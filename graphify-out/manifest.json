@@ -1,7 +1,7 @@
 {
   "/Users/coryj/Dev/slate/crates/slate-uniffi/src/lib.rs": {
-    "mtime": 1783722153.7998023,
-    "hash": "7130c277353a63f9a47599f5d61c2ccc"
+    "mtime": 1783994842.9087346,
+    "hash": "987534c41400df4f823b0ef9e9b96dfa"
   },
   "/Users/coryj/Dev/slate/crates/slate-uniffi/src/host_logging.rs": {
     "mtime": 1783346660.1405356,
@@ -19,9 +19,25 @@
     "mtime": 1779509854.1912258,
     "hash": "8677138587e89b434ab61560158c3756"
   },
+  "/Users/coryj/Dev/slate/crates/slate-core/migrations/029_oplog_events.sql": {
+    "mtime": 1783784871.9620173,
+    "hash": "836ea222ebe9139cf8f97840633b1719"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/migrations/030_files_birthtime.sql": {
+    "mtime": 1783801229.4135025,
+    "hash": "cc7d8abc24cbc4eb6cbaa62135fe225b"
+  },
   "/Users/coryj/Dev/slate/crates/slate-core/migrations/017_structural_ops.sql": {
     "mtime": 1783127950.0993013,
     "hash": "30d050b1cc6c509bfe07b382dce2e004"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/migrations/028_open_marks.sql": {
+    "mtime": 1783784871.961842,
+    "hash": "2bcb6dc19d38feeb2f00c3931a7c7ae9"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/migrations/027_files_oplog_name.sql": {
+    "mtime": 1783742821.6451619,
+    "hash": "40806b5db09a71022561fae74c1fbfd4"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/migrations/021_bases.sql": {
     "mtime": 1783486401.7512934,
@@ -155,6 +171,14 @@
     "mtime": 1783274096.2984924,
     "hash": "66275ae14bc4fd14132e25920bdaed4b"
   },
+  "/Users/coryj/Dev/slate/crates/slate-core/benches/graph_bench.rs": {
+    "mtime": 1783897781.8929133,
+    "hash": "8e186f9f4a0eea4e601241f90c246a7d"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/benches/layout_bench.rs": {
+    "mtime": 1783987074.967382,
+    "hash": "2981f8fcae64827d60be20514b5940b0"
+  },
   "/Users/coryj/Dev/slate/crates/slate-core/benches/bases_bench.rs": {
     "mtime": 1783722153.7903008,
     "hash": "9a9430bc8c4626109c1a94b6b1712875"
@@ -162,6 +186,10 @@
   "/Users/coryj/Dev/slate/crates/slate-core/benches/scan_bench.rs": {
     "mtime": 1783722153.7904778,
     "hash": "cbcbd9a30dcde0b3535829432e8b5396"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/benches/oplog_bench.rs": {
+    "mtime": 1783784871.9616978,
+    "hash": "0b8d5413f59624bb908cd2f36a0e8018"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/benches/common/mod.rs": {
     "mtime": 1779752569.4032266,
@@ -171,29 +199,49 @@
     "mtime": 1783722153.7940528,
     "hash": "aaaf71f24931740c560123fa6318dc2c"
   },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/oplog_compaction.rs": {
+    "mtime": 1783784871.9650037,
+    "hash": "9495242811bc615d6a61d66a8f80785f"
+  },
   "/Users/coryj/Dev/slate/crates/slate-core/src/blocks_db.rs": {
     "mtime": 1781375307.8192272,
     "hash": "603513ffc0fd6dbe2549b24e807726b7"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/reading.rs": {
-    "mtime": 1783186046.722567,
-    "hash": "b5b8a68046987e092764bc5a76d89050"
+    "mtime": 1783987074.9765787,
+    "hash": "41c6e15e24799763c2bb19750960db17"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/oplog_events.rs": {
+    "mtime": 1783784871.9652245,
+    "hash": "697168e6b2db80c216c905aa055d8b02"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/code.rs": {
     "mtime": 1783722153.792986,
     "hash": "75ab4b0fda7cd178c6f85cde593e8bda"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session.rs": {
-    "mtime": 1783722153.7948585,
-    "hash": "001f8b7568c7d853bad9732a4ac470be"
+    "mtime": 1783994842.9076705,
+    "hash": "f0b0a474e484741551aa8619ea53a560"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/sync_detect.rs": {
     "mtime": 1783299372.8448043,
     "hash": "136dba816cc1db6409e685837c9c06e4"
   },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/graph_metrics.rs": {
+    "mtime": 1783897781.8932276,
+    "hash": "80ff9dcbbecb8a07ec81b1c8079d2ee6"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/history_prefs.rs": {
+    "mtime": 1783786501.0197556,
+    "hash": "b525df44ef67c89e1624ef7fbedf58d7"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/graph.rs": {
+    "mtime": 1783987074.9712007,
+    "hash": "bed0c58a528d4bc4395f74f51e601ad5"
+  },
   "/Users/coryj/Dev/slate/crates/slate-core/src/links_db.rs": {
-    "mtime": 1781375307.8235426,
-    "hash": "c08a6b376ffac22881d06a3a7a2b3025"
+    "mtime": 1783897781.8941154,
+    "hash": "529a6e0be9c4c80eb4f29bac6d4934ee"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/frontmatter.rs": {
     "mtime": 1783722153.7936661,
@@ -208,24 +256,24 @@
     "hash": "80e64b5bb4d8a0c3ea2a217da0547af5"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/lib.rs": {
-    "mtime": 1783722153.7938588,
-    "hash": "39a1e34bb6c5b9822f2920d412195b92"
+    "mtime": 1783987074.972222,
+    "hash": "2a6cfb799802674bc13c1ab3435cc833"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/bases_db.rs": {
     "mtime": 1783486401.7513933,
     "hash": "22ca91e82c29aab9e7b85524c0673148"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/properties_db.rs": {
-    "mtime": 1783722153.7942572,
-    "hash": "a10f3b1986e51e4654528f4eff123171"
+    "mtime": 1783742821.6464195,
+    "hash": "a2b59d34b0d3e378409967a95807a3e3"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/citations.rs": {
     "mtime": 1781375307.8195655,
     "hash": "de457e616f7d7b540ad416da9ab6a849"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/structural.rs": {
-    "mtime": 1783127950.104745,
-    "hash": "e0c3c43d742f01e5444c061ae0d6a131"
+    "mtime": 1783742821.6491628,
+    "hash": "9eba7b4b1b4f4b141d40ae1528792417"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/dql_inline_fields_db.rs": {
     "mtime": 1783722153.7933662,
@@ -240,16 +288,20 @@
     "hash": "713fb481950e87ecfe612a82197b471c"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/db.rs": {
-    "mtime": 1783722153.7931845,
-    "hash": "690c63da82669641bd15428a872f7ec2"
+    "mtime": 1783801229.415225,
+    "hash": "e4fb710e44361bc6764339044c66ab35"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/search_db.rs": {
     "mtime": 1783500209.338949,
     "hash": "ab1d179903d8ba11d06fd302f728c6d2"
   },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/structured_diff.rs": {
+    "mtime": 1783784871.9686027,
+    "hash": "d8c1215ba81c275c783d3f5ee38e8b7d"
+  },
   "/Users/coryj/Dev/slate/crates/slate-core/src/commands.rs": {
-    "mtime": 1783542745.6925569,
-    "hash": "b94ec0c95f72115bd2f80b9aaad45478"
+    "mtime": 1783987074.9708617,
+    "hash": "ac204e8a318d1fa3ae7a2406c3064e2a"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/text_buffer.rs": {
     "mtime": 1781380995.9042904,
@@ -284,12 +336,16 @@
     "hash": "b4810269993ed6026ec10742fc9a06cb"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/oplog.rs": {
-    "mtime": 1783346660.1371605,
-    "hash": "4a38783728ddaabc3f2143a5e136b62f"
+    "mtime": 1783784871.9648285,
+    "hash": "3bda14e93151e36e7c5b25c2e08c7895"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/diff.rs": {
     "mtime": 1781380995.9036114,
     "hash": "9db084d22471c1e2816ca62dc8fafb99"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/graph_layout.rs": {
+    "mtime": 1783987074.972037,
+    "hash": "40af9a6a336b1130bd678d85dcb090be"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/tags_db.rs": {
     "mtime": 1783722153.7957726,
@@ -320,20 +376,20 @@
     "hash": "72a66e85ce3516ee0b61b54f942cfcf1"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/bases/expr.rs": {
-    "mtime": 1783722153.7922974,
-    "hash": "294ca65b609ef92bb1956ff565d2e0ac"
+    "mtime": 1783801229.414853,
+    "hash": "a9210adf1fb32ebd4fba939c1eb4cd02"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/bases/eval.rs": {
-    "mtime": 1783722153.7920938,
-    "hash": "2eec1d26d6f15c3c975bcb30774069d9"
+    "mtime": 1783801229.414445,
+    "hash": "c56ea8d03c1aa657b145b0600e00b4f6"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/bases/slate_query_fence.rs": {
     "mtime": 1783722153.7928078,
     "hash": "281b6998b09b5d8a119951a4cb1411a2"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/bases/engine.rs": {
-    "mtime": 1783722153.791716,
-    "hash": "120da7f20930b3e8e174ac7e3a79c5f8"
+    "mtime": 1783801229.4139688,
+    "hash": "00f864214688596b60fb154b078eeaed"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/canvas/serialize_tests.rs": {
     "mtime": 1783274096.30044,
@@ -388,32 +444,52 @@
     "hash": "91e8ef40053f4bb7d554138b02258c48"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/vault/provider.rs": {
-    "mtime": 1783127950.1057665,
-    "hash": "256acda5fd4d549a5bcc631a31d20121"
+    "mtime": 1783801229.417774,
+    "hash": "9f164c826a0a7f541a98082eb835085a"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/vault/mod.rs": {
     "mtime": 1781375307.8277056,
     "hash": "b41372309b750ea121498fcd7682995e"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/vault/fs.rs": {
-    "mtime": 1783127950.105454,
-    "hash": "04b2a7526d83bb37199bf8f3e44717ae"
+    "mtime": 1783987074.9820945,
+    "hash": "71a5768f6d2dc4cbd7a49f7a39d25bd9"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/reading.rs": {
     "mtime": 1783127950.1043522,
     "hash": "21b3ed24a0d81160de903338dd27664c"
   },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/oplog_since_open.rs": {
+    "mtime": 1783784871.9677334,
+    "hash": "b5534ae338ccaa1cdedd5030c0154ed9"
+  },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/link_integrity.rs": {
     "mtime": 1783127950.1038423,
     "hash": "3643c1de021a80f15125804dd1a02580"
   },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/oplog_history.rs": {
+    "mtime": 1783994842.9082236,
+    "hash": "f1d6540445f2067b9fdd653bf29ae62d"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/events.rs": {
+    "mtime": 1783810453.1945615,
+    "hash": "5a4c879932ec7c4f3869a011191dccb2"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/graph.rs": {
+    "mtime": 1783897781.8951252,
+    "hash": "79b91dcd41cf1fc52e2b14988904e7f3"
+  },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/tasks.rs": {
-    "mtime": 1779812589.4798403,
-    "hash": "0ad49bce383cbb919dde296b48ca6ad1"
+    "mtime": 1783742821.6488304,
+    "hash": "e5b625eef54324a6b90c78eb99e32fdc"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/properties.rs": {
     "mtime": 1783722153.7953644,
     "hash": "ae11bc6ceb4a27ceb1685f46129f1efd"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/oplog_identity.rs": {
+    "mtime": 1783784871.9676094,
+    "hash": "21bd65582ab0e8564e05736632da1cd0"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/citations.rs": {
     "mtime": 1781139240.9027917,
@@ -452,20 +528,24 @@
     "hash": "edfce212016dad0b9690ea00cc4f4d10"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/canvas.rs": {
-    "mtime": 1783274096.3035567,
-    "hash": "18ef0502b3414a710a8cece2e61b8dd5"
+    "mtime": 1783742821.6475654,
+    "hash": "58eb0572a3cab583877709bd01968e8d"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/oplog_temporal.rs": {
+    "mtime": 1783810453.195136,
+    "hash": "6380bf913e8e164f978682749ef863f1"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/oplog_logging.rs": {
-    "mtime": 1783346660.1388152,
-    "hash": "1a788a530ba9dd19af6fad14e2c8084b"
+    "mtime": 1783742821.6480215,
+    "hash": "aa7ea22411a882025ebd513be22ad292"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/search.rs": {
     "mtime": 1783186046.723769,
     "hash": "28c44fe6cc0d377c5347f74078a413f9"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/scan.rs": {
-    "mtime": 1783722153.7956066,
-    "hash": "7bb8dbcc886732a0d25406494617f663"
+    "mtime": 1783801229.417345,
+    "hash": "afd9084c648babd7ee2f13d8767617aa"
   },
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/dir_tree.rs": {
     "mtime": 1783127950.1033852,
@@ -478,6 +558,10 @@
   "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/common.rs": {
     "mtime": 1783127950.102949,
     "hash": "bf3a1b249c153160bb782a446dfebccf"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-core/src/session/tests/oplog_compaction_session.rs": {
+    "mtime": 1783784871.9665446,
+    "hash": "d6bb4ba2610f36c14e33a63d4582549b"
   },
   "/Users/coryj/Dev/slate/crates/slate-cli/tests/write.rs": {
     "mtime": 1783346660.134557,
@@ -492,8 +576,8 @@
     "hash": "82306ec5e2b071abb21c89e57ddc02bd"
   },
   "/Users/coryj/Dev/slate/crates/slate-cli/tests/cli.rs": {
-    "mtime": 1783510000.2644193,
-    "hash": "f7abd9b6d6e1f894882f8e1c42f7a6b7"
+    "mtime": 1783801229.4133747,
+    "hash": "ef73c4ce1598e7511d7ed9766b303a55"
   },
   "/Users/coryj/Dev/slate/crates/slate-cli/src/session.rs": {
     "mtime": 1783346660.134207,
@@ -508,8 +592,8 @@
     "hash": "89cef1ace3f58371af98e2c8241a188a"
   },
   "/Users/coryj/Dev/slate/crates/slate-cli/src/main.rs": {
-    "mtime": 1783510000.2641256,
-    "hash": "38c1d8c19e18d24199cf23708c762054"
+    "mtime": 1783801229.4130204,
+    "hash": "cdd5de7f90fd15e26c2e16a9688e3d3f"
   },
   "/Users/coryj/Dev/slate/crates/slate-cli/src/commands/links.rs": {
     "mtime": 1783299372.7701192,
@@ -540,8 +624,12 @@
     "hash": "17fdeef4f56a96aeb3c16ffac944ea72"
   },
   "/Users/coryj/Dev/slate/crates/slate-cli/src/commands/mod.rs": {
-    "mtime": 1783510000.2638178,
-    "hash": "b8d5cf8e536937c0fa643ab92536e387"
+    "mtime": 1783801229.4126487,
+    "hash": "680268e18b21ae442c9b27740a71cd28"
+  },
+  "/Users/coryj/Dev/slate/crates/slate-cli/src/commands/history.rs": {
+    "mtime": 1783801229.4119503,
+    "hash": "683ffdd44b32b42978f5e71130701508"
   },
   "/Users/coryj/Dev/slate/crates/slate-cli/src/commands/read.rs": {
     "mtime": 1783299372.7858946,
@@ -568,8 +656,8 @@
     "hash": "743d14a6f051bb0bda4380c4a9ef499f"
   },
   "/Users/coryj/Dev/slate/examples/swift-cli/main.swift": {
-    "mtime": 1783127950.1081872,
-    "hash": "06d94d058c2ad52b25941bab4ae21d7c"
+    "mtime": 1783784871.97223,
+    "hash": "1b98e4f4e4dd26c18391e2e0068d17c2"
   },
   "/Users/coryj/Dev/slate/scripts/apply-license-header.py": {
     "mtime": 1779752569.4081073,
@@ -583,17 +671,29 @@
     "mtime": 1783277060.9542556,
     "hash": "dff9c7aaed6e99050a687353260fb027"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Resources/generate-app-icon.py": {
+    "mtime": 1783987074.8438337,
+    "hash": "d125f6178b3c96a260762974e88b806e"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/WorkspaceTabsTests.swift": {
-    "mtime": 1783127950.0982144,
-    "hash": "d83754b8692b365ddf9288ce0f7073fd"
+    "mtime": 1783897781.8924391,
+    "hash": "272adfad17e66d15b76e3d9fe67bfa74"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CanvasAnnouncerTests.swift": {
     "mtime": 1783274096.2943501,
     "hash": "9baa7b3c6117ae8b34ddfe3d0a98cefd"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/NSLogFormatSafetyTests.swift": {
+    "mtime": 1783994842.900031,
+    "hash": "277c3d95d1189152c81a21976b28e488"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CodeBlockViewTests.swift": {
-    "mtime": 1781140335.2996976,
-    "hash": "9547182cbcf4f612fba6672fecf5ff1f"
+    "mtime": 1783897781.8875396,
+    "hash": "b3bc72ea861b4e7de8b28f03f9085d15"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/FileTreeMultiSelectTests.swift": {
+    "mtime": 1783987074.945487,
+    "hash": "615d6efd982d409c553e2330267ac8ce"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/WorkspaceViewMigrationTests.swift": {
     "mtime": 1783127950.0984764,
@@ -611,6 +711,10 @@
     "mtime": 1781134114.2879379,
     "hash": "c07ddbbab4f535d662050e97d1747dcd"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/GraphConfigTests.swift": {
+    "mtime": 1783987074.9504437,
+    "hash": "0242bcfc26aba43597a0ce17bee18fb7"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EditorSyntaxPaletteTests.swift": {
     "mtime": 1780183410.0461028,
     "hash": "65f2470195f1bbf771837bb6899e42d3"
@@ -618,6 +722,10 @@
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MutationAnnouncementFocusTests.swift": {
     "mtime": 1783131175.615768,
     "hash": "47dce9635a152a5ea01ab61aa3ac7569"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EditorTextZoomTests.swift": {
+    "mtime": 1783827307.9967198,
+    "hash": "53445b35b12262cd7c6b9db01ab53093"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SwiftSourceStrippingTests.swift": {
     "mtime": 1779941574.1348524,
@@ -631,6 +739,10 @@
     "mtime": 1783274096.2962298,
     "hash": "466a6873d8f92fb57a37be11eb3d153b"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CreateNoteRaceTests.swift": {
+    "mtime": 1783801229.4114532,
+    "hash": "3c7333dff86c1fd1204d4d4e0533aeaf"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MilestoneIIntegrationTests.swift": {
     "mtime": 1779752569.4021652,
     "hash": "edc4309ffd8f1aa5178abec9eb55357f"
@@ -640,12 +752,16 @@
     "hash": "deef68425f58bb6caea9f12527d2e4f8"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CitationsPanelTests.swift": {
-    "mtime": 1779763655.08932,
-    "hash": "7e3cec123c7bf34d2ca6da54a95713af"
+    "mtime": 1783897781.8870006,
+    "hash": "78e1e38000a79fadcd2cff8c7ef6666b"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/ReadingPrintComposerTests.swift": {
+    "mtime": 1783987074.9524102,
+    "hash": "1e6e46fae486786ae1e36efbacd6481b"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/RightPaneViewTests.swift": {
-    "mtime": 1783722153.7895648,
-    "hash": "67b95117ea26fe13dd6ad36da8698755"
+    "mtime": 1783987074.9575388,
+    "hash": "6404fbf29bf7c5fa496b8da46227a00c"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/InteractiveRowStyleTests.swift": {
     "mtime": 1783140512.1770992,
@@ -659,6 +775,10 @@
     "mtime": 1779765443.9419281,
     "hash": "470b6a4964095c7a4d4d8e572b06b8e6"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/GraphDiagramTests.swift": {
+    "mtime": 1783987074.950957,
+    "hash": "25059e6db0cc69249a1ecc966f0312e2"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/BibliographyVaultConfigTests.swift": {
     "mtime": 1781139240.9011197,
     "hash": "6068eed2e30ed639c0da191fc0ef332a"
@@ -668,28 +788,40 @@
     "hash": "ada97500fe87b632c23ea36688ee1f50"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/WorkspaceStoreTests.swift": {
-    "mtime": 1783557156.490112,
-    "hash": "dd5e22a38a6197c6f1a14436f4e40239"
+    "mtime": 1783897781.8919566,
+    "hash": "39ab97ad648c39cf0d89dbbd5742b23d"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/ReadingViewTests.swift": {
-    "mtime": 1783722153.789323,
-    "hash": "532ef3c99c1fe90310899ee06fadb02b"
+    "mtime": 1783987074.9572108,
+    "hash": "60e5b557915f1f985f20476ac450fc0d"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CanvasRendererTests.swift": {
     "mtime": 1783274096.2959025,
     "hash": "6d96b6366df7272e0416cba1afffeb1b"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/FileTreeDragDropTests.swift": {
+    "mtime": 1783994842.899886,
+    "hash": "6c898a6c2d9b124889cc113662bc2f77"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/FileTreeSidebarTests.swift": {
-    "mtime": 1783127950.095798,
-    "hash": "0966eabf059349bc872964a641b94119"
+    "mtime": 1783827307.9978952,
+    "hash": "66e1c4d1ac0e4781632730ad99030393"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/PreferencesStoreTests.swift": {
-    "mtime": 1783542745.6919372,
-    "hash": "3f3a358a10f3785bd4a76f02fda66461"
+    "mtime": 1783987074.9520342,
+    "hash": "a6d513fc9d508181fbbcc5004cad9b6e"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/WorkspaceOpenTargetsTests.swift": {
     "mtime": 1783127950.0975502,
     "hash": "ddadaa4443910132d56802470de339d8"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/GraphAnnouncerTests.swift": {
+    "mtime": 1783897781.8881586,
+    "hash": "2062dee1c98240faabdf2d7d5b501814"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/ToolbarCustomizationTests.swift": {
+    "mtime": 1783987074.9666615,
+    "hash": "9a75fcf56954a103e92c31f0730ee008"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/PropertiesSourceTests.swift": {
     "mtime": 1783136149.616297,
@@ -704,12 +836,12 @@
     "hash": "95f9361c21c2aa90abc1b176006c0dfc"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/AccessibleDataGridTests.swift": {
-    "mtime": 1783722153.7877126,
-    "hash": "48d52a058fd4f2ae57086cc3ae95fe6c"
+    "mtime": 1783897781.8860114,
+    "hash": "520c45359f7830d4254c8989a75f08a1"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SidebarUtilityBarTests.swift": {
-    "mtime": 1783127950.096424,
-    "hash": "a88cbec9d8f018fc1ce0651117532938"
+    "mtime": 1783817496.5271735,
+    "hash": "d9c73fb87f4b0d148b12e2e78ee7973b"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/PresentationReadyTests.swift": {
     "mtime": 1783093733.3036497,
@@ -719,9 +851,17 @@
     "mtime": 1783274096.2963269,
     "hash": "b0ae85296092af28f4e12574078dc371"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/StructuralUndoTests.swift": {
+    "mtime": 1783987074.9627616,
+    "hash": "31abf751a71342a0ae510a54f39efb76"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/ConnectionsPanelTests.swift": {
+    "mtime": 1783897781.887688,
+    "hash": "23334a3b0b295770dc906dfd0e276bbf"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SearchErgonomicsTests.swift": {
-    "mtime": 1783186046.7211819,
-    "hash": "4154f7e99c4f2cb02324c8942a7ba9fc"
+    "mtime": 1783810453.1929045,
+    "hash": "90af1bbf7f78b4d7c062ba966d51d704"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SwiftSourceStripping.swift": {
     "mtime": 1779941574.1347091,
@@ -747,9 +887,13 @@
     "mtime": 1783140512.1769094,
     "hash": "a7e81c983e0511b4d5f8116f4ac553fa"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SearchRecentsStoreTests.swift": {
+    "mtime": 1783987074.960697,
+    "hash": "b28349ec2ec7e6d5f8dedf80e5364b87"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SlateCommandsTests.swift": {
-    "mtime": 1783722153.789841,
-    "hash": "3c46775fda8c728be41c1371d0877a23"
+    "mtime": 1783987074.9614654,
+    "hash": "ad223d67abfc2dfe1ab94e14ae188d9e"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/WorkspaceFocusRoutingTests.swift": {
     "mtime": 1783136149.616639,
@@ -760,16 +904,20 @@
     "hash": "0f501bfa753b5fc3dc6874acc0ec7d53"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/AppStateTests.swift": {
-    "mtime": 1781145838.119488,
-    "hash": "2db407f5b412e6224f16630e94a53c20"
+    "mtime": 1783987074.9367607,
+    "hash": "e64f141da16c1b1d8c20c50ad74fe019"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/HighlightBenchmarkTests.swift": {
     "mtime": 1780244538.608879,
     "hash": "a50959e695523dbffc5efcd7bd9e5d88"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CanvasOutlineTests.swift": {
-    "mtime": 1783274096.2956908,
-    "hash": "3211472b78c2fb64d72af2c49e69de1e"
+    "mtime": 1783897781.8864725,
+    "hash": "1cd1359a242d99194bb314eb236e3a29"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/PropertyDatePickerTests.swift": {
+    "mtime": 1783897781.8898673,
+    "hash": "f8213af50a676da665e161160d87e3e0"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/BaseQueriesPanelTests.swift": {
     "mtime": 1783722153.7882152,
@@ -780,8 +928,8 @@
     "hash": "0197a2c28e25ddd09732446e0857ed03"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CloseVaultSheetParityTests.swift": {
-    "mtime": 1779946834.531611,
-    "hash": "e957ea0dc929c21ee7fe6902c3dd747f"
+    "mtime": 1783987074.941446,
+    "hash": "8971760488816fefea6df8cc4178bb75"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MilestoneJIntegrationTests.swift": {
     "mtime": 1781137200.355642,
@@ -790,6 +938,14 @@
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EmbedViewTests.swift": {
     "mtime": 1781141571.0782034,
     "hash": "3e134cfb254349505a29fa20a9d92a87"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SettingsLayoutTests.swift": {
+    "mtime": 1783987074.9609518,
+    "hash": "89698ace3f1bf3895402f1836d961821"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MenusObservabilityTests.swift": {
+    "mtime": 1783897781.889434,
+    "hash": "06b2f56e646ad51d8ee07ac2caaad143"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/ComposedBufferTests.swift": {
     "mtime": 1783136149.6155667,
@@ -812,8 +968,8 @@
     "hash": "80de7490bf5db6ffa3b88e59c6ae61ee"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/QuickSwitcherActivationTests.swift": {
-    "mtime": 1783180688.3726926,
-    "hash": "bf08575c5cf47e6593a7bc36f147d9de"
+    "mtime": 1783827307.9993856,
+    "hash": "16487a78d6f924bd8109dabc9d3e2d4c"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SettingsLocalizationTests.swift": {
     "mtime": 1781140335.3003192,
@@ -826,6 +982,10 @@
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SyncMarkerWatcherTests.swift": {
     "mtime": 1783306466.2670174,
     "hash": "cfa6d1c350e7c00061fbb5ad0c4cc790"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/GraphFFITests.swift": {
+    "mtime": 1783897781.8882813,
+    "hash": "87fc6d7c2f5ed0cf77bc5b1902c01cbf"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/ViewModeTests.swift": {
     "mtime": 1783131175.6165562,
@@ -843,6 +1003,10 @@
     "mtime": 1779752569.401571,
     "hash": "b34c63ce3280a7a1d365fb78447fdfd5"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/HistoryPanelTests.swift": {
+    "mtime": 1783897781.888971,
+    "hash": "9b80133761ba177a5fe1c6495b31c345"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/PrefsJsonStoreTests.swift": {
     "mtime": 1779764782.6197522,
     "hash": "063012894f7960521ea7adafba5cec68"
@@ -855,9 +1019,17 @@
     "mtime": 1783274096.2945974,
     "hash": "c1afae92f8920541997a1a17ee26c694"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/ReadingScrollParkTests.swift": {
+    "mtime": 1783897781.8899846,
+    "hash": "028b4110857cfc93b67638eb17cc717b"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/WorkspaceModelTests.swift": {
-    "mtime": 1783722153.7900686,
-    "hash": "ce97c04b9adf636be95acaa876d7382c"
+    "mtime": 1783897781.8917856,
+    "hash": "6f4d9e3567f04a8c158780f28df39187"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/GraphActionParityTests.swift": {
+    "mtime": 1783987074.9466674,
+    "hash": "9d080ca703c079e0f11af4232eed4e7f"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/OutlineSidebarTests.swift": {
     "mtime": 1781145838.1203856,
@@ -868,24 +1040,36 @@
     "hash": "6ae2b554921217515ff7fb53086ced3b"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/SlateSymbolTests.swift": {
-    "mtime": 1783542745.6922808,
-    "hash": "d763444734639a197a4a483120da523a"
+    "mtime": 1783987074.9624887,
+    "hash": "2c1fb354edc05a4f83aebccf2db66c7b"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/EditorSpellCheckTests.swift": {
+    "mtime": 1783897781.8878183,
+    "hash": "a373570dc3e87e99af772f73e4c0b382"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/TaskStatusPhraseTests.swift": {
     "mtime": 1781142623.1207356,
     "hash": "56f85d9fb02bdcf644baad581e7e6c5f"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CommandPaletteViewTests.swift": {
-    "mtime": 1780184280.2180538,
-    "hash": "2747dc2e5ecaa348fc0875acbe0e3aba"
+    "mtime": 1783987074.9423378,
+    "hash": "b3b746f6e8a22d12d75c0dcb420ecca4"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/GraphTabRoutingTests.swift": {
+    "mtime": 1783987074.9514594,
+    "hash": "78c292cb2ff031e9ee791eb51a273eba"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/BasesTabRoutingTests.swift": {
-    "mtime": 1783722153.7888417,
-    "hash": "db40b9a615ede67d296670a16ba3fe79"
+    "mtime": 1783987074.9408877,
+    "hash": "d3a7a82529b74149a5e1f001aab086bb"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/MilestoneLIntegrationTests.swift": {
     "mtime": 1779811786.2114122,
     "hash": "20c071ab86d57027325523a2797f0418"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/GraphCommandsTests.swift": {
+    "mtime": 1783987074.9467664,
+    "hash": "f72e669f7e9fa5cb9fd153a95709b4ec"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/NoteEditorRangedHighlightConcurrencyTests.swift": {
     "mtime": 1780247886.3535883,
@@ -908,44 +1092,56 @@
     "hash": "8537d23d206a39a3aaa121bd42ffdb0f"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/HotkeySpokenTests.swift": {
-    "mtime": 1779938833.615532,
-    "hash": "fdf76efd2eb88d2b95e05f7087421344"
+    "mtime": 1783810453.1925957,
+    "hash": "a6f4536e280aefb7d76780325bb2f98c"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/ReopenClosedTabTests.swift": {
+    "mtime": 1783827307.9995916,
+    "hash": "ab7e101f5840acb97446f4c26ceb36ac"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CanvasFFITests.swift": {
     "mtime": 1783274096.294926,
     "hash": "dc53048fde20e6d4013c19730396ece0"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/LeafPortTests.swift": {
-    "mtime": 1783136149.6161907,
-    "hash": "182aa078ff1c15ed8cd002fb0c75e1f5"
+    "mtime": 1783897781.889317,
+    "hash": "91292eb65eebfc353bf262274162935a"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/GraphTableViewTests.swift": {
+    "mtime": 1783897781.8885908,
+    "hash": "e5430a3a49d19781adcf694545076be1"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/FileManagementCommandsTests.swift": {
-    "mtime": 1783131175.6156423,
-    "hash": "a473e4b73d53328cfb95db6747fb95e8"
+    "mtime": 1783897781.88801,
+    "hash": "02211a1d7743e3d0bd0bb9bfda5fabeb"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Tests/SlateMacTests/CommandPaletteRecentsStoreTests.swift": {
     "mtime": 1779945374.0675733,
     "hash": "32a1c9e8a17d4ffa6c675b5e71c91bf7"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/FileRecentsStore.swift": {
-    "mtime": 1783180688.3527837,
-    "hash": "1aa4ddc45d503bc232befc2f9de5b146"
+    "mtime": 1783994842.8991156,
+    "hash": "71813ec8e1af23e227b65db03e9255a2"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AppState.swift": {
-    "mtime": 1783722153.783317,
-    "hash": "20a529a4435a50e023805b537405b67e"
+    "mtime": 1783994842.8981688,
+    "hash": "601e357ae64d072827739f87c1f8f2e7"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/MathView.swift": {
     "mtime": 1779752569.3980577,
     "hash": "07265bef77bc23aa2b979a2b0e2d5900"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/OutlineSidebar.swift": {
-    "mtime": 1783140512.1756456,
-    "hash": "10e28721a11d04b7e2ceb43d4d9a5351"
+    "mtime": 1783817496.5179229,
+    "hash": "4cdc337d515454f36cf381af5dd3088e"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EditorSpanMapping.swift": {
     "mtime": 1780183410.0453553,
     "hash": "d7c01a60a47e6c408ff0a48fbf408213"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/HistoryPanel.swift": {
+    "mtime": 1783817496.5154595,
+    "hash": "75ec413d5455b49f80b928b6eca46ba7"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/MathPrefs.swift": {
     "mtime": 1779752569.3978696,
@@ -960,8 +1156,8 @@
     "hash": "700806cd27ea7079332e3a86e93b417f"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SettingsView.swift": {
-    "mtime": 1783274096.2907107,
-    "hash": "ce8311e34adced93cb457d392f03a50e"
+    "mtime": 1783987074.920586,
+    "hash": "ef7fe45867da926ef70ed2cf6a47849a"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/NoteSectionSlicer.swift": {
     "mtime": 1779752569.3985887,
@@ -980,12 +1176,12 @@
     "hash": "b34766b63c4abac75b24b6d11be03822"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/NoteEditorView.swift": {
-    "mtime": 1783131175.6121674,
-    "hash": "621db246c39ac775cd27da58b370111c"
+    "mtime": 1783987074.9100475,
+    "hash": "a2bbf1649c73fbdd91a4462b0b1a20a9"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/FileTreeSidebar.swift": {
-    "mtime": 1783722153.786482,
-    "hash": "5a208a76a0f7146c848c838af9f40995"
+    "mtime": 1783987074.8826587,
+    "hash": "828e891c3568f65f5f31d58fff702eeb"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CitationPopover.swift": {
     "mtime": 1779764303.4338903,
@@ -996,8 +1192,8 @@
     "hash": "91ed3a6d6ed34293916c755319db7685"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/PreferencesStore.swift": {
-    "mtime": 1783542745.690145,
-    "hash": "575d408cd6d5ec925d30eef64dfb8188"
+    "mtime": 1783987074.9104826,
+    "hash": "c9fafb3d8d875cbb8bd651b792868236"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EmbedsPanel.swift": {
     "mtime": 1783140512.1738951,
@@ -1008,20 +1204,28 @@
     "hash": "7a3c6e8fcb3dc2b1980cc1aa9581fd28"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/NotePropertiesHeader.swift": {
-    "mtime": 1783140512.1752262,
-    "hash": "3efc4d267fe056a4d08c1b71fbf23089"
+    "mtime": 1783897781.8781915,
+    "hash": "5fc611fde0493c279c55000004b4bdb3"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EditorTextConversions.swift": {
     "mtime": 1783131175.6100998,
     "hash": "fb329a99223b1abed3ffc03b7a2f8061"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CommandPaletteModel.swift": {
-    "mtime": 1783514122.4855235,
-    "hash": "f5000801e6fa5e791be139a5684055aa"
+    "mtime": 1783987074.8742754,
+    "hash": "0c09f0b00d1d9ce536cadf9faa663853"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SearchRecentsStore.swift": {
+    "mtime": 1783994842.8996193,
+    "hash": "4537dbf19e486ca30e4e2bd97842e157"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SearchOverlay.swift": {
-    "mtime": 1783186046.72029,
-    "hash": "7a5414615a6e206d9e362279f612a9b5"
+    "mtime": 1783987074.9159474,
+    "hash": "b0a3800d50c6509003bc445686e00db2"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AppState+History.swift": {
+    "mtime": 1783987074.8524938,
+    "hash": "57833d97950be87e87ab68884970b155"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/EditorSyntaxPalette.swift": {
     "mtime": 1780183410.0455904,
@@ -1032,48 +1236,52 @@
     "hash": "92faa9aca3b4fb36655336615b4b585d"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/PrefsJsonStore.swift": {
-    "mtime": 1779764782.61931,
-    "hash": "e669fd193655df1ffd2a9a586769014a"
+    "mtime": 1783786501.0167196,
+    "hash": "d08925a017601c1cef907bd967a7672e"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AppState+Print.swift": {
+    "mtime": 1783987074.8531988,
+    "hash": "5b1f10db53e43559e2404eaddbdfb2e4"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CodeBlockView.swift": {
-    "mtime": 1781140335.2984111,
-    "hash": "a4ffb3821bf310c44e51ed24118a5f74"
+    "mtime": 1783897781.872316,
+    "hash": "51afc034f55d432da922a1a9aac84405"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AccessibleDataGrid.swift": {
-    "mtime": 1783722153.782563,
-    "hash": "7768296a5a5e0acdcafbb0c82daba09f"
+    "mtime": 1783897781.8682442,
+    "hash": "bcebb7bb72f40685cb9f246070c8e44e"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AnnouncementPosting.swift": {
     "mtime": 1783299372.6981897,
     "hash": "da2b1a0c8a3d067ee4dacbcd0c98022b"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/MainSplitView.swift": {
-    "mtime": 1783530998.7194836,
-    "hash": "2f2e69ad058fcf4e6bdab142364198f6"
+    "mtime": 1783987074.9007177,
+    "hash": "d164eb483602b29db3bca84b96ea0c01"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/WelcomeView.swift": {
-    "mtime": 1783057090.602003,
-    "hash": "d0f1745697198effe9151f8a9e8c17a3"
+    "mtime": 1783987074.9313648,
+    "hash": "1e169708e71e1d39eecdd71b6e319bbc"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TemplatePromptSheet.swift": {
-    "mtime": 1783136149.6145391,
-    "hash": "f35e5cd4fa8bd23b4d956be2902b3178"
+    "mtime": 1783810453.1913188,
+    "hash": "85e8b9983830bedc9990cce96e27e002"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CodePrefs.swift": {
     "mtime": 1779752569.3968523,
     "hash": "92d11671f5389c0ec826c3a732152fa6"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/ContentBlockPanels.swift": {
-    "mtime": 1783140512.1733415,
-    "hash": "3f2606137e677ee8668372820f3e5b13"
+    "mtime": 1783827307.985348,
+    "hash": "4db9ece1ce3c3982f945d7f19ee0cda8"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/VaultPicker.swift": {
     "mtime": 1779752569.4007974,
     "hash": "06b78598e4a2fa6bfcd2ade3ecccdaa8"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TemplatePicker.swift": {
-    "mtime": 1779752569.4004292,
-    "hash": "20ca37f725b7515c8c7850aee338151a"
+    "mtime": 1783817496.5246942,
+    "hash": "fa846cc9f52d9d4622809bc052ad1979"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/MermaidView.swift": {
     "mtime": 1779752569.3981571,
@@ -1083,49 +1291,53 @@
     "mtime": 1783136149.6110232,
     "hash": "c66f5e559b035345a6465eacfc9f7751"
   },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TasksReviewPanel.swift": {
+    "mtime": 1783987074.9310794,
+    "hash": "1f226b01c360ef1085c214e4bf36f6da"
+  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SyncDiagnosticsPanel.swift": {
     "mtime": 1783299372.7473385,
     "hash": "84f6042bd7f3b2f16383300d300fdedc"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/MoveToFolderSheet.swift": {
-    "mtime": 1783131175.6111667,
-    "hash": "65c3abe801a8caa38ee53e5aed812b5a"
+    "mtime": 1783987074.905481,
+    "hash": "fb51e21317a08b663e1d2533b6a9b396"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/PropertyValueDisplay.swift": {
     "mtime": 1783136149.6131628,
     "hash": "c0c4d8a27dce5519ee9b25ba4d81e020"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/PropertyEditorRow.swift": {
-    "mtime": 1783136149.613044,
-    "hash": "b03c1fc9f79d6b32d82779df92678d0d"
+    "mtime": 1783897781.879054,
+    "hash": "26576a08cab6a212b7227356c6c66ac3"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CommandPaletteRecentsStore.swift": {
-    "mtime": 1779948926.9082365,
-    "hash": "481ebb3f49e66d23f05f94c36279dcab"
+    "mtime": 1783994842.8986864,
+    "hash": "793f86fd7e4f5ed11bfdc1ab1365a3c7"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SlateCommands.swift": {
-    "mtime": 1783542745.6903102,
-    "hash": "da9d08ae9dab7acadfdb36039051438a"
+    "mtime": 1783987074.921642,
+    "hash": "ba3d29a8d8d8191adf5bef6cbaf4d9d5"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TaskStatusPhrase.swift": {
     "mtime": 1781142623.1202242,
     "hash": "e8ff5b154a7681bbed613f39271bd396"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CommandPaletteView.swift": {
-    "mtime": 1783060272.0711577,
-    "hash": "861e92aacbb097c42b2b4d3c4b7d53dd"
+    "mtime": 1783987074.8814812,
+    "hash": "39f528b8278e2b847dfe3e6b6e262e4a"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/HotkeySpoken.swift": {
-    "mtime": 1779938833.6153977,
-    "hash": "5121f8ae6eecdac3791567d3d2005551"
+    "mtime": 1783810453.187139,
+    "hash": "2906074d37aea6dc48717119abe79b0f"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SlateMacApp.swift": {
-    "mtime": 1783518098.4438798,
-    "hash": "a0c09be32f649092babbb424e7323797"
+    "mtime": 1783987074.9226089,
+    "hash": "c303e9a6634b3862a2b1fc76ad810840"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SidebarUtilityBar.swift": {
-    "mtime": 1783140512.1759057,
-    "hash": "221fb27fa2db5407c706b8223d13427a"
+    "mtime": 1783817496.5222075,
+    "hash": "518647a147295a7ae229becd60b7a2c7"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/InteractiveRowStyle.swift": {
     "mtime": 1783140512.1747077,
@@ -1135,105 +1347,161 @@
     "mtime": 1783127950.0911555,
     "hash": "6a2aed76586564eb482acec762f399af"
   },
-  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TasksReviewView.swift": {
-    "mtime": 1783060272.0740328,
-    "hash": "390b4b5ab590b57bc7c3562f1e9d0cc4"
-  },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/BibliographyPanel.swift": {
-    "mtime": 1783140512.17286,
-    "hash": "4937ba241517eb2ee0af893bfa4828bc"
+    "mtime": 1783897781.8709116,
+    "hash": "8dc93ccb0d19438af30c1fff86234108"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/AccessibilityExtensions.swift": {
-    "mtime": 1779943693.4780865,
-    "hash": "39b6c15cc33df5dfabbd440adb70afff"
+    "mtime": 1783987074.8484826,
+    "hash": "bae326bfcb221749653300ca738fb35c"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/RecentVaultsStore.swift": {
-    "mtime": 1779948926.9086044,
-    "hash": "d66e8b7832e4b15d93fffeb3f747e754"
+    "mtime": 1783994842.8994656,
+    "hash": "75aaeed017108400842d3e8f79ad2340"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CitationsPanel.swift": {
-    "mtime": 1783140512.1730487,
-    "hash": "89d5d85cc6188d8f7d2d11988b784efd"
+    "mtime": 1783897781.8721485,
+    "hash": "78ead6018808e99fa1e351f3c7f0d383"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/PlainTextEditor.swift": {
+    "mtime": 1783897781.878409,
+    "hash": "4bdbd2277fa4db3a27fd186204759bb2"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/NoteContentView.swift": {
-    "mtime": 1783722153.7866719,
-    "hash": "ed0747efec4cdcb51097e47b9c56109f"
+    "mtime": 1783987074.9094138,
+    "hash": "cd5fbe01aab0f8efee60dfc0a90d5e19"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/OutgoingLinksPanel.swift": {
     "mtime": 1783140512.1754553,
     "hash": "da185061bd22070af5fdd96a4f6a2844"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/QuickSwitcherView.swift": {
-    "mtime": 1783514122.4856958,
-    "hash": "0968b71e00d758c71e97d7e7ce3a875f"
+    "mtime": 1783827307.9882607,
+    "hash": "0489fdb9fba8ceed9ef5dadb5ebb2836"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/CitationSummarySheet.swift": {
-    "mtime": 1779811786.2111635,
-    "hash": "397fda40ea0798d69e4654fb2acdcbe8"
+    "mtime": 1783817496.514103,
+    "hash": "d98e31a58f39019b9679e9e916c6770f"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/SlateSymbol.swift": {
-    "mtime": 1783542745.690468,
-    "hash": "07e69cd3a21ea42d8cacfb402b9dffa8"
+    "mtime": 1783987074.9270892,
+    "hash": "1b8549a7ce28e510cc494c08a20327c5"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/TasksPanel.swift": {
-    "mtime": 1783140512.176175,
-    "hash": "cb377ffd01c492db34ab801ba60da79f"
+    "mtime": 1783987074.9309814,
+    "hash": "954f305822ae202391c1aa04fc810aa2"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Reading/ReadingView.swift": {
-    "mtime": 1783722153.7870939,
-    "hash": "f6c5c40c562aee9cdda9dd8b0fdb5dc7"
+    "mtime": 1783987074.9155326,
+    "hash": "016eefdd3e7f9f5479abe9922bd0abd3"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Reading/ReadingPrintComposer.swift": {
+    "mtime": 1783987074.9144773,
+    "hash": "182d78fb00937abecee85f1bde437db1"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Reading/ReadingLinkRouter.swift": {
-    "mtime": 1783186046.7195177,
-    "hash": "3d344379a4081844007411be13b94e0a"
+    "mtime": 1783897781.8811114,
+    "hash": "9c86f8afcaf9b62d337c3c6d50f4a923"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Reading/ReadingInlineMapper.swift": {
-    "mtime": 1783186046.719296,
-    "hash": "a2a9100995a3da2428106f28332007a3"
+    "mtime": 1783897781.879519,
+    "hash": "8c707669d4d7311f54784f58f39a4213"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Reading/ReadingBlockSource.swift": {
-    "mtime": 1783722153.7868783,
-    "hash": "716d3771aa5abf8b0f0ddaaf454850b8"
+    "mtime": 1783987074.911372,
+    "hash": "f910ace75adf6ef33c139e82d6d82509"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceModel.swift": {
-    "mtime": 1783722153.7873049,
-    "hash": "3f4ba3b4dc20f209a513cbbada150ebd"
+    "mtime": 1783897781.883656,
+    "hash": "74a9b4522d3bf9aa130009e975405503"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceState.swift": {
-    "mtime": 1783722153.7874947,
-    "hash": "01f4c062aee5ec549b777045fc9c13ce"
+    "mtime": 1783897781.8840268,
+    "hash": "e34e2cc384a87e9b47483044ebcea3ac"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Workspace/RightPaneView.swift": {
-    "mtime": 1783557156.4880185,
-    "hash": "91742f6286207ac23287056dfed60f91"
+    "mtime": 1783987074.9321792,
+    "hash": "e7017920b33c1b6946b2752fbd1debc5"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Workspace/TabBarView.swift": {
-    "mtime": 1783557156.4882972,
-    "hash": "4070386614a566afcb9e23c575874bd3"
+    "mtime": 1783897781.8833683,
+    "hash": "b5ce470606e3a2fdfef4bdb5afe26d0c"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Workspace/SplitContainerView.swift": {
-    "mtime": 1783127950.0939999,
-    "hash": "89753b4c3b2b18dce2a909919cce27bd"
+    "mtime": 1783897781.8830817,
+    "hash": "1796acaa5f38b267f2812d28edd77bb0"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceView.swift": {
-    "mtime": 1783557156.4892092,
-    "hash": "8ec1b12604455fc08ebfd18f51e8fd7d"
+    "mtime": 1783897781.8845022,
+    "hash": "22caf8019ce9906466afe1c7032b075b"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceStore.swift": {
-    "mtime": 1783557156.488993,
-    "hash": "106fa60a99234db17cb5c66ea405356e"
+    "mtime": 1783897781.8842518,
+    "hash": "50715f703a808af2fb925b4ddfc1312d"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Workspace/NoteDocument.swift": {
     "mtime": 1783136149.6146927,
     "hash": "7230391d05bd4a5343b1a30aca3c12b7"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/GraphInspectorView.swift": {
+    "mtime": 1783987074.8920355,
+    "hash": "07e7fdd20d074001ce4201f689df92f2"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/GraphAnnouncer.swift": {
+    "mtime": 1783987074.8853111,
+    "hash": "1adc75fcc3dff89aa6f699c99a1928fc"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/ConnectionsPanel.swift": {
+    "mtime": 1783987074.8848677,
+    "hash": "07f8b356f48e4632ae57572546c7c004"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/AppState+Connections.swift": {
+    "mtime": 1783987074.8832572,
+    "hash": "29b8a7e1a6e62e3232eab7f53d124a8b"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/GraphConfigStore.swift": {
+    "mtime": 1783987074.8861506,
+    "hash": "b4af41c213859593678dcd8fc9d5f25c"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/GraphViewState.swift": {
+    "mtime": 1783987074.8993976,
+    "hash": "28c1bc6692ebb72e5692151735acd1ac"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/GraphDiagramView.swift": {
+    "mtime": 1783987074.8914318,
+    "hash": "251e7f65939a02812130b4cde2345dee"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/AppState+GraphDiagram.swift": {
+    "mtime": 1783987074.8839147,
+    "hash": "25f23169166091a2822ec44806f63099"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/AppState+GraphTable.swift": {
+    "mtime": 1783987074.8843136,
+    "hash": "964734152091612bc3371231949eb662"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/GraphTableView.swift": {
+    "mtime": 1783987074.899071,
+    "hash": "113828084ce55f73e9e81d0deb7da94f"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/GraphConfig.swift": {
+    "mtime": 1783987074.885569,
+    "hash": "1e1351db17887fea26ce0cdc255aa53c"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/GraphDiagramModel.swift": {
+    "mtime": 1783987074.8903568,
+    "hash": "79900d2be7bddef82b21196571826632"
+  },
+  "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Graph/AppState+GraphConfig.swift": {
+    "mtime": 1783987074.8835742,
+    "hash": "255fa649c3052c2c6426e28d69bd1baf"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Bases/BaseDocument.swift": {
     "mtime": 1783722153.7841392,
     "hash": "d7a5997ecb27ab832cf8648d84644119"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Bases/BaseEmbedView.swift": {
-    "mtime": 1783722153.7845135,
-    "hash": "66479651c513ed2d19c36a6415921389"
+    "mtime": 1783987074.867715,
+    "hash": "82d4c8aa502312f5ff23a5de2155c78c"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Bases/BaseCellEditPolicy.swift": {
     "mtime": 1783530998.7175612,
@@ -1244,20 +1512,20 @@
     "hash": "04bf890fbabe10684951455ebc0e5a28"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Bases/BaseEmbedDocument.swift": {
-    "mtime": 1783722153.78431,
-    "hash": "fdb5d7e77a63a8aac26fb473aef11ede"
+    "mtime": 1783987074.8668306,
+    "hash": "d621cb7e9777ec7e20b3a8c1449e1112"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Bases/AppState+Bases.swift": {
-    "mtime": 1783722153.783604,
-    "hash": "433455e41521546d1f35b55dbfa8cd19"
+    "mtime": 1783987074.8617232,
+    "hash": "869ff3f1d7a0b2608544d69f9591a2e0"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Bases/BaseContainerView.swift": {
-    "mtime": 1783722153.7837956,
-    "hash": "4cb8878eb3c0df68a2cc4941c28ddb81"
+    "mtime": 1783897781.8704348,
+    "hash": "782417b64e119405489fc81fa2f903bd"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Bases/BaseQueriesPanel.swift": {
-    "mtime": 1783722153.7849836,
-    "hash": "f96268d4fd001873c28ba3ea05694d2c"
+    "mtime": 1783817496.5136456,
+    "hash": "9e8cd79303602584fcb66374c1e2280e"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Bases/DashboardViews.swift": {
     "mtime": 1783722153.7859938,
@@ -1300,8 +1568,8 @@
     "hash": "8681e3419f85823038832b738bfe4741"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Canvas/CanvasOutlineView.swift": {
-    "mtime": 1783274096.2883565,
-    "hash": "1d3c8aba9f3eae127e2a496df7905d63"
+    "mtime": 1783897781.8717217,
+    "hash": "88a0409a269c06f4f92666bbbefcd020"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Canvas/AppState+CanvasNavigation.swift": {
     "mtime": 1783274096.28678,
@@ -1312,8 +1580,8 @@
     "hash": "a23fd958ebd14a86ca3813fe48ad9fe1"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Canvas/AppState+CanvasActions.swift": {
-    "mtime": 1783274096.2856157,
-    "hash": "d3742ad85e65a3fdf8a4ad7f745415da"
+    "mtime": 1783987074.869056,
+    "hash": "460ce49dda88a2918ebdd6f5a4902f77"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Canvas/CanvasAnnouncer.swift": {
     "mtime": 1783274096.2869787,
@@ -1332,8 +1600,8 @@
     "hash": "10d98f7eaf1a83b4d2d6a45c238e49fe"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Canvas/CanvasCardEditorSheet.swift": {
-    "mtime": 1783274096.2872021,
-    "hash": "c410e09226b651830d9d1a66b320c3f3"
+    "mtime": 1783897781.87137,
+    "hash": "4528ff1504db2a475120c0dfda0c99c5"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Canvas/CanvasRendererView.swift": {
     "mtime": 1783274096.2889965,
@@ -1344,12 +1612,12 @@
     "hash": "77d1d6d35abf59a6759aa361b18df0c1"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Canvas/AppState+CanvasExtras.swift": {
-    "mtime": 1783274096.2864769,
-    "hash": "21a4fdfc1e4f272c3165f66d6c7971cb"
+    "mtime": 1783987074.8731537,
+    "hash": "b8333c36f9b667fa7c5ccbf1e23ba2af"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Canvas/AppState+Canvas.swift": {
-    "mtime": 1783557156.487777,
-    "hash": "e3fd9fad0e9c617fee433ae9eeea2991"
+    "mtime": 1783897781.8712192,
+    "hash": "5ec42fdb614f31a40a4ca52180c79dde"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/Sources/SlateMac/Canvas/CanvasCardPicker.swift": {
     "mtime": 1783274096.287321,
@@ -1360,8 +1628,8 @@
     "hash": "a05305ca5c489b0d0638fc4311e26399"
   },
   "/Users/coryj/Dev/slate/BENCHMARKS.md": {
-    "mtime": 1783722153.782082,
-    "hash": "70657924605b82b8c82d7e2b1440fdd2"
+    "mtime": 1783987074.8425264,
+    "hash": "ddffd53be45a6d2d208fe78ff4aa1484"
   },
   "/Users/coryj/Dev/slate/README.md": {
     "mtime": 1783371548.0193248,
@@ -1483,8 +1751,12 @@
     "mtime": 1783563468.465407,
     "hash": "550c9677736c086cc68d3dd3f5f21a5c"
   },
+  "/Users/coryj/Dev/slate/demo-vault/bases/pizza toppings/Roasted mushrooms.md": {
+    "mtime": 1783726866.8469958,
+    "hash": "fc20be0f45cf0241108968aeae9ef244"
+  },
   "/Users/coryj/Dev/slate/demo-vault/bases/pizza toppings/Fresh mozzarella.md": {
-    "mtime": 1783565764.5046566,
+    "mtime": 1783726866.8469493,
     "hash": "014a883cb84f8b2bd31280bc245e90cc"
   },
   "/Users/coryj/Dev/slate/demo-vault/daily/2026-05-27.md": {
@@ -1600,8 +1872,8 @@
     "hash": "ad2eddd54eeaaa365e276778c67eec06"
   },
   "/Users/coryj/Dev/slate/docs/plans/01_detailed_roadmap.md": {
-    "mtime": 1778980736.387304,
-    "hash": "4b05ee816f1a2c82e5b63b2db41600bd"
+    "mtime": 1783897781.8959465,
+    "hash": "621e8377f131078d12b1a552d736f215"
   },
   "/Users/coryj/Dev/slate/docs/plans/initial_chat_and_research.md": {
     "mtime": 1778980725.106805,
@@ -1612,8 +1884,8 @@
     "hash": "23f1a5919618cbe8f34e4fb270f56e10"
   },
   "/Users/coryj/Dev/slate/docs/plans/05_locked_architecture_decisions.md": {
-    "mtime": 1779509854.1944613,
-    "hash": "58c6c2b0c5cbcbfa5ae912484a78591c"
+    "mtime": 1783817496.5283976,
+    "hash": "458097296f4120f7da18802d2a598646"
   },
   "/Users/coryj/Dev/slate/docs/plans/13_repo_structure.md": {
     "mtime": 1783274096.3073888,
@@ -1656,20 +1928,20 @@
     "hash": "f199f4cb83352b25b6d8997d66036137"
   },
   "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/specs/u3_spec.md": {
-    "mtime": 1783127950.1073885,
-    "hash": "3dbac8a3502631d9a50d4d4555820d3d"
+    "mtime": 1783897781.8964589,
+    "hash": "37f7f76bff184b22c86259dce719559a"
   },
   "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/specs/u2_spec.md": {
-    "mtime": 1783127950.1071925,
-    "hash": "c001ee70f02924b5d99d871ed9b82639"
+    "mtime": 1783827308.0018334,
+    "hash": "fc3adfe7da509b10c13ede3f6533dc0a"
   },
   "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/specs/gap_analysis.md": {
     "mtime": 1783127950.106674,
     "hash": "4faf6462711c0c693782a1fa99f4aae3"
   },
   "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/specs/u1_spec.md": {
-    "mtime": 1783127950.1069725,
-    "hash": "2857a2c25bf0e0119e06446eec4ff91d"
+    "mtime": 1783827308.0013838,
+    "hash": "ea6f99841c16449d6e6314adc886efbb"
   },
   "/Users/coryj/Dev/slate/docs/plans/08_ui_parity/specs/u4_spec.md": {
     "mtime": 1783127950.1076257,
@@ -1703,61 +1975,69 @@
     "mtime": 1783186046.726483,
     "hash": "fd21f6d9a56f7cf94a4ccf2c67be7502"
   },
+  "/Users/coryj/Dev/slate/docs/plans/18_windows_port/03_codex_adversarial_review_2026-07-12.md": {
+    "mtime": 1783897781.899604,
+    "hash": "d9045e8a7ebf56d68a94ebdd45d6ca9d"
+  },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/00_program.md": {
-    "mtime": 1783371014.7191217,
-    "hash": "27c00ceb77f3a6c8ace2040bb10d6b8a"
+    "mtime": 1783897781.898979,
+    "hash": "c7fa036b82be5354051062957d69638e"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/01_milestone_brief.md": {
     "mtime": 1783371014.7192638,
     "hash": "711ce3db193062f90b838366de4ee29f"
   },
+  "/Users/coryj/Dev/slate/docs/plans/18_windows_port/02_handoff_audit_2026-07-11.md": {
+    "mtime": 1783897781.8992682,
+    "hash": "b67fbd012dcbb23434a79df66cb6d5fe"
+  },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/w5_spec.md": {
-    "mtime": 1783371014.7201085,
-    "hash": "8c5de50f9d80254a0afc94926ea611c0"
+    "mtime": 1783897781.9023325,
+    "hash": "02703159b49c20c4669e0a288e4f367e"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/w4_spec.md": {
-    "mtime": 1783371014.7200067,
-    "hash": "870ffd121fafa8755dbec29aa245bc3a"
+    "mtime": 1783897781.9019756,
+    "hash": "954fdfc8f008571eb571cca9ef9233ee"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/w6_spec.md": {
-    "mtime": 1783371014.7202096,
-    "hash": "50dce4f5734c741586b038ecb7c7808d"
+    "mtime": 1783897781.9026918,
+    "hash": "fb916afd9deeaf1b0c13638df40d8aab"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/gap_analysis.md": {
-    "mtime": 1783371014.719429,
-    "hash": "48ee1fdb710d8873cf8ed54c60304293"
+    "mtime": 1783897781.9000509,
+    "hash": "1fb9f51ac9f5dafef9517069bde90707"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/w7_spec.md": {
-    "mtime": 1783371014.7203083,
-    "hash": "20bf93e6c00bee8cf89ed258b5739eaf"
+    "mtime": 1783897781.9028978,
+    "hash": "f3f69b35f7430d62602a0bdc324282c5"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/w2_spec.md": {
-    "mtime": 1783371014.719786,
-    "hash": "4e74d9cab8a33a06907b4caef16e1e86"
+    "mtime": 1783897781.901127,
+    "hash": "148ef18348ee7e8bccdba3cb811a3aa0"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/w3_spec.md": {
-    "mtime": 1783371014.7198894,
-    "hash": "31593e0cec44a507cd43c88dcba2bada"
+    "mtime": 1783897781.9014912,
+    "hash": "6618ce2a20a7ee260a590369cac52dc9"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/w8_spec.md": {
-    "mtime": 1783371014.7204156,
-    "hash": "62b0025a0df8c82e0d4264a32c481181"
+    "mtime": 1783897781.9034739,
+    "hash": "b418d14546c8984f870c0105c0f4263f"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/w1_spec.md": {
-    "mtime": 1783371014.7196734,
-    "hash": "87abec4077dc8795d61e5ffb876d2afe"
+    "mtime": 1783897781.9008274,
+    "hash": "85d2058a7966724215b0c3e05368686b"
   },
   "/Users/coryj/Dev/slate/docs/plans/18_windows_port/specs/w0_spec.md": {
-    "mtime": 1783371014.71956,
-    "hash": "327c070cf636d71c984538e522dc46d1"
+    "mtime": 1783897781.9004571,
+    "hash": "1a567a23afe095d423a5c991bffc435f"
   },
   "/Users/coryj/Dev/slate/docs/plans/09_canvas/at_smoke_checklist.md": {
     "mtime": 1783274096.3071272,
     "hash": "4813f3dddab69cb0db56f0af66ebed98"
   },
   "/Users/coryj/Dev/slate/docs/plans/09_canvas/00_program.md": {
-    "mtime": 1783274096.3070316,
-    "hash": "40b22563035ac6c5f88b9d3bc35756d0"
+    "mtime": 1783987074.990936,
+    "hash": "62aad283330535bd8d75c78e1ae6d35d"
   },
   "/Users/coryj/Dev/slate/docs/plans/09_canvas/specs/t3_spec.md": {
     "mtime": 1783136149.6189876,
@@ -1787,21 +2067,45 @@
     "mtime": 1783136149.6185997,
     "hash": "a3057d84a75a0846021e28c8333e40a7"
   },
+  "/Users/coryj/Dev/slate/docs/plans/19_image_ocr/00_plan.md": {
+    "mtime": 1783784871.9712045,
+    "hash": "67f6d0854e4262fc943bfdb256fa456a"
+  },
+  "/Users/coryj/Dev/slate/docs/plans/19_image_ocr/specs/embed_resolver_contract.md": {
+    "mtime": 1783784871.9714382,
+    "hash": "c9587466cf2ec856665ceeb0e6fe5744"
+  },
+  "/Users/coryj/Dev/slate/docs/plans/19_image_ocr/specs/storage_spec.md": {
+    "mtime": 1783784871.9717114,
+    "hash": "c4d545019505a6e84dcd1b110616eaa4"
+  },
+  "/Users/coryj/Dev/slate/docs/plans/19_image_ocr/specs/reconciliation_spec.md": {
+    "mtime": 1783784871.9715912,
+    "hash": "f1a2d1264f4d125f00e5b94cace8842a"
+  },
   "/Users/coryj/Dev/slate/docs/plans/09_sync_cli/m_spec.md": {
-    "mtime": 1783510000.2651646,
-    "hash": "2c4dfaf3fb71a666a4d09f8d3f8d1329"
+    "mtime": 1783817496.5292718,
+    "hash": "bb6783f39d61698e022b2b789a11a07b"
   },
   "/Users/coryj/Dev/slate/docs/plans/09_sync_cli/00_plan.md": {
     "mtime": 1783371548.0196462,
     "hash": "eb6a30be30aac4ee90bf165c4477201e"
   },
   "/Users/coryj/Dev/slate/docs/plans/10_local_history/o_spec.md": {
-    "mtime": 1783137241.6324382,
-    "hash": "1d3c51852848c6a1395617699b17e9ee"
+    "mtime": 1783817496.5297585,
+    "hash": "006913d2c713c981f101f6f05dd67ad2"
   },
   "/Users/coryj/Dev/slate/docs/plans/10_local_history/00_plan.md": {
-    "mtime": 1783137241.631996,
-    "hash": "14735f97302a8272ebab8b26488d956d"
+    "mtime": 1783897781.8969436,
+    "hash": "0f961f2f291d1c0ec55e1465ce7858b6"
+  },
+  "/Users/coryj/Dev/slate/docs/plans/20_note_export/00_plan.md": {
+    "mtime": 1783784871.9718637,
+    "hash": "915ad7e52219feed926ecef47249c82d"
+  },
+  "/Users/coryj/Dev/slate/docs/plans/20_note_export/specs/export_spec.md": {
+    "mtime": 1783784871.9720323,
+    "hash": "b6511ef312d1542fc607b82c11ed1c9c"
   },
   "/Users/coryj/Dev/slate/docs/plans/16_excalidraw/00_program.md": {
     "mtime": 1783346660.141788,
@@ -1864,8 +2168,8 @@
     "hash": "089a4fe8f3c0e9c1095d72137fd61f67"
   },
   "/Users/coryj/Dev/slate/docs/plans/15_files_sidebar/specs/fl2_spec.md": {
-    "mtime": 1783306466.2734416,
-    "hash": "9ea127f00a82369d52abcead63a3189f"
+    "mtime": 1783827308.0024796,
+    "hash": "d33195549d5f14be2a10e61634b9222f"
   },
   "/Users/coryj/Dev/slate/docs/plans/17_bases/02_milestone_brief.md": {
     "mtime": 1783351602.1944363,
@@ -1896,8 +2200,8 @@
     "hash": "f7f80065c9f36ebda51b623243853f76"
   },
   "/Users/coryj/Dev/slate/docs/plans/17_bases/specs/n1_spec.md": {
-    "mtime": 1783722153.8009748,
-    "hash": "3aa16d245060b0a3a16c501e257bef3e"
+    "mtime": 1783897781.8983085,
+    "hash": "80f5f8f416edd3138fa6d2f0fe4cc839"
   },
   "/Users/coryj/Dev/slate/docs/plans/17_bases/specs/n0_spec.md": {
     "mtime": 1783722153.8008049,
@@ -1912,24 +2216,24 @@
     "hash": "3ad55518830b2ee9734aedbb097c619a"
   },
   "/Users/coryj/Dev/slate/docs/plans/11_graph/00_program.md": {
-    "mtime": 1783140512.1790404,
-    "hash": "aed1f45a2dc2e2710211be7675df3a6e"
+    "mtime": 1783897781.897273,
+    "hash": "8eebed9daccb483d74bab5d0cc451d64"
   },
   "/Users/coryj/Dev/slate/docs/plans/11_graph/01_research_brief.md": {
     "mtime": 1783140512.1791775,
     "hash": "0a92df555ca532818df26d5ebace548a"
   },
   "/Users/coryj/Dev/slate/docs/plans/11_graph/specs/p0_spec.md": {
-    "mtime": 1783140512.1793501,
-    "hash": "ed5c789b029c4ba71b20b885c4aedcfa"
+    "mtime": 1783897781.8974733,
+    "hash": "c03be8e663351f2a0169795d616725c7"
   },
   "/Users/coryj/Dev/slate/docs/plans/11_graph/specs/p1_spec.md": {
-    "mtime": 1783140512.1794784,
-    "hash": "67afb39c23bce1c75979350c8e3d8adb"
+    "mtime": 1783897781.8976822,
+    "hash": "22b84e5afb9c6fbe38aa96b622fc783d"
   },
   "/Users/coryj/Dev/slate/docs/plans/11_graph/specs/p2_spec.md": {
-    "mtime": 1783140512.1796045,
-    "hash": "9eb41c745be87f7b568b3b713a9db12b"
+    "mtime": 1783987074.9911022,
+    "hash": "7a2c697bf51c23785badb51434bfe35e"
   },
   "/Users/coryj/Dev/slate/docs/plans/12_autocomplete/00_program.md": {
     "mtime": 1783186046.7247376,
@@ -1955,6 +2259,10 @@
     "mtime": 1783186046.725047,
     "hash": "8977bda6df573df7f3d82522e9c56cff"
   },
+  "/Users/coryj/Dev/slate/docs/audits/2026-07-11-hig-corpus-conformance.md": {
+    "mtime": 1783817496.5277026,
+    "hash": "134c8fa4c2a1a0d9252e4907d7feb232"
+  },
   "/Users/coryj/Dev/slate/docs/diagrams/README.md": {
     "mtime": 1778995310.0,
     "hash": "573c8da61f9ba3423641efcd8698232f"
@@ -1968,8 +2276,8 @@
     "hash": "bea51864347d24a7af526e077d237777"
   },
   "/Users/coryj/Dev/slate/docs/runbooks/voiceover-feature-test.md": {
-    "mtime": 1783140512.1799285,
-    "hash": "470db927d8749565a3f7b7d07bf2311e"
+    "mtime": 1783987074.9919438,
+    "hash": "13f0c8ca1b7c5ebad077731743b270df"
   },
   "/Users/coryj/Dev/slate/docs/superpowers/plans/2026-07-09-milestone-n-remediation.md": {
     "mtime": 1783722153.8017952,
@@ -1984,20 +2292,24 @@
     "hash": "124fa0edd806a7a87ab22e6a4f4473a8"
   },
   "/Users/coryj/Dev/slate/docs/help/bases.md": {
-    "mtime": 1783722153.7999833,
-    "hash": "f9204c491ef1b08bb224c5b9e4d61df5"
+    "mtime": 1783817496.5279887,
+    "hash": "6378fcf4528edded81380b16a4f73f25"
   },
   "/Users/coryj/Dev/slate/docs/help/canvas.md": {
-    "mtime": 1783274096.3067236,
-    "hash": "40fd7c48838523cfef0a7f7f1738844d"
+    "mtime": 1783827308.0008543,
+    "hash": "89028fe25350551e8ec828a827222916"
+  },
+  "/Users/coryj/Dev/slate/docs/help/graph.md": {
+    "mtime": 1783987074.9893186,
+    "hash": "b750e3349a80a4a61ba08eaf73bc0cdd"
   },
   "/Users/coryj/Dev/slate/examples/swift-cli/README.md": {
     "mtime": 1779509854.194832,
     "hash": "fdf305af70b989d8c039eb675b0f0c20"
   },
   "/Users/coryj/Dev/slate/apps/slate-mac/README.md": {
-    "mtime": 1779512343.652461,
-    "hash": "da9bda9787785312fd1ae56d81e665d5"
+    "mtime": 1783827307.982494,
+    "hash": "779d0768aeae0e21c4f2740efe6f468d"
   },
   "/Users/coryj/Dev/slate/demo-vault/attachments/document.pdf": {
     "mtime": 1783563468.4546454,
