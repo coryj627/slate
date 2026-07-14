@@ -32,7 +32,8 @@ SwiftUI/AppKit, XCTest, UserDefaults, GitHub Actions.
 - Implementation baseline is `origin/main` at `6aa9fce`. FL2 is not actually a
   clean slate: main already has pointer multi-selection, batch move/trash,
   Duplicate, Reveal in Finder, Copy Path, Finder file imports, drop highlighting,
-  600 ms spring-loading, expansion persistence, and structural undo.
+  600 ms spring-loading, expansion persistence, move/rename structural undo, and
+  explicitly non-undoable system-Trash deletion.
 - The newest schema migration is `030_files_birthtime.sql`; `files.birthtime_ms`
   already supplies the filesystem-created timestamp. FL0 must use migration 031
   and must not add a second created-time column.
@@ -65,9 +66,11 @@ locked user-facing scope:
    validated canonical authored `YYYY-MM-DD` civil date and
    `created_ms: Option<i64>` for a parsed datetime instant or the existing
    positive `files.birthtime_ms` fallback. `created_date` takes precedence. Its
-   ISO components are proleptic Gregorian: Swift must strictly round-trip them
-   through `Calendar(identifier: .gregorian)` configured with the user's current
-   time zone and construct that civil day's absolute local start. It must never
+   ISO components are proleptic Gregorian. FL-01 owns one production
+   `SidebarCivilDateResolver`, which strictly round-trips them through
+   `Calendar(identifier: .gregorian)` configured with the user's current time
+   zone and constructs that civil day's absolute local start. Later FL work
+   consumes that symbol/result instead of implementing another parser. It must never
    feed the numeric components to `Calendar.current` or reinterpret them through
    a Buddhist, Hebrew, Islamic, or other non-Gregorian calendar. Presentation may
    localize from the resulting `Date`; sort/group uses that same value. The
@@ -82,14 +85,17 @@ locked user-facing scope:
    inventory disabled with an accessible reason when unavailable; temporarily
    blocked but otherwise relevant context actions may be disabled with a reason.
 3. **FL2 is residual work.** Keep the shipped `<stem> copy` Duplicate naming,
-   spring-loading, pointer multi-selection, and current undo behavior unless a
-   later PR deliberately upgrades the batch contract. Do not implement parallel
-   versions.
-4. **One logical batch operation.** Replace the current K independent Swift
-   operations with one core request, complete preflight, one consolidated result,
-   one refresh/announcement, and one undo group. Because multiple filesystem
-   mutations cannot be crash-atomic, the core must journal progress, attempt
-   rollback on failure, and report any rollback failure honestly.
+   spring-loading, pointer multi-selection, move/rename undo, and non-undoable
+   system-Trash behavior. Do not implement parallel versions or imply that Trash
+   can be undone through Slate.
+4. **One logical batch operation, operation-specific recovery.** Replace the
+   current K independent Swift operations with one core request per user action,
+   complete preflight, one consolidated result, and one refresh/announcement.
+   Move journals progress, attempts rollback on failure, reports rollback failure,
+   and creates one undo group. Trash uses the existing system-Trash primitive,
+   whose FFI returns no restore receipt: it creates no Slate undo entry, attempts
+   no fictional rollback, and reports exact partial success/failure if a runtime
+   error follows an earlier successful trash.
 5. **One recents history.** Move `FileRecentsStore` to device-local persistence,
    retain its 50-entry depth for Quick Switcher, and show the first 10 eligible
    entries in the sidebar. Migrate the legacy vault-local file once; do not keep
@@ -112,13 +118,19 @@ locked user-facing scope:
     shortcuts and Recents are leaves: they open immediately through the normal
     open seam and then mirror the containing folder/file selection; they never
     become list containers.
+11. **Filter dates use exact civil-day boundaries.** Core exposes parsed date-term
+    requirements; the app supplies exact half-open UTC boundary instants built
+    with an explicitly Gregorian calendar and the actual `TimeZone`. No fixed
+    UTC offset or 24-hour-day arithmetic may stand in for timezone rules across
+    spring-forward or fall-back transitions.
 
 ## Architecture and Usability Rules
 
 - Keep `FileTreeSidebar` as an assembly surface. New logic belongs under
   `apps/slate-mac/Sources/SlateMac/Sidebar/` in focused files such as
   `SidebarFileRow.swift`, `SidebarSelectionModel.swift`,
-  `SidebarActionCatalog.swift`, `SidebarPreferences.swift`,
+  `SidebarActionCatalog.swift`, `SidebarCivilDateResolver.swift`,
+  `SidebarPreferences.swift`,
   `SidebarFilterView.swift`, `SidebarSectionsView.swift`, and
   `SidebarDualPaneView.swift`.
 - Introduce one immutable `SidebarRowModel` and one `SidebarAction` catalog.
@@ -267,7 +279,9 @@ Each task below inherits this gate in addition to its targeted tests:
 - Modify `crates/slate-core/src/db.rs`, `session.rs`, and session test module list
 - Modify `crates/slate-uniffi/src/lib.rs`
 - Modify `crates/slate-core/benches/scan_bench.rs` and `BENCHMARKS.md`
-- Add/modify Swift FFI smoke tests; generated bindings remain untracked
+- Create `apps/slate-mac/Sources/SlateMac/Sidebar/SidebarCivilDateResolver.swift`
+- Add `SidebarCivilDateResolverTests.swift` and modify Swift FFI smoke tests;
+  generated bindings remain untracked
 
 **Work:**
 
@@ -280,12 +294,15 @@ Each task below inherits this gate in addition to its targeted tests:
       count, preview, and task aggregates. Both listing APIs use one SQL statement
       with no per-row queries; migration 031 adds no created column.
 - [ ] Resolve strict proleptic-Gregorian `YYYY-MM-DD` to `created_date`; resolve
-      datetime or positive birthtime fallback to `created_ms`. In Swift,
-      round-trip with `Calendar(identifier: .gregorian)` plus the user's time zone
-      and construct one absolute local-start `Date`. Test invalid-date fallthrough,
-      date-over-birthtime precedence, positive/negative UTC offsets, DST, Buddhist
-      plus Hebrew/Islamic system calendars, and the ban on Calendar.current
-      reinterpretation or UTC-midnight encoding.
+      datetime or positive birthtime fallback to `created_ms`. FL-01 creates the
+      single production `SidebarCivilDateResolver`, which round-trips with
+      `Calendar(identifier: .gregorian)` plus an injected user time zone and
+      constructs one absolute local-start `Date`. Direct resolver tests cover
+      strict invalid-date rejection, positive/negative UTC offsets, DST, Buddhist
+      plus Hebrew/Islamic system calendars, and the ban on `Calendar.current`
+      reinterpretation or UTC-midnight encoding. FFI/integration tests cover
+      invalid-date fallthrough and date-over-birthtime precedence. Later FLs
+      consume this symbol instead of copying the parser.
 - [ ] Verify the additive JSON/CLI contract and regenerate bindings locally.
 - [ ] Add rescan-parity and random-walk censuses plus 1k/10k/50k scan, 10k root
       listing, and save-path benchmarks.
@@ -294,6 +311,7 @@ Each task below inherits this gate in addition to its targeted tests:
 
 - `cargo test -p slate-core file_meta -- --nocapture`
 - `cargo test -p slate-uniffi file_summary -- --nocapture`
+- Run `SidebarCivilDateResolverTests` against the production resolver symbol.
 - `SLATE_CENSUS_FULL=1 cargo test -p slate-core census_file_meta --release -- --nocapture`
 - `make bench BENCH_ARGS='list_dir_children_meta/10000'`
 - Scan overhead <= 5%, root metadata listing <= 10 ms, and save remains
@@ -319,9 +337,10 @@ Each task below inherits this gate in addition to its targeted tests:
 - [ ] Extract one row model/view for effective title; civil-date-first, truthful
       created/modified labels; preview clamp; task badge; localized word count;
       standard/compact density; filename tooltip; rename filename; and one
-      coherent AX utterance. Resolve date-only components once with an explicitly
-      Gregorian calendar and the user's time zone. Presentation localizes from
-      that absolute local-start `Date`; sort/group reuses it without reparsing.
+      coherent AX utterance. Consume FL-01's `SidebarCivilDateResolver` and its
+      absolute local-start `Date`; FL-02 does not parse date-only components.
+      Presentation localizes from that value; sort/group reuses it without
+      reparsing.
 - [ ] Cache formatters and precompute row strings outside `body`.
 - [ ] Add the Sidebar settings surface to the existing Settings view using
       device-local typed preferences.
@@ -330,10 +349,11 @@ Each task below inherits this gate in addition to its targeted tests:
 - [ ] Keep compact mode visually compact without reducing spoken information.
 
 **Targeted verification:** titled/untitled/date-fallback rows; no date
-mislabeling; Gregorian round-trip under Buddhist plus Hebrew/Islamic system
-calendars, positive/negative UTC offsets, and DST; rename uses filename;
+mislabeling; row tests inject/spy the production FL-01 resolver and prove its
+returned `Date` is consumed without a second parse; rename uses filename;
 preview/badge/compact AX; corrupted/oversized/unknown-key prefs;
-formatter-allocation regression; APCA both appearances.
+formatter-allocation regression; APCA both appearances. Gregorian validity,
+calendar, offset, and DST cases remain direct FL-01 resolver tests.
 
 **Commit:** `feat(sidebar): add rich shared rows and preferences`
 
@@ -357,17 +377,22 @@ formatter-allocation regression; APCA both appearances.
       >=10-item confirmation.
 - [ ] Build multi-item drag providers from the current visible selection and
       preserve the selection while dragging.
-- [ ] Add one core batch request for move and trash with top-level selection
-      pruning, complete preflight, progress journal, deterministic results,
-      rollback attempt, one undo group, and session/vault ownership guards.
+- [ ] Add one logical core request per Move or Trash action with top-level
+      selection pruning, complete preflight, deterministic results, and
+      session/vault ownership guards.
+- [ ] For Move, journal progress, attempt rollback, report rollback failures, and
+      register one undo group. For Trash, use the existing system-Trash primitive,
+      register no undo, attempt no rollback without a restore receipt, and report
+      exact trashed versus untrashed paths after a runtime partial failure.
 - [ ] Publish one refresh, announcement, and consolidated error/skip report.
 - [ ] Keep actions disabled with an accessible reason while a batch is running;
       prevent double submission and stale completion after vault switch.
 
 **Targeted verification:** pointer/keyboard range matrix, hidden/collapsed rows,
-multi-drag payload, open confirmation, collision/subtree preflight, injected
-mid-batch failure and rollback, rollback-failure honesty, vault switch, one undo,
-one announcement, #643 click regression.
+multi-drag payload, open confirmation, collision/subtree/permission preflight;
+Move failure/rollback/rollback-failure plus one undo group; Trash success with no
+undo and failure-after-one-success with exact partial result and no rollback
+claim; vault switch, one refresh/announcement, and #643 click regression.
 
 **Commit:** `feat(sidebar): complete selection and batch operations`
 
@@ -391,7 +416,9 @@ one announcement, #643 click regression.
       Menu bar/palette keep the stable full inventory disabled with accessible
       reasons; concise context menus/rotor omit structurally inapplicable verbs;
       temporarily blocked relevant context actions may remain disabled. Toolbar
-      and keyboard invoke the same applicable catalog entries.
+      and keyboard invoke the same applicable catalog entries. Move-to-Trash is
+      marked non-undoable; labels, help, confirmation, and announcements never
+      promise ⌘Z or app rollback.
 - [ ] Preserve shipped Duplicate/Reveal behavior; make Copy Path vault-relative;
       add resolver-correct Copy Wikilink and one `Copied.` announcement.
 - [ ] Add live, polite filename warnings for filesystem-invalid and link-breaking
@@ -453,9 +480,9 @@ cancel, partial success, vault switch, in-vault move, external copy semantics.
 
 - [ ] Add total-order name/created/modified sorting with direction, null-last
       rules, stable tie-breaks, and per-folder override precedence. A valid
-      `created_date` supplies the already-resolved Gregorian local-start `Date`
-      before any simultaneous `created_ms` birthtime fallback; never reconstruct
-      its numeric components with the user's system calendar.
+      `created_date` supplies the local-start `Date` from FL-01's production
+      `SidebarCivilDateResolver` before any simultaneous `created_ms` birthtime
+      fallback; never reconstruct its numeric components or add another parser.
 - [ ] Add injected-clock date buckets as nonselectable AX headers. Grouping
       forces its compatible date sort and never mixes folder/file ordering.
 - [ ] Add one nonduplicated Pinned section, pin commands, authored order, and
@@ -518,16 +545,21 @@ fetch bound; history dedupe/delete/vault switch; AX headings and announcements.
 
 - [ ] Implement the locked typed grammar, explicit parse errors, negation, name,
       tag, date, task, extension, and path terms using parameterized SQL only.
-- [ ] Accept caller-supplied now/timezone; use deterministic total ordering and
-      one statement/page with no N+1 work.
+- [ ] Expose canonical unique date-term requirements from the core parser and
+      accept one validated exact half-open UTC-instant window per requirement.
+      Reject missing, extra, duplicate, reversed, or mismatched windows before SQL;
+      core reads no wall clock or host timezone.
+- [ ] Use deterministic total ordering and one statement/page with no N+1 work.
 - [ ] Add `scope_dir` listing mode: empty query is valid only with a normalized,
       vault-contained scope. Unscoped empty query remains invalid.
 - [ ] Return normative count/audio summary and expose parse detail through FFI.
 
-**Targeted verification:** parser table, injection strings, combinations/
-negations, term permutation, timezone/calendar boundaries, pagination stability,
-scope normalization/traversal rejection, positive-term subset property, 10k
-benchmark <= 50 ms.
+**Targeted verification:** parser/date-requirement table, injection strings,
+combinations/negations, term permutation, invalid-window rejection, exact
+`America/New_York` 23-hour spring-forward and 25-hour fall-back windows for
+relative and literal-date terms, pagination stability, scope
+normalization/traversal rejection, positive-term subset property, 10k benchmark
+<= 50 ms.
 
 **Commit:** `feat(sidebar): add deterministic filter engine`
 
@@ -547,6 +579,11 @@ benchmark <= 50 ms.
 - [ ] Put the filter field at the top of the sidebar with operator insertion,
       Option-Command-F, 200 ms debounce, generation cancellation, and day-rollover
       refresh only for relative terms.
+- [ ] Obtain date requirements from core; with an injected clock, explicitly
+      Gregorian calendar, actual `TimeZone`, and FL-01's civil-date resolver,
+      build exact starts/ends by calendar-day addition and pass their epoch
+      milliseconds to core. Never use a fixed offset or 86,400-second arithmetic;
+      rerun active date terms after local rollover or a system-time-zone change.
 - [ ] Overlay a paged flat list without destroying tree expansion/selection;
       reuse the shared row and action catalog. Include path subtitles.
 - [ ] Keep previous good results on parse failure, name the bad term in a polite
@@ -555,7 +592,9 @@ benchmark <= 50 ms.
 
 **Targeted verification:** debounce/stale response/vault switch, Esc states,
 keyboard entry, retained results/error AX, page append and stable selection,
-restore-not-apply, relative rollover, action parity, APCA both appearances.
+restore-not-apply, app-built spring-forward/fall-back boundaries forwarded
+byte-for-byte, relative rollover/time-zone-change refresh, action parity, APCA
+both appearances.
 
 **Commit:** `feat(sidebar): add accessible top-pinned filtering`
 

@@ -8,8 +8,8 @@ Program: [00_program.md](../00_program.md) (locked decisions 11, 13–15; DoD §
 Baseline facts (verified 2026-07-14 at `origin/main` `6aa9fce`):
 
 - Pointer multi-selection has shipped: `FileTreeSidebar` keeps a focused `listSelection`, a `multiSelection` set, a stable anchor/snapshot, range and toggle click handling, top-level batch-target pruning, one count announcement, and batch Move/Trash context actions. Preserve the #643 primary-click behavior. Missing FL work is Command-A, Shift-arrow range extension, Return/Command-Down multi-open confirmation, and multi-item drag payloads.
-- Batch Move/Trash currently loop K independent AppState/core operations. They consolidate some UI output but produce K mutation/undo units and cannot provide complete preflight, rollback, or one logical result. FL-03 replaces that implementation with one core request; it does not add a parallel batch path.
-- Duplicate already ships through context menu, File menu, palette, and rotor with exclusive-create `<stem> copy`, then `<stem> copy 2`, … naming. Reveal in Finder and vault-relative Copy Path also ship. Structural move/rename undo, pointer drag/drop, drop highlighting, 600 ms spring-loading/re-collapse, and expansion persistence are present and must not regress.
+- Batch Move/Trash currently loop K independent AppState/core operations. Move produces K structural undo entries. Trash calls `delete_file`/`delete_folder`, which return no restore receipt, send bytes to the system Trash, and are explicitly rejected by `undo_structural`; it is non-undoable inside Slate. FL-03 replaces the Swift loop with one operation-specific core request and result, not a parallel batch path.
+- Duplicate already ships through context menu, File menu, palette, and rotor with exclusive-create `<stem> copy`, then `<stem> copy 2`, … naming. Reveal in Finder and vault-relative Copy Path also ship. Structural move/rename undo, non-undoable system Trash, pointer drag/drop, drop highlighting, 600 ms spring-loading/re-collapse, and expansion persistence are present and must not regress.
 - File-URL drops already distinguish in-vault moves from external imports and can import a Finder file. FL-05 adds the missing all-provider, file-and-directory, bounded/cancellable multi-import pipeline while preserving current feedback and spring-loading.
 - Templates already have `list_templates`, `render_template`, and an app-side picker/render/name/caret flow. FL-04 injects only the selected destination folder; it must not fork the template engine.
 - Mutations continue through AppState action funnels and `TreeMutation` publication. Exact July 5 line references are obsolete; implementation follows the named seams.
@@ -33,22 +33,24 @@ Tests: shipped pointer click/range/toggle matrix including #643; Shift-arrow; Co
 
 ## FL2-2a · One logical batch contract (#656 prerequisite) — FL-03 (`Refs #656`)
 
-Move and Trash become one core request per user action:
+Move and Trash each become one logical core request per user action, with a shared preflight/result envelope but different recovery semantics:
 
 1. Prune descendants of selected folders, validate session/vault ownership, and complete collision/subtree/permission preflight before the first mutation.
-2. Journal progress, apply deterministic operations, attempt rollback on failure, and return one consolidated result. If rollback is incomplete, name every unrecovered path honestly; never claim atomicity the filesystem cannot provide.
-3. AppState publishes one refresh, one announcement, one skip/error report, and one undo group. While running, affected actions that are otherwise relevant to the current surface are disabled with an accessible reason; double submission and stale completion after a vault switch are rejected.
-4. Preserve the shipped confirmation threshold for destructive non-empty-folder batches and tab error/retarget semantics.
+2. **Move:** journal progress, apply deterministic operations, attempt rollback on runtime failure, and name every unrecovered path if rollback is incomplete. A successful batch Move records one structural undo group.
+3. **Trash:** apply the existing system-Trash primitive in deterministic order after complete preflight. It remains non-undoable in Slate and does not attempt rollback because the primitive returns no restore receipt. If a runtime failure occurs after earlier items reached Trash, the consolidated result names every trashed and untrashed/failed path; never describe the result as rolled back or atomic.
+4. AppState publishes one refresh, one announcement, and one consolidated skip/error report. It registers one undo group only for Move and none for Trash. While running, affected actions that are otherwise relevant to the current surface are disabled with an accessible reason; double submission and stale completion after a vault switch are rejected.
+5. Preserve the shipped confirmation threshold for destructive non-empty-folder batches and tab error/retarget semantics. Trash labels, confirmations, announcements, menus, and palette help may say system Trash but must never promise Slate undo, ⌘Z, or rollback.
 
-Tests: top-level pruning; complete preflight; injected mid-batch failure and rollback; rollback-failure honesty; vault switch; double submission; one undo, refresh, and announcement.
+Tests: top-level pruning; complete preflight for both operations; Move mid-batch failure/rollback and rollback-failure honesty; one Move undo group; Trash success with no undo entry; injected Trash failure after one success with exact trashed/untrashed paths and no rollback claim; vault switch; double submission; one refresh/announcement/result; UI-copy scan proving no Trash undo promise.
 
-- [ ] Core batch request/report + progress journal and rollback
+- [ ] Core batch requests/report + Move progress journal/rollback/one undo
+- [ ] Non-undoable Trash partial-result contract with no restore/rollback fiction
 - [ ] AppState single-result funnel + disabled reasons
 - [ ] Move/Trash regression and failure-path tests
 
 ## FL2-2b · Shared action/menu completion (#656 remainder) — closing PR FL-04
 
-1. Append `.sidebar` to the existing cross-language `CommandSection`, add exhaustive conversion/order tests, and define one `SidebarAction` catalog. The catalog owns verb identity, capability, enablement, disabled reason, and the shared AppState action funnel; surfaces own projection. Menu bar and palette retain a stable full command inventory and disable unavailable commands with an accessible reason. Context menus and the VoiceOver rotor omit structurally inapplicable verbs and stay concise; an otherwise relevant action that is only temporarily blocked (for example, while a batch runs or Templates is empty) may remain present and disabled with its accessible reason. Toolbar and keyboard paths invoke the same applicable catalog entries.
+1. Append `.sidebar` to the existing cross-language `CommandSection`, add exhaustive conversion/order tests, and define one `SidebarAction` catalog. The catalog owns verb identity, capability, enablement, disabled reason, and the shared AppState action funnel; surfaces own projection. Menu bar and palette retain a stable full command inventory and disable unavailable commands with an accessible reason. Context menus and the VoiceOver rotor omit structurally inapplicable verbs and stay concise; an otherwise relevant action that is only temporarily blocked (for example, while a batch runs or Templates is empty) may remain present and disabled with its accessible reason. Toolbar and keyboard paths invoke the same applicable catalog entries. The Move-to-Trash action metadata is explicitly non-undoable and no projected hint/copy may advertise ⌘Z or app rollback.
 2. Preserve shipped Duplicate exactly: files only, exclusive-create `<stem> copy`, `<stem> copy 2`, … naming, outgoing links unchanged, one announcement, copied row selected. Preserve shipped Reveal in Finder and vault-relative Copy Path.
 3. Add resolver-correct **Copy Wikilink**: `[[stem]]` only when unambiguous under the live resolver; otherwise use the vault-relative path without `.md`. Copy Path and Copy Wikilink announce one `"Copied."`.
 4. Add live polite warnings for filesystem-invalid and link-breaking characters to rename, new-note, and new-folder flows. Warnings do not replace backend commit validation.

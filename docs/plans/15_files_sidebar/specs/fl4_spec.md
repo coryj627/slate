@@ -35,25 +35,29 @@ Malformed operator terms (`@notadate`, `has:xyzzy`, bare `#`) are **errors**, no
 
 ```rust
 pub struct SidebarFilterPage { pub files: Vec<FileSummary>, pub total: u64, pub audio_summary: String }
+pub struct SidebarFilterDateWindow { pub term: String, pub start_ms: i64, pub end_ms: i64 }
 // VaultSession:
-fn filter_files(&self, query: String, scope_dir: Option<String>, now_ms: i64,
-    tz_offset_min: i32, paging: Paging)
+fn sidebar_filter_date_requirements(&self, query: String) -> Result<Vec<String>, VaultError>
+fn filter_files(&self, query: String, scope_dir: Option<String>,
+    date_windows: Vec<SidebarFilterDateWindow>, paging: Paging)
     -> Result<SidebarFilterPage, VaultError>   // VaultError::InvalidQuery wraps FilterParseError detail
 ```
 
 Rules:
 
 1. One SQL statement (joins per term class; `EXISTS` subqueries for tags/tasks), parameterized — **no SQL built from user strings by concatenation**. `scope_dir` composes as an implicit `path:` prefix (dual-pane and tag-scoped reuse).
-2. **Determinism:** `now_ms` is a parameter (no wall clock in core — same rule as Graph §P-C); date windows resolve in a fixed UTC-offset handed in by the caller (extend the signature with `tz_offset_min: i32`; the app passes the user's current offset). Result order: effective-name asc (locale-neutral casefold key), tie-break path — total order.
-3. **Scoped listing mode lands now:** an empty query is valid only when `scope_dir` is present, normalized, and vault-contained. It returns the same deterministic paged row model for that scope. Unscoped empty query remains `InvalidQuery`; traversal/escape scopes fail before SQL. FL7 consumes this contract without reopening the filter API.
-4. `audio_summary` (normative): `"{n} results."`; scoped: `"{n} results in {folder}."` — grouped decimals; 0 ⇒ `"No results."`
-5. Budget: ≤ **50 ms** at 10k (bench `sidebar_filter/{10k}` in `scan_bench.rs` or a sibling bench file; baseline in BENCHMARKS.md). Name-substring over 10k rows is a linear scan — acceptable at budget; if it misses, add a casefolded name column in a follow-up, don't pre-build it speculatively.
-6. Grammar/AST/parse errors are `pub` — the CLI adopts this exact grammar later (program: not an FL deliverable).
+2. **One grammar, exact boundaries:** the core parser exposes the canonical unique date-term requirements through `sidebar_filter_date_requirements`; Swift does not parse the query language. For execution the app supplies one exact half-open `[start_ms, end_ms)` UTC-instant window per required term. Core rejects missing, extra, duplicate, reversed, or term-mismatched windows before SQL.
+3. **App boundary construction:** with an injected `now`, configure `Calendar(identifier: .gregorian)` with the actual injected/user `TimeZone`. Build `@today` as local start today through local start tomorrow, `@yesterday` as yesterday through today, `@last7d` as six calendar days before today through tomorrow, and `@last30d` as 29 calendar days before today through tomorrow. Build `@YYYY-MM-DD` with FL-01's production civil-date resolver and obtain its exclusive end by adding one Gregorian calendar day. Convert only those starts/ends to epoch milliseconds. Never use a fixed UTC offset, `Calendar.current`, `86_400`-second arithmetic, or UTC-midnight encoding.
+4. **Determinism:** core reads no wall clock or host timezone; the query plus validated windows fully determine SQL results. Result order: effective-name asc (locale-neutral casefold key), tie-break path — total order.
+5. **Scoped listing mode lands now:** an empty query is valid only when `scope_dir` is present, normalized, and vault-contained. It returns the same deterministic paged row model for that scope. Unscoped empty query remains `InvalidQuery`; traversal/escape scopes fail before SQL. FL7 consumes this contract without reopening the filter API.
+6. `audio_summary` (normative): `"{n} results."`; scoped: `"{n} results in {folder}."` — grouped decimals; 0 ⇒ `"No results."`
+7. Budget: ≤ **50 ms** at 10k (bench `sidebar_filter/{10k}` in `scan_bench.rs` or a sibling bench file; baseline in BENCHMARKS.md). Name-substring over 10k rows is a linear scan — acceptable at budget; if it misses, add a casefolded name column in a follow-up, don't pre-build it speculatively.
+8. Grammar/AST/parse errors are `pub` — the CLI adopts this exact grammar later (program: not an FL deliverable).
 
-Tests: parser table-tests (every operator, negation, malformed forms); execution fixtures per term + combinations + negation; SQL-injection strings; permutation of term order ⇒ identical results; window boundaries under fixed `now_ms`/offset; scoped empty listing and pagination; scope normalization/traversal rejection; property: `filter(q) ⊆ filter(drop_one_term(q))` for positive-term queries; bench recorded.
+Tests: parser table-tests (every operator, negation, malformed forms) plus canonical date requirements; execution fixtures per term + combinations + negation; missing/extra/duplicate/reversed window rejection; SQL-injection strings; permutation of term order ⇒ identical results; exact `America/New_York` spring-forward 23-hour and fall-back 25-hour day windows (including named-relative and `@YYYY-MM-DD` terms); scoped empty listing and pagination; scope normalization/traversal rejection; property: `filter(q) ⊆ filter(drop_one_term(q))` for positive-term queries; bench recorded.
 
 - [ ] Parser + typed errors; execution joins; scoped listing; FFI record + method
-- [ ] Determinism rules (now/tz parameters); ordering
+- [ ] Core date-requirement plan + validated exact-window FFI; ordering
 - [ ] Tests + bench baseline; fmt/clippy; host-independent
 
 ## FL4-2 · Top-pinned sidebar filter UI (#663) — closing PR FL-09
@@ -64,9 +68,9 @@ Tests: parser table-tests (every operator, negation, malformed forms); execution
 4. **Errors:** `InvalidQuery` renders inline under the field naming the bad term (from `FilterParseError`), AX polite live region; the previous good results stay visible.
 5. **Announce:** on settle, `audio_summary` verbatim through the announce seam, deduped on (query, count). Row activation opens the file (all FL2 context-menu verbs work on result rows — they're the same component).
 6. **Persistence:** last committed query saved device-local; restored **into the field but not applied** on relaunch (⏎ or edit re-applies) — avoids waking up trapped in a filtered view.
-7. `now_ms`/`tz_offset_min` from the app clock at query time; a timer re-evaluates relative windows on day rollover only if a relative term is active.
+7. At query time, obtain canonical date requirements from core and use the FL-01 resolver plus an explicitly Gregorian calendar, injected clock, and actual `TimeZone` to supply exact UTC boundary instants. Recompute and rerun on local-day rollover (or a system-time-zone change) only if a date term is active; never cache one offset across a DST transition.
 
-Tests: debounce/replace-wholesale; Esc state machine (field↔list↔tree); error inline + retained results; announce dedup; restore-not-apply; path-subtitle AX; paging.
+Tests: debounce/replace-wholesale; Esc state machine (field↔list↔tree); error inline + retained results; announce dedup; restore-not-apply; path-subtitle AX; paging; app-built spring-forward/fall-back boundaries forwarded byte-for-byte to core; rollover/time-zone-change refresh only for date terms.
 
 - [ ] Field + operator menu + chords/palette
 - [ ] Flat-list presentation + tree-state preservation
