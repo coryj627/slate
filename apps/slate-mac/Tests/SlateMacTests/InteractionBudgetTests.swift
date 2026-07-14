@@ -128,7 +128,9 @@ final class InteractionBudgetTests: XCTestCase {
             FileSummary(
                 path: String(format: "big/note-%05d.md", i),
                 name: String(format: "note-%05d.md", i),
-                mtimeMs: 0, sizeBytes: 0, isMarkdown: true)
+                mtimeMs: 0, sizeBytes: 0, isMarkdown: true, displayName: nil,
+                createdDate: nil, createdMs: nil, wordCount: nil, preview: nil,
+                taskTotal: 0, taskOpen: 0)
         }
         let root = DirListing(
             dirs: [

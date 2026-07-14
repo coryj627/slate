@@ -163,6 +163,13 @@ pub struct FileSummary {
     pub mtime_ms: i64,
     pub size_bytes: u64,
     pub is_markdown: bool,
+    pub display_name: Option<String>,
+    pub created_date: Option<String>,
+    pub created_ms: Option<i64>,
+    pub word_count: Option<u32>,
+    pub preview: Option<String>,
+    pub task_total: u32,
+    pub task_open: u32,
 }
 
 // --- Directory tree types (#459, U2-1) ---
@@ -6600,6 +6607,183 @@ fn get_file_metadata_impl(
 
 // --- Internal: list_files ---
 
+/// Shared joined projection used by every API that returns [`FileSummary`].
+///
+/// Each caller defines a unique `candidates` CTE with the seven base file
+/// columns and a one-row `totals(total_filtered)` CTE. The aggregates below
+/// are therefore bounded to the current query's candidates, and the
+/// deterministic minimum ordinal keeps repeated property shapes from
+/// multiplying file rows.
+pub(crate) const FILE_SUMMARY_QUERY_TAIL: &str = r#"
+    , task_counts AS (
+        SELECT t.file_id,
+               COUNT(*) AS task_total,
+               SUM(CASE WHEN t.completed = 0 THEN 1 ELSE 0 END) AS task_open
+        FROM tasks t
+        JOIN candidates c ON c.id = t.file_id
+        GROUP BY t.file_id
+    ),
+    title_ordinals AS (
+        SELECT p.file_id, MIN(p.ordinal) AS ordinal
+        FROM properties p
+        JOIN candidates c ON c.id = p.file_id
+        WHERE p.key = 'title'
+        GROUP BY p.file_id
+    ),
+    title_values AS (
+        SELECT p.file_id, p.value_kind, p.value_text
+        FROM properties p
+        JOIN title_ordinals o
+          ON o.file_id = p.file_id AND o.ordinal = p.ordinal
+    ),
+    created_ordinals AS (
+        SELECT p.file_id, MIN(p.ordinal) AS ordinal
+        FROM properties p
+        JOIN candidates c ON c.id = p.file_id
+        WHERE p.key = 'created'
+        GROUP BY p.file_id
+    ),
+    created_values AS (
+        SELECT p.file_id, p.value_kind, p.value_text
+        FROM properties p
+        JOIN created_ordinals o
+          ON o.file_id = p.file_id AND o.ordinal = p.ordinal
+    )
+    SELECT c.id, c.path, c.name, c.mtime_ms, c.size_bytes,
+           c.is_markdown, c.birthtime_ms,
+           CASE WHEN c.is_markdown = 1 THEN fm.word_count END,
+           CASE WHEN c.is_markdown = 1 THEN NULLIF(fm.preview, '') END,
+           COALESCE(tc.task_total, 0), COALESCE(tc.task_open, 0),
+           tv.value_kind, tv.value_text,
+           cv.value_kind, cv.value_text,
+           totals.total_filtered
+    FROM totals
+    LEFT JOIN candidates c ON 1 = 1
+    LEFT JOIN file_meta fm ON fm.file_id = c.id
+    LEFT JOIN task_counts tc ON tc.file_id = c.id
+    LEFT JOIN title_values tv ON tv.file_id = c.id
+    LEFT JOIN created_values cv ON cv.file_id = c.id
+    ORDER BY c.path COLLATE BINARY ASC
+"#;
+
+fn decode_json_string(value_text: Option<&str>) -> Option<String> {
+    serde_json::from_str::<String>(value_text?).ok()
+}
+
+fn canonical_gregorian_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes[..4].iter().all(u8::is_ascii_digit)
+        || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        || !bytes[8..].iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+    let year = value[..4].parse::<i32>().ok();
+    let month = value[5..7].parse::<u32>().ok();
+    let day = value[8..].parse::<u32>().ok();
+    matches!((year, month, day), (Some(y), Some(m), Some(d)) if chrono::NaiveDate::from_ymd_opt(y, m, d).is_some())
+}
+
+fn canonical_naive_datetime(value: &str) -> Option<i64> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 19
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| !matches!(index, 4 | 7 | 10 | 13 | 16) && !byte.is_ascii_digit())
+    {
+        return None;
+    }
+    chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
+        .ok()
+        .map(|datetime| datetime.and_utc().timestamp_millis())
+}
+
+fn resolve_created_value(
+    kind: Option<&str>,
+    value_text: Option<&str>,
+    birthtime_ms: Option<i64>,
+) -> (Option<String>, Option<i64>) {
+    let positive_birthtime = birthtime_ms.filter(|value| *value > 0);
+    if !matches!(kind, Some("text" | "date" | "datetime")) {
+        return (None, positive_birthtime);
+    }
+    let Some(value) = decode_json_string(value_text) else {
+        return (None, positive_birthtime);
+    };
+    if canonical_gregorian_date(&value) {
+        return (Some(value), positive_birthtime);
+    }
+    let datetime_ms = chrono::DateTime::parse_from_rfc3339(&value)
+        .ok()
+        .map(|datetime| datetime.timestamp_millis())
+        .or_else(|| canonical_naive_datetime(&value));
+    (None, datetime_ms.or(positive_birthtime))
+}
+
+/// Decode the fixed column order emitted by [`FILE_SUMMARY_QUERY_TAIL`].
+/// The first column is nullable because `totals LEFT JOIN candidates` emits a
+/// sentinel row for empty/past-end pages so the total remains truthful.
+pub(crate) fn decode_file_summary_query_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(Option<FileSummary>, u64)> {
+    let total_raw = row.get::<_, i64>(15)?;
+    let total_filtered = u64::try_from(total_raw)
+        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(15, total_raw))?;
+    if row.get::<_, Option<i64>>(0)?.is_none() {
+        return Ok((None, total_filtered));
+    }
+
+    let is_markdown = row.get::<_, i64>(5)? != 0;
+    let birthtime_ms = row.get::<_, Option<i64>>(6)?;
+    let title_kind = row.get::<_, Option<String>>(11)?;
+    let title_value = row.get::<_, Option<String>>(12)?;
+    let display_name = if title_kind.as_deref() == Some("text") {
+        decode_json_string(title_value.as_deref()).and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+    } else {
+        None
+    };
+    let created_kind = row.get::<_, Option<String>>(13)?;
+    let created_value = row.get::<_, Option<String>>(14)?;
+    let (created_date, created_ms) = resolve_created_value(
+        created_kind.as_deref(),
+        created_value.as_deref(),
+        birthtime_ms,
+    );
+
+    Ok((
+        Some(FileSummary {
+            path: row.get(1)?,
+            name: row.get(2)?,
+            mtime_ms: row.get(3)?,
+            size_bytes: {
+                let raw = row.get::<_, i64>(4)?;
+                u64::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(4, raw))?
+            },
+            is_markdown,
+            display_name,
+            created_date,
+            created_ms,
+            word_count: row.get::<_, Option<u32>>(7)?,
+            preview: row.get(8)?,
+            task_total: row.get::<_, u32>(9)?,
+            task_open: row.get::<_, u32>(10)?,
+        }),
+        total_filtered,
+    ))
+}
+
 fn list_files_impl(
     conn: &Connection,
     filter: FileFilter,
@@ -6614,49 +6798,34 @@ fn list_files_impl(
         }
     };
 
-    let total: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM files WHERE {where_clause}"),
-        [],
-        |row| row.get(0),
-    )?;
-
     // Fetch limit + 1: the extra row tells us whether there's a next page.
     let fetch_n = paging.limit as i64 + 1;
-
-    let mut items: Vec<FileSummary> = Vec::new();
-    let row_to_summary = |row: &rusqlite::Row<'_>| -> rusqlite::Result<FileSummary> {
-        Ok(FileSummary {
-            path: row.get(0)?,
-            name: row.get(1)?,
-            mtime_ms: row.get(2)?,
-            size_bytes: row.get::<_, i64>(3)? as u64,
-            is_markdown: row.get::<_, i64>(4)? != 0,
-        })
-    };
-
-    if let Some(cursor) = &paging.cursor {
-        let query = format!(
-            "SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files
-             WHERE {where_clause} AND path > ?1
-             ORDER BY path ASC
-             LIMIT ?2"
-        );
-        let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map(rusqlite::params![cursor, fetch_n], row_to_summary)?;
-        for r in rows {
-            items.push(r?);
-        }
-    } else {
-        let query = format!(
-            "SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files
-             WHERE {where_clause}
-             ORDER BY path ASC
-             LIMIT ?1"
-        );
-        let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map(rusqlite::params![fetch_n], row_to_summary)?;
-        for r in rows {
-            items.push(r?);
+    let query = format!(
+        "WITH filtered AS (
+             SELECT id, path, name, mtime_ms, size_bytes, is_markdown, birthtime_ms
+             FROM files WHERE {where_clause}
+         ),
+         totals AS (SELECT COUNT(*) AS total_filtered FROM filtered),
+         candidates AS (
+             SELECT id, path, name, mtime_ms, size_bytes, is_markdown, birthtime_ms
+             FROM filtered
+             WHERE (?1 IS NULL OR path COLLATE BINARY > ?1 COLLATE BINARY)
+             ORDER BY path COLLATE BINARY ASC
+             LIMIT ?2
+         )
+         {FILE_SUMMARY_QUERY_TAIL}"
+    );
+    let mut stmt = conn.prepare_cached(&query)?;
+    let mut total_filtered = 0;
+    let mut items = Vec::new();
+    let rows = stmt.query_map(rusqlite::params![paging.cursor, fetch_n], |row| {
+        decode_file_summary_query_row(row)
+    })?;
+    for row in rows {
+        let (summary, total) = row?;
+        total_filtered = total;
+        if let Some(summary) = summary {
+            items.push(summary);
         }
     }
 
@@ -6670,7 +6839,7 @@ fn list_files_impl(
     Ok(Page {
         items,
         next_cursor,
-        total_filtered: total as u64,
+        total_filtered,
     })
 }
 
@@ -6820,31 +6989,28 @@ fn list_dir_children_impl(
     let mut dir_child_file_count: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
     {
-        let scan_file_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<FileSummary> {
-            Ok(FileSummary {
-                path: row.get(0)?,
-                name: row.get(1)?,
-                mtime_ms: row.get(2)?,
-                size_bytes: row.get::<_, i64>(3)? as u64,
-                is_markdown: row.get::<_, i64>(4)? != 0,
-            })
-        };
-        let rows: Vec<FileSummary> = match subtree_bounds(&parent) {
-            Some((lo, hi)) => {
-                let mut stmt = conn.prepare(
-                    "SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files
-                     WHERE path > ?1 AND path < ?2",
-                )?;
-                stmt.query_map(rusqlite::params![lo, hi], scan_file_row)?
-                    .collect::<Result<Vec<_>, _>>()?
+        let (lower, upper) = subtree_bounds(&parent)
+            .map(|(lower, upper)| (Some(lower), Some(upper)))
+            .unwrap_or((None, None));
+        let query = format!(
+            "WITH candidates AS (
+                 SELECT id, path, name, mtime_ms, size_bytes, is_markdown, birthtime_ms
+                 FROM files
+                 WHERE (?1 IS NULL OR (path > ?1 AND path < ?2))
+             ),
+             totals AS (SELECT COUNT(*) AS total_filtered FROM candidates)
+             {FILE_SUMMARY_QUERY_TAIL}"
+        );
+        let mut stmt = conn.prepare_cached(&query)?;
+        let mapped = stmt.query_map(rusqlite::params![lower, upper], |row| {
+            decode_file_summary_query_row(row)
+        })?;
+        let mut rows = Vec::new();
+        for row in mapped {
+            if let (Some(summary), _) = row? {
+                rows.push(summary);
             }
-            None => {
-                let mut stmt = conn
-                    .prepare("SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files")?;
-                stmt.query_map([], scan_file_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-        };
+        }
         for f in rows {
             // A file's containing directory is its path minus the final
             // component. Tally it toward that dir's child-file count so a

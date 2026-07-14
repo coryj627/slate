@@ -85,6 +85,295 @@ fn list_files_empty_vault() {
 }
 
 #[test]
+fn file_summary_enrichment_is_typed_deterministic_and_stable_across_listing_apis() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "a-authored.md",
+            br#"---
+title: "  Authored title  "
+created: 2024-02-29
+category: Work
+---
+# Heading
+
+- [ ] open task
+- [x] done task
+
+Hello [[World|friend]].
+"#,
+        )
+        .unwrap();
+        p.write_file(
+            "b-offset.md",
+            b"---\ncreated: 2024-03-01T12:30:45+02:00\n---\nOffset body\n",
+        )
+        .unwrap();
+        p.write_file(
+            "c-naive.md",
+            b"---\ncreated: 2024-03-01T10:30:45\n---\nNaive body\n",
+        )
+        .unwrap();
+        p.write_file(
+            "d-invalid.md",
+            b"---\ncreated: 2023-02-29\n---\nInvalid date\n",
+        )
+        .unwrap();
+        p.write_file(
+            "e-list-title.md",
+            b"---\ntitle: [not, scalar]\n---\nList title\n",
+        )
+        .unwrap();
+        p.write_file(
+            "f-empty-title.md",
+            b"---\ntitle: \"   \"\n---\nEmpty title\n",
+        )
+        .unwrap();
+        p.write_file("g-missing-meta.md", b"Missing replay projection\n")
+            .unwrap();
+        p.write_file("h-data.txt", b"plain text\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    const AUTHORED_BIRTHTIME: i64 = 1_700_000_000_123;
+    const INVALID_BIRTHTIME: i64 = 1_710_000_000_456;
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET birthtime_ms = ?1 WHERE path = 'a-authored.md'",
+            [AUTHORED_BIRTHTIME],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE files SET birthtime_ms = ?1 WHERE path = 'd-invalid.md'",
+            [INVALID_BIRTHTIME],
+        )
+        .unwrap();
+        conn.execute(
+            "DELETE FROM file_meta WHERE file_id =
+             (SELECT id FROM files WHERE path = 'g-missing-meta.md')",
+            [],
+        )
+        .unwrap();
+
+        // A second title/created row must neither multiply the file row nor
+        // displace the deterministic first document ordinal.
+        let authored_id: i64 = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = 'a-authored.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO properties
+             (file_id, ordinal, key, value_kind, value_text, value_text_norm)
+             VALUES (?1, 100, 'title', 'text', '\"Later title\"', 'later title')",
+            [authored_id],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO properties
+             (file_id, ordinal, key, value_kind, value_text, value_text_norm)
+             VALUES (?1, 101, 'created', 'date', '\"1999-01-01\"', '1999-01-01')",
+            [authored_id],
+        )
+        .unwrap();
+    }
+
+    let page = session
+        .list_files(FileFilter::All, Paging::first(100))
+        .unwrap();
+    assert_eq!(page.total_filtered, 8);
+    assert_eq!(page.items.len(), 8, "property joins must not multiply rows");
+    assert_eq!(
+        page.items
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "a-authored.md",
+            "b-offset.md",
+            "c-naive.md",
+            "d-invalid.md",
+            "e-list-title.md",
+            "f-empty-title.md",
+            "g-missing-meta.md",
+            "h-data.txt",
+        ],
+        "enrichment must preserve path order"
+    );
+
+    let authored = page
+        .items
+        .iter()
+        .find(|f| f.path == "a-authored.md")
+        .unwrap();
+    assert_eq!(authored.display_name.as_deref(), Some("Authored title"));
+    assert_eq!(authored.created_date.as_deref(), Some("2024-02-29"));
+    assert_eq!(authored.created_ms, Some(AUTHORED_BIRTHTIME));
+    assert!(authored.word_count.unwrap() > 0);
+    assert!(
+        authored
+            .preview
+            .as_deref()
+            .unwrap()
+            .contains("Hello friend")
+    );
+    assert_eq!((authored.task_total, authored.task_open), (2, 1));
+
+    let offset = page.items.iter().find(|f| f.path == "b-offset.md").unwrap();
+    assert_eq!(offset.created_date, None);
+    assert_eq!(
+        offset.created_ms,
+        Some(
+            chrono::DateTime::parse_from_rfc3339("2024-03-01T12:30:45+02:00")
+                .unwrap()
+                .timestamp_millis()
+        )
+    );
+
+    let naive = page.items.iter().find(|f| f.path == "c-naive.md").unwrap();
+    assert_eq!(naive.created_date, None);
+    assert_eq!(
+        naive.created_ms,
+        Some(
+            chrono::NaiveDateTime::parse_from_str("2024-03-01T10:30:45", "%Y-%m-%dT%H:%M:%S")
+                .unwrap()
+                .and_utc()
+                .timestamp_millis()
+        )
+    );
+
+    let invalid = page
+        .items
+        .iter()
+        .find(|f| f.path == "d-invalid.md")
+        .unwrap();
+    assert_eq!(invalid.created_date, None);
+    assert_eq!(invalid.created_ms, Some(INVALID_BIRTHTIME));
+    assert_eq!(
+        page.items
+            .iter()
+            .find(|f| f.path == "e-list-title.md")
+            .unwrap()
+            .display_name,
+        None
+    );
+    assert_eq!(
+        page.items
+            .iter()
+            .find(|f| f.path == "f-empty-title.md")
+            .unwrap()
+            .display_name,
+        None
+    );
+
+    let missing = page
+        .items
+        .iter()
+        .find(|f| f.path == "g-missing-meta.md")
+        .unwrap();
+    assert_eq!(
+        (missing.word_count, missing.preview.as_deref()),
+        (None, None)
+    );
+    assert_eq!((missing.task_total, missing.task_open), (0, 0));
+    let non_markdown = page.items.iter().find(|f| f.path == "h-data.txt").unwrap();
+    assert_eq!(
+        (non_markdown.word_count, non_markdown.preview.as_deref()),
+        (None, None)
+    );
+
+    let tree = session.list_dir_children("", Paging::first(100)).unwrap();
+    assert_eq!(tree.files.items, page.items);
+
+    let by_value = session
+        .files_with_property("category", "work", Paging::first(10))
+        .unwrap();
+    assert_eq!(by_value.total_filtered, 1);
+    assert_eq!(by_value.items, vec![authored.clone()]);
+
+    let by_key = session
+        .files_with_property_key("title", Paging::first(10))
+        .unwrap();
+    assert_eq!(by_key.total_filtered, 3);
+    assert_eq!(
+        by_key
+            .items
+            .iter()
+            .filter(|f| f.path == "a-authored.md")
+            .count(),
+        1,
+        "duplicate property shapes must still yield one enriched file"
+    );
+    assert_eq!(
+        by_key
+            .items
+            .iter()
+            .find(|f| f.path == "a-authored.md")
+            .unwrap(),
+        authored
+    );
+}
+
+#[test]
+fn file_summary_enrichment_preserves_pagination_totals_and_order() {
+    let (_tmp, session) = make_vault(|p| {
+        for name in ["A.md", "b.md", "C.md", "d.md", "e.md"] {
+            p.write_file(
+                name,
+                format!("---\ntitle: {name}\n---\n{name}\n").as_bytes(),
+            )
+            .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let first = session
+        .list_files(FileFilter::All, Paging::first(2))
+        .unwrap();
+    assert_eq!(first.total_filtered, 5);
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["A.md", "C.md"]
+    );
+    let second = session
+        .list_files(
+            FileFilter::All,
+            Paging::after(first.next_cursor.clone().unwrap(), 2),
+        )
+        .unwrap();
+    assert_eq!(second.total_filtered, 5);
+    assert_eq!(
+        second
+            .items
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["b.md", "d.md"]
+    );
+    let third = session
+        .list_files(
+            FileFilter::All,
+            Paging::after(second.next_cursor.clone().unwrap(), 2),
+        )
+        .unwrap();
+    assert_eq!(third.total_filtered, 5);
+    assert_eq!(third.items[0].path, "e.md");
+    assert!(third.next_cursor.is_none());
+
+    let past_end = session
+        .list_files(FileFilter::All, Paging::after("z.md".into(), 2))
+        .unwrap();
+    assert!(past_end.items.is_empty());
+    assert_eq!(past_end.total_filtered, 5);
+}
+
+#[test]
 fn get_file_metadata_returns_none_for_unknown_path() {
     let (_tmp, session) = make_vault(|_| {});
     assert!(session.get_file_metadata("missing.md").unwrap().is_none());

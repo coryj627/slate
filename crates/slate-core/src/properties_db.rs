@@ -13,7 +13,9 @@ use serde_json::Value as JsonValue;
 
 use crate::VaultError;
 use crate::frontmatter::{Property, PropertyValue, extract_frontmatter};
-use crate::session::{FileSummary, Page, Paging};
+use crate::session::{
+    FILE_SUMMARY_QUERY_TAIL, FileSummary, Page, Paging, decode_file_summary_query_row,
+};
 
 const KIND_TEXT: &str = "text";
 const KIND_NUMBER: &str = "number";
@@ -233,7 +235,6 @@ pub(crate) fn files_with_property(
     paging: Paging,
 ) -> Result<Page<FileSummary>, VaultError> {
     let limit = paging.limit.clamp(1, 1000);
-    let after_path = paging.cursor.clone();
     let target = value.to_lowercase();
 
     // Two index-backed paths into one CTE so the JOIN logic runs
@@ -256,80 +257,48 @@ pub(crate) fn files_with_property(
     // explicit collation here the cursor advance would silently
     // start dropping or duplicating rows whenever the default
     // changed (#93 item 6).
-    let sql = "
+    let sql = format!(
+        "
         WITH matches AS (
-            SELECT files.id, files.path, files.name, files.mtime_ms,
-                   files.size_bytes, files.is_markdown
+            SELECT files.id
             FROM files
             JOIN properties p ON p.file_id = files.id
             WHERE p.key = ?1
               AND p.value_kind NOT IN ('list', 'tag_list')
               AND p.value_text_norm = ?2
             UNION
-            SELECT files.id, files.path, files.name, files.mtime_ms,
-                   files.size_bytes, files.is_markdown
+            SELECT files.id
             FROM files
             JOIN properties_list_values plv ON plv.file_id = files.id
             WHERE plv.key = ?1 AND plv.value_norm = ?2
+        ),
+        totals AS (SELECT COUNT(*) AS total_filtered FROM matches),
+        candidates AS (
+            SELECT f.id, f.path, f.name, f.mtime_ms, f.size_bytes,
+                   f.is_markdown, f.birthtime_ms
+            FROM files f
+            JOIN matches m ON m.id = f.id
+            WHERE (?3 IS NULL OR f.path COLLATE BINARY > ?3 COLLATE BINARY)
+            ORDER BY f.path COLLATE BINARY ASC
+            LIMIT ?4
         )
-        SELECT path, name, mtime_ms, size_bytes, is_markdown,
-               (SELECT COUNT(*) FROM matches) AS total_filtered
-        FROM matches
-        WHERE (?3 IS NULL OR path COLLATE BINARY > ?3 COLLATE BINARY)
-        ORDER BY path COLLATE BINARY ASC
-        LIMIT ?4
-    ";
-    let mut stmt = conn.prepare_cached(sql)?;
+        {FILE_SUMMARY_QUERY_TAIL}
+    "
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
 
     let mut total_filtered: u64 = 0;
-    let rows: Vec<FileSummary> = stmt
-        .query_map(params![key, target, after_path, limit as i64 + 1], |row| {
-            let summary = FileSummary {
-                path: row.get::<_, String>(0)?,
-                name: row.get::<_, String>(1)?,
-                mtime_ms: row.get::<_, i64>(2)?,
-                size_bytes: row.get::<_, i64>(3)? as u64,
-                is_markdown: row.get::<_, i64>(4)? != 0,
-            };
-            // The (SELECT COUNT(*) FROM matches) subquery returns
-            // the same total on every row — pick up the first
-            // value we see and ignore subsequent reads.
-            let count: i64 = row.get(5)?;
-            total_filtered = count as u64;
-            Ok(summary)
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // When there were no matching rows the SELECT yielded zero
-    // rows, so `total_filtered` was never assigned by the closure.
-    // 0 is correct in that case — no matches means total is 0.
-    //
-    // Edge case: paging cursor lands past the last match. The
-    // count subquery wouldn't fire (no outer rows), so we'd report
-    // total_filtered=0 even though earlier pages had matches.
-    // Resolve by re-running just the COUNT branch if the row
-    // fetch was empty AND a cursor was provided.
-    if rows.is_empty() && after_path.is_some() {
-        total_filtered = conn.query_row(
-            "
-            WITH matches AS (
-                SELECT files.id
-                FROM files
-                JOIN properties p ON p.file_id = files.id
-                WHERE p.key = ?1
-                  AND p.value_kind NOT IN ('list', 'tag_list')
-                  AND p.value_text_norm = ?2
-                UNION
-                SELECT files.id
-                FROM files
-                JOIN properties_list_values plv ON plv.file_id = files.id
-                WHERE plv.key = ?1 AND plv.value_norm = ?2
-            )
-            SELECT COUNT(*) FROM matches
-            ",
-            params![key, target],
-            |row| row.get::<_, i64>(0),
-        )? as u64;
+    let mut rows = Vec::new();
+    let mapped = stmt.query_map(
+        params![key, target, paging.cursor, limit as i64 + 1],
+        decode_file_summary_query_row,
+    )?;
+    for row in mapped {
+        let (summary, total) = row?;
+        total_filtered = total;
+        if let Some(summary) = summary {
+            rows.push(summary);
+        }
     }
 
     let has_more = rows.len() > limit as usize;
@@ -431,8 +400,6 @@ pub(crate) fn files_with_property_key(
     paging: Paging,
 ) -> Result<Page<FileSummary>, VaultError> {
     let limit = paging.limit.clamp(1, 1000);
-    let after_path = paging.cursor.clone();
-
     // `idx_properties_file` / the `key` column narrow the JOIN; the
     // outer `COUNT(*) FROM matches` window shares the materialized set
     // with the row fetch (same shape as `files_with_property`). The
@@ -441,54 +408,41 @@ pub(crate) fn files_with_property_key(
     // `COLLATE BINARY` on both the cursor comparison and the ORDER BY
     // pins the paging order byte-wise, independent of any future
     // `files.path` collation change (#93 item 6 rationale).
-    let sql = "
+    let sql = format!(
+        "
         WITH matches AS (
-            SELECT DISTINCT files.id, files.path, files.name, files.mtime_ms,
-                   files.size_bytes, files.is_markdown
+            SELECT DISTINCT files.id
             FROM files
             JOIN properties p ON p.file_id = files.id
             WHERE p.key = ?1
+        ),
+        totals AS (SELECT COUNT(*) AS total_filtered FROM matches),
+        candidates AS (
+            SELECT f.id, f.path, f.name, f.mtime_ms, f.size_bytes,
+                   f.is_markdown, f.birthtime_ms
+            FROM files f
+            JOIN matches m ON m.id = f.id
+            WHERE (?2 IS NULL OR f.path COLLATE BINARY > ?2 COLLATE BINARY)
+            ORDER BY f.path COLLATE BINARY ASC
+            LIMIT ?3
         )
-        SELECT path, name, mtime_ms, size_bytes, is_markdown,
-               (SELECT COUNT(*) FROM matches) AS total_filtered
-        FROM matches
-        WHERE (?2 IS NULL OR path COLLATE BINARY > ?2 COLLATE BINARY)
-        ORDER BY path COLLATE BINARY ASC
-        LIMIT ?3
-    ";
-    let mut stmt = conn.prepare_cached(sql)?;
+        {FILE_SUMMARY_QUERY_TAIL}
+    "
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
 
     let mut total_filtered: u64 = 0;
-    let rows: Vec<FileSummary> = stmt
-        .query_map(params![key, after_path, limit as i64 + 1], |row| {
-            let summary = FileSummary {
-                path: row.get::<_, String>(0)?,
-                name: row.get::<_, String>(1)?,
-                mtime_ms: row.get::<_, i64>(2)?,
-                size_bytes: row.get::<_, i64>(3)? as u64,
-                is_markdown: row.get::<_, i64>(4)? != 0,
-            };
-            let count: i64 = row.get(5)?;
-            total_filtered = count as u64;
-            Ok(summary)
-        })?
-        .collect::<Result<Vec<_>, _>>()?;
-
-    // Same cursor-past-the-end edge case `files_with_property` handles:
-    // when the row fetch is empty but a cursor was supplied, the
-    // `COUNT(*)` subquery never fired (no outer rows), so re-run just
-    // the count so `total_filtered` stays truthful across pages.
-    if rows.is_empty() && after_path.is_some() {
-        total_filtered = conn.query_row(
-            "SELECT COUNT(*) FROM (
-                 SELECT DISTINCT files.id
-                 FROM files
-                 JOIN properties p ON p.file_id = files.id
-                 WHERE p.key = ?1
-             )",
-            params![key],
-            |row| row.get::<_, i64>(0),
-        )? as u64;
+    let mut rows = Vec::new();
+    let mapped = stmt.query_map(
+        params![key, paging.cursor, limit as i64 + 1],
+        decode_file_summary_query_row,
+    )?;
+    for row in mapped {
+        let (summary, total) = row?;
+        total_filtered = total;
+        if let Some(summary) = summary {
+            rows.push(summary);
+        }
     }
 
     let has_more = rows.len() > limit as usize;
