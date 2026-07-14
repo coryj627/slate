@@ -1,19 +1,19 @@
 # FL3 executable spec — Organization: sort, grouping, pins, shortcuts, recents, navigation polish
 
-Issues: FL3-1 ([#658](https://github.com/coryj627/slate/issues/658)) · FL3-2 ([#659](https://github.com/coryj627/slate/issues/659)) · FL3-3 ([#660](https://github.com/coryj627/slate/issues/660)) · FL3-4 ([#661](https://github.com/coryj627/slate/issues/661)). Milestone: [GH 31](https://github.com/coryj627/slate/milestone/31). One PR per issue.
-FL3-1 requires FL0-2 (created dates) and FL1-1 (display names). FL3-2/3/4 require only FL1-2's `SidebarVaultPrefs` accessor.
+Issues: FL3-1 ([#658](https://github.com/coryj627/slate/issues/658)) · FL3-2 ([#659](https://github.com/coryj627/slate/issues/659)) · FL3-3 ([#660](https://github.com/coryj627/slate/issues/660)) · FL3-4 ([#661](https://github.com/coryj627/slate/issues/661)). Milestone: [GH 31](https://github.com/coryj627/slate/milestone/31). Grouped delivery: FL-06 closes #658 and #659 after FL-02; FL-07 closes #660 and #661 after FL-06.
 Program: [00_program.md](../00_program.md) (locked decisions 5–6, 15; DoD §FL-A/§FL-E). U §A–§G apply.
 
-Baseline facts (verified 2026-07-05):
+Baseline facts (verified 2026-07-14 at `origin/main` `6aa9fce`):
 
-- Level ordering today is fixed: dirs-then-files, case-insensitive name (FileTreeViewModel:457; API returns that order). Levels are small post-lazy-fetch (≤ page size), so re-sorting app-side is cell-cheap (locked decision 5).
-- `SidebarVaultPrefs` (`.slate/sidebar.json`, versioned/atomic/forward-tolerant) ships in FL1-2 with no consumers; FL3 adds the first keys. Device-local state → UserDefaults.
-- Palette registration: `CommandPaletteModel.swift`; menu bar for structural commands; no chord may be the only path (program decision 15).
+- Level ordering is dirs-then-files with case-insensitive name order. Levels are small after lazy fetch, so FL-06 builds total app-side sort keys once per row; row bodies do not allocate formatters or query SQLite.
+- FL-02 supplies the AppState-owned `SidebarVaultPrefsStore`; FL-06 adds the first authored organization keys. Device-local view state remains in typed UserDefaults preferences.
+- `CommandRegistry`, `SlateCommandID`, and `CommandSection` already back palette/menu/utility surfaces. FL navigation commands use the shared `.sidebar` section and AppState action funnels; no chord may be the only path.
+- `FileRecentsStore` currently retains 50 paths in vault-local `.slate/file-recents.json` for Quick Switcher. FL-07 migrates that history into one device-local store rather than creating a second sidebar-only ring.
 - Announce seam + `TreeMutation` conventions per fl2 baseline. Section/heading AX conventions: List section headers must be real headers (VO rotor), not styled text rows.
 
 ---
 
-## FL3-1 · Sort options + date grouping (#658) — PR 1
+## FL3-1 · Sort options + date grouping (#658) — closing PR FL-06
 
 1. **Sort** applies to the *file* portion of each level (dirs stay first, name-ordered — mixing folders into date sorts makes the tree unpredictable for AT users): `name | created | modified`, each `asc | desc`. Name sorts on the FL1-1 *effective* label (display_name ?? stem), case-insensitive, locale-aware (`localizedStandardCompare`), NFC keys per the #459 convention. Date sorts: NULL `created_ms` sorts last, tie-break name asc — total order, deterministic.
 2. **Scope:** a vault-wide default (`sidebar.sort` in sidebar.json — vault-local, syncs with the vault) plus **per-folder overrides** (`sidebar.json: folderOverrides.{path}.sort`). Override set/cleared via folder context menu → "Sort" submenu (radio state; "Use Vault Default" clears). A toolbar sort button + palette commands mirror the same submenu for the selected container.
@@ -29,7 +29,7 @@ Tests: comparator total-order property (incl. NULL created, case/diacritic names
 - [ ] Palette/menu/toolbar surfaces + announcements
 - [ ] Tests; a11y 100/100 on tip
 
-## FL3-2 · Pinned notes (#659) — PR 2
+## FL3-2 · Pinned notes (#659) — closing PR FL-06
 
 1. Pin/unpin via file context menu + palette (`"Pin to Top of Folder"` / `"Unpin"`). Storage: `sidebar.json: pins.{folderPath} = [filePath…]` (vault-local; authored order = pin order, newest appended).
 2. Presentation: a **Pinned** section at the top of the file portion of that folder's level (above FL3-1 groups), rows identical to normal rows plus a pin glyph; AX value appends `", pinned"`. Pinned rows also remain in their natural position? **No** — they move to the section (one row per file; duplicates would double VO walks).
@@ -42,23 +42,24 @@ Tests: pin order stability; rename/move/delete integrity via mutation replay; st
 - [ ] Mutation-stream integrity + lazy prune
 - [ ] Commands + tests; a11y 100/100
 
-## FL3-3 · Shortcuts + Recents sections (#660) — PR 3
+## FL3-3 · Shortcuts + one Recents history (#660) — closing PR FL-07
 
 1. Two collapsible sections rendered **above the folder tree** inside the sidebar scroll view, order: **Shortcuts**, **Recents**, then the tree. Each is an AX-labeled group with a header (rotor-navigable); collapsed state is device-local. Empty sections render a single quiet placeholder row ("No shortcuts — right-click a file to add one") rather than disappearing (discoverability, esp. for VO users who can't see the affordance appear).
 2. **Shortcuts** (vault-local, `sidebar.json: shortcuts = [{kind: file|folder, path}]`): add via context menu "Add to Shortcuts" (toggle to "Remove from Shortcuts"); reorder via drag and via context-menu Move Up/Move Down (keyboard parity — decision 15); activate = open file / reveal-and-select folder. Chords: `⌃1`–`⌃9` open shortcuts 1–9 **when sidebar has key focus** (`⌘1–9` belong to tabs); palette commands "Open Shortcut N" work regardless of focus. Integrity via `TreeMutation` replay (rename/move retarget; delete removes + one-time notice).
-3. **Recents** (device-local, UserDefaults ring buffer, cap 10): every successful file open (any surface — tab open seam in AppState, not the tree click handler, so palette/search opens count) prepends; duplicates move to front; current file excluded from display. Activate = open. Clear Recents command. Rename/move retargets via mutation stream; unresolvable entries drop silently.
-4. Rows reuse the FL1 file-row component (display name, date) with a compact variant; folder shortcut rows show the folder icon + path subtitle when ambiguous.
-5. Tags become addable shortcuts in FL5-2 (kind: tag) — the storage schema above reserves `kind` for it; FL3-3 ships file|folder only.
+3. **Recents**: move the existing `FileRecentsStore` history to bounded UserDefaults data keyed by stable vault identity. Keep one most-recent-first history for Quick Switcher and sidebar: retain **50**, display the first **10 eligible** sidebar rows excluding the current file. Every successful file open at the AppState seam prepends; duplicates move to front; rename/move retargets and unresolvable entries drop. Clear Recents clears the shared history.
+4. **Migration**: read legacy `.slate/file-recents.json` once, merge/dedupe into the device-local history, and remove or mark the legacy source only after a successful durable write. Missing, malformed, oversized, or repeated migration is safe and idempotent; never keep two stores in active use.
+5. Rows reuse the FL1 file-row component (display name, date) with a compact variant; folder shortcut rows show the folder icon + path subtitle when ambiguous.
+6. Tags become addable shortcuts in FL5-2 (kind: tag) — the storage schema above reserves `kind` for it; FL3-3 ships file|folder only.
 
-Tests: section AX structure (headers, groups); shortcut add/remove/reorder persistence + chord dispatch under focus; recents ring semantics (dedup, cap, exclusion); mutation retargeting both sections.
+Tests: section AX structure (headers, groups); shortcut add/remove/reorder persistence + chord dispatch under focus; recents migration idempotence/corruption/oversize; two-window writes; retain-50/display-10/dedup/current exclusion; mutation retargeting both sections.
 
 - [ ] Sections + placeholder rows + AX structure
-- [ ] Shortcuts storage/commands/chords; Recents ring
+- [ ] Shortcuts storage/commands/chords; one migrated Recents history
 - [ ] Mutation integrity; tests; a11y 100/100
 
-## FL3-4 · Navigation polish: collapse/expand-all, selection history (#661) — PR 4
+## FL3-4 · Navigation polish: collapse/expand-loaded, selection history (#661) — closing PR FL-07
 
-1. **Collapse All** / **Expand All** (palette + View menu + toolbar): collapse-all keeps ancestors of the current selection expanded (setting-free, always-on behavior — matches Navigator's default and avoids dumping VO focus onto a vanished row); expand-all expands **fetched** levels and fetches one level deeper at most (a 10k-vault full expansion is a foot-gun; announce `"Expanded loaded folders."`).
+1. **Collapse All** / **Expand Loaded** (palette + View menu + toolbar): collapse-all keeps ancestors of the current selection expanded (setting-free, always-on behavior — matches Navigator's default and avoids dumping VO focus onto a vanished row); expand-loaded expands fetched levels and fetches one level deeper at most (a 10k-vault full expansion is a foot-gun; announce `"Expanded loaded folders."`).
 2. **Selection history**: per-window ring (cap 50) of sidebar selections (file or folder). Back/Forward via palette commands + `⌘⌃[` / `⌘⌃]` when sidebar has key focus (⌘[ / ⌘] stay with the editor). Navigating re-selects and reveals (expanding ancestors as needed via the existing reveal seam); history entries invalidated by delete are skipped. Programmatic reveals (editor mirror) don't push duplicate consecutive entries.
 3. Announce: back/forward announces the newly selected row per the existing selection announce convention.
 
