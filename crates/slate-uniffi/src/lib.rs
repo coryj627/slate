@@ -622,6 +622,29 @@ impl VaultSession {
         Ok(self.inner.create_exclusive(&path, &content)?.into())
     }
 
+    /// Create-if-absent BYTES write (#910): the binary / non-UTF-8 sibling
+    /// of `create_exclusive`. Same no-clobber contract — an occupied
+    /// destination (on disk or in the case-insensitive index) is
+    /// `DestinationExists`, nothing written — so a host's file-drop import
+    /// funnel can copy an image / PDF / arbitrary binary byte-for-byte
+    /// with the identical collision surface the text path uses.
+    pub fn create_exclusive_bytes(
+        &self,
+        path: String,
+        bytes: Vec<u8>,
+    ) -> Result<SaveReport, VaultError> {
+        Ok(self.inner.create_exclusive_bytes(&path, &bytes)?.into())
+    }
+
+    /// The byte ceiling above which a write is refused (`FileTooLarge`).
+    /// A host reads this to PRE-CHECK a dropped file's size and refuse an
+    /// oversized import gracefully BEFORE reading it into memory and
+    /// lowering it across the FFI — where a >2 GiB `Data`/`String` would
+    /// otherwise trap in the generated `Int32(count)` converter (#910).
+    pub fn large_file_refuse_bytes(&self) -> u64 {
+        self.inner.large_file_refuse_bytes()
+    }
+
     /// Structured diff between two (verified) versions (O-4 #542) —
     /// named operations in document order, never a side-by-side dump.
     pub fn diff_versions(

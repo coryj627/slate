@@ -3771,7 +3771,13 @@ impl VaultSession {
                 reason: "deleted-file history failed integrity verification".into(),
             });
         }
-        let report = self.create_exclusive_binding(destination, &content, Some(&remnant.stem))?;
+        let report = self.create_exclusive_binding(
+            destination,
+            content.as_bytes(),
+            &content,
+            Some(&content),
+            Some(&remnant.stem),
+        )?;
         // The remnant is a remnant no more (one lock hold: retain +
         // generation bump are atomic together).
         {
@@ -3789,9 +3795,47 @@ impl VaultSession {
     /// convention) → [`VaultError::DestinationExists`]; else the
     /// standard atomic-write + index + op-log machinery.
     pub fn create_exclusive(&self, path: &str, content: &str) -> Result<SaveReport, VaultError> {
-        let report = self.create_exclusive_binding(path, content, None)?;
+        let report =
+            self.create_exclusive_binding(path, content.as_bytes(), content, Some(content), None)?;
         self.notify_file_change(FileChangeKind::Created, path, None);
         Ok(report)
+    }
+
+    /// Create-if-absent BYTES write (#910): the binary / non-UTF-8 sibling
+    /// of [`create_exclusive`]. Writes `bytes` VERBATIM through the same
+    /// no-replace primitive (`write_file_if_absent`) under the same
+    /// cross-process IMMEDIATE lock, so an occupied destination — on disk
+    /// OR in the case-insensitive index — is the identical
+    /// [`VaultError::DestinationExists`] with nothing written. The row is
+    /// indexed exactly as the scanner indexes a non-text file: a lossy
+    /// UTF-8 view feeds the parsers (a true binary is non-markdown, so the
+    /// view is unused; a non-UTF-8 `.md` gets the same lossy treatment a
+    /// rescan would), while the stored content hash is taken over the RAW
+    /// bytes so a later scan's fast path stays coherent. No op-log entry is
+    /// recorded — a binary has no text-diff history, and the scanner never
+    /// op-logs non-text files either.
+    pub fn create_exclusive_bytes(
+        &self,
+        path: &str,
+        bytes: &[u8],
+    ) -> Result<SaveReport, VaultError> {
+        let index_contents = String::from_utf8_lossy(bytes);
+        let report =
+            self.create_exclusive_binding(path, bytes, index_contents.as_ref(), None, None)?;
+        self.notify_file_change(FileChangeKind::Created, path, None);
+        Ok(report)
+    }
+
+    /// The byte ceiling above which a write is refused with
+    /// [`VaultError::FileTooLarge`] — the same `large_file_refuse_bytes`
+    /// the `create_exclusive*` / `save_text` guards enforce. Exposed so a
+    /// host's file-drop import funnel can PRE-CHECK a dropped file's size
+    /// and refuse gracefully BEFORE reading multi-GB bytes into memory and
+    /// lowering them across the FFI (#910): reusing this single source of
+    /// truth keeps the host's pre-flight guard and the engine's backstop
+    /// from drifting.
+    pub fn large_file_refuse_bytes(&self) -> u64 {
+        self.config.large_file_refuse_bytes
     }
 
     /// `create_exclusive` with an optional pre-existing op-log binding
@@ -3809,17 +3853,26 @@ impl VaultSession {
     /// entries blocking retries. A post-write index failure leaves the
     /// created file on disk (never delete user bytes on an index
     /// error); the next scan indexes it.
+    ///
+    /// `bytes` are what land on disk (and what the content hash is taken
+    /// over); `index_contents` is the str view the index/parsers see
+    /// (identical to the bytes for a text create, a lossy decode for the
+    /// #910 bytes create). `oplog_contents` gates history: `Some(text)`
+    /// binds a log name and appends the snapshot (text / recovery),
+    /// `None` records no op-log entry (binary create).
     fn create_exclusive_binding(
         &self,
         path: &str,
-        content: &str,
+        bytes: &[u8],
+        index_contents: &str,
+        oplog_contents: Option<&str>,
         bind_log: Option<&str>,
     ) -> Result<SaveReport, VaultError> {
         validate_save_path(path)?;
-        if content.len() as u64 > self.config.large_file_refuse_bytes {
+        if bytes.len() as u64 > self.config.large_file_refuse_bytes {
             return Err(VaultError::FileTooLarge {
                 path: path.to_string(),
-                size: content.len() as u64,
+                size: bytes.len() as u64,
             });
         }
         let mut conn = self.conn.lock().expect("session connection mutex");
@@ -3838,11 +3891,10 @@ impl VaultSession {
         }
 
         // No-replace publish: the point of no return for user bytes.
-        self.provider
-            .write_file_if_absent(path, content.as_bytes())?;
+        self.provider.write_file_if_absent(path, bytes)?;
 
         let new_stat = self.provider.stat(path)?;
-        let new_hash = crate::vault::content_hash(content.as_bytes());
+        let new_hash = crate::vault::content_hash(bytes);
         let now = now_ms();
         let mut graph_sink = self.graph_sink();
         // `existed = false` by construction: the case-insensitive index
@@ -3850,7 +3902,7 @@ impl VaultSession {
         let file_id = self.index_saved_file(
             &tx,
             path,
-            content,
+            index_contents,
             &new_stat,
             &new_hash,
             now,
@@ -3894,12 +3946,19 @@ impl VaultSession {
                 }
             }
         }
-        let oplog_name = self.ensure_oplog_name(&tx, file_id, path);
+        // A binary create (`oplog_contents == None`) records no history:
+        // the op log is a text diff/snapshot store, and the scanner
+        // likewise never op-logs non-text files (#910). A text / recovery
+        // create binds a name and appends its snapshot exactly as before.
+        let oplog_name = match oplog_contents {
+            Some(_) => self.ensure_oplog_name(&tx, file_id, path),
+            None => None,
+        };
         tx.commit()?;
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
 
-        if let Some(log_name) = oplog_name.as_deref() {
+        if let (Some(text), Some(log_name)) = (oplog_contents, oplog_name.as_deref()) {
             self.append_save_to_oplog(
                 &conn,
                 file_id,
@@ -3907,7 +3966,7 @@ impl VaultSession {
                 path,
                 "",
                 &new_hash,
-                content,
+                text,
                 None,
                 now,
                 &[],

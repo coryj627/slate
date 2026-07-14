@@ -348,6 +348,106 @@ fn create_exclusive_creates_once_and_refuses_occupants() {
 }
 
 #[test]
+fn create_exclusive_bytes_round_trips_binary_and_refuses_occupants() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("indexed.md", b"indexed\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Arbitrary bytes INCLUDING non-UTF-8 sequences (a UTF-16 BOM +
+    // a lone 0xFF/0xFE that no valid UTF-8 string can hold).
+    let blob: &[u8] = &[0xFF, 0xFE, 0x00, 0x01, 0x80, b'P', b'N', b'G', 0xC0, 0xC1];
+
+    // Absent → created atomically, written VERBATIM (byte-for-byte).
+    let report = session.create_exclusive_bytes("photo.png", blob).unwrap();
+    assert_eq!(report.new_content_hash, crate::vault::content_hash(blob));
+    assert_eq!(
+        std::fs::read(tmp.path().join("photo.png")).unwrap(),
+        blob,
+        "bytes round-trip identically, including the non-UTF-8 bytes"
+    );
+
+    // Indexed like any vault file (appears in the tree; non-markdown).
+    let listing = session.list_dir_children("", Paging::first(50)).unwrap();
+    let row = listing
+        .files
+        .items
+        .iter()
+        .find(|f| f.path == "photo.png")
+        .expect("imported binary appears in the directory listing");
+    assert!(!row.is_markdown, "a binary import is not markdown");
+    assert_eq!(row.size_bytes, blob.len() as u64);
+
+    // A binary create records NO op-log history (the scanner agrees).
+    assert!(
+        session.read_oplog("photo.png").unwrap().is_empty(),
+        "binary imports carry no text-diff history"
+    );
+
+    // No-clobber: a second create on the SAME path → DestinationExists,
+    // nothing overwritten.
+    let err = session
+        .create_exclusive_bytes("photo.png", b"different")
+        .unwrap_err();
+    assert!(matches!(err, VaultError::DestinationExists { .. }));
+    assert_eq!(
+        std::fs::read(tmp.path().join("photo.png")).unwrap(),
+        blob,
+        "the colliding second create left the original bytes untouched"
+    );
+
+    // The same no-clobber gate an occupied text path hits: a name already
+    // in the index refuses regardless of payload kind.
+    let err = session
+        .create_exclusive_bytes("indexed.md", blob)
+        .unwrap_err();
+    assert!(matches!(err, VaultError::DestinationExists { .. }));
+}
+
+#[test]
+fn create_exclusive_bytes_refuses_over_threshold_writing_nothing() {
+    // A genuine >2 GiB drop (the crash the host pre-check guards against)
+    // is impractical to fabricate here, so drive the ENGINE backstop with
+    // a LOWERED refuse threshold: an oversized bytes create must return
+    // `FileTooLarge` and write nothing — on disk OR in the index — exactly
+    // as the text path does (#910 defense-in-depth).
+    let tmp = tempfile::tempdir().unwrap();
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    let mut config = SessionConfig::new(tmp.path().join(".slate"));
+    config.large_file_refuse_bytes = 8;
+    let session = VaultSession::open(Arc::new(provider), config).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // The host's pre-flight size guard reads this exact value (#910), so
+    // its Swift pre-check and this Rust backstop agree on one threshold.
+    assert_eq!(session.large_file_refuse_bytes(), 8);
+
+    // 10 bytes of non-UTF-8 > the 8-byte ceiling → refused.
+    let blob: &[u8] = &[0xFF, 0xFE, 0, 1, 2, 3, 4, 5, 6, 7];
+    let err = session
+        .create_exclusive_bytes("huge.bin", blob)
+        .unwrap_err();
+    match err {
+        VaultError::FileTooLarge { path, size } => {
+            assert_eq!(path, "huge.bin");
+            assert_eq!(size, blob.len() as u64);
+        }
+        other => panic!("expected FileTooLarge, got {other:?}"),
+    }
+
+    // Nothing landed: not on disk, and no index row.
+    assert!(
+        !tmp.path().join("huge.bin").exists(),
+        "a refused import must write no bytes"
+    );
+    let listing = session.list_dir_children("", Paging::first(50)).unwrap();
+    assert!(
+        listing.files.items.iter().all(|f| f.path != "huge.bin"),
+        "a refused import must create no index row"
+    );
+}
+
+#[test]
 fn deleted_file_lifecycle_lists_recovers_and_keeps_history() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("keep.md", b"bystander\n").unwrap();

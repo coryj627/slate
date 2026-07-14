@@ -267,6 +267,190 @@ final class FileTreeDragDropTests: XCTestCase {
             original, "the existing vault file is NOT clobbered")
     }
 
+    /// #910: a binary / non-UTF-8 external drop imports as a byte-for-byte
+    /// copy (via `createExclusiveBytes`) instead of the pre-PR text-only
+    /// clean failure — same "Imported <name>." announcement as the text path.
+    func testBinaryExternalDropImportsByteForByte() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md"])
+        // A payload no valid UTF-8 string can hold (lone 0xFF/0xFE + 0xC0/0xC1).
+        let bytes: [UInt8] = [0xFF, 0xFE, 0x00, 0x01, 0x80, 0xC0, 0xC1]
+        let external = tempDir.appendingPathComponent("photo.png")
+        try Data(bytes).write(to: external)
+
+        await state.importEntry(externalURL: external, into: "")?.value
+
+        XCTAssertTrue(exists(vault, "photo.png"), "the binary file was copied in")
+        XCTAssertEqual(
+            try Data(contentsOf: vault.appendingPathComponent("photo.png")), Data(bytes),
+            "bytes round-trip identically, including the non-UTF-8 bytes")
+        XCTAssertEqual(state.lastMutationAnnouncement, "Imported photo.png.")
+        XCTAssertNil(state.lastError, "a successful binary import surfaces no error")
+    }
+
+    /// #910 red-team Medium: an oversized external drop is refused GRACEFULLY
+    /// (via the shared `FileTooLarge` failure path) instead of crashing when
+    /// its >2 GiB `Data`/`String` would trap in the FFI's `Int32(count)`
+    /// converter. The pre-read size guard trips first. Driven with a SPARSE
+    /// file one byte past the refuse ceiling — `truncate` sets the logical
+    /// size without writing gigabytes, so the guard sees the over-cap size and
+    /// the bytes are never allocated (let alone lowered across the FFI).
+    func testOversizedExternalDropIsRefusedGracefullyNotCrashed() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md"])
+        let refuse = try XCTUnwrap(state.currentSession).largeFileRefuseBytes()
+        let big = tempDir.appendingPathComponent("huge.bin")
+        XCTAssertTrue(FileManager.default.createFile(atPath: big.path, contents: nil))
+        let handle = try FileHandle(forWritingTo: big)
+        try handle.truncate(atOffset: refuse + 1)
+        try handle.close()
+
+        await state.importEntry(externalURL: big, into: "")?.value
+
+        XCTAssertFalse(exists(vault, "huge.bin"), "the oversized file was not imported")
+        XCTAssertNotNil(state.lastError, "the refusal surfaced an error")
+        let announcement = try XCTUnwrap(state.lastMutationAnnouncement)
+        XCTAssertTrue(
+            announcement.hasPrefix("Could not import huge.bin: "),
+            "refusal routes through the shared 'Could not import …' path — got \(announcement)")
+    }
+
+    /// #910 (Codex follow-up): the byte-ceiling decision does NOT trust a
+    /// missing or stale preflight — the actual read count is the definitive
+    /// gate, so a nil-metadata source whose bytes exceed the ceiling is still
+    /// refused (the exact crash path the earlier metadata-only guard missed).
+    func testImportOverCeilingGatesOnActualBytesWhenMetadataMissingOrStale() {
+        let cap: UInt64 = 10
+        // Pre-read call (no bytes yet), metadata unavailable → proceed.
+        XCTAssertNil(
+            AppState.importOverCeiling(metadataSize: nil, readByteCount: nil, refuseBytes: cap))
+        // Metadata unavailable (nil), but the bytes IN HAND exceed the cap →
+        // REFUSE. This is the nil-preflight / package-source crash path.
+        XCTAssertEqual(
+            AppState.importOverCeiling(metadataSize: nil, readByteCount: 11, refuseBytes: cap), 11)
+        // A file that grew past the cap after a passing/absent stat (TOCTOU) is
+        // caught by the post-read count.
+        XCTAssertEqual(
+            AppState.importOverCeiling(metadataSize: nil, readByteCount: 5_000, refuseBytes: cap),
+            5_000)
+        // Within-limit under both signals → proceed (boundary: exactly at cap).
+        XCTAssertNil(
+            AppState.importOverCeiling(metadataSize: 10, readByteCount: 10, refuseBytes: cap))
+        // A preflight over the cap fast-rejects before any read.
+        XCTAssertEqual(
+            AppState.importOverCeiling(metadataSize: 20, readByteCount: nil, refuseBytes: cap), 20)
+    }
+
+    /// #910: the bounded reader never loads more than `cap + 1` bytes, so a
+    /// nil-metadata multi-GB source can't be fully read into memory (nor reach
+    /// the FFI). A within-cap file is returned in full, byte-identical.
+    func testReadImportBytesCapsAtCeilingPlusOne() throws {
+        // A file well past the cap → the reader returns exactly cap + 1 bytes,
+        // not the whole 60.
+        let big = tempDir.appendingPathComponent("cap-big.bin")
+        try Data(repeating: 0xAB, count: 60).write(to: big)
+        XCTAssertEqual(
+            try AppState.readImportBytes(from: big, cap: 10).count, 11,
+            "reads at most cap + 1, never the whole oversized file")
+
+        // A within-cap file (incl. non-UTF-8 bytes) is returned verbatim.
+        let small = tempDir.appendingPathComponent("cap-small.bin")
+        let payload = Data([0xFF, 0xFE, 0x00, 0x01, 0x80])
+        try payload.write(to: small)
+        XCTAssertEqual(try AppState.readImportBytes(from: small, cap: 10), payload)
+    }
+
+    /// #910 (Codex rounds 2–3): the effective transport ceiling clamps the
+    /// engine threshold to `Int32.max - 4` — the 4 being the RustBuffer length
+    /// prefix, so the OUTER FFI buffer conversion `Int32(payload.count + 4)` (not
+    /// just the inner `Int32(value.count)`) cannot trap. Even a pathological
+    /// >2 GiB `large_file_refuse_bytes` config cannot let a buffer whose
+    /// serialized length exceeds `Int32.max` reach the FFI.
+    func testTransportCeilingClampsBelowFfiInt32Limit() {
+        let int32Max = UInt64(Int32.max)  // 2_147_483_647
+        // (a) A >2 GiB config clamps to Int32.max - 4; Int32.max itself clamps
+        //     to Int32.max - 4 (min with the strictly-smaller bound).
+        XCTAssertEqual(
+            AppState.importTransportCeiling(refuseBytes: int32Max + 1000), int32Max - 4)
+        XCTAssertEqual(
+            AppState.importTransportCeiling(refuseBytes: int32Max), int32Max - 4)
+        // The serialized buffer (payload + 4-byte length prefix) fits in Int32,
+        // so neither the inner nor the outer converter conversion can trap.
+        let clamped = AppState.importTransportCeiling(refuseBytes: int32Max + 1000)
+        XCTAssertLessThanOrEqual(
+            clamped + 4, int32Max,
+            "payload.count + 4 (the RustBuffer length) must be representable as Int32")
+        // The ~50 MiB default is far below the limit → passes through unchanged.
+        let fiftyMiB: UInt64 = 50 * 1024 * 1024
+        XCTAssertEqual(AppState.importTransportCeiling(refuseBytes: fiftyMiB), fiftyMiB)
+        // (c) The clamped ceiling is Int-safe, so the reader's `cap + 1`
+        //     sentinel can never overflow Int.
+        XCTAssertLessThan(
+            AppState.importTransportCeiling(refuseBytes: int32Max + 1_000_000), UInt64(Int.max))
+
+        // (b) Under the clamped ceiling, a buffer AT Int32.max — whose serialized
+        //     length WOULD trap the FFI converter — is REFUSED by the definitive
+        //     gate, so it never reaches `createExclusive*`. The largest ALLOWED
+        //     payload is exactly the ceiling (serialized length == Int32.max);
+        //     one byte more is refused.
+        XCTAssertNil(
+            AppState.importOverCeiling(
+                metadataSize: nil, readByteCount: Int(int32Max - 4), refuseBytes: clamped),
+            "a payload at the ceiling (serialized length == Int32.max) is allowed")
+        XCTAssertEqual(
+            AppState.importOverCeiling(
+                metadataSize: nil, readByteCount: Int(int32Max - 3), refuseBytes: clamped),
+            int32Max - 3,
+            "one byte past the ceiling is refused before it can trap the converter")
+        XCTAssertEqual(
+            AppState.importOverCeiling(
+                metadataSize: nil, readByteCount: Int(Int32.max), refuseBytes: clamped),
+            int32Max,
+            "an Int32.max-byte buffer is refused before it can trap the FFI converter")
+    }
+
+    /// #910 (Codex round 3): a ByInspection guard that `importEntry` threads the
+    /// CLAMPED `importTransportCeiling(...)` result — never the raw
+    /// `session.largeFileRefuseBytes()` — into ALL THREE size checks (preflight,
+    /// bounded read, definitive gate). The pure-helper tests above only exercise
+    /// pre-clamped values, so they would not catch a regression that passed the
+    /// raw threshold to one of the three sites; this reads the source and fails
+    /// if that happens.
+    func testImportEntryThreadsClampedCeilingIntoAllThreeSizeChecks() throws {
+        let appStateURL = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SlateMacTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // slate-mac
+            .appendingPathComponent("Sources/SlateMac/AppState.swift")
+        let source = try String(contentsOf: appStateURL, encoding: .utf8)
+
+        // Scope to importEntry's body (up to the first helper that follows it).
+        guard let start = source.range(of: "func importEntry(externalURL"),
+            let end = source.range(
+                of: "nonisolated static func importTransportCeiling",
+                range: start.upperBound..<source.endIndex)
+        else {
+            return XCTFail("could not locate importEntry in AppState.swift")
+        }
+        // Whitespace-normalize so the assertions survive line-wrapping.
+        let flat = source[start.lowerBound..<end.lowerBound]
+            .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+
+        // The raw engine threshold is read exactly ONCE, and only to feed the
+        // clamp — never handed to a size check directly.
+        XCTAssertEqual(
+            flat.components(separatedBy: "largeFileRefuseBytes()").count - 1, 1,
+            "the raw threshold must be read once and immediately clamped")
+        XCTAssertTrue(
+            flat.contains("importTransportCeiling( refuseBytes: session.largeFileRefuseBytes())"),
+            "the single raw-threshold read must feed importTransportCeiling")
+        // All three size checks consume the CLAMPED ceiling.
+        XCTAssertTrue(
+            flat.contains("readImportBytes(from: externalURL, cap: ceiling)"),
+            "the bounded read must cap at the clamped ceiling, not the raw threshold")
+        XCTAssertEqual(
+            flat.components(separatedBy: "refuseBytes: ceiling").count - 1, 2,
+            "both the preflight and the definitive gate must pass the clamped ceiling")
+    }
+
     // MARK: - In-vault file-URL drop → move end-to-end
 
     func testInVaultFileURLDropMovesOnDisk() async throws {
