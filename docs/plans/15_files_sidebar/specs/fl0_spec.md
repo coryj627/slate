@@ -63,7 +63,8 @@ Extend `FileSummary` (additive only — CLI coupling above):
 pub struct FileSummary {
     // existing five fields unchanged …
     pub display_name: Option<String>, // frontmatter `title` (value_kind='text', non-empty after trim); None ⇒ caller falls back to stem
-    pub created_ms: Option<i64>,      // frontmatter `created` (date|datetime) if present, else files.birthtime_ms when > 0
+    pub created_date: Option<String>, // validated canonical frontmatter date-only `YYYY-MM-DD`; preserves the authored civil day
+    pub created_ms: Option<i64>,      // parsed frontmatter datetime instant, else files.birthtime_ms when > 0; never UTC midnight for a date-only value
     pub word_count: Option<u32>,      // None for non-markdown or missing meta row
     pub preview: Option<String>,      // None when empty/missing
     pub task_total: u32,              // aggregate over tasks table
@@ -75,20 +76,22 @@ Rules:
 
 - Populated by **one SQL statement** per listing (LEFT JOIN `file_meta`, LEFT JOIN a `tasks` GROUP BY subquery, LEFT JOIN `properties` on `key='title'` / `key='created'`) — no per-row query loops, no N+1. Applies to both `list_files` and `list_dir_children`; paging and the existing case-insensitive name ordering are unchanged (sorting by the new fields is app-side, locked decision 5).
 - `display_name`: `properties.value_kind='text'` and trimmed-non-empty only; any other kind ⇒ None (a list-valued `title:` is authoring noise, not a name).
-- `created` property parse: `date` ⇒ the explicitly tested calendar/UTC boundary; `datetime` ⇒ instant ms; missing/unparseable ⇒ `files.birthtime_ms` when positive, otherwise None. A date-only value must never shift a day in presentation.
+- Resolve the scalar `created` value in this order: a strict canonical `YYYY-MM-DD` whose year/month/day form a valid civil date; a valid datetime with an explicit or parser-defined offset; then positive `files.birthtime_ms`. A valid date-only value is copied unchanged into `created_date`; it never becomes an epoch value. A datetime becomes `created_ms`. Missing/invalid date syntax falls through to datetime parsing, and missing/invalid datetime falls through to birthtime.
+- `created_ms` may carry the birthtime fallback alongside a non-NULL `created_date`; consumers must give `created_date` presentation and created-sort/group precedence. The fallback remains useful to older/additive-field consumers, but it cannot override the authored civil day.
+- Swift parses `created_date` into year/month/day components in the user's current calendar/timezone, presents that authored day without an instant or UTC-midnight conversion, and derives local start-of-day only when it needs a numeric sort/group key. Datetime and birthtime values remain ordinary instants in `created_ms`.
 - Verify additive-fields stance against the `slate.cli.v1` contract doc and note the verification in the PR; regenerate bindings (`make regenerate-bindings`).
 - Budget: `list_dir_children` on the 10k-vault root ≤ **10 ms** (it is on the sidebar's first-paint path; bench in FL0-3).
 
 - [ ] Record extension + single-statement joins in both listings
 - [ ] `slate.cli.v1` additive-check noted in PR; bindings regenerated
-- [ ] FFI-shape unit tests: title precedence, created precedence, task aggregates, non-markdown rows
+- [ ] FFI-shape unit tests: title precedence; valid/leap/invalid date-only; datetime offsets; date-only + birthtime coexistence and precedence; datetime/birthtime fallback; task aggregates; non-markdown rows
 - [ ] Swift binding smoke test
 
 ## FL0-3 · Censuses + benchmarks — the wave gate (#652) — closing PR FL-01
 
 **Censuses** (`crates/slate-core/src/session/tests/file_meta.rs`, `census_*` convention):
 
-1. `census_file_meta_matches_rescan` — adversarial random walk (N ops from {create/edit/save/rename/move/delete, frontmatter add/remove/retype of `title`/`created`, task-list edits}); after **every** op, every file's `file_meta` row and the joined `FileSummary` fields ≡ a from-scratch recompute of the same file's bytes. Random + exhaustive small-vault sweep per the adversarial-census methodology.
+1. `census_file_meta_matches_rescan` — adversarial random walk (N ops from {create/edit/save/rename/move/delete, frontmatter add/remove/retype of `title`/`created`, task-list edits}); after **every** op, every file's `file_meta` row and the joined `FileSummary` fields (including the distinct `created_date`/`created_ms` resolution) ≡ a from-scratch recompute of the same file's bytes. Random + exhaustive small-vault sweep per the adversarial-census methodology.
 2. `census_file_meta_scan_parity` — full vault scanned cold ≡ vault built incrementally op-by-op (catches hook-site omissions).
 
 **Benchmarks** (`scan_bench.rs` additions): `scan_initial/{1k,10k,50k}` re-run — overhead vs. recorded baseline ≤ **5%** (DoD §FL-C); `list_dir_children_meta/{10k}` ≤ 10 ms; `save_path/{10k}` unchanged O(changed-file). Record in `BENCHMARKS.md`.

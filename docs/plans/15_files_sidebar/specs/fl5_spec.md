@@ -8,7 +8,7 @@ Baseline facts (verified 2026-07-14 at `origin/main` `6aa9fce`):
 - `file_tags` (migration `019_file_tags.sql`) remains the indexed union of suppression-aware inline tags and frontmatter `TagList`; `tags_db::replace_tags_for_file` and `normalize_tag` are the authoritative seams. Nested `a`→`a/b` semantics remain settled. Exact July 5 line references are obsolete.
 - Frontmatter `tags` arrive as `PropertyValue::TagList` (frontmatter.rs); properties rows carry the original list JSON (`value_kind='tag_list'`).
 - Save path is the derived-data refresh seam (fl0 baseline); editing a note's frontmatter through core save updates `file_tags` in the same transaction.
-- FL-09 supplies the shared flat result list and `filter_files` `#tag` term; FL-07 shortcut storage reserves `kind: tag`.
+- FL-09 supplies the shared flat result list and `filter_files` `#tag` term; FL-07 shortcut storage reserves `kind: tag|untagged` container targets.
 
 ---
 
@@ -46,10 +46,10 @@ Tests: fixture with nested/deep/sibling tags + intermediate-only segments; count
 1. A collapsible **Tags** section rendered below the folder tree (final order: Shortcuts, Recents, folder tree, Tags), header with total count, AX group + header per FL3-3 conventions; collapsed state device-local, default **collapsed** (zero cost until opened; `tag_tree()` fetches on first expand, refreshes on tree-invalidation events while expanded).
 2. Rows: disclosure per nested level (reuse the folder-row disclosure interaction + AX patterns wholesale — expanded/collapsed, "level N"); label = segment; count badge = `file_count`, AX `"projects, 12 notes, collapsed, level 1"`. An **Untagged** leaf row renders last when `untagged_count > 0`.
 3. **Activation** (click/Return): shows the FL4-2 flat result list with query `#<full>` (Untagged: a reserved scope executed via a dedicated core call — `filter_files` gains `scope_untagged: bool` or the UI calls a sibling method; pick at implementation, either way the list presentation and announce are FL4-2's). The filter field shows the produced query — editable, teaching the grammar.
-4. Context menu: **Copy Tag** (`#full`), **Add to Shortcuts** (FL3-3 `kind: tag` — activation re-runs the tag query), **Filter by Tag** (same as activation, for VO rotor discoverability). Tag rename/delete are **out of FL scope** (they rewrite note bodies at vault scale; deferred, noted in program close-out list).
+4. Context menu: **Copy Tag** (`#full`), **Add to Shortcuts** (FL3-3 `kind: tag`; Untagged uses `kind: untagged`). These shortcuts are dual-pane containers whose activation drives the list with the tag/Untagged query; in single-tree mode they reuse the FL4 flat-list handoff. **Filter by Tag** uses the same handoff for VO rotor discoverability. Tag rename/delete are **out of FL scope** (they rewrite note bodies at vault scale; deferred, noted in program close-out list).
 5. Empty state: section shows one quiet row "No tags yet."
 
-Tests: section lifecycle (lazy fetch, invalidation refresh); disclosure AX parity with folders; activation query handoff incl. Untagged; shortcut round-trip; empty state.
+Tests: section lifecycle (lazy fetch, invalidation refresh); disclosure AX parity with folders; activation query handoff incl. Untagged; tag and Untagged shortcut round-trip as containers; empty state.
 
 - [ ] Section + rows + disclosure AX; lazy fetch/refresh
 - [ ] Activation → FL4-2 list; Untagged path; context menu

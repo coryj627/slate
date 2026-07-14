@@ -60,12 +60,22 @@ These decisions replace stale implementation assumptions without changing the
 locked user-facing scope:
 
 1. **Migration 031, no duplicate birthtime.** `file_meta` stores only
-   `word_count`, `char_count`, and `preview`; `created_ms` is resolved from the
-   existing `files.birthtime_ms`, with frontmatter `created` taking precedence.
+   `word_count`, `char_count`, and `preview`; there is no new database created
+   column. `FileSummary` grows additive `created_date: Option<String>` for a
+   validated canonical authored `YYYY-MM-DD` civil date and
+   `created_ms: Option<i64>` for a parsed datetime instant or the existing
+   positive `files.birthtime_ms` fallback. `created_date` takes presentation and
+   created-sort/group precedence. Swift preserves its year/month/day in the
+   user's calendar/timezone and derives local start-of-day only for sort/group
+   keys; it never represents a date-only value as UTC midnight. Invalid dates
+   fall through to datetime parsing and then birthtime.
 2. **One command system.** Append `.sidebar` to the existing cross-language
    `CommandSection` enum and register every FL command through the current
-   registry. Menu bar, palette, context menu, toolbar, keyboard, and VoiceOver
-   rotor actions call the same AppState action funnels.
+   registry. One action catalog owns verbs and AppState funnels, but projection
+   is surface-specific: concise context menus and VoiceOver rotor actions omit
+   structurally inapplicable verbs; menu bar and palette keep the stable full
+   inventory disabled with an accessible reason when unavailable; temporarily
+   blocked but otherwise relevant context actions may be disabled with a reason.
 3. **FL2 is residual work.** Keep the shipped `<stem> copy` Duplicate naming,
    spring-loading, pointer multi-selection, and current undo behavior unless a
    later PR deliberately upgrades the batch contract. Do not implement parallel
@@ -92,6 +102,11 @@ locked user-facing scope:
    frontmatter range and Markdown/source-span machinery wherever available. Any
    preview-specific stripping is isolated in `file_meta_db` and protected by
    fixtures/censuses so it cannot affect the editor parser.
+10. **Shortcut containers and leaves are distinct.** Folder, tag, and Untagged
+    shortcuts are navigation containers that drive the dual-pane list. File
+    shortcuts and Recents are leaves: they open immediately through the normal
+    open seam and then mirror the containing folder/file selection; they never
+    become list containers.
 
 ## Architecture and Usability Rules
 
@@ -119,13 +134,22 @@ locked user-facing scope:
   `Tokens`. New text pairings are measured with the existing
   `PresentationReady`/`APCAContrast` harness in Aqua and Dark Aqua at
   `|Lc| > 75`.
-- Follow Apple's macOS sidebar, outline, search, focus/selection, menu, and drag
-  conventions: leading navigation, succinct section labels, disclosure separate
-  from activation, persistent search above a navigable list, active/inactive
-  selection distinction, full keyboard/menu parity, copy semantics for external
-  drops, multi-item drag, visible drop feedback, and spring-loading.
-- Context menus stay concise and selection-relevant. The menu bar and command
-  palette remain the complete command inventory.
+- Follow Apple's official macOS [Sidebars](https://developer.apple.com/design/human-interface-guidelines/sidebars),
+  [Search fields](https://developer.apple.com/design/human-interface-guidelines/search-fields),
+  [Outline views](https://developer.apple.com/design/human-interface-guidelines/outline-views),
+  [Drag and drop](https://developer.apple.com/design/human-interface-guidelines/drag-and-drop),
+  [Focus and selection](https://developer.apple.com/design/human-interface-guidelines/focus-and-selection),
+  and [Menus](https://developer.apple.com/design/human-interface-guidelines/menus)
+  guidance: leading navigation, succinct section labels, disclosure separate from
+  activation, persistent search above a navigable list, active/inactive selection
+  distinction, full keyboard/menu parity, copy semantics for external drops,
+  multi-item drag, visible drop feedback, and spring-loading. These links define
+  conventions; do not infer or invent measurements.
+- Context menus and VoiceOver rotors stay concise and selection-relevant by
+  omitting structurally inapplicable catalog verbs. The menu bar and command
+  palette remain the stable complete command inventory with accessible disabled
+  reasons. Temporarily blocked, otherwise relevant contextual verbs may stay
+  visible and disabled with their reason.
 - Human-facing UAT covers keyboard-only use, VoiceOver, Full Keyboard Access,
   light/dark, Increase Contrast, Reduce Motion, narrow/wide sidebars, empty/error/
   loading states, 10k-note vaults, and external filesystem changes.
@@ -142,7 +166,7 @@ an issue cannot close while residual acceptance criteria remain.
 | FL-02 | Rich rows, settings, preference stores | #653 #654 | — | FL-01 |
 | FL-03 | Selection and one-logical-batch contract | #655 | batch part of #656 | FL-00 |
 | FL-04 | Action/menu/template completeness | #656 | template part of #657 | FL-03 |
-| FL-05 | Multi-item Finder import pipeline | #657 | — | FL-03 |
+| FL-05 | Multi-item Finder import pipeline | #657 | — | FL-04 |
 | FL-06 | Sort, grouping, and pins | #658 #659 | — | FL-02 |
 | FL-07 | Shortcuts, recents, and navigation | #660 #661 | — | FL-06 |
 | FL-08 | Filter/listing engine | #662 | — | FL-01 |
@@ -246,11 +270,14 @@ Each task below inherits this gate in addition to its targeted tests:
       one established slow-path replay for existing vaults.
 - [ ] Derive body counts and normalized preview at the scan slow path and save
       path in the same transaction; delete cascades. Preserve O(changed-file).
-- [ ] Extend `FileSummary` additively with effective title, resolved created
-      timestamp, word count, preview, and task aggregates. Both listing APIs use
-      one SQL statement with no per-row queries.
-- [ ] Resolve frontmatter date/datetime deterministically and test the chosen
-      calendar/UTC display boundary explicitly so a date cannot shift a day.
+- [ ] Extend `FileSummary` additively with effective title, distinct canonical
+      `created_date` civil-date and `created_ms` instant/birthtime fields, word
+      count, preview, and task aggregates. Both listing APIs use one SQL statement
+      with no per-row queries; migration 031 adds no created column.
+- [ ] Resolve strict valid `YYYY-MM-DD` to `created_date`; resolve datetime or
+      positive birthtime fallback to `created_ms`. Test invalid-date fallthrough,
+      date-over-birthtime presentation precedence, timezone/DST behavior, and the
+      ban on UTC-midnight date encoding.
 - [ ] Verify the additive JSON/CLI contract and regenerate bindings locally.
 - [ ] Add rescan-parity and random-walk censuses plus 1k/10k/50k scan, 10k root
       listing, and save-path benchmarks.
@@ -281,9 +308,11 @@ Each task below inherits this gate in addition to its targeted tests:
 
 **Work:**
 
-- [ ] Extract one row model/view for effective title, truthful created/modified
-      labels, preview clamp, task badge, localized word count, standard/compact
-      density, filename tooltip, rename filename, and one coherent AX utterance.
+- [ ] Extract one row model/view for effective title; civil-date-first, truthful
+      created/modified labels; preview clamp; task badge; localized word count;
+      standard/compact density; filename tooltip; rename filename; and one
+      coherent AX utterance. Present date-only calendar components without an
+      instant conversion; derive local start-of-day only for sort/group keys.
 - [ ] Cache formatters and precompute row strings outside `body`.
 - [ ] Add the Sidebar settings surface to the existing Settings view using
       device-local typed preferences.
@@ -347,8 +376,11 @@ one announcement, #643 click regression.
 
 - [ ] Append `.sidebar` cross-language command section and update exhaustive
       conversion/order tests.
-- [ ] Define one action catalog with enablement/reason rules. Project it into
-      menu bar, palette, concise context menus, toolbar, keyboard, and rotor.
+- [ ] Define one action catalog with capability, enablement, and reason rules.
+      Menu bar/palette keep the stable full inventory disabled with accessible
+      reasons; concise context menus/rotor omit structurally inapplicable verbs;
+      temporarily blocked relevant context actions may remain disabled. Toolbar
+      and keyboard invoke the same applicable catalog entries.
 - [ ] Preserve shipped Duplicate/Reveal behavior; make Copy Path vault-relative;
       add resolver-correct Copy Wikilink and one `Copied.` announcement.
 - [ ] Add live, polite filename warnings for filesystem-invalid and link-breaking
@@ -358,15 +390,18 @@ one announcement, #643 click regression.
       only the selected destination folder. Empty Templates disables the action
       with an accessible reason.
 
-**Targeted verification:** command/action parity and unique IDs; disabled-not-
-hidden rules; ambiguous/unambiguous wikilinks; warning character table; shipped
-Duplicate suffix; template destination/title/prompts/caret; empty Templates.
+**Targeted verification:** command/action parity and unique IDs; surface projection
+matrix (context/rotor structural omission, menu bar/palette stable disabled
+inventory, temporarily blocked contextual reasons); ambiguous/unambiguous
+wikilinks; warning character table; shipped Duplicate suffix; template
+destination/title/prompts/caret; empty Templates on contextual and full-inventory
+surfaces.
 
 **Commit:** `feat(sidebar): complete actions and template creation`
 
 ## FL-05 — Bounded Multi-Item Finder Import
 
-**Issues:** Close #657.
+**Issues:** Close #657 after FL-04 has delivered and referenced its template work.
 
 **Files:**
 
@@ -406,7 +441,9 @@ cancel, partial success, vault switch, in-vault move, external copy semantics.
 **Work:**
 
 - [ ] Add total-order name/created/modified sorting with direction, null-last
-      rules, stable tie-breaks, and per-folder override precedence.
+      rules, stable tie-breaks, and per-folder override precedence. A valid
+      `created_date` supplies the local-start-of-day sort/group key before any
+      simultaneous `created_ms` birthtime fallback.
 - [ ] Add injected-clock date buckets as nonselectable AX headers. Grouping
       forces its compatible date sort and never mixes folder/file ordering.
 - [ ] Add one nonduplicated Pinned section, pin commands, authored order, and
@@ -438,14 +475,19 @@ selection after mutation, pin integrity/prune idempotence, header/row AX.
       Quick Switcher retains 50; sidebar displays first 10 excluding current.
 - [ ] Add discoverable Shortcuts and Recents AX groups above the tree, including
       accessible empty rows, reorder parity, clear recents, and mutation repair.
+- [ ] Make folder shortcuts navigation containers; make file shortcuts and every
+      Recent a normal-open leaf that mirrors containing folder/file selection in
+      dual-pane mode and never drives list contents. Reserve tag/Untagged shortcut
+      kinds as containers for FL-11.
 - [ ] Add focus-scoped shortcut chords without stealing tab chords.
 - [ ] Add bounded Collapse All/Expand Loaded and per-window back/forward selection
       history with stable reveal, invalid-entry skipping, and focus-scoped chords.
 
 **Targeted verification:** migration idempotence/corruption/oversize; two-window
 recents writes; cap/dedupe/current exclusion; shortcut mutation/reorder/chords;
-collapse ancestor preservation; fetch bound; history dedupe/delete/vault switch;
-AX headings and announcements.
+folder-container versus file-shortcut/Recent leaf activation and normal-open
+mirror; proof leaves never drive list contents; collapse ancestor preservation;
+fetch bound; history dedupe/delete/vault switch; AX headings and announcements.
 
 **Commit:** `feat(sidebar): add shortcuts recents and navigation`
 
@@ -602,8 +644,11 @@ rename-in/out refresh, badge APCA and AX.
 
 - [ ] Add the top/bottom navigation/list container, persisted divider fraction,
       AX-labeled pane groups/divider, and folders-only navigation projection.
-- [ ] Define container selection for folder/tag/untagged/shortcut and editor
-      mirror state. Filter remains topmost and replaces list contents only.
+- [ ] Define container selection for direct folder/tag/Untagged rows and shortcuts
+      targeting those scopes. File shortcuts and Recents remain non-container
+      leaves: focus does not retarget the list; activation uses normal open and
+      editor mirroring selects the containing folder/file. Filter remains topmost
+      and replaces list contents only.
 - [ ] Implement Tab/arrow focus transfer without stealing disclosure keys; mode
       switches preserve tree/filter/selection state and avoid redundant fetches.
 - [ ] Keep the user-facing layout toggle hidden/internal until FL-14 supplies the
@@ -611,8 +656,10 @@ rename-in/out refresh, badge APCA and AX.
       equivalent.
 
 **Targeted verification:** internal toggle round trip, folders-only projection,
-container matrix, focus escape priority, VO pane announcements, divider storage,
-filter scoping, editor mirror, state preservation, zero extra work in tree mode.
+container matrix, file-shortcut/Recent leaf non-retarget + open/mirror matrix,
+container-only focus transfer and disclosure escape priority, VO pane
+announcements, divider storage, filter scoping, editor mirror, state preservation,
+zero extra work in tree mode.
 
 **Commit:** `feat(sidebar): add gated dual-pane container`
 
@@ -630,7 +677,8 @@ filter scoping, editor mirror, state preservation, zero extra work in tree mode.
 **Work:**
 
 - [ ] Render pinned/grouped/sorted shared rows for folder, descendant, tag,
-      untagged, and shortcut containers with paging and path subtitles.
+      Untagged, and folder/tag/Untagged shortcut containers with paging and path
+      subtitles. File shortcuts and Recents never supply list content.
 - [ ] Add Include Subfolders and per-container sort/group/preview/density
       overrides in the one vault-local store; single-tree reads the same values.
 - [ ] Share multi-selection, drag-to-navigation, keyboard, context, menu, palette,
@@ -686,8 +734,10 @@ Milestone FL is complete only when:
 - #650–#670 are closed by the mapped merged PRs.
 - Every PR tip passed its targeted gates, repository CI, independent red team,
   and explicit Codoki safe-to-merge review before merge.
-- No feature exists only in a context menu; menu bar/palette/keyboard/rotor parity
-  is verified through the shared action catalog.
+- No feature exists only in a context menu. Verb identity and action funnels are
+  shared, while tests verify the required surface projections: context menu/rotor
+  structural omission and concise ordering, menu bar/palette stable disabled
+  inventory, and keyboard/toolbar access where applicable.
 - Metadata scan/save remains O(changed-file), filter <= 50 ms at 10k, tag tree
   <= 25 ms at 10k, root metadata listing <= 10 ms, and scan regression <= 5%.
 - `.slate/sidebar.json` survives corruption/concurrent writers/unknown keys; all

@@ -1,9 +1,9 @@
 # FL2 executable spec — Selection & operations: multi-select, batch ops, menu completeness, templates, Finder drop
 
-Issues: FL2-1 ([#655](https://github.com/coryj627/slate/issues/655)) · FL2-2 ([#656](https://github.com/coryj627/slate/issues/656)) · FL2-3 ([#657](https://github.com/coryj627/slate/issues/657)). Milestone: [GH 31](https://github.com/coryj627/slate/milestone/31). Grouped delivery: FL-03 closes #655 and references the batch part of #656; FL-04 closes #656 and references the template part of #657; FL-05 closes #657.
+Issues: FL2-1 ([#655](https://github.com/coryj627/slate/issues/655)) · FL2-2 ([#656](https://github.com/coryj627/slate/issues/656)) · FL2-3 ([#657](https://github.com/coryj627/slate/issues/657)). Milestone: [GH 31](https://github.com/coryj627/slate/milestone/31). Grouped delivery: FL-03 closes #655 and references the batch part of #656; FL-04 closes #656 and references the template part of #657; FL-05 depends on FL-04 and closes #657.
 Program: [00_program.md](../00_program.md) (locked decisions 11, 13–15; DoD §FL-A). U §A–§G apply.
 
-**Execution order: FL-03 residual selection + one logical batch → FL-04 action/template completion; FL-05 bounded multi-import follows FL-03.**
+**Execution order: FL-03 residual selection + one logical batch → FL-04 action/template completion → FL-05 bounded multi-import.** FL-05 depends on FL-04 because FL-04 owns the template acceptance criteria for #657 and only FL-05 closes the issue.
 
 Baseline facts (verified 2026-07-14 at `origin/main` `6aa9fce`):
 
@@ -37,7 +37,7 @@ Move and Trash become one core request per user action:
 
 1. Prune descendants of selected folders, validate session/vault ownership, and complete collision/subtree/permission preflight before the first mutation.
 2. Journal progress, apply deterministic operations, attempt rollback on failure, and return one consolidated result. If rollback is incomplete, name every unrecovered path honestly; never claim atomicity the filesystem cannot provide.
-3. AppState publishes one refresh, one announcement, one skip/error report, and one undo group. While running, affected actions are disabled with an accessible reason; double submission and stale completion after a vault switch are rejected.
+3. AppState publishes one refresh, one announcement, one skip/error report, and one undo group. While running, affected actions that are otherwise relevant to the current surface are disabled with an accessible reason; double submission and stale completion after a vault switch are rejected.
 4. Preserve the shipped confirmation threshold for destructive non-empty-folder batches and tab error/retarget semantics.
 
 Tests: top-level pruning; complete preflight; injected mid-batch failure and rollback; rollback-failure honesty; vault switch; double submission; one undo, refresh, and announcement.
@@ -48,13 +48,13 @@ Tests: top-level pruning; complete preflight; injected mid-batch failure and rol
 
 ## FL2-2b · Shared action/menu completion (#656 remainder) — closing PR FL-04
 
-1. Append `.sidebar` to the existing cross-language `CommandSection`, add exhaustive conversion/order tests, and define one `SidebarAction` catalog. Menu bar, palette, concise context menus, toolbar, keyboard, and rotor project that catalog through the same AppState action funnels.
+1. Append `.sidebar` to the existing cross-language `CommandSection`, add exhaustive conversion/order tests, and define one `SidebarAction` catalog. The catalog owns verb identity, capability, enablement, disabled reason, and the shared AppState action funnel; surfaces own projection. Menu bar and palette retain a stable full command inventory and disable unavailable commands with an accessible reason. Context menus and the VoiceOver rotor omit structurally inapplicable verbs and stay concise; an otherwise relevant action that is only temporarily blocked (for example, while a batch runs or Templates is empty) may remain present and disabled with its accessible reason. Toolbar and keyboard paths invoke the same applicable catalog entries.
 2. Preserve shipped Duplicate exactly: files only, exclusive-create `<stem> copy`, `<stem> copy 2`, … naming, outgoing links unchanged, one announcement, copied row selected. Preserve shipped Reveal in Finder and vault-relative Copy Path.
 3. Add resolver-correct **Copy Wikilink**: `[[stem]]` only when unambiguous under the live resolver; otherwise use the vault-relative path without `.md`. Copy Path and Copy Wikilink announce one `"Copied."`.
 4. Add live polite warnings for filesystem-invalid and link-breaking characters to rename, new-note, and new-folder flows. Warnings do not replace backend commit validation.
-5. Multi-selection exposes only applicable shared actions; unavailable actions remain discoverable with an accessible disabled reason.
+5. Multi-selection uses the catalog's same capability evaluation on every surface. Structural inapplicability (for example, Duplicate on a mixed file/folder selection) is omitted from context menus and the rotor but remains in the menu bar/palette's full inventory as disabled with the same accessible reason. Temporary unavailability never creates a second verb or action path.
 
-Tests: command/action parity and unique IDs; exhaustive `CommandSection.sidebar` mapping; disabled reasons; shipped Duplicate suffix; Reveal/Copy Path regression; both wikilink branches; warning character table.
+Tests: command/action parity and unique IDs; exhaustive `CommandSection.sidebar` mapping; surface projection matrix (context/rotor structural omission, concise ordering, menu bar/palette stable disabled inventory, temporarily blocked contextual action + reason); shipped Duplicate suffix; Reveal/Copy Path regression; both wikilink branches; warning character table. Review the interaction against Apple's [Menus](https://developer.apple.com/design/human-interface-guidelines/menus), [Drag and drop](https://developer.apple.com/design/human-interface-guidelines/drag-and-drop), and [Focus and selection](https://developer.apple.com/design/human-interface-guidelines/focus-and-selection) guidance.
 
 - [ ] Existing registry `.sidebar` section + shared action catalog
 - [ ] Preserve shipped actions; add Copy Wikilink and warnings
@@ -62,9 +62,9 @@ Tests: command/action parity and unique IDs; exhaustive `CommandSection.sidebar`
 
 ## FL2-3a · Template creation (#657 prerequisite) — FL-04 (`Refs #657`)
 
-**New Note from Template…** is available from folder actions and the complete command inventory. Reuse the existing picker/render/name/caret pipeline and inject only the selected destination folder. Empty Templates disables the action with an accessible reason. Test destination, title/prompts, caret, and empty state.
+**New Note from Template…** is available from folder actions and the complete command inventory. Reuse the existing picker/render/name/caret pipeline and inject only the selected destination folder. Empty Templates is a temporary availability state: the relevant folder context action may remain disabled with its accessible reason, and the menu bar/palette command remains in the stable inventory disabled for the same reason. Test destination, title/prompts, caret, and both projections of the empty state.
 
-## FL2-3b · Bounded multi-item Finder import (#657 remainder) — closing PR FL-05
+## FL2-3b · Bounded multi-item Finder import (#657 remainder) — closing PR FL-05 after FL-04
 
 1. Consume every file-URL provider exactly once and preserve provider order. Classify in-vault URLs as the shipped undoable move before mutation; external URLs copy into the selected vault folder.
 2. Copy files and directories recursively without following symlink cycles or escaping the selected root. Preserve raw bytes and security-scoped access.
