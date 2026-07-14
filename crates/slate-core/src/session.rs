@@ -6614,7 +6614,7 @@ fn get_file_metadata_impl(
 /// are therefore bounded to the current query's candidates, and the
 /// deterministic minimum ordinal keeps repeated property shapes from
 /// multiplying file rows.
-pub(crate) const FILE_SUMMARY_QUERY_TAIL: &str = r#"
+const FILE_SUMMARY_ENRICHMENT_CTES: &str = r#"
     , task_counts AS (
         SELECT t.file_id,
                COUNT(*) AS task_total,
@@ -6649,22 +6649,51 @@ pub(crate) const FILE_SUMMARY_QUERY_TAIL: &str = r#"
         JOIN created_ordinals o
           ON o.file_id = p.file_id AND o.ordinal = p.ordinal
     )
-    SELECT c.id, c.path, c.name, c.mtime_ms, c.size_bytes,
-           c.is_markdown, c.birthtime_ms,
-           CASE WHEN c.is_markdown = 1 THEN fm.word_count END,
-           CASE WHEN c.is_markdown = 1 THEN NULLIF(fm.preview, '') END,
-           COALESCE(tc.task_total, 0), COALESCE(tc.task_open, 0),
-           tv.value_kind, tv.value_text,
-           cv.value_kind, cv.value_text,
-           totals.total_filtered
-    FROM totals
-    LEFT JOIN candidates c ON 1 = 1
+"#;
+
+const FILE_SUMMARY_SELECT_COLUMNS: &str = r#"
+    c.id, c.path, c.name, c.mtime_ms, c.size_bytes,
+    c.is_markdown, c.birthtime_ms,
+    CASE WHEN c.is_markdown = 1 THEN fm.word_count END,
+    CASE WHEN c.is_markdown = 1 THEN NULLIF(fm.preview, '') END,
+    COALESCE(tc.task_total, 0), COALESCE(tc.task_open, 0),
+    tv.value_kind, tv.value_text,
+    cv.value_kind, cv.value_text,
+    totals.total_filtered
+"#;
+
+const FILE_SUMMARY_ENRICHMENT_JOINS: &str = r#"
     LEFT JOIN file_meta fm ON fm.file_id = c.id
     LEFT JOIN task_counts tc ON tc.file_id = c.id
     LEFT JOIN title_values tv ON tv.file_id = c.id
     LEFT JOIN created_values cv ON cv.file_id = c.id
-    ORDER BY c.path COLLATE BINARY ASC
 "#;
+
+/// Compose the fixed enrichment projection around a caller-provided row
+/// source. `candidate_join` must bind the candidate row as `c`; optional extra
+/// columns are appended after the decoder's fixed 16-column prefix.
+fn file_summary_query_projection(
+    candidate_join: &str,
+    extra_select_columns: &str,
+    order_by: &str,
+) -> String {
+    format!(
+        "{FILE_SUMMARY_ENRICHMENT_CTES}
+         SELECT {FILE_SUMMARY_SELECT_COLUMNS}{extra_select_columns}
+         FROM totals
+         {candidate_join}
+         {FILE_SUMMARY_ENRICHMENT_JOINS}
+         {order_by}"
+    )
+}
+
+pub(crate) fn file_summary_query_tail() -> String {
+    file_summary_query_projection(
+        "LEFT JOIN candidates c ON 1 = 1",
+        "",
+        "ORDER BY c.path COLLATE BINARY ASC",
+    )
+}
 
 fn decode_json_string(value_text: Option<&str>) -> Option<String> {
     serde_json::from_str::<String>(value_text?).ok()
@@ -6684,7 +6713,7 @@ fn canonical_gregorian_date(value: &str) -> bool {
     let year = value[..4].parse::<i32>().ok();
     let month = value[5..7].parse::<u32>().ok();
     let day = value[8..].parse::<u32>().ok();
-    matches!((year, month, day), (Some(y), Some(m), Some(d)) if chrono::NaiveDate::from_ymd_opt(y, m, d).is_some())
+    matches!((year, month, day), (Some(y), Some(m), Some(d)) if (1..=9999).contains(&y) && chrono::NaiveDate::from_ymd_opt(y, m, d).is_some())
 }
 
 fn canonical_naive_datetime(value: &str) -> Option<i64> {
@@ -6729,9 +6758,10 @@ fn resolve_created_value(
     (None, datetime_ms.or(positive_birthtime))
 }
 
-/// Decode the fixed column order emitted by [`FILE_SUMMARY_QUERY_TAIL`].
-/// The first column is nullable because `totals LEFT JOIN candidates` emits a
-/// sentinel row for empty/past-end pages so the total remains truthful.
+/// Decode the fixed column order emitted by [`file_summary_query_projection`].
+/// The first column is nullable because each caller drives the projection from
+/// `totals` and emits a sentinel/count row when no candidate summary exists, so
+/// empty and past-end pages can still return a truthful total.
 pub(crate) fn decode_file_summary_query_row(
     row: &rusqlite::Row<'_>,
 ) -> rusqlite::Result<(Option<FileSummary>, u64)> {
@@ -6800,6 +6830,7 @@ fn list_files_impl(
 
     // Fetch limit + 1: the extra row tells us whether there's a next page.
     let fetch_n = paging.limit as i64 + 1;
+    let summary_projection = file_summary_query_tail();
     let query = format!(
         "WITH filtered AS (
              SELECT id, path, name, mtime_ms, size_bytes, is_markdown, birthtime_ms
@@ -6813,7 +6844,7 @@ fn list_files_impl(
              ORDER BY path COLLATE BINARY ASC
              LIMIT ?2
          )
-         {FILE_SUMMARY_QUERY_TAIL}"
+         {summary_projection}"
     );
     let mut stmt = conn.prepare_cached(&query)?;
     let mut total_filtered = 0;
@@ -6986,44 +7017,74 @@ fn list_dir_children_impl(
     // --- Files: immediate child files of `parent`, plus each child
     //     directory's immediate child-file count. ---
     let mut listing_files: Vec<FileSummary> = Vec::new();
+    let mut total_files = 0;
     let mut dir_child_file_count: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
     {
         let (lower, upper) = subtree_bounds(&parent)
             .map(|(lower, upper)| (Some(lower), Some(upper)))
             .unwrap_or((None, None));
+        // Keep the subtree scan on base file paths only. `file_counts`
+        // collapses even a 10k-descendant tree to one row per containing
+        // directory, while only direct children enter `candidates` and reach
+        // file_meta/task/property enrichment. `row_sources` returns both row
+        // kinds through this single statement without multiplying summaries.
+        let summary_projection = file_summary_query_projection(
+            "LEFT JOIN row_sources rs ON 1 = 1
+             LEFT JOIN candidates c ON c.id = rs.file_id",
+            ", rs.parent_path, rs.child_file_count",
+            "ORDER BY rs.parent_path COLLATE BINARY ASC, c.path COLLATE BINARY ASC",
+        );
         let query = format!(
-            "WITH candidates AS (
-                 SELECT id, path, name, mtime_ms, size_bytes, is_markdown, birthtime_ms
+            "WITH subtree_paths AS (
+                 SELECT id, path, name
                  FROM files
                  WHERE (?1 IS NULL OR (path > ?1 AND path < ?2))
              ),
-             totals AS (SELECT COUNT(*) AS total_filtered FROM candidates)
-             {FILE_SUMMARY_QUERY_TAIL}"
+             file_counts AS (
+                 SELECT CASE
+                            WHEN length(path) = length(name) THEN ''
+                            ELSE substr(path, 1, length(path) - length(name) - 1)
+                        END AS parent_path,
+                        COUNT(*) AS child_file_count
+                 FROM subtree_paths
+                 GROUP BY parent_path
+             ),
+             candidates AS (
+                 SELECT f.id, f.path, f.name, f.mtime_ms, f.size_bytes,
+                        f.is_markdown, f.birthtime_ms
+                 FROM files f
+                 JOIN subtree_paths sp ON sp.id = f.id
+                 WHERE instr(substr(sp.path, length(?3) + 2), '/') = 0
+             ),
+             totals AS (SELECT COUNT(*) AS total_filtered FROM candidates),
+             row_sources AS (
+                 SELECT parent_path, child_file_count, NULL AS file_id
+                 FROM file_counts
+                 UNION ALL
+                 SELECT NULL, NULL, id
+                 FROM candidates
+             )
+             {summary_projection}"
         );
         let mut stmt = conn.prepare_cached(&query)?;
-        let mapped = stmt.query_map(rusqlite::params![lower, upper], |row| {
-            decode_file_summary_query_row(row)
+        let mapped = stmt.query_map(rusqlite::params![lower, upper, parent], |row| {
+            let (summary, total) = decode_file_summary_query_row(row)?;
+            Ok((
+                summary,
+                total,
+                row.get::<_, Option<String>>(16)?,
+                row.get::<_, Option<u32>>(17)?,
+            ))
         })?;
-        let mut rows = Vec::new();
         for row in mapped {
-            if let (Some(summary), _) = row? {
-                rows.push(summary);
+            let (summary, total, count_parent, child_file_count) = row?;
+            total_files = total;
+            if let (Some(count_parent), Some(child_file_count)) = (count_parent, child_file_count) {
+                dir_child_file_count.insert(count_parent, child_file_count);
             }
-        }
-        for f in rows {
-            // A file's containing directory is its path minus the final
-            // component. Tally it toward that dir's child-file count so a
-            // collapsed child folder can announce its file count.
-            let file_parent = match f.path.rfind('/') {
-                Some(i) => &f.path[..i],
-                None => "",
-            };
-            *dir_child_file_count
-                .entry(file_parent.to_string())
-                .or_insert(0) += 1;
-            if immediate_child_segment(&parent, &f.path).is_some() {
-                listing_files.push(f);
+            if let Some(summary) = summary {
+                listing_files.push(summary);
             }
         }
     }
@@ -7051,7 +7112,6 @@ fn list_dir_children_impl(
     // survive a SQL `path >` cursor), so the cursor is the count already
     // returned.
     listing_files.sort_by_cached_key(|f| (tree_sort_key(&f.name), f.path.clone()));
-    let total_files = listing_files.len() as u64;
     let offset: usize = match &paging.cursor {
         Some(c) => c.parse().map_err(|_| VaultError::InvalidArgument {
             message: format!("invalid directory paging cursor {c:?}"),

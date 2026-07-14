@@ -31,6 +31,26 @@ final class SidebarCivilDateResolverTests: XCTestCase {
         XCTAssertNil(SidebarCivilDateResolver.resolve("２０２４-０２-２９", calendar: utc))
     }
 
+    func testProlepticGregorianCutoverAndSupportedYearRangeMatchChrono() throws {
+        let utc = calendar(timeZone: "UTC")
+        let expectedUnixSeconds: [(String, TimeInterval)] = [
+            ("0001-01-01", -62_135_596_800),
+            ("1582-10-04", -12_220_243_200),
+            ("1582-10-10", -12_219_724_800),
+            ("1582-10-15", -12_219_292_800),
+        ]
+
+        for (value, expected) in expectedUnixSeconds {
+            let resolved = try XCTUnwrap(
+                SidebarCivilDateResolver.resolve(value, calendar: utc),
+                "\(value) must exist in the proleptic Gregorian calendar")
+            XCTAssertEqual(resolved.timeIntervalSince1970, expected, accuracy: 0.5)
+        }
+
+        XCTAssertNotNil(SidebarCivilDateResolver.resolve("9999-12-31", calendar: utc))
+        XCTAssertNil(SidebarCivilDateResolver.resolve("0000-01-01", calendar: utc))
+    }
+
     func testPositiveAndNegativeOffsetsResolveToGregorianLocalStartNotUTCMidnight() throws {
         for zoneName in ["Pacific/Kiritimati", "Pacific/Honolulu"] {
             let injected = calendar(timeZone: zoneName)

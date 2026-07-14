@@ -84,6 +84,39 @@ fn root_child_counts_are_immediate_only() {
     assert_eq!(notes.path, "notes");
 }
 
+#[test]
+fn root_listing_counts_nested_files_without_enriching_their_summaries() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/nested.md", b"# nested\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // This value cannot be decoded into FileSummary.word_count's checked u32.
+    // A root listing has no direct file rows, so it must only count this nested
+    // file and must not run the expensive summary projection for it.
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE file_meta
+             SET word_count = 4294967296
+             WHERE file_id = (SELECT id FROM files WHERE path = 'notes/nested.md')",
+            [],
+        )
+        .unwrap();
+    }
+
+    let root = session.list_dir_children("", Paging::first(100)).unwrap();
+    assert!(root.files.items.is_empty());
+    assert_eq!(root.files.total_filtered, 0);
+    let notes = root.dirs.iter().find(|dir| dir.path == "notes").unwrap();
+    assert_eq!(notes.child_file_count, 1);
+
+    let nested_error = session
+        .list_dir_children("notes", Paging::first(100))
+        .expect_err("listing the nested level must exercise checked summary decoding");
+    assert!(nested_error.to_string().contains("out of range"));
+}
+
 // --- unit: nested listing ------------------------------------------------
 
 #[test]

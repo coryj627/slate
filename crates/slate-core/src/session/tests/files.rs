@@ -374,6 +374,35 @@ fn file_summary_enrichment_preserves_pagination_totals_and_order() {
 }
 
 #[test]
+fn created_civil_dates_use_the_shared_proleptic_year_0001_through_9999_contract() {
+    for value in [
+        "0001-01-01",
+        "1582-10-04",
+        "1582-10-10",
+        "1582-10-15",
+        "9999-12-31",
+    ] {
+        assert!(
+            canonical_gregorian_date(value),
+            "{value} must be accepted by the Rust half of the shared civil-date contract"
+        );
+        assert_eq!(
+            resolve_created_value(Some("date"), Some(&format!("\"{value}\"")), None),
+            (Some(value.to_string()), None)
+        );
+    }
+
+    assert!(
+        !canonical_gregorian_date("0000-01-01"),
+        "Foundation has no safe year-zero mapping, so Rust must reject it too"
+    );
+    assert_eq!(
+        resolve_created_value(Some("date"), Some("\"0000-01-01\""), None),
+        (None, None)
+    );
+}
+
+#[test]
 fn get_file_metadata_returns_none_for_unknown_path() {
     let (_tmp, session) = make_vault(|_| {});
     assert!(session.get_file_metadata("missing.md").unwrap().is_none());

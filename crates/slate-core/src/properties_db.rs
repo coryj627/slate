@@ -14,7 +14,7 @@ use serde_json::Value as JsonValue;
 use crate::VaultError;
 use crate::frontmatter::{Property, PropertyValue, extract_frontmatter};
 use crate::session::{
-    FILE_SUMMARY_QUERY_TAIL, FileSummary, Page, Paging, decode_file_summary_query_row,
+    FileSummary, Page, Paging, decode_file_summary_query_row, file_summary_query_tail,
 };
 
 const KIND_TEXT: &str = "text";
@@ -257,6 +257,7 @@ pub(crate) fn files_with_property(
     // explicit collation here the cursor advance would silently
     // start dropping or duplicating rows whenever the default
     // changed (#93 item 6).
+    let summary_projection = file_summary_query_tail();
     let sql = format!(
         "
         WITH matches AS (
@@ -282,7 +283,7 @@ pub(crate) fn files_with_property(
             ORDER BY f.path COLLATE BINARY ASC
             LIMIT ?4
         )
-        {FILE_SUMMARY_QUERY_TAIL}
+        {summary_projection}
     "
     );
     let mut stmt = conn.prepare_cached(&sql)?;
@@ -408,6 +409,7 @@ pub(crate) fn files_with_property_key(
     // `COLLATE BINARY` on both the cursor comparison and the ORDER BY
     // pins the paging order byte-wise, independent of any future
     // `files.path` collation change (#93 item 6 rationale).
+    let summary_projection = file_summary_query_tail();
     let sql = format!(
         "
         WITH matches AS (
@@ -426,7 +428,7 @@ pub(crate) fn files_with_property_key(
             ORDER BY f.path COLLATE BINARY ASC
             LIMIT ?3
         )
-        {FILE_SUMMARY_QUERY_TAIL}
+        {summary_projection}
     "
     );
     let mut stmt = conn.prepare_cached(&sql)?;
