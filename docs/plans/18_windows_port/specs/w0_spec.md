@@ -87,7 +87,7 @@ Baseline facts (verified 2026-07-06; re-verified + refreshed 2026-07-12 — anch
 
 ### W0.5-1 · Command-palette ranking + recents → `slate-core` — PR 5
 
-1. New core module (e.g. `crates/slate-core/src/palette.rs`) owning: fuzzy scoring (port `fuzzyScore`'s semantics or deliberately improve them — either way the **core becomes the reference**, with golden tests capturing ranking for a pinned query corpus), section ordering, recents blending policy, and the recents **store** (SQLite or the existing prefs-adjacent JSON — decided in the PR; the mac `CommandPaletteRecentsStore` file store is replaced, with a one-time migration).
+1. New core module (e.g. `crates/slate-core/src/palette.rs`) owning fuzzy scoring (port `fuzzyScore`'s semantics or deliberately improve them — either way the **core becomes the reference**, with golden tests capturing ranking for a pinned query corpus), section ordering, recents blending policy, ordered-recents state transitions (add/remove/dedupe/cap), and the versioned serialization shape. **Filesystem location and atomic file I/O stay in thin host adapters** because these are global, device-local app recents — never per-vault prefs or SQLite. The mac adapter migrates/continues `~/Library/Application Support/Slate/command-palette-recents.json`; Windows uses `%LOCALAPPDATA%\Slate\command-palette-recents.json`. Swift ranking/recency policy is deleted; platform-path plumbing is not reclassified as core product logic.
 2. FFI: a query→ranked-commands call on the existing registry surface; ranked results carry section grouping and match-range data for per-platform bolding.
 3. Mac: `CommandPaletteModel` becomes a thin view model over the FFI; `fuzzyScore` and its tests move to Rust (goldens preserved); palette behavior tests stay green unchanged.
 
@@ -102,5 +102,6 @@ Baseline facts (verified 2026-07-06; re-verified + refreshed 2026-07-12 — anch
 2. Mac: `AnnouncementPosting` keeps the *poster* role but every trigger site posts a rendered `A11yEvent`. A census proves the mac announcement corpus (event → text) is unchanged against a recorded golden set (or deltas are itemized).
 3. The vocabulary is the §W-D parity anchor: Windows `RaiseNotificationEvent` will consume the same events with the same rendered text. The recorded golden set produced here **is** §W-D's "canonical a11y-event corpus" — it does not pre-exist this issue.
 4. Scope guard: this issue **moves** strings, it does not redesign verbosity policy (canvas verbosity settings etc. keep their semantics; their strings just get canonical IDs).
+5. Trigger ownership stays at the interaction sites: core defines and renders typed events, while the mac and Windows hosts decide when those events fire. Existing mac scenario tests plus the Windows FlaUI twins prove trigger parity; neither host may invent alternate text.
 
 - [ ] (each) core API + FFI; mac consumes; Swift logic deleted; goldens/censuses prove parity
