@@ -175,6 +175,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "files.birthtime_ms: compaction-stable creation time (#801)",
         sql: include_str!("../migrations/030_files_birthtime.sql"),
     },
+    Migration {
+        description: "file_meta: derived note counts and preview (#650)",
+        sql: include_str!("../migrations/031_file_meta.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -1045,6 +1049,60 @@ mod tests {
             cached_value, "[\"Target\"]",
             "the migration invalidates the regenerable cache without guessing erased types"
         );
+    }
+
+    #[test]
+    fn migration_031_creates_file_meta_and_forces_replay_without_changing_birthtime() {
+        let mut conn = fresh_db();
+        migrate_up_to(&mut conn, 30).unwrap();
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown, birthtime_ms)
+             VALUES
+              ('note.md', 'note.md', 'md', 4, 1700000000000, 1700000000000,
+               'hash', 1, 1700000000000, 1, 1600000000000)",
+            [],
+        )
+        .unwrap();
+
+        apply_migration(&conn, 31, &MIGRATIONS[30]).unwrap();
+
+        let table_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'file_meta'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_exists, 1);
+        let times: (i64, i64) = conn
+            .query_row(
+                "SELECT mtime_ms, birthtime_ms FROM files WHERE path = 'note.md'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(times, (0, 1600000000000));
+
+        let file_id: i64 = conn
+            .query_row("SELECT id FROM files WHERE path = 'note.md'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        conn.execute(
+            "INSERT INTO file_meta (file_id, word_count, char_count, preview)
+             VALUES (?1, 1, 4, 'body')",
+            [file_id],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM files WHERE id = ?1", [file_id])
+            .unwrap();
+        let meta_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM file_meta", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(meta_rows, 0, "file_meta FK must cascade on file delete");
     }
 
     #[test]

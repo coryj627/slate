@@ -111,6 +111,7 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
     conn.execute("DROP INDEX idx_files_birthtime", []).unwrap();
     conn.execute("ALTER TABLE files DROP COLUMN birthtime_ms", [])
         .unwrap();
+    conn.execute("DROP TABLE file_meta", []).unwrap();
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
             row.get(0)
@@ -163,6 +164,102 @@ fn scan_initial_indexes_markdown_and_non_markdown() {
     assert_eq!(report.files_indexed, 4);
     assert_eq!(report.errors.len(), 0);
     assert!(report.bytes_processed > 0);
+}
+
+#[test]
+fn scan_slow_path_derives_file_meta_from_markdown_body() {
+    let source = "---\ntitle: Ignored\n---\n# Heading\n\nHello [[Note#anchor|friend]] and [site](https://example.com).\n\n```rust\nhidden code\n```\n\n<div>\nhidden html\n</div>\n\n- [x] Done *now*.\n";
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", source.as_bytes()).unwrap();
+    });
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let body = crate::frontmatter::body_after_frontmatter(source);
+    let conn = session.conn.lock().unwrap();
+    let row: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(row.0, body.split_whitespace().count() as i64);
+    assert_eq!(row.1, body.chars().count() as i64);
+    assert_eq!(row.2, "Heading Hello friend and site. Done now.");
+}
+
+#[test]
+fn save_path_replaces_file_meta_in_the_save_transaction() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", b"one two").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    session
+        .save_text("note.md", "# Updated\n\nthree four five", None)
+        .unwrap();
+
+    let conn = session.conn.lock().unwrap();
+    let row: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(row, (5, 26, "Updated three four five".to_string()));
+}
+
+#[test]
+fn non_markdown_file_meta_is_empty_and_file_delete_cascades() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", b"body").unwrap();
+        provider
+            .write_file("attachment.txt", b"not markdown metadata")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let note_id: i64;
+    {
+        let conn = session.conn.lock().unwrap();
+        let non_markdown: (i64, i64, String) = conn
+            .query_row(
+                "SELECT fm.word_count, fm.char_count, fm.preview
+                 FROM file_meta fm
+                 JOIN files f ON f.id = fm.file_id
+                 WHERE f.path = 'attachment.txt'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(non_markdown, (0, 0, String::new()));
+        note_id = conn
+            .query_row("SELECT id FROM files WHERE path = 'note.md'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+    }
+
+    session.delete_file("note.md").unwrap();
+
+    let conn = session.conn.lock().unwrap();
+    let remaining: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM file_meta WHERE file_id = ?1",
+            [note_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0, "deleting files row must cascade file_meta");
 }
 
 #[test]

@@ -2988,31 +2988,35 @@ impl VaultSession {
                 rows: written,
             });
             crate::properties_db::replace_properties_for_file(tx, file_id, contents)?;
+            crate::file_meta_db::replace_meta_for_file(tx, file_id, contents)?;
             crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, contents)?;
             crate::tags_db::replace_tags_for_file(tx, file_id, contents)?;
             crate::tasks_db::replace_tasks_for_file(tx, file_id, contents)?;
             crate::blocks_db::replace_blocks_for_file(tx, file_id, contents)?;
             crate::citations_db::replace_citations_for_file(tx, file_id, contents)?;
             crate::bases_db::replace_base_blocks_for_file(tx, file_id, contents)?;
-        } else if is_base {
-            crate::bases_db::replace_base_file_for_file(
-                tx,
-                file_id,
-                &name,
-                contents,
-                self.config.parser_version,
-                now,
-            )?;
-        } else if classify_path(path).1.as_deref() == Some("canvas") {
-            // Keep the canvas index coherent even when a `.canvas`
-            // file is written through the generic text-save path
-            // (the canvas-native save lands with #366/#372).
-            crate::canvas_db::replace_canvas_for_file(
-                tx,
-                file_id,
-                contents,
-                &DbTitleSource { conn: tx },
-            )?;
+        } else {
+            crate::file_meta_db::replace_meta_for_file(tx, file_id, "")?;
+            if is_base {
+                crate::bases_db::replace_base_file_for_file(
+                    tx,
+                    file_id,
+                    &name,
+                    contents,
+                    self.config.parser_version,
+                    now,
+                )?;
+            } else if classify_path(path).1.as_deref() == Some("canvas") {
+                // Keep the canvas index coherent even when a `.canvas`
+                // file is written through the generic text-save path
+                // (the canvas-native save lands with #366/#372).
+                crate::canvas_db::replace_canvas_for_file(
+                    tx,
+                    file_id,
+                    contents,
+                    &DbTitleSource { conn: tx },
+                )?;
+            }
         }
         Ok(file_id)
     }
@@ -6336,13 +6340,13 @@ fn index_file(
     // reaches here, so unchanged files don't churn the derivative
     // tables. Non-Markdown files have no headings / outgoing links /
     // frontmatter properties worth indexing.
+    // Need the file_id for the foreign keys. INSERT … ON CONFLICT
+    // DO UPDATE doesn't expose the row id directly, so query it
+    // back — cheap given we just touched the row.
+    let file_id: i64 = tx
+        .prepare_cached("SELECT id FROM files WHERE path = ?1")?
+        .query_row(rusqlite::params![path], |row| row.get(0))?;
     if is_markdown {
-        // Need the file_id for the foreign keys. INSERT … ON CONFLICT
-        // DO UPDATE doesn't expose the row id directly, so query it
-        // back — cheap given we just touched the row.
-        let file_id: i64 = tx
-            .prepare_cached("SELECT id FROM files WHERE path = ?1")?
-            .query_row(rusqlite::params![path], |row| row.get(0))?;
         // Reuse the already-decoded `body_text` so we don't pay the
         // utf8_lossy cost twice (once for FTS, once for parsers).
         index_markdown_derivatives(
@@ -6354,19 +6358,19 @@ fn index_file(
             replacing_existing_file,
             graph_sink,
         )?;
-    } else if is_base {
-        let file_id: i64 = tx
-            .prepare_cached("SELECT id FROM files WHERE path = ?1")?
-            .query_row(rusqlite::params![path], |row| row.get(0))?;
-        let source = String::from_utf8_lossy(&content);
-        crate::bases_db::replace_base_file_for_file(
-            tx,
-            file_id,
-            name,
-            source.as_ref(),
-            parser_version,
-            now,
-        )?;
+    } else {
+        crate::file_meta_db::replace_meta_for_file(tx, file_id, "")?;
+        if is_base {
+            let source = String::from_utf8_lossy(&content);
+            crate::bases_db::replace_base_file_for_file(
+                tx,
+                file_id,
+                name,
+                source.as_ref(),
+                parser_version,
+                now,
+            )?;
+        }
     }
 
     report.files_indexed += 1;
@@ -6430,6 +6434,7 @@ fn index_markdown_derivatives(
         rows: written,
     });
     crate::properties_db::replace_properties_for_file(tx, file_id, body_text)?;
+    crate::file_meta_db::replace_meta_for_file(tx, file_id, body_text)?;
     if replacing_existing_file {
         crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, body_text)?;
         crate::tags_db::replace_tags_for_file(tx, file_id, body_text)?;
@@ -6505,6 +6510,7 @@ fn purge_markdown_derivatives(
         rows: Vec::new(),
     });
     crate::properties_db::replace_properties_for_file(tx, file_id, "")?;
+    crate::file_meta_db::replace_meta_for_file(tx, file_id, "")?;
     crate::dql_inline_fields_db::mark_dql_inline_fields_incomplete_for_file(tx, file_id)?;
     crate::tags_db::replace_tags_for_file(tx, file_id, "")?;
     crate::tasks_db::replace_tasks_for_file(tx, file_id, "")?;
