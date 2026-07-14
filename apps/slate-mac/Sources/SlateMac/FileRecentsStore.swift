@@ -63,9 +63,10 @@ struct FileRecentsStore {
             return []
         }
         if data.count > Self.maxFileBytes {
-            NSLog(
+            let message =
                 "FileRecentsStore: recents file exceeds the "
-                + "\(Self.maxFileBytes)-byte threshold; treating as malformed.")
+                + "\(Self.maxFileBytes)-byte threshold; treating as malformed."
+            NSLog("%@", message)
             return []
         }
         guard let decoded = try? JSONDecoder().decode([String].self, from: data) else {

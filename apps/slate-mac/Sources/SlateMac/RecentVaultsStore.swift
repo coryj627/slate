@@ -79,10 +79,10 @@ public final class RecentVaultsStore {
             return []
         }
         if data.count > Self.maxFileBytes {
-            NSLog(
+            let message =
                 "RecentVaultsStore: recent-vaults file exceeds the "
                 + "\(Self.maxFileBytes)-byte threshold; treating as malformed."
-            )
+            NSLog("%@", message)
             return []
         }
         guard let decoded = try? JSONDecoder().decode([RecentVault].self, from: data) else {
