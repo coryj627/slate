@@ -7857,11 +7857,18 @@ final class AppState: ObservableObject {
     /// collision, which surfaces through the identical `lastError` +
     /// `announceMutationFailure` path a colliding move takes.
     ///
-    /// Text-only: the vault has no bytes-import FFI, so a non-UTF-8 (binary)
-    /// file surfaces a clear failure rather than being copied corrupt — see the
-    /// PR's scope note. An import is a CREATE (like `createNote`/`duplicateEntry`
-    /// — not undoable; delete is the Trash-recoverable inverse), so it records
-    /// no structural-undo entry.
+    /// Binary-aware (#910): the dropped file is read as raw `Data`, and the
+    /// payload kind picks the FFI. A valid-UTF-8 file takes the text
+    /// `createExclusive` path UNCHANGED (same link-rewrite scope — none — and
+    /// announcement as before); a binary / non-UTF-8 file (image, PDF, …) takes
+    /// the `createExclusiveBytes` FFI and lands as a byte-for-byte copy. Both
+    /// share the SAME no-clobber collision surface — `create_exclusive`/
+    /// `create_exclusive_bytes` throw `DestinationExists`, which flows through
+    /// the identical `lastError` + `announceMutationFailure` a colliding
+    /// `moveEntry` takes. An import is a CREATE (like `createNote`/
+    /// `duplicateEntry` — not undoable; delete is the Trash-recoverable
+    /// inverse), so its shared `publishTreeMutation(.createNote)` success path
+    /// barriers the structural-undo stacks (#871) and records no undo entry.
     @discardableResult
     func importEntry(externalURL: URL, into destinationFolder: String) -> Task<Void, Never>? {
         guard !isMutatingStructure, let session = currentSession else { return nil }
@@ -7878,8 +7885,58 @@ final class AppState: ObservableObject {
                 let scoped = externalURL.startAccessingSecurityScopedResource()
                 defer { if scoped { externalURL.stopAccessingSecurityScopedResource() } }
                 do {
-                    let content = try String(contentsOf: externalURL, encoding: .utf8)
-                    _ = try session.createExclusive(path: destPath, content: content)
+                    // Refuse an oversized import WITHOUT letting a >2 GiB buffer
+                    // reach the FFI (#910 red-team Medium + Codex follow-up).
+                    // Lowering a >2 GiB `Data`/`String` traps in the generated
+                    // `Int32(value.count)` converter — a hard crash that beats
+                    // the Rust `large_file_refuse_bytes` backstop. Two layers,
+                    // both against the SAME engine threshold, both surfacing the
+                    // identical `FileTooLarge` the Rust layer would (routed
+                    // through the shared `announceMutationFailure` / `lastError`
+                    // path below) and BOTH before the decode, so text and binary
+                    // are covered alike.
+                    // The EFFECTIVE ceiling is the engine threshold clamped to
+                    // the FFI's single-buffer transport limit (`Int32.max - 4`,
+                    // the 4 covering the RustBuffer length prefix), and it is
+                    // used for EVERY byte-count decision below — the preflight,
+                    // the read cap, AND the definitive gate — so nothing larger
+                    // than the converter can carry ever reaches
+                    // `createExclusive*` (#910 Codex rounds 2–3).
+                    let ceiling = Self.importTransportCeiling(
+                        refuseBytes: session.largeFileRefuseBytes())
+                    // (1) Cheap preflight stat: fast-rejects the common large
+                    //     file without a read. Metadata may be ABSENT (nil) for a
+                    //     package/device/special source, or simply omitted by
+                    //     Foundation — nil is NOT trusted as within-limit; step
+                    //     (3) is the definitive gate.
+                    let metadataSize = (try? externalURL.resourceValues(
+                        forKeys: [.fileSizeKey]))?.fileSize
+                    if let over = Self.importOverCeiling(
+                        metadataSize: metadataSize, readByteCount: nil, refuseBytes: ceiling)
+                    {
+                        return .failure(.FileTooLarge(path: destPath, size: over))
+                    }
+                    // (2) BOUNDED read: never load more than `ceiling + 1`, so a
+                    //     nil-/stale-metadata multi-GB (or unbounded) source is
+                    //     never fully loaded, let alone lowered across the FFI.
+                    let data = try Self.readImportBytes(from: externalURL, cap: ceiling)
+                    // (3) DEFINITIVE gate on the bytes actually in hand — catches
+                    //     the nil-preflight and grown-since-stat (TOCTOU) cases
+                    //     the metadata check can miss, before either branch.
+                    if let over = Self.importOverCeiling(
+                        metadataSize: nil, readByteCount: data.count, refuseBytes: ceiling)
+                    {
+                        return .failure(.FileTooLarge(path: destPath, size: over))
+                    }
+                    // Branch on decodability: valid UTF-8 → the text create
+                    // (byte-identical to the prior `String(contentsOf:…)`
+                    // behavior); otherwise → the #910 bytes create, a verbatim
+                    // copy.
+                    if let text = String(data: data, encoding: .utf8) {
+                        _ = try session.createExclusive(path: destPath, content: text)
+                    } else {
+                        _ = try session.createExclusiveBytes(path: destPath, bytes: data)
+                    }
                     return .success(())
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
@@ -7899,6 +7956,75 @@ final class AppState: ObservableObject {
             self.endStructuralMutation(token)
         }
         return task
+    }
+
+    /// The effective transport ceiling for a single import buffer (#910 Codex
+    /// rounds 2–3). Lowering a `Data`/`String` argument across the FFI wraps the
+    /// payload in a RustBuffer whose length is converted with `Int32(...)`, and
+    /// that conversion TRAPS above `Int32.max`. Two nested conversions matter,
+    /// traced through the generated `slate_uniffi.swift`:
+    ///   • `FfiConverterData.write` prefixes a 4-byte length, THEN
+    ///     `RustBuffer.from` → `ForeignBytes.init` converts `Int32(payload.count
+    ///     + 4)` — the OUTER conversion, stricter than the inner by the 4-byte
+    ///     prefix.
+    ///   • the `String` argument path lowers `Int32(utf8.count)` (no prefix),
+    ///     and for an import `utf8.count == data.count`, so it is the looser of
+    ///     the two.
+    /// The binding constraint is therefore the Data path: `count + 4 <=
+    /// Int32.max`, i.e. `count <= Int32.max - 4`. Clamping here — and using the
+    /// result for the preflight, the bounded-read cap, AND the definitive gate —
+    /// makes BOTH conversions (inner `value.count` and outer buffer length)
+    /// unable to trap for ANY config, not just the ~50 MiB default, and keeps
+    /// the reader's `cap + 1` sentinel `Int`-safe (the ceiling is ~2 GiB, far
+    /// below `Int.max`). In the pathological >2 GiB-config case this makes Swift
+    /// STRICTER than the Rust `large_file_refuse_bytes` backstop — it refuses a
+    /// subset Rust would accept — which is the FFI transport bound, not an
+    /// inconsistency (a larger single buffer would need a separate
+    /// chunked-transfer feature). The Rust backstop is untouched.
+    nonisolated static func importTransportCeiling(refuseBytes: UInt64) -> UInt64 {
+        // `- 4` = the RustBuffer 4-byte length-prefix headroom, so the OUTER FFI
+        // buffer conversion (`Int32(payload.count + 4)`), not just the inner
+        // `Int32(value.count)`, cannot trap — for both Data and String lowering.
+        min(refuseBytes, UInt64(Int32.max) - 4)
+    }
+
+    /// The #910 byte-ceiling decision, shared by `importEntry`'s two-layer
+    /// size guard. `metadataSize` is the cheap pre-read stat (nil when the
+    /// source's metadata is unavailable — a package/device/special file, or
+    /// Foundation omitting `.fileSizeKey`); `readByteCount` is the count of
+    /// bytes actually read. Returns the size to report in `FileTooLarge`, or
+    /// nil to proceed.
+    ///
+    /// A nil `metadataSize` is deliberately NOT treated as within-limit: the
+    /// post-read `readByteCount` is the definitive gate, so a nil/stale stat
+    /// (and a file that grew between the stat and the read) is still refused
+    /// before the bytes cross the FFI, where a >2 GiB buffer would trap.
+    nonisolated static func importOverCeiling(
+        metadataSize: Int?, readByteCount: Int?, refuseBytes: UInt64
+    ) -> UInt64? {
+        if let metadataSize, UInt64(metadataSize) > refuseBytes { return UInt64(metadataSize) }
+        if let readByteCount, UInt64(readByteCount) > refuseBytes { return UInt64(readByteCount) }
+        return nil
+    }
+
+    /// Read a to-be-imported file, BOUNDED to `cap + 1` bytes (#910). One byte
+    /// past the refuse ceiling is enough for the caller to detect an over-limit
+    /// file, so capping there means a nil-/stale-metadata multi-GB (or otherwise
+    /// unbounded) source is never fully loaded into memory. Short-read-safe:
+    /// accumulates until the cap is reached or EOF. `cap` is clamped so the
+    /// `+ 1` cannot overflow `Int` (the threshold is realistically ~50 MB).
+    nonisolated static func readImportBytes(from url: URL, cap: UInt64) throws -> Data {
+        let readCap = cap < UInt64(Int.max) ? Int(cap) + 1 : Int.max
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var buffer = Data()
+        while buffer.count < readCap {
+            guard let chunk = try handle.read(upToCount: readCap - buffer.count),
+                !chunk.isEmpty
+            else { break }
+            buffer.append(chunk)
+        }
+        return buffer
     }
 
     /// The action a file-URL drop (#870) resolves to. Pure decision so the
