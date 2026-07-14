@@ -151,6 +151,60 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
 }
 
 #[test]
+fn migration_031_backfills_epoch_mtime_file_instead_of_taking_fast_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    let source = b"# Epoch note\n\nbody";
+    provider.write_file("epoch.md", source).unwrap();
+    std::fs::File::open(tmp.path().join("epoch.md"))
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH)
+        .unwrap();
+    let stat = provider.stat("epoch.md").unwrap();
+    assert_eq!(stat.mtime_ms, 0, "fixture requires an epoch-mtime file");
+
+    let cache_dir = tmp.path().join(".slate");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    let mut conn = crate::db::open_database(&cache_dir.join("cache.sqlite"), 512).unwrap();
+    crate::db::migrate_up_to(&mut conn, 30).unwrap();
+    conn.execute(
+        "INSERT INTO files
+          (path, name, extension, size_bytes, mtime_ms, ctime_ms, birthtime_ms,
+           content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+         VALUES ('epoch.md', 'epoch.md', 'md', ?1, 0, 0, ?2, ?3, 1, 1, 1, ?4)",
+        rusqlite::params![
+            stat.size_bytes as i64,
+            stat.birthtime_ms,
+            content_hash(source),
+            String::from_utf8_lossy(source).as_ref(),
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        report.files_indexed, 1,
+        "missing file_meta must force slow path"
+    );
+    assert_eq!(report.files_skipped, 0);
+
+    let conn = session.conn.lock().unwrap();
+    let row: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'epoch.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(row, (4, 18, "Epoch note body".to_string()));
+}
+
+#[test]
 fn scan_initial_indexes_markdown_and_non_markdown() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("notes/a.md", b"# A").unwrap();

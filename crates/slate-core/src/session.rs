@@ -6107,8 +6107,12 @@ fn index_file(
     let is_base = extension.as_deref() == Some("base");
 
     // Fast path: if the indexed row's (mtime_ms, size_bytes, ctime_ms)
-    // already match what we just stat'd, assume content is unchanged
-    // and skip the blake3 hash. ctime catches the case where mtime is
+    // already match what we just stat'd AND its required file_meta row
+    // exists, assume content is unchanged and skip the blake3 hash.
+    // The candidate-local EXISTS probe hits file_meta's INTEGER PRIMARY
+    // KEY; it also makes migration replay total for real epoch-mtime files,
+    // whose mtime remains 0 after migration 031's UPDATE-to-zero trigger.
+    // ctime catches the case where mtime is
     // preserved by the writer (`cp -p`, `rsync -a`, snapshot restore)
     // — mtime alone would miss those. Pre-migration-002 rows store
     // ctime_ms = 0, and platforms without portable ctime (Windows)
@@ -6116,20 +6120,26 @@ fn index_file(
     // skipped and the fast path keeps its mtime+size semantics. We
     // still refresh `indexed_at_ms` so a future stale-row sweep can
     // tell "the scanner has visited this" from "this row is orphaned."
-    let existing: Option<(i64, i64, i64)> = tx
-        .prepare_cached("SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = ?1")?
+    let existing: Option<(i64, i64, i64, bool)> = tx
+        .prepare_cached(
+            "SELECT f.mtime_ms, f.size_bytes, f.ctime_ms,
+                    EXISTS(SELECT 1 FROM file_meta fm WHERE fm.file_id = f.id)
+             FROM files f
+             WHERE f.path = ?1",
+        )?
         .query_row(rusqlite::params![path], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, bool>(3)?,
             ))
         })
         .optional()?;
     let replacing_existing_file = existing.is_some();
     // Prior mtime, for the metadata-touch gate below — captured
     // before `existing` is consumed by the fast path.
-    let prior_mtime_ms = existing.map(|(m, _, _)| m);
+    let prior_mtime_ms = existing.map(|(m, _, _, _)| m);
     // A file the index has never seen becomes a graph node on every
     // path below that upserts its row (normal and oversized alike);
     // existing files never reach those paths without a row already
@@ -6143,7 +6153,7 @@ fn index_file(
             })
         })?;
     }
-    if let Some((db_mtime_ms, db_size_bytes, db_ctime_ms)) = existing {
+    if let Some((db_mtime_ms, db_size_bytes, db_ctime_ms, has_file_meta)) = existing {
         let mtime_size_match = i64::try_from(stat.size_bytes).is_ok_and(|stat_size_bytes| {
             db_mtime_ms == stat.mtime_ms && db_size_bytes == stat_size_bytes
         });
@@ -6154,7 +6164,7 @@ fn index_file(
         // ctime — fall back to mtime+size only so the fast path still
         // works.
         let ctime_match = stat.ctime_ms == 0 || db_ctime_ms == 0 || db_ctime_ms == stat.ctime_ms;
-        if mtime_size_match && ctime_match {
+        if has_file_meta && mtime_size_match && ctime_match {
             // Update indexed_at_ms unconditionally; update ctime_ms
             // only when the current stat actually carries one. The
             // CASE guards against two regressions:
@@ -8892,20 +8902,23 @@ impl VaultSession {
     ///
     /// `base_execute` resolves `this` through the `files` table. A file-backed
     /// handle therefore needs its own path represented there before the handle
-    /// records that path as its default context. Existing rows stay on the
-    /// scanner fast path; only a genuinely missing row pays the targeted read
-    /// and Bases-index update below.
+    /// records that path as its default context. Complete existing rows stay
+    /// on the scanner fast path; a missing files row or file_meta projection
+    /// pays the targeted read and Bases-index update below.
     fn ensure_open_base_indexed(&self, path: &str) -> Result<(), VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
-        let indexed = conn
+        let indexed_with_meta = conn
             .query_row(
-                "SELECT 1 FROM files WHERE path = ?1",
+                "SELECT 1
+                 FROM files f
+                 JOIN file_meta fm ON fm.file_id = f.id
+                 WHERE f.path = ?1",
                 rusqlite::params![path],
                 |_| Ok(()),
             )
             .optional()?
             .is_some();
-        if indexed {
+        if indexed_with_meta {
             return Ok(());
         }
 
@@ -11273,17 +11286,21 @@ impl VaultSession {
         let mut conn = self.conn.lock().expect("session connection mutex");
         let tx = conn.transaction()?;
 
-        // Ensure a files row exists (open-before-first-scan works).
-        let existing: Option<i64> = tx
+        // Ensure a files row and its required empty non-Markdown metadata row
+        // exist (open-before-first-scan and migration-replay gaps both heal).
+        let existing: Option<(i64, bool)> = tx
             .query_row(
-                "SELECT id FROM files WHERE path = ?1",
+                "SELECT f.id,
+                        EXISTS(SELECT 1 FROM file_meta fm WHERE fm.file_id = f.id)
+                 FROM files f
+                 WHERE f.path = ?1",
                 rusqlite::params![path],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         let mut graph_sink = self.graph_sink();
-        let file_id = match existing {
-            Some(id) => id,
+        let (file_id, needs_meta) = match existing {
+            Some((id, has_meta)) => (id, !has_meta),
             None => {
                 let stat = self.provider.stat(path)?;
                 let (name, extension, is_markdown) = classify_path(path);
@@ -11316,13 +11333,19 @@ impl VaultSession {
                         resolved_inbound: crate::links_db::graph_inbound_rows(&tx, path)?,
                     })
                 })?;
-                tx.query_row(
-                    "SELECT id FROM files WHERE path = ?1",
-                    rusqlite::params![path],
-                    |row| row.get(0),
-                )?
+                (
+                    tx.query_row(
+                        "SELECT id FROM files WHERE path = ?1",
+                        rusqlite::params![path],
+                        |row| row.get(0),
+                    )?,
+                    true,
+                )
             }
         };
+        if needs_meta {
+            crate::file_meta_db::replace_meta_for_file(&tx, file_id, "")?;
+        }
 
         let (parsed, warnings, model) = crate::canvas_db::replace_canvas_for_file(
             &tx,

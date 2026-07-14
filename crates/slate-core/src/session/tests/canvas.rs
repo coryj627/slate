@@ -230,6 +230,19 @@ fn open_canvas_works_before_first_scan() {
     // indexed) — the humanized-filename floor applies, never a path.
     let notes = outline.iter().find(|r| r.node_id == "card-notes").unwrap();
     assert_eq!(notes.title, "canvas research");
+
+    let conn = session.conn.lock().unwrap();
+    let meta: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'board.canvas'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(meta, (0, 0, String::new()));
 }
 
 #[test]
