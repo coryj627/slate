@@ -64,11 +64,16 @@ locked user-facing scope:
    column. `FileSummary` grows additive `created_date: Option<String>` for a
    validated canonical authored `YYYY-MM-DD` civil date and
    `created_ms: Option<i64>` for a parsed datetime instant or the existing
-   positive `files.birthtime_ms` fallback. `created_date` takes presentation and
-   created-sort/group precedence. Swift preserves its year/month/day in the
-   user's calendar/timezone and derives local start-of-day only for sort/group
-   keys; it never represents a date-only value as UTC midnight. Invalid dates
-   fall through to datetime parsing and then birthtime.
+   positive `files.birthtime_ms` fallback. `created_date` takes precedence. Its
+   ISO components are proleptic Gregorian: Swift must strictly round-trip them
+   through `Calendar(identifier: .gregorian)` configured with the user's current
+   time zone and construct that civil day's absolute local start. It must never
+   feed the numeric components to `Calendar.current` or reinterpret them through
+   a Buddhist, Hebrew, Islamic, or other non-Gregorian calendar. Presentation may
+   localize from the resulting `Date`; sort/group uses that same value. The
+   represented Gregorian day cannot shift across UTC offsets or DST and is never
+   encoded as UTC midnight. Invalid dates fall through to datetime parsing and
+   then birthtime.
 2. **One command system.** Append `.sidebar` to the existing cross-language
    `CommandSection` enum and register every FL command through the current
    registry. One action catalog owns verbs and AppState funnels, but projection
@@ -274,10 +279,13 @@ Each task below inherits this gate in addition to its targeted tests:
       `created_date` civil-date and `created_ms` instant/birthtime fields, word
       count, preview, and task aggregates. Both listing APIs use one SQL statement
       with no per-row queries; migration 031 adds no created column.
-- [ ] Resolve strict valid `YYYY-MM-DD` to `created_date`; resolve datetime or
-      positive birthtime fallback to `created_ms`. Test invalid-date fallthrough,
-      date-over-birthtime presentation precedence, timezone/DST behavior, and the
-      ban on UTC-midnight date encoding.
+- [ ] Resolve strict proleptic-Gregorian `YYYY-MM-DD` to `created_date`; resolve
+      datetime or positive birthtime fallback to `created_ms`. In Swift,
+      round-trip with `Calendar(identifier: .gregorian)` plus the user's time zone
+      and construct one absolute local-start `Date`. Test invalid-date fallthrough,
+      date-over-birthtime precedence, positive/negative UTC offsets, DST, Buddhist
+      plus Hebrew/Islamic system calendars, and the ban on Calendar.current
+      reinterpretation or UTC-midnight encoding.
 - [ ] Verify the additive JSON/CLI contract and regenerate bindings locally.
 - [ ] Add rescan-parity and random-walk censuses plus 1k/10k/50k scan, 10k root
       listing, and save-path benchmarks.
@@ -311,8 +319,9 @@ Each task below inherits this gate in addition to its targeted tests:
 - [ ] Extract one row model/view for effective title; civil-date-first, truthful
       created/modified labels; preview clamp; task badge; localized word count;
       standard/compact density; filename tooltip; rename filename; and one
-      coherent AX utterance. Present date-only calendar components without an
-      instant conversion; derive local start-of-day only for sort/group keys.
+      coherent AX utterance. Resolve date-only components once with an explicitly
+      Gregorian calendar and the user's time zone. Presentation localizes from
+      that absolute local-start `Date`; sort/group reuses it without reparsing.
 - [ ] Cache formatters and precompute row strings outside `body`.
 - [ ] Add the Sidebar settings surface to the existing Settings view using
       device-local typed preferences.
@@ -321,8 +330,10 @@ Each task below inherits this gate in addition to its targeted tests:
 - [ ] Keep compact mode visually compact without reducing spoken information.
 
 **Targeted verification:** titled/untitled/date-fallback rows; no date
-mislabeling; rename uses filename; preview/badge/compact AX; corrupted/oversized/
-unknown-key prefs; formatter-allocation regression; APCA both appearances.
+mislabeling; Gregorian round-trip under Buddhist plus Hebrew/Islamic system
+calendars, positive/negative UTC offsets, and DST; rename uses filename;
+preview/badge/compact AX; corrupted/oversized/unknown-key prefs;
+formatter-allocation regression; APCA both appearances.
 
 **Commit:** `feat(sidebar): add rich shared rows and preferences`
 
@@ -442,8 +453,9 @@ cancel, partial success, vault switch, in-vault move, external copy semantics.
 
 - [ ] Add total-order name/created/modified sorting with direction, null-last
       rules, stable tie-breaks, and per-folder override precedence. A valid
-      `created_date` supplies the local-start-of-day sort/group key before any
-      simultaneous `created_ms` birthtime fallback.
+      `created_date` supplies the already-resolved Gregorian local-start `Date`
+      before any simultaneous `created_ms` birthtime fallback; never reconstruct
+      its numeric components with the user's system calendar.
 - [ ] Add injected-clock date buckets as nonselectable AX headers. Grouping
       forces its compatible date sort and never mixes folder/file ordering.
 - [ ] Add one nonduplicated Pinned section, pin commands, authored order, and
@@ -452,7 +464,8 @@ cancel, partial success, vault switch, in-vault move, external copy semantics.
       index. Announce nondefault organization changes.
 
 **Targeted verification:** comparator properties/permutations, locale/diacritic,
-null dates, midnight/month/year/timezone boundaries, override precedence,
+null dates, Gregorian-day identity under Buddhist plus Hebrew/Islamic system
+calendars, midnight/month/year/timezone/DST boundaries, override precedence,
 selection after mutation, pin integrity/prune idempotence, header/row AX.
 
 **Commit:** `feat(sidebar): add organization and pinned notes`

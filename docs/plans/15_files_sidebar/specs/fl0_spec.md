@@ -63,7 +63,7 @@ Extend `FileSummary` (additive only — CLI coupling above):
 pub struct FileSummary {
     // existing five fields unchanged …
     pub display_name: Option<String>, // frontmatter `title` (value_kind='text', non-empty after trim); None ⇒ caller falls back to stem
-    pub created_date: Option<String>, // validated canonical frontmatter date-only `YYYY-MM-DD`; preserves the authored civil day
+    pub created_date: Option<String>, // validated canonical proleptic-Gregorian frontmatter date-only `YYYY-MM-DD`
     pub created_ms: Option<i64>,      // parsed frontmatter datetime instant, else files.birthtime_ms when > 0; never UTC midnight for a date-only value
     pub word_count: Option<u32>,      // None for non-markdown or missing meta row
     pub preview: Option<String>,      // None when empty/missing
@@ -76,16 +76,17 @@ Rules:
 
 - Populated by **one SQL statement** per listing (LEFT JOIN `file_meta`, LEFT JOIN a `tasks` GROUP BY subquery, LEFT JOIN `properties` on `key='title'` / `key='created'`) — no per-row query loops, no N+1. Applies to both `list_files` and `list_dir_children`; paging and the existing case-insensitive name ordering are unchanged (sorting by the new fields is app-side, locked decision 5).
 - `display_name`: `properties.value_kind='text'` and trimmed-non-empty only; any other kind ⇒ None (a list-valued `title:` is authoring noise, not a name).
-- Resolve the scalar `created` value in this order: a strict canonical `YYYY-MM-DD` whose year/month/day form a valid civil date; a valid datetime with an explicit or parser-defined offset; then positive `files.birthtime_ms`. A valid date-only value is copied unchanged into `created_date`; it never becomes an epoch value. A datetime becomes `created_ms`. Missing/invalid date syntax falls through to datetime parsing, and missing/invalid datetime falls through to birthtime.
+- Resolve the scalar `created` value in this order: a strict canonical `YYYY-MM-DD` whose numeric components form a valid date in the **proleptic Gregorian calendar**; a valid datetime with an explicit or parser-defined offset; then positive `files.birthtime_ms`. A valid date-only value is copied unchanged into `created_date`; it never becomes an epoch value in Rust. A datetime becomes `created_ms`. Missing/invalid Gregorian date syntax falls through to datetime parsing, and missing/invalid datetime falls through to birthtime.
 - `created_ms` may carry the birthtime fallback alongside a non-NULL `created_date`; consumers must give `created_date` presentation and created-sort/group precedence. The fallback remains useful to older/additive-field consumers, but it cannot override the authored civil day.
-- Swift parses `created_date` into year/month/day components in the user's current calendar/timezone, presents that authored day without an instant or UTC-midnight conversion, and derives local start-of-day only when it needs a numeric sort/group key. Datetime and birthtime values remain ordinary instants in `created_ms`.
+- Swift splits `created_date` into exact numeric year/month/day components, configures `Calendar(identifier: .gregorian)` with the user's current time zone, and rejects the value unless constructing and decomposing the date round-trips to the same Gregorian components (Foundation can otherwise normalize invalid dates). The result is one absolute `Date` at that Gregorian civil day's local start. Never pass the numeric components to `Calendar.current` or reinterpret them through a Buddhist, Hebrew, Islamic, or other non-Gregorian calendar.
+- Presentation may localize language, component order, and calendar rendering **from that resolved absolute `Date`**. Created sorting and grouping consume the same `Date`; no consumer reparses the ISO components. The represented Gregorian day must remain unchanged in positive and negative UTC offsets and across DST. A date-only value is never encoded as UTC midnight. Datetime and birthtime values remain ordinary instants in `created_ms`.
 - Verify additive-fields stance against the `slate.cli.v1` contract doc and note the verification in the PR; regenerate bindings (`make regenerate-bindings`).
 - Budget: `list_dir_children` on the 10k-vault root ≤ **10 ms** (it is on the sidebar's first-paint path; bench in FL0-3).
 
 - [ ] Record extension + single-statement joins in both listings
 - [ ] `slate.cli.v1` additive-check noted in PR; bindings regenerated
-- [ ] FFI-shape unit tests: title precedence; valid/leap/invalid date-only; datetime offsets; date-only + birthtime coexistence and precedence; datetime/birthtime fallback; task aggregates; non-markdown rows
-- [ ] Swift binding smoke test
+- [ ] FFI-shape unit tests: title precedence; valid/leap/invalid proleptic-Gregorian date-only; datetime offsets; date-only + birthtime coexistence and precedence; datetime/birthtime fallback; task aggregates; non-markdown rows
+- [ ] Swift binding/resolution tests: Gregorian round-trip validation; positive/negative UTC offsets and DST; injected Buddhist and Hebrew (or Islamic) system calendars prove the same authored Gregorian civil day and absolute local-start value
 
 ## FL0-3 · Censuses + benchmarks — the wave gate (#652) — closing PR FL-01
 
