@@ -2871,7 +2871,10 @@ final class AppState: ObservableObject {
         do {
             try commandPaletteRecentsStore.save(updated)
         } catch {
-            NSLog("Failed to persist command palette recent '\(id)': \(error)")
+            // Fixed-format NSLog: the id / error text can contain `%`, which a
+            // dynamic format string would misread as an unsupplied specifier.
+            let message = "Failed to persist command palette recent '\(id)': \(error)"
+            NSLog("%@", message)
         }
     }
 
@@ -2919,7 +2922,10 @@ final class AppState: ObservableObject {
         do {
             try store.save(updated)
         } catch {
-            NSLog("Failed to persist file recent '\(path)': \(error)")
+            // Fixed-format NSLog: a file path / error text can contain `%`,
+            // which a dynamic format string would misread as a specifier.
+            let message = "Failed to persist file recent '\(path)': \(error)"
+            NSLog("%@", message)
         }
     }
 
@@ -2941,7 +2947,10 @@ final class AppState: ObservableObject {
         do {
             searchRecents = try store.add(trimmed)
         } catch {
-            NSLog("Failed to persist search recent '\(trimmed)': \(error)")
+            // Fixed-format NSLog: user search text / error can contain `%`,
+            // which a dynamic format string would misread as a specifier.
+            let message = "Failed to persist search recent '\(trimmed)': \(error)"
+            NSLog("%@", message)
         }
     }
 
@@ -2964,7 +2973,10 @@ final class AppState: ObservableObject {
             try store.clear()
             searchRecents = []
         } catch {
-            NSLog("Failed to clear search recents (list kept): \(error)")
+            // Fixed-format NSLog: the error text can contain `%`, which a
+            // dynamic format string would misread as an unsupplied specifier.
+            let message = "Failed to clear search recents (list kept): \(error)"
+            NSLog("%@", message)
         }
     }
 
