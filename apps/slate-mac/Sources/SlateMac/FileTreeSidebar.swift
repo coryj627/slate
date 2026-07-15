@@ -1042,8 +1042,13 @@ struct FileTreeSidebar: View {
     }
 
     /// One-shot announcement suppression with explicit consume semantics.
-    /// Keeping this as a value lets tests exercise the user-edge/programmatic-
-    /// mirror contract without parsing `.onChange` source text.
+    /// The view stores this value in `@State`, arms it immediately before a
+    /// programmatic `listSelection` assignment, and consumes it at the start of
+    /// the resulting `.onChange` edge. Repeated arms are intentionally
+    /// idempotent because SwiftUI may coalesce programmatic writes; consuming
+    /// always clears the gate so later user input cannot inherit suppression.
+    /// Keeping this as a value lets tests exercise that lifecycle without
+    /// parsing `.onChange` source text.
     struct SelectionAnnouncementGate: Equatable {
         private(set) var isArmed = false
 
