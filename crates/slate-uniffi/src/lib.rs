@@ -324,6 +324,12 @@ impl VaultSession {
         Ok(page.into())
     }
 
+    /// Return one indexed file's enriched sidebar summary by exact
+    /// vault-relative path, or `None` when the file is not indexed.
+    pub fn get_file_summary(&self, path: String) -> Result<Option<FileSummary>, VaultError> {
+        Ok(self.inner.get_file_summary(&path)?.map(Into::into))
+    }
+
     pub fn list_tags(&self) -> Result<Vec<String>, VaultError> {
         Ok(self.inner.list_tags()?)
     }
@@ -6742,6 +6748,34 @@ mod tests {
         assert_eq!(converted.word_count, Some(42));
         assert_eq!(converted.preview.as_deref(), Some("Preview"));
         assert_eq!((converted.task_total, converted.task_open), (3, 2));
+    }
+
+    #[test]
+    fn file_summary_lookup_drives_over_ffi_wrapper() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join("target.md"),
+            "---\ntitle: Target\n---\nFresh preview.\n- [ ] open\n",
+        )
+        .unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        let summary = session
+            .get_file_summary("target.md".into())
+            .unwrap()
+            .unwrap();
+        assert_eq!(summary.path, "target.md");
+        assert_eq!(summary.display_name.as_deref(), Some("Target"));
+        assert!(
+            summary
+                .preview
+                .as_deref()
+                .unwrap()
+                .contains("Fresh preview")
+        );
+        assert_eq!((summary.task_total, summary.task_open), (1, 1));
     }
 
     // ---------------------------------------------------------------

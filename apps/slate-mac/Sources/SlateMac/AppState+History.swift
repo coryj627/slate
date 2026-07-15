@@ -655,11 +655,13 @@ extension AppState {
         // generation probe off-main again.
         let adapter = VaultEventAdapter(
             appState: self,
-            onFileChangeHook: { [weak self] _ in
-                Task { @MainActor [weak self] in
-                    self?.refreshConnectionsIfGraphChanged()
-                    self?.refreshGraphTableIfGraphChanged()
-                    self?.refreshGraphDiagramIfGraphChanged()
+            onFileChangeHook: { [weak self, weak session] event in
+                Task { @MainActor [weak self, weak session] in
+                    guard let self, let session else { return }
+                    self.handleSidebarFileChange(event, from: session)
+                    self.refreshConnectionsIfGraphChanged()
+                    self.refreshGraphTableIfGraphChanged()
+                    self.refreshGraphDiagramIfGraphChanged()
                 }
             },
             onIndexPhaseHook: { [weak self] phase, _ in

@@ -52,7 +52,7 @@ struct MainSplitView: View {
         // mangled NSHostingView type names that the Accessibility
         // Inspector flagged with "Element has no description".
         NavigationSplitView {
-            FileTreeSidebar()
+            FileTreeSidebar(rowPreferences: appState.sidebarPreferences.rowSnapshot)
                 .accessibilityLabel("Files sidebar")
         } content: {
             // U1-4 (#456): the center column is the workspace region.
@@ -555,8 +555,11 @@ struct MainSplitView: View {
             Text(structuralFailureMessage(report))
         }
         .onAppear {
+            let sidebarNotice = appState.sidebarVaultPrefsNotice
+                .map { " \($0.localizedDescription)" } ?? ""
             postAccessibilityAnnouncement(
                 "Vault \(vaultTitle) opened. Scanning files for the sidebar."
+                    + sidebarNotice
             )
         }
     }

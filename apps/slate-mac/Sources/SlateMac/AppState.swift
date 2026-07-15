@@ -289,6 +289,14 @@ final class AppState: ObservableObject {
     /// A monotonically-bumped `token` guarantees `.onChange` fires even when two
     /// mutations produce an equal event payload (e.g. two creates into root).
     @Published private(set) var treeMutation: TreeMutation?
+    /// A targeted enriched-summary replacement emitted after a non-structural
+    /// committed write. The view-owned tree applies it in place without
+    /// refetching a potentially 5k-item sibling level.
+    private(set) var sidebarFileSummaryUpdate: SidebarFileSummaryUpdate?
+    /// Event channel rather than `@Published`: a metadata-only save must not
+    /// invalidate every view observing the environment object. The sidebar
+    /// receives the batch and updates only its keyed row observables.
+    let sidebarFileSummaryUpdates = PassthroughSubject<[FileSummary], Never>()
 
     /// Surfaced when a structural mutation's link-rewrite pass left one or more
     /// files un-rewritten (`StructuralReport.failed`): the move/rename itself
@@ -1986,6 +1994,38 @@ final class AppState: ObservableObject {
     /// (e.g. "library.bib not found").
     @Published var bibliographySettingsError: String?
 
+    /// Device-local Files-sidebar presentation. The lazy tree consumes one
+    /// immutable snapshot per render; rows never scan `files` or observe the
+    /// rest of AppState. Every Settings mutation persists immediately.
+    @Published var sidebarPreferences: SidebarPreferences = SidebarPreferences() {
+        didSet {
+            guard oldValue != sidebarPreferences else { return }
+            preferencesStore.saveSidebarPreferences(sidebarPreferences)
+        }
+    }
+
+    /// AppState owns the current vault's generic sidebar preference store even
+    /// though FL-02 intentionally authors no vault-local fields yet. A typed
+    /// notice is published for the inline sidebar banner; unsafe input is kept
+    /// read-only by the store and therefore can never be silently replaced.
+    private(set) var sidebarVaultPrefsStore: SidebarVaultPrefsStore?
+    @Published private(set) var sidebarVaultPrefsNotice: SidebarVaultPrefsNotice?
+    @Published private(set) var isRetryingSidebarVaultPreferences = false
+    private var sidebarVaultPrefsRetryTask: Task<Void, Never>?
+    private var sidebarVaultPrefsRetryGeneration = 0
+
+    /// Injectable targeted lookup for deterministic coalescing tests. The
+    /// production closure uses the exact-path Rust projection and runs only
+    /// from a detached task.
+    var sidebarFileSummaryFetcher: @Sendable (VaultSession, String) -> FileSummary? = {
+        session, path in
+        try? session.getFileSummary(path: path)
+    }
+    var sidebarMetadataPendingPaths: Set<String> = []
+    var sidebarMetadataRefreshGeneration = 0
+    private(set) var sidebarMetadataRefreshTaskForTesting: Task<Void, Never>?
+    private var sidebarFileSummaryUpdateCounter = 0
+
     /// Drives the Citation Summary sheet (Cmd+Shift+J / #282). `true`
     /// while the sheet is presented; the sheet body reads from
     /// `currentNoteCitations` to compute counts.
@@ -2649,6 +2689,7 @@ final class AppState: ObservableObject {
         // assignment after init), so loading here doesn't recurse.
         self.mathPrefs = preferencesStore.loadMathPrefs()
         self.codePrefs = preferencesStore.loadCodePrefs()
+        self.sidebarPreferences = preferencesStore.loadSidebarPreferences()
         // #848: persisted editor text zoom — applied on top of the
         // body-text-style base size in `monospacedBodyNSFont(scale:)`.
         self.editorTextScale = Self.nearestEditorTextRung(to: preferencesStore.loadEditorTextScale())
@@ -3869,6 +3910,19 @@ final class AppState: ObservableObject {
     var isVaultOpen: Bool { currentSession != nil }
 
     func openVault(at url: URL) {
+        // MainSplitView posts the initial open announcement when the newly
+        // mounted interface is ready. It stays mounted during a direct A→B
+        // switch, so remember that case and announce it here after B is fully
+        // installed instead of relying on a second onAppear that never occurs.
+        let replacesOpenVault = isVaultOpen || announceNextOpenAfterClose
+        announceNextOpenAfterClose = false
+        resetSidebarMetadataRefresh()
+        resetSidebarVaultPreferencesRetry()
+        // A direct vault switch does not route through `closeVault`; clear the
+        // old vault's store/notice up front so a failed open cannot leave stale
+        // warnings or a writer targeting the previous root.
+        sidebarVaultPrefsStore = nil
+        sidebarVaultPrefsNotice = nil
         do {
             let session = try VaultSession.openFilesystem(rootPath: url.path)
             // Audit #259: push the persisted math prefs into the
@@ -3921,6 +3975,7 @@ final class AppState: ObservableObject {
             currentSession = session
             currentVaultURL = url
             lastError = nil
+            loadSidebarVaultPreferences(at: url)
             // Load this vault's file-recents (#495) now that the store's
             // vault path resolves. Per-vault, so it's repopulated on
             // every vault switch; a missing / malformed file loads empty.
@@ -4067,15 +4122,102 @@ final class AppState: ObservableObject {
                     await self?.adoptSessionCitationsConfig()
                 }
             }
+            if replacesOpenVault {
+                announceDirectVaultSwitch(to: url)
+            }
         } catch let error as VaultError {
+            sidebarVaultPrefsStore = nil
+            sidebarVaultPrefsNotice = nil
             currentSession = nil
             currentVaultURL = nil
             lastError = humanReadable(error)
         } catch {
+            sidebarVaultPrefsStore = nil
+            sidebarVaultPrefsNotice = nil
             currentSession = nil
             currentVaultURL = nil
             lastError = error.localizedDescription
         }
+    }
+
+    /// Install and inspect the per-vault store once per successful open. Reads
+    /// are bounded by the store's 16 MiB cap. The typed notice is included in
+    /// whichever single open announcement owns this transition and remains
+    /// visible in the sidebar until the vault closes.
+    private func loadSidebarVaultPreferences(at vaultRoot: URL) {
+        let store = SidebarVaultPrefsStore(vaultRoot: vaultRoot)
+        let result = store.read()
+        sidebarVaultPrefsStore = store
+        sidebarVaultPrefsNotice = result.notice
+    }
+
+    /// Re-read a repaired `.slate/sidebar.json` without making the user close
+    /// the vault. Bounded file I/O and JSON decoding stay off the main actor;
+    /// one owned task coalesces repeated activations, while its generation
+    /// prevents a cancelled old-vault read from publishing or clearing the
+    /// replacement vault's state. Unsafe input remains untouched and keeps its
+    /// typed recovery notice.
+    @discardableResult
+    func retrySidebarVaultPreferences() -> Task<Void, Never>? {
+        guard sidebarVaultPrefsRetryTask == nil else {
+            return nil
+        }
+        guard let store = sidebarVaultPrefsStore, let session = currentSession else {
+            return nil
+        }
+        sidebarVaultPrefsRetryGeneration &+= 1
+        let generation = sidebarVaultPrefsRetryGeneration
+        isRetryingSidebarVaultPreferences = true
+        let task = Task { [weak self] in
+            let notice = await Task.detached(priority: .userInitiated) {
+                store.read().notice
+            }.value
+            guard let self else { return }
+            guard generation == self.sidebarVaultPrefsRetryGeneration else { return }
+            defer {
+                if generation == self.sidebarVaultPrefsRetryGeneration {
+                    self.sidebarVaultPrefsRetryTask = nil
+                    self.isRetryingSidebarVaultPreferences = false
+                }
+            }
+            guard !Task.isCancelled,
+                self.currentSession === session,
+                self.sidebarVaultPrefsStore?.fileURL == store.fileURL
+            else { return }
+            self.sidebarVaultPrefsNotice = notice
+            if let notice {
+                self.announcer.post(
+                    "Sidebar settings still use defaults. \(notice.localizedDescription)",
+                    priority: .medium)
+            } else {
+                self.announcer.post("Sidebar settings reloaded.", priority: .medium)
+            }
+        }
+        sidebarVaultPrefsRetryTask = task
+        return task
+    }
+
+    private func resetSidebarVaultPreferencesRetry() {
+        sidebarVaultPrefsRetryGeneration &+= 1
+        sidebarVaultPrefsRetryTask?.cancel()
+        sidebarVaultPrefsRetryTask = nil
+        isRetryingSidebarVaultPreferences = false
+    }
+
+    /// A direct vault switch keeps `MainSplitView` mounted, so its initial
+    /// `.onAppear` announcement cannot fire again. Use the shared injectable
+    /// poster here, after the replacement vault and its sidebar notice have
+    /// both been installed. A clean recent-vault close/open may be coalesced
+    /// without remounting too, so its narrowly scoped flag routes here. True
+    /// initial mounts remain view-owned, avoiding duplicate speech.
+    private func announceDirectVaultSwitch(to vaultRoot: URL) {
+        let notice = sidebarVaultPrefsNotice
+            .map { " \($0.localizedDescription)" } ?? ""
+        announcer.post(
+            "Vault \(vaultRoot.lastPathComponent) opened. Scanning files for the sidebar."
+                + notice,
+            priority: .medium
+        )
     }
 
     /// The recent vault the user asked to switch to while the current vault
@@ -4084,6 +4226,12 @@ final class AppState: ObservableObject {
     /// prompt was cancelled (the cancel resolvers clear it → no switch).
     /// `private(set)` so tests can assert the gate parked / cleared it.
     private(set) var pendingVaultSwitchTarget: RecentVault?
+    /// A clean recent-vault switch closes A before synchronously opening B.
+    /// SwiftUI can coalesce that false→true transition without remounting
+    /// `MainSplitView`, so the close tail marks B as state-announced just as a
+    /// direct open-over-open switch is. The flag is scoped around `openRecent`
+    /// and cannot leak from a missing target into a later unrelated open.
+    private var announceNextOpenAfterClose = false
 
     /// Switch to a recent vault (U4-3 vault switcher): close the current vault
     /// **through the same dirty gate** `closeVaultFromUserAction` uses, then
@@ -4373,6 +4521,8 @@ final class AppState: ObservableObject {
         // U1-6: persist the layout FIRST — the teardown below clears
         // `currentVaultURL`, and the save is a no-op once it's gone.
         saveWorkspaceLayout()
+        resetSidebarMetadataRefresh()
+        resetSidebarVaultPreferencesRetry()
         baseQueryBuilderPreviewGeneration += 1
         scanTask?.cancel()
         scanTask = nil
@@ -4496,6 +4646,8 @@ final class AppState: ObservableObject {
         unregisterVaultEventListener()
         currentSession = nil
         currentVaultURL = nil
+        sidebarVaultPrefsStore = nil
+        sidebarVaultPrefsNotice = nil
         files = []
         scanError = nil
         stopSyncMarkerWatcher()  // #638: no vault, no watch
@@ -4617,7 +4769,9 @@ final class AppState: ObservableObject {
         // Vault after a cancelled switch can't accidentally reopen a vault.
         if let target = pendingVaultSwitchTarget {
             pendingVaultSwitchTarget = nil
+            announceNextOpenAfterClose = true
             openRecent(target)
+            announceNextOpenAfterClose = false
         }
     }
 
@@ -6958,6 +7112,94 @@ final class AppState: ObservableObject {
         static func normalizedParent(_ parent: String) -> String? {
             parent.isEmpty ? nil : parent
         }
+    }
+
+    struct SidebarFileSummaryUpdate: Equatable {
+        let token: Int
+        /// One atomic delivery prevents SwiftUI from coalescing a same-turn
+        /// burst down to only its final file.
+        let summaries: [FileSummary]
+    }
+
+    /// Main-actor entry point for rich-row metadata. The UniFFI worker callback
+    /// hops to `@MainActor` before calling here, so pending paths, task ownership,
+    /// generations, and delivery stay isolated. Only the immutable path snapshot
+    /// and synchronous FFI lookups leave the actor in the detached utility task.
+    /// This path handles only metadata-preserving modifications; sidebar
+    /// structural commands have their own tree seam.
+    func handleSidebarFileChange(_ event: FileChangeEvent, from session: VaultSession) {
+        guard event.kind == .modified, currentSession === session else { return }
+        sidebarMetadataPendingPaths.insert(event.path)
+        guard sidebarMetadataRefreshTaskForTesting == nil else { return }
+        let generation = sidebarMetadataRefreshGeneration
+        sidebarMetadataRefreshTaskForTesting = Task { @MainActor [weak self, weak session] in
+            guard let self, let session else { return }
+            await self.runSidebarMetadataRefreshLoop(
+                session: session,
+                generation: generation)
+        }
+    }
+
+    private func runSidebarMetadataRefreshLoop(
+        session: VaultSession,
+        generation: Int
+    ) async {
+        while true {
+            do {
+                try await Task.sleep(for: .milliseconds(75))
+            } catch {
+                return
+            }
+            guard !Task.isCancelled,
+                generation == sidebarMetadataRefreshGeneration,
+                currentSession === session
+            else { return }
+
+            let paths = sidebarMetadataPendingPaths.sorted()
+            sidebarMetadataPendingPaths.removeAll(keepingCapacity: true)
+            guard !paths.isEmpty else {
+                sidebarMetadataRefreshTaskForTesting = nil
+                return
+            }
+            let fetcher = sidebarFileSummaryFetcher
+            let summaries = await Task.detached(priority: .utility) {
+                paths.compactMap { fetcher(session, $0) }
+            }.value
+            guard !Task.isCancelled,
+                generation == sidebarMetadataRefreshGeneration,
+                currentSession === session
+            else { return }
+
+            if !summaries.isEmpty {
+                publishSidebarFileSummaries(summaries)
+            }
+            if sidebarMetadataPendingPaths.isEmpty {
+                sidebarMetadataRefreshTaskForTesting = nil
+                return
+            }
+        }
+    }
+
+    private func publishSidebarFileSummaries(_ summaries: [FileSummary]) {
+        let sorted = summaries.sorted(by: { $0.path < $1.path })
+        // `files` is the flat openable-document inventory used for counts,
+        // quick-open, and create-name collision checks. None of those consumers
+        // reads rich row metadata, so rewriting its full 50k-element array after
+        // every save would be pure main-actor work. The view-owned tree is the
+        // sole rich metadata cache and applies this batch through its path index.
+        sidebarFileSummaryUpdateCounter &+= 1
+        sidebarFileSummaryUpdate = SidebarFileSummaryUpdate(
+            token: sidebarFileSummaryUpdateCounter,
+            summaries: sorted)
+        sidebarFileSummaryUpdates.send(sorted)
+    }
+
+    private func resetSidebarMetadataRefresh() {
+        sidebarMetadataRefreshGeneration &+= 1
+        sidebarMetadataRefreshTaskForTesting?.cancel()
+        sidebarMetadataRefreshTaskForTesting = nil
+        sidebarMetadataPendingPaths.removeAll(keepingCapacity: false)
+        sidebarFileSummaryUpdate = nil
     }
 
     /// A link-rewrite partial failure surfaced to the user (spec §U2-5). The

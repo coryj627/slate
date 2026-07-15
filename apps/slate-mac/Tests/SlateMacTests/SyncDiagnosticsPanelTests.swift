@@ -35,6 +35,10 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
     /// gates assertable.
     private final class RecordingAnnouncer: AnnouncementPosting, @unchecked Sendable {
         private(set) var posts: [(message: String, priority: AnnouncementPriority)] = []
+        var highPriorityPosts: [(message: String, priority: AnnouncementPriority)] {
+            posts.filter { $0.priority == .high }
+        }
+
         func post(_ message: String, priority: AnnouncementPriority) {
             posts.append((message, priority))
         }
@@ -206,10 +210,12 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
         let state = try await openVault(named: "reopen-vault", announcer: announcer) {
             try self.plantLiveSync($0)
         }
-        XCTAssertEqual(announcer.posts.count, 1)
+        XCTAssertEqual(announcer.highPriorityPosts.count, 1)
         // Same vault, reopened: the gate keys on vault identity.
         try await reopenVault(named: "reopen-vault", in: state)
-        XCTAssertEqual(announcer.posts.count, 1, "same vault must not re-announce")
+        XCTAssertEqual(
+            announcer.highPriorityPosts.count, 1,
+            "same vault must not re-announce its sync warning")
     }
 
     func testDifferentVaultRearmsAnnouncement() async throws {
@@ -217,11 +223,13 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
         let state = try await openVault(named: "vault-a", announcer: announcer) {
             try self.plantLiveSync($0)
         }
-        XCTAssertEqual(announcer.posts.count, 1)
+        XCTAssertEqual(announcer.highPriorityPosts.count, 1)
         try await reopenVault(named: "vault-b", in: state) {
             try self.plantLiveSync($0)
         }
-        XCTAssertEqual(announcer.posts.count, 2, "a different vault re-arms the gate")
+        XCTAssertEqual(
+            announcer.highPriorityPosts.count, 2,
+            "a different vault re-arms the sync-warning gate")
     }
 
     func testManualRefreshDoesNotReannounce() async throws {
@@ -229,9 +237,11 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
         let state = try await openVault(named: "refresh-vault", announcer: announcer) {
             try self.plantLiveSync($0)
         }
-        XCTAssertEqual(announcer.posts.count, 1)
+        XCTAssertEqual(announcer.highPriorityPosts.count, 1)
         await state.loadSyncDiagnostics()
-        XCTAssertEqual(announcer.posts.count, 1, "refresh must not re-announce")
+        XCTAssertEqual(
+            announcer.highPriorityPosts.count, 1,
+            "refresh must not re-announce its sync warning")
     }
 
     /// Adversarial (codex + the #328 red-team P1 pattern): a refresh
@@ -257,7 +267,7 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
             try self.plantLiveSync($0)
             try self.plantGit($0)
         }
-        XCTAssertEqual(announcer.posts.count, 1)
+        XCTAssertEqual(announcer.highPriorityPosts.count, 1)
         XCTAssertEqual(
             state.syncReport?.providers.map(\.kind), [.liveSync, .git])
 
@@ -282,7 +292,7 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
         // completely: empty report, no announcement.
         try await reopenVault(named: "race-b", in: state)
         XCTAssertEqual(state.syncReport?.providers.isEmpty, true)
-        XCTAssertEqual(announcer.posts.count, 1)
+        XCTAssertEqual(announcer.highPriorityPosts.count, 1)
 
         // Release the parked refresh: it resumes holding vault A's
         // session and must bail at the identity guard — publishing A's
@@ -294,7 +304,7 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
             state.syncReport?.providers.isEmpty, true,
             "stale refresh must not publish vault A's report over vault B")
         XCTAssertEqual(
-            announcer.posts.count, 1,
+            announcer.highPriorityPosts.count, 1,
             "vault A's announcement must not fire under vault B")
 
         // The announce-once gate survived un-poisoned: a fresh
@@ -302,9 +312,11 @@ final class SyncDiagnosticsPanelTests: XCTestCase {
         try await reopenVault(named: "race-c", in: state) {
             try self.plantLiveSync($0)
         }
-        XCTAssertEqual(announcer.posts.count, 2, "vault C still announces once")
         XCTAssertEqual(
-            announcer.posts.last?.message,
+            announcer.highPriorityPosts.count, 2,
+            "vault C still announces its sync warning once")
+        XCTAssertEqual(
+            announcer.highPriorityPosts.last?.message,
             state.syncReport?.audioSummary,
             "the second announcement is vault C's own summary")
     }

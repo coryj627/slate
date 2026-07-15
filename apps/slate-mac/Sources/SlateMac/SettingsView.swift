@@ -67,6 +67,10 @@ struct SettingsView: View {
                     .tabItem {
                         SlateSymbol.settings.label("General")
                     }
+                SidebarSettingsTab()
+                    .tabItem {
+                        SlateSymbol.folder.label("Sidebar")
+                    }
                 MathSettingsTab()
                     .tabItem {
                         SlateSymbol.math.label()
@@ -111,6 +115,139 @@ struct SettingsView: View {
         // handling it once here keeps all tabs consistent
         // (settings.md: the settings window carries one title).
         .navigationTitle("Slate preferences")
+    }
+}
+
+// MARK: - Sidebar tab (Milestone FL, #653/#654)
+
+/// Stable, testable identities for every device-local sidebar presentation
+/// control. `SidebarSettingsTab` renders this schema directly, so tests can
+/// validate coverage without parsing Swift source text.
+enum SidebarSettingsControl: String, CaseIterable, Identifiable {
+    case dateSource = "Date source"
+    case dateFormat = "Date format"
+    case previewLines = "Preview lines"
+    case showTaskCounts = "Show task counts"
+    case showWordCount = "Show word count"
+    case density = "Density"
+
+    var id: Self { self }
+    var label: String { rawValue }
+}
+
+struct SidebarSettingsSection: Identifiable {
+    enum ID: String {
+        case dates
+        case details
+        case layout
+    }
+
+    let id: ID
+    let title: String
+    let controls: [SidebarSettingsControl]
+    let footer: String?
+}
+
+/// Device-local presentation choices for the Files sidebar. These controls
+/// change only how rows are shown on this Mac; vault-authored organization is
+/// stored separately and remains untouched.
+struct SidebarSettingsTab: View {
+    @EnvironmentObject private var appState: AppState
+
+    static let sections = [
+        SidebarSettingsSection(
+            id: .dates,
+            title: "Dates",
+            controls: [.dateSource, .dateFormat],
+            footer: "Created uses the date in the note when available. Otherwise, "
+                + "the row shows its modified date."),
+        SidebarSettingsSection(
+            id: .details,
+            title: "Details",
+            controls: [.previewLines, .showTaskCounts, .showWordCount],
+            footer: nil),
+        SidebarSettingsSection(
+            id: .layout,
+            title: "Layout",
+            controls: [.density],
+            footer: "Compact rows show only the note name visually while VoiceOver keeps "
+                + "the full date and detail summary."),
+    ]
+
+    var body: some View {
+        Form {
+            ForEach(Self.sections) { section in
+                Section {
+                    ForEach(section.controls) { setting in
+                        control(for: setting)
+                    }
+                } header: {
+                    Text(section.title)
+                        .font(.headline)
+                        .accessibilityAddTraits(.isHeader)
+                } footer: {
+                    if let footer = section.footer {
+                        Text(footer)
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .accessibilityLabel("Sidebar settings")
+    }
+
+    @ViewBuilder
+    private func control(for setting: SidebarSettingsControl) -> some View {
+        switch setting {
+        case .dateSource:
+            Picker(setting.label, selection: $appState.sidebarPreferences.dateSource) {
+                ForEach(SidebarPreferences.DateSource.allCases, id: \.self) { source in
+                    Text(source.displayName).tag(source)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(setting.label)
+
+        case .dateFormat:
+            Picker(setting.label, selection: $appState.sidebarPreferences.dateFormat) {
+                ForEach(SidebarPreferences.DateFormat.allCases, id: \.self) { format in
+                    Text(format.displayName).tag(format)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(setting.label)
+
+        case .previewLines:
+            Picker(setting.label, selection: $appState.sidebarPreferences.previewLines) {
+                Text("Off").tag(0)
+                Text("1 line").tag(1)
+                Text("2 lines").tag(2)
+                Text("3 lines").tag(3)
+            }
+            .accessibilityLabel(setting.label)
+
+        case .showTaskCounts:
+            Toggle(setting.label, isOn: $appState.sidebarPreferences.showTaskCounts)
+                .accessibilityLabel(setting.label)
+
+        case .showWordCount:
+            Toggle(setting.label, isOn: $appState.sidebarPreferences.showWordCount)
+                .accessibilityLabel(setting.label)
+
+        case .density:
+            Picker(setting.label, selection: $appState.sidebarPreferences.density) {
+                ForEach(SidebarPreferences.Density.allCases, id: \.self) { density in
+                    Text(density.displayName).tag(density)
+                }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(setting.label)
+        }
     }
 }
 

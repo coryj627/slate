@@ -4022,6 +4022,18 @@ impl VaultSession {
         list_files_impl(&conn, filter, paging)
     }
 
+    /// Fetch one indexed file through the same enriched projection as
+    /// [`VaultSession::list_files`].
+    ///
+    /// Returns `Ok(None)` when `path` is not in the index. The lookup is an
+    /// exact vault-relative path query; it does not page or materialize the
+    /// file's sibling directory.
+    pub fn get_file_summary(&self, path: &str) -> Result<Option<FileSummary>, VaultError> {
+        validate_save_path(path)?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        get_file_summary_impl(&conn, path)
+    }
+
     /// Return the distinct normalized tag inventory from the tag index.
     pub fn list_tags(&self) -> Result<Vec<String>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
@@ -6958,6 +6970,22 @@ fn list_files_impl(
         next_cursor,
         total_filtered,
     })
+}
+
+fn get_file_summary_impl(conn: &Connection, path: &str) -> Result<Option<FileSummary>, VaultError> {
+    let summary_projection = file_summary_query_tail();
+    let query = format!(
+        "WITH candidates AS (
+             SELECT id, path, name, mtime_ms, size_bytes, is_markdown, birthtime_ms
+             FROM files
+             WHERE path = ?1
+         ),
+         totals AS (SELECT COUNT(*) AS total_filtered FROM candidates)
+         {summary_projection}"
+    );
+    let mut stmt = conn.prepare_cached(&query)?;
+    let (summary, _) = stmt.query_row(rusqlite::params![path], decode_file_summary_query_row)?;
+    Ok(summary)
 }
 
 // --- Internal: list_dir_children (#459, U2-1) ---
