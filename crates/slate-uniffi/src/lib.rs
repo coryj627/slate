@@ -388,6 +388,18 @@ impl VaultSession {
         Ok(self.inner.undo_structural(op_id)?.into())
     }
 
+    pub fn batch_move(&self, request: BatchMoveRequest) -> Result<BatchMoveReport, VaultError> {
+        Ok(self.inner.batch_move(request.into())?.into())
+    }
+
+    pub fn batch_trash(&self, request: BatchTrashRequest) -> Result<BatchTrashReport, VaultError> {
+        Ok(self.inner.batch_trash(request.into())?.into())
+    }
+
+    pub fn undo_batch_move(&self, op_id: i64) -> Result<BatchMoveReport, VaultError> {
+        Ok(self.inner.undo_batch_move(op_id)?.into())
+    }
+
     pub fn list_dir_children(
         &self,
         parent_path: String,
@@ -1680,14 +1692,14 @@ pub struct MovedPath {
     pub new_path: String,
 }
 
-#[derive(uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct RewriteOutcome {
     pub path: String,
     pub hash_before: String,
     pub hash_after: String,
 }
 
-#[derive(uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct RewriteFailure {
     pub path: String,
     pub kind: RewriteFailureKind,
@@ -1695,10 +1707,125 @@ pub struct RewriteFailure {
 
 /// Flattened (uniffi enums carry no per-variant payload here; the detail
 /// string rides alongside).
-#[derive(uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct RewriteFailureKind {
     pub kind: String,
     pub detail: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct StructuralBatchItem {
+    pub path: String,
+    pub is_directory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BatchMoveRequest {
+    pub items: Vec<StructuralBatchItem>,
+    pub new_parent: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BatchTrashRequest {
+    pub items: Vec<StructuralBatchItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BatchPathChange {
+    pub old_path: String,
+    pub new_path: String,
+    pub is_directory: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BatchSkippedItem {
+    pub item: StructuralBatchItem,
+    pub reason: BatchSkipReason,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BatchSkipReason {
+    Duplicate,
+    CoveredBySelectedFolder,
+    AlreadyInDestination,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BatchItemFailure {
+    pub item: Option<StructuralBatchItem>,
+    pub stage: BatchFailureStage,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BatchFailureStage {
+    Preflight,
+    Move,
+    Index,
+    LinkRewrite,
+    LinkRewriteRestore,
+    Journal,
+    Rollback,
+    Trash,
+    Reconciliation,
+    RecoveryBarrier,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct StructuralBatchEnvelope {
+    pub planned: Vec<StructuralBatchItem>,
+    pub skipped: Vec<BatchSkippedItem>,
+    pub preflight_failures: Vec<BatchItemFailure>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BatchMoveState {
+    Rejected,
+    NoOp,
+    Succeeded,
+    RolledBack,
+    RollbackIncomplete,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BatchMoveReport {
+    pub envelope: StructuralBatchEnvelope,
+    pub state: BatchMoveState,
+    pub op_id: Option<i64>,
+    pub standing: Vec<BatchPathChange>,
+    pub rolled_back: Vec<BatchPathChange>,
+    pub failure: Option<BatchItemFailure>,
+    pub rollback_failures: Vec<BatchItemFailure>,
+    pub rewritten: Vec<RewriteOutcome>,
+    pub rewrite_failures: Vec<RewriteFailure>,
+    pub requires_rescan: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum BatchTrashState {
+    Rejected,
+    NoOp,
+    Succeeded,
+    Partial,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BatchTrashRemainder {
+    pub item: StructuralBatchItem,
+    pub failure: BatchItemFailure,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct BatchTrashReport {
+    pub envelope: StructuralBatchEnvelope,
+    pub state: BatchTrashState,
+    pub op_id: Option<i64>,
+    pub trashed: Vec<StructuralBatchItem>,
+    pub untrashed: Vec<BatchTrashRemainder>,
+    pub bookkeeping_failures: Vec<BatchItemFailure>,
+    pub requires_rescan: bool,
 }
 
 impl From<core::structural::StructuralReport> for StructuralReport {
@@ -1743,6 +1870,192 @@ impl From<core::structural::RewriteFailure> for RewriteFailure {
         Self {
             path: f.path,
             kind: RewriteFailureKind { kind, detail },
+        }
+    }
+}
+
+impl From<StructuralBatchItem> for core::structural_batch::StructuralBatchItem {
+    fn from(item: StructuralBatchItem) -> Self {
+        Self {
+            path: item.path,
+            is_directory: item.is_directory,
+        }
+    }
+}
+
+impl From<core::structural_batch::StructuralBatchItem> for StructuralBatchItem {
+    fn from(item: core::structural_batch::StructuralBatchItem) -> Self {
+        Self {
+            path: item.path,
+            is_directory: item.is_directory,
+        }
+    }
+}
+
+impl From<BatchMoveRequest> for core::structural_batch::BatchMoveRequest {
+    fn from(request: BatchMoveRequest) -> Self {
+        Self {
+            items: request.items.into_iter().map(Into::into).collect(),
+            new_parent: request.new_parent,
+        }
+    }
+}
+
+impl From<BatchTrashRequest> for core::structural_batch::BatchTrashRequest {
+    fn from(request: BatchTrashRequest) -> Self {
+        Self {
+            items: request.items.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchPathChange> for BatchPathChange {
+    fn from(change: core::structural_batch::BatchPathChange) -> Self {
+        Self {
+            old_path: change.old_path,
+            new_path: change.new_path,
+            is_directory: change.is_directory,
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchSkippedItem> for BatchSkippedItem {
+    fn from(skipped: core::structural_batch::BatchSkippedItem) -> Self {
+        Self {
+            item: skipped.item.into(),
+            reason: skipped.reason.into(),
+            detail: skipped.detail,
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchSkipReason> for BatchSkipReason {
+    fn from(reason: core::structural_batch::BatchSkipReason) -> Self {
+        use core::structural_batch::BatchSkipReason as C;
+        match reason {
+            C::Duplicate => Self::Duplicate,
+            C::CoveredBySelectedFolder => Self::CoveredBySelectedFolder,
+            C::AlreadyInDestination => Self::AlreadyInDestination,
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchItemFailure> for BatchItemFailure {
+    fn from(failure: core::structural_batch::BatchItemFailure) -> Self {
+        Self {
+            item: failure.item.map(Into::into),
+            stage: failure.stage.into(),
+            message: failure.message,
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchFailureStage> for BatchFailureStage {
+    fn from(stage: core::structural_batch::BatchFailureStage) -> Self {
+        use core::structural_batch::BatchFailureStage as C;
+        match stage {
+            C::Preflight => Self::Preflight,
+            C::Move => Self::Move,
+            C::Index => Self::Index,
+            C::LinkRewrite => Self::LinkRewrite,
+            C::LinkRewriteRestore => Self::LinkRewriteRestore,
+            C::Journal => Self::Journal,
+            C::Rollback => Self::Rollback,
+            C::Trash => Self::Trash,
+            C::Reconciliation => Self::Reconciliation,
+            C::RecoveryBarrier => Self::RecoveryBarrier,
+        }
+    }
+}
+
+impl From<core::structural_batch::StructuralBatchEnvelope> for StructuralBatchEnvelope {
+    fn from(envelope: core::structural_batch::StructuralBatchEnvelope) -> Self {
+        Self {
+            planned: envelope.planned.into_iter().map(Into::into).collect(),
+            skipped: envelope.skipped.into_iter().map(Into::into).collect(),
+            preflight_failures: envelope
+                .preflight_failures
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchMoveState> for BatchMoveState {
+    fn from(state: core::structural_batch::BatchMoveState) -> Self {
+        use core::structural_batch::BatchMoveState as C;
+        match state {
+            C::Rejected => Self::Rejected,
+            C::NoOp => Self::NoOp,
+            C::Succeeded => Self::Succeeded,
+            C::RolledBack => Self::RolledBack,
+            C::RollbackIncomplete => Self::RollbackIncomplete,
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchMoveReport> for BatchMoveReport {
+    fn from(report: core::structural_batch::BatchMoveReport) -> Self {
+        Self {
+            envelope: report.envelope.into(),
+            state: report.state.into(),
+            op_id: report.op_id,
+            standing: report.standing.into_iter().map(Into::into).collect(),
+            rolled_back: report.rolled_back.into_iter().map(Into::into).collect(),
+            failure: report.failure.map(Into::into),
+            rollback_failures: report
+                .rollback_failures
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            rewritten: report.rewritten.into_iter().map(Into::into).collect(),
+            rewrite_failures: report
+                .rewrite_failures
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            requires_rescan: report.requires_rescan,
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchTrashState> for BatchTrashState {
+    fn from(state: core::structural_batch::BatchTrashState) -> Self {
+        use core::structural_batch::BatchTrashState as C;
+        match state {
+            C::Rejected => Self::Rejected,
+            C::NoOp => Self::NoOp,
+            C::Succeeded => Self::Succeeded,
+            C::Partial => Self::Partial,
+            C::Failed => Self::Failed,
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchTrashRemainder> for BatchTrashRemainder {
+    fn from(remainder: core::structural_batch::BatchTrashRemainder) -> Self {
+        Self {
+            item: remainder.item.into(),
+            failure: remainder.failure.into(),
+        }
+    }
+}
+
+impl From<core::structural_batch::BatchTrashReport> for BatchTrashReport {
+    fn from(report: core::structural_batch::BatchTrashReport) -> Self {
+        Self {
+            envelope: report.envelope.into(),
+            state: report.state.into(),
+            op_id: report.op_id,
+            trashed: report.trashed.into_iter().map(Into::into).collect(),
+            untrashed: report.untrashed.into_iter().map(Into::into).collect(),
+            bookkeeping_failures: report
+                .bookkeeping_failures
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            requires_rescan: report.requires_rescan,
         }
     }
 }
@@ -6719,6 +7032,562 @@ impl VaultSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ffi_batch_item(path: &str, is_directory: bool) -> StructuralBatchItem {
+        StructuralBatchItem {
+            path: path.to_string(),
+            is_directory,
+        }
+    }
+
+    fn core_batch_item(
+        path: &str,
+        is_directory: bool,
+    ) -> core::structural_batch::StructuralBatchItem {
+        core::structural_batch::StructuralBatchItem {
+            path: path.to_string(),
+            is_directory,
+        }
+    }
+
+    fn core_batch_failure(
+        item: Option<core::structural_batch::StructuralBatchItem>,
+        stage: core::structural_batch::BatchFailureStage,
+        message: &str,
+    ) -> core::structural_batch::BatchItemFailure {
+        core::structural_batch::BatchItemFailure {
+            item,
+            stage,
+            message: message.to_string(),
+        }
+    }
+
+    fn rich_core_batch_envelope() -> core::structural_batch::StructuralBatchEnvelope {
+        core::structural_batch::StructuralBatchEnvelope {
+            planned: vec![
+                core_batch_item("planned-z", true),
+                core_batch_item("planned-a.md", false),
+            ],
+            skipped: vec![
+                core::structural_batch::BatchSkippedItem {
+                    item: core_batch_item("skipped-z.md", false),
+                    reason: core::structural_batch::BatchSkipReason::Duplicate,
+                    detail: "skip-z".into(),
+                },
+                core::structural_batch::BatchSkippedItem {
+                    item: core_batch_item("skipped-a", true),
+                    reason: core::structural_batch::BatchSkipReason::CoveredBySelectedFolder,
+                    detail: "skip-a".into(),
+                },
+            ],
+            preflight_failures: vec![
+                core_batch_failure(
+                    None,
+                    core::structural_batch::BatchFailureStage::Preflight,
+                    "preflight-global-z",
+                ),
+                core_batch_failure(
+                    Some(core_batch_item("preflight-a.md", false)),
+                    core::structural_batch::BatchFailureStage::RecoveryBarrier,
+                    "preflight-item-a",
+                ),
+            ],
+        }
+    }
+
+    #[test]
+    fn batch_move_request_conversion_preserves_utf8_order_and_kind() {
+        let request = BatchMoveRequest {
+            items: vec![
+                ffi_batch_item("β.md", false),
+                ffi_batch_item("Empty Folder", true),
+                ffi_batch_item("a/猫.md", false),
+            ],
+            new_parent: "目的地/β".into(),
+        };
+
+        let converted: core::structural_batch::BatchMoveRequest = request.into();
+
+        assert_eq!(
+            converted.items,
+            vec![
+                core_batch_item("β.md", false),
+                core_batch_item("Empty Folder", true),
+                core_batch_item("a/猫.md", false),
+            ]
+        );
+        assert_eq!(converted.new_parent, "目的地/β");
+    }
+
+    #[test]
+    fn batch_item_conversion_is_bidirectional() {
+        let ffi_item = ffi_batch_item("Empty Folder", true);
+        let core_item: core::structural_batch::StructuralBatchItem = ffi_item.clone().into();
+        assert_eq!(core_item, core_batch_item("Empty Folder", true));
+
+        let round_trip: StructuralBatchItem = core_item.into();
+        assert_eq!(round_trip, ffi_item);
+    }
+
+    #[test]
+    fn batch_enum_conversions_are_exhaustive_including_no_op() {
+        use slate_core::structural_batch as c;
+
+        for (source, expected) in [
+            (c::BatchSkipReason::Duplicate, BatchSkipReason::Duplicate),
+            (
+                c::BatchSkipReason::CoveredBySelectedFolder,
+                BatchSkipReason::CoveredBySelectedFolder,
+            ),
+            (
+                c::BatchSkipReason::AlreadyInDestination,
+                BatchSkipReason::AlreadyInDestination,
+            ),
+        ] {
+            assert_eq!(BatchSkipReason::from(source), expected);
+        }
+
+        for (source, expected) in [
+            (
+                c::BatchFailureStage::Preflight,
+                BatchFailureStage::Preflight,
+            ),
+            (c::BatchFailureStage::Move, BatchFailureStage::Move),
+            (c::BatchFailureStage::Index, BatchFailureStage::Index),
+            (
+                c::BatchFailureStage::LinkRewrite,
+                BatchFailureStage::LinkRewrite,
+            ),
+            (
+                c::BatchFailureStage::LinkRewriteRestore,
+                BatchFailureStage::LinkRewriteRestore,
+            ),
+            (c::BatchFailureStage::Journal, BatchFailureStage::Journal),
+            (c::BatchFailureStage::Rollback, BatchFailureStage::Rollback),
+            (c::BatchFailureStage::Trash, BatchFailureStage::Trash),
+            (
+                c::BatchFailureStage::Reconciliation,
+                BatchFailureStage::Reconciliation,
+            ),
+            (
+                c::BatchFailureStage::RecoveryBarrier,
+                BatchFailureStage::RecoveryBarrier,
+            ),
+        ] {
+            assert_eq!(BatchFailureStage::from(source), expected);
+        }
+
+        for (source, expected) in [
+            (c::BatchMoveState::Rejected, BatchMoveState::Rejected),
+            (c::BatchMoveState::NoOp, BatchMoveState::NoOp),
+            (c::BatchMoveState::Succeeded, BatchMoveState::Succeeded),
+            (c::BatchMoveState::RolledBack, BatchMoveState::RolledBack),
+            (
+                c::BatchMoveState::RollbackIncomplete,
+                BatchMoveState::RollbackIncomplete,
+            ),
+        ] {
+            assert_eq!(BatchMoveState::from(source), expected);
+        }
+
+        for (source, expected) in [
+            (c::BatchTrashState::Rejected, BatchTrashState::Rejected),
+            (c::BatchTrashState::NoOp, BatchTrashState::NoOp),
+            (c::BatchTrashState::Succeeded, BatchTrashState::Succeeded),
+            (c::BatchTrashState::Partial, BatchTrashState::Partial),
+            (c::BatchTrashState::Failed, BatchTrashState::Failed),
+        ] {
+            assert_eq!(BatchTrashState::from(source), expected);
+        }
+    }
+
+    #[test]
+    fn batch_failure_conversion_preserves_global_none_and_item_some() {
+        let global = BatchItemFailure::from(core_batch_failure(
+            None,
+            core::structural_batch::BatchFailureStage::RecoveryBarrier,
+            "global recovery failure",
+        ));
+        assert_eq!(global.item, None);
+        assert_eq!(global.stage, BatchFailureStage::RecoveryBarrier);
+        assert_eq!(global.message, "global recovery failure");
+
+        let item = BatchItemFailure::from(core_batch_failure(
+            Some(core_batch_item("Empty Folder", true)),
+            core::structural_batch::BatchFailureStage::Trash,
+            "item failure",
+        ));
+        assert_eq!(item.item, Some(ffi_batch_item("Empty Folder", true)));
+        assert_eq!(item.stage, BatchFailureStage::Trash);
+        assert_eq!(item.message, "item failure");
+    }
+
+    #[test]
+    fn batch_move_report_conversion_preserves_order_state_and_optional_op_id() {
+        use slate_core::structural_batch as c;
+
+        for (source_state, expected_state, op_id) in [
+            (c::BatchMoveState::Rejected, BatchMoveState::Rejected, None),
+            (c::BatchMoveState::NoOp, BatchMoveState::NoOp, None),
+            (
+                c::BatchMoveState::Succeeded,
+                BatchMoveState::Succeeded,
+                Some(i64::MAX),
+            ),
+            (
+                c::BatchMoveState::RolledBack,
+                BatchMoveState::RolledBack,
+                None,
+            ),
+            (
+                c::BatchMoveState::RollbackIncomplete,
+                BatchMoveState::RollbackIncomplete,
+                Some(i64::MAX),
+            ),
+        ] {
+            let converted = BatchMoveReport::from(c::BatchMoveReport {
+                envelope: rich_core_batch_envelope(),
+                state: source_state,
+                op_id,
+                standing: vec![
+                    c::BatchPathChange {
+                        old_path: "standing-z".into(),
+                        new_path: "destination-z".into(),
+                        is_directory: true,
+                    },
+                    c::BatchPathChange {
+                        old_path: "standing-a.md".into(),
+                        new_path: "destination-a.md".into(),
+                        is_directory: false,
+                    },
+                ],
+                rolled_back: vec![
+                    c::BatchPathChange {
+                        old_path: "rolled-z.md".into(),
+                        new_path: "restored-z.md".into(),
+                        is_directory: false,
+                    },
+                    c::BatchPathChange {
+                        old_path: "rolled-a".into(),
+                        new_path: "restored-a".into(),
+                        is_directory: true,
+                    },
+                ],
+                failure: Some(core_batch_failure(
+                    None,
+                    c::BatchFailureStage::LinkRewrite,
+                    "forward-global",
+                )),
+                rollback_failures: vec![
+                    core_batch_failure(
+                        Some(core_batch_item("rollback-z", true)),
+                        c::BatchFailureStage::Rollback,
+                        "rollback-z",
+                    ),
+                    core_batch_failure(
+                        Some(core_batch_item("rollback-a.md", false)),
+                        c::BatchFailureStage::LinkRewriteRestore,
+                        "rollback-a",
+                    ),
+                ],
+                rewritten: vec![
+                    core::structural::RewriteOutcome {
+                        path: "rewritten-z.md".into(),
+                        hash_before: "before-z".into(),
+                        hash_after: "after-z".into(),
+                    },
+                    core::structural::RewriteOutcome {
+                        path: "rewritten-a.md".into(),
+                        hash_before: "before-a".into(),
+                        hash_after: "after-a".into(),
+                    },
+                ],
+                rewrite_failures: vec![
+                    core::structural::RewriteFailure {
+                        path: "rewrite-failure-z.md".into(),
+                        kind: core::structural::RewriteFailureKind::Other("z-detail".into()),
+                    },
+                    core::structural::RewriteFailure {
+                        path: "rewrite-failure-a.md".into(),
+                        kind: core::structural::RewriteFailureKind::Cancelled,
+                    },
+                ],
+                requires_rescan: true,
+            });
+
+            assert_eq!(converted.state, expected_state);
+            assert_eq!(converted.op_id, op_id);
+            assert_eq!(
+                converted
+                    .envelope
+                    .planned
+                    .iter()
+                    .map(|item| item.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["planned-z", "planned-a.md"]
+            );
+            assert_eq!(
+                converted
+                    .envelope
+                    .skipped
+                    .iter()
+                    .map(|skip| (skip.item.path.as_str(), skip.detail.as_str()))
+                    .collect::<Vec<_>>(),
+                vec![("skipped-z.md", "skip-z"), ("skipped-a", "skip-a")]
+            );
+            assert_eq!(
+                converted
+                    .envelope
+                    .preflight_failures
+                    .iter()
+                    .map(|failure| failure.message.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["preflight-global-z", "preflight-item-a"]
+            );
+            assert_eq!(
+                converted
+                    .standing
+                    .iter()
+                    .map(|change| change.old_path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["standing-z", "standing-a.md"]
+            );
+            assert_eq!(
+                converted
+                    .rolled_back
+                    .iter()
+                    .map(|change| change.old_path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["rolled-z.md", "rolled-a"]
+            );
+            assert_eq!(converted.failure.as_ref().unwrap().item, None);
+            assert_eq!(
+                converted
+                    .rollback_failures
+                    .iter()
+                    .map(|failure| failure.message.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["rollback-z", "rollback-a"]
+            );
+            assert_eq!(
+                converted
+                    .rewritten
+                    .iter()
+                    .map(|outcome| outcome.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["rewritten-z.md", "rewritten-a.md"]
+            );
+            assert_eq!(
+                converted
+                    .rewrite_failures
+                    .iter()
+                    .map(|failure| failure.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["rewrite-failure-z.md", "rewrite-failure-a.md"]
+            );
+            assert!(converted.requires_rescan);
+        }
+    }
+
+    #[test]
+    fn batch_trash_report_conversion_keeps_trashed_and_untrashed_distinct() {
+        use slate_core::structural_batch as c;
+
+        for (source_state, expected_state, op_id) in [
+            (
+                c::BatchTrashState::Rejected,
+                BatchTrashState::Rejected,
+                None,
+            ),
+            (c::BatchTrashState::NoOp, BatchTrashState::NoOp, None),
+            (
+                c::BatchTrashState::Succeeded,
+                BatchTrashState::Succeeded,
+                Some(i64::MAX),
+            ),
+            (
+                c::BatchTrashState::Partial,
+                BatchTrashState::Partial,
+                Some(i64::MAX),
+            ),
+            (c::BatchTrashState::Failed, BatchTrashState::Failed, None),
+        ] {
+            let converted = BatchTrashReport::from(c::BatchTrashReport {
+                envelope: rich_core_batch_envelope(),
+                state: source_state,
+                op_id,
+                trashed: vec![
+                    core_batch_item("trashed-z", true),
+                    core_batch_item("trashed-a.md", false),
+                ],
+                untrashed: vec![
+                    c::BatchTrashRemainder {
+                        item: core_batch_item("untrashed-z.md", false),
+                        failure: core_batch_failure(
+                            Some(core_batch_item("untrashed-z.md", false)),
+                            c::BatchFailureStage::Trash,
+                            "untrashed-z-failure",
+                        ),
+                    },
+                    c::BatchTrashRemainder {
+                        item: core_batch_item("untrashed-a", true),
+                        failure: core_batch_failure(
+                            None,
+                            c::BatchFailureStage::Reconciliation,
+                            "untrashed-a-global-failure",
+                        ),
+                    },
+                ],
+                bookkeeping_failures: vec![
+                    core_batch_failure(None, c::BatchFailureStage::Journal, "bookkeeping-z"),
+                    core_batch_failure(
+                        Some(core_batch_item("bookkeeping-a.md", false)),
+                        c::BatchFailureStage::Index,
+                        "bookkeeping-a",
+                    ),
+                ],
+                requires_rescan: true,
+            });
+
+            assert_eq!(converted.state, expected_state);
+            assert_eq!(converted.op_id, op_id);
+            assert_eq!(
+                converted
+                    .envelope
+                    .planned
+                    .iter()
+                    .map(|item| item.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["planned-z", "planned-a.md"]
+            );
+            assert_eq!(
+                converted
+                    .trashed
+                    .iter()
+                    .map(|item| item.path.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["trashed-z", "trashed-a.md"]
+            );
+            assert_eq!(
+                converted
+                    .untrashed
+                    .iter()
+                    .map(|remainder| {
+                        (
+                            remainder.item.path.as_str(),
+                            remainder.failure.message.as_str(),
+                            remainder
+                                .failure
+                                .item
+                                .as_ref()
+                                .map(|item| item.path.as_str()),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                vec![
+                    (
+                        "untrashed-z.md",
+                        "untrashed-z-failure",
+                        Some("untrashed-z.md")
+                    ),
+                    ("untrashed-a", "untrashed-a-global-failure", None),
+                ]
+            );
+            assert_eq!(
+                converted
+                    .bookkeeping_failures
+                    .iter()
+                    .map(|failure| failure.message.as_str())
+                    .collect::<Vec<_>>(),
+                vec!["bookkeeping-z", "bookkeeping-a"]
+            );
+            assert!(converted.requires_rescan);
+        }
+    }
+
+    #[test]
+    fn batch_ffi_wrapper_move_and_dedicated_undo_return_batch_reports() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("left")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("right/Empty Folder")).unwrap();
+        std::fs::create_dir_all(tmp.path().join("destination")).unwrap();
+        std::fs::write(tmp.path().join("left/a.md"), "# A\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        let moved = session
+            .batch_move(BatchMoveRequest {
+                items: vec![
+                    ffi_batch_item("right/Empty Folder", true),
+                    ffi_batch_item("left/a.md", false),
+                ],
+                new_parent: "destination".into(),
+            })
+            .expect("batch rejection/recovery states are report data");
+
+        assert_eq!(moved.state, BatchMoveState::Succeeded);
+        let op_id = moved.op_id.expect("successful batch move has a journal id");
+        assert_eq!(
+            moved
+                .standing
+                .iter()
+                .map(|change| {
+                    (
+                        change.old_path.as_str(),
+                        change.new_path.as_str(),
+                        change.is_directory,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                ("left/a.md", "destination/a.md", false),
+                ("right/Empty Folder", "destination/Empty Folder", true),
+            ]
+        );
+        assert!(tmp.path().join("destination/a.md").is_file());
+        assert!(tmp.path().join("destination/Empty Folder").is_dir());
+
+        let undone = session
+            .undo_batch_move(op_id)
+            .expect("dedicated batch undo returns a batch report");
+        assert_eq!(undone.state, BatchMoveState::Succeeded);
+        assert!(undone.op_id.is_some());
+        assert_eq!(
+            undone
+                .standing
+                .iter()
+                .map(|change| (change.old_path.as_str(), change.new_path.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("destination/Empty Folder", "right/Empty Folder"),
+                ("destination/a.md", "left/a.md"),
+            ]
+        );
+        assert!(tmp.path().join("left/a.md").is_file());
+        assert!(tmp.path().join("right/Empty Folder").is_dir());
+        assert!(!tmp.path().join("destination/a.md").exists());
+        assert!(!tmp.path().join("destination/Empty Folder").exists());
+    }
+
+    #[test]
+    fn batch_ffi_rejection_is_report_data() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+
+        let report = session
+            .batch_move(BatchMoveRequest {
+                items: Vec::new(),
+                new_parent: String::new(),
+            })
+            .expect("an expected request rejection must not be a thrown VaultError");
+
+        assert_eq!(report.state, BatchMoveState::Rejected);
+        assert_eq!(report.op_id, None);
+        assert_eq!(report.envelope.preflight_failures.len(), 1);
+        assert_eq!(report.envelope.preflight_failures[0].item, None);
+    }
 
     #[test]
     fn file_summary_conversion_preserves_enrichment() {
