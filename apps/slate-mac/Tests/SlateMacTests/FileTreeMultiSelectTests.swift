@@ -974,14 +974,29 @@ final class FileTreeMultiSelectTests: XCTestCase {
     /// A programmatic / single open collapses the batch set UNCONDITIONALLY —
     /// the collapse is NOT gated on `listSelection` changing (a same-value
     /// assignment wouldn't fire the `.onChange(of: listSelection)` collapse).
-    func testProgrammaticOpenCollapsesBatchUnconditionallyByInspection() throws {
-        let src = try Self.normalizedSidebarSource()
-        XCTAssertTrue(
-            src.contains(
-                "let mirrored = rowID(forPath: newPath) setMultiSelection(mirrored.map { [$0] } ?? []) "
-                    + "setSelectionAnchor(mirrored) if listSelection != mirrored { "
-                    + "suppressSelectionAnnouncement = true listSelection = mirrored }"),
-            "the collapse runs before (and independent of) the listSelection-changed guard")
+    func testProgrammaticOpenCollapsesBatchUnconditionally() {
+        let mirrored = FileTreeSidebar.RowID.node(.file(path: "opened.md"))
+        let other = FileTreeSidebar.RowID.node(.file(path: "other.md"))
+
+        for current in [nil, mirrored, other] {
+            let outcome = FileTreeSidebar.programmaticSelectionOutcome(
+                currentListSelection: current,
+                mirroredSelection: mirrored)
+            XCTAssertEqual(outcome.selection, [mirrored])
+            XCTAssertEqual(outcome.anchor, mirrored)
+            XCTAssertEqual(outcome.listSelection, mirrored)
+            XCTAssertEqual(outcome.shouldMirrorListSelection, current != mirrored)
+            XCTAssertEqual(outcome.shouldSuppressAnnouncement, current != mirrored)
+        }
+
+        let cleared = FileTreeSidebar.programmaticSelectionOutcome(
+            currentListSelection: mirrored,
+            mirroredSelection: nil)
+        XCTAssertTrue(cleared.selection.isEmpty)
+        XCTAssertNil(cleared.anchor)
+        XCTAssertNil(cleared.listSelection)
+        XCTAssertTrue(cleared.shouldMirrorListSelection)
+        XCTAssertTrue(cleared.shouldSuppressAnnouncement)
     }
 
     /// A plain click on the ALREADY-focused row opens it explicitly, because the

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Foundation
+import SwiftUI
 import XCTest
 
 @testable import SlateMac
@@ -114,28 +115,31 @@ final class SidebarPreferencesTests: XCTestCase {
       PreferencesStore(defaults: defaults).loadSidebarPreferences().showWordCount)
   }
 
-  func testSettingsViewContainsOneNativeSidebarPaneWithEveryControl() throws {
-    let source = try settingsSource()
-    XCTAssertTrue(source.contains("struct SidebarSettingsTab: View"))
-    XCTAssertEqual(source.components(separatedBy: "SidebarSettingsTab()").count - 1, 1)
-    for label in [
-      "Date source", "Date format", "Preview lines", "Show task counts",
-      "Show word count", "Density",
-    ] {
-      XCTAssertTrue(source.contains("\"\(label)\""), "missing Settings control: \(label)")
-    }
-    XCTAssertTrue(source.contains(".formStyle(.grouped)"))
+  func testSidebarSettingsSchemaCoversEveryControlExactlyOnce() {
+    XCTAssertEqual(SidebarSettingsTab.sections.map(\.title), ["Dates", "Details", "Layout"])
+    XCTAssertEqual(
+      SidebarSettingsTab.sections.flatMap(\.controls),
+      SidebarSettingsControl.allCases)
+    XCTAssertEqual(
+      SidebarSettingsControl.allCases.map(\.label),
+      [
+        "Date source", "Date format", "Preview lines", "Show task counts",
+        "Show word count", "Density",
+      ])
   }
 
-  private func settingsSource() throws -> String {
-    var cursor = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
-    for _ in 0..<8 {
-      let candidate = cursor.appendingPathComponent("Sources/SlateMac/SettingsView.swift")
-      if FileManager.default.fileExists(atPath: candidate.path) {
-        return try String(contentsOf: candidate, encoding: .utf8)
-      }
-      cursor = cursor.deletingLastPathComponent()
-    }
-    throw XCTSkip("SettingsView.swift not found relative to the test file")
+  @MainActor
+  func testSidebarSettingsPaneRendersInBothAppearances() {
+    let store = PreferencesStore(defaults: defaults)
+    let recentsURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("\(suiteName!).settings-render.recents.json")
+    let appState = AppState(
+      recentsStore: RecentVaultsStore(fileURL: recentsURL),
+      externalOpener: { _ in true },
+      preferencesStore: store
+    )
+
+    PresentationReady.assertRendersInBothAppearances(
+      SidebarSettingsTab().environmentObject(appState))
   }
 }

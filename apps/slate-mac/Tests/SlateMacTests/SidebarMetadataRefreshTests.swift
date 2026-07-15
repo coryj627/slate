@@ -269,26 +269,6 @@ final class SidebarMetadataRefreshTests: XCTestCase {
     withExtendedLifetime(deliveryObservation) {}
   }
 
-  func testRefreshTaskMakesItsMainActorOwnershipExplicit() throws {
-    let packageRoot = URL(fileURLWithPath: #filePath)
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-      .deletingLastPathComponent()
-    let source = try String(
-      contentsOf: packageRoot.appendingPathComponent("Sources/SlateMac/AppState.swift"),
-      encoding: .utf8)
-    let methodStart = try XCTUnwrap(source.range(of: "func handleSidebarFileChange("))
-    let methodTail = source[methodStart.lowerBound...]
-    let methodEnd = try XCTUnwrap(
-      methodTail.range(of: "private func runSidebarMetadataRefreshLoop("))
-    let method = methodTail[..<methodEnd.lowerBound]
-
-    XCTAssertTrue(
-      method.contains(
-        "sidebarMetadataRefreshTaskForTesting = Task { @MainActor [weak self, weak session] in"),
-      "the callback task must make its inherited main-actor ownership reviewable")
-  }
-
   private func makeVault(named name: String) throws -> URL {
     let vault = root.appendingPathComponent(name, isDirectory: true)
     try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)

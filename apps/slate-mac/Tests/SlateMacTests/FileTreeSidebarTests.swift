@@ -1244,29 +1244,17 @@ final class FileTreeSidebarTests: XCTestCase {
             0)
     }
 
-    func testRichFileAnnouncementIsDrivenByListSelectionNotSelectedPath() throws {
-        let packageRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: packageRoot
-                .appendingPathComponent("Sources/SlateMac/FileTreeSidebar.swift"),
-            encoding: .utf8)
-        let listStart = try XCTUnwrap(source.range(of: ".onChange(of: listSelection)"))
-        let pathStart = try XCTUnwrap(
-            source.range(of: ".onChange(of: appState.selectedFilePath)"))
-        let listHandler = source[listStart.lowerBound..<pathStart.lowerBound]
-        XCTAssertTrue(
-            listHandler.contains("announceFocusedFileSelection("),
-            "folder → an already-open file must still speak on the row-selection edge")
+    func testProgrammaticSelectionAnnouncementSuppressionIsOneShot() {
+        var gate = FileTreeSidebar.SelectionAnnouncementGate()
 
-        let pathTail = source[pathStart.lowerBound...]
-        let pathEnd = try XCTUnwrap(pathTail.range(of: "}  // ScrollViewReader"))
-        let pathHandler = pathTail[..<pathEnd.lowerBound]
-        XCTAssertTrue(pathHandler.contains("suppressSelectionAnnouncement = true"))
-        XCTAssertFalse(
-            pathHandler.contains("postAccessibilityAnnouncement("),
-            "programmatic selected-path mirroring must not double-speak")
+        XCTAssertFalse(gate.consume(), "a user-driven selection must announce")
+        gate.arm()
+        XCTAssertTrue(gate.consume(), "a programmatic mirror suppresses its list edge")
+        XCTAssertFalse(gate.consume(), "the next user-driven selection must announce")
+
+        gate.arm()
+        gate.arm()
+        XCTAssertTrue(gate.consume(), "repeated mirrors still suppress only one list edge")
+        XCTAssertFalse(gate.consume())
     }
 }

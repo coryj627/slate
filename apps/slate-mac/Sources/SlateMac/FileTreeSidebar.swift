@@ -952,10 +952,10 @@ struct FileTreeSidebar: View {
     /// the onChange would otherwise mis-route the focus move to a new tab). Same
     /// one-shot shape as `suppressOpenForPostMutationFocus`.
     @State private var suppressOpenForSelectionChange = false
-    /// One-shot set when `selectedFilePath` mirrors a programmatic open onto
-    /// the List. The originating surface owns its announcement, so the ensuing
-    /// `listSelection` edge must not repeat it.
-    @State private var suppressSelectionAnnouncement = false
+    /// One-shot gate armed when `selectedFilePath` mirrors a programmatic open
+    /// onto the List. The originating surface owns its announcement, so the
+    /// ensuing `listSelection` edge must not repeat it.
+    @State private var selectionAnnouncementGate = SelectionAnnouncementGate()
     /// Keyboard focus on the file tree — gates the #418 selection announcements
     /// to list-driven changes only.
     @FocusState private var fileTreeFocused: Bool
@@ -1039,6 +1039,46 @@ struct FileTreeSidebar: View {
         let selection: Set<RowID>
         let anchor: RowID?
         let focus: RowID?
+    }
+
+    /// One-shot announcement suppression with explicit consume semantics.
+    /// Keeping this as a value lets tests exercise the user-edge/programmatic-
+    /// mirror contract without parsing `.onChange` source text.
+    struct SelectionAnnouncementGate: Equatable {
+        private(set) var isArmed = false
+
+        mutating func arm() {
+            isArmed = true
+        }
+
+        mutating func consume() -> Bool {
+            defer { isArmed = false }
+            return isArmed
+        }
+    }
+
+    /// Complete state transition for a programmatic selected-path mirror. The
+    /// batch selection and anchor always collapse, even when the List already
+    /// carries the same focus and therefore emits no selection-change edge.
+    struct ProgrammaticSelectionOutcome: Equatable {
+        let selection: Set<RowID>
+        let anchor: RowID?
+        let listSelection: RowID?
+        let shouldMirrorListSelection: Bool
+        let shouldSuppressAnnouncement: Bool
+    }
+
+    static func programmaticSelectionOutcome(
+        currentListSelection: RowID?,
+        mirroredSelection: RowID?
+    ) -> ProgrammaticSelectionOutcome {
+        let shouldMirror = currentListSelection != mirroredSelection
+        return ProgrammaticSelectionOutcome(
+            selection: mirroredSelection.map { [$0] } ?? [],
+            anchor: mirroredSelection,
+            listSelection: mirroredSelection,
+            shouldMirrorListSelection: shouldMirror,
+            shouldSuppressAnnouncement: shouldMirror)
     }
 
     /// Decode a `SelectionClick` from a live event's modifier flags. ⇧ wins over
@@ -1628,8 +1668,7 @@ struct FileTreeSidebar: View {
             // The focus (single node) mirrors for single-item commands; the
             // BATCH actions read `multiSelection` (#852).
             mirrorTreeSelectionToAppState(newSelection)
-            let announcementIsSuppressed = suppressSelectionAnnouncement
-            suppressSelectionAnnouncement = false
+            let announcementIsSuppressed = selectionAnnouncementGate.consume()
             // #852: a ⌘/⇧ multi-select gesture manages the set + open itself
             // (`applyMultiSelectClick`) — consume its one-shot suppression and
             // don't re-open or collapse here.
@@ -1663,7 +1702,7 @@ struct FileTreeSidebar: View {
                 appState.openFile(path, target: .newTab)
                 if case let .node(.file(selected)) = listSelection,
                     selected != appState.selectedFilePath {
-                    suppressSelectionAnnouncement = true
+                    selectionAnnouncementGate.arm()
                     listSelection = appState.selectedFilePath.map { .node(.file(path: $0)) }
                 }
                 return
@@ -1684,7 +1723,9 @@ struct FileTreeSidebar: View {
             // Mirror programmatic selection changes back onto the list
             // highlight (search-open, template-create, dirty-gate rollback).
             // Guarded so it doesn't fight the user-driven write above.
-            let mirrored = rowID(forPath: newPath)
+            let outcome = Self.programmaticSelectionOutcome(
+                currentListSelection: listSelection,
+                mirroredSelection: rowID(forPath: newPath))
             // #852 (Codex finding 2a): a programmatic / single open collapses the
             // batch set to the single focus UNCONDITIONALLY — even when
             // `listSelection` is ALREADY the mirrored row (a same-value
@@ -1693,11 +1734,13 @@ struct FileTreeSidebar: View {
             // ⌘⌫ trash rows the user can't see selected). This handler only fires
             // when `selectedFilePath` actually changes (a real open), so it never
             // clobbers an in-progress ⌘/⇧ multi-select (those suppress the open).
-            setMultiSelection(mirrored.map { [$0] } ?? [])
-            setSelectionAnchor(mirrored)
-            if listSelection != mirrored {
-                suppressSelectionAnnouncement = true
-                listSelection = mirrored
+            setMultiSelection(outcome.selection)
+            setSelectionAnchor(outcome.anchor)
+            if outcome.shouldMirrorListSelection {
+                if outcome.shouldSuppressAnnouncement {
+                    selectionAnnouncementGate.arm()
+                }
+                listSelection = outcome.listSelection
             }
         }
         }  // ScrollViewReader
