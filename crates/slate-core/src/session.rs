@@ -672,6 +672,13 @@ pub struct VaultSession {
     /// Coarse session-local generation for Bases query caches. Bumped after
     /// index-changing writes so cache lookups stay O(1) at large vault sizes.
     bases_generation: AtomicU64,
+    /// A failed attempt to persist a RecoveryBarrier makes every structural
+    /// undo endpoint fail closed for the rest of this session.
+    structural_history_valid: std::sync::atomic::AtomicBool,
+    /// Serializes structural journal validation through the corresponding
+    /// filesystem/index mutation. Unlike `conn`, this guard may remain held
+    /// while legacy undo calls an inverse helper which reacquires `conn`.
+    structural_operation: Mutex<()>,
     /// In-memory adjacency mirror of the links table (Milestone P
     /// #550). `None` until the first graph query (`with_graph`), then
     /// maintained by replaying committed writes: hooked helpers stage
@@ -1685,6 +1692,8 @@ impl VaultSession {
             bases: Mutex::new(std::collections::HashMap::new()),
             next_base_handle: AtomicU64::new(1),
             bases_generation: AtomicU64::new(1),
+            structural_history_valid: std::sync::atomic::AtomicBool::new(true),
+            structural_operation: Mutex::new(()),
         })
     }
 
@@ -3651,18 +3660,28 @@ impl VaultSession {
         {
             let conn = self.conn.lock().expect("session connection mutex");
             let mut stmt = conn.prepare(
-                "SELECT timestamp_ms, payload FROM structural_ops
-                 WHERE kind = 'delete_file' ORDER BY id ASC",
+                "SELECT kind, timestamp_ms, payload FROM structural_ops
+                 WHERE kind IN ('delete_file', 'trash_batch') ORDER BY id ASC",
             )?;
             let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
             })?;
             for row in rows {
-                let (ts, payload) = row?;
-                if let Some(parsed) = crate::structural::StructuralOpPayload::from_json(&payload)
-                    && let Some(stem) = parsed.oplog_name
-                {
-                    deleted_at_by_stem.insert(stem, ts);
+                let (kind, ts, payload) = row?;
+                if let Some(parsed) = crate::structural::StructuralOpPayload::from_json(&payload) {
+                    if kind == "delete_file" {
+                        if let Some(stem) = parsed.oplog_name {
+                            deleted_at_by_stem.insert(stem, ts);
+                        }
+                    } else {
+                        for binding in parsed.deleted_oplogs {
+                            deleted_at_by_stem.insert(binding.oplog_name, ts);
+                        }
+                    }
                 }
             }
         }
@@ -7603,12 +7622,1928 @@ fn classify_path(path: &str) -> (String, Option<String>, bool) {
 // fs op succeeded; if the tx fails, the fs op is reverted best-effort and
 // the error surfaces (never a silently split state).
 
+#[derive(Debug)]
+struct StructuralBatchIndexSnapshot {
+    files: std::collections::BTreeMap<String, Option<String>>,
+    dirs: std::collections::BTreeSet<String>,
+    occupied_lower: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct LinkRewriteHealth {
+    /// The rewrite reached or may have reached disk after derived
+    /// bookkeeping failed, so callers must invalidate live projections.
+    requires_rescan: bool,
+    /// Disk could not be classified as either exact known state, or the
+    /// landed state could not be made reconstructable. No ordinary undo row
+    /// may claim this outcome is reversible.
+    physical_unknown: bool,
+}
+
+impl LinkRewriteHealth {
+    fn absorb(&mut self, other: Self) {
+        self.requires_rescan |= other.requires_rescan;
+        self.physical_unknown |= other.physical_unknown;
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum BatchFaultPoint {
+    MoveIndex,
+    MovePathMarker,
+    MovePathMarkerPostWrite,
+    MoveLinkRewrite,
+    MoveJournal,
+    MoveReconciliation,
+    TrashIndex,
+    TrashJournal,
+    TrashReconciliation,
+    RecoveryBarrier,
+}
+
+pub(crate) trait StructuralBatchFaultHook {
+    fn check(&self, point: BatchFaultPoint) -> Result<(), VaultError>;
+}
+
+struct NoStructuralBatchFaults;
+
+impl StructuralBatchFaultHook for NoStructuralBatchFaults {
+    fn check(&self, _point: BatchFaultPoint) -> Result<(), VaultError> {
+        Ok(())
+    }
+}
+
+fn structural_batch_index_snapshot(
+    conn: &Connection,
+) -> Result<StructuralBatchIndexSnapshot, VaultError> {
+    let mut files = std::collections::BTreeMap::new();
+    {
+        let mut stmt = conn.prepare("SELECT path, oplog_name FROM files ORDER BY path")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+        for row in rows {
+            let (path, oplog_name) = row?;
+            files.insert(path, oplog_name);
+        }
+    }
+    let mut dirs = std::collections::BTreeSet::new();
+    {
+        let mut stmt = conn.prepare("SELECT path FROM dirs ORDER BY path")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            dirs.insert(row?);
+        }
+    }
+    let mut occupied_lower = std::collections::BTreeMap::new();
+    for path in files.keys().chain(dirs.iter()) {
+        occupied_lower
+            .entry(path.to_lowercase())
+            .and_modify(|existing: &mut String| {
+                if path < existing {
+                    *existing = path.clone();
+                }
+            })
+            .or_insert_with(|| path.clone());
+    }
+    Ok(StructuralBatchIndexSnapshot {
+        files,
+        dirs,
+        occupied_lower,
+    })
+}
+
+fn structural_batch_failure(
+    item: Option<crate::structural_batch::StructuralBatchItem>,
+    stage: crate::structural_batch::BatchFailureStage,
+    message: impl Into<String>,
+) -> crate::structural_batch::BatchItemFailure {
+    crate::structural_batch::BatchItemFailure {
+        item,
+        stage,
+        message: message.into(),
+    }
+}
+
+fn structural_batch_parent(path: &str) -> &str {
+    path.rsplit_once('/').map_or("", |(parent, _)| parent)
+}
+
+fn structural_batch_mutation_path_exists(
+    provider: &dyn VaultProvider,
+    path: &str,
+) -> Result<bool, VaultError> {
+    provider.mutation_path_exists(path)
+}
+
+fn batch_move_file_mapping(
+    plans: &[crate::structural_batch::PlannedBatchMove],
+    forward: bool,
+) -> Vec<(String, String)> {
+    plans
+        .iter()
+        .flat_map(|plan| {
+            plan.moved_files.iter().map(move |(old, new)| {
+                if forward {
+                    (old.clone(), new.clone())
+                } else {
+                    (new.clone(), old.clone())
+                }
+            })
+        })
+        .collect()
+}
+
+fn apply_batch_move_index_direction(
+    tx: &rusqlite::Transaction,
+    plans: &[crate::structural_batch::PlannedBatchMove],
+    forward: bool,
+) -> Result<Vec<(String, String)>, VaultError> {
+    for plan in plans {
+        let (from, to) = if forward {
+            (plan.item.path.as_str(), plan.destination.as_str())
+        } else {
+            (plan.destination.as_str(), plan.item.path.as_str())
+        };
+        if plan.item.is_directory {
+            rename_prefix_in_index(tx, from, to)?;
+        } else {
+            let changed = tx.execute(
+                "UPDATE files SET path = ?1 WHERE path = ?2",
+                rusqlite::params![to, from],
+            )?;
+            if changed != 1 {
+                return Err(VaultError::InvalidPath {
+                    path: from.to_string(),
+                    reason: "batch index source is missing".into(),
+                });
+            }
+        }
+    }
+    let moved = batch_move_file_mapping(plans, forward);
+    {
+        let mut stmt = tx.prepare("UPDATE links SET target_path = ?1 WHERE target_path = ?2")?;
+        for (old, new) in &moved {
+            stmt.execute(rusqlite::params![new, old])?;
+        }
+    }
+    crate::links_db::re_resolve_unresolved_links(tx)?;
+    Ok(moved)
+}
+
+fn empty_batch_move_report(
+    envelope: crate::structural_batch::StructuralBatchEnvelope,
+    state: crate::structural_batch::BatchMoveState,
+) -> crate::structural_batch::BatchMoveReport {
+    crate::structural_batch::BatchMoveReport {
+        envelope,
+        state,
+        op_id: None,
+        standing: Vec::new(),
+        rolled_back: Vec::new(),
+        failure: None,
+        rollback_failures: Vec::new(),
+        rewritten: Vec::new(),
+        rewrite_failures: Vec::new(),
+        requires_rescan: false,
+    }
+}
+
+fn empty_batch_trash_report(
+    envelope: crate::structural_batch::StructuralBatchEnvelope,
+    state: crate::structural_batch::BatchTrashState,
+) -> crate::structural_batch::BatchTrashReport {
+    crate::structural_batch::BatchTrashReport {
+        envelope,
+        state,
+        op_id: None,
+        trashed: Vec::new(),
+        untrashed: Vec::new(),
+        bookkeeping_failures: Vec::new(),
+        requires_rescan: false,
+    }
+}
+
 impl VaultSession {
+    /// Move a deterministic, top-level selection as one logical request.
+    pub fn batch_move(
+        &self,
+        request: crate::structural_batch::BatchMoveRequest,
+    ) -> Result<crate::structural_batch::BatchMoveReport, VaultError> {
+        self.batch_move_with_faults(request, &NoStructuralBatchFaults)
+    }
+
+    fn batch_move_with_faults(
+        &self,
+        request: crate::structural_batch::BatchMoveRequest,
+        faults: &dyn StructuralBatchFaultHook,
+    ) -> Result<crate::structural_batch::BatchMoveReport, VaultError> {
+        use crate::structural_batch::{BatchFailureStage, BatchMoveState};
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
+
+        if request.items.is_empty() || request.items.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
+            let message = if request.items.is_empty() {
+                "a structural batch must contain at least one item".to_string()
+            } else {
+                format!(
+                    "a structural batch may contain at most {} items",
+                    crate::MAX_STRUCTURAL_BATCH_ITEMS
+                )
+            };
+            return Ok(empty_batch_move_report(
+                crate::StructuralBatchEnvelope {
+                    preflight_failures: vec![structural_batch_failure(
+                        None,
+                        BatchFailureStage::Preflight,
+                        message,
+                    )],
+                    ..Default::default()
+                },
+                BatchMoveState::Rejected,
+            ));
+        }
+
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let (envelope, plans) = self.plan_batch_move_locked(&conn, request)?;
+        if !envelope.preflight_failures.is_empty() {
+            return Ok(empty_batch_move_report(envelope, BatchMoveState::Rejected));
+        }
+        if plans.is_empty() {
+            return Ok(empty_batch_move_report(envelope, BatchMoveState::NoOp));
+        }
+
+        let mut applied: Vec<crate::structural_batch::PlannedBatchMove> = Vec::new();
+        for plan in &plans {
+            if let Err(error) = self.provider.rename(&plan.item.path, &plan.destination) {
+                let failure = structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Move,
+                    error.to_string(),
+                );
+                let mut recovery_candidates = applied.clone();
+                // A provider may report failure after completing its rename.
+                // Include the failed call only when physical truth says it
+                // moved (or cannot be established); a normal pre-mutation
+                // failure remains excluded from `rolled_back`.
+                match (
+                    structural_batch_mutation_path_exists(self.provider.as_ref(), &plan.item.path),
+                    structural_batch_mutation_path_exists(
+                        self.provider.as_ref(),
+                        &plan.destination,
+                    ),
+                ) {
+                    (Ok(true), Ok(false)) => {}
+                    _ => recovery_candidates.push(plan.clone()),
+                }
+                let report = self.recover_batch_move_locked(
+                    &mut conn,
+                    envelope,
+                    &recovery_candidates,
+                    false,
+                    LinkRewriteHealth::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    failure,
+                    faults,
+                )?;
+                drop(conn);
+                drop(structural_operation);
+                self.publish_batch_move_recovery(&report, &recovery_candidates);
+                return Ok(report);
+            }
+            applied.push(plan.clone());
+        }
+
+        let moved: Vec<(String, String)> = plans
+            .iter()
+            .flat_map(|plan| plan.moved_files.iter().cloned())
+            .collect();
+        let mut graph_sink = self.graph_sink();
+        let index_result = (|| -> Result<(), VaultError> {
+            faults.check(BatchFaultPoint::MoveIndex)?;
+            let tx = conn.transaction()?;
+            for (old, new) in &moved {
+                graph_sink.stage(|| crate::graph::GraphOp::FileRenamed {
+                    old_path: old.clone(),
+                    new_path: new.clone(),
+                    is_markdown: classify_path(new).2,
+                });
+            }
+            for plan in &plans {
+                if plan.item.is_directory {
+                    rename_prefix_in_index(&tx, &plan.item.path, &plan.destination)?;
+                } else {
+                    tx.execute(
+                        "UPDATE files SET path = ?1 WHERE path = ?2",
+                        rusqlite::params![plan.destination, plan.item.path],
+                    )?;
+                }
+            }
+            {
+                let mut stmt =
+                    tx.prepare("UPDATE links SET target_path = ?1 WHERE target_path = ?2")?;
+                for (old, new) in &moved {
+                    stmt.execute(rusqlite::params![new, old])?;
+                }
+            }
+            let resolved_sources = crate::links_db::re_resolve_unresolved_links(&tx)?;
+            if graph_sink.live() {
+                for source in resolved_sources {
+                    graph_sink.stage_with(|| {
+                        Ok(crate::graph::GraphOp::LinksetChanged {
+                            source_path: source.clone(),
+                            rows: crate::links_db::graph_linkset_for(&tx, &source)?,
+                        })
+                    })?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(error) = index_result {
+            let report = self.recover_batch_move_locked(
+                &mut conn,
+                envelope,
+                &applied,
+                false,
+                LinkRewriteHealth::default(),
+                Vec::new(),
+                Vec::new(),
+                structural_batch_failure(None, BatchFailureStage::Index, error.to_string()),
+                faults,
+            )?;
+            drop(conn);
+            drop(structural_operation);
+            self.publish_batch_move_recovery(&report, &applied);
+            return Ok(report);
+        }
+        self.graph_apply(graph_sink);
+        for (old, new) in &moved {
+            let marker_result = faults
+                .check(BatchFaultPoint::MovePathMarker)
+                .and_then(|_| self.append_path_changed_marker_locked(&conn, old, new))
+                .and_then(|_| faults.check(BatchFaultPoint::MovePathMarkerPostWrite));
+            if let Err(error) = marker_result {
+                let report = self.recover_batch_move_locked(
+                    &mut conn,
+                    envelope,
+                    &applied,
+                    true,
+                    LinkRewriteHealth::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
+                    faults,
+                )?;
+                drop(conn);
+                drop(structural_operation);
+                self.publish_batch_move_recovery(&report, &applied);
+                return Ok(report);
+            }
+        }
+        if let Err(error) = faults.check(BatchFaultPoint::MoveLinkRewrite) {
+            let report = self.recover_batch_move_locked(
+                &mut conn,
+                envelope,
+                &applied,
+                true,
+                LinkRewriteHealth::default(),
+                Vec::new(),
+                Vec::new(),
+                structural_batch_failure(None, BatchFailureStage::LinkRewrite, error.to_string()),
+                faults,
+            )?;
+            drop(conn);
+            drop(structural_operation);
+            self.publish_batch_move_recovery(&report, &applied);
+            return Ok(report);
+        }
+        let (rewritten, rewrite_failures, rewrite_health) =
+            self.apply_link_rewrites(&mut conn, &moved);
+        if rewrite_health.requires_rescan {
+            let mut graph = self.graph.lock().expect("graph index mutex");
+            self.graph_drop_locked(&mut graph);
+        }
+        if rewrite_health.physical_unknown {
+            let report = self.recover_batch_move_locked(
+                &mut conn,
+                envelope,
+                &applied,
+                true,
+                rewrite_health,
+                rewritten,
+                rewrite_failures,
+                structural_batch_failure(
+                    None,
+                    BatchFailureStage::LinkRewrite,
+                    "link rewrite physical outcome could not be established",
+                ),
+                faults,
+            )?;
+            drop(conn);
+            drop(structural_operation);
+            self.publish_batch_move_recovery(&report, &applied);
+            return Ok(report);
+        }
+        let journal_result = (|| -> Result<i64, VaultError> {
+            faults.check(BatchFaultPoint::MoveJournal)?;
+            let tx = conn.transaction()?;
+            let op_id = journal_append(
+                &tx,
+                crate::structural::StructuralOpKind::MoveBatch,
+                &crate::structural::StructuralOpPayload {
+                    from: String::new(),
+                    to: String::new(),
+                    moved: moved.clone(),
+                    rewrites: rewritten.clone(),
+                    batch_entries: plans
+                        .iter()
+                        .map(|plan| crate::structural::StructuralBatchJournalEntry {
+                            from: plan.item.path.clone(),
+                            to: plan.destination.clone(),
+                            is_directory: plan.item.is_directory,
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+            )?;
+            tx.commit()?;
+            Ok(op_id)
+        })();
+        let op_id = match journal_result {
+            Ok(op_id) => op_id,
+            Err(error) => {
+                let report = self.recover_batch_move_locked(
+                    &mut conn,
+                    envelope,
+                    &applied,
+                    true,
+                    rewrite_health,
+                    rewritten,
+                    rewrite_failures,
+                    structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
+                    faults,
+                )?;
+                drop(conn);
+                drop(structural_operation);
+                self.publish_batch_move_recovery(&report, &applied);
+                return Ok(report);
+            }
+        };
+        let standing = plans.iter().map(|plan| plan.change()).collect();
+        drop(conn);
+        drop(structural_operation);
+        self.bump_bases_generation();
+        for (old, new) in &moved {
+            self.notify_file_change(FileChangeKind::Renamed, new, Some(old));
+        }
+        Ok(crate::BatchMoveReport {
+            envelope,
+            state: BatchMoveState::Succeeded,
+            op_id: Some(op_id),
+            standing,
+            rolled_back: Vec::new(),
+            failure: None,
+            rollback_failures: Vec::new(),
+            rewritten,
+            rewrite_failures,
+            requires_rescan: rewrite_health.requires_rescan,
+        })
+    }
+
+    fn plan_batch_move_locked(
+        &self,
+        conn: &Connection,
+        request: crate::BatchMoveRequest,
+    ) -> Result<
+        (
+            crate::StructuralBatchEnvelope,
+            Vec<crate::structural_batch::PlannedBatchMove>,
+        ),
+        VaultError,
+    > {
+        use crate::structural_batch::{
+            BatchFailureStage, BatchSkipReason, BatchSkippedItem, PlannedBatchMove,
+        };
+        let normalized = crate::structural_batch::normalize_batch_items(request.items);
+        let snapshot = structural_batch_index_snapshot(conn)?;
+        let mut envelope = crate::StructuralBatchEnvelope {
+            planned: Vec::new(),
+            skipped: normalized.skipped,
+            preflight_failures: normalized.failures,
+        };
+        if !request.new_parent.is_empty() {
+            if let Err(error) = validate_save_path(&request.new_parent) {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    None,
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                ));
+            } else if !snapshot.dirs.contains(&request.new_parent) {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    None,
+                    BatchFailureStage::Preflight,
+                    format!(
+                        "destination parent {:?} is not an indexed folder",
+                        request.new_parent
+                    ),
+                ));
+            }
+        }
+
+        let mut plans = Vec::new();
+        for item in normalized.items {
+            if let Err(error) = validate_save_path(&item.path) {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                ));
+                continue;
+            }
+            let indexed_as_file = snapshot.files.contains_key(&item.path);
+            let indexed_as_directory = snapshot.dirs.contains(&item.path);
+            if indexed_as_file == item.is_directory || indexed_as_directory != item.is_directory {
+                let message = if indexed_as_file || indexed_as_directory {
+                    "request kind does not match the indexed entry"
+                } else {
+                    "source is not present in this session's index"
+                };
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    message,
+                ));
+                continue;
+            }
+            if structural_batch_parent(&item.path) == request.new_parent {
+                envelope.skipped.push(BatchSkippedItem {
+                    item,
+                    reason: BatchSkipReason::AlreadyInDestination,
+                    detail: "already directly in the destination".into(),
+                });
+                continue;
+            }
+            if item.is_directory
+                && (request.new_parent == item.path
+                    || (request.new_parent.len() > item.path.len()
+                        && request.new_parent.starts_with(&item.path)
+                        && request.new_parent.as_bytes().get(item.path.len()) == Some(&b'/')))
+            {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item.clone()),
+                    BatchFailureStage::Preflight,
+                    "cannot move a folder into its own subtree",
+                ));
+            }
+            let destination = match child_path(&request.new_parent, leaf_name(&item.path)) {
+                Ok(destination) => destination,
+                Err(error) => {
+                    envelope.preflight_failures.push(structural_batch_failure(
+                        Some(item),
+                        BatchFailureStage::Preflight,
+                        error.to_string(),
+                    ));
+                    continue;
+                }
+            };
+            let moved_files = if item.is_directory {
+                let (lo, hi) = subtree_bounds(&item.path).expect("validated non-root folder");
+                snapshot
+                    .files
+                    .range(lo..hi)
+                    .map(|(old, _)| {
+                        (
+                            old.clone(),
+                            format!("{destination}{}", &old[item.path.len()..]),
+                        )
+                    })
+                    .collect()
+            } else {
+                vec![(item.path.clone(), destination.clone())]
+            };
+            envelope.planned.push(item.clone());
+            plans.push(PlannedBatchMove {
+                item,
+                destination,
+                moved_files,
+            });
+        }
+
+        let mut destinations: std::collections::BTreeMap<String, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (index, plan) in plans.iter().enumerate() {
+            destinations
+                .entry(plan.destination.to_lowercase())
+                .or_default()
+                .push(index);
+        }
+        for indices in destinations.values().filter(|indices| indices.len() > 1) {
+            for &index in indices {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plans[index].item.clone()),
+                    BatchFailureStage::Preflight,
+                    "multiple selected items have the same case-insensitive destination",
+                ));
+            }
+        }
+        for plan in &plans {
+            if let Some(existing) = snapshot
+                .occupied_lower
+                .get(&plan.destination.to_lowercase())
+            {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Preflight,
+                    format!("destination is occupied by {existing:?}"),
+                ));
+            }
+        }
+        // Permission/source probes are independent evidence. Collect them for
+        // every addressable item even when another preflight rule (including a
+        // batch-wide destination-parent or collision rule) already rejected
+        // the request; mutation still remains all-or-nothing.
+        for plan in &plans {
+            match self.provider.stat(&plan.item.path) {
+                Ok(stat) if (stat.kind == EntryKind::Directory) != plan.item.is_directory => {
+                    envelope.preflight_failures.push(structural_batch_failure(
+                        Some(plan.item.clone()),
+                        BatchFailureStage::Preflight,
+                        "source kind changed on disk since it was indexed",
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) => envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                )),
+            }
+            if let Err(error) = self
+                .provider
+                .preflight_rename(&plan.item.path, &plan.destination)
+            {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                ));
+            }
+        }
+        envelope.skipped.sort_by(|left, right| {
+            crate::structural_batch::deterministic_item_cmp(&left.item, &right.item)
+                .then_with(|| left.reason.cmp(&right.reason))
+        });
+        Ok((envelope, plans))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn recover_batch_move_locked(
+        &self,
+        conn: &mut Connection,
+        envelope: crate::StructuralBatchEnvelope,
+        applied: &[crate::structural_batch::PlannedBatchMove],
+        forward_index_committed: bool,
+        forward_rewrite_health: LinkRewriteHealth,
+        forward_rewritten: Vec<crate::structural::RewriteOutcome>,
+        mut rewrite_failures: Vec<crate::structural::RewriteFailure>,
+        failure: crate::BatchItemFailure,
+        faults: &dyn StructuralBatchFaultHook,
+    ) -> Result<crate::BatchMoveReport, VaultError> {
+        use crate::structural_batch::{BatchFailureStage, BatchMoveState};
+
+        let mut rollback_failures = Vec::new();
+        for plan in applied.iter().rev() {
+            if let Err(error) = self.provider.rename(&plan.destination, &plan.item.path) {
+                rollback_failures.push(structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Rollback,
+                    error.to_string(),
+                ));
+            }
+        }
+
+        // Provider return values alone are insufficient: a provider can fail
+        // after completing work. Establish physical truth before touching the
+        // index so the reconciliation targets the actual mixed topology.
+        let mut standing_plans = Vec::new();
+        let mut restored_plans = Vec::new();
+        let mut recovery_incomplete = forward_rewrite_health.physical_unknown;
+        let mut physical_topology_uncertain = false;
+        for plan in applied {
+            let source =
+                structural_batch_mutation_path_exists(self.provider.as_ref(), &plan.item.path);
+            let destination =
+                structural_batch_mutation_path_exists(self.provider.as_ref(), &plan.destination);
+            match (source, destination) {
+                (Ok(true), Ok(false)) => restored_plans.push(plan.clone()),
+                (Ok(false), Ok(true)) => standing_plans.push(plan.clone()),
+                (Ok(source_exists), Ok(destination_exists)) => {
+                    recovery_incomplete = true;
+                    physical_topology_uncertain = true;
+                    rollback_failures.push(structural_batch_failure(
+                        Some(plan.item.clone()),
+                        BatchFailureStage::Rollback,
+                        format!(
+                            "could not establish one physical location after rollback \
+                             (source exists: {source_exists}, destination exists: {destination_exists})"
+                        ),
+                    ));
+                }
+                (source_result, destination_result) => {
+                    recovery_incomplete = true;
+                    physical_topology_uncertain = true;
+                    let detail = format!(
+                        "could not verify physical rollback topology: source={:?}, destination={:?}",
+                        source_result.err().map(|error| error.to_string()),
+                        destination_result.err().map(|error| error.to_string())
+                    );
+                    rollback_failures.push(structural_batch_failure(
+                        Some(plan.item.clone()),
+                        BatchFailureStage::Rollback,
+                        detail,
+                    ));
+                }
+            }
+        }
+        standing_plans.sort_by(|left, right| left.item.path.cmp(&right.item.path));
+        restored_plans.sort_by(|left, right| left.item.path.cmp(&right.item.path));
+
+        let reconciliation_plans = if forward_index_committed {
+            &restored_plans
+        } else {
+            &standing_plans
+        };
+        let reconciliation_forward = !forward_index_committed;
+        let mut reconciliation_ok = true;
+        let mut requires_rescan =
+            physical_topology_uncertain || forward_rewrite_health.requires_rescan;
+        if !reconciliation_plans.is_empty() {
+            let reconciled = (|| -> Result<(), VaultError> {
+                faults.check(BatchFaultPoint::MoveReconciliation)?;
+                let tx = conn.transaction()?;
+                apply_batch_move_index_direction(
+                    &tx,
+                    reconciliation_plans,
+                    reconciliation_forward,
+                )?;
+                tx.commit()?;
+                Ok(())
+            })();
+            if let Err(error) = reconciled {
+                reconciliation_ok = false;
+                recovery_incomplete = true;
+                requires_rescan = true;
+                rollback_failures.push(structural_batch_failure(
+                    None,
+                    BatchFailureStage::Reconciliation,
+                    error.to_string(),
+                ));
+            }
+        }
+
+        let mut recovered_rewrites = Vec::new();
+        if reconciliation_ok {
+            let inverse_markers = batch_move_file_mapping(&restored_plans, true)
+                .into_iter()
+                .map(|(old, new)| (new, old));
+            let missing_forward_markers =
+                batch_move_file_mapping(&standing_plans, true).into_iter();
+            for (old, new) in inverse_markers.chain(missing_forward_markers) {
+                if let Err(error) = self.append_path_changed_marker_locked(conn, &old, &new) {
+                    recovery_incomplete = true;
+                    rollback_failures.push(structural_batch_failure(
+                        None,
+                        BatchFailureStage::Journal,
+                        error.to_string(),
+                    ));
+                }
+            }
+
+            if forward_index_committed
+                && !physical_topology_uncertain
+                && restored_plans.len() == applied.len()
+            {
+                let reverse_paths: std::collections::BTreeMap<String, String> = applied
+                    .iter()
+                    .flat_map(|plan| plan.moved_files.iter())
+                    .map(|(old, new)| (new.clone(), old.clone()))
+                    .collect();
+                for rewrite in &forward_rewritten {
+                    let final_path = reverse_paths
+                        .get(&rewrite.path)
+                        .cloned()
+                        .unwrap_or_else(|| rewrite.path.clone());
+                    let (outcome, restore_failure, restore_health) = self
+                        .restore_file_to_hash_observed_locked(
+                            conn,
+                            &final_path,
+                            &rewrite.hash_before,
+                            &rewrite.hash_after,
+                        );
+                    if let Some(outcome) = outcome {
+                        recovered_rewrites.push(outcome);
+                    }
+                    if let Some(restore_failure) = restore_failure {
+                        recovery_incomplete = true;
+                        rollback_failures.push(structural_batch_failure(
+                            None,
+                            BatchFailureStage::LinkRewriteRestore,
+                            format!(
+                                "link restore failed for {:?}: {:?}",
+                                restore_failure.path, restore_failure.kind
+                            ),
+                        ));
+                        rewrite_failures.push(restore_failure);
+                    }
+                    if restore_health.requires_rescan {
+                        recovery_incomplete = true;
+                        requires_rescan = true;
+                    }
+                }
+            } else {
+                // Mixed topology recovery is semantic, not an all-bytes
+                // restore: invert only restored mappings so links to standing
+                // entries keep their forward form.
+                let recovery_mapping = if forward_index_committed {
+                    batch_move_file_mapping(&restored_plans, false)
+                } else {
+                    batch_move_file_mapping(&standing_plans, true)
+                };
+                if !recovery_mapping.is_empty() {
+                    let (rewritten, failures, rewrite_health) =
+                        self.apply_link_rewrites(conn, &recovery_mapping);
+                    if rewrite_health.requires_rescan {
+                        recovery_incomplete = true;
+                        requires_rescan = true;
+                    }
+                    if !failures.is_empty() {
+                        recovery_incomplete = true;
+                        for link_failure in &failures {
+                            rollback_failures.push(structural_batch_failure(
+                                None,
+                                BatchFailureStage::LinkRewrite,
+                                format!("link recovery failed for {:?}", link_failure.path),
+                            ));
+                        }
+                    }
+                    recovered_rewrites = rewritten;
+                    rewrite_failures.extend(failures);
+                }
+            }
+        }
+
+        // Any post-index recovery must rebuild lazily from final SQLite. The
+        // mixed pre-index path also drops when it reconciled standing moves.
+        if forward_index_committed
+            || !standing_plans.is_empty()
+            || physical_topology_uncertain
+            || !reconciliation_ok
+            || forward_rewrite_health.requires_rescan
+            || requires_rescan
+        {
+            let mut graph = self.graph.lock().expect("graph index mutex");
+            self.graph_drop_locked(&mut graph);
+        }
+
+        if !standing_plans.is_empty() {
+            recovery_incomplete = true;
+        }
+        if recovery_incomplete {
+            let barrier = (|| -> Result<(), VaultError> {
+                faults.check(BatchFaultPoint::RecoveryBarrier)?;
+                let tx = conn.transaction()?;
+                journal_append(
+                    &tx,
+                    crate::structural::StructuralOpKind::RecoveryBarrier,
+                    &crate::structural::StructuralOpPayload::default(),
+                )?;
+                tx.commit()?;
+                Ok(())
+            })();
+            if let Err(error) = barrier {
+                self.structural_history_valid
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                rollback_failures.push(structural_batch_failure(
+                    None,
+                    BatchFailureStage::RecoveryBarrier,
+                    error.to_string(),
+                ));
+            }
+        }
+
+        Ok(crate::BatchMoveReport {
+            envelope,
+            state: if recovery_incomplete {
+                BatchMoveState::RollbackIncomplete
+            } else {
+                BatchMoveState::RolledBack
+            },
+            op_id: None,
+            standing: standing_plans.iter().map(|plan| plan.change()).collect(),
+            rolled_back: restored_plans.iter().map(|plan| plan.change()).collect(),
+            failure: Some(failure),
+            rollback_failures,
+            rewritten: recovered_rewrites,
+            rewrite_failures,
+            requires_rescan,
+        })
+    }
+
+    fn publish_batch_move_recovery(
+        &self,
+        report: &crate::BatchMoveReport,
+        applied: &[crate::structural_batch::PlannedBatchMove],
+    ) {
+        if !report.standing.is_empty() || !report.rolled_back.is_empty() || report.requires_rescan {
+            self.bump_bases_generation();
+        }
+        let standing: std::collections::BTreeSet<&str> = report
+            .standing
+            .iter()
+            .map(|change| change.old_path.as_str())
+            .collect();
+        for plan in applied {
+            if standing.contains(plan.item.path.as_str()) {
+                for (old, new) in &plan.moved_files {
+                    self.notify_file_change(FileChangeKind::Renamed, new, Some(old));
+                }
+            }
+        }
+    }
+
+    /// Undo the latest successful batch move as one inverse batch. The
+    /// inverse is itself a `move_batch` journal row, so invoking this endpoint
+    /// again with the returned id performs redo without weakening the
+    /// append-only history contract.
+    pub fn undo_batch_move(&self, op_id: i64) -> Result<crate::BatchMoveReport, VaultError> {
+        self.undo_batch_move_with_faults(op_id, &NoStructuralBatchFaults)
+    }
+
+    fn undo_batch_move_with_faults(
+        &self,
+        op_id: i64,
+        faults: &dyn StructuralBatchFaultHook,
+    ) -> Result<crate::BatchMoveReport, VaultError> {
+        use crate::structural_batch::{BatchFailureStage, BatchMoveState};
+
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
+
+        if !self
+            .structural_history_valid
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(VaultError::InvalidArgument {
+                message: "structural history is unavailable after incomplete recovery".into(),
+            });
+        }
+
+        // Latest-row validation, inverse preflight, filesystem mutation,
+        // reconciliation, and journal append all share this one writer lock.
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let (latest_id, kind_string, payload_json): (i64, String, String) = conn
+            .query_row(
+                "SELECT id, kind, payload FROM structural_ops ORDER BY id DESC LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .map_err(|_| VaultError::InvalidArgument {
+                message: "no structural operations to undo".into(),
+            })?;
+        if latest_id != op_id {
+            return Err(VaultError::InvalidArgument {
+                message: format!(
+                    "only the latest structural op is undoable (latest is {latest_id}, got {op_id})"
+                ),
+            });
+        }
+        let kind = crate::structural::StructuralOpKind::parse(&kind_string).ok_or_else(|| {
+            VaultError::InvalidArgument {
+                message: format!("unknown structural op kind {kind_string:?}"),
+            }
+        })?;
+        if kind != crate::structural::StructuralOpKind::MoveBatch {
+            return Err(VaultError::InvalidArgument {
+                message: format!(
+                    "{} is not a batch move; use its dedicated history endpoint",
+                    kind.as_str()
+                ),
+            });
+        }
+        let payload =
+            crate::structural::StructuralOpPayload::from_json(&payload_json).ok_or_else(|| {
+                VaultError::InvalidArgument {
+                    message: "corrupt structural journal payload".into(),
+                }
+            })?;
+        let inverse_entries = payload
+            .batch_entries
+            .iter()
+            .map(|entry| crate::structural::StructuralBatchJournalEntry {
+                from: entry.to.clone(),
+                to: entry.from.clone(),
+                is_directory: entry.is_directory,
+            })
+            .collect();
+        let (envelope, plans) = self.plan_explicit_batch_move_locked(&conn, inverse_entries)?;
+        if !envelope.preflight_failures.is_empty() {
+            return Ok(empty_batch_move_report(envelope, BatchMoveState::Rejected));
+        }
+
+        let mut applied = Vec::new();
+        for plan in &plans {
+            if let Err(error) = self.provider.rename(&plan.item.path, &plan.destination) {
+                let failure = structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Move,
+                    error.to_string(),
+                );
+                let mut recovery_candidates = applied.clone();
+                match (
+                    structural_batch_mutation_path_exists(self.provider.as_ref(), &plan.item.path),
+                    structural_batch_mutation_path_exists(
+                        self.provider.as_ref(),
+                        &plan.destination,
+                    ),
+                ) {
+                    (Ok(true), Ok(false)) => {}
+                    _ => recovery_candidates.push(plan.clone()),
+                }
+                let report = self.recover_batch_move_locked(
+                    &mut conn,
+                    envelope,
+                    &recovery_candidates,
+                    false,
+                    LinkRewriteHealth::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    failure,
+                    faults,
+                )?;
+                drop(conn);
+                drop(structural_operation);
+                self.publish_batch_move_recovery(&report, &recovery_candidates);
+                return Ok(report);
+            }
+            applied.push(plan.clone());
+        }
+
+        let moved = batch_move_file_mapping(&plans, true);
+        let mut graph_sink = self.graph_sink();
+        let index_result = (|| -> Result<(), VaultError> {
+            faults.check(BatchFaultPoint::MoveIndex)?;
+            let tx = conn.transaction()?;
+            for (old, new) in &moved {
+                graph_sink.stage(|| crate::graph::GraphOp::FileRenamed {
+                    old_path: old.clone(),
+                    new_path: new.clone(),
+                    is_markdown: classify_path(new).2,
+                });
+            }
+            for plan in &plans {
+                if plan.item.is_directory {
+                    rename_prefix_in_index(&tx, &plan.item.path, &plan.destination)?;
+                } else {
+                    let changed = tx.execute(
+                        "UPDATE files SET path = ?1 WHERE path = ?2",
+                        rusqlite::params![plan.destination, plan.item.path],
+                    )?;
+                    if changed != 1 {
+                        return Err(VaultError::InvalidPath {
+                            path: plan.item.path.clone(),
+                            reason: "batch inverse index source is missing".into(),
+                        });
+                    }
+                }
+            }
+            {
+                let mut stmt =
+                    tx.prepare("UPDATE links SET target_path = ?1 WHERE target_path = ?2")?;
+                for (old, new) in &moved {
+                    stmt.execute(rusqlite::params![new, old])?;
+                }
+            }
+            let resolved_sources = crate::links_db::re_resolve_unresolved_links(&tx)?;
+            if graph_sink.live() {
+                for source in resolved_sources {
+                    graph_sink.stage_with(|| {
+                        Ok(crate::graph::GraphOp::LinksetChanged {
+                            source_path: source.clone(),
+                            rows: crate::links_db::graph_linkset_for(&tx, &source)?,
+                        })
+                    })?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(error) = index_result {
+            let report = self.recover_batch_move_locked(
+                &mut conn,
+                envelope,
+                &applied,
+                false,
+                LinkRewriteHealth::default(),
+                Vec::new(),
+                Vec::new(),
+                structural_batch_failure(None, BatchFailureStage::Index, error.to_string()),
+                faults,
+            )?;
+            drop(conn);
+            drop(structural_operation);
+            self.publish_batch_move_recovery(&report, &applied);
+            return Ok(report);
+        }
+        self.graph_apply(graph_sink);
+        for (old, new) in &moved {
+            let marker_result = faults
+                .check(BatchFaultPoint::MovePathMarker)
+                .and_then(|_| self.append_path_changed_marker_locked(&conn, old, new))
+                .and_then(|_| faults.check(BatchFaultPoint::MovePathMarkerPostWrite));
+            if let Err(error) = marker_result {
+                let report = self.recover_batch_move_locked(
+                    &mut conn,
+                    envelope,
+                    &applied,
+                    true,
+                    LinkRewriteHealth::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
+                    faults,
+                )?;
+                drop(conn);
+                drop(structural_operation);
+                self.publish_batch_move_recovery(&report, &applied);
+                return Ok(report);
+            }
+        }
+        if let Err(error) = faults.check(BatchFaultPoint::MoveLinkRewrite) {
+            let report = self.recover_batch_move_locked(
+                &mut conn,
+                envelope,
+                &applied,
+                true,
+                LinkRewriteHealth::default(),
+                Vec::new(),
+                Vec::new(),
+                structural_batch_failure(
+                    None,
+                    BatchFailureStage::LinkRewriteRestore,
+                    error.to_string(),
+                ),
+                faults,
+            )?;
+            drop(conn);
+            drop(structural_operation);
+            self.publish_batch_move_recovery(&report, &applied);
+            return Ok(report);
+        }
+
+        let reverse_paths: std::collections::BTreeMap<String, String> =
+            moved.iter().cloned().collect();
+        let mut rewritten = Vec::new();
+        let mut rewrite_failures = Vec::new();
+        let mut restore_health = LinkRewriteHealth::default();
+        for rewrite in &payload.rewrites {
+            let final_path = reverse_paths
+                .get(&rewrite.path)
+                .cloned()
+                .unwrap_or_else(|| rewrite.path.clone());
+            let (outcome, restore_failure, health) = self.restore_file_to_hash_observed_locked(
+                &mut conn,
+                &final_path,
+                &rewrite.hash_before,
+                &rewrite.hash_after,
+            );
+            if let Some(outcome) = outcome {
+                rewritten.push(outcome);
+            }
+            if let Some(restore_failure) = restore_failure {
+                rewrite_failures.push(restore_failure);
+            }
+            restore_health.absorb(health);
+        }
+        if restore_health.requires_rescan {
+            let mut graph = self.graph.lock().expect("graph index mutex");
+            self.graph_drop_locked(&mut graph);
+        }
+        if restore_health.physical_unknown {
+            let report = self.recover_batch_move_locked(
+                &mut conn,
+                envelope,
+                &applied,
+                true,
+                restore_health,
+                rewritten,
+                rewrite_failures,
+                structural_batch_failure(
+                    None,
+                    BatchFailureStage::LinkRewriteRestore,
+                    "inverse link rewrite physical outcome could not be established",
+                ),
+                faults,
+            )?;
+            drop(conn);
+            drop(structural_operation);
+            self.publish_batch_move_recovery(&report, &applied);
+            return Ok(report);
+        }
+
+        let journal_result = (|| -> Result<i64, VaultError> {
+            faults.check(BatchFaultPoint::MoveJournal)?;
+            let tx = conn.transaction()?;
+            let id = journal_append(
+                &tx,
+                crate::structural::StructuralOpKind::MoveBatch,
+                &crate::structural::StructuralOpPayload {
+                    moved: moved.clone(),
+                    rewrites: rewritten.clone(),
+                    batch_entries: plans
+                        .iter()
+                        .map(|plan| crate::structural::StructuralBatchJournalEntry {
+                            from: plan.item.path.clone(),
+                            to: plan.destination.clone(),
+                            is_directory: plan.item.is_directory,
+                        })
+                        .collect(),
+                    ..Default::default()
+                },
+            )?;
+            tx.commit()?;
+            Ok(id)
+        })();
+        let new_op_id = match journal_result {
+            Ok(id) => id,
+            Err(error) => {
+                let report = self.recover_batch_move_locked(
+                    &mut conn,
+                    envelope,
+                    &applied,
+                    true,
+                    restore_health,
+                    rewritten,
+                    rewrite_failures,
+                    structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
+                    faults,
+                )?;
+                drop(conn);
+                drop(structural_operation);
+                self.publish_batch_move_recovery(&report, &applied);
+                return Ok(report);
+            }
+        };
+        let standing = plans.iter().map(|plan| plan.change()).collect();
+        drop(conn);
+        drop(structural_operation);
+        self.bump_bases_generation();
+        for (old, new) in &moved {
+            self.notify_file_change(FileChangeKind::Renamed, new, Some(old));
+        }
+        Ok(crate::BatchMoveReport {
+            envelope,
+            state: BatchMoveState::Succeeded,
+            op_id: Some(new_op_id),
+            standing,
+            rolled_back: Vec::new(),
+            failure: None,
+            rollback_failures: Vec::new(),
+            rewritten,
+            rewrite_failures,
+            requires_rescan: restore_health.requires_rescan,
+        })
+    }
+
+    fn plan_explicit_batch_move_locked(
+        &self,
+        conn: &Connection,
+        mut entries: Vec<crate::structural::StructuralBatchJournalEntry>,
+    ) -> Result<
+        (
+            crate::StructuralBatchEnvelope,
+            Vec<crate::structural_batch::PlannedBatchMove>,
+        ),
+        VaultError,
+    > {
+        use crate::structural_batch::{BatchFailureStage, PlannedBatchMove};
+
+        if entries.is_empty() || entries.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
+            return Ok((
+                crate::StructuralBatchEnvelope {
+                    preflight_failures: vec![structural_batch_failure(
+                        None,
+                        BatchFailureStage::Preflight,
+                        "batch journal has an invalid number of entries",
+                    )],
+                    ..Default::default()
+                },
+                Vec::new(),
+            ));
+        }
+        entries.sort_by(|left, right| {
+            left.from
+                .cmp(&right.from)
+                .then_with(|| left.is_directory.cmp(&right.is_directory))
+                .then_with(|| left.to.cmp(&right.to))
+        });
+        let snapshot = structural_batch_index_snapshot(conn)?;
+        let mut envelope = crate::StructuralBatchEnvelope::default();
+        let mut plans = Vec::new();
+        let mut seen_sources = std::collections::BTreeSet::new();
+        let mut selected_directories = std::collections::BTreeSet::new();
+
+        for entry in entries {
+            let item = crate::StructuralBatchItem {
+                path: entry.from.clone(),
+                is_directory: entry.is_directory,
+            };
+            if !seen_sources.insert(entry.from.clone()) {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    "batch journal contains a duplicate source",
+                ));
+                continue;
+            }
+            if entry
+                .from
+                .match_indices('/')
+                .any(|(boundary, _)| selected_directories.contains(&entry.from[..boundary]))
+            {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    "batch journal contains overlapping top-level entries",
+                ));
+                continue;
+            }
+            if entry.is_directory {
+                selected_directories.insert(entry.from.clone());
+            }
+
+            if let Err(error) = validate_save_path(&entry.from) {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                ));
+                continue;
+            }
+            if let Err(error) = validate_save_path(&entry.to) {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                ));
+                continue;
+            }
+            if entry.from == entry.to {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    "batch journal source equals destination",
+                ));
+                continue;
+            }
+            let indexed_as_file = snapshot.files.contains_key(&entry.from);
+            let indexed_as_directory = snapshot.dirs.contains(&entry.from);
+            if indexed_as_file == entry.is_directory || indexed_as_directory != entry.is_directory {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    "batch inverse source kind does not match this session's index",
+                ));
+                continue;
+            }
+            let destination_parent = structural_batch_parent(&entry.to);
+            if !destination_parent.is_empty() && !snapshot.dirs.contains(destination_parent) {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item.clone()),
+                    BatchFailureStage::Preflight,
+                    format!("destination parent {destination_parent:?} is not indexed"),
+                ));
+            }
+            if entry.is_directory
+                && entry.to.len() > entry.from.len()
+                && entry.to.starts_with(&entry.from)
+                && entry.to.as_bytes().get(entry.from.len()) == Some(&b'/')
+            {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item.clone()),
+                    BatchFailureStage::Preflight,
+                    "cannot move a folder into its own subtree",
+                ));
+            }
+            let moved_files = if entry.is_directory {
+                let (lo, hi) = subtree_bounds(&entry.from).expect("validated non-root folder");
+                snapshot
+                    .files
+                    .range(lo..hi)
+                    .map(|(old, _)| {
+                        (
+                            old.clone(),
+                            format!("{}{}", entry.to, &old[entry.from.len()..]),
+                        )
+                    })
+                    .collect()
+            } else {
+                vec![(entry.from.clone(), entry.to.clone())]
+            };
+            envelope.planned.push(item.clone());
+            plans.push(PlannedBatchMove {
+                item,
+                destination: entry.to,
+                moved_files,
+            });
+        }
+
+        let mut destinations: std::collections::BTreeMap<String, Vec<usize>> =
+            std::collections::BTreeMap::new();
+        for (index, plan) in plans.iter().enumerate() {
+            destinations
+                .entry(plan.destination.to_lowercase())
+                .or_default()
+                .push(index);
+        }
+        for indices in destinations.values().filter(|indices| indices.len() > 1) {
+            for &index in indices {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plans[index].item.clone()),
+                    BatchFailureStage::Preflight,
+                    "batch inverse destinations collide case-insensitively",
+                ));
+            }
+        }
+        for plan in &plans {
+            if let Some(existing) = snapshot
+                .occupied_lower
+                .get(&plan.destination.to_lowercase())
+            {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Preflight,
+                    format!("batch inverse destination is occupied by {existing:?}"),
+                ));
+            }
+        }
+        for plan in &plans {
+            match self.provider.stat(&plan.item.path) {
+                Ok(stat) if (stat.kind == EntryKind::Directory) != plan.item.is_directory => {
+                    envelope.preflight_failures.push(structural_batch_failure(
+                        Some(plan.item.clone()),
+                        BatchFailureStage::Preflight,
+                        "batch inverse source kind changed on disk since it was indexed",
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) => envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                )),
+            }
+            if let Err(error) = self
+                .provider
+                .preflight_rename(&plan.item.path, &plan.destination)
+            {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                ));
+            }
+        }
+        Ok((envelope, plans))
+    }
+
+    /// Move selected entries to the system Trash as one logical request.
+    pub fn batch_trash(
+        &self,
+        request: crate::BatchTrashRequest,
+    ) -> Result<crate::BatchTrashReport, VaultError> {
+        self.batch_trash_with_faults(request, &NoStructuralBatchFaults)
+    }
+
+    fn batch_trash_with_faults(
+        &self,
+        request: crate::BatchTrashRequest,
+        faults: &dyn StructuralBatchFaultHook,
+    ) -> Result<crate::BatchTrashReport, VaultError> {
+        use crate::structural_batch::{BatchFailureStage, BatchTrashState};
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
+        if request.items.is_empty() || request.items.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
+            let message = if request.items.is_empty() {
+                "a structural batch must contain at least one item".to_string()
+            } else {
+                format!(
+                    "a structural batch may contain at most {} items",
+                    crate::MAX_STRUCTURAL_BATCH_ITEMS
+                )
+            };
+            return Ok(empty_batch_trash_report(
+                crate::StructuralBatchEnvelope {
+                    preflight_failures: vec![structural_batch_failure(
+                        None,
+                        BatchFailureStage::Preflight,
+                        message,
+                    )],
+                    ..Default::default()
+                },
+                BatchTrashState::Rejected,
+            ));
+        }
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let (envelope, plans) = self.plan_batch_trash_locked(&conn, request)?;
+        if !envelope.preflight_failures.is_empty() {
+            return Ok(empty_batch_trash_report(
+                envelope,
+                BatchTrashState::Rejected,
+            ));
+        }
+        if plans.is_empty() {
+            return Ok(empty_batch_trash_report(envelope, BatchTrashState::NoOp));
+        }
+
+        let mut successful = Vec::new();
+        let mut untrashed = Vec::new();
+        let mut bookkeeping_failures = Vec::new();
+        let mut requires_rescan = false;
+        for plan in &plans {
+            let provider_result = self.provider.delete(&plan.item.path);
+            match structural_batch_mutation_path_exists(self.provider.as_ref(), &plan.item.path) {
+                Ok(false) => {
+                    if let Err(error) = provider_result {
+                        bookkeeping_failures.push(structural_batch_failure(
+                            Some(plan.item.clone()),
+                            BatchFailureStage::Trash,
+                            format!(
+                                "provider reported failure after the item disappeared: {error}"
+                            ),
+                        ));
+                    }
+                    successful.push(plan.clone());
+                }
+                Ok(true) => untrashed.push(crate::BatchTrashRemainder {
+                    item: plan.item.clone(),
+                    failure: structural_batch_failure(
+                        Some(plan.item.clone()),
+                        BatchFailureStage::Trash,
+                        match provider_result {
+                            Ok(()) => {
+                                "provider reported success but the item still exists".to_string()
+                            }
+                            Err(error) => error.to_string(),
+                        },
+                    ),
+                }),
+                Err(probe_error) => {
+                    requires_rescan = true;
+                    let provider_detail = provider_result
+                        .err()
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "provider reported success".into());
+                    let message = format!(
+                        "Trash outcome is unknown ({provider_detail}); physical verification failed: {probe_error}"
+                    );
+                    untrashed.push(crate::BatchTrashRemainder {
+                        item: plan.item.clone(),
+                        failure: structural_batch_failure(
+                            Some(plan.item.clone()),
+                            BatchFailureStage::Trash,
+                            message.clone(),
+                        ),
+                    });
+                    bookkeeping_failures.push(structural_batch_failure(
+                        Some(plan.item.clone()),
+                        BatchFailureStage::Reconciliation,
+                        message,
+                    ));
+                }
+            }
+        }
+        if successful.is_empty() {
+            if requires_rescan {
+                let mut graph = self.graph.lock().expect("graph index mutex");
+                self.graph_drop_locked(&mut graph);
+                drop(graph);
+                let barrier = (|| -> Result<(), VaultError> {
+                    faults.check(BatchFaultPoint::RecoveryBarrier)?;
+                    let tx = conn.transaction()?;
+                    journal_append(
+                        &tx,
+                        crate::structural::StructuralOpKind::RecoveryBarrier,
+                        &crate::structural::StructuralOpPayload::default(),
+                    )?;
+                    tx.commit()?;
+                    Ok(())
+                })();
+                if let Err(error) = barrier {
+                    self.structural_history_valid
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    bookkeeping_failures.push(structural_batch_failure(
+                        None,
+                        BatchFailureStage::RecoveryBarrier,
+                        error.to_string(),
+                    ));
+                }
+            }
+            let report = crate::BatchTrashReport {
+                envelope,
+                state: BatchTrashState::Failed,
+                op_id: None,
+                trashed: Vec::new(),
+                untrashed,
+                bookkeeping_failures,
+                requires_rescan,
+            };
+            drop(conn);
+            drop(structural_operation);
+            if requires_rescan {
+                self.bump_bases_generation();
+            }
+            return Ok(report);
+        }
+
+        if let Err(initial_error) = self.reconcile_batch_trash_index_locked(
+            &mut conn,
+            &successful,
+            BatchFaultPoint::TrashIndex,
+            faults,
+        ) && let Err(reconciliation_error) = self.reconcile_batch_trash_index_locked(
+            &mut conn,
+            &successful,
+            BatchFaultPoint::TrashReconciliation,
+            faults,
+        ) {
+            requires_rescan = true;
+            bookkeeping_failures.push(structural_batch_failure(
+                None,
+                BatchFailureStage::Reconciliation,
+                format!(
+                    "batch Trash index update failed ({initial_error}); reconciliation failed ({reconciliation_error})"
+                ),
+            ));
+        }
+
+        // Disk and SQLite may diverge after an unknown provider outcome or
+        // failed reconciliation. Invalidate once for this logical result.
+        if requires_rescan {
+            let mut graph = self.graph.lock().expect("graph index mutex");
+            self.graph_drop_locked(&mut graph);
+        }
+
+        let journal_result = (|| -> Result<i64, VaultError> {
+            faults.check(BatchFaultPoint::TrashJournal)?;
+            let tx = conn.transaction()?;
+            let op_id = journal_append(
+                &tx,
+                crate::structural::StructuralOpKind::TrashBatch,
+                &crate::structural::StructuralOpPayload {
+                    batch_entries: successful
+                        .iter()
+                        .map(|plan| crate::structural::StructuralBatchJournalEntry {
+                            from: plan.item.path.clone(),
+                            to: plan.item.path.clone(),
+                            is_directory: plan.item.is_directory,
+                        })
+                        .collect(),
+                    deleted_oplogs: successful
+                        .iter()
+                        .flat_map(|plan| plan.oplog_bindings.iter().cloned())
+                        .collect(),
+                    ..Default::default()
+                },
+            )?;
+            tx.commit()?;
+            Ok(op_id)
+        })();
+        let op_id = match journal_result {
+            Ok(op_id) => Some(op_id),
+            Err(error) => {
+                bookkeeping_failures.push(structural_batch_failure(
+                    None,
+                    BatchFailureStage::Journal,
+                    error.to_string(),
+                ));
+                let barrier = (|| -> Result<(), VaultError> {
+                    faults.check(BatchFaultPoint::RecoveryBarrier)?;
+                    let tx = conn.transaction()?;
+                    journal_append(
+                        &tx,
+                        crate::structural::StructuralOpKind::RecoveryBarrier,
+                        &crate::structural::StructuralOpPayload::default(),
+                    )?;
+                    tx.commit()?;
+                    Ok(())
+                })();
+                if let Err(barrier_error) = barrier {
+                    self.structural_history_valid
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                    bookkeeping_failures.push(structural_batch_failure(
+                        None,
+                        BatchFailureStage::RecoveryBarrier,
+                        barrier_error.to_string(),
+                    ));
+                }
+                None
+            }
+        };
+
+        let state = if untrashed.is_empty() {
+            BatchTrashState::Succeeded
+        } else {
+            BatchTrashState::Partial
+        };
+        let trashed = successful
+            .iter()
+            .map(|plan| plan.item.clone())
+            .collect::<Vec<_>>();
+        let deleted_files = successful
+            .iter()
+            .flat_map(|plan| plan.deleted_files.iter().cloned())
+            .collect::<Vec<_>>();
+        drop(conn);
+        drop(structural_operation);
+        self.bump_bases_generation();
+        for path in &deleted_files {
+            self.notify_file_change(FileChangeKind::Deleted, path, None);
+        }
+        Ok(crate::BatchTrashReport {
+            envelope,
+            state,
+            op_id,
+            trashed,
+            untrashed,
+            bookkeeping_failures,
+            requires_rescan,
+        })
+    }
+
+    fn reconcile_batch_trash_index_locked(
+        &self,
+        conn: &mut Connection,
+        plans: &[crate::structural_batch::PlannedBatchTrash],
+        fault_point: BatchFaultPoint,
+        faults: &dyn StructuralBatchFaultHook,
+    ) -> Result<(), VaultError> {
+        faults.check(fault_point)?;
+        let mut graph_sink = self.graph_sink();
+        let result = (|| -> Result<(), VaultError> {
+            let tx = conn.transaction()?;
+            for plan in plans {
+                for file in &plan.deleted_files {
+                    graph_sink.stage_with(|| {
+                        Ok(crate::graph::GraphOp::FileRemoved {
+                            path: file.clone(),
+                            inbound: crate::links_db::graph_inbound_rows(&tx, file)?,
+                        })
+                    })?;
+                }
+                if plan.item.is_directory {
+                    let (lo, hi) =
+                        subtree_bounds(&plan.item.path).expect("validated non-root folder path");
+                    tx.execute(
+                        "DELETE FROM files WHERE path >= ?1 AND path < ?2",
+                        rusqlite::params![lo, hi],
+                    )?;
+                    tx.execute(
+                        "DELETE FROM dirs WHERE path = ?1 OR (path >= ?2 AND path < ?3)",
+                        rusqlite::params![plan.item.path, lo, hi],
+                    )?;
+                } else {
+                    tx.execute(
+                        "DELETE FROM files WHERE path = ?1",
+                        rusqlite::params![plan.item.path],
+                    )?;
+                }
+            }
+            tx.commit()?;
+            Ok(())
+        })();
+        if result.is_ok() {
+            self.graph_apply(graph_sink);
+        }
+        result
+    }
+
+    fn plan_batch_trash_locked(
+        &self,
+        conn: &Connection,
+        request: crate::BatchTrashRequest,
+    ) -> Result<
+        (
+            crate::StructuralBatchEnvelope,
+            Vec<crate::structural_batch::PlannedBatchTrash>,
+        ),
+        VaultError,
+    > {
+        use crate::structural_batch::{BatchFailureStage, PlannedBatchTrash};
+        let normalized = crate::structural_batch::normalize_batch_items(request.items);
+        let snapshot = structural_batch_index_snapshot(conn)?;
+        let mut envelope = crate::StructuralBatchEnvelope {
+            planned: Vec::new(),
+            skipped: normalized.skipped,
+            preflight_failures: normalized.failures,
+        };
+        let mut plans = Vec::new();
+        for item in normalized.items {
+            if let Err(error) = validate_save_path(&item.path) {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                ));
+                continue;
+            }
+            let indexed_as_file = snapshot.files.contains_key(&item.path);
+            let indexed_as_directory = snapshot.dirs.contains(&item.path);
+            if indexed_as_file == item.is_directory || indexed_as_directory != item.is_directory {
+                let message = if indexed_as_file || indexed_as_directory {
+                    "request kind does not match the indexed entry"
+                } else {
+                    "source is not present in this session's index"
+                };
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(item),
+                    BatchFailureStage::Preflight,
+                    message,
+                ));
+                continue;
+            }
+            let deleted_files: Vec<String> = if item.is_directory {
+                let (lo, hi) = subtree_bounds(&item.path).expect("validated non-root folder");
+                snapshot
+                    .files
+                    .range(lo..hi)
+                    .map(|(path, _)| path.clone())
+                    .collect()
+            } else {
+                vec![item.path.clone()]
+            };
+            let oplog_bindings = deleted_files
+                .iter()
+                .filter_map(|path| {
+                    snapshot.files.get(path).and_then(|name| {
+                        name.as_ref()
+                            .map(|oplog_name| crate::structural::DeletedOplogBinding {
+                                path: path.clone(),
+                                oplog_name: oplog_name.clone(),
+                            })
+                    })
+                })
+                .collect();
+            envelope.planned.push(item.clone());
+            plans.push(PlannedBatchTrash {
+                item,
+                deleted_files,
+                oplog_bindings,
+            });
+        }
+        for plan in &plans {
+            match self.provider.stat(&plan.item.path) {
+                Ok(stat) if (stat.kind == EntryKind::Directory) != plan.item.is_directory => {
+                    envelope.preflight_failures.push(structural_batch_failure(
+                        Some(plan.item.clone()),
+                        BatchFailureStage::Preflight,
+                        "source kind changed on disk since it was indexed",
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) => envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                )),
+            }
+            if let Err(error) = self.provider.preflight_delete(&plan.item.path) {
+                envelope.preflight_failures.push(structural_batch_failure(
+                    Some(plan.item.clone()),
+                    BatchFailureStage::Preflight,
+                    error.to_string(),
+                ));
+            }
+        }
+        Ok((envelope, plans))
+    }
+
     /// Create an empty folder. Journaled; undo deletes it if still empty.
     pub fn create_folder(
         &self,
         path: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let _structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
         let mut conn = self.conn.lock().expect("session connection mutex");
@@ -7642,6 +9577,10 @@ impl VaultSession {
         path: &str,
         new_name: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
         let new_path = sibling_path(path, new_name)?;
         let report = self.structural_move_folder(
             path,
@@ -7649,6 +9588,7 @@ impl VaultSession {
             crate::structural::StructuralOpKind::RenameFolder,
             true,
         )?;
+        drop(structural_operation);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -7659,6 +9599,10 @@ impl VaultSession {
         path: &str,
         new_parent: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
         let new_path = child_path(new_parent, leaf_name(path))?;
         let report = self.structural_move_folder(
             path,
@@ -7666,6 +9610,7 @@ impl VaultSession {
             crate::structural::StructuralOpKind::MoveFolder,
             true,
         )?;
+        drop(structural_operation);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -7676,6 +9621,10 @@ impl VaultSession {
         path: &str,
         new_name: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
         let new_path = sibling_path(path, new_name)?;
         let report = self.structural_move_file(
             path,
@@ -7683,6 +9632,7 @@ impl VaultSession {
             crate::structural::StructuralOpKind::RenameFile,
             true,
         )?;
+        drop(structural_operation);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -7693,6 +9643,10 @@ impl VaultSession {
         path: &str,
         new_parent: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
         let new_path = child_path(new_parent, leaf_name(path))?;
         let report = self.structural_move_file(
             path,
@@ -7700,6 +9654,7 @@ impl VaultSession {
             crate::structural::StructuralOpKind::MoveFile,
             true,
         )?;
+        drop(structural_operation);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -7707,6 +9662,10 @@ impl VaultSession {
     /// Move a file to the system trash. Journaled for auditability; NOT
     /// undoable via `undo_structural` (the bytes are in the trash).
     pub fn delete_file(&self, path: &str) -> Result<(), VaultError> {
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
         validate_save_path(path)?;
         let mut conn = self.conn.lock().expect("session connection mutex");
         // Capture the op-log binding before the row goes: the journal
@@ -7751,6 +9710,7 @@ impl VaultSession {
         // round 1, finding 1).
         self.graph_apply(graph_sink);
         drop(conn);
+        drop(structural_operation);
         self.bump_bases_generation();
         self.notify_file_change(FileChangeKind::Deleted, path, None);
         Ok(())
@@ -7759,6 +9719,10 @@ impl VaultSession {
     /// Move a folder (recursively) to the system trash. Journaled; not
     /// undoable via `undo_structural`.
     pub fn delete_folder(&self, path: &str) -> Result<(), VaultError> {
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
         validate_save_path(path)?;
         let mut conn = self.conn.lock().expect("session connection mutex");
         // #802: the range delete below erases the paths — capture them
@@ -7810,6 +9774,7 @@ impl VaultSession {
         // Under the still-held connection lock (review round 1 #1).
         self.graph_apply(graph_sink);
         drop(conn);
+        drop(structural_operation);
         self.bump_bases_generation();
         for file in &deleted_files {
             self.notify_file_change(FileChangeKind::Deleted, file, None);
@@ -7828,6 +9793,18 @@ impl VaultSession {
         op_id: i64,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         use crate::structural::{StructuralOpKind, StructuralOpPayload};
+        let structural_operation = self
+            .structural_operation
+            .lock()
+            .expect("structural operation mutex");
+        if !self
+            .structural_history_valid
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(VaultError::InvalidArgument {
+                message: "structural history is unavailable after incomplete recovery".into(),
+            });
+        }
         let (kind, payload) = {
             let conn = self.conn.lock().expect("session connection mutex");
             let (max_id, kind_str, payload_json): (i64, String, String) = conn
@@ -7851,11 +9828,17 @@ impl VaultSession {
                     message: format!("unknown structural op kind {kind_str:?}"),
                 })?;
             if !kind.undoable() {
+                let reason = match kind {
+                    StructuralOpKind::RecoveryBarrier => {
+                        "structural history is blocked after incomplete recovery"
+                    }
+                    StructuralOpKind::DeleteFile
+                    | StructuralOpKind::DeleteFolder
+                    | StructuralOpKind::TrashBatch => "the content is in the system trash",
+                    _ => "this operation requires its dedicated undo endpoint",
+                };
                 return Err(VaultError::InvalidArgument {
-                    message: format!(
-                        "{} is not undoable (the content is in the system trash)",
-                        kind.as_str()
-                    ),
+                    message: format!("{} is not undoable ({reason})", kind.as_str()),
                 });
             }
             let payload = StructuralOpPayload::from_json(&payload_json).ok_or_else(|| {
@@ -7864,8 +9847,9 @@ impl VaultSession {
                 }
             })?;
             (kind, payload)
-            // Mutex drops here: the inverse op below re-acquires it through
-            // the public mutation, which owns full validation + journaling.
+            // The connection guard drops here. `structural_operation` stays
+            // held while the private inverse helper reacquires `conn`, so no
+            // structural writer can invalidate the latest-op decision.
         };
 
         let mut report = match kind {
@@ -7917,8 +9901,16 @@ impl VaultSession {
             StructuralOpKind::RenameFile | StructuralOpKind::MoveFile => {
                 self.structural_move_file(&payload.to, &payload.from, kind, false)?
             }
+            StructuralOpKind::MoveBatch => {
+                return Err(VaultError::InvalidArgument {
+                    message: "batch moves must be undone with undo_batch_move".into(),
+                });
+            }
             StructuralOpKind::DeleteFile | StructuralOpKind::DeleteFolder => {
                 unreachable!("undoable() filtered deletes above")
+            }
+            StructuralOpKind::TrashBatch | StructuralOpKind::RecoveryBarrier => {
+                unreachable!("undoable() filtered non-undoable batch rows above")
             }
         };
 
@@ -7960,6 +9952,7 @@ impl VaultSession {
         // emit their per-file Renamed events here. (Rewrite restores
         // ride `save_text_locked`, the shared seam, and emit
         // themselves.)
+        drop(structural_operation);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -8198,27 +10191,51 @@ impl VaultSession {
         // journal — it must never plan NEW rewrites (the reverse pass would
         // both break byte-identity and invalidate the hash-guarded
         // restores; census-found, seed 0).
-        let (rewritten, failed) = if plan_rewrites {
+        let (rewritten, failed, rewrite_health) = if plan_rewrites {
             self.apply_link_rewrites(&mut conn, &moved)
         } else {
-            (Vec::new(), Vec::new())
+            (Vec::new(), Vec::new(), LinkRewriteHealth::default())
         };
+        if rewrite_health.requires_rescan {
+            let mut graph = self.graph.lock().expect("graph index mutex");
+            self.graph_drop_locked(&mut graph);
+        }
 
-        let op_id = {
+        let journal_result = (|| -> Result<i64, VaultError> {
             let tx = conn.transaction()?;
+            let journal_kind = if rewrite_health.physical_unknown {
+                crate::structural::StructuralOpKind::RecoveryBarrier
+            } else {
+                kind
+            };
             let id = journal_append(
                 &tx,
-                kind,
-                &crate::structural::StructuralOpPayload {
-                    from: from.to_string(),
-                    to: to.to_string(),
-                    moved: moved.clone(),
-                    rewrites: rewritten.clone(),
-                    oplog_name: None,
+                journal_kind,
+                &if rewrite_health.physical_unknown {
+                    crate::structural::StructuralOpPayload::default()
+                } else {
+                    crate::structural::StructuralOpPayload {
+                        from: from.to_string(),
+                        to: to.to_string(),
+                        moved: moved.clone(),
+                        rewrites: rewritten.clone(),
+                        oplog_name: None,
+                        ..Default::default()
+                    }
                 },
             )?;
             tx.commit()?;
-            id
+            Ok(id)
+        })();
+        let op_id = match journal_result {
+            Ok(id) => id,
+            Err(error) => {
+                if rewrite_health.physical_unknown {
+                    self.structural_history_valid
+                        .store(false, std::sync::atomic::Ordering::SeqCst);
+                }
+                return Err(error);
+            }
         };
         self.bump_bases_generation();
         Ok(crate::structural::StructuralReport {
@@ -8253,33 +10270,44 @@ impl VaultSession {
     /// snapshot cadence — noise next to the 256-byte framing
     /// estimate). Best-effort like every op-log write.
     fn append_path_changed_marker(&self, conn: &Connection, from: &str, to: &str) {
+        if let Err(error) = self.append_path_changed_marker_locked(conn, from, to) {
+            log::warn!("oplog path marker append failed");
+            log::debug!("oplog path marker append failure for path {to:?}: {error}");
+        }
+    }
+
+    /// Result-returning form used by batch recovery, where a journal failure
+    /// must be reported rather than silently degraded.
+    fn append_path_changed_marker_locked(
+        &self,
+        conn: &Connection,
+        from: &str,
+        to: &str,
+    ) -> Result<(), VaultError> {
         let row: Option<(i64, Option<String>)> = conn
             .query_row(
                 "SELECT id, oplog_name FROM files WHERE path = ?1",
                 rusqlite::params![to],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
-            .optional()
-            .ok()
-            .flatten();
+            .optional()?;
         let Some((file_id, Some(log_name))) = row else {
-            return; // unindexed, or never saved through Slate — no log
+            return Ok(()); // unindexed, or never saved through Slate — no log
         };
 
-        if let Err(e) = crate::oplog::append_path_changed_marker(
+        crate::oplog::append_path_changed_marker(
             &self.config.cache_dir,
             &log_name,
             from,
             to,
             &self.config.user_actor_id,
             now_ms(),
-        ) {
-            log::warn!(
-                "oplog path marker append failed for file_id={file_id}: {}",
-                e.kind()
-            );
-            log::debug!("oplog path marker append failure for path {to:?}: {e}");
-        }
+        )
+        .map_err(|error| {
+            log::debug!("oplog path marker append failed for file_id={file_id}");
+            VaultError::Io(error)
+        })
+        .map(|_| ())
     }
 
     /// U2-3 (#461): plan and apply the link-text rewrites a move demands.
@@ -8288,16 +10316,17 @@ impl VaultSession {
     /// (`crate::link_rewrite`) decides, this method applies.
     fn apply_link_rewrites(
         &self,
-        conn: &mut std::sync::MutexGuard<'_, Connection>,
+        conn: &mut Connection,
         moved: &[(String, String)],
     ) -> (
         Vec<crate::structural::RewriteOutcome>,
         Vec<crate::structural::RewriteFailure>,
+        LinkRewriteHealth,
     ) {
         use crate::structural::{RewriteFailure, RewriteFailureKind, RewriteOutcome};
         let mapping = crate::link_rewrite::MoveMapping::new(moved.iter().cloned());
         if mapping.is_empty() {
-            return (Vec::new(), Vec::new());
+            return (Vec::new(), Vec::new(), LinkRewriteHealth::default());
         }
 
         // This path is best-effort by design (the move already stands): a
@@ -8316,12 +10345,14 @@ impl VaultSession {
                             "link-rewrite candidate sweep failed: {e}"
                         )),
                     }],
+                    LinkRewriteHealth::default(),
                 );
             }
         };
 
         let mut rewritten = Vec::new();
         let mut failed = Vec::new();
+        let mut health = LinkRewriteHealth::default();
         for path in candidates {
             let (text, hash_before) = match self.read_text(&path) {
                 Ok(text) => {
@@ -8359,10 +10390,34 @@ impl VaultSession {
                     path,
                     kind: RewriteFailureKind::WriteConflict,
                 }),
-                Err(e) => failed.push(RewriteFailure {
-                    path,
-                    kind: RewriteFailureKind::Other(e.to_string()),
-                }),
+                Err(e) => {
+                    let outcomes_before = rewritten.len();
+                    health.absorb(self.classify_rewrite_after_save_error(
+                        path.clone(),
+                        hash_before,
+                        &new_text,
+                        e,
+                        &mut rewritten,
+                        &mut failed,
+                    ));
+                    if rewritten.len() > outcomes_before
+                        && let Err(anchor_error) = self.anchor_oplog_snapshot_required(
+                            conn,
+                            &path,
+                            &new_text,
+                            &crate::vault::content_hash(new_text.as_bytes()),
+                        )
+                    {
+                        failed.push(RewriteFailure {
+                            path,
+                            kind: RewriteFailureKind::Other(format!(
+                                "landed rewrite could not be made reconstructable: {anchor_error}"
+                            )),
+                        });
+                        health.requires_rescan = true;
+                        health.physical_unknown = true;
+                    }
+                }
             }
         }
 
@@ -8373,9 +10428,94 @@ impl VaultSession {
         // outcome or failure lands in the structural report — never
         // silent. Serialization is per-field (#366), so only the
         // changed `file` values are touched on disk.
-        self.rewrite_canvas_references(conn, &mapping, &mut rewritten, &mut failed);
+        self.rewrite_canvas_references(conn, &mapping, &mut rewritten, &mut failed, &mut health);
 
-        (rewritten, failed)
+        (rewritten, failed, health)
+    }
+
+    /// A save can atomically replace the file and then fail while refreshing
+    /// metadata, SQLite, or the graph. Re-read physical truth so a landed
+    /// rewrite remains compensatable and appears in the structural journal.
+    /// `true` means callers must invalidate their live graph and request a
+    /// rescan because disk and derived bookkeeping may disagree.
+    fn classify_rewrite_after_save_error(
+        &self,
+        path: String,
+        hash_before: String,
+        intended_text: &str,
+        error: VaultError,
+        rewritten: &mut Vec<crate::structural::RewriteOutcome>,
+        failed: &mut Vec<crate::structural::RewriteFailure>,
+    ) -> LinkRewriteHealth {
+        use crate::structural::{RewriteFailure, RewriteFailureKind, RewriteOutcome};
+
+        let intended_hash = crate::vault::content_hash(intended_text.as_bytes());
+        let physical = self
+            .provider
+            .read_file_with_cap(&path, self.config.large_file_refuse_bytes);
+        match physical {
+            Ok(bytes) if (bytes.len() as u64) <= self.config.large_file_refuse_bytes => {
+                let physical_hash = crate::vault::content_hash(&bytes);
+                if physical_hash == intended_hash {
+                    rewritten.push(RewriteOutcome {
+                        path: path.clone(),
+                        hash_before,
+                        hash_after: intended_hash,
+                    });
+                    failed.push(RewriteFailure {
+                        path,
+                        kind: RewriteFailureKind::Other(format!(
+                            "rewrite reached disk but bookkeeping failed: {error}"
+                        )),
+                    });
+                    LinkRewriteHealth {
+                        requires_rescan: true,
+                        physical_unknown: false,
+                    }
+                } else if physical_hash == hash_before {
+                    failed.push(RewriteFailure {
+                        path,
+                        kind: RewriteFailureKind::Other(error.to_string()),
+                    });
+                    LinkRewriteHealth::default()
+                } else {
+                    failed.push(RewriteFailure {
+                        path,
+                        kind: RewriteFailureKind::Other(format!(
+                            "rewrite save failed and physical bytes no longer match either known state: {error}"
+                        )),
+                    });
+                    LinkRewriteHealth {
+                        requires_rescan: true,
+                        physical_unknown: true,
+                    }
+                }
+            }
+            Ok(_) => {
+                failed.push(RewriteFailure {
+                    path,
+                    kind: RewriteFailureKind::Other(format!(
+                        "rewrite save failed and physical verification exceeded the text size limit: {error}"
+                    )),
+                });
+                LinkRewriteHealth {
+                    requires_rescan: true,
+                    physical_unknown: true,
+                }
+            }
+            Err(probe_error) => {
+                failed.push(RewriteFailure {
+                    path,
+                    kind: RewriteFailureKind::Other(format!(
+                        "rewrite save failed and physical verification also failed ({probe_error}): {error}"
+                    )),
+                });
+                LinkRewriteHealth {
+                    requires_rescan: true,
+                    physical_unknown: true,
+                }
+            }
+        }
     }
 
     /// Rewrite `file`-card paths in every canvas that references a
@@ -8384,10 +10524,11 @@ impl VaultSession {
     /// can't be rewritten and stay exactly as the user wrote them.
     fn rewrite_canvas_references(
         &self,
-        conn: &mut std::sync::MutexGuard<'_, Connection>,
+        conn: &mut Connection,
         mapping: &crate::link_rewrite::MoveMapping,
         rewritten: &mut Vec<crate::structural::RewriteOutcome>,
         failed: &mut Vec<crate::structural::RewriteFailure>,
+        health: &mut LinkRewriteHealth,
     ) {
         use crate::structural::{RewriteFailure, RewriteFailureKind, RewriteOutcome};
 
@@ -8455,10 +10596,34 @@ impl VaultSession {
                     path,
                     kind: RewriteFailureKind::WriteConflict,
                 }),
-                Err(e) => failed.push(RewriteFailure {
-                    path,
-                    kind: RewriteFailureKind::Other(e.to_string()),
-                }),
+                Err(e) => {
+                    let outcomes_before = rewritten.len();
+                    health.absorb(self.classify_rewrite_after_save_error(
+                        path.clone(),
+                        hash_before,
+                        &new_text,
+                        e,
+                        rewritten,
+                        failed,
+                    ));
+                    if rewritten.len() > outcomes_before
+                        && let Err(anchor_error) = self.anchor_oplog_snapshot_required(
+                            conn,
+                            &path,
+                            &new_text,
+                            &crate::vault::content_hash(new_text.as_bytes()),
+                        )
+                    {
+                        failed.push(RewriteFailure {
+                            path,
+                            kind: RewriteFailureKind::Other(format!(
+                                "landed canvas rewrite could not be made reconstructable: {anchor_error}"
+                            )),
+                        });
+                        health.requires_rescan = true;
+                        health.physical_unknown = true;
+                    }
+                }
             }
         }
     }
@@ -8470,22 +10635,72 @@ impl VaultSession {
     /// per-file conflict report, never corruption.
     fn anchor_oplog_snapshot(
         &self,
-        conn: &std::sync::MutexGuard<'_, Connection>,
+        conn: &Connection,
         path: &str,
         contents: &str,
         content_hash: &str,
     ) {
-        let file_id: Option<i64> = conn
+        if let Err(error) = self.append_oplog_snapshot_anchor(conn, path, contents, content_hash) {
+            // Best-effort at ordinary call sites: a missing pre-save anchor
+            // degrades that file's later restore to a reported failure. The
+            // required post-write path below fails closed instead.
+            log::warn!("oplog anchor failed");
+            log::debug!("oplog anchor failure for path {path:?}: {error}");
+        }
+    }
+
+    /// Durably append and then verify a reconstructable WholeFileReplace
+    /// anchor. Used after a save is proven to have reached disk but failed
+    /// before its normal op-log append: a normal undoable MoveBatch must not
+    /// reference `content_hash` until reconstruction is proven available.
+    fn anchor_oplog_snapshot_required(
+        &self,
+        conn: &Connection,
+        path: &str,
+        contents: &str,
+        content_hash: &str,
+    ) -> Result<(), VaultError> {
+        let log_name = self.append_oplog_snapshot_anchor(conn, path, contents, content_hash)?;
+        let entries =
+            crate::oplog::read_oplog(&self.config.cache_dir, &log_name).map_err(VaultError::Io)?;
+        let reconstructed =
+            crate::oplog::reconstruct_at_hash(&entries, content_hash).ok_or_else(|| {
+                VaultError::InvalidArgument {
+                    message: "landed rewrite hash is not reconstructable from its op-log".into(),
+                }
+            })?;
+        if reconstructed.as_bytes() != contents.as_bytes() {
+            return Err(VaultError::InvalidArgument {
+                message: "landed rewrite op-log reconstruction is not byte exact".into(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Cheap append used by the ordinary pre-save path. The rare required
+    /// post-write path calls this and then performs the full read-back proof.
+    fn append_oplog_snapshot_anchor(
+        &self,
+        conn: &Connection,
+        path: &str,
+        contents: &str,
+        content_hash: &str,
+    ) -> Result<String, VaultError> {
+        let file_id: i64 = conn
             .query_row(
                 "SELECT id FROM files WHERE path = ?1",
                 rusqlite::params![path],
                 |row| row.get(0),
             )
-            .ok();
-        let Some(file_id) = file_id else { return };
-        let Some(log_name) = self.ensure_oplog_name(conn, file_id, path) else {
-            return; // ensure_oplog_name already warned
-        };
+            .map_err(|_| VaultError::InvalidPath {
+                path: path.to_string(),
+                reason: "rewrite source is missing from the index".into(),
+            })?;
+        let log_name = self.ensure_oplog_name(conn, file_id, path).ok_or_else(|| {
+            VaultError::InvalidArgument {
+                message: "could not allocate the rewrite source op-log".into(),
+            }
+        })?;
         let entry = crate::oplog::OpLogEntry {
             timestamp_ms: now_ms(),
             user_actor_id: self.config.user_actor_id.clone(),
@@ -8494,18 +10709,8 @@ impl VaultSession {
             content_hash_after: content_hash.to_string(),
             payload_bytes: contents.as_bytes().to_vec(),
         };
-        if let Err(e) = crate::oplog::append_entry(&self.config.cache_dir, &log_name, path, &entry)
-        {
-            // Non-fatal: a missing anchor only degrades a structural-move's
-            // undo to a per-file conflict report, never corruption. Route
-            // through the facade (#507). warn carries only the file id and
-            // the error *kind* — never the full Display, which for a
-            // torn/short existing log embeds the cache path. The path-bearing
-            // detail rides the debug line (see the lib.rs privacy rule).
-            log::warn!("oplog anchor failed for file_id={file_id}: {}", e.kind());
-            log::debug!("oplog anchor failure for path {path:?}: {e}");
-            return;
-        }
+        crate::oplog::append_entry(&self.config.cache_dir, &log_name, path, &entry)
+            .map_err(VaultError::Io)?;
         let mut state = self.oplog_state.lock().expect("oplog state mutex");
         state.insert(
             file_id,
@@ -8516,6 +10721,7 @@ impl VaultSession {
                 appends_this_session: 1,
             },
         );
+        Ok(log_name)
     }
 
     /// Run `body` inside one transaction on the already-locked
@@ -8545,6 +10751,91 @@ impl VaultSession {
         expected_current: &str,
     ) -> Result<(), VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
+        self.restore_file_to_hash_locked(&mut conn, path, hash_before, expected_current)
+    }
+
+    fn restore_file_to_hash_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        hash_before: &str,
+        expected_current: &str,
+    ) -> Result<(), VaultError> {
+        let contents = self.restore_contents_for_hash_locked(conn, path, hash_before)?;
+        self.save_text_locked(conn, path, &contents, Some(expected_current), &[])
+            .map(|_| ())
+    }
+
+    /// Restore with post-write physical classification. A save can replace
+    /// bytes and then fail during metadata/index work; callers that journal
+    /// an inverse must retain a known-landed outcome or fail closed when the
+    /// final bytes cannot be classified.
+    fn restore_file_to_hash_observed_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        target_hash: &str,
+        expected_current: &str,
+    ) -> (
+        Option<crate::structural::RewriteOutcome>,
+        Option<crate::structural::RewriteFailure>,
+        LinkRewriteHealth,
+    ) {
+        use crate::structural::{RewriteFailure, RewriteFailureKind, RewriteOutcome};
+
+        let contents = match self.restore_contents_for_hash_locked(conn, path, target_hash) {
+            Ok(contents) => contents,
+            Err(error) => {
+                return (
+                    None,
+                    Some(RewriteFailure {
+                        path: path.to_string(),
+                        kind: RewriteFailureKind::Other(error.to_string()),
+                    }),
+                    LinkRewriteHealth::default(),
+                );
+            }
+        };
+        match self.save_text_locked(conn, path, &contents, Some(expected_current), &[]) {
+            Ok(report) => (
+                Some(RewriteOutcome {
+                    path: path.to_string(),
+                    hash_before: expected_current.to_string(),
+                    hash_after: report.new_content_hash,
+                }),
+                None,
+                LinkRewriteHealth::default(),
+            ),
+            Err(VaultError::WriteConflict { .. }) => (
+                None,
+                Some(RewriteFailure {
+                    path: path.to_string(),
+                    kind: RewriteFailureKind::WriteConflict,
+                }),
+                LinkRewriteHealth::default(),
+            ),
+            Err(error) => {
+                let mut rewritten = Vec::new();
+                let mut failed = Vec::new();
+                let health = self.classify_rewrite_after_save_error(
+                    path.to_string(),
+                    expected_current.to_string(),
+                    &contents,
+                    error,
+                    &mut rewritten,
+                    &mut failed,
+                );
+                (rewritten.pop(), failed.pop(), health)
+            }
+        }
+    }
+
+    fn restore_contents_for_hash_locked(
+        &self,
+        conn: &Connection,
+        path: &str,
+        target_hash: &str,
+    ) -> Result<String, VaultError> {
         // Inline binding lookup (NOT the public read_oplog — it takes the
         // mutex this method already holds).
         let log_name: Option<Option<String>> = conn
@@ -8566,14 +10857,11 @@ impl VaultSession {
             }
             None => Vec::new(),
         };
-        let contents =
-            crate::oplog::reconstruct_at_hash(&entries, hash_before).ok_or_else(|| {
-                VaultError::InvalidArgument {
-                    message: format!("op-log for {path:?} has no state with hash {hash_before}"),
-                }
-            })?;
-        self.save_text_locked(&mut conn, path, &contents, Some(expected_current), &[])
-            .map(|_| ())
+        crate::oplog::reconstruct_at_hash(&entries, target_hash).ok_or_else(|| {
+            VaultError::InvalidArgument {
+                message: format!("op-log for {path:?} has no state with hash {target_hash}"),
+            }
+        })
     }
 }
 
@@ -8710,7 +10998,7 @@ fn index_entry_case_insensitive(
             rusqlite::params![lowered],
             |row| row.get(0),
         )
-        .ok();
+        .optional()?;
     Ok(hit)
 }
 
@@ -12241,6 +14529,9 @@ mod tests {
 
     #[path = "structural.rs"]
     mod structural;
+
+    #[path = "structural_batch.rs"]
+    mod structural_batch;
 
     #[path = "link_integrity.rs"]
     mod link_integrity;

@@ -72,6 +72,30 @@ pub trait VaultProvider: Send + Sync {
     /// Rename or move a file within the vault.
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError>;
 
+    /// Best-effort capability probe for a later rename. Batch structural
+    /// operations call every probe before their first mutation. This cannot
+    /// eliminate ACL/TOCTOU failures; runtime reporting remains authoritative.
+    /// The default keeps host providers and test doubles source-compatible.
+    fn preflight_rename(&self, from: &str, _to: &str) -> Result<(), VaultError> {
+        self.stat(from).map(|_| ())
+    }
+
+    /// Best-effort capability probe for a later system-Trash operation.
+    fn preflight_delete(&self, path: &str) -> Result<(), VaultError> {
+        self.stat(path).map(|_| ())
+    }
+
+    /// Inspect the mutation entry itself after a provider call. Unlike a
+    /// content read, this must treat a dangling symlink as present. Providers
+    /// with an lstat-style primitive should override the default.
+    fn mutation_path_exists(&self, path: &str) -> Result<bool, VaultError> {
+        match self.stat(path) {
+            Ok(_) => Ok(true),
+            Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Create a directory (and any missing parents) at a vault-relative
     /// path. Idempotent: an already-existing directory is Ok — the caller
     /// (U2-2 `create_folder`) enforces its own collision policy against

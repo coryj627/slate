@@ -70,6 +70,7 @@ pub mod reading;
 pub mod search_db;
 pub mod session;
 pub mod structural;
+pub mod structural_batch;
 pub mod structured_diff;
 pub mod sync_detect;
 pub mod tags_db;
@@ -82,6 +83,12 @@ mod vault_config;
 
 pub use search_db::{
     QueryHit, QueryResultSet, SNIPPET_HIT_END, SNIPPET_HIT_START, SearchScope, full_text_search,
+};
+pub use structural_batch::{
+    BatchFailureStage, BatchItemFailure, BatchMoveReport, BatchMoveRequest, BatchMoveState,
+    BatchPathChange, BatchSkipReason, BatchSkippedItem, BatchTrashRemainder, BatchTrashReport,
+    BatchTrashRequest, BatchTrashState, MAX_STRUCTURAL_BATCH_ITEMS, StructuralBatchEnvelope,
+    StructuralBatchItem,
 };
 
 pub use blocks::{BlockAnchor, BlockKind, extract_blocks};

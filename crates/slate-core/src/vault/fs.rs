@@ -74,6 +74,50 @@ impl FsVaultProvider {
     fn tmp_dir(&self) -> PathBuf {
         self.root.join(".slate").join("tmp")
     }
+
+    fn require_mutation_parent_access(&self, path: &Path) -> Result<(), VaultError> {
+        let parent = path.parent().ok_or_else(|| VaultError::InvalidPath {
+            path: path.to_string_lossy().into_owned(),
+            reason: "mutation path has no parent directory".into(),
+        })?;
+        let metadata = parent.metadata().map_err(VaultError::Io)?;
+        if !metadata.is_dir() {
+            return Err(VaultError::InvalidPath {
+                path: parent.to_string_lossy().into_owned(),
+                reason: "mutation parent is not a directory".into(),
+            });
+        }
+
+        #[cfg(unix)]
+        {
+            use std::ffi::CString;
+            let encoded = CString::new(parent.as_os_str().as_encoded_bytes()).map_err(|_| {
+                VaultError::InvalidPath {
+                    path: parent.to_string_lossy().into_owned(),
+                    reason: "mutation parent contains an embedded NUL".into(),
+                }
+            })?;
+            // Rename/delete require search plus write permission on the
+            // containing directory. This is a current-process access check;
+            // the eventual syscall remains authoritative against ACL/TOCTOU
+            // changes.
+            // SAFETY: `encoded` is a live NUL-terminated filesystem path.
+            let allowed = unsafe { libc::access(encoded.as_ptr(), libc::W_OK | libc::X_OK) } == 0;
+            if !allowed {
+                return Err(VaultError::Io(io::Error::last_os_error()));
+            }
+        }
+
+        #[cfg(windows)]
+        if metadata.permissions().readonly() {
+            return Err(VaultError::Io(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "mutation parent is read-only",
+            )));
+        }
+
+        Ok(())
+    }
 }
 
 /// Compute the canonical content hash of a byte slice.
@@ -316,6 +360,36 @@ impl VaultProvider for FsVaultProvider {
                 })
             }
             Err(e) => Err(VaultError::Io(e)),
+        }
+    }
+
+    fn preflight_rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        let from_path = self.resolve_for_mutation(from)?;
+        let to_path = self.resolve_for_mutation(to)?;
+        from_path.symlink_metadata().map_err(VaultError::Io)?;
+        self.require_mutation_parent_access(&from_path)?;
+        self.require_mutation_parent_access(&to_path)?;
+        match to_path.symlink_metadata() {
+            Ok(_) => Err(VaultError::DestinationExists {
+                path: to.to_string(),
+            }),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(VaultError::Io(error)),
+        }
+    }
+
+    fn preflight_delete(&self, relative: &str) -> Result<(), VaultError> {
+        let path = self.resolve_for_mutation(relative)?;
+        path.symlink_metadata().map_err(VaultError::Io)?;
+        self.require_mutation_parent_access(&path)
+    }
+
+    fn mutation_path_exists(&self, relative: &str) -> Result<bool, VaultError> {
+        let path = self.resolve_for_mutation(relative)?;
+        match path.symlink_metadata() {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(VaultError::Io(error)),
         }
     }
 
