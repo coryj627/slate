@@ -16,9 +16,10 @@
 use rusqlite::{Connection, Transaction, params};
 
 use crate::VaultError;
+use crate::file_meta_db::{FileMetaParseArtifact, FileMetaPreviewObserver};
 use crate::graph::{GraphLinkRow, InboundRow};
 use crate::link_resolver::{InMemoryVaultIndex, ResolvedLink, resolve_link};
-use crate::links::{LinkAnchor, LinkKind, extract_links};
+use crate::links::{LinkAnchor, LinkKind, extract_links_with_event_sink};
 use crate::session::{Page, Paging};
 
 /// One outgoing link from a source file (the file being queried) —
@@ -68,6 +69,11 @@ pub struct UnresolvedLink {
     pub snippet: String,
 }
 
+pub(crate) struct LinkReplaceResult {
+    pub(crate) rows: Vec<GraphLinkRow>,
+    pub(crate) file_meta_artifact: FileMetaParseArtifact,
+}
+
 /// Atomically replace every row for `source_file_id` with links
 /// extracted from `markdown_source`. Resolution runs against
 /// `index` (the snapshot of vault paths captured at scan start).
@@ -76,9 +82,11 @@ pub struct UnresolvedLink {
 /// scan fast path never touches this table so unchanged files don't
 /// churn link rows.
 ///
-/// Returns the graph-relevant projection of exactly the rows it
-/// wrote, so the session's `GraphIndex` hook can replay the committed
-/// state without re-reading anything (Milestone P #550).
+/// Returns both the graph-relevant projection of exactly the rows it wrote and
+/// the owned metadata artifact observed during that same authoritative parse.
+/// The graph hook can replay without a read (Milestone P #550), and file-meta
+/// finalization avoids a second Markdown parse when no valid wikilink rewrite
+/// is required.
 //
 // 5 params is one over clippy's default ceiling but the bundling
 // options (a borrow-laden struct, or splitting tx out) hurt
@@ -92,14 +100,19 @@ pub(crate) fn replace_links_for_file(
     source_path: &str,
     markdown_source: &str,
     index: &InMemoryVaultIndex,
-) -> Result<Vec<GraphLinkRow>, VaultError> {
+) -> Result<LinkReplaceResult, VaultError> {
     tx.execute(
         "DELETE FROM links WHERE source_file_id = ?1",
         params![source_file_id],
     )?;
-    let parsed = extract_links(markdown_source);
+    let mut preview_observer = FileMetaPreviewObserver::new();
+    let parsed = extract_links_with_event_sink(markdown_source, &mut preview_observer);
+    let file_meta_artifact = preview_observer.into_artifact();
     if parsed.is_empty() {
-        return Ok(Vec::new());
+        return Ok(LinkReplaceResult {
+            rows: Vec::new(),
+            file_meta_artifact,
+        });
     }
     let mut stmt = tx.prepare_cached(
         "INSERT INTO links (
@@ -140,7 +153,10 @@ pub(crate) fn replace_links_for_file(
             is_external,
         });
     }
-    Ok(written)
+    Ok(LinkReplaceResult {
+        rows: written,
+        file_meta_artifact,
+    })
 }
 
 /// The graph-relevant projection of one source's current rows, in

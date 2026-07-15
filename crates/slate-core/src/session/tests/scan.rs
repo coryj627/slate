@@ -248,6 +248,50 @@ fn scan_slow_path_derives_file_meta_from_markdown_body() {
 }
 
 #[test]
+fn scan_batch_reports_meta_fallback_failure_before_later_derivative_error() {
+    let (_tmp, session) = make_vault(|provider| {
+        for index in 0..200 {
+            provider
+                .write_file(
+                    &format!("note-{index:03}.md"),
+                    format!("# Note {index}\n\n#tag\n\n- [ ] task\n").as_bytes(),
+                )
+                .unwrap();
+        }
+    });
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_first_batched_meta
+             BEFORE INSERT ON file_meta WHEN NEW.file_id = 1
+             BEGIN SELECT RAISE(ABORT, 'meta fallback sentinel'); END;
+             CREATE TRIGGER reject_later_tag_derivative
+             BEFORE INSERT ON file_tags
+             BEGIN SELECT RAISE(ABORT, 'later tag sentinel'); END;",
+        )
+        .unwrap();
+    }
+
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.contains("note-000.md") && error.contains("meta fallback sentinel")),
+        "metadata fallback path error must survive a later derivative error: {:?}",
+        report.errors
+    );
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.contains("later tag sentinel")),
+        "fixture must exercise a later fallible derivative: {:?}",
+        report.errors
+    );
+}
+
+#[test]
 fn save_path_replaces_file_meta_in_the_save_transaction() {
     let (_tmp, session) = make_vault(|provider| {
         provider.write_file("note.md", b"one two").unwrap();

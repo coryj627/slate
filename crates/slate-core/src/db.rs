@@ -187,6 +187,7 @@ const MIGRATIONS: &[Migration] = &[
 /// this is 4096 on desktop and 512 on mobile (see `docs/plans/05` §9.3.5).
 pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, DbError> {
     let conn = Connection::open(path)?;
+    register_connection_functions(&conn)?;
     apply_pragmas(&conn, cache_size_pages)?;
     Ok(conn)
 }
@@ -195,8 +196,34 @@ pub fn open_database(path: &Path, cache_size_pages: u32) -> Result<Connection, D
 #[cfg(test)]
 pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
     let conn = Connection::open_in_memory()?;
+    register_connection_functions(&conn)?;
     apply_pragmas(&conn, cache_size_pages)?;
     Ok(conn)
+}
+
+/// Register deterministic SQL helpers shared by every Slate-owned connection.
+///
+/// Directory paging must apply the exact Rust NFC/full-Unicode-lowercase key
+/// before SQL LIMIT/OFFSET. Keeping the function here makes file-backed,
+/// in-memory, and background-worker connections agree instead of teaching SQL
+/// a weaker ASCII-only approximation.
+pub(crate) fn register_connection_functions(conn: &Connection) -> rusqlite::Result<()> {
+    use rusqlite::functions::FunctionFlags;
+
+    conn.create_scalar_function(
+        "slate_tree_sort_key",
+        1,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let name = context.get::<Option<String>>(0)?;
+            Ok(name.map(|name| tree_sort_key(&name)))
+        },
+    )
+}
+
+pub(crate) fn tree_sort_key(name: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    name.nfc().collect::<String>().to_lowercase()
 }
 
 fn apply_pragmas(conn: &Connection, cache_size_pages: u32) -> Result<(), DbError> {
@@ -369,6 +396,19 @@ mod tests {
         let mut conn = fresh_db();
         let version = migrate(&mut conn).expect("migrate");
         assert_eq!(version, MIGRATIONS.len() as u32);
+    }
+
+    #[test]
+    fn every_slate_connection_registers_the_exact_tree_sort_key() {
+        let conn = fresh_db();
+        let key: String = conn
+            .query_row(
+                "SELECT slate_tree_sort_key(?1)",
+                ["E\u{0301}TUDE.md"],
+                |row| row.get(0),
+            )
+            .expect("Slate connections expose the deterministic tree sort key");
+        assert_eq!(key, "étude.md");
     }
 
     #[test]
