@@ -604,6 +604,15 @@ parent implementation state is Task-2 commit
 benchmarked Task-3 changes and this evidence. Both worktrees used byte-identical
 benchmark sources:
 
+The later red-team recovery commit
+`62f464f464741ca7fb6d414d77031a7bdd1c4f67` invalidates a prior `file_meta`
+completion row only when an existing file enters changed-file reindexing. None
+of the retained gates exercises that branch: cold-scan iterations delete the
+cache first, metadata listing does not scan, and save-path iterations call
+`save_text`. The measurements therefore remain exact for the gated paths; no
+unmeasured performance claim is made for fault recovery or changed-file
+rescanning.
+
 - `benches/common/mod.rs`: git blob
   `f185a0d0f7647258bbdfae9bf513870a4dbe20a8`, SHA-256
   `f1230265594b033dad0af265865b753ee7a0796850d7328edce52b2110e42d85`
