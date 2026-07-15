@@ -84,20 +84,24 @@ struct SidebarVaultPrefsStore: Sendable {
 
   let vaultRoot: URL
   private let sidebarFileOpener: @Sendable (Int32) -> Int32
+  private let directorySynchronizer: @Sendable (Int32) -> Int32
 
   init(vaultRoot: URL) {
     self.init(
       vaultRoot: vaultRoot,
-      sidebarFileOpener: { Self.openSidebarFile(in: $0) }
+      sidebarFileOpener: { Self.openSidebarFile(in: $0) },
+      directorySynchronizer: { fsync($0) }
     )
   }
 
   init(
     vaultRoot: URL,
-    sidebarFileOpener: @escaping @Sendable (Int32) -> Int32
+    sidebarFileOpener: @escaping @Sendable (Int32) -> Int32,
+    directorySynchronizer: @escaping @Sendable (Int32) -> Int32 = { fsync($0) }
   ) {
     self.vaultRoot = vaultRoot
     self.sidebarFileOpener = sidebarFileOpener
+    self.directorySynchronizer = directorySynchronizer
   }
 
   var fileURL: URL {
@@ -501,6 +505,16 @@ struct SidebarVaultPrefsStore: Sendable {
       )
     }
     removeTemporary = false
+
+    // The temp file is durable before rename; synchronizing the pinned parent
+    // now makes the replacement directory entry durable as well. Report a
+    // failure honestly even though the atomic rename has already taken effect.
+    guard directorySynchronizer(slateDirectoryFD) == 0 else {
+      throw SidebarVaultPrefsStoreError.writeFailed(
+        reason: "the preference directory could not be synchronized after replacement: "
+          + Self.posixReason()
+      )
+    }
   }
 
   private static func entryState(named name: String, in directoryFD: Int32) -> EntryState {

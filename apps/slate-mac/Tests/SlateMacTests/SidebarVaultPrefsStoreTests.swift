@@ -52,6 +52,42 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     }
   }
 
+  private final class DirectorySynchronizerSpy: @unchecked Sendable {
+    private let lock = NSLock()
+    private let shouldFail: Bool
+    private var callCountStorage = 0
+    private var sawRenamedRegularFileStorage = false
+
+    init(shouldFail: Bool = false) {
+      self.shouldFail = shouldFail
+    }
+
+    var callCount: Int {
+      lock.withLock { callCountStorage }
+    }
+
+    var sawRenamedRegularFile: Bool {
+      lock.withLock { sawRenamedRegularFileStorage }
+    }
+
+    func synchronize(_ directoryFD: Int32) -> Int32 {
+      var metadata = stat()
+      let result = "sidebar.json".withCString { name in
+        fstatat(directoryFD, name, &metadata, AT_SYMLINK_NOFOLLOW)
+      }
+      let sawRenamedRegularFile =
+        result == 0 && metadata.st_mode & S_IFMT == S_IFREG
+      lock.withLock {
+        callCountStorage += 1
+        sawRenamedRegularFileStorage =
+          sawRenamedRegularFileStorage || sawRenamedRegularFile
+      }
+      guard shouldFail else { return 0 }
+      errno = EIO
+      return -1
+    }
+  }
+
   private var vault: URL!
 
   override func setUpWithError() throws {
@@ -137,6 +173,41 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     let zeta = try XCTUnwrap(text.range(of: #""zeta""#)?.lowerBound)
     XCTAssertLessThan(alpha, version)
     XCTAssertLessThan(version, zeta)
+  }
+
+  func testAtomicReplacementSynchronizesPinnedDirectoryAfterRename() throws {
+    let synchronizer = DirectorySynchronizerSpy()
+    let store = makeStore(directorySynchronizer: { synchronizer.synchronize($0) })
+
+    try store.update { root in
+      root["durable"] = true
+    }
+
+    XCTAssertEqual(synchronizer.callCount, 1)
+    XCTAssertTrue(
+      synchronizer.sawRenamedRegularFile,
+      "the directory sync must happen after sidebar.json is atomically renamed into place")
+    XCTAssertEqual(store.read().root["durable"] as? Bool, true)
+  }
+
+  func testDirectorySyncFailureIsReportedAfterAtomicReplacement() throws {
+    let synchronizer = DirectorySynchronizerSpy(shouldFail: true)
+    let store = makeStore(directorySynchronizer: { synchronizer.synchronize($0) })
+
+    XCTAssertThrowsError(
+      try store.update { root in
+        root["writtenBeforeSyncFailure"] = true
+      }
+    ) { error in
+      guard case SidebarVaultPrefsStoreError.writeFailed(let reason) = error else {
+        return XCTFail("expected writeFailed, got \(error)")
+      }
+      XCTAssertTrue(reason.contains("directory"))
+      XCTAssertTrue(reason.contains("synchronized"))
+    }
+    XCTAssertEqual(synchronizer.callCount, 1)
+    XCTAssertTrue(synchronizer.sawRenamedRegularFile)
+    XCTAssertEqual(store.read().root["writtenBeforeSyncFailure"] as? Bool, true)
   }
 
   func testUpdatePreservesUnknownTopLevelAndNestedKeys() throws {
@@ -677,6 +748,23 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
 
   private func makeStore() -> SidebarVaultPrefsStore {
     SidebarVaultPrefsStore(vaultRoot: vault)
+  }
+
+  private func makeStore(
+    directorySynchronizer: @escaping @Sendable (Int32) -> Int32
+  ) -> SidebarVaultPrefsStore {
+    SidebarVaultPrefsStore(
+      vaultRoot: vault,
+      sidebarFileOpener: { directoryFD in
+        "sidebar.json".withCString { name in
+          openat(
+            directoryFD,
+            name,
+            O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW
+          )
+        }
+      },
+      directorySynchronizer: directorySynchronizer)
   }
 
   private func writeRaw(_ string: String) throws {
