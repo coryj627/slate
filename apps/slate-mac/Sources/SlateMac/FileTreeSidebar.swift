@@ -529,7 +529,8 @@ final class FileTreeViewModel: ObservableObject {
         expansionRecency.removeAll { $0 == node.path }
     }
 
-    /// Toggle disclosure for a directory row (Space/Return, disclosure action).
+    /// Toggle disclosure for a directory row (Space, Return when no selected
+    /// file needs opening, or the disclosure action).
     func toggle(_ node: TreeNode) {
         guard case .directory = node.kind else { return }
         if expanded.contains(node.nodeID) {
@@ -926,6 +927,7 @@ struct FileTreeSidebar: View {
     /// the onChange would otherwise mis-route the focus move to a new tab). Same
     /// one-shot shape as `suppressOpenForPostMutationFocus`.
     @State private var suppressOpenForSelectionChange = false
+    @State private var pendingOpenSelection: OpenSelectionRequest?
     /// One-shot gate armed when `selectedFilePath` mirrors a programmatic open
     /// onto the List. The originating surface owns its announcement, so the
     /// ensuing `listSelection` edge must not repeat it.
@@ -995,6 +997,71 @@ struct FileTreeSidebar: View {
     typealias SelectionRow = SelectionModel.VisibleRow
     typealias SelectionClick = SelectionModel.PointerClick
     typealias SelectionOutcome = SelectionModel.PointerOutcome
+
+    enum SelectionKeyAction: Equatable {
+        case extend(SelectionModel.ArrowDirection)
+        case selectAll
+        case openSelected
+    }
+
+    struct KeyboardSelectionOutcome: Equatable {
+        let model: SelectionModel
+        let handled: Bool
+        let changed: Bool
+        let listSelection: RowID?
+        let shouldMirrorListSelection: Bool
+        let visibleSelectedCount: Int
+    }
+
+    static func selectionKeyAction(
+        key: KeyEquivalent,
+        modifiers: EventModifiers,
+        fileTreeFocused: Bool,
+        isRenaming: Bool
+    ) -> SelectionKeyAction? {
+        guard treeKeyInterceptionActive(
+            fileTreeFocused: fileTreeFocused,
+            isRenaming: isRenaming)
+        else { return nil }
+        let meaningfulModifiers = modifiers.subtracting(.capsLock)
+        if meaningfulModifiers == [.shift] {
+            if key == .upArrow { return .extend(.up) }
+            if key == .downArrow { return .extend(.down) }
+        }
+        if meaningfulModifiers == [.command], key == "a" { return .selectAll }
+        if meaningfulModifiers.isEmpty, key == .return { return .openSelected }
+        return nil
+    }
+
+    static func keyboardSelectionOutcome(
+        action: SelectionKeyAction,
+        model: SelectionModel,
+        currentListSelection: RowID?,
+        visibleRows: [SelectionRow]
+    ) -> KeyboardSelectionOutcome {
+        var next = model
+        let transition: SelectionModel.Transition
+        switch action {
+        case let .extend(direction):
+            transition = next.extendSelection(direction, visibleRows: visibleRows)
+        case .selectAll:
+            transition = next.selectAll(visibleRows: visibleRows)
+        case .openSelected:
+            return KeyboardSelectionOutcome(
+                model: model, handled: false, changed: false,
+                listSelection: currentListSelection,
+                shouldMirrorListSelection: false,
+                visibleSelectedCount: model.selectedVisibleRows(in: visibleRows).count)
+        }
+        return KeyboardSelectionOutcome(
+            model: next,
+            handled: transition.handled,
+            changed: transition.changed,
+            listSelection: next.focused,
+            shouldMirrorListSelection: transition.focusChanged
+                && currentListSelection != next.focused,
+            visibleSelectedCount: next.selectedVisibleRows(in: visibleRows).count)
+    }
 
     /// One-shot announcement suppression with explicit consume semantics.
     /// The view stores this value in `@State`, arms it immediately before a
@@ -1075,6 +1142,145 @@ struct FileTreeSidebar: View {
     ) -> SelectionOutcome {
         SelectionModel.pointerOutcome(
             order: order, current: current, anchor: anchor, clicked: clicked, click: click)
+    }
+
+    static func openSelectedPaths(
+        from model: SelectionModel,
+        visibleRows: [SelectionRow]
+    ) -> [String] {
+        openSelectionBatch(from: model, visibleRows: visibleRows).paths
+    }
+
+    struct OpenSelectionBatch: Equatable {
+        let paths: [String]
+        let focusedPath: String?
+
+        /// Keep the captured selection in flattened visible order, but open the
+        /// focused file last so the user's keyboard locus remains the active tab.
+        var executionPaths: [String] {
+            guard let focusedPath,
+                let focusedIndex = paths.firstIndex(of: focusedPath)
+            else { return paths }
+
+            var result = paths
+            result.remove(at: focusedIndex)
+            result.append(focusedPath)
+            return result
+        }
+    }
+
+    static func openSelectionBatch(
+        from model: SelectionModel,
+        visibleRows: [SelectionRow]
+    ) -> OpenSelectionBatch {
+        let rows = model.selectedVisibleRows(in: visibleRows)
+            .filter { !$0.isDirectory }
+        let focusedPath = rows.first { $0.identity == model.focused }?.path
+        return OpenSelectionBatch(paths: rows.map(\.path), focusedPath: focusedPath)
+    }
+
+    struct OpenSelectionRequest: Equatable {
+        let sessionIdentity: ObjectIdentifier
+        let batch: OpenSelectionBatch
+
+        var paths: [String] { batch.paths }
+        var focusedPath: String? { batch.focusedPath }
+
+        var title: String { "Open \(paths.count) Files?" }
+        var message: String { "This will open each selected file in a tab." }
+    }
+
+    enum OpenSelectionDisposition: Equatable {
+        case none
+        case direct(OpenSelectionBatch)
+        case confirm(OpenSelectionRequest)
+    }
+
+    static func openSelectionDisposition(
+        batch: OpenSelectionBatch,
+        sessionIdentity: ObjectIdentifier?
+    ) -> OpenSelectionDisposition {
+        guard !batch.paths.isEmpty, let sessionIdentity else { return .none }
+        if batch.paths.count >= 10 {
+            return .confirm(
+                OpenSelectionRequest(sessionIdentity: sessionIdentity, batch: batch))
+        }
+        return .direct(batch)
+    }
+
+    static func resolvedOpenPaths(
+        _ request: OpenSelectionRequest,
+        confirmed: Bool,
+        currentSessionIdentity: ObjectIdentifier?
+    ) -> [String] {
+        guard confirmed, request.sessionIdentity == currentSessionIdentity else { return [] }
+        return request.batch.executionPaths
+    }
+
+    struct DragPayloadItem: Codable, Equatable {
+        let path: String
+        let isDirectory: Bool
+    }
+
+    private struct DragPayloadEnvelope: Codable {
+        let version: Int
+        let items: [DragPayloadItem]
+    }
+
+    static func encodeDragPayload(_ items: [DragPayloadItem]) -> Data? {
+        guard dragPayloadItemsAreValid(items) else { return nil }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return try? encoder.encode(DragPayloadEnvelope(version: 1, items: items))
+    }
+
+    static func decodeDragPayload(_ data: Data) -> [DragPayloadItem]? {
+        guard let envelope = try? JSONDecoder().decode(DragPayloadEnvelope.self, from: data),
+            envelope.version == 1,
+            dragPayloadItemsAreValid(envelope.items)
+        else { return nil }
+        return envelope.items
+    }
+
+    private static func dragPayloadItemsAreValid(_ items: [DragPayloadItem]) -> Bool {
+        guard !items.isEmpty else { return false }
+        var paths = Set<String>()
+        for item in items {
+            let components = item.path.split(
+                separator: "/", omittingEmptySubsequences: false)
+            guard !item.path.isEmpty,
+                !item.path.hasPrefix("/"),
+                !item.path.hasSuffix("/"),
+                !item.path.contains("\0"),
+                components.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }),
+                paths.insert(item.path).inserted
+            else { return false }
+        }
+        return true
+    }
+
+    static func dragItems(
+        for origin: SelectionRow,
+        from model: SelectionModel,
+        visibleRows: [SelectionRow]
+    ) -> [DragPayloadItem] {
+        let rows: [SelectionRow]
+        if model.isSelected(origin.identity, currentPath: origin.path) {
+            rows = model.selectedVisibleRows(in: visibleRows)
+        } else {
+            rows = [origin]
+        }
+        return rows.map {
+            DragPayloadItem(path: $0.path, isDirectory: $0.isDirectory)
+        }
+    }
+
+    static func dragPreviewCount(
+        for origin: SelectionRow,
+        from model: SelectionModel,
+        visibleRows: [SelectionRow]
+    ) -> Int {
+        dragItems(for: origin, from: model, visibleRows: visibleRows).count
     }
 
     /// Pure (#852, Codex finding 4): the selected rows in LIVE visible-row order,
@@ -1229,6 +1435,13 @@ struct FileTreeSidebar: View {
         // `fileTreeFocused` on `.onChange` (a post-update mutation point, #448).
         .background(
             TreeFocusBridge(workspace: appState.workspace, focused: $fileTreeFocused))
+        .background {
+            TreeOpenSelectedKeyMonitor(
+                enabled: fileTreeFocused,
+                isRenaming: appState.renamingNode != nil,
+                openSelected: { _ = requestOpenSelected() })
+                .frame(width: 0, height: 0)
+        }
         .onAppear {
             // Bind the tree to whatever session is already open when the
             // sidebar mounts (re-entering a vault view with files loaded).
@@ -1429,6 +1642,28 @@ struct FileTreeSidebar: View {
         .onMoveCommand { direction in
             handleMoveCommand(direction)
         }
+        .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+            guard
+                let action = Self.selectionKeyAction(
+                    key: press.key,
+                    modifiers: press.modifiers,
+                    fileTreeFocused: fileTreeFocused,
+                    isRenaming: appState.renamingNode != nil),
+                handleSelectionKeyAction(action, proxy: proxy)
+            else { return .ignored }
+            return .handled
+        }
+        .onKeyPress("a", phases: .down) { press in
+            guard
+                let action = Self.selectionKeyAction(
+                    key: press.key,
+                    modifiers: press.modifiers,
+                    fileTreeFocused: fileTreeFocused,
+                    isRenaming: appState.renamingNode != nil),
+                handleSelectionKeyAction(action, proxy: proxy)
+            else { return .ignored }
+            return .handled
+        }
         // ⌘⌫ deletes the selected node, but ONLY while the tree has keyboard
         // focus (spec §U2-5 "tree-focused only"). Delivered here rather than as
         // a menu-bar chord so it can't fire while a property field or the editor
@@ -1467,28 +1702,39 @@ struct FileTreeSidebar: View {
             requestDeleteFromKeyboard()
             return .handled
         }
-        // Space/Return toggle the selected FOLDER's disclosure — the
-        // keyboard equivalent of the folder row's tap (the row comment
-        // promises it; §U2-4 keyboard disclosure). Files: `.ignored` —
-        // selection already opened the note, so Return has nothing to add.
-        .onKeyPress(keys: [.space, .return]) { press in
+        // Return explicitly opens every visible, path-valid selected file;
+        // ⌘↓ reaches the same request through the tree-scoped key-down monitor
+        // (SwiftUI erases that chord's modifiers before onMoveCommand). When
+        // there is no selected file, Return keeps the selected folder's
+        // disclosure behavior. Space always remains folder disclosure.
+        .onKeyPress(keys: [.space, .return], phases: .down) { press in
             guard
                 Self.treeKeyInterceptionActive(
                     fileTreeFocused: fileTreeFocused,
+                    isRenaming: appState.renamingNode != nil)
+            else { return .ignored }
+            if press.key == .return,
+                let action = Self.selectionKeyAction(
+                    key: press.key,
+                    modifiers: press.modifiers,
+                    fileTreeFocused: fileTreeFocused,
                     isRenaming: appState.renamingNode != nil),
-                press.modifiers.isEmpty,
+                handleSelectionKeyAction(action, proxy: proxy)
+            {
+                return .handled
+            }
+            guard press.modifiers.subtracting(.capsLock).isEmpty,
                 let node = selectedTreeNode, node.isDirectory
             else { return .ignored }
             tree.toggle(node)
             return .handled
         }
-        // F2 begins inline rename of the selected node (#850) — the cross-
-        // app rename fallback the app's own grid already honors
-        // (AccessibleDataGrid handles Return/F2). Return stays UNCHANGED
-        // here: selection opens files and Space/Return toggles folders
-        // (shipped semantics above). Gated exactly like every other tree
-        // key path: never while the RenameField is up (focus-WITHIN — see
-        // `treeKeyInterceptionActive`), never with modifiers down.
+        // F2 begins inline rename of the selected node (#850) — the cross-app
+        // rename fallback the app's own grid already honors. Return is owned by
+        // explicit open-selected / folder disclosure above. Gated exactly like
+        // every other tree key path: never while the RenameField is up
+        // (focus-WITHIN — see `treeKeyInterceptionActive`), never with
+        // modifiers down.
         .onKeyPress(keys: [Self.f2Key]) { press in
             guard
                 Self.treeKeyInterceptionActive(
@@ -1585,6 +1831,28 @@ struct FileTreeSidebar: View {
         .onChange(of: appState.currentVaultURL) { _, _ in
             selectionModel.reveal(nil)
             listSelection = nil
+        }
+        // Session identity, rather than URL alone, owns a staged bulk-open
+        // request: closing and reopening the same vault must dismiss it.
+        .onChange(of: appState.currentSession.map(ObjectIdentifier.init)) { _, _ in
+            pendingOpenSelection = nil
+        }
+        .alert(
+            pendingOpenSelection?.title ?? "Open Selected Files?",
+            isPresented: Binding(
+                get: { pendingOpenSelection != nil },
+                set: { if !$0 { pendingOpenSelection = nil } })
+        ) {
+            Button("Open") {
+                confirmPendingOpenSelection()
+                fileTreeFocused = true
+            }
+            Button("Cancel", role: .cancel) {
+                pendingOpenSelection = nil
+                fileTreeFocused = true
+            }
+        } message: {
+            Text(pendingOpenSelection?.message ?? "")
         }
         // User-driven selection: push it onto AppState here, outside the list's
         // update transaction, so handleSelectionChange runs in a well-defined
@@ -1705,6 +1973,71 @@ struct FileTreeSidebar: View {
                 identity: .node($0.nodeID),
                 path: $0.path,
                 isDirectory: $0.isDirectory)
+        }
+    }
+
+    @discardableResult
+    private func handleSelectionKeyAction(
+        _ action: SelectionKeyAction,
+        proxy: ScrollViewProxy
+    ) -> Bool {
+        if action == .openSelected { return requestOpenSelected() }
+        let outcome = Self.keyboardSelectionOutcome(
+            action: action,
+            model: selectionModel,
+            currentListSelection: listSelection,
+            visibleRows: visibleSelectionRows)
+        guard outcome.handled else { return false }
+
+        selectionModel = outcome.model
+        if outcome.shouldMirrorListSelection {
+            suppressOpenForSelectionChange = true
+            selectionAnnouncementGate.arm()
+            listSelection = outcome.listSelection
+            if let focus = outcome.listSelection {
+                proxy.scrollTo(focus, anchor: .center)
+            }
+        }
+        if outcome.changed {
+            let count = outcome.visibleSelectedCount
+            let message = count == 0
+                ? "No items selected"
+                : "\(count) \(count == 1 ? "item" : "items") selected"
+            postAccessibilityAnnouncement(message, priority: .medium)
+        }
+        return true
+    }
+
+    @discardableResult
+    private func requestOpenSelected() -> Bool {
+        let batch = Self.openSelectionBatch(
+            from: selectionModel,
+            visibleRows: visibleSelectionRows)
+        let identity = appState.currentSession.map(ObjectIdentifier.init)
+        switch Self.openSelectionDisposition(batch: batch, sessionIdentity: identity) {
+        case .none:
+            return false
+        case let .direct(capturedBatch):
+            openCapturedPaths(capturedBatch.executionPaths)
+        case let .confirm(request):
+            pendingOpenSelection = request
+        }
+        return true
+    }
+
+    private func confirmPendingOpenSelection() {
+        guard let request = pendingOpenSelection else { return }
+        pendingOpenSelection = nil
+        let paths = Self.resolvedOpenPaths(
+            request,
+            confirmed: true,
+            currentSessionIdentity: appState.currentSession.map(ObjectIdentifier.init))
+        openCapturedPaths(paths)
+    }
+
+    private func openCapturedPaths(_ paths: [String]) {
+        for path in paths {
+            appState.openFile(path, target: .newTab)
         }
     }
 
@@ -2180,8 +2513,9 @@ struct FileTreeSidebar: View {
                 isDropTargeted: dropTargetedNodes.contains(node.nodeID))
             .contentShape(Rectangle())
             // A folder row SELECTS and toggles disclosure on activation
-            // (pointer tap; Space/Return when selected ride the List-level
-            // `.onKeyPress` above). Selecting matters as much as toggling:
+            // (pointer tap; Space, or Return when no selected file needs
+            // opening, ride the List-level `.onKeyPress` above). Selecting
+            // matters as much as toggling:
             // the tap must move `listSelection` onto the folder — exactly
             // as a file row's tap does — or the highlight (and therefore
             // the ⌘⌫ / Rename / Move target that `mirrorTreeSelectionToAppState`
@@ -2264,7 +2598,9 @@ struct FileTreeSidebar: View {
                 }
             }
             // Drag source: a folder can be dragged onto another folder / root.
-            .onDrag { dragItem(for: node) }
+            .onDrag { dragItem(for: node) } preview: {
+                dragPreview(for: node)
+            }
             // Drop target: dropping a file/folder onto this folder moves it
             // here. #851: per-row targeting drives the wash above and the
             // spring-load timer (hover ≥ 600ms on a collapsed folder
@@ -2384,7 +2720,9 @@ struct FileTreeSidebar: View {
                 }
             }
             // Drag source: a file can be dragged onto a folder / root.
-            .onDrag { dragItem(for: node) }
+            .onDrag { dragItem(for: node) } preview: {
+                dragPreview(for: node)
+            }
         }
     }
 
@@ -2573,10 +2911,32 @@ struct FileTreeSidebar: View {
     /// Finder move). `"public.file-url"` via the UTI constant.
     static let fileURLUTType = UTType.fileURL.identifier
 
-    /// Build the drag payload for `node`: an `NSItemProvider` carrying the
-    /// node's path under the private UTType AND its real on-disk file URL
-    /// (#870). Also records the source in AppState so the drop handler knows
-    /// whether the dragged node is a directory.
+    enum PreferredDropProvider {
+        case privatePayload(NSItemProvider)
+        case fileURL(NSItemProvider)
+        case none
+    }
+
+    static func preferredDropProvider(
+        in providers: [NSItemProvider]
+    ) -> PreferredDropProvider {
+        if let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(Self.nodeUTType)
+        }) {
+            return .privatePayload(provider)
+        }
+        if let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(Self.fileURLUTType)
+        }) {
+            return .fileURL(provider)
+        }
+        return .none
+    }
+
+    /// Build the drag payload for `node`. A selected origin carries the whole
+    /// visible, path-valid selection as an ordered, self-describing private
+    /// payload; an unselected origin carries only itself. The public file URL
+    /// continues to describe the origin row for drag-out interoperability.
     private func dragItem(for node: TreeNode) -> NSItemProvider {
         // #851: a NEW drag beginning with leftovers from a previous session
         // (a cancel the watchdog hasn't reaped yet) settles the old one
@@ -2584,95 +2944,157 @@ struct FileTreeSidebar: View {
         if !springOpenedDirs.isEmpty || !springLoadTasks.isEmpty {
             endDragSession(dropDestination: nil)
         }
-        appState.dragSourceNode = AppState.TreeSelection(
-            path: node.path, isDirectory: node.isDirectory)
+        let origin = SelectionRow(
+            identity: .node(node.nodeID),
+            path: node.path,
+            isDirectory: node.isDirectory)
         return Self.makeDragProvider(
-            nodePath: node.path,
-            fileURL: appState.currentVaultURL?.appendingPathComponent(node.path))
+            origin: origin,
+            from: selectionModel,
+            visibleRows: visibleSelectionRows,
+            vaultURL: appState.currentVaultURL)
+    }
+
+    /// A selected-origin drag carries more than the origin row, so its visual
+    /// preview must disclose the actual payload count before the user drops it.
+    /// The badge is visual-only because the selected rows already expose their
+    /// selected state to VoiceOver.
+    private func dragPreview(for node: TreeNode) -> some View {
+        let origin = SelectionRow(
+            identity: .node(node.nodeID),
+            path: node.path,
+            isDirectory: node.isDirectory)
+        let count = Self.dragPreviewCount(
+            for: origin,
+            from: selectionModel,
+            visibleRows: visibleSelectionRows)
+
+        return HStack(spacing: Tokens.Spacing.xs) {
+            if node.isDirectory {
+                SlateSymbol.folder.decorative
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+            Text(node.name)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textPrimary)
+                .lineLimit(2)
+            if count > 1 {
+                Text("\(count)")
+                    .font(Tokens.Typography.caption.weight(.semibold))
+                    .foregroundStyle(Tokens.ColorRole.onAccentFill)
+                    .padding(.horizontal, Tokens.Spacing.xs)
+                    .padding(.vertical, Tokens.Spacing.xxs)
+                    .background(Tokens.ColorRole.accentFill, in: Capsule())
+                    .accessibilityHidden(true)
+            }
+        }
+        .padding(.horizontal, Tokens.Spacing.sm)
+        .padding(.vertical, Tokens.Spacing.xs)
+        .background(
+            Tokens.ColorRole.surface,
+            in: RoundedRectangle(cornerRadius: Tokens.Radius.control))
+        .overlay {
+            RoundedRectangle(cornerRadius: Tokens.Radius.control)
+                .stroke(Tokens.ColorRole.separator)
+                .accessibilityHidden(true)
+        }
     }
 
     /// Pure builder for the drag payload (#870), extracted so the flavors it
-    /// registers are regression-locked without a live drag: the private
-    /// own-process type (exact vault-relative path — `handleDrop` prefers it
-    /// for precise, fast intra-tree moves) PLUS the public file URL so the item
-    /// can cross the process boundary to Finder / other apps. The vault file
-    /// already exists on disk, so a plain file-url is sufficient — no
+    /// registers are regression-locked without a live drag: the versioned
+    /// private own-process batch (ordered vault-relative path + directory kind,
+    /// preferred by `handleDrop`) PLUS the origin row's public file URL so that
+    /// item can cross the process boundary to Finder / other apps. The vault
+    /// item already exists on disk, so a plain file-url is sufficient — no
     /// `NSFilePromiseProvider` needed (#870).
     static func makeDragProvider(nodePath: String, fileURL: URL?) -> NSItemProvider {
+        makeDragProvider(
+            items: [DragPayloadItem(path: nodePath, isDirectory: false)],
+            originFileURL: fileURL)
+    }
+
+    static func makeDragProvider(
+        items: [DragPayloadItem],
+        originFileURL: URL?
+    ) -> NSItemProvider {
         let provider = NSItemProvider()
-        provider.registerDataRepresentation(
-            forTypeIdentifier: Self.nodeUTType, visibility: .ownProcess
-        ) { completion in
-            completion(Data(nodePath.utf8), nil)
-            return nil
+        if let payload = encodeDragPayload(items) {
+            provider.registerDataRepresentation(
+                forTypeIdentifier: Self.nodeUTType, visibility: .ownProcess
+            ) { completion in
+                completion(payload, nil)
+                return nil
+            }
         }
-        if let fileURL {
-            provider.suggestedName = fileURL.lastPathComponent
-            // `.all` visibility — this flavor is exactly what must leave the
-            // app. `URL.dataRepresentation` is the canonical `public.file-url`
-            // pasteboard encoding Finder reads to copy the referenced file.
+        if let originFileURL {
+            provider.suggestedName = originFileURL.lastPathComponent
+            // Register the URL object itself before the file-URL data flavor.
+            // `loadObject(ofClass: URL.self)` declares `public.url` as its
+            // readable type; providing that exact object representation avoids
+            // an intermittent NSItemProvider -1200 conformance-bridge failure.
+            provider.registerObject(originFileURL as NSURL, visibility: .all)
+            // Keep the explicit `.all` `public.file-url` flavor that Finder
+            // reads to copy the referenced on-disk item during drag-out.
             provider.registerDataRepresentation(
                 forTypeIdentifier: Self.fileURLUTType, visibility: .all
             ) { completion in
-                completion(fileURL.dataRepresentation, nil)
+                completion(originFileURL.dataRepresentation, nil)
                 return nil
             }
         }
         return provider
     }
 
-    /// Handle a drop of a dragged tree node into `destinationFolder` ("" =
-    /// root). Reads the dragged path, resolves whether it's a directory from the
-    /// recorded source, and routes through the SAME `moveEntry` wrapper the
-    /// commands use (spec §U2-5: "drop calls exactly `move_file`/`move_folder`
-    /// — the commands are the source of truth"). Rejects a no-op (already in the
-    /// destination) and a folder-into-own-subtree drop (the backend also
-    /// guards, but rejecting early avoids a wasted round-trip + error alert).
+    static func makeDragProvider(
+        origin: SelectionRow,
+        from model: SelectionModel,
+        visibleRows: [SelectionRow],
+        vaultURL: URL?
+    ) -> NSItemProvider {
+        makeDragProvider(
+            items: dragItems(for: origin, from: model, visibleRows: visibleRows),
+            originFileURL: vaultURL?.appendingPathComponent(origin.path))
+    }
+
+    /// Handle a drop into `destinationFolder` ("" = root). The private flavor
+    /// wins and decodes one ordered, self-describing selection before sending
+    /// one intent to AppState's single/batch operation funnel. Malformed private
+    /// data fails closed instead of falling through as a file import. Public
+    /// file URLs preserve the existing in-vault move / external import path.
     private func handleDrop(_ providers: [NSItemProvider], into destinationFolder: String) -> Bool {
-        // The private own-process type wins when present: our own drags carry
-        // it, and it names the exact vault-relative path (no filesystem
-        // round-trip, no ambiguity). An external drop never has it.
-        if let provider = providers.first(where: {
-            $0.hasItemConformingToTypeIdentifier(Self.nodeUTType)
-        }) {
+        switch Self.preferredDropProvider(in: providers) {
+        case let .privatePayload(provider):
             // #851: the drag session ends HERE with a known destination —
             // spring-opened folders that the drop did NOT land in re-collapse;
             // the destination's own chain stays open (the user is about to see
             // the moved node inside it).
             endDragSession(dropDestination: destinationFolder)
             provider.loadDataRepresentation(forTypeIdentifier: Self.nodeUTType) { data, _ in
-                guard let data, let path = String(data: data, encoding: .utf8) else { return }
+                guard let data, let payload = Self.decodeDragPayload(data) else { return }
                 Task { @MainActor in
-                    let isDir = appState.dragSourceNode?.path == path
-                        ? (appState.dragSourceNode?.isDirectory ?? false)
-                        : false
-                    appState.dragSourceNode = nil
-                    // No-op: already directly in the destination folder.
-                    let currentParent = AppState.TreeMutation.parentPath(of: path) ?? ""
-                    if currentParent == destinationFolder { return }
-                    // Folder into its own subtree (or onto itself) — reject early.
-                    if isDir, AppState.pathIsWithin(destinationFolder, path: path, isDirectory: true) {
-                        return
-                    }
-                    appState.moveEntry(path: path, isDirectory: isDir, to: destinationFolder)
+                    appState.moveTreeSelection(
+                        payload.map {
+                            AppState.TreeSelection(
+                                path: $0.path,
+                                isDirectory: $0.isDirectory)
+                        },
+                        to: destinationFolder)
                 }
             }
             return true
-        }
-        // #870: a file-URL drop from Finder / another app (or a vault file
-        // dragged back in from Finder). Inside the vault ⇒ move; external ⇒
-        // import — resolved by `AppState.fileURLDropAction`.
-        if let provider = providers.first(where: {
-            $0.hasItemConformingToTypeIdentifier(Self.fileURLUTType)
-        }) {
+        case let .fileURL(provider):
+            // #870: a file-URL drop from Finder / another app (or a vault file
+            // dragged back in from Finder). Inside the vault ⇒ move; external ⇒
+            // import — resolved by `AppState.fileURLDropAction`.
             endDragSession(dropDestination: destinationFolder)
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url, url.isFileURL else { return }
                 Task { @MainActor in handleFileURLDrop(url, into: destinationFolder) }
             }
             return true
+        case .none:
+            return false
         }
-        return false
     }
 
     /// Dispatch a resolved file-URL drop (#870). Reads `isDirectory` off the
@@ -2682,7 +3104,6 @@ struct FileTreeSidebar: View {
     /// imports a copy (via `importEntry`, reusing the collision machinery).
     @MainActor
     private func handleFileURLDrop(_ url: URL, into destinationFolder: String) {
-        appState.dragSourceNode = nil
         // Codoki: unambiguous directory detection via the extracted, tested
         // `AppState.urlIsDirectory` seam (no `Bool??` optional-chaining trap).
         let isDirectory = AppState.urlIsDirectory(url)
@@ -2969,9 +3390,10 @@ struct FileTreeSidebar: View {
         return event.modifierFlags.contains(.command)
     }
 
-    /// Whether the List-level `.onKeyPress` interceptors (⌘⌫ delete,
-    /// Space/Return folder disclosure) may fire. TWO conditions, and the
-    /// second is load-bearing: `.focused($fileTreeFocused)` on the List
+    /// Whether the List-level `.onKeyPress` interceptors (keyboard selection,
+    /// explicit open, ⌘⌫ delete, and folder disclosure) may fire. TWO
+    /// conditions, and the second is load-bearing:
+    /// `.focused($fileTreeFocused)` on the List
     /// has focus-WITHIN semantics — it stays TRUE while the inline
     /// RenameField (a descendant) is first responder, and a List-level
     /// `.onKeyPress` sees keys BEFORE the field editor does. Without the

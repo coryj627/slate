@@ -54,6 +54,90 @@ final class FileTreeDragDropTests: XCTestCase {
         FileManager.default.fileExists(atPath: vault.appendingPathComponent(rel).path)
     }
 
+    private func fileRow(_ path: String) -> FileTreeSidebar.RowID {
+        .node(.file(path: path))
+    }
+
+    // MARK: - Versioned private batch payload
+
+    func testPrivateDragPayloadRoundTripsOrderAndKindDeterministically() throws {
+        let items = [
+            FileTreeSidebar.DragPayloadItem(path: "folder", isDirectory: true),
+            FileTreeSidebar.DragPayloadItem(path: "folder/note.md", isDirectory: false),
+            FileTreeSidebar.DragPayloadItem(path: "other.md", isDirectory: false),
+        ]
+        let first = try XCTUnwrap(FileTreeSidebar.encodeDragPayload(items))
+        let second = try XCTUnwrap(FileTreeSidebar.encodeDragPayload(items))
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(FileTreeSidebar.decodeDragPayload(first), items)
+    }
+
+    func testPrivateDragPayloadRejectsEmptyMalformedUnsafeAndDuplicateBatches() {
+        let invalidPayloads = [
+            #"{"version":1,"items":[]}"#,
+            #"{"version":2,"items":[{"path":"a.md","isDirectory":false}]}"#,
+            #"{"version":1,"items":[{"path":"","isDirectory":false}]}"#,
+            #"{"version":1,"items":[{"path":"/tmp/a.md","isDirectory":false}]}"#,
+            #"{"version":1,"items":[{"path":"a/../b.md","isDirectory":false}]}"#,
+            #"{"version":1,"items":[{"path":"a.md","isDirectory":false},{"path":"a.md","isDirectory":true}]}"#,
+            "not-json",
+            "legacy.md",
+        ]
+
+        for payload in invalidPayloads {
+            XCTAssertNil(
+                FileTreeSidebar.decodeDragPayload(Data(payload.utf8)),
+                "must fail closed: \(payload)")
+        }
+        XCTAssertNil(FileTreeSidebar.encodeDragPayload([]))
+    }
+
+    func testPrivateDropFlavorWinsEvenWhenItsDataIsInvalid() {
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.nodeUTType,
+            visibility: .ownProcess
+        ) { completion in
+            completion(Data("malformed".utf8), nil)
+            return nil
+        }
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { completion in
+            completion(URL(fileURLWithPath: "/tmp/fallback.md").dataRepresentation, nil)
+            return nil
+        }
+
+        guard case .privatePayload = FileTreeSidebar.preferredDropProvider(in: [provider]) else {
+            return XCTFail("private data must win; invalid private data must not become an import")
+        }
+    }
+
+    func testTreeDropMoveIntentUsesSingleAndBatchFunnels() async throws {
+        do {
+            let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+            await state.moveTreeSelection(
+                [AppState.TreeSelection(path: "a.md", isDirectory: false)],
+                to: "dest")?.value
+            XCTAssertTrue(exists(vault, "dest/a.md"))
+            XCTAssertEqual(state.lastMutationAnnouncement, "Moved a.md to dest.")
+        }
+
+        try FileManager.default.removeItem(at: tempDir.appendingPathComponent("vault"))
+        let (state, vault) = try await makeVault(files: ["a.md", "b.md", "dest/keep.md"])
+        await state.moveTreeSelection(
+            [
+                AppState.TreeSelection(path: "a.md", isDirectory: false),
+                AppState.TreeSelection(path: "b.md", isDirectory: false),
+            ],
+            to: "dest")?.value
+        XCTAssertTrue(exists(vault, "dest/a.md"))
+        XCTAssertTrue(exists(vault, "dest/b.md"))
+        XCTAssertEqual(state.lastMutationAnnouncement, "Moved 2 items to dest.")
+    }
+
     // MARK: - Drag payload carries public.file-url (drag OUT)
 
     func testDragProviderCarriesBothPrivateTypeAndFileURL() {
@@ -69,6 +153,67 @@ final class FileTreeDragDropTests: XCTestCase {
             "public.file-url is carried so the item can be dragged OUT to Finder")
         XCTAssertEqual(
             provider.suggestedName, "idea.md", "the drop gets a sensible file name")
+    }
+
+    func testDragProviderPrivateFlavorCarriesSelfDescribingOrderedBatch() async throws {
+        let items = [
+            FileTreeSidebar.DragPayloadItem(path: "folder", isDirectory: true),
+            FileTreeSidebar.DragPayloadItem(path: "other.md", isDirectory: false),
+        ]
+        let originURL = URL(fileURLWithPath: "/Vaults/demo/folder")
+        let provider = FileTreeSidebar.makeDragProvider(
+            items: items, originFileURL: originURL)
+
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(
+                forTypeIdentifier: FileTreeSidebar.nodeUTType
+            ) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: error ?? URLError(.cannotDecodeRawData)) }
+            }
+        }
+
+        XCTAssertEqual(FileTreeSidebar.decodeDragPayload(data), items)
+        XCTAssertEqual(provider.suggestedName, "folder")
+    }
+
+    func testDragProviderProjectsSelectionButKeepsOriginPublicFileURL() async throws {
+        let a = fileRow("a.md")
+        let b = fileRow("nested/b.md")
+        let rows = [
+            FileTreeSidebar.SelectionRow(identity: a, path: "a.md", isDirectory: false),
+            FileTreeSidebar.SelectionRow(
+                identity: b, path: "nested/b.md", isDirectory: false),
+        ]
+        let model = FileTreeSidebar.SelectionModel(
+            focused: b,
+            selected: [b, a],
+            selectionPathSnapshots: [a: "a.md", b: "nested/b.md"],
+            rangeAnchor: a,
+            rangeAnchorPathSnapshot: "a.md")
+        let vaultURL = URL(fileURLWithPath: "/Vaults/demo")
+
+        let provider = FileTreeSidebar.makeDragProvider(
+            origin: rows[1], from: model, visibleRows: rows, vaultURL: vaultURL)
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(
+                forTypeIdentifier: FileTreeSidebar.nodeUTType
+            ) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: error ?? URLError(.cannotDecodeRawData)) }
+            }
+        }
+
+        XCTAssertEqual(
+            FileTreeSidebar.decodeDragPayload(data)?.map(\.path), ["a.md", "nested/b.md"])
+        XCTAssertEqual(provider.suggestedName, "b.md")
+        let publicURL: URL = try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, error in
+                if let url { continuation.resume(returning: url) }
+                else { continuation.resume(throwing: error ?? URLError(.badURL)) }
+            }
+        }
+        XCTAssertEqual(publicURL.standardizedFileURL.path, "/Vaults/demo/nested/b.md")
     }
 
     /// The file-URL flavor round-trips the real on-disk URL (what Finder reads

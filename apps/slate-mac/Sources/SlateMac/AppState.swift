@@ -337,11 +337,6 @@ final class AppState: ObservableObject {
         let isDirectory: Bool
     }
 
-    /// The node currently being dragged in the tree (U2-5 drag & drop), recorded
-    /// when a drag starts so the drop handler knows whether it's a directory
-    /// (the drag payload carries only the path). Transient; cleared on drop.
-    @Published var dragSourceNode: TreeSelection?
-
     /// The folder a new note/folder should be created in, given the current
     /// tree selection: the selected folder itself, a selected file's parent
     /// folder, or the vault root ("") when nothing is selected. Command-facing.
@@ -7799,6 +7794,27 @@ final class AppState: ObservableObject {
     /// Pure (#852): the ONE summary sentence a batch delete announces.
     static func batchDeleteAnnouncement(count: Int) -> String {
         "Moved \(count) \(count == 1 ? "item" : "items") to Trash."
+    }
+
+    @discardableResult
+    func moveTreeSelection(
+        _ items: [TreeSelection],
+        to newParent: String
+    ) -> Task<Void, Never>? {
+        let targets = Self.topLevelSelection(items)
+        guard !targets.isEmpty else { return nil }
+        if targets.count == 1, let item = targets.first {
+            let currentParent = TreeMutation.parentPath(of: item.path) ?? ""
+            guard currentParent != newParent else { return nil }
+            guard !item.isDirectory
+                || !Self.pathIsWithin(newParent, path: item.path, isDirectory: true)
+            else { return nil }
+            return moveEntry(
+                path: item.path,
+                isDirectory: item.isDirectory,
+                to: newParent)
+        }
+        return batchMove(targets, to: newParent)
     }
 
     /// Move every item of a multi-selection under `newParent` ("" = vault root),
