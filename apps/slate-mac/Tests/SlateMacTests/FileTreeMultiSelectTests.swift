@@ -434,16 +434,20 @@ final class FileTreeMultiSelectTests: XCTestCase {
         // be present, immediately before the focus move.
         XCTAssertTrue(
             src.contains(
-                "if listSelection != outcome.focus { suppressOpenForSelectionChange = true } "
-                    + "listSelection = outcome.focus"),
+                "if listSelection != selectionModel.focused { "
+                    + "suppressOpenForSelectionChange = true } "
+                    + "listSelection = selectionModel.focused"),
             "suppress is armed conditionally (only when focus changes), then focus moves")
         XCTAssertTrue(
             src.contains(
                 "if suppressOpenForSelectionChange { suppressOpenForSelectionChange = false "
-                    + "announceFocusedFileSelection( newSelection, suppressed: announcementIsSuppressed) return }"),
+                    + "mirrorTreeSelectionToAppState(selectionModel.focused) "
+                    + "announceFocusedFileSelection( selectionModel.focused, "
+                    + "suppressed: announcementIsSuppressed) return }"),
             "the onChange path consumes suppression, speaks the focused row, and returns before open")
         XCTAssertTrue(
-            src.contains("if count == 1, case let .node(.file(path)) = outcome.focus {"),
+            src.contains(
+                "if count == 1, case let .node(.file(path)) = selectionModel.focused {"),
             "a collapse-to-one-row opens explicitly (current tab), not via the ⌘-live onChange")
     }
 
@@ -724,81 +728,16 @@ final class FileTreeMultiSelectTests: XCTestCase {
             "the DESELECTED removed row becomes the anchor (must be snapshotted)")
     }
 
-    /// #852 Codex round-5 (source wiring): the anchor is snapshotted on every set
-    /// (incl. deselected rows), reconciled independently before the selection
-    /// early-return, remapped across known moves, and path-validated for ranges.
-    func testAnchorSnapshotReconcileRemapWiringByInspection() throws {
-        let src = try Self.normalizedSidebarSource()
-        XCTAssertTrue(
-            src.contains(
-                "private func setSelectionAnchor(_ anchor: RowID?) { selectionAnchor = anchor "
-                    + "selectionAnchorPath = anchor.flatMap { resolvedPath(of: $0) } }"),
-            "every anchor set snapshots its path (incl. a ⌘-removed row)")
-        // The anchor reconcile runs BEFORE the selection reconcile's early-return.
-        XCTAssertTrue(
-            src.contains("reconcileAnchorAfterTreeChange() let (survivors, snapshot)"),
-            "anchor reconcile precedes the selection reconcile (so its early-return can't skip it)")
-        XCTAssertTrue(
-            src.contains(
-                "anchor: pathValidatedAnchor()"),
-            "the ⇧-range computation uses the fail-closed anchor")
-        XCTAssertTrue(
-            src.contains(
-                "anchor: selectionAnchor, anchorSnapshot: selectionAnchorPath"),
-            "known-move remap threads the anchor's independent snapshot")
-    }
-
-    /// #852 Codex findings 3 & 4 (source wiring): multi-select MODE reads the
-    /// PRE-dedup pruned count; the operation targets are the deduped set; and the
-    /// selection is reconciled on tree mutation + rescan.
-    func testModeAndReconcileWiringByInspection() throws {
-        let src = try Self.normalizedSidebarSource()
-        XCTAssertTrue(
-            src.contains("private var hasMultiSelection: Bool { prunedSelectedNodes.count >= 2 }"),
-            "multi-select MODE is the pre-dedup pruned count ≥ 2 (finding 3)")
-        XCTAssertTrue(
-            src.contains(
-                "private var selectedNodesForBatch: [AppState.TreeSelection] { "
-                    + "AppState.topLevelSelection(prunedSelectedNodes) }"),
-            "the operation targets are the deduped pruned selection")
-        XCTAssertTrue(
-            src.contains("reconcileSelectionAfterTreeChange()"),
-            "the selection is reconciled after tree changes (finding 4)")
-        XCTAssertTrue(
-            src.contains(
-                "private func setMultiSelection(_ newSelection: Set<RowID>) { "
-                    + "multiSelection = newSelection"),
-            "every selection assignment snapshots the members' paths (finding 4)")
-    }
-
-    /// #852 Codex round-4 finding 1 (source wiring): the reused-id reconcile
-    /// re-anchors the NATIVE focus, runs after the refetch lands, and the
-    /// single-item command target (`selectedTreeNode` + the AppState mirror) is
-    /// FAIL-CLOSED via `pathValidatedNode`.
+    /// The remaining view-only wiring runs reconciliation after refetch and
+    /// mirrors through the fail-closed node resolver. Reconcile/focus/path
+    /// behavior itself is exercised directly by `SidebarSelectionModelTests`.
     func testNativeFocusReanchorAndFailClosedTargetByInspection() throws {
         let src = try Self.normalizedSidebarSource()
-        XCTAssertTrue(
-            src.contains(
-                "if let focus = listSelection, !survivors.contains(focus) { "
-                    + "let newFocus = visibleRowOrder.first { survivors.contains($0) } "
-                    + "suppressOpenForSelectionChange = true listSelection = newFocus }"),
-            "reconcile re-anchors the native focus (suppressing the open) when it was repointed")
         XCTAssertTrue(
             src.contains(
                 ".onChange(of: tree.visibleRows) { _, _ in reconcileSelectionAfterTreeChange() "
                     + "mirrorTreeSelectionToAppState(listSelection) }"),
             "reconcile + mirror re-sync run once the refetch lands (fresh id resolution)")
-        XCTAssertTrue(
-            src.contains(
-                "private var selectedTreeNode: TreeNode? { guard let listSelection else "
-                    + "{ return nil } return pathValidatedNode(for: listSelection) }"),
-            "selectedTreeNode resolves through the fail-closed pathValidatedNode")
-        XCTAssertTrue(
-            src.contains(
-                "private func pathValidatedNode(for rowID: RowID) -> TreeNode? { "
-                    + "guard case let .node(id) = rowID, let node = tree.node(for: id) else { return nil } "
-                    + "if let snapshot = selectionPaths[rowID], snapshot != node.path { return nil } return node }"),
-            "pathValidatedNode refuses a reused id whose current path differs from its snapshot")
         XCTAssertTrue(
             src.contains("guard let selection, let node = pathValidatedNode(for: selection) else {"),
             "the AppState mirror is fail-closed too (never mirrors a reused id)")
@@ -949,21 +888,12 @@ final class FileTreeMultiSelectTests: XCTestCase {
 
     func testEveryBatchMemberIsSelectedVisuallyAndAccessiblyByInspection() throws {
         let src = try Self.normalizedSidebarSource()
-        // The AX `.isSelected` trait reads multiSelection membership AND
-        // path-validates the id (finding 4) so a reused dir id isn't reported.
-        XCTAssertTrue(
-            src.contains(
-                "private func isRowSelected(_ rowID: RowID, currentPath: String) -> Bool "
-                    + "{ multiSelection.contains(rowID) && selectionPaths[rowID] == currentPath }"),
-            "the AX selected predicate reads multiSelection membership + path snapshot")
+        // Path-valid membership is covered directly by SidebarSelectionModelTests;
+        // this pins only the SwiftUI-only trait and fill consumption sites.
         XCTAssertTrue(
             src.contains(
                 "isRowSelected(.node(node.nodeID), currentPath: node.path) ? .isSelected : []"),
             "both rows carry .isSelected for every selected, path-valid batch member")
-        // The custom selection fill is a non-focus, path-valid selected member.
-        XCTAssertTrue(
-            src.contains("isRowSelected(rowID, currentPath: currentPath) && listSelection != rowID"),
-            "the fill predicate is a non-focus, path-valid multiSelection member")
         XCTAssertTrue(
             src.contains("isMultiSelectFill(.node(node.nodeID), currentPath: node.path) {"),
             "both rows paint the multi-select fill")
@@ -997,18 +927,6 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertNil(cleared.listSelection)
         XCTAssertTrue(cleared.shouldMirrorListSelection)
         XCTAssertTrue(cleared.shouldSuppressAnnouncement)
-    }
-
-    /// A plain click on the ALREADY-focused row opens it explicitly, because the
-    /// same-value `listSelection` assignment wouldn't fire `.onChange`.
-    func testPlainClickSameFocusOpensExplicitlyByInspection() throws {
-        let src = try Self.normalizedSidebarSource()
-        XCTAssertTrue(
-            src.contains(
-                "let sameFocus = (listSelection == row) setMultiSelection([row]) setSelectionAnchor(row) "
-                    + "listSelection = row if sameFocus, case let .node(.file(path)) = row, "
-                    + "appState.selectedFilePath != path { appState.openFile(path, target: .currentTab) }"),
-            "a same-focus plain click opens the file explicitly (onChange won't fire)")
     }
 
     // MARK: - Source helpers
