@@ -111,7 +111,7 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
     conn.execute("DROP INDEX idx_files_birthtime", []).unwrap();
     conn.execute("ALTER TABLE files DROP COLUMN birthtime_ms", [])
         .unwrap();
-    conn.execute("DROP TABLE file_meta", []).unwrap();
+    conn.execute("DROP TABLE IF EXISTS file_meta", []).unwrap();
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
             row.get(0)
