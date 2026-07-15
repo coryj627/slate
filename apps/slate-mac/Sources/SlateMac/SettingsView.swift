@@ -67,6 +67,10 @@ struct SettingsView: View {
                     .tabItem {
                         SlateSymbol.settings.label("General")
                     }
+                SidebarSettingsTab()
+                    .tabItem {
+                        SlateSymbol.folder.label("Sidebar")
+                    }
                 MathSettingsTab()
                     .tabItem {
                         SlateSymbol.math.label()
@@ -111,6 +115,89 @@ struct SettingsView: View {
         // handling it once here keeps all tabs consistent
         // (settings.md: the settings window carries one title).
         .navigationTitle("Slate preferences")
+    }
+}
+
+// MARK: - Sidebar tab (Milestone FL, #653/#654)
+
+/// Device-local presentation choices for the Files sidebar. These controls
+/// change only how rows are shown on this Mac; vault-authored organization is
+/// stored separately and remains untouched.
+struct SidebarSettingsTab: View {
+    @EnvironmentObject private var appState: AppState
+
+    var body: some View {
+        Form {
+            Section {
+                Picker("Date source", selection: $appState.sidebarPreferences.dateSource) {
+                    ForEach(SidebarPreferences.DateSource.allCases, id: \.self) { source in
+                        Text(source.displayName).tag(source)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Date source")
+
+                Picker("Date format", selection: $appState.sidebarPreferences.dateFormat) {
+                    ForEach(SidebarPreferences.DateFormat.allCases, id: \.self) { format in
+                        Text(format.displayName).tag(format)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Date format")
+            } header: {
+                Text("Dates")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+            } footer: {
+                Text(
+                    "Created uses the date in the note when available. Otherwise, "
+                        + "the row shows its modified date.")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+
+            Section {
+                Picker("Preview lines", selection: $appState.sidebarPreferences.previewLines) {
+                    Text("Off").tag(0)
+                    Text("1 line").tag(1)
+                    Text("2 lines").tag(2)
+                    Text("3 lines").tag(3)
+                }
+                Toggle(
+                    "Show task counts",
+                    isOn: $appState.sidebarPreferences.showTaskCounts)
+                Toggle(
+                    "Show word count",
+                    isOn: $appState.sidebarPreferences.showWordCount)
+            } header: {
+                Text("Details")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+            }
+
+            Section {
+                Picker("Density", selection: $appState.sidebarPreferences.density) {
+                    ForEach(SidebarPreferences.Density.allCases, id: \.self) { density in
+                        Text(density.displayName).tag(density)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .accessibilityElement(children: .contain)
+                .accessibilityLabel("Density")
+            } header: {
+                Text("Layout")
+                    .font(.headline)
+                    .accessibilityAddTraits(.isHeader)
+            } footer: {
+                Text("Compact rows show only the note name visually while VoiceOver keeps the full date and detail summary.")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+        }
+        .formStyle(.grouped)
+        .accessibilityLabel("Sidebar settings")
     }
 }
 

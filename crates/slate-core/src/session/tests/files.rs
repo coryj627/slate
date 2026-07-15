@@ -317,6 +317,114 @@ Hello [[World|friend]].
 }
 
 #[test]
+fn get_file_summary_matches_list_files_enriched_projection() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "notes/target.md",
+            br#"---
+title: "  Target title  "
+created: 2026-07-14
+---
+# Heading
+
+- [ ] open task
+- [x] done task
+
+Target preview words.
+"#,
+        )
+        .unwrap();
+        p.write_file("notes/sibling.md", b"Sibling content\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let listed = session
+        .list_files(FileFilter::All, Paging::first(100))
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|summary| summary.path == "notes/target.md")
+        .unwrap();
+    let targeted = session
+        .get_file_summary("notes/target.md")
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(targeted, listed);
+    assert_eq!(targeted.display_name.as_deref(), Some("Target title"));
+    assert_eq!(targeted.created_date.as_deref(), Some("2026-07-14"));
+    assert!(targeted.word_count.unwrap() > 0);
+    assert!(
+        targeted
+            .preview
+            .as_deref()
+            .unwrap()
+            .contains("Target preview")
+    );
+    assert_eq!((targeted.task_total, targeted.task_open), (2, 1));
+}
+
+#[test]
+fn get_file_summary_returns_none_for_unknown_path() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("present.md", b"Present\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    assert_eq!(session.get_file_summary("missing.md").unwrap(), None);
+}
+
+#[test]
+fn get_file_summary_rejects_parent_traversal() {
+    let (_tmp, session) = make_vault(|_| {});
+
+    match session.get_file_summary("notes/../../outside.md") {
+        Err(VaultError::InvalidPath { path, .. }) => {
+            assert_eq!(path, "notes/../../outside.md");
+        }
+        other => panic!("expected InvalidPath, got {other:?}"),
+    }
+}
+
+#[test]
+fn get_file_summary_returns_latest_enrichment_after_save() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "note.md",
+            b"---\ntitle: Before\ncreated: 2024-01-01\n---\nOld body\n",
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let before = session.get_file_summary("note.md").unwrap().unwrap();
+    session
+        .save_text(
+            "note.md",
+            "---\ntitle: After\ncreated: 2025-02-03\n---\nFresh preview words here.\n- [ ] first\n- [x] second\n",
+            None,
+        )
+        .unwrap();
+    let after = session.get_file_summary("note.md").unwrap().unwrap();
+    let listed_after = session
+        .list_files(FileFilter::All, Paging::first(10))
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|summary| summary.path == "note.md")
+        .unwrap();
+
+    assert_ne!(after, before);
+    assert_eq!(after, listed_after);
+    assert_eq!(after.display_name.as_deref(), Some("After"));
+    assert_eq!(after.created_date.as_deref(), Some("2025-02-03"));
+    assert!(after.word_count.unwrap() > before.word_count.unwrap());
+    assert!(after.preview.as_deref().unwrap().contains("Fresh preview"));
+    assert_eq!((after.task_total, after.task_open), (2, 1));
+}
+
+#[test]
 fn file_summary_enrichment_preserves_pagination_totals_and_order() {
     let (_tmp, session) = make_vault(|p| {
         for name in ["A.md", "b.md", "C.md", "d.md", "e.md"] {

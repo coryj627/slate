@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import CoreFoundation
 import Foundation
 
 /// Persistence layer for `MathPrefs` + `CodePrefs` (and any future
@@ -17,6 +18,10 @@ import Foundation
 /// All keys namespaced under `slate.prefs.` so a UserDefaults dump
 /// is identifiable.
 final class PreferencesStore {
+    private static let sidebarIntegerEncodings: Set<String> = [
+        "c", "C", "s", "S", "i", "I", "l", "L", "q", "Q",
+    ]
+
     static let mathKey = "slate.prefs.math"
     static let codeKey = "slate.prefs.code"
     static let canvasKey = "slate.prefs.canvas"
@@ -175,6 +180,90 @@ final class PreferencesStore {
 
     func saveRestoreVaultOnLaunch(_ enabled: Bool) {
         defaults.set(enabled, forKey: Self.restoreVaultOnLaunchKey)
+    }
+
+    // MARK: - Files sidebar presentation (Milestone FL, #653/#654)
+
+    /// Load typed, device-local sidebar presentation preferences. Raw enum
+    /// values are stable persistence tags; unknown future values fall back to
+    /// today's defaults. The numeric preview count is clamped so a hand-edited
+    /// defaults domain can never create an unbounded row.
+    func loadSidebarPreferences() -> SidebarPreferences {
+        let defaultsValue = SidebarPreferences()
+        let dateSource = (defaults.object(forKey: SidebarPreferences.Keys.dateSource) as? String)
+            .flatMap(SidebarPreferences.DateSource.init(rawValue:))
+            ?? defaultsValue.dateSource
+        let dateFormat = (defaults.object(forKey: SidebarPreferences.Keys.dateFormat) as? String)
+            .flatMap(SidebarPreferences.DateFormat.init(rawValue:))
+            ?? defaultsValue.dateFormat
+        let density = (defaults.object(forKey: SidebarPreferences.Keys.density) as? String)
+            .flatMap(SidebarPreferences.Density.init(rawValue:))
+            ?? defaultsValue.density
+        let previewLines = strictSidebarInteger(forKey: SidebarPreferences.Keys.previewLines)
+            .map { min(max($0, 0), 3) }
+            ?? defaultsValue.previewLines
+        let showTaskCounts =
+            strictSidebarBool(forKey: SidebarPreferences.Keys.showTaskCounts)
+            ?? defaultsValue.showTaskCounts
+        let showWordCount =
+            strictSidebarBool(forKey: SidebarPreferences.Keys.showWordCount)
+            ?? defaultsValue.showWordCount
+
+        return SidebarPreferences(
+            dateSource: dateSource,
+            dateFormat: dateFormat,
+            previewLines: previewLines,
+            showTaskCounts: showTaskCounts,
+            showWordCount: showWordCount,
+            density: density
+        )
+    }
+
+    func saveSidebarPreferences(_ preferences: SidebarPreferences) {
+        defaults.set(
+            preferences.dateSource.rawValue,
+            forKey: SidebarPreferences.Keys.dateSource)
+        defaults.set(
+            preferences.dateFormat.rawValue,
+            forKey: SidebarPreferences.Keys.dateFormat)
+        defaults.set(
+            min(max(preferences.previewLines, 0), 3),
+            forKey: SidebarPreferences.Keys.previewLines)
+        defaults.set(
+            preferences.showTaskCounts,
+            forKey: SidebarPreferences.Keys.showTaskCounts)
+        defaults.set(
+            preferences.showWordCount,
+            forKey: SidebarPreferences.Keys.showWordCount)
+        defaults.set(
+            preferences.density.rawValue,
+            forKey: SidebarPreferences.Keys.density)
+    }
+
+    /// UserDefaults bridges both integers and booleans through `NSNumber`, so
+    /// Swift conditional casts alone are permissive enough to turn `true` into
+    /// one preview line. Require an integer Objective-C encoding and explicitly
+    /// exclude the singleton CFBoolean type before accepting a value.
+    private func strictSidebarInteger(forKey key: String) -> Int? {
+        guard
+            let number = defaults.object(forKey: key) as? NSNumber,
+            CFGetTypeID(number) != CFBooleanGetTypeID()
+        else { return nil }
+
+        guard Self.sidebarIntegerEncodings.contains(String(cString: number.objCType)) else {
+            return nil
+        }
+        return Int(number.stringValue)
+    }
+
+    /// Accept only a persisted CFBoolean. Numeric zero/one values are not
+    /// silently reinterpreted as user choices when a defaults domain drifts.
+    private func strictSidebarBool(forKey key: String) -> Bool? {
+        guard
+            let number = defaults.object(forKey: key) as? NSNumber,
+            CFGetTypeID(number) == CFBooleanGetTypeID()
+        else { return nil }
+        return number.boolValue
     }
 
     // MARK: - Internals

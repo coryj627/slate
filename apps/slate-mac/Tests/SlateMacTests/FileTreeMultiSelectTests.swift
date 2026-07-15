@@ -439,8 +439,9 @@ final class FileTreeMultiSelectTests: XCTestCase {
             "suppress is armed conditionally (only when focus changes), then focus moves")
         XCTAssertTrue(
             src.contains(
-                "if suppressOpenForSelectionChange { suppressOpenForSelectionChange = false return }"),
-            "the onChange open path consumes the one-shot suppression and returns")
+                "if suppressOpenForSelectionChange { suppressOpenForSelectionChange = false "
+                    + "announceFocusedFileSelection( newSelection, suppressed: announcementIsSuppressed) return }"),
+            "the onChange path consumes suppression, speaks the focused row, and returns before open")
         XCTAssertTrue(
             src.contains("if count == 1, case let .node(.file(path)) = outcome.focus {"),
             "a collapse-to-one-row opens explicitly (current tab), not via the ⌘-live onChange")
@@ -978,7 +979,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertTrue(
             src.contains(
                 "let mirrored = rowID(forPath: newPath) setMultiSelection(mirrored.map { [$0] } ?? []) "
-                    + "setSelectionAnchor(mirrored) if listSelection != mirrored { listSelection = mirrored }"),
+                    + "setSelectionAnchor(mirrored) if listSelection != mirrored { "
+                    + "suppressSelectionAnnouncement = true listSelection = mirrored }"),
             "the collapse runs before (and independent of) the listSelection-changed guard")
     }
 

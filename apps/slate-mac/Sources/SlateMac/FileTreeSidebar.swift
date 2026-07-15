@@ -19,6 +19,32 @@ enum NodeID: Hashable {
     case file(path: String)
 }
 
+/// Mutable presentation state for one materialized file row.
+///
+/// Tree structure and row order stay in `FileTreeViewModel`'s published arrays;
+/// derived metadata changes do not. A targeted save updates this keyed object,
+/// so SwiftUI invalidates only the observing row instead of rebuilding and
+/// equality-comparing a 50k-entry structural array on the main actor.
+@MainActor
+final class FileTreeFileState: ObservableObject, Equatable {
+    @Published private(set) var summary: FileSummary
+
+    init(summary: FileSummary) {
+        self.summary = summary
+    }
+
+    @discardableResult
+    func replace(with summary: FileSummary) -> Bool {
+        guard self.summary != summary else { return false }
+        self.summary = summary
+        return true
+    }
+
+    nonisolated static func == (lhs: FileTreeFileState, rhs: FileTreeFileState) -> Bool {
+        lhs === rhs
+    }
+}
+
 /// One visible entry in the tree. Directories carry their immediate child
 /// counts (so a *collapsed* folder can announce "N items" without a fetch)
 /// and their depth (0-based from root); files carry the path the open flow
@@ -38,10 +64,10 @@ struct TreeNode: Identifiable, Equatable {
         /// A directory; `childDirCount`/`childFileCount` are its immediate
         /// (non-recursive) child counts, straight from `DirNodeSummary`.
         case directory(childDirCount: Int, childFileCount: Int)
-        /// A file; `mtimeMs` rides along from the tree API's `FileSummary`
-        /// so the row never scans `AppState.files` (O(n) per row × visible
-        /// rows was a measurable render cost on 10k vaults).
-        case file(mtimeMs: Int64)
+        /// A file carries a stable keyed summary object. Rich metadata updates
+        /// publish through that object without mutating the structural tree;
+        /// identity/rename still use `path`/`name` on `TreeNode`.
+        case file(FileTreeFileState)
     }
 
     var id: NodeID { nodeID }
@@ -56,6 +82,89 @@ struct TreeNode: Identifiable, Equatable {
     var itemCount: Int {
         if case let .directory(dirs, files) = kind { return dirs + files }
         return 0
+    }
+}
+
+/// Visual-only content for a folder List row. Interaction and accessibility
+/// remain on `FileTreeSidebar.folderRow`; extracting the label makes the
+/// active/inactive native-selection palette render-testable.
+struct SidebarFolderRowContent: View {
+    let node: TreeNode
+    let isExpanded: Bool
+    let isSelected: Bool
+    let selectionIsActive: Bool
+    var isDropTargeted = false
+
+    @Environment(\.layoutDirection) private var layoutDirection
+
+    private var primaryText: Color {
+        isSelected
+            ? Color(nsColor: SidebarSelectionColors.text(active: selectionIsActive))
+            : Tokens.ColorRole.textPrimary
+    }
+
+    private var secondaryText: Color {
+        isSelected
+            ? Color(nsColor: SidebarSelectionColors.text(active: selectionIsActive))
+            : Tokens.ColorRole.textSecondary
+    }
+
+    var body: some View {
+        HStack(spacing: Tokens.Spacing.xs) {
+            Color.clear
+                .frame(width: FileTreeSidebar.indentWidth(for: node.depth), height: 0)
+                .accessibilityHidden(true)
+            SlateSymbol.disclosure.decorative
+                .rotationEffect(
+                    .degrees(
+                        isExpanded
+                            ? (layoutDirection == .rightToLeft ? -90 : 90)
+                            : 0))
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(secondaryText)
+            (isExpanded ? SlateSymbol.folderOpen : SlateSymbol.folder).decorative
+                .foregroundStyle(secondaryText)
+            Text(node.name)
+                .font(Tokens.Typography.body)
+                .foregroundStyle(primaryText)
+                .lineLimit(2)
+            Spacer(minLength: 0)
+        }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: Tokens.Radius.control)
+                    .strokeBorder(
+                        Color(
+                            nsColor: SidebarSelectionColors.dropIndicator(
+                                selected: isSelected,
+                                active: selectionIsActive)),
+                        lineWidth: 2)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// The only observer of a file's mutable summary. Keeping this subscription at
+/// the cell boundary is what makes an O(changed) metadata refresh remain
+/// O(changed) through SwiftUI rather than invalidating the whole tree view.
+struct SidebarObservedFileRowContent: View {
+    @ObservedObject var fileState: FileTreeFileState
+    let preferences: SidebarRowPreferencesSnapshot
+    let now: Date
+    let depth: Int
+    let isSelected: Bool
+    let selectionIsActive: Bool
+
+    var body: some View {
+        SidebarFileRow(
+            model: SidebarRowModel(
+                summary: fileState.summary,
+                preferences: preferences,
+                now: now),
+            depth: depth,
+            isSelected: isSelected,
+            selectionIsActive: selectionIsActive)
     }
 }
 
@@ -97,6 +206,55 @@ final class FileTreeViewModel: ObservableObject {
     /// fixtures without an FFI round-trip. `nil` until `bind(to:)`.
     private var fetcher: ((String) throws -> DirListing)?
 
+    /// Exact path → the one observable owned by its materialized row. Rich
+    /// metadata refreshes use this index and never mutate a published level.
+    private var fileStateByPath: [String: FileTreeFileState] = [:]
+    private(set) var summaryReplacementLookupCountForTesting = 0
+
+    private func clearMaterializedLevels() {
+        rootLevel = []
+        children = [:]
+        fileStateByPath = [:]
+    }
+
+    private func replaceRootLevel(with level: [TreeNode]) {
+        removeFileStates(in: rootLevel)
+        rootLevel = level
+        indexFileStates(in: level)
+    }
+
+    private func replaceChildLevel(_ level: [TreeNode]?, for parent: NodeID) {
+        if let oldLevel = children[parent] {
+            removeFileStates(in: oldLevel)
+        }
+        children[parent] = level
+        guard let level else { return }
+        indexFileStates(in: level)
+    }
+
+    private func removeFileStates(in level: [TreeNode]) {
+        for node in level {
+            guard case let .file(state) = node.kind,
+                fileStateByPath[node.path] === state
+            else { continue }
+            fileStateByPath[node.path] = nil
+        }
+    }
+
+    private func indexFileStates(in level: [TreeNode]) {
+        for node in level {
+            guard case let .file(state) = node.kind else { continue }
+            fileStateByPath[node.path] = state
+        }
+    }
+
+    private func clearChildLevels() {
+        for level in children.values {
+            removeFileStates(in: level)
+        }
+        children = [:]
+    }
+
     /// Test seam: bind to an explicit fetcher instead of a live session. The
     /// tree behaves identically (root loads immediately); only the source of
     /// `DirListing`s differs. `session` stays nil, so no FFI is touched.
@@ -106,8 +264,7 @@ final class FileTreeViewModel: ObservableObject {
     ) {
         self.session = nil
         self.fetcher = fetcher
-        rootLevel = []
-        children = [:]
+        clearMaterializedLevels()
         expanded = []
         pendingExpandedPaths = Set(restoringExpandedDirPaths)
         expansionRecency = restoringExpandedDirPaths
@@ -153,8 +310,7 @@ final class FileTreeViewModel: ObservableObject {
     /// and cost nothing; the persistence cap bounds any accumulation.
     func bind(to session: VaultSession?, restoringExpandedDirPaths: [String] = []) {
         self.session = session
-        rootLevel = []
-        children = [:]
+        clearMaterializedLevels()
         expanded = []
         pendingExpandedPaths = Set(restoringExpandedDirPaths)
         expansionRecency = restoringExpandedDirPaths
@@ -186,12 +342,12 @@ final class FileTreeViewModel: ObservableObject {
         fetchState[Self.rootFetchKey] = .loading
         do {
             let listing = try fetcher("")
-            rootLevel = Self.nodes(from: listing, depth: 0)
+            replaceRootLevel(with: Self.nodes(from: listing, depth: 0))
             fetchState[Self.rootFetchKey] = nil
             adoptPendingExpansions(in: rootLevel)
             materializeExpandedChildren(in: rootLevel)
         } catch {
-            rootLevel = []
+            replaceRootLevel(with: [])
             fetchState[Self.rootFetchKey] = .failed(message: Self.message(for: error))
         }
     }
@@ -207,7 +363,7 @@ final class FileTreeViewModel: ObservableObject {
         do {
             let listing = try fetcher(node.path)
             let level = Self.nodes(from: listing, depth: node.depth + 1)
-            children[node.nodeID] = level
+            replaceChildLevel(level, for: node.nodeID)
             fetchState[node.nodeID] = nil
             adoptPendingExpansions(in: level)
             materializeExpandedChildren(in: level)
@@ -333,7 +489,7 @@ final class FileTreeViewModel: ObservableObject {
             if let kids = children[row.nodeID] {
                 dropDescendantCaches(rows: kids)
             }
-            children[row.nodeID] = nil
+            replaceChildLevel(nil, for: row.nodeID)
             fetchState[row.nodeID] = nil
         }
     }
@@ -413,7 +569,7 @@ final class FileTreeViewModel: ObservableObject {
             // loop here would resolve RECYCLED ids to unrelated new folders
             // and eagerly fetch their children — Codex round 3.)
             demoteExpandedSubtree(rows: rootLevel)
-            children.removeAll()
+            clearChildLevels()
             fetchState = fetchState.filter { $0.key == Self.rootFetchKey }
             loadRoot()
             return
@@ -426,7 +582,7 @@ final class FileTreeViewModel: ObservableObject {
         let oldRows = children[parent] ?? []
         demoteExpandedSubtree(rows: oldRows)
         dropDescendantCaches(rows: oldRows)
-        children[parent] = nil
+        replaceChildLevel(nil, for: parent)
         fetchState[parent] = nil
         if expanded.contains(parent), let node = node(for: parent) {
             loadChildren(of: node)
@@ -465,6 +621,34 @@ final class FileTreeViewModel: ObservableObject {
             if let hit = level.first(where: { $0.nodeID == id }) { return hit }
         }
         return nil
+    }
+
+    /// Replace enriched metadata in already-materialized file rows without an
+    /// FFI call, sibling-level refetch, or whole-tree scan. Every summary does
+    /// one path-index lookup and preserves the row's identity and depth.
+    @discardableResult
+    func replaceFileSummaries(_ summaries: [FileSummary]) -> Int {
+        summaryReplacementLookupCountForTesting = 0
+        guard !summaries.isEmpty else { return 0 }
+        var replacementCount = 0
+
+        for summary in summaries {
+            summaryReplacementLookupCountForTesting += 1
+            guard let state = fileStateByPath[summary.path] else { continue }
+            if state.replace(with: summary) { replacementCount += 1 }
+        }
+        return replacementCount
+    }
+
+    @discardableResult
+    func replaceFileSummary(_ summary: FileSummary) -> Bool {
+        replaceFileSummaries([summary]) == 1
+    }
+
+    /// Current rich summary for a materialized file. This reads the same keyed
+    /// state the row observes and never scans a level.
+    func fileSummary(forPath path: String) -> FileSummary? {
+        fileStateByPath[path]?.summary
     }
 
     /// The parent node id of a node, if that node lives in a cached child
@@ -650,7 +834,7 @@ final class FileTreeViewModel: ObservableObject {
                     path: file.path,
                     name: file.name,
                     depth: depth,
-                    kind: .file(mtimeMs: file.mtimeMs)
+                    kind: .file(FileTreeFileState(summary: file))
                 ))
         }
         return out
@@ -700,10 +884,24 @@ final class FileTreeViewModel: ObservableObject {
 /// has a home and the stack is retired exactly once.
 struct FileTreeSidebar: View {
     @EnvironmentObject private var appState: AppState
+    /// Immutable device-local row presentation supplied by the assembly layer.
+    /// A default preserves existing previews/tests and the shipped U2 density.
+    let rowPreferences: SidebarRowPreferencesSnapshot
+
+    init(rowPreferences: SidebarRowPreferencesSnapshot = .defaults) {
+        self.rowPreferences = rowPreferences
+    }
+
     /// The tree model. `@StateObject` so it survives view-body churn; rebound
     /// to the live session on vault change.
     @StateObject private var tree = FileTreeViewModel()
     @State private var didAnnounceCount = false
+    /// One sidebar-scoped clock shared by every visible relative-date row.
+    /// Absolute dates never start the task; no row owns a timer.
+    @State private var sidebarNow = Date()
+    nonisolated static let relativeDateRefreshInterval: Duration = .seconds(60)
+    nonisolated static let recoveryActionMinimumHeight =
+        Tokens.Spacing.lg + Tokens.Spacing.xs
     /// Local mirror of the selected row that the `List`'s selection binds to —
     /// a `RowID` (which wraps a real `NodeID`), not a path, because rows are now
     /// dirs *and* files (plus synthetic loading/error placeholders). The list
@@ -754,17 +952,23 @@ struct FileTreeSidebar: View {
     /// the onChange would otherwise mis-route the focus move to a new tab). Same
     /// one-shot shape as `suppressOpenForPostMutationFocus`.
     @State private var suppressOpenForSelectionChange = false
+    /// One-shot set when `selectedFilePath` mirrors a programmatic open onto
+    /// the List. The originating surface owns its announcement, so the ensuing
+    /// `listSelection` edge must not repeat it.
+    @State private var suppressSelectionAnnouncement = false
     /// Keyboard focus on the file tree — gates the #418 selection announcements
     /// to list-driven changes only.
     @FocusState private var fileTreeFocused: Bool
 
-    /// RTL-aware disclosure rotation (right-to-left.md): the base
-    /// `chevron.forward` glyph auto-mirrors to point left under RTL
-    /// (that is why the symbol layer uses forward, not right — measured:
-    /// chevron.right does NOT mirror), so the expanded rotation must
-    /// turn the OPPOSITE way — a fixed +90° composed with the mirrored
-    /// glyph would point up, not down.
-    @Environment(\.layoutDirection) private var layoutDirection
+    /// Native List selection changes carrier when the window/app becomes
+    /// inactive even if this control remains the first responder.
+    @Environment(\.controlActiveState) private var controlActiveState
+
+    private var nativeSelectionIsActive: Bool {
+        Self.selectionIsActive(
+            treeFocused: fileTreeFocused,
+            controlActiveState: controlActiveState)
+    }
 
     /// Set for exactly one `listSelection` change when post-DELETE focus moves
     /// the highlight to a sibling: the deleted node's tab is now in the missing-
@@ -1018,6 +1222,9 @@ struct FileTreeSidebar: View {
             // events. The `@ViewBuilder` renders EmptyView when there's no
             // scanProgress, which collapses to no rendered output.
             progressBar
+            if let notice = appState.sidebarVaultPrefsNotice {
+                sidebarPreferencesNotice(notice)
+            }
             Group {
                 if appState.isScanning && appState.files.isEmpty {
                     scanningState
@@ -1100,9 +1307,61 @@ struct FileTreeSidebar: View {
                 // refetch lands and resolution is fresh.
             }
         }
+        .task(id: rowPreferences.dateFormat) {
+            guard rowPreferences.dateFormat == .relative else { return }
+            sidebarNow = Date()
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: Self.relativeDateRefreshInterval)
+                } catch {
+                    return
+                }
+                sidebarNow = Date()
+            }
+        }
     }
 
     // MARK: - States
+
+    /// Persistent, non-modal recovery notice for unsafe vault-authored sidebar
+    /// preferences. It stays visible while defaults are in use, uses a warning
+    /// symbol plus text (never color alone), and shares the exact message spoken
+    /// by the vault-open announcement.
+    private func sidebarPreferencesNotice(_ notice: SidebarVaultPrefsNotice) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+            HStack(alignment: .top, spacing: Tokens.Spacing.sm) {
+                SlateSymbol.warning.decorative
+                    .foregroundStyle(Tokens.ColorRole.warningText)
+                Text(notice.localizedDescription)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.warningText)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Button {
+                _ = appState.retrySidebarVaultPreferences()
+            } label: {
+                SlateSymbol.refresh.label("Retry")
+            }
+            .buttonStyle(.borderless)
+            .controlSize(.small)
+            .frame(minHeight: Self.recoveryActionMinimumHeight)
+            .contentShape(Rectangle())
+            .disabled(appState.isRetryingSidebarVaultPreferences)
+            .accessibilityLabel("Retry sidebar settings")
+            .accessibilityHint("Reads .slate/sidebar.json again after you repair it.")
+        }
+        .padding(.horizontal, Tokens.Spacing.md)
+        .padding(.vertical, Tokens.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.ColorRole.surfaceSecondary)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Tokens.ColorRole.separator)
+                .frame(height: 1)
+                .accessibilityHidden(true)
+        }
+        .accessibilityElement(children: .contain)
+    }
 
     private var scanningState: some View {
         // Linear (like the `scanStrip` that takes over once rows
@@ -1322,6 +1581,13 @@ struct FileTreeSidebar: View {
         .onChange(of: appState.treeMutation?.token) { _, _ in
             handleTreeMutation(proxy: proxy)
         }
+        // Non-structural writes (body/frontmatter/task edits) leave tree shape
+        // intact but can change every rich-row field. Apply the complete
+        // coalesced burst atomically so SwiftUI cannot drop an intermediate
+        // per-file notification.
+        .onReceive(appState.sidebarFileSummaryUpdates) { summaries in
+            tree.replaceFileSummaries(summaries)
+        }
         // #852 (Codex round-4 finding 1): reconcile the selection against reused
         // SQLite directory ids whenever the visible rows settle (an external
         // replace / rescan refetch). This fires AFTER the refetch has landed —
@@ -1362,11 +1628,16 @@ struct FileTreeSidebar: View {
             // The focus (single node) mirrors for single-item commands; the
             // BATCH actions read `multiSelection` (#852).
             mirrorTreeSelectionToAppState(newSelection)
+            let announcementIsSuppressed = suppressSelectionAnnouncement
+            suppressSelectionAnnouncement = false
             // #852: a ⌘/⇧ multi-select gesture manages the set + open itself
             // (`applyMultiSelectClick`) — consume its one-shot suppression and
             // don't re-open or collapse here.
             if suppressOpenForSelectionChange {
                 suppressOpenForSelectionChange = false
+                announceFocusedFileSelection(
+                    newSelection,
+                    suppressed: announcementIsSuppressed)
                 return
             }
             // #852: any OTHER focus change (keyboard arrow, type-select,
@@ -1392,6 +1663,7 @@ struct FileTreeSidebar: View {
                 appState.openFile(path, target: .newTab)
                 if case let .node(.file(selected)) = listSelection,
                     selected != appState.selectedFilePath {
+                    suppressSelectionAnnouncement = true
                     listSelection = appState.selectedFilePath.map { .node(.file(path: $0)) }
                 }
                 return
@@ -1399,15 +1671,15 @@ struct FileTreeSidebar: View {
             if appState.selectedFilePath != path {
                 appState.openFile(path, target: .currentTab)
             }
+            announceFocusedFileSelection(
+                newSelection,
+                suppressed: announcementIsSuppressed)
         }
-        // #418 (F-A1): keyboard selection in the list is silent — VO speaks
-        // only side-effect live regions ("Outline, N headings.") and a blind
-        // user can't tell which file is selected while arrowing. Announce the
-        // selection, but ONLY when the list itself has keyboard focus:
-        // programmatic selection changes (search-open's "Opened <file>, line
-        // N", template create's "Created <file>…", the dirty-gate rollback)
-        // carry their own announcements and must not double-speak. Same
-        // "Selected:" phrasing as the command palette.
+        // Programmatic selection changes (search-open, template create, dirty-
+        // gate rollback) mirror onto the List but keep their originating
+        // announcement. User-focused row speech is driven above by the actual
+        // `listSelection` edge, including folder → already-open-file paths that
+        // don't change `selectedFilePath` at all.
         .onChange(of: appState.selectedFilePath) { _, newPath in
             // Mirror programmatic selection changes back onto the list
             // highlight (search-open, template-create, dirty-gate rollback).
@@ -1424,24 +1696,9 @@ struct FileTreeSidebar: View {
             setMultiSelection(mirrored.map { [$0] } ?? [])
             setSelectionAnchor(mirrored)
             if listSelection != mirrored {
+                suppressSelectionAnnouncement = true
                 listSelection = mirrored
             }
-            guard fileTreeFocused, let newPath else { return }
-            // Red-team note: the dirty-gate rollback re-sets the selection
-            // asynchronously while the "Save changes?" alert presents —
-            // announcing the rollback on top of the prompt is chatter the user
-            // didn't ask for.
-            guard appState.pendingNavigation == nil else { return }
-            let isBasePath = newPath.lowercased().hasSuffix(".base")
-            guard let file = appState.files.first(where: {
-                isBasePath
-                    ? BaseExactIdentity.matches($0.path, newPath)
-                    : $0.path == newPath
-            }) else { return }
-            postAccessibilityAnnouncement(
-                "Selected: \(file.name)",
-                priority: .medium
-            )
         }
         }  // ScrollViewReader
     }
@@ -1990,29 +2247,13 @@ struct FileTreeSidebar: View {
         if isRenaming(node) {
             renameFieldRow(node)
         } else {
-            HStack(spacing: Tokens.Spacing.xs) {
-                indent(for: node.depth)
-                // Disclosure chevron — rotates with expansion. Decorative (routed
-                // through SlateSymbol, no raw glyph): the AX value already states
-                // expanded/collapsed.
-                SlateSymbol.disclosure.decorative
-                    .rotationEffect(
-                        .degrees(
-                            isExpanded
-                                ? (layoutDirection == .rightToLeft ? -90 : 90)
-                                : 0))
-                    .font(Tokens.Typography.caption)
-                    .foregroundStyle(Tokens.ColorRole.textSecondary)
-                // Folder glyph per expanded state; decorative since the row label
-                // names the folder (SlateSymbol contract).
-                (isExpanded ? SlateSymbol.folderOpen : SlateSymbol.folder).decorative
-                    .foregroundStyle(Tokens.ColorRole.textSecondary)
-                Text(node.name)
-                    .font(Tokens.Typography.body)
-                    .foregroundStyle(Tokens.ColorRole.textPrimary)
-                    .lineLimit(2)
-                Spacer(minLength: 0)
-            }
+            let selected = isRowSelected(.node(node.nodeID), currentPath: node.path)
+            SidebarFolderRowContent(
+                node: node,
+                isExpanded: isExpanded,
+                isSelected: selected,
+                selectionIsActive: nativeSelectionIsActive,
+                isDropTargeted: dropTargetedNodes.contains(node.nodeID))
             .contentShape(Rectangle())
             // A folder row SELECTS and toggles disclosure on activation
             // (pointer tap; Space/Return when selected ride the List-level
@@ -2047,22 +2288,16 @@ struct FileTreeSidebar: View {
                     applyMultiSelectClick(.node(node.nodeID), click: click)
                 }
             }
-            // #851: HIG drag-and-drop "highlight the destination" — the
-            // selection-token wash (rounded like every control fill, U5-2)
-            // while a live drag would drop INTO this folder. Decorative
-            // drag feedback, hidden from AX (the row's hint already
-            // discloses the drop affordance).
             .background {
-                if dropTargetedNodes.contains(node.nodeID) {
-                    RoundedRectangle(cornerRadius: Tokens.Radius.control)
-                        .fill(Tokens.ColorRole.selection)
-                        .accessibilityHidden(true)
-                } else if isMultiSelectFill(.node(node.nodeID), currentPath: node.path) {
+                if isMultiSelectFill(.node(node.nodeID), currentPath: node.path) {
                     // #852 (Codex finding 1): paint the non-focus batch members
                     // so every selected folder reads as selected (the focus row
                     // keeps the native List highlight).
                     RoundedRectangle(cornerRadius: Tokens.Radius.control)
-                        .fill(Tokens.ColorRole.selection)
+                        .fill(
+                            Color(
+                                nsColor: SidebarSelectionColors.background(
+                                    active: nativeSelectionIsActive)))
                         .accessibilityHidden(true)
                 }
             }
@@ -2071,7 +2306,7 @@ struct FileTreeSidebar: View {
             // #852 (Codex finding 1): every batch member carries the selected
             // trait so VoiceOver announces it — not just the keyboard-focus row.
             .accessibilityAddTraits(
-                isRowSelected(.node(node.nodeID), currentPath: node.path) ? .isSelected : [])
+                selected ? .isSelected : [])
             .accessibilityLabel(node.name)
             .accessibilityValue(Self.folderAccessibilityValue(for: node, expanded: isExpanded))
             .accessibilityAction(named: Text(isExpanded ? "Collapse" : "Expand")) {
@@ -2117,8 +2352,9 @@ struct FileTreeSidebar: View {
         }
     }
 
-    /// A file row: name + relative modified time (the flat list's cell, carried
-    /// over verbatim), indented to its depth.
+    /// A file row presents FL-01's derived title/date/preview/count metadata at
+    /// the configured density, indented to its depth. The extracted content
+    /// view remains interaction-free; this assembly keeps every tree gesture.
     ///
     /// U2-5: swaps to an inline rename field when renaming; is a drag source and
     /// carries the file-management context menu alongside the open-in actions.
@@ -2126,27 +2362,15 @@ struct FileTreeSidebar: View {
     private func fileRow(_ node: TreeNode) -> some View {
         if isRenaming(node) {
             renameFieldRow(node)
-        } else {
-            // Explicit token text roles so the colors don't fall back to
-            // whatever inherited container style happens to be in scope
-            // (textPrimary for the name, textSecondary for the metadata line).
-            HStack(spacing: Tokens.Spacing.xs) {
-                indent(for: node.depth)
-                VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-                    Text(node.name)
-                        .font(Tokens.Typography.body)
-                        .foregroundStyle(Tokens.ColorRole.textPrimary)
-                        // Cap like the folder rows (2 lines, not 1 — the
-                        // a11y gate's line-limit-1 rule + WCAG 1.4.4 want
-                        // wrap-room at large type). `.help(node.path)`
-                        // below carries the full name for the long tail.
-                        .lineLimit(2)
-                    Text("Modified \(relativeDate(for: mtime(of: node)))")
-                        .font(Tokens.Typography.caption)
-                        .foregroundStyle(Tokens.ColorRole.textSecondary)
-                }
-                Spacer(minLength: 0)
-            }
+        } else if case let .file(fileState) = node.kind {
+            let selected = isRowSelected(.node(node.nodeID), currentPath: node.path)
+            SidebarObservedFileRowContent(
+                fileState: fileState,
+                preferences: rowPreferences,
+                now: sidebarNow,
+                depth: node.depth,
+                isSelected: selected,
+                selectionIsActive: nativeSelectionIsActive)
             .contentShape(Rectangle())
             // `.onDrag` on a macOS `List` row swallows the row's native
             // single-click SELECTION: a click on the label content starts a
@@ -2183,12 +2407,13 @@ struct FileTreeSidebar: View {
             .background {
                 if isMultiSelectFill(.node(node.nodeID), currentPath: node.path) {
                     RoundedRectangle(cornerRadius: Tokens.Radius.control)
-                        .fill(Tokens.ColorRole.selection)
+                        .fill(
+                            Color(
+                                nsColor: SidebarSelectionColors.background(
+                                    active: nativeSelectionIsActive)))
                         .accessibilityHidden(true)
                 }
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(node.name), modified \(relativeDate(for: mtime(of: node)))")
             .accessibilityAddTraits(.isButton)
             // #852 (Codex finding 1): every batch member carries the selected
             // trait so VoiceOver announces it — not just the keyboard-focus row.
@@ -2207,7 +2432,6 @@ struct FileTreeSidebar: View {
                 // routes through the single entry point.
                 appState.requestDeleteEntry(path: node.path, isDirectory: false)
             }
-            .help(node.path)
             .contextMenu {
                 // #852: right-clicking a row that's part of a ≥2-row multi-
                 // selection arms the BATCH actions over the whole set; the
@@ -2938,6 +3162,55 @@ struct FileTreeSidebar: View {
         return current + incoming
     }
 
+    /// VoiceOver's keyboard-selection live region speaks the same semantic
+    /// label and value as the row itself, including compact rows whose details
+    /// are intentionally visual-only hidden.
+    static func selectionAnnouncement(for model: SidebarRowModel) -> String {
+        "Selected: \(model.accessibilityLabel). \(model.accessibilityValue)."
+    }
+
+    /// #418: native macOS List keyboard movement is silent in this custom
+    /// tree. Speak the selected row's shared semantic model on the actual
+    /// selection edge. Dirty-gate navigation and programmatic mirrors suppress
+    /// this path because their dialog/originating command already speaks.
+    private func announceFocusedFileSelection(
+        _ selection: RowID?,
+        suppressed: Bool
+    ) {
+        guard !suppressed, fileTreeFocused, appState.pendingNavigation == nil else {
+            return
+        }
+        guard case let .node(id) = selection,
+            case .file = id,
+            let node = tree.node(for: id),
+            case let .file(fileState) = node.kind
+        else { return }
+        let model = SidebarRowModel(
+            summary: fileState.summary,
+            preferences: rowPreferences,
+            now: sidebarNow)
+        postAccessibilityAnnouncement(
+            Self.selectionAnnouncement(for: model),
+            priority: .medium)
+    }
+
+    static func selectionIsActive(
+        treeFocused: Bool,
+        controlActiveState: ControlActiveState
+    ) -> Bool {
+        treeFocused && controlActiveState == .key
+    }
+
+    /// Finder-style type-select follows the visible primary label. Folder
+    /// names are already their visible labels; file rows may use frontmatter
+    /// title or the filename stem.
+    static func typeSelectName(for row: TreeNode) -> String {
+        if case let .file(fileState) = row.kind {
+            return SidebarRowModel.displayName(for: fileState.summary)
+        }
+        return row.name
+    }
+
     private func handleTypeSelect(_ characters: String, proxy: ScrollViewProxy) {
         typeSelectResetTask?.cancel()
         typeSelectBuffer = Self.nextTypeSelectBuffer(
@@ -2954,7 +3227,7 @@ struct FileTreeSidebar: View {
         }()
         guard
             let index = Self.typeSelectIndex(
-                names: rows.map(\.name), prefix: typeSelectBuffer,
+                names: rows.map(Self.typeSelectName(for:)), prefix: typeSelectBuffer,
                 selectedIndex: selectedIndex)
         else { return }
         let target = rows[index].nodeID
@@ -3044,34 +3317,12 @@ struct FileTreeSidebar: View {
         return nil
     }
 
-    /// The mtime a file node carries from the tree API. Reading it off the
-    /// node (not `AppState.files`) matters: a per-row linear scan of a 10k
-    /// file list × ~50 visible rows was O(500k) string compares per render
-    /// pass (principal review of the U2-4 implementation).
-    private func mtime(of node: TreeNode) -> Int64 {
-        if case .file(let mtimeMs) = node.kind { return mtimeMs }
-        return 0
-    }
-
     /// Indent width for a row at `depth`: `Tokens.Spacing.md` per level.
     /// Static + pure so tests can assert the exact geometry.
     static func indentWidth(for depth: Int) -> CGFloat {
         CGFloat(depth) * Tokens.Spacing.md
     }
 
-    /// Cached so a vault of 10k rows doesn't allocate 10k formatters.
-    /// RelativeDateTimeFormatter is thread-safe for `localizedString` reads, and
-    /// we only mutate `unitsStyle` once at init.
-    private static let relativeFormatter: RelativeDateTimeFormatter = {
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .full
-        return formatter
-    }()
-
-    private func relativeDate(for mtimeMs: Int64) -> String {
-        let date = Date(timeIntervalSince1970: TimeInterval(mtimeMs) / 1000)
-        return Self.relativeFormatter.localizedString(for: date, relativeTo: Date())
-    }
 }
 
 /// The inline rename TextField swapped into a tree row while renaming (U2-5).

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import Combine
 import SwiftUI
 import XCTest
 
@@ -113,6 +114,14 @@ final class FileTreeSidebarTests: XCTestCase {
         XCTAssertEqual(FileTreeSidebar.indentWidth(for: 3), Tokens.Spacing.md * 3)
     }
 
+    func testSidebarRecoveryActionMeetsTheMacHitTargetFloor() {
+        XCTAssertGreaterThanOrEqual(FileTreeSidebar.recoveryActionMinimumHeight, 20)
+    }
+
+    func testRelativeDatesUseOneBoundedSidebarRefreshInterval() {
+        XCTAssertEqual(FileTreeSidebar.relativeDateRefreshInterval, .seconds(60))
+    }
+
     // MARK: - Root load + node building (dirs-then-files, depth)
 
     func testRootLoadsDirsThenFilesFromTheApiOrder() {
@@ -134,6 +143,153 @@ final class FileTreeSidebarTests: XCTestCase {
         XCTAssertTrue(vm.rootLevel[0].isDirectory)
         XCTAssertFalse(vm.rootLevel[2].isDirectory)
         XCTAssertEqual(vm.rootLevel[3].nodeID, .file(path: "todo.md"))
+    }
+
+    func testFileNodeRetainsTheFullSummaryWithoutASecondaryLookup() throws {
+        let rich = FileSummary(
+            path: "Journal/review.md", name: "review.md", mtimeMs: 123,
+            sizeBytes: 456, isMarkdown: true, displayName: "Weekly review",
+            createdDate: "2026-07-14", createdMs: 789, wordCount: 1_240,
+            preview: "A useful preview", taskTotal: 5, taskOpen: 3)
+
+        let node = try XCTUnwrap(
+            FileTreeViewModel.nodes(
+                from: listing(dirs: [], files: [rich]), depth: 2
+            ).first)
+
+        guard case let .file(fileState) = node.kind else {
+            return XCTFail("expected a file node")
+        }
+        XCTAssertEqual(fileState.summary, rich)
+        XCTAssertEqual(node.name, "review.md", "rename and file operations keep using filename")
+        XCTAssertEqual(node.path, "Journal/review.md")
+        XCTAssertEqual(node.depth, 2)
+    }
+
+    func testTargetedSummaryReplacementUpdatesOnlyTheCachedRowWithoutRefetching() throws {
+        let original = file("notes/target.md", mtime: 1)
+        let spy = FetchSpy([
+            "": listing(dirs: [dir(1, "notes", fileCount: 1)], files: []),
+            "notes": listing(dirs: [], files: [original]),
+        ])
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: spy.fetch)
+        vm.expand(try XCTUnwrap(vm.rootLevel.first))
+        XCTAssertEqual(spy.calls, ["", "notes"])
+
+        let refreshed = FileSummary(
+            path: original.path,
+            name: original.name,
+            mtimeMs: 2,
+            sizeBytes: 99,
+            isMarkdown: true,
+            displayName: "Fresh title",
+            createdDate: "2026-07-14",
+            createdMs: nil,
+            wordCount: 42,
+            preview: "Fresh preview",
+            taskTotal: 3,
+            taskOpen: 1)
+
+        XCTAssertTrue(vm.replaceFileSummary(refreshed))
+        XCTAssertEqual(spy.calls, ["", "notes"], "targeted refresh must not fetch siblings")
+        let node = try XCTUnwrap(vm.node(for: .file(path: refreshed.path)))
+        guard case let .file(fileState) = node.kind else {
+            return XCTFail("expected refreshed file node")
+        }
+        XCTAssertEqual(fileState.summary, refreshed)
+        XCTAssertEqual(node.depth, 1)
+    }
+
+    func testSummaryBurstReplacesEveryCachedPathWithoutRefetching() throws {
+        let first = file("notes/a.md", mtime: 1)
+        let second = file("notes/b.md", mtime: 1)
+        let spy = FetchSpy([
+            "": listing(dirs: [dir(1, "notes", fileCount: 2)], files: []),
+            "notes": listing(dirs: [], files: [first, second]),
+        ])
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: spy.fetch)
+        vm.expand(try XCTUnwrap(vm.rootLevel.first))
+
+        let refreshedFirst = file("notes/a.md", mtime: 2)
+        let refreshedSecond = file("notes/b.md", mtime: 3)
+        XCTAssertEqual(vm.replaceFileSummaries([refreshedFirst, refreshedSecond]), 2)
+        XCTAssertEqual(spy.calls, ["", "notes"])
+        XCTAssertEqual(vm.fileSummary(forPath: refreshedFirst.path), refreshedFirst)
+        XCTAssertEqual(vm.fileSummary(forPath: refreshedSecond.path), refreshedSecond)
+    }
+
+    func testTargetedSummaryReplacementIsOneLookupAtFiftyThousandRows() throws {
+        let files = (0..<50_000).map { file(String(format: "note-%05d.md", $0)) }
+        let spy = FetchSpy(["": listing(dirs: [], files: files)])
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: spy.fetch)
+        let refreshed = file("note-49999.md", mtime: 2)
+        var structuralInvalidations = 0
+        let observation = vm.objectWillChange.sink {
+            structuralInvalidations += 1
+        }
+
+        XCTAssertTrue(vm.replaceFileSummary(refreshed))
+        XCTAssertEqual(
+            vm.summaryReplacementLookupCountForTesting,
+            1,
+            "one changed file must not scan or map the 50k-row root")
+        XCTAssertEqual(
+            structuralInvalidations,
+            0,
+            "metadata-only refresh must invalidate its keyed row, not the structural tree")
+        XCTAssertEqual(vm.fileSummary(forPath: refreshed.path), refreshed)
+        XCTAssertEqual(spy.calls, [""])
+        withExtendedLifetime(observation) {}
+    }
+
+    func testSummaryIndexDropsOldVaultLocationsOnRebind() {
+        let vm = FileTreeViewModel()
+        vm.bindForTesting { _ in self.listing(dirs: [], files: [self.file("a.md")]) }
+        vm.bindForTesting { _ in self.listing(dirs: [], files: [self.file("b.md")]) }
+
+        XCTAssertFalse(vm.replaceFileSummary(file("a.md", mtime: 2)))
+        XCTAssertTrue(vm.replaceFileSummary(file("b.md", mtime: 2)))
+        XCTAssertEqual(vm.fileSummary(forPath: "b.md"), file("b.md", mtime: 2))
+    }
+
+    func testSummaryIndexDropsCollapsedInvalidatedChildUntilRefetch() throws {
+        var childFiles = [file("notes/old.md")]
+        let vm = FileTreeViewModel()
+        vm.bindForTesting { parent in
+            parent.isEmpty
+                ? self.listing(dirs: [self.dir(1, "notes", fileCount: 1)], files: [])
+                : self.listing(dirs: [], files: childFiles)
+        }
+        let notes = try XCTUnwrap(vm.rootLevel.first)
+        vm.expand(notes)
+        vm.collapse(notes)
+        childFiles = [file("notes/new.md")]
+        vm.treeInvalidation(parent: .dir(1))
+
+        XCTAssertFalse(vm.replaceFileSummary(file("notes/old.md", mtime: 2)))
+        XCTAssertFalse(vm.replaceFileSummary(file("notes/new.md", mtime: 2)))
+        vm.expand(notes)
+        XCTAssertTrue(vm.replaceFileSummary(file("notes/new.md", mtime: 2)))
+    }
+
+    func testSummaryIndexRebuildsOffsetsAfterExpandedChildRefetchReordersRows() throws {
+        var childFiles = [file("notes/a.md"), file("notes/b.md")]
+        let vm = FileTreeViewModel()
+        vm.bindForTesting { parent in
+            parent.isEmpty
+                ? self.listing(dirs: [self.dir(1, "notes", fileCount: 2)], files: [])
+                : self.listing(dirs: [], files: childFiles)
+        }
+        vm.expand(try XCTUnwrap(vm.rootLevel.first))
+        childFiles = [file("notes/b.md"), file("notes/a.md")]
+        vm.treeInvalidation(parent: .dir(1))
+        let refreshed = file("notes/a.md", mtime: 2)
+
+        XCTAssertTrue(vm.replaceFileSummary(refreshed))
+        XCTAssertEqual(vm.fileSummary(forPath: refreshed.path), refreshed)
     }
 
     // MARK: - Lazy fetch (spec: expanding fetches ONLY that level)
@@ -499,8 +655,64 @@ final class FileTreeSidebarTests: XCTestCase {
         PresentationReady.assertContrastFloor([
             ("row title on surface", .tokenTextPrimary, .tokenSurface),
             ("row subtitle on surface", .tokenTextSecondary, .tokenSurface),
+            (
+                "active selected row text on native selection",
+                SidebarSelectionColors.text(active: true),
+                SidebarSelectionColors.background(active: true)
+            ),
+            (
+                "inactive selected row text on native selection",
+                SidebarSelectionColors.text(active: false),
+                SidebarSelectionColors.background(active: false)
+            ),
+            (
+                "unselected folder drop indicator on surface",
+                SidebarSelectionColors.dropIndicator(selected: false, active: true),
+                .tokenSurface
+            ),
             ("error message on surface", .tokenDestructiveText, .tokenSurface),
         ])
+    }
+
+    func testSelectionEmphasisRequiresTreeFocusAndAKeyWindow() {
+        XCTAssertTrue(
+            FileTreeSidebar.selectionIsActive(
+                treeFocused: true,
+                controlActiveState: .key))
+        XCTAssertFalse(
+            FileTreeSidebar.selectionIsActive(
+                treeFocused: true,
+                controlActiveState: .active),
+            "a focused control in a non-key window uses the inactive carrier")
+        XCTAssertFalse(
+            FileTreeSidebar.selectionIsActive(
+                treeFocused: true,
+                controlActiveState: .inactive))
+        XCTAssertFalse(
+            FileTreeSidebar.selectionIsActive(
+                treeFocused: false,
+                controlActiveState: .key))
+    }
+
+    func testSelectedFolderContentRendersWithActiveAndInactiveSystemPalettes() {
+        let node = TreeNode(
+            nodeID: .dir(7), path: "Reference", name: "Reference", depth: 1,
+            kind: .directory(childDirCount: 2, childFileCount: 3))
+
+        PresentationReady.assertRendersInBothAppearances(
+            SidebarFolderRowContent(
+                node: node,
+                isExpanded: false,
+                isSelected: true,
+                selectionIsActive: true,
+                isDropTargeted: true))
+        PresentationReady.assertRendersInBothAppearances(
+            SidebarFolderRowContent(
+                node: node,
+                isExpanded: true,
+                isSelected: true,
+                selectionIsActive: false,
+                isDropTargeted: true))
     }
 
     // MARK: - Type-select matcher (#850, pure — the moveOutcome pattern)
@@ -1004,5 +1216,57 @@ final class FileTreeSidebarTests: XCTestCase {
             FileTreeSidebar.nextTypeSelectBuffer(current: "b", incoming: "e"), "be")
         XCTAssertEqual(
             FileTreeSidebar.nextTypeSelectBuffer(current: "be", incoming: "t"), "bet")
+    }
+
+    func testTypeSelectUsesTheDisplayedTitleForFilesAndTheNameForFolders() {
+        let titled = FileSummary(
+            path: "Journal/review-2026-07.md", name: "review-2026-07.md", mtimeMs: 0,
+            sizeBytes: 0, isMarkdown: true, displayName: "Weekly review",
+            createdDate: nil, createdMs: nil, wordCount: nil, preview: nil,
+            taskTotal: 0, taskOpen: 0)
+        let fileNode = TreeNode(
+            nodeID: .file(path: titled.path), path: titled.path, name: titled.name,
+            depth: 1, kind: .file(FileTreeFileState(summary: titled)))
+        let folderNode = TreeNode(
+            nodeID: .dir(9), path: "Reference", name: "Reference", depth: 0,
+            kind: .directory(childDirCount: 0, childFileCount: 1))
+
+        XCTAssertEqual(FileTreeSidebar.typeSelectName(for: fileNode), "Weekly review")
+        XCTAssertEqual(FileTreeSidebar.typeSelectName(for: folderNode), "Reference")
+        XCTAssertEqual(
+            FileTreeSidebar.typeSelectIndex(
+                names: [
+                    FileTreeSidebar.typeSelectName(for: fileNode),
+                    FileTreeSidebar.typeSelectName(for: folderNode),
+                ],
+                prefix: "wee",
+                selectedIndex: nil),
+            0)
+    }
+
+    func testRichFileAnnouncementIsDrivenByListSelectionNotSelectedPath() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: packageRoot
+                .appendingPathComponent("Sources/SlateMac/FileTreeSidebar.swift"),
+            encoding: .utf8)
+        let listStart = try XCTUnwrap(source.range(of: ".onChange(of: listSelection)"))
+        let pathStart = try XCTUnwrap(
+            source.range(of: ".onChange(of: appState.selectedFilePath)"))
+        let listHandler = source[listStart.lowerBound..<pathStart.lowerBound]
+        XCTAssertTrue(
+            listHandler.contains("announceFocusedFileSelection("),
+            "folder → an already-open file must still speak on the row-selection edge")
+
+        let pathTail = source[pathStart.lowerBound...]
+        let pathEnd = try XCTUnwrap(pathTail.range(of: "}  // ScrollViewReader"))
+        let pathHandler = pathTail[..<pathEnd.lowerBound]
+        XCTAssertTrue(pathHandler.contains("suppressSelectionAnnouncement = true"))
+        XCTAssertFalse(
+            pathHandler.contains("postAccessibilityAnnouncement("),
+            "programmatic selected-path mirroring must not double-speak")
     }
 }
