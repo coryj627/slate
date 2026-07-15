@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import Combine
+import Dispatch
 import Foundation
 import XCTest
 
@@ -12,6 +13,7 @@ final class SidebarMetadataRefreshTests: XCTestCase {
   private final class FetchCounter: @unchecked Sendable {
     private let lock = NSLock()
     private var storage = 0
+    private var observedMainThread = false
 
     var value: Int {
       lock.lock()
@@ -19,10 +21,62 @@ final class SidebarMetadataRefreshTests: XCTestCase {
       return storage
     }
 
+    var ranOnMainThread: Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return observedMainThread
+    }
+
     func increment() {
       lock.lock()
       storage += 1
+      observedMainThread = observedMainThread || Thread.isMainThread
       lock.unlock()
+    }
+  }
+
+  private final class BlockingSummaryFetcher: @unchecked Sendable {
+    private let lock = NSLock()
+    private let releaseGate = DispatchSemaphore(value: 0)
+    private var enteredStorage = false
+    private var ranOnMainThreadStorage = false
+    private var releasedStorage = false
+    private let result: FileSummary
+
+    init(result: FileSummary) {
+      self.result = result
+    }
+
+    var entered: Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return enteredStorage
+    }
+
+    var ranOnMainThread: Bool {
+      lock.lock()
+      defer { lock.unlock() }
+      return ranOnMainThreadStorage
+    }
+
+    func fetch() -> FileSummary? {
+      lock.lock()
+      enteredStorage = true
+      ranOnMainThreadStorage = Thread.isMainThread
+      lock.unlock()
+      releaseGate.wait()
+      return result
+    }
+
+    func release() {
+      lock.lock()
+      guard !releasedStorage else {
+        lock.unlock()
+        return
+      }
+      releasedStorage = true
+      lock.unlock()
+      releaseGate.signal()
     }
   }
 
@@ -63,6 +117,12 @@ final class SidebarMetadataRefreshTests: XCTestCase {
     let observation = state.objectWillChange.sink {
       appStateInvalidations += 1
     }
+    var deliveredBatches: [[FileSummary]] = []
+    var deliveryWasOnMainThread = false
+    let deliveryObservation = state.sidebarFileSummaryUpdates.sink { summaries in
+      deliveredBatches.append(summaries)
+      deliveryWasOnMainThread = Thread.isMainThread
+    }
 
     let event = FileChangeEvent(kind: .modified, path: refreshed.path, previousPath: nil)
     state.handleSidebarFileChange(event, from: session)
@@ -70,12 +130,16 @@ final class SidebarMetadataRefreshTests: XCTestCase {
     await state.sidebarMetadataRefreshTaskForTesting?.value
 
     XCTAssertEqual(counter.value, 1, "the same path in one burst is fetched once")
+    XCTAssertFalse(counter.ranOnMainThread, "the synchronous FFI lookup must stay off-main")
+    XCTAssertEqual(deliveredBatches, [[refreshed]])
+    XCTAssertTrue(deliveryWasOnMainThread, "targeted row delivery must return to the main actor")
     XCTAssertEqual(state.sidebarFileSummaryUpdate?.summaries, [refreshed])
     XCTAssertEqual(
       appStateInvalidations,
       0,
       "targeted row delivery must not invalidate every AppState-observing surface")
     withExtendedLifetime(observation) {}
+    withExtendedLifetime(deliveryObservation) {}
   }
 
   func testOldSessionEventIsDroppedBeforeItCanFetchOrPublish() async throws {
@@ -156,6 +220,73 @@ final class SidebarMetadataRefreshTests: XCTestCase {
     XCTAssertEqual(tree.replaceFileSummaries(update.summaries), 2)
     XCTAssertEqual(tree.fileSummary(forPath: first.path), first)
     XCTAssertEqual(tree.fileSummary(forPath: second.path), second)
+  }
+
+  func testVaultSwitchWhileMetadataFetchIsInFlightDropsOldBatch() async throws {
+    let vaultA = try makeVault(named: "a")
+    let vaultB = try makeVault(named: "b")
+    let state = makeState()
+    defer { state.closeVault() }
+    state.openVault(at: vaultA)
+    await state.scanTask?.value
+    let sessionA = try XCTUnwrap(state.currentSession)
+    let stale = summary(
+      displayName: "Stale vault A title",
+      mtime: 2,
+      wordCount: 42,
+      preview: "Must never reach vault B",
+      taskTotal: 1,
+      taskOpen: 1)
+    let gate = BlockingSummaryFetcher(result: stale)
+    defer { gate.release() }
+    state.sidebarFileSummaryFetcher = { _, _ in gate.fetch() }
+    var deliveredBatches: [[FileSummary]] = []
+    let deliveryObservation = state.sidebarFileSummaryUpdates.sink { summaries in
+      deliveredBatches.append(summaries)
+    }
+
+    state.handleSidebarFileChange(
+      FileChangeEvent(kind: .modified, path: stale.path, previousPath: nil),
+      from: sessionA)
+    let oldTask = try XCTUnwrap(state.sidebarMetadataRefreshTaskForTesting)
+
+    for _ in 0..<200 where !gate.entered {
+      try await Task.sleep(for: .milliseconds(5))
+    }
+    XCTAssertTrue(gate.entered, "the old-vault fetch must be in flight before switching")
+
+    state.openVault(at: vaultB)
+    await state.scanTask?.value
+    let sessionB = try XCTUnwrap(state.currentSession)
+    gate.release()
+    await oldTask.value
+
+    XCTAssertFalse(gate.ranOnMainThread, "the blocking lookup must execute off-main")
+    XCTAssertTrue(deliveredBatches.isEmpty, "vault A metadata must never publish into vault B")
+    XCTAssertNil(state.sidebarFileSummaryUpdate)
+    XCTAssertTrue(state.sidebarMetadataPendingPaths.isEmpty)
+    XCTAssertTrue(state.currentSession === sessionB)
+    withExtendedLifetime(deliveryObservation) {}
+  }
+
+  func testRefreshTaskMakesItsMainActorOwnershipExplicit() throws {
+    let packageRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+      .deletingLastPathComponent()
+    let source = try String(
+      contentsOf: packageRoot.appendingPathComponent("Sources/SlateMac/AppState.swift"),
+      encoding: .utf8)
+    let methodStart = try XCTUnwrap(source.range(of: "func handleSidebarFileChange("))
+    let methodTail = source[methodStart.lowerBound...]
+    let methodEnd = try XCTUnwrap(
+      methodTail.range(of: "private func runSidebarMetadataRefreshLoop("))
+    let method = methodTail[..<methodEnd.lowerBound]
+
+    XCTAssertTrue(
+      method.contains(
+        "sidebarMetadataRefreshTaskForTesting = Task { @MainActor [weak self, weak session] in"),
+      "the callback task must make its inherited main-actor ownership reviewable")
   }
 
   private func makeVault(named name: String) throws -> URL {

@@ -7121,16 +7121,18 @@ final class AppState: ObservableObject {
         let summaries: [FileSummary]
     }
 
-    /// Event-side entry point for rich-row metadata. File changes arrive after
-    /// the disk/index transaction commits, but on a worker callback that must
-    /// not re-enter the session. This path handles only metadata-preserving
-    /// modifications; sidebar structural commands have their own tree seam.
+    /// Main-actor entry point for rich-row metadata. The UniFFI worker callback
+    /// hops to `@MainActor` before calling here, so pending paths, task ownership,
+    /// generations, and delivery stay isolated. Only the immutable path snapshot
+    /// and synchronous FFI lookups leave the actor in the detached utility task.
+    /// This path handles only metadata-preserving modifications; sidebar
+    /// structural commands have their own tree seam.
     func handleSidebarFileChange(_ event: FileChangeEvent, from session: VaultSession) {
         guard event.kind == .modified, currentSession === session else { return }
         sidebarMetadataPendingPaths.insert(event.path)
         guard sidebarMetadataRefreshTaskForTesting == nil else { return }
         let generation = sidebarMetadataRefreshGeneration
-        sidebarMetadataRefreshTaskForTesting = Task { [weak self, weak session] in
+        sidebarMetadataRefreshTaskForTesting = Task { @MainActor [weak self, weak session] in
             guard let self, let session else { return }
             await self.runSidebarMetadataRefreshLoop(
                 session: session,
