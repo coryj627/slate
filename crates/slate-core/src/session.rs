@@ -163,6 +163,13 @@ pub struct FileSummary {
     pub mtime_ms: i64,
     pub size_bytes: u64,
     pub is_markdown: bool,
+    pub display_name: Option<String>,
+    pub created_date: Option<String>,
+    pub created_ms: Option<i64>,
+    pub word_count: Option<u32>,
+    pub preview: Option<String>,
+    pub task_total: u32,
+    pub task_open: u32,
 }
 
 // --- Directory tree types (#459, U2-1) ---
@@ -853,6 +860,7 @@ struct OpenBaseState {
 /// exists (no migrations here).
 fn open_worker_connection(cache_dir: &std::path::Path) -> Result<Connection, rusqlite::Error> {
     let conn = Connection::open(cache_dir.join("cache.sqlite"))?;
+    crate::db::register_connection_functions(&conn)?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     Ok(conn)
@@ -2981,38 +2989,49 @@ impl VaultSession {
                     .collect::<Result<Vec<_>, _>>()?,
             );
             replace_headings(tx, file_id, contents)?;
-            let written =
-                crate::links_db::replace_links_for_file(tx, file_id, path, contents, &vault_index)?;
+            let crate::links_db::LinkReplaceResult {
+                rows,
+                file_meta_artifact,
+            } = crate::links_db::replace_links_for_file(tx, file_id, path, contents, &vault_index)?;
             graph_sink.stage(|| crate::graph::GraphOp::LinksetChanged {
                 source_path: path.to_string(),
-                rows: written,
+                rows,
             });
             crate::properties_db::replace_properties_for_file(tx, file_id, contents)?;
+            crate::file_meta_db::replace_meta_for_file_from_artifact(
+                tx,
+                file_id,
+                contents,
+                file_meta_artifact,
+            )?;
             crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, contents)?;
             crate::tags_db::replace_tags_for_file(tx, file_id, contents)?;
             crate::tasks_db::replace_tasks_for_file(tx, file_id, contents)?;
             crate::blocks_db::replace_blocks_for_file(tx, file_id, contents)?;
             crate::citations_db::replace_citations_for_file(tx, file_id, contents)?;
             crate::bases_db::replace_base_blocks_for_file(tx, file_id, contents)?;
-        } else if is_base {
-            crate::bases_db::replace_base_file_for_file(
-                tx,
-                file_id,
-                &name,
-                contents,
-                self.config.parser_version,
-                now,
-            )?;
-        } else if classify_path(path).1.as_deref() == Some("canvas") {
-            // Keep the canvas index coherent even when a `.canvas`
-            // file is written through the generic text-save path
-            // (the canvas-native save lands with #366/#372).
-            crate::canvas_db::replace_canvas_for_file(
-                tx,
-                file_id,
-                contents,
-                &DbTitleSource { conn: tx },
-            )?;
+        } else {
+            crate::file_meta_db::replace_meta_for_file(tx, file_id, "")?;
+            if is_base {
+                crate::bases_db::replace_base_file_for_file(
+                    tx,
+                    file_id,
+                    &name,
+                    contents,
+                    self.config.parser_version,
+                    now,
+                )?;
+            } else if classify_path(path).1.as_deref() == Some("canvas") {
+                // Keep the canvas index coherent even when a `.canvas`
+                // file is written through the generic text-save path
+                // (the canvas-native save lands with #366/#372).
+                crate::canvas_db::replace_canvas_for_file(
+                    tx,
+                    file_id,
+                    contents,
+                    &DbTitleSource { conn: tx },
+                )?;
+            }
         }
         Ok(file_id)
     }
@@ -5714,6 +5733,7 @@ fn scan_vault(
     // `write` reports a misleading conflict and `--create` can't
     // recreate it).
     let mut seen_files: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut file_meta_batch = crate::file_meta_db::FileMetaScanBatch::new();
     // A failed directory listing hides its whole subtree from the walk;
     // pruning on a partial view would evict live rows wholesale. Track
     // completeness and skip the file prune on any listing error (the
@@ -5778,6 +5798,7 @@ fn scan_vault(
                         &mut report,
                         &vault_index,
                         large_file_refuse_bytes,
+                        Some(&mut file_meta_batch),
                         graph_sink,
                     ) {
                         // NotFound here means the file vanished between
@@ -5823,6 +5844,12 @@ fn scan_vault(
             }
         }
     }
+
+    // Flush the tail before any post-walk reconciliation and before commit.
+    // Full 200-row chunks flush at the locked after-properties seam while the
+    // walk runs; this catches the final partial chunk.
+    let file_meta_failures = file_meta_batch.flush(&tx);
+    record_file_meta_failures(file_meta_failures, &mut report, graph_sink);
 
     // Prune `dirs` rows for directories no longer on disk. The walk
     // upserts every directory it sees into `seen_dirs`; anything left
@@ -6086,6 +6113,7 @@ fn index_file(
     report: &mut ScanReport,
     vault_index: &crate::InMemoryVaultIndex,
     large_file_refuse_bytes: u64,
+    mut file_meta_batch: Option<&mut crate::file_meta_db::FileMetaScanBatch>,
     graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
     let stat = provider.stat(path)?;
@@ -6103,8 +6131,14 @@ fn index_file(
     let is_base = extension.as_deref() == Some("base");
 
     // Fast path: if the indexed row's (mtime_ms, size_bytes, ctime_ms)
-    // already match what we just stat'd, assume content is unchanged
-    // and skip the blake3 hash. ctime catches the case where mtime is
+    // already match what we just stat'd AND its required file_meta row
+    // exists, assume content is unchanged and skip the blake3 hash. Keep the
+    // primary lookup identical to the pre-FL0 cold-scan query: only an
+    // existing row whose filesystem tuple matches pays the candidate-local
+    // file_meta probe. That probe hits file_meta's INTEGER PRIMARY KEY and
+    // makes migration replay total for real epoch-mtime files, whose mtime
+    // remains 0 after migration 031's UPDATE-to-zero trigger.
+    // ctime catches the case where mtime is
     // preserved by the writer (`cp -p`, `rsync -a`, snapshot restore)
     // — mtime alone would miss those. Pre-migration-002 rows store
     // ctime_ms = 0, and platforms without portable ctime (Windows)
@@ -6150,7 +6184,19 @@ fn index_file(
         // ctime — fall back to mtime+size only so the fast path still
         // works.
         let ctime_match = stat.ctime_ms == 0 || db_ctime_ms == 0 || db_ctime_ms == stat.ctime_ms;
-        if mtime_size_match && ctime_match {
+        let has_file_meta = if mtime_size_match && ctime_match {
+            tx.prepare_cached(
+                "SELECT EXISTS(
+                    SELECT 1 FROM file_meta fm
+                    JOIN files f ON f.id = fm.file_id
+                    WHERE f.path = ?1
+                 )",
+            )?
+            .query_row(rusqlite::params![path], |row| row.get::<_, bool>(0))?
+        } else {
+            false
+        };
+        if has_file_meta && mtime_size_match && ctime_match {
             // Update indexed_at_ms unconditionally; update ctime_ms
             // only when the current stat actually carries one. The
             // CASE guards against two regressions:
@@ -6180,6 +6226,21 @@ fn index_file(
             report.files_skipped += 1;
             return Ok(());
         }
+    }
+
+    // `file_meta` is the scanner's completion marker: the fast path above
+    // only skips a file when this row exists. Invalidate an existing marker
+    // before changing the file tuple or any derived rows. If a later batched
+    // metadata write fails, the missing marker forces the next scan back
+    // through the slow path so it can heal. If this DELETE itself fails, the
+    // early return leaves the old file tuple intact, which also guarantees a
+    // retry. New files avoid this extra statement entirely.
+    if replacing_existing_file {
+        tx.prepare_cached(
+            "DELETE FROM file_meta
+             WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+        )?
+        .execute(rusqlite::params![path])?;
     }
 
     // Past the fast path with an EXISTING file whose mtime moved:
@@ -6336,13 +6397,13 @@ fn index_file(
     // reaches here, so unchanged files don't churn the derivative
     // tables. Non-Markdown files have no headings / outgoing links /
     // frontmatter properties worth indexing.
+    // Need the file_id for the foreign keys. INSERT … ON CONFLICT
+    // DO UPDATE doesn't expose the row id directly, so query it
+    // back — cheap given we just touched the row.
+    let file_id: i64 = tx
+        .prepare_cached("SELECT id FROM files WHERE path = ?1")?
+        .query_row(rusqlite::params![path], |row| row.get(0))?;
     if is_markdown {
-        // Need the file_id for the foreign keys. INSERT … ON CONFLICT
-        // DO UPDATE doesn't expose the row id directly, so query it
-        // back — cheap given we just touched the row.
-        let file_id: i64 = tx
-            .prepare_cached("SELECT id FROM files WHERE path = ?1")?
-            .query_row(rusqlite::params![path], |row| row.get(0))?;
         // Reuse the already-decoded `body_text` so we don't pay the
         // utf8_lossy cost twice (once for FTS, once for parsers).
         index_markdown_derivatives(
@@ -6352,21 +6413,34 @@ fn index_file(
             body_text.as_str(),
             vault_index,
             replacing_existing_file,
+            file_meta_batch.as_deref_mut(),
+            report,
             graph_sink,
         )?;
-    } else if is_base {
-        let file_id: i64 = tx
-            .prepare_cached("SELECT id FROM files WHERE path = ?1")?
-            .query_row(rusqlite::params![path], |row| row.get(0))?;
-        let source = String::from_utf8_lossy(&content);
-        crate::bases_db::replace_base_file_for_file(
-            tx,
-            file_id,
-            name,
-            source.as_ref(),
-            parser_version,
-            now,
-        )?;
+    } else {
+        if let Some(batch) = file_meta_batch {
+            let failures = batch.push(
+                tx,
+                file_id,
+                path.to_string(),
+                "",
+                crate::file_meta_db::FileMetaParseArtifact::empty(),
+            );
+            record_file_meta_failures(failures, report, graph_sink);
+        } else {
+            crate::file_meta_db::replace_meta_for_file(tx, file_id, "")?;
+        }
+        if is_base {
+            let source = String::from_utf8_lossy(&content);
+            crate::bases_db::replace_base_file_for_file(
+                tx,
+                file_id,
+                name,
+                source.as_ref(),
+                parser_version,
+                now,
+            )?;
+        }
     }
 
     report.files_indexed += 1;
@@ -6413,6 +6487,7 @@ fn replace_headings(
 /// outgoing links → frontmatter properties. Each step is a
 /// DELETE-then-INSERT for the file's rows in its table, so calling
 /// this re-indexes from scratch even if previous rows existed.
+#[allow(clippy::too_many_arguments)] // shared derivative transaction state
 fn index_markdown_derivatives(
     tx: &rusqlite::Transaction,
     file_id: i64,
@@ -6420,16 +6495,31 @@ fn index_markdown_derivatives(
     body_text: &str,
     vault_index: &crate::InMemoryVaultIndex,
     replacing_existing_file: bool,
+    file_meta_batch: Option<&mut crate::file_meta_db::FileMetaScanBatch>,
+    report: &mut ScanReport,
     graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
     replace_headings(tx, file_id, body_text)?;
-    let written =
-        crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
+    let crate::links_db::LinkReplaceResult {
+        rows,
+        file_meta_artifact,
+    } = crate::links_db::replace_links_for_file(tx, file_id, path, body_text, vault_index)?;
     graph_sink.stage(|| crate::graph::GraphOp::LinksetChanged {
         source_path: path.to_string(),
-        rows: written,
+        rows,
     });
     crate::properties_db::replace_properties_for_file(tx, file_id, body_text)?;
+    if let Some(batch) = file_meta_batch {
+        let failures = batch.push(tx, file_id, path.to_string(), body_text, file_meta_artifact);
+        record_file_meta_failures(failures, report, graph_sink);
+    } else {
+        crate::file_meta_db::replace_meta_for_file_from_artifact(
+            tx,
+            file_id,
+            body_text,
+            file_meta_artifact,
+        )?;
+    }
     if replacing_existing_file {
         crate::dql_inline_fields_db::replace_dql_inline_fields_for_file(tx, file_id, body_text)?;
         crate::tags_db::replace_tags_for_file(tx, file_id, body_text)?;
@@ -6442,6 +6532,23 @@ fn index_markdown_derivatives(
     crate::citations_db::replace_citations_for_file(tx, file_id, body_text)?;
     crate::bases_db::replace_base_blocks_for_file(tx, file_id, body_text)?;
     Ok(())
+}
+
+fn record_file_meta_failures(
+    failures: Vec<crate::file_meta_db::FileMetaWriteFailure>,
+    report: &mut ScanReport,
+    graph_sink: &mut crate::graph::GraphOpSink,
+) {
+    if !failures.is_empty() {
+        // Match the scanner's existing conservative response to a derivative
+        // write failure: partial cache state must not publish graph replay.
+        graph_sink.poison();
+    }
+    report.errors.extend(
+        failures
+            .into_iter()
+            .map(|failure| format!("{}: {}", failure.path, failure.error)),
+    );
 }
 
 /// Drop any cached headings, links, and properties rows for
@@ -6499,12 +6606,14 @@ fn purge_markdown_derivatives(
     graph_sink: &mut crate::graph::GraphOpSink,
 ) -> Result<(), VaultError> {
     replace_headings(tx, file_id, "")?;
-    crate::links_db::replace_links_for_file(tx, file_id, path, "", vault_index)?;
+    let crate::links_db::LinkReplaceResult { rows, .. } =
+        crate::links_db::replace_links_for_file(tx, file_id, path, "", vault_index)?;
     graph_sink.stage(|| crate::graph::GraphOp::LinksetChanged {
         source_path: path.to_string(),
-        rows: Vec::new(),
+        rows,
     });
     crate::properties_db::replace_properties_for_file(tx, file_id, "")?;
+    crate::file_meta_db::replace_meta_for_file(tx, file_id, "")?;
     crate::dql_inline_fields_db::mark_dql_inline_fields_incomplete_for_file(tx, file_id)?;
     crate::tags_db::replace_tags_for_file(tx, file_id, "")?;
     crate::tasks_db::replace_tasks_for_file(tx, file_id, "")?;
@@ -6584,6 +6693,213 @@ fn get_file_metadata_impl(
 
 // --- Internal: list_files ---
 
+/// Shared joined projection used by every API that returns [`FileSummary`].
+///
+/// Each caller defines a unique `candidates` CTE with the seven base file
+/// columns and a one-row `totals(total_filtered)` CTE. The aggregates below
+/// are therefore bounded to the current query's candidates, and the
+/// deterministic minimum ordinal keeps repeated property shapes from
+/// multiplying file rows.
+const FILE_SUMMARY_ENRICHMENT_CTES: &str = r#"
+    , task_counts AS (
+        SELECT t.file_id,
+               COUNT(*) AS task_total,
+               SUM(CASE WHEN t.completed = 0 THEN 1 ELSE 0 END) AS task_open
+        FROM tasks t
+        JOIN candidates c ON c.id = t.file_id
+        GROUP BY t.file_id
+    ),
+    title_ordinals AS (
+        SELECT p.file_id, MIN(p.ordinal) AS ordinal
+        FROM properties p
+        JOIN candidates c ON c.id = p.file_id
+        WHERE p.key = 'title'
+        GROUP BY p.file_id
+    ),
+    title_values AS (
+        SELECT p.file_id, p.value_kind, p.value_text
+        FROM properties p
+        JOIN title_ordinals o
+          ON o.file_id = p.file_id AND o.ordinal = p.ordinal
+    ),
+    created_ordinals AS (
+        SELECT p.file_id, MIN(p.ordinal) AS ordinal
+        FROM properties p
+        JOIN candidates c ON c.id = p.file_id
+        WHERE p.key = 'created'
+        GROUP BY p.file_id
+    ),
+    created_values AS (
+        SELECT p.file_id, p.value_kind, p.value_text
+        FROM properties p
+        JOIN created_ordinals o
+          ON o.file_id = p.file_id AND o.ordinal = p.ordinal
+    )
+"#;
+
+const FILE_SUMMARY_SELECT_COLUMNS: &str = r#"
+    c.id, c.path, c.name, c.mtime_ms, c.size_bytes,
+    c.is_markdown, c.birthtime_ms,
+    CASE WHEN c.is_markdown = 1 THEN fm.word_count END,
+    CASE WHEN c.is_markdown = 1 THEN NULLIF(fm.preview, '') END,
+    COALESCE(tc.task_total, 0), COALESCE(tc.task_open, 0),
+    tv.value_kind, tv.value_text,
+    cv.value_kind, cv.value_text,
+    totals.total_filtered
+"#;
+
+const FILE_SUMMARY_ENRICHMENT_JOINS: &str = r#"
+    LEFT JOIN file_meta fm ON fm.file_id = c.id
+    LEFT JOIN task_counts tc ON tc.file_id = c.id
+    LEFT JOIN title_values tv ON tv.file_id = c.id
+    LEFT JOIN created_values cv ON cv.file_id = c.id
+"#;
+
+/// Compose the fixed enrichment projection around a caller-provided row
+/// source. `candidate_join` must bind the candidate row as `c`; optional extra
+/// columns are appended after the decoder's fixed 16-column prefix.
+fn file_summary_query_projection(
+    candidate_join: &str,
+    extra_select_columns: &str,
+    order_by: &str,
+) -> String {
+    format!(
+        "{FILE_SUMMARY_ENRICHMENT_CTES}
+         SELECT {FILE_SUMMARY_SELECT_COLUMNS}{extra_select_columns}
+         FROM totals
+         {candidate_join}
+         {FILE_SUMMARY_ENRICHMENT_JOINS}
+         {order_by}"
+    )
+}
+
+pub(crate) fn file_summary_query_tail() -> String {
+    file_summary_query_projection(
+        "LEFT JOIN candidates c ON 1 = 1",
+        "",
+        "ORDER BY c.path COLLATE BINARY ASC",
+    )
+}
+
+fn decode_json_string(value_text: Option<&str>) -> Option<String> {
+    serde_json::from_str::<String>(value_text?).ok()
+}
+
+fn canonical_gregorian_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes[..4].iter().all(u8::is_ascii_digit)
+        || !bytes[5..7].iter().all(u8::is_ascii_digit)
+        || !bytes[8..].iter().all(u8::is_ascii_digit)
+    {
+        return false;
+    }
+    let year = value[..4].parse::<i32>().ok();
+    let month = value[5..7].parse::<u32>().ok();
+    let day = value[8..].parse::<u32>().ok();
+    matches!((year, month, day), (Some(y), Some(m), Some(d)) if (1..=9999).contains(&y) && chrono::NaiveDate::from_ymd_opt(y, m, d).is_some())
+}
+
+fn canonical_naive_datetime(value: &str) -> Option<i64> {
+    let bytes = value.as_bytes();
+    if bytes.len() != 19
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || bytes[10] != b'T'
+        || bytes[13] != b':'
+        || bytes[16] != b':'
+        || bytes
+            .iter()
+            .enumerate()
+            .any(|(index, byte)| !matches!(index, 4 | 7 | 10 | 13 | 16) && !byte.is_ascii_digit())
+    {
+        return None;
+    }
+    chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S")
+        .ok()
+        .map(|datetime| datetime.and_utc().timestamp_millis())
+}
+
+fn resolve_created_value(
+    kind: Option<&str>,
+    value_text: Option<&str>,
+    birthtime_ms: Option<i64>,
+) -> (Option<String>, Option<i64>) {
+    let positive_birthtime = birthtime_ms.filter(|value| *value > 0);
+    if !matches!(kind, Some("text" | "date" | "datetime")) {
+        return (None, positive_birthtime);
+    }
+    let Some(value) = decode_json_string(value_text) else {
+        return (None, positive_birthtime);
+    };
+    if canonical_gregorian_date(&value) {
+        return (Some(value), positive_birthtime);
+    }
+    let datetime_ms = chrono::DateTime::parse_from_rfc3339(&value)
+        .ok()
+        .map(|datetime| datetime.timestamp_millis())
+        .or_else(|| canonical_naive_datetime(&value));
+    (None, datetime_ms.or(positive_birthtime))
+}
+
+/// Decode the fixed column order emitted by [`file_summary_query_projection`].
+/// The first column is nullable because each caller drives the projection from
+/// `totals` and emits a sentinel/count row when no candidate summary exists, so
+/// empty and past-end pages can still return a truthful total.
+pub(crate) fn decode_file_summary_query_row(
+    row: &rusqlite::Row<'_>,
+) -> rusqlite::Result<(Option<FileSummary>, u64)> {
+    let total_raw = row.get::<_, i64>(15)?;
+    let total_filtered = u64::try_from(total_raw)
+        .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(15, total_raw))?;
+    if row.get::<_, Option<i64>>(0)?.is_none() {
+        return Ok((None, total_filtered));
+    }
+
+    let is_markdown = row.get::<_, i64>(5)? != 0;
+    let birthtime_ms = row.get::<_, Option<i64>>(6)?;
+    let title_kind = row.get::<_, Option<String>>(11)?;
+    let title_value = row.get::<_, Option<String>>(12)?;
+    let display_name = if title_kind.as_deref() == Some("text") {
+        decode_json_string(title_value.as_deref()).and_then(|value| {
+            let trimmed = value.trim();
+            (!trimmed.is_empty()).then(|| trimmed.to_string())
+        })
+    } else {
+        None
+    };
+    let created_kind = row.get::<_, Option<String>>(13)?;
+    let created_value = row.get::<_, Option<String>>(14)?;
+    let (created_date, created_ms) = resolve_created_value(
+        created_kind.as_deref(),
+        created_value.as_deref(),
+        birthtime_ms,
+    );
+
+    Ok((
+        Some(FileSummary {
+            path: row.get(1)?,
+            name: row.get(2)?,
+            mtime_ms: row.get(3)?,
+            size_bytes: {
+                let raw = row.get::<_, i64>(4)?;
+                u64::try_from(raw).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(4, raw))?
+            },
+            is_markdown,
+            display_name,
+            created_date,
+            created_ms,
+            word_count: row.get::<_, Option<u32>>(7)?,
+            preview: row.get(8)?,
+            task_total: row.get::<_, u32>(9)?,
+            task_open: row.get::<_, u32>(10)?,
+        }),
+        total_filtered,
+    ))
+}
+
 fn list_files_impl(
     conn: &Connection,
     filter: FileFilter,
@@ -6598,49 +6914,35 @@ fn list_files_impl(
         }
     };
 
-    let total: i64 = conn.query_row(
-        &format!("SELECT COUNT(*) FROM files WHERE {where_clause}"),
-        [],
-        |row| row.get(0),
-    )?;
-
     // Fetch limit + 1: the extra row tells us whether there's a next page.
     let fetch_n = paging.limit as i64 + 1;
-
-    let mut items: Vec<FileSummary> = Vec::new();
-    let row_to_summary = |row: &rusqlite::Row<'_>| -> rusqlite::Result<FileSummary> {
-        Ok(FileSummary {
-            path: row.get(0)?,
-            name: row.get(1)?,
-            mtime_ms: row.get(2)?,
-            size_bytes: row.get::<_, i64>(3)? as u64,
-            is_markdown: row.get::<_, i64>(4)? != 0,
-        })
-    };
-
-    if let Some(cursor) = &paging.cursor {
-        let query = format!(
-            "SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files
-             WHERE {where_clause} AND path > ?1
-             ORDER BY path ASC
-             LIMIT ?2"
-        );
-        let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map(rusqlite::params![cursor, fetch_n], row_to_summary)?;
-        for r in rows {
-            items.push(r?);
-        }
-    } else {
-        let query = format!(
-            "SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files
-             WHERE {where_clause}
-             ORDER BY path ASC
-             LIMIT ?1"
-        );
-        let mut stmt = conn.prepare(&query)?;
-        let rows = stmt.query_map(rusqlite::params![fetch_n], row_to_summary)?;
-        for r in rows {
-            items.push(r?);
+    let summary_projection = file_summary_query_tail();
+    let query = format!(
+        "WITH filtered AS (
+             SELECT id, path, name, mtime_ms, size_bytes, is_markdown, birthtime_ms
+             FROM files WHERE {where_clause}
+         ),
+         totals AS (SELECT COUNT(*) AS total_filtered FROM filtered),
+         candidates AS (
+             SELECT id, path, name, mtime_ms, size_bytes, is_markdown, birthtime_ms
+             FROM filtered
+             WHERE (?1 IS NULL OR path COLLATE BINARY > ?1 COLLATE BINARY)
+             ORDER BY path COLLATE BINARY ASC
+             LIMIT ?2
+         )
+         {summary_projection}"
+    );
+    let mut stmt = conn.prepare_cached(&query)?;
+    let mut total_filtered = 0;
+    let mut items = Vec::new();
+    let rows = stmt.query_map(rusqlite::params![paging.cursor, fetch_n], |row| {
+        decode_file_summary_query_row(row)
+    })?;
+    for row in rows {
+        let (summary, total) = row?;
+        total_filtered = total;
+        if let Some(summary) = summary {
+            items.push(summary);
         }
     }
 
@@ -6654,7 +6956,7 @@ fn list_files_impl(
     Ok(Page {
         items,
         next_cursor,
-        total_filtered: total as u64,
+        total_filtered,
     })
 }
 
@@ -6670,8 +6972,7 @@ fn list_files_impl(
 /// `to_lowercase` is the full Unicode lowercasing, matching the
 /// resolver's case-insensitive discipline.
 fn tree_sort_key(name: &str) -> String {
-    use unicode_normalization::UnicodeNormalization;
-    name.nfc().collect::<String>().to_lowercase()
+    crate::db::tree_sort_key(name)
 }
 
 /// Normalize + validate a `parent_path` for [`list_dir_children_impl`].
@@ -6759,6 +7060,16 @@ fn list_dir_children_impl(
     paging: Paging,
 ) -> Result<DirListing, VaultError> {
     let parent = normalize_parent_path(parent_path)?;
+    let offset: usize = match &paging.cursor {
+        Some(cursor) => cursor.parse().map_err(|_| VaultError::InvalidArgument {
+            message: format!("invalid directory paging cursor {cursor:?}"),
+        })?,
+        None => 0,
+    };
+    let sql_offset = i64::try_from(offset).map_err(|_| VaultError::InvalidArgument {
+        message: format!("directory paging cursor {offset} is too large"),
+    })?;
+    let fetch_n = i64::from(paging.limit) + 1;
 
     // --- Child directories, with their immediate child counts. ---
     //
@@ -6801,47 +7112,89 @@ fn list_dir_children_impl(
     // --- Files: immediate child files of `parent`, plus each child
     //     directory's immediate child-file count. ---
     let mut listing_files: Vec<FileSummary> = Vec::new();
+    let mut total_files = 0;
     let mut dir_child_file_count: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
     {
-        let scan_file_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<FileSummary> {
-            Ok(FileSummary {
-                path: row.get(0)?,
-                name: row.get(1)?,
-                mtime_ms: row.get(2)?,
-                size_bytes: row.get::<_, i64>(3)? as u64,
-                is_markdown: row.get::<_, i64>(4)? != 0,
-            })
-        };
-        let rows: Vec<FileSummary> = match subtree_bounds(&parent) {
-            Some((lo, hi)) => {
-                let mut stmt = conn.prepare(
-                    "SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files
-                     WHERE path > ?1 AND path < ?2",
-                )?;
-                stmt.query_map(rusqlite::params![lo, hi], scan_file_row)?
-                    .collect::<Result<Vec<_>, _>>()?
+        let (lower, upper) = subtree_bounds(&parent)
+            .map(|(lower, upper)| (Some(lower), Some(upper)))
+            .unwrap_or((None, None));
+        // Keep the subtree scan and parent counts on base file paths only.
+        // `direct_candidates` establishes the full immediate set and truthful
+        // total; `candidates` applies the exact NFC/case-fold key and numeric
+        // paging BEFORE any file_meta/task/property enrichment. Only limit+1
+        // rows can reach those joins, while `file_counts` remains an unpaged,
+        // lightweight source for collapsed-directory child counts. All of it
+        // remains one SQL statement.
+        let summary_projection = file_summary_query_projection(
+            "LEFT JOIN row_sources rs ON 1 = 1
+             LEFT JOIN candidates c ON c.id = rs.file_id",
+            ", rs.parent_path, rs.child_file_count",
+            "ORDER BY CASE WHEN rs.file_id IS NULL THEN 0 ELSE 1 END ASC,
+                      rs.parent_path COLLATE BINARY ASC,
+                      slate_tree_sort_key(c.name) ASC,
+                      c.path COLLATE BINARY ASC",
+        );
+        let query = format!(
+            "WITH subtree_paths AS (
+                 SELECT id, path, name
+                 FROM files
+                 WHERE (?1 IS NULL OR (path > ?1 AND path < ?2))
+             ),
+             file_counts AS (
+                 SELECT CASE
+                            WHEN length(path) = length(name) THEN ''
+                            ELSE substr(path, 1, length(path) - length(name) - 1)
+                        END AS parent_path,
+                        COUNT(*) AS child_file_count
+                 FROM subtree_paths
+                 GROUP BY parent_path
+             ),
+             direct_candidates AS (
+                 SELECT f.id, f.path, f.name, f.mtime_ms, f.size_bytes,
+                        f.is_markdown, f.birthtime_ms
+                 FROM files f
+                 JOIN subtree_paths sp ON sp.id = f.id
+                 WHERE instr(substr(sp.path, length(?3) + 2), '/') = 0
+             ),
+             totals AS (SELECT COUNT(*) AS total_filtered FROM direct_candidates),
+             candidates AS (
+                 SELECT id, path, name, mtime_ms, size_bytes,
+                        is_markdown, birthtime_ms
+                 FROM direct_candidates
+                 ORDER BY slate_tree_sort_key(name) ASC, path COLLATE BINARY ASC
+                 LIMIT ?4 OFFSET ?5
+             ),
+             row_sources AS (
+                 SELECT parent_path, child_file_count, NULL AS file_id
+                 FROM file_counts
+                 UNION ALL
+                 SELECT NULL, NULL, id
+                 FROM candidates
+             )
+             {summary_projection}"
+        );
+        let mut stmt = conn.prepare_cached(&query)?;
+        let mapped = stmt.query_map(
+            rusqlite::params![lower, upper, parent, fetch_n, sql_offset],
+            |row| {
+                let (summary, total) = decode_file_summary_query_row(row)?;
+                Ok((
+                    summary,
+                    total,
+                    row.get::<_, Option<String>>(16)?,
+                    row.get::<_, Option<u32>>(17)?,
+                ))
+            },
+        )?;
+        for row in mapped {
+            let (summary, total, count_parent, child_file_count) = row?;
+            total_files = total;
+            if let (Some(count_parent), Some(child_file_count)) = (count_parent, child_file_count) {
+                dir_child_file_count.insert(count_parent, child_file_count);
             }
-            None => {
-                let mut stmt = conn
-                    .prepare("SELECT path, name, mtime_ms, size_bytes, is_markdown FROM files")?;
-                stmt.query_map([], scan_file_row)?
-                    .collect::<Result<Vec<_>, _>>()?
-            }
-        };
-        for f in rows {
-            // A file's containing directory is its path minus the final
-            // component. Tally it toward that dir's child-file count so a
-            // collapsed child folder can announce its file count.
-            let file_parent = match f.path.rfind('/') {
-                Some(i) => &f.path[..i],
-                None => "",
-            };
-            *dir_child_file_count
-                .entry(file_parent.to_string())
-                .or_insert(0) += 1;
-            if immediate_child_segment(&parent, &f.path).is_some() {
-                listing_files.push(f);
+            if let Some(summary) = summary {
+                listing_files.push(summary);
             }
         }
     }
@@ -6864,25 +7217,15 @@ fn list_dir_children_impl(
     // each NFC key once (not per comparison).
     dirs.sort_by_cached_key(|d| (tree_sort_key(&d.name), d.path.clone()));
 
-    // Sort the files the same way, then page by numeric offset — the
-    // level is materialized in memory (case-insensitive order doesn't
-    // survive a SQL `path >` cursor), so the cursor is the count already
-    // returned.
-    listing_files.sort_by_cached_key(|f| (tree_sort_key(&f.name), f.path.clone()));
-    let total_files = listing_files.len() as u64;
-    let offset: usize = match &paging.cursor {
-        Some(c) => c.parse().map_err(|_| VaultError::InvalidArgument {
-            message: format!("invalid directory paging cursor {c:?}"),
-        })?,
-        None => 0,
-    };
-    let end = offset
-        .saturating_add(paging.limit as usize)
-        .min(listing_files.len());
-    let start = offset.min(listing_files.len());
-    let items: Vec<FileSummary> = listing_files[start..end].to_vec();
-    let next_cursor = if end < listing_files.len() {
-        Some(end.to_string())
+    // SQL returned exact tree order and one lookahead row. Drop only that
+    // lookahead; the numeric cursor remains the number of sorted rows already
+    // returned, preserving the existing public paging contract.
+    let has_more = listing_files.len() > paging.limit as usize;
+    if has_more {
+        listing_files.pop();
+    }
+    let next_cursor = if has_more {
+        Some(offset.saturating_add(listing_files.len()).to_string())
     } else {
         None
     };
@@ -6890,7 +7233,7 @@ fn list_dir_children_impl(
     Ok(DirListing {
         dirs,
         files: Page {
-            items,
+            items: listing_files,
             next_cursor,
             total_filtered: total_files,
         },
@@ -7171,6 +7514,7 @@ fn refresh_text_derived_indexes_after_reclassification(
     let source = String::from_utf8_lossy(&content);
     if is_markdown {
         write_body(tx, source.as_ref())?;
+        let mut immediate_meta_report = ScanReport::default();
         index_markdown_derivatives(
             tx,
             file_id,
@@ -7178,6 +7522,8 @@ fn refresh_text_derived_indexes_after_reclassification(
             source.as_ref(),
             &vault_index,
             true,
+            None,
+            &mut immediate_meta_report,
             graph_sink,
         )?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
@@ -8886,20 +9232,23 @@ impl VaultSession {
     ///
     /// `base_execute` resolves `this` through the `files` table. A file-backed
     /// handle therefore needs its own path represented there before the handle
-    /// records that path as its default context. Existing rows stay on the
-    /// scanner fast path; only a genuinely missing row pays the targeted read
-    /// and Bases-index update below.
+    /// records that path as its default context. Complete existing rows stay
+    /// on the scanner fast path; a missing files row or file_meta projection
+    /// pays the targeted read and Bases-index update below.
     fn ensure_open_base_indexed(&self, path: &str) -> Result<(), VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
-        let indexed = conn
+        let indexed_with_meta = conn
             .query_row(
-                "SELECT 1 FROM files WHERE path = ?1",
+                "SELECT 1
+                 FROM files f
+                 JOIN file_meta fm ON fm.file_id = f.id
+                 WHERE f.path = ?1",
                 rusqlite::params![path],
                 |_| Ok(()),
             )
             .optional()?
             .is_some();
-        if indexed {
+        if indexed_with_meta {
             return Ok(());
         }
 
@@ -8923,6 +9272,7 @@ impl VaultSession {
             &mut report,
             &vault_index,
             self.config.large_file_refuse_bytes,
+            None,
             &mut graph_sink,
         )?;
         tx.commit()?;
@@ -11267,17 +11617,21 @@ impl VaultSession {
         let mut conn = self.conn.lock().expect("session connection mutex");
         let tx = conn.transaction()?;
 
-        // Ensure a files row exists (open-before-first-scan works).
-        let existing: Option<i64> = tx
+        // Ensure a files row and its required empty non-Markdown metadata row
+        // exist (open-before-first-scan and migration-replay gaps both heal).
+        let existing: Option<(i64, bool)> = tx
             .query_row(
-                "SELECT id FROM files WHERE path = ?1",
+                "SELECT f.id,
+                        EXISTS(SELECT 1 FROM file_meta fm WHERE fm.file_id = f.id)
+                 FROM files f
+                 WHERE f.path = ?1",
                 rusqlite::params![path],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
         let mut graph_sink = self.graph_sink();
-        let file_id = match existing {
-            Some(id) => id,
+        let (file_id, needs_meta) = match existing {
+            Some((id, has_meta)) => (id, !has_meta),
             None => {
                 let stat = self.provider.stat(path)?;
                 let (name, extension, is_markdown) = classify_path(path);
@@ -11310,13 +11664,19 @@ impl VaultSession {
                         resolved_inbound: crate::links_db::graph_inbound_rows(&tx, path)?,
                     })
                 })?;
-                tx.query_row(
-                    "SELECT id FROM files WHERE path = ?1",
-                    rusqlite::params![path],
-                    |row| row.get(0),
-                )?
+                (
+                    tx.query_row(
+                        "SELECT id FROM files WHERE path = ?1",
+                        rusqlite::params![path],
+                        |row| row.get(0),
+                    )?,
+                    true,
+                )
             }
         };
+        if needs_meta {
+            crate::file_meta_db::replace_meta_for_file(&tx, file_id, "")?;
+        }
 
         let (parsed, warnings, model) = crate::canvas_db::replace_canvas_for_file(
             &tx,
@@ -11841,6 +12201,9 @@ mod tests {
 
     #[path = "scan.rs"]
     mod scan;
+
+    #[path = "file_meta.rs"]
+    mod file_meta;
 
     #[path = "files.rs"]
     mod files;

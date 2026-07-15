@@ -590,3 +590,145 @@ Both gated budgets pass. Determinism (DoD §P-C) is enforced separately by the
 golden-digest unit tests (bit-identical positions at iters {60, 300} for the
 10- and 100-node fixtures) and the `census_barnes_hut_matches_exact` oracle
 (BH repulsion within 5% RMS of the exact solver on ≤500-node graphs).
+
+---
+
+## Milestone FL — FL-01 derived file metadata (2026-07-14)
+
+FL-01 adds the regenerable `file_meta` projection, enriches file listings, and
+derives metadata during real saves and cold scans. The adjacent merged base is
+**A**, commit `f07d78eddf0215e510c2f9beaa0377097dd80f5c`; the implementation is
+**B**, the complete FL-01 Tasks 1-3 tree committed alongside this record. Its
+parent implementation state is Task-2 commit
+`6e66a601bf98bf109f25eb818c1610a3df31e01a`; the containing commit adds the
+benchmarked Task-3 changes and this evidence. Both worktrees used byte-identical
+benchmark sources:
+
+The later red-team recovery commit
+`62f464f464741ca7fb6d414d77031a7bdd1c4f67` invalidates a prior `file_meta`
+completion row only when an existing file enters changed-file reindexing. None
+of the retained gates exercises that branch: cold-scan iterations delete the
+cache first, metadata listing does not scan, and save-path iterations call
+`save_text`. The measurements therefore remain exact for the gated paths; no
+unmeasured performance claim is made for fault recovery or changed-file
+rescanning.
+
+- `benches/common/mod.rs`: git blob
+  `f185a0d0f7647258bbdfae9bf513870a4dbe20a8`, SHA-256
+  `f1230265594b033dad0af265865b753ee7a0796850d7328edce52b2110e42d85`
+- `benches/scan_bench.rs`: git blob
+  `9cfd52d6fe332d2f7b88acc74878bdb29e1df1f9`, SHA-256
+  `9937378cd6fef9c306bc0ab2ae71ca6c0f7a90f2b0b618533bbc86142deaece0`
+
+Environment: MacBook Pro `Mac17,8`, Apple M5 Pro (18 cores: 6 Super + 12
+Performance), 48 GB RAM; macOS 26.5.1 (25F80); `aarch64-apple-darwin`;
+`rustc 1.95.0 (59807616e 2026-04-14)`, LLVM 22.1.2. Criterion ran release
+builds with 10 samples, 3 s warm-up, and 5 s measurement time. Processes ran
+serially with a 90 s quiet settle before each Criterion invocation; one
+invocation then measured its 1k, 10k, and 50k groups consecutively. The power
+snapshot reported the AC Power profile with `lowpowermode = 2`, while the
+battery snapshot simultaneously reported discharging; no charging state is
+claimed. Values below are the Criterion median point estimate (p50) and its 95%
+confidence interval from `new/estimates.json`.
+
+The final blocks use symmetric orders to counterbalance observed order bias;
+they cannot eliminate every environmental effect. “Geo” is the geometric mean
+of each source's two p50s. Relative delta is `(Geo B / Geo A) - 1`; additive
+delta is `Geo B - Geo A`.
+
+### Final cold-scan block — order B-A-A-B
+
+| Vault | B1 p50 (95% CI) | A1 p50 (95% CI) | A2 p50 (95% CI) | B2 p50 (95% CI) |
+|---|---:|---:|---:|---:|
+| 1k | 143.533236 ms (143.026281–144.392806) | 139.762058 ms (136.863875–141.849807) | 137.141776 ms (136.705868–138.119571) | 141.165228 ms (140.522401–143.994208) |
+| 10k | 1.720478042 s (1.713534542–1.726522208) | 1.675821271 s (1.664331250–1.691288646) | 1.677923709 s (1.674648375–1.690689500) | 1.663686084 s (1.657441917–1.674380521) |
+| 50k | 10.205454563 s (10.011595500–10.441502729) | 9.910130604 s (9.820423042–10.006874500) | 10.038366896 s (9.996783125–10.091863584) | 10.077934771 s (10.032073042–10.215685791) |
+
+| Vault | Geo A | Geo B | Relative delta | Additive delta | ≤5% gate |
+|---|---:|---:|---:|---:|---:|
+| 1k | 138.445718 ms | 142.344308 ms | +2.81597% | +3.898590 ms | PASS |
+| 10k | 1.676872160 s | 1.691843780 s | +0.89283% | +14.971620 ms | PASS |
+| 50k | 9.974042660 s | 10.141494238 s | +1.67887% | +167.451578 ms | PASS |
+
+The two directional comparisons were +2.69828% / +2.93379% at 1k,
++2.66477% / −0.84853% at 10k, and +2.98002% / +0.39417% at 50k. Every
+order-balanced geometric result clears the 5% scan budget.
+
+An additional settled 1k confirmation used the reverse A-B-B-A order:
+
+| A1 p50 (95% CI) | B1 p50 (95% CI) | B2 p50 (95% CI) | A2 p50 (95% CI) | Block geo delta |
+|---:|---:|---:|---:|---:|
+| 142.143521 ms (140.983109–143.800202) | 150.637183 ms (150.064958–166.130609) | 152.197771 ms (151.049966–154.478479) | 147.976545 ms (146.178833–149.076375) | +4.40235% |
+
+Across both settled 1k blocks (eight p50s), base Geo is 141.699968 ms, tip
+Geo is 146.809842 ms, and the combined delta is **+3.60612%**, still inside
+the 5% gate.
+
+### Final metadata-listing block — order A-B-B-A
+
+| Benchmark | A1 p50 (95% CI) | B1 p50 (95% CI) | B2 p50 (95% CI) | A2 p50 (95% CI) |
+|---|---:|---:|---:|---:|
+| `list_dir_children_meta/10000` | 2.693962 ms (2.684512–2.701095) | 8.178805 ms (7.508822–8.675548) | 7.469075 ms (7.368726–7.569071) | 2.668797 ms (2.660317–2.704245) |
+
+Geo A is 2.681350 ms and Geo B is 7.815888 ms: +191.49075%, or
++5.134538 ms additive. Both FL-01 p50s, and their geometric mean, remain below
+the **10 ms local gate** (the automated noisy-runner guard remains 100 ms):
+**PASS**. The increase is the intended single-query metadata projection, not an
+N+1 query.
+
+### Final real-save block — order B-A-A-B
+
+Each iteration alternates same-sized metadata-rich bodies and supplies the
+previous returned hash, so it is a real CAS save without content growth or
+compaction noise.
+
+| Vault | B1 p50 (95% CI) | A1 p50 (95% CI) | A2 p50 (95% CI) | B2 p50 (95% CI) |
+|---|---:|---:|---:|---:|
+| 1k | 9.469296 ms (9.090867–9.715815) | 9.037884 ms (8.909538–9.109259) | 9.121467 ms (9.022958–9.228014) | 9.294869 ms (9.143424–9.358572) |
+| 10k | 10.404605 ms (10.207583–10.631232) | 10.402968 ms (10.258887–10.664069) | 10.360702 ms (10.112495–11.294675) | 10.999462 ms (10.394361–11.285402) |
+| 50k | 19.398748 ms (19.178625–20.182662) | 19.486959 ms (19.356723–19.800885) | 20.024314 ms (19.652933–20.255849) | 20.332711 ms (20.199017–20.524298) |
+
+| Vault | Geo A | Geo B | Relative delta | Additive delta | Amended ≤0.5 ms gate |
+|---|---:|---:|---:|---:|---:|
+| 1k | 9.079579 ms | 9.381677 ms | +3.32723% | **+0.302098 ms** | PASS |
+| 10k | 10.381813 ms | 10.697900 ms | +3.04461% | **+0.316086 ms** | PASS |
+| 50k | 19.753810 ms | 19.860240 ms | +0.53878% | **+0.106430 ms** | PASS |
+
+Directional deltas were +4.77338% / +1.90103% at 1k, +0.01574% /
++6.16521% at 10k, and −0.45267% / +1.54011% at 50k. The order-balanced
+additive result passes the owner-approved 2026-07-14 gate at every size. The
+overhead does not grow with vault size (0.302, 0.316, then 0.106 ms), so FL-01
+adds O(changed-file) metadata work without worsening the shipped save path's
+existing O(N) vault-index curve. User-visible scope and all metadata derivation
+rules are unchanged; retaining the reliable current index rebuild was favored
+over a late, risky vault-index cache.
+
+### Gate amendment and excluded exploratory runs
+
+The owner-approved 2026-07-14 amendment replaces the original literal “total
+save curve no worse than adjacent base” reading with the order-balanced
+geometric-p50 additive budget above. It does not relax scan, listing,
+correctness, durability, or metadata O(changed-file) requirements.
+
+Earlier exploratory measurements that overlapped another Criterion process or
+did not receive the 90 s quiet settle are **non-gating and excluded**. The
+settled symmetric runs measured a material second-run/order bias; selecting one
+direction would therefore misstate the change. Only the complete symmetric
+blocks above are release evidence.
+
+Before the reviewed optimizations, the first unoptimized pass failed every
+performance area. Only point medians were retained for this exploratory pass;
+its confidence intervals were overwritten and are not reconstructed here.
+
+| Benchmark | Base p50 | Initial tip p50 | Delta / result |
+|---|---:|---:|---:|
+| scan 1k | 144.384121 ms | 168.903997 ms | +16.98%, FAIL |
+| scan 10k | 1.707203167 s | 2.002056438 s | +17.27%, FAIL |
+| scan 50k | 10.276509188 s | 12.113648167 s | +17.88%, FAIL |
+| listing 10k | 2.706268 ms | 34.061683 ms | >10 ms, FAIL |
+| save 1k | 8.870469 ms | 9.743574 ms | +9.84%, +0.873105 ms, FAIL |
+| save 10k | 10.875062 ms | 10.899277 ms | +0.22%, +0.024215 ms |
+| save 50k | 19.312632 ms | 20.189552 ms | +4.54%, +0.876920 ms, FAIL |
+
+Final verdict: **scan PASS at 1k/10k/50k; listing PASS at 10k; amended save
+gate PASS at 1k/10k/50k; scale-shape/O(changed-file) gate PASS.**

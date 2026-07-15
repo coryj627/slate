@@ -84,6 +84,39 @@ fn root_child_counts_are_immediate_only() {
     assert_eq!(notes.path, "notes");
 }
 
+#[test]
+fn root_listing_counts_nested_files_without_enriching_their_summaries() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/nested.md", b"# nested\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // This value cannot be decoded into FileSummary.word_count's checked u32.
+    // A root listing has no direct file rows, so it must only count this nested
+    // file and must not run the expensive summary projection for it.
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE file_meta
+             SET word_count = 4294967296
+             WHERE file_id = (SELECT id FROM files WHERE path = 'notes/nested.md')",
+            [],
+        )
+        .unwrap();
+    }
+
+    let root = session.list_dir_children("", Paging::first(100)).unwrap();
+    assert!(root.files.items.is_empty());
+    assert_eq!(root.files.total_filtered, 0);
+    let notes = root.dirs.iter().find(|dir| dir.path == "notes").unwrap();
+    assert_eq!(notes.child_file_count, 1);
+
+    let nested_error = session
+        .list_dir_children("notes", Paging::first(100))
+        .expect_err("listing the nested level must exercise checked summary decoding");
+    assert!(nested_error.to_string().contains("out of range"));
+}
+
 // --- unit: nested listing ------------------------------------------------
 
 #[test]
@@ -249,6 +282,125 @@ fn file_paging_round_trips_case_insensitive_order() {
         }
     }
     assert_eq!(collected, expected, "paged order must equal full order");
+}
+
+#[test]
+fn unicode_tree_order_survives_page_boundaries() {
+    let nfc = "éclair.md";
+    let nfd = "e\u{0301}tude.md";
+    let (_tmp, session) = make_vault(|p| {
+        for name in [nfd, "Zed.md", nfc, "apple.md", "Beta.md"] {
+            p.write_file(name, b"# note\n").unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let mut names = Vec::new();
+    let mut cursor = None;
+    loop {
+        let listing = session
+            .list_dir_children(
+                "",
+                Paging {
+                    cursor: cursor.take(),
+                    limit: 2,
+                },
+            )
+            .unwrap();
+        assert_eq!(listing.files.total_filtered, 5);
+        names.extend(file_names(&listing));
+        match listing.files.next_cursor {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+    }
+    assert_eq!(names, ["apple.md", "Beta.md", "Zed.md", nfc, nfd]);
+}
+
+#[test]
+fn equal_tree_sort_keys_use_binary_path_tiebreak_across_pages() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("a-path.md", b"# a\n").unwrap();
+        provider.write_file("z-path.md", b"# z\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        // A default case-insensitive APFS temp volume cannot hold two actual
+        // names that differ only by case. Change only the cached display-name
+        // column so both rows have the same NFC+lowercase key while their
+        // distinct real paths exercise the contract's binary tiebreak.
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET name = 'Case.md' WHERE path = 'z-path.md'",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE files SET name = 'case.md' WHERE path = 'a-path.md'",
+            [],
+        )
+        .unwrap();
+    }
+
+    let first = session.list_dir_children("", Paging::first(1)).unwrap();
+    assert_eq!(
+        first
+            .files
+            .items
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["a-path.md"]
+    );
+    assert_eq!(first.files.next_cursor.as_deref(), Some("1"));
+
+    let second = session
+        .list_dir_children("", Paging::after("1".to_string(), 1))
+        .unwrap();
+    assert_eq!(
+        second
+            .files
+            .items
+            .iter()
+            .map(|file| file.path.as_str())
+            .collect::<Vec<_>>(),
+        ["z-path.md"]
+    );
+    assert_eq!(second.files.next_cursor, None);
+}
+
+#[test]
+fn directory_page_enriches_only_limit_plus_one_candidates() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("alpha.md", b"# alpha\n").unwrap();
+        p.write_file("beta.md", b"# beta\n").unwrap();
+        p.write_file("zulu.md", b"# zulu\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE file_meta
+             SET word_count = 4294967296
+             WHERE file_id = (SELECT id FROM files WHERE path = 'zulu.md')",
+            [],
+        )
+        .unwrap();
+    }
+
+    // The first one-row page may fetch one lookahead candidate, but zulu is
+    // beyond both and must not enter the expensive enrichment joins yet.
+    let first = session.list_dir_children("", Paging::first(1)).unwrap();
+    assert_eq!(file_names(&first), ["alpha.md"]);
+    assert_eq!(first.files.next_cursor.as_deref(), Some("1"));
+    assert_eq!(first.files.total_filtered, 3);
+
+    // Requesting the page that actually includes zulu still exercises the
+    // checked summary decoder and surfaces the corrupt value.
+    let error = session
+        .list_dir_children("", Paging::after("2".to_string(), 1))
+        .expect_err("the corrupt candidate must fail only on its own page");
+    assert!(error.to_string().contains("out of range"));
 }
 
 #[test]
@@ -735,27 +887,19 @@ fn dir_id_map(session: &VaultSession) -> BTreeMap<String, i64> {
 
 #[test]
 fn perf_guard_root_listing_under_100ms_on_10k_files() {
-    // 10k files across ~50 subdirs. The budget in the spec is 10ms;
-    // assert 100ms (10x headroom) so a loaded CI box still passes while a
-    // real regression (accidental O(vault^2) or a per-file query) trips.
+    // Match the Criterion gate's difficult shape: 10k metadata-rich direct
+    // root children. The budget in the spec is 10ms; assert 100ms (10x
+    // headroom) so a loaded CI box still passes while a real regression
+    // (accidental O(vault^2) or a per-file query) trips.
     let tmp = tempfile::tempdir().unwrap();
-    let subdir_count = 50usize;
-    // Create each of the 50 subdirs exactly once (i = 0..50 covers every
-    // `i % subdir_count`), then fill all 10k files across them.
-    for s in 0..subdir_count {
-        std::fs::create_dir_all(tmp.path().join(format!("notes/{s:03}"))).unwrap();
-    }
     for i in 0..10_000usize {
-        let subdir = format!("notes/{:03}", i % subdir_count);
         std::fs::write(
-            tmp.path().join(subdir).join(format!("note-{i:08}.md")),
-            b"# n\n",
+            tmp.path().join(format!("note-{i:08}.md")),
+            format!(
+                "---\ntitle: Metadata note {i}\ncreated: 2026-07-14\n---\n# Note {i}\n\nPreview words for metadata-rich listing {i}.\n\n- [ ] open task {i}\n"
+            ),
         )
         .unwrap();
-    }
-    // A handful of root-level files + dirs so the root listing has both.
-    for i in 0..20 {
-        std::fs::write(tmp.path().join(format!("root-{i:02}.md")), b"r").unwrap();
     }
 
     let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
@@ -765,9 +909,10 @@ fn perf_guard_root_listing_under_100ms_on_10k_files() {
     let listing = session.list_dir_children("", Paging::first(200)).unwrap();
     let elapsed = start.elapsed();
 
-    // Root has one child dir ("notes") + 20 files.
-    assert_eq!(dir_names(&listing), vec!["notes"]);
-    assert_eq!(listing.files.total_filtered, 20);
+    assert!(listing.dirs.is_empty());
+    assert_eq!(listing.files.total_filtered, 10_000);
+    assert_eq!(listing.files.items.len(), 200);
+    assert_eq!(listing.files.next_cursor.as_deref(), Some("200"));
     assert!(
         elapsed < std::time::Duration::from_millis(100),
         "root list_dir_children took {elapsed:?}, over the 100ms guard (10x the 10ms budget)"

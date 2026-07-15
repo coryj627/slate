@@ -111,6 +111,7 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
     conn.execute("DROP INDEX idx_files_birthtime", []).unwrap();
     conn.execute("ALTER TABLE files DROP COLUMN birthtime_ms", [])
         .unwrap();
+    conn.execute("DROP TABLE IF EXISTS file_meta", []).unwrap();
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
             row.get(0)
@@ -150,6 +151,60 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
 }
 
 #[test]
+fn migration_031_backfills_epoch_mtime_file_instead_of_taking_fast_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let provider = FsVaultProvider::new(tmp.path().to_path_buf());
+    let source = b"# Epoch note\n\nbody";
+    provider.write_file("epoch.md", source).unwrap();
+    std::fs::File::open(tmp.path().join("epoch.md"))
+        .unwrap()
+        .set_modified(SystemTime::UNIX_EPOCH)
+        .unwrap();
+    let stat = provider.stat("epoch.md").unwrap();
+    assert_eq!(stat.mtime_ms, 0, "fixture requires an epoch-mtime file");
+
+    let cache_dir = tmp.path().join(".slate");
+    std::fs::create_dir_all(&cache_dir).unwrap();
+    let mut conn = crate::db::open_database(&cache_dir.join("cache.sqlite"), 512).unwrap();
+    crate::db::migrate_up_to(&mut conn, 30).unwrap();
+    conn.execute(
+        "INSERT INTO files
+          (path, name, extension, size_bytes, mtime_ms, ctime_ms, birthtime_ms,
+           content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+         VALUES ('epoch.md', 'epoch.md', 'md', ?1, 0, 0, ?2, ?3, 1, 1, 1, ?4)",
+        rusqlite::params![
+            stat.size_bytes as i64,
+            stat.birthtime_ms,
+            content_hash(source),
+            String::from_utf8_lossy(source).as_ref(),
+        ],
+    )
+    .unwrap();
+    drop(conn);
+
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(
+        report.files_indexed, 1,
+        "missing file_meta must force slow path"
+    );
+    assert_eq!(report.files_skipped, 0);
+
+    let conn = session.conn.lock().unwrap();
+    let row: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'epoch.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(row, (4, 18, "Epoch note body".to_string()));
+}
+
+#[test]
 fn scan_initial_indexes_markdown_and_non_markdown() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("notes/a.md", b"# A").unwrap();
@@ -163,6 +218,283 @@ fn scan_initial_indexes_markdown_and_non_markdown() {
     assert_eq!(report.files_indexed, 4);
     assert_eq!(report.errors.len(), 0);
     assert!(report.bytes_processed > 0);
+}
+
+#[test]
+fn scan_slow_path_derives_file_meta_from_markdown_body() {
+    let source = "---\ntitle: Ignored\n---\n# Heading\n\nHello [[Note#anchor|friend]] and [site](https://example.com).\n\n```rust\nhidden code\n```\n\n<div>\nhidden html\n</div>\n\n- [x] Done *now*.\n";
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", source.as_bytes()).unwrap();
+    });
+
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let body = crate::frontmatter::body_after_frontmatter(source);
+    let conn = session.conn.lock().unwrap();
+    let row: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+
+    assert_eq!(row.0, body.split_whitespace().count() as i64);
+    assert_eq!(row.1, body.chars().count() as i64);
+    assert_eq!(row.2, "Heading Hello friend and site. Done now.");
+}
+
+#[test]
+fn scan_batch_reports_meta_fallback_failure_before_later_derivative_error() {
+    let (_tmp, session) = make_vault(|provider| {
+        for index in 0..200 {
+            provider
+                .write_file(
+                    &format!("note-{index:03}.md"),
+                    format!("# Note {index}\n\n#tag\n\n- [ ] task\n").as_bytes(),
+                )
+                .unwrap();
+        }
+    });
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_first_batched_meta
+             BEFORE INSERT ON file_meta WHEN NEW.file_id = 1
+             BEGIN SELECT RAISE(ABORT, 'meta fallback sentinel'); END;
+             CREATE TRIGGER reject_later_tag_derivative
+             BEFORE INSERT ON file_tags
+             BEGIN SELECT RAISE(ABORT, 'later tag sentinel'); END;",
+        )
+        .unwrap();
+    }
+
+    let report = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.contains("note-000.md") && error.contains("meta fallback sentinel")),
+        "metadata fallback path error must survive a later derivative error: {:?}",
+        report.errors
+    );
+    assert!(
+        report
+            .errors
+            .iter()
+            .any(|error| error.contains("later tag sentinel")),
+        "fixture must exercise a later fallible derivative: {:?}",
+        report.errors
+    );
+}
+
+#[test]
+fn scan_meta_failure_invalidates_stale_row_and_next_scan_heals() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", b"old").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_changed_meta
+             BEFORE INSERT ON file_meta
+             BEGIN SELECT RAISE(ABORT, 'transient meta sentinel'); END;",
+        )
+        .unwrap();
+    }
+    FsVaultProvider::new(tmp.path().to_path_buf())
+        .write_file("note.md", b"alpha beta gamma delta")
+        .unwrap();
+
+    let failed = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        failed
+            .errors
+            .iter()
+            .any(|error| error.contains("note.md") && error.contains("transient meta sentinel")),
+        "fixture must exercise the rowwise metadata failure: {:?}",
+        failed.errors
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let stale_completion_marker: Option<(i64, i64, String)> = conn
+            .query_row(
+                "SELECT fm.word_count, fm.char_count, fm.preview
+                 FROM file_meta fm
+                 JOIN files f ON f.id = fm.file_id
+                 WHERE f.path = 'note.md'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(
+            stale_completion_marker, None,
+            "a failed projection must not leave stale metadata marked complete"
+        );
+        conn.execute("DROP TRIGGER reject_changed_meta", [])
+            .unwrap();
+    }
+
+    let recovered = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(recovered.files_indexed, 1);
+    assert_eq!(recovered.files_skipped, 0);
+    assert!(recovered.errors.is_empty(), "{:?}", recovered.errors);
+
+    let conn = session.conn.lock().unwrap();
+    let healed: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(healed, (4, 22, "alpha beta gamma delta".to_string()));
+}
+
+#[test]
+fn scan_meta_invalidation_failure_preserves_old_tuple_for_retry() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", b"old").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let old_tuple: (i64, i64, i64) = {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_meta_invalidation
+             BEFORE DELETE ON file_meta
+             BEGIN SELECT RAISE(ABORT, 'invalidation sentinel'); END;",
+        )
+        .unwrap();
+        conn.query_row(
+            "SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+    };
+    FsVaultProvider::new(tmp.path().to_path_buf())
+        .write_file("note.md", b"alpha beta gamma delta")
+        .unwrap();
+
+    let failed = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        failed
+            .errors
+            .iter()
+            .any(|error| { error.contains("note.md") && error.contains("invalidation sentinel") }),
+        "fixture must exercise metadata invalidation failure: {:?}",
+        failed.errors
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let retained_tuple: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = 'note.md'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(retained_tuple, old_tuple);
+        conn.execute("DROP TRIGGER reject_meta_invalidation", [])
+            .unwrap();
+    }
+
+    let recovered = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(recovered.files_indexed, 1);
+    assert_eq!(recovered.files_skipped, 0);
+    assert!(recovered.errors.is_empty(), "{:?}", recovered.errors);
+
+    let conn = session.conn.lock().unwrap();
+    let healed: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(healed, (4, 22, "alpha beta gamma delta".to_string()));
+}
+
+#[test]
+fn save_path_replaces_file_meta_in_the_save_transaction() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", b"one two").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    session
+        .save_text("note.md", "# Updated\n\nthree four five", None)
+        .unwrap();
+
+    let conn = session.conn.lock().unwrap();
+    let row: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(row, (5, 26, "Updated three four five".to_string()));
+}
+
+#[test]
+fn non_markdown_file_meta_is_empty_and_file_delete_cascades() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", b"body").unwrap();
+        provider
+            .write_file("attachment.txt", b"not markdown metadata")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let note_id: i64;
+    {
+        let conn = session.conn.lock().unwrap();
+        let non_markdown: (i64, i64, String) = conn
+            .query_row(
+                "SELECT fm.word_count, fm.char_count, fm.preview
+                 FROM file_meta fm
+                 JOIN files f ON f.id = fm.file_id
+                 WHERE f.path = 'attachment.txt'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(non_markdown, (0, 0, String::new()));
+        note_id = conn
+            .query_row("SELECT id FROM files WHERE path = 'note.md'", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+    }
+
+    session.delete_file("note.md").unwrap();
+
+    let conn = session.conn.lock().unwrap();
+    let remaining: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM file_meta WHERE file_id = ?1",
+            [note_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(remaining, 0, "deleting files row must cascade file_meta");
 }
 
 #[test]

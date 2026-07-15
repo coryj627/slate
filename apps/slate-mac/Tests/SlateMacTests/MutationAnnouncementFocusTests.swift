@@ -30,7 +30,8 @@ final class MutationAnnouncementFocusTests: XCTestCase {
     private func file(_ path: String) -> FileSummary {
         FileSummary(
             path: path, name: (path as NSString).lastPathComponent, mtimeMs: 0,
-            sizeBytes: 0, isMarkdown: true)
+            sizeBytes: 0, isMarkdown: true, displayName: nil, createdDate: nil,
+            createdMs: nil, wordCount: nil, preview: nil, taskTotal: 0, taskOpen: 0)
     }
 
     private func listing(dirs: [DirNodeSummary], files: [FileSummary]) -> DirListing {

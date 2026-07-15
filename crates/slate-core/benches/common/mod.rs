@@ -117,6 +117,24 @@ pub fn generate_vault(file_count: usize) -> TempDir {
     tmp
 }
 
+/// Build a metadata-rich vault with every file at the root level.
+///
+/// `generate_vault` intentionally spreads files through directories for the
+/// scanner benchmarks. The FL0-3 directory-listing gate needs the opposite
+/// shape: 10k direct root children so the measured call must project metadata
+/// for the full first-paint level rather than a small nested bucket.
+pub fn generate_flat_metadata_vault(file_count: usize) -> TempDir {
+    let tmp = tempfile::tempdir().expect("create tempdir for metadata listing vault");
+    for index in 0..file_count {
+        let content = format!(
+            "---\ntitle: Metadata note {index}\ncreated: 2026-07-14\ntags: [bench, metadata]\n---\n# Note {index}\n\nPreview words for metadata-rich listing {index}.\n\n- [ ] open task {index}\n- [x] done task {index}\n"
+        );
+        fs::write(tmp.path().join(format!("note-{index:08}.md")), content)
+            .expect("write metadata listing note");
+    }
+    tmp
+}
+
 /// Generate one note's contents, sized according to a 60/30/10 mix
 /// of small / medium / large files.
 fn synthetic_markdown(seed: usize) -> String {

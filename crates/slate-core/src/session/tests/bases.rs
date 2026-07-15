@@ -1467,6 +1467,47 @@ views:
 }
 
 #[test]
+fn open_base_heals_an_existing_files_row_without_file_meta() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("view.base", b"views:\n  - type: table\n    name: All\n")
+            .unwrap();
+    });
+    let stat = session.provider.stat("view.base").unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO files
+              (path, name, extension, size_bytes, mtime_ms, ctime_ms, birthtime_ms,
+               content_hash, parser_version, indexed_at_ms, is_markdown, body_text)
+             VALUES ('view.base', 'view.base', 'base', ?1, ?2, ?3, ?4, '', 1, 1, 0, '')",
+            rusqlite::params![
+                stat.size_bytes as i64,
+                stat.mtime_ms,
+                stat.ctime_ms,
+                stat.birthtime_ms,
+            ],
+        )
+        .unwrap();
+    }
+
+    session.open_base("view.base").unwrap();
+
+    let conn = session.conn.lock().unwrap();
+    let meta: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'view.base'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(meta, (0, 0, String::new()));
+}
+
+#[test]
 fn dql_date_shorthand_session_cache_does_not_cross_new_york_midnight() {
     const CHILD: &str = "SLATE_DQL_SESSION_CACHE_TZ_CHILD";
     if std::env::var(CHILD).as_deref() != Ok("1") {

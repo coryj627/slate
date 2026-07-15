@@ -107,6 +107,29 @@ pub struct ParsedLink {
     pub is_external: bool,
 }
 
+/// Internal observer for callers that can reuse the authoritative Markdown
+/// event walk. The public extraction surface remains allocation-compatible by
+/// installing a no-op observer.
+pub(crate) trait MarkdownEventSink {
+    fn observe_event(&mut self, event: &Event<'_>);
+
+    fn observe_wikilinks(&mut self, _links: &[ParsedLink]) {}
+
+    fn is_satisfied(&self) -> bool {
+        false
+    }
+}
+
+struct NoopMarkdownEventSink;
+
+impl MarkdownEventSink for NoopMarkdownEventSink {
+    fn observe_event(&mut self, _event: &Event<'_>) {}
+
+    fn is_satisfied(&self) -> bool {
+        true
+    }
+}
+
 /// Walk `source` and return every link reference in document order.
 ///
 /// Pure function — no IO, no allocation beyond the returned vec and
@@ -121,11 +144,63 @@ pub struct ParsedLink {
 /// are shifted back into the original-source coordinate space so
 /// callers can keep indexing into the full source they passed in.
 pub fn extract_links(source: &str) -> Vec<ParsedLink> {
+    extract_links_with_event_sink(source, &mut NoopMarkdownEventSink)
+}
+
+/// Internal extraction entry point that exposes the one authoritative
+/// pulldown-cmark event stream and validated wikilinks to a caller-owned sink.
+pub(crate) fn extract_links_with_event_sink<S: MarkdownEventSink>(
+    source: &str,
+    sink: &mut S,
+) -> Vec<ParsedLink> {
+    extract_links_impl(source, sink, true)
+}
+
+#[cfg(test)]
+fn extract_links_forced_full(source: &str) -> Vec<ParsedLink> {
+    extract_links_impl(source, &mut NoopMarkdownEventSink, false)
+}
+
+#[cfg(test)]
+pub(crate) fn extract_links_with_event_sink_forced_full<S: MarkdownEventSink>(
+    source: &str,
+    sink: &mut S,
+) -> Vec<ParsedLink> {
+    extract_links_impl(source, sink, false)
+}
+
+fn extract_links_impl<S: MarkdownEventSink>(
+    source: &str,
+    sink: &mut S,
+    allow_proven_linkless_shortcut: bool,
+) -> Vec<ParsedLink> {
     let body = crate::frontmatter::body_after_frontmatter(source);
     let body_offset = source.len() - body.len();
 
-    let (md_links, code_ranges) = walk_markdown(body);
+    // This proof is coupled to the ENABLE_STRIKETHROUGH-only parser options in
+    // `walk_markdown`: every inline/reference/collapsed/shortcut/image and
+    // wikilink family needs `[`, CommonMark URI/email autolinks need `<`, and
+    // bare GFM autolinks are not enabled. Revisit the guard before adding any
+    // parser option that recognizes another opener.
+    let proven_linkless = memchr::memchr2(b'[', b'<', body.as_bytes()).is_none();
+    if allow_proven_linkless_shortcut && proven_linkless {
+        if sink.is_satisfied() {
+            return Vec::new();
+        }
+        // Metadata still consumes this same links-owned parser, but it may stop
+        // once its bounded projection is complete. No link/code-range result is
+        // needed because the opener proof makes the link set exactly empty.
+        let _ = walk_markdown(body, sink, true);
+        return Vec::new();
+    }
+
+    // Any possible link opener requires a complete walk even when a secondary
+    // observer has already collected everything it needs.
+    let (md_links, code_ranges) = walk_markdown(body, sink, false);
     let wiki_links = scan_wikilinks(body, &code_ranges);
+    // Report validated wikilinks before their spans shift into full-source
+    // coordinates. Metadata preview rewriting operates on this same body.
+    sink.observe_wikilinks(&wiki_links);
 
     let mut out: Vec<ParsedLink> = md_links.into_iter().chain(wiki_links).collect();
     if body_offset > 0 {
@@ -147,15 +222,23 @@ pub fn extract_links(source: &str) -> Vec<ParsedLink> {
 /// - Emit `ParsedLink`s for Markdown link / image events.
 /// - Collect byte ranges of code blocks + inline code so the wikilink
 ///   scanner can skip them.
-fn walk_markdown(source: &str) -> (Vec<ParsedLink>, Vec<(usize, usize)>) {
+fn walk_markdown<S: MarkdownEventSink>(
+    source: &str,
+    sink: &mut S,
+    stop_when_sink_satisfied: bool,
+) -> (Vec<ParsedLink>, Vec<(usize, usize)>) {
     let mut links = Vec::new();
     let mut code_ranges = Vec::new();
 
     let mut parser = Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
     while let Some((event, range)) = parser.next() {
+        sink.observe_event(&event);
+        if stop_when_sink_satisfied && sink.is_satisfied() {
+            break;
+        }
         match event {
             Event::Start(Tag::Link { dest_url, .. }) => {
-                let display = collect_inline_text(&mut parser);
+                let display = collect_inline_text(&mut parser, sink);
                 let url_string = dest_url.into_string();
                 let is_external = looks_external(&url_string);
                 let display_text = if display.is_empty() || display == url_string {
@@ -182,7 +265,7 @@ fn walk_markdown(source: &str) -> (Vec<ParsedLink>, Vec<(usize, usize)>) {
                 });
             }
             Event::Start(Tag::Image { dest_url, .. }) => {
-                let display = collect_inline_text(&mut parser);
+                let display = collect_inline_text(&mut parser, sink);
                 let url_string = dest_url.into_string();
                 let is_external = looks_external(&url_string);
                 let display_text = if display.is_empty() {
@@ -232,13 +315,15 @@ fn walk_markdown(source: &str) -> (Vec<ParsedLink>, Vec<(usize, usize)>) {
 /// Tracks nesting depth because inline emphasis / code / nested links
 /// can also emit their own End events; we stop at the End that
 /// matches the outer Start the caller already consumed.
-fn collect_inline_text<'a, I>(parser: &mut I) -> String
+fn collect_inline_text<'a, I, S>(parser: &mut I, sink: &mut S) -> String
 where
     I: Iterator<Item = (Event<'a>, std::ops::Range<usize>)>,
+    S: MarkdownEventSink,
 {
     let mut out = String::new();
     let mut depth = 1usize;
     for (event, _) in parser.by_ref() {
+        sink.observe_event(&event);
         match &event {
             Event::Start(_) => depth += 1,
             Event::End(_) => {
@@ -482,9 +567,111 @@ fn parse_anchor_after_hash(anchor_raw: &str) -> Option<LinkAnchor> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+
+    #[derive(Default)]
+    struct RecordingEventSink {
+        events: Vec<String>,
+        wikilinks: Vec<ParsedLink>,
+    }
+
+    impl MarkdownEventSink for RecordingEventSink {
+        fn observe_event(&mut self, event: &Event<'_>) {
+            self.events.push(format!("{event:?}"));
+        }
+
+        fn observe_wikilinks(&mut self, links: &[ParsedLink]) {
+            self.wikilinks.extend_from_slice(links);
+        }
+
+        fn is_satisfied(&self) -> bool {
+            false
+        }
+    }
+
+    #[derive(Default)]
+    struct InitiallySatisfiedSink {
+        observed_events: usize,
+    }
+
+    impl MarkdownEventSink for InitiallySatisfiedSink {
+        fn observe_event(&mut self, _event: &Event<'_>) {
+            self.observed_events += 1;
+        }
+
+        fn is_satisfied(&self) -> bool {
+            true
+        }
+    }
 
     fn target(link: &ParsedLink) -> &str {
         &link.target_raw
+    }
+
+    #[test]
+    fn shared_event_extraction_is_output_compatible_and_forwards_drained_inline_events_once() {
+        let source = "[**bold\nsoft** `code`](target.md) and ![*alt*](img.png) [[Wiki|Alias]]";
+        let expected_links = extract_links(source);
+        let expected_events: Vec<String> = Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH)
+            .map(|event| format!("{event:?}"))
+            .collect();
+
+        let mut sink = RecordingEventSink::default();
+        let actual_links = extract_links_with_event_sink(source, &mut sink);
+
+        assert_eq!(actual_links, expected_links);
+        assert_eq!(sink.events, expected_events);
+        assert!(sink.events.iter().any(|event| event.contains("SoftBreak")));
+        assert!(sink.events.iter().any(|event| event.contains("Code")));
+        assert!(sink.events.iter().any(|event| event.contains("alt")));
+        assert_eq!(sink.wikilinks.len(), 1);
+        assert_eq!(sink.wikilinks[0].target_raw, "Wiki");
+        assert_eq!(sink.wikilinks[0].display_text.as_deref(), Some("Alias"));
+    }
+
+    #[test]
+    fn proven_linkless_satisfied_sink_observes_nothing_but_angle_autolinks_force_a_full_walk() {
+        let mut linkless_sink = InitiallySatisfiedSink::default();
+        assert!(extract_links_with_event_sink("plain body", &mut linkless_sink).is_empty());
+        assert_eq!(linkless_sink.observed_events, 0);
+
+        let mut autolink_sink = InitiallySatisfiedSink::default();
+        let links = extract_links_with_event_sink(
+            "<https://example.com> and <person@example.com>",
+            &mut autolink_sink,
+        );
+        assert_eq!(links.len(), 2);
+        assert!(links.iter().all(|link| link.kind == LinkKind::Markdown));
+        assert!(autolink_sink.observed_events > 0);
+    }
+
+    #[test]
+    fn every_bracket_led_link_family_bypasses_the_linkless_shortcut() {
+        let fixtures = [
+            ("[inline](inline.md)", "inline.md"),
+            ("[full][ref]\n\n[ref]: full.md", "full.md"),
+            ("[collapsed][]\n\n[collapsed]: collapsed.md", "collapsed.md"),
+            ("[shortcut]\n\n[shortcut]: shortcut.md", "shortcut.md"),
+            ("![image](image.png)", "image.png"),
+            ("[[Wiki|label]]", "Wiki"),
+        ];
+
+        for (source, target) in fixtures {
+            let mut sink = InitiallySatisfiedSink::default();
+            let links = extract_links_with_event_sink(source, &mut sink);
+            assert_eq!(links.len(), 1, "source={source:?}");
+            assert_eq!(links[0].target_raw, target, "source={source:?}");
+            assert!(sink.observed_events > 0, "source={source:?}");
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn proven_linkless_fast_path_matches_forced_full_extraction(
+            source in "[^\\[<]{0,2000}"
+        ) {
+            prop_assert_eq!(extract_links(&source), extract_links_forced_full(&source));
+        }
     }
 
     // --- Wikilink shapes ---

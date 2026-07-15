@@ -314,8 +314,19 @@ Each task below inherits this gate in addition to its targeted tests:
 - Run `SidebarCivilDateResolverTests` against the production resolver symbol.
 - `SLATE_CENSUS_FULL=1 cargo test -p slate-core census_file_meta --release -- --nocapture`
 - `make bench BENCH_ARGS='list_dir_children_meta/10000'`
-- Scan overhead <= 5%, root metadata listing <= 10 ms, and save remains
-  O(changed-file), with machine/baseline context recorded.
+- Preserve `first_open_and_scan/{1000,10000,50000}` (the established group
+  measures `scan_initial`): metadata scan overhead <= 5% versus adjacent base;
+  root metadata listing <= 10 ms locally (100 ms noisy-runner guard); and apply
+  the owner-approved 2026-07-14 save-gate amendment: order-balanced geometric
+  p50 additive overhead versus adjacent base must be <= 0.5 ms at each of
+  `save_path/{1000,10000,50000}`. The metadata contribution remains
+  O(changed-file), with no worsening of scale-dependent growth on the existing
+  O(N) total save curve. This amendment changes no user-visible feature or
+  derivation rule. The existing vault link-index rebuild remains the reliable
+  shipped behavior; do not add a risky vault-index cache solely to force a
+  literal zero-regression result. Record exact machine, source/harness identity,
+  symmetric run order, p50 confidence intervals, geometric deltas, and additive
+  deltas in `BENCHMARKS.md`.
 
 **Commit:** `feat(sidebar): add derived file metadata read model`
 

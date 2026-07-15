@@ -1422,6 +1422,13 @@ pub struct FileSummary {
     pub mtime_ms: i64,
     pub size_bytes: u64,
     pub is_markdown: bool,
+    pub display_name: Option<String>,
+    pub created_date: Option<String>,
+    pub created_ms: Option<i64>,
+    pub word_count: Option<u32>,
+    pub preview: Option<String>,
+    pub task_total: u32,
+    pub task_open: u32,
 }
 
 /// One frontmatter property as exposed across the FFI boundary.
@@ -1587,6 +1594,13 @@ impl From<core::FileSummary> for FileSummary {
             mtime_ms: s.mtime_ms,
             size_bytes: s.size_bytes,
             is_markdown: s.is_markdown,
+            display_name: s.display_name,
+            created_date: s.created_date,
+            created_ms: s.created_ms,
+            word_count: s.word_count,
+            preview: s.preview,
+            task_total: s.task_total,
+            task_open: s.task_open,
         }
     }
 }
@@ -6699,6 +6713,36 @@ impl VaultSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn file_summary_conversion_preserves_enrichment() {
+        let converted = FileSummary::from(core::FileSummary {
+            path: "notes/a.md".into(),
+            name: "a.md".into(),
+            mtime_ms: 17,
+            size_bytes: 23,
+            is_markdown: true,
+            display_name: Some("Authored".into()),
+            created_date: Some("2024-02-29".into()),
+            created_ms: Some(1_700_000_000_000),
+            word_count: Some(42),
+            preview: Some("Preview".into()),
+            task_total: 3,
+            task_open: 2,
+        });
+
+        assert_eq!(converted.path, "notes/a.md");
+        assert_eq!(converted.name, "a.md");
+        assert_eq!(converted.mtime_ms, 17);
+        assert_eq!(converted.size_bytes, 23);
+        assert!(converted.is_markdown);
+        assert_eq!(converted.display_name.as_deref(), Some("Authored"));
+        assert_eq!(converted.created_date.as_deref(), Some("2024-02-29"));
+        assert_eq!(converted.created_ms, Some(1_700_000_000_000));
+        assert_eq!(converted.word_count, Some(42));
+        assert_eq!(converted.preview.as_deref(), Some("Preview"));
+        assert_eq!((converted.task_total, converted.task_open), (3, 2));
+    }
 
     // ---------------------------------------------------------------
     // text_* conversions (#378) — rope-backed offset/line FFI smoke.

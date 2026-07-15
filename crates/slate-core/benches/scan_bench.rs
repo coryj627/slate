@@ -29,7 +29,9 @@ use slate_core::{
 };
 
 mod common;
-use common::{generate_linked_vault, generate_tasks_vault, generate_vault};
+use common::{
+    generate_flat_metadata_vault, generate_linked_vault, generate_tasks_vault, generate_vault,
+};
 
 const SIZES: &[usize] = &[1_000, 10_000, 50_000];
 
@@ -138,6 +140,81 @@ fn bench_list_files_paged(c: &mut Criterion) {
     }
 
     group.finish();
+}
+
+fn bench_list_dir_children_meta(c: &mut Criterion) {
+    // FL0-3's sidebar first-paint gate. Unlike `generate_vault`, this fixture
+    // has 10k DIRECT root files, each carrying title, created, preview, and
+    // task metadata. One primed session is reused for all timed iterations.
+    let mut group = c.benchmark_group("list_dir_children_meta");
+    let vault = generate_flat_metadata_vault(10_000);
+    let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
+    session
+        .scan_initial(&CancelToken::new())
+        .expect("prime metadata listing");
+
+    group.bench_function("10000", |b| {
+        b.iter(|| {
+            black_box(
+                session
+                    .list_dir_children("", Paging::first(200))
+                    .expect("list metadata-rich root"),
+            )
+        });
+    });
+
+    drop(session);
+    drop(vault);
+    group.finish();
+}
+
+fn bench_save_path(c: &mut Criterion) {
+    // Alternate byte-for-byte same-sized, metadata-rich bodies. Feeding the
+    // prior report's hash into the next iteration makes every sample a real
+    // compare-and-swap save; keeping sizes fixed removes file-growth noise.
+    // The run stays far below the default oplog compaction thresholds.
+    let mut group = c.benchmark_group("save_path");
+    let bodies = metadata_rich_save_bodies();
+    assert_eq!(bodies.0.len(), bodies.1.len());
+
+    for &size in SIZES {
+        let vault = generate_vault(size);
+        let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
+        session
+            .scan_initial(&CancelToken::new())
+            .expect("prime save vault");
+        let path = "notes/000/note-00000000.md";
+        let initial = session
+            .save_text(path, &bodies.0, None)
+            .expect("install save benchmark body");
+        let mut expected_hash = initial.new_content_hash;
+        let mut use_second = true;
+
+        group.bench_with_input(BenchmarkId::from_parameter(size), &size, |b, _| {
+            b.iter(|| {
+                let contents = if use_second { &bodies.1 } else { &bodies.0 };
+                let report = session
+                    .save_text(path, contents, Some(&expected_hash))
+                    .expect("CAS save benchmark body");
+                expected_hash = report.new_content_hash.clone();
+                use_second = !use_second;
+                black_box(report)
+            });
+        });
+
+        drop(session);
+        drop(vault);
+    }
+    group.finish();
+}
+
+fn metadata_rich_save_bodies() -> (String, String) {
+    let body = |marker: char| {
+        format!(
+            "---\ntitle: Metadata save {marker}\ncreated: 2026-07-14\ntags: [bench, save]\n---\n# Save {marker}\n\nMetadata-rich preview body {marker} with [[target-{marker}|alias-{marker}]].\n\n- [ ] open task {marker}\n- [x] done task {marker}\n"
+        )
+    };
+    (body('a'), body('b'))
 }
 
 fn bench_tasks_scan_and_query(c: &mut Criterion) {
@@ -613,6 +690,8 @@ criterion_group! {
         bench_first_open_and_scan,
         bench_reopen_with_cache,
         bench_list_files_paged,
+        bench_list_dir_children_meta,
+        bench_save_path,
         bench_tasks_scan_and_query,
         bench_parser_zero_task_overhead,
         bench_full_text_search,

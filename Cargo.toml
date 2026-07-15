@@ -27,7 +27,7 @@ uniffi = { version = "0.31", features = ["cli"] }
 # macro and fails to compile on the pinned stable toolchain. 0.39
 # (libsqlite3-sys 0.37, bundled SQLite ~3.50) is the highest that
 # builds today; revisit 0.40 once a newer stable stabilizes cfg_select.
-rusqlite = { version = "0.39", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled", "functions"] }
 tempfile = "3"
 blake3 = "1"
 trash = "5"
@@ -86,6 +86,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # transitively (via `idna`); pinning it as a direct dep is cheap.
 unicode-normalization = "0.1"
 regex = "1.12.4"
+memchr = "2.8.3"
 # petgraph backs Milestone P's GraphIndex (#550): StableDiGraph keeps
 # node indices stable across removals, which the incremental link-graph
 # mirror relies on. default-features = false sheds graphmap /

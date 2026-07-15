@@ -50,6 +50,7 @@ pub mod doc_buffer;
 mod dql_inline_fields_db;
 pub mod editor_spans;
 pub mod embeds;
+pub mod file_meta_db;
 pub mod frontmatter;
 pub mod graph;
 pub mod graph_layout;

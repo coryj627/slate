@@ -8,7 +8,7 @@ Program: [00_program.md](../00_program.md) (locked decisions 3–5; DoD §FL-B/�
 Baseline facts (verified 2026-07-14 at `origin/main` `6aa9fce`):
 
 - `files` table includes `birthtime_ms` from migration `030_files_birthtime.sql`, populated by scanner/save-path `FileStat` upserts and preserved when a later stat cannot supply it. Change detection still uses the cached `(mtime_ms, size_bytes, ctime_ms)` triple. FL0 reuses `files.birthtime_ms`; it does not add another filesystem-created column.
-- The scan slow path and save path refresh headings, links, properties, tags, and tasks inside their existing transaction seams in `session.rs`. FL0 adds `file_meta_db::replace_meta_for_file` to those same seams; implementation must locate the symbols rather than rely on the obsolete July 5 line numbers.
+- The scan slow path and save path refresh headings, links, properties, tags, and tasks inside their existing transaction seams in `session.rs`. FL0 derives `file_meta` at the same after-properties seam. Save/open/repair paths call `file_meta_db::replace_meta_for_file` immediately; scan may use the bounded batch companion described below. Implementation must locate the symbols rather than rely on the obsolete July 5 line numbers.
 - `tasks` table already exists (migration `008_tasks.sql`) and is maintained through `tasks_db::replace_tasks_for_file`; per-file task counts are aggregate queries, not new derived state.
 - `properties` table already exists (migration `005_properties.sql`) and frontmatter is parsed by `frontmatter::extract_frontmatter`; `title`/`created` lookups are joins, not new extraction.
 - Latest migration is `030_files_birthtime.sql` in `db.rs::MIGRATIONS`; FL0-1 takes migration **031**. Migrations remain append-only and transactionally applied; adding one means a new `.sql` file plus a final `Migration` entry.
@@ -36,7 +36,7 @@ Existing vaults are backfilled by the established derived-table slow-path replay
 
 ### Rust: new module `crates/slate-core/src/file_meta_db.rs`
 
-`pub fn replace_meta_for_file(tx: &Transaction, file_id: i64, contents: &str) -> Result<(), VaultError>` — called at the scan slow path and save path, after `properties_db` in the sequence. Non-markdown files get a row with `word_count = 0, char_count = 0, preview = ''` for uniform LEFT JOIN semantics.
+`pub fn replace_meta_for_file(tx: &Transaction, file_id: i64, contents: &str) -> Result<(), VaultError>` persists immediately for save/open/repair paths, after `properties_db` in the sequence. The scan slow path uses `FileMetaScanBatch` at that same seam: the same normative derivation and UPSERT, bounded to 200 rows / 800 bind parameters, flushed inside the scan transaction before post-walk reconciliation, with atomic batch failure retried rowwise so errors retain their exact path. This implementation refinement is required by the existing ≤5% scan-overhead gate; it does not change any user-visible or derivation rule. Non-markdown files get a row with `word_count = 0, char_count = 0, preview = ''` for uniform LEFT JOIN semantics.
 
 **Normative derivation rules:**
 
@@ -52,7 +52,7 @@ Existing vaults are backfilled by the established derived-table slow-path replay
 - Hook-site integration: create → row present; save with changed body → row updated in the same transaction; delete → row cascades.
 
 - [ ] Migration + schema-cookie slow-path replay
-- [ ] `file_meta_db::replace_meta_for_file` + both hook sites
+- [ ] Immediate `replace_meta_for_file` save/open/repair hook + bounded scan batch at the same after-properties transaction seam
 - [ ] Normative rules 1–4 with unit + property tests
 - [ ] fmt/clippy clean; host-independent
 
@@ -96,9 +96,11 @@ Rules:
 1. `census_file_meta_matches_rescan` — adversarial random walk (N ops from {create/edit/save/rename/move/delete, frontmatter add/remove/retype of `title`/`created`, task-list edits}); after **every** op, every file's `file_meta` row and the joined `FileSummary` fields (including the distinct `created_date`/`created_ms` resolution) ≡ a from-scratch recompute of the same file's bytes. Random + exhaustive small-vault sweep per the adversarial-census methodology.
 2. `census_file_meta_scan_parity` — full vault scanned cold ≡ vault built incrementally op-by-op (catches hook-site omissions).
 
-**Benchmarks** (`scan_bench.rs` additions): `scan_initial/{1k,10k,50k}` re-run — overhead vs. recorded baseline ≤ **5%** (DoD §FL-C); `list_dir_children_meta/{10k}` ≤ 10 ms; `save_path/{10k}` unchanged O(changed-file). Record in `BENCHMARKS.md`.
+**Benchmarks** (`scan_bench.rs` additions): retain and re-run the established `first_open_and_scan/{1000,10000,50000}` group (it measures `scan_initial`) — metadata-enabled overhead versus the adjacent merged base ≤ **5%** (DoD §FL-C); `list_dir_children_meta/10000` ≤ 10 ms locally (the automated noisy-runner guard remains 100 ms); add `save_path/{1000,10000,50000}` and record order-balanced base/tip measurements in `BENCHMARKS.md`.
 
-Wave-1 exit: both censuses clean (incl. one `SLATE_CENSUS_FULL=1` release run), baselines recorded, no scan/save regression.
+**Owner-approved save-gate amendment (2026-07-14):** the original literal “total save curve no worse than adjacent base” wording is replaced by an order-balanced geometric-p50 gate: additive tip overhead versus the adjacent base must be ≤ **0.5 ms at each of 1k, 10k, and 50k files**. The metadata contribution itself remains O(changed-file), and FL-01 must introduce no worsening of scale-dependent growth on the shipped save path's existing O(N) curve. This amendment changes neither user-visible scope nor any count/preview/date derivation rule. The shipped save still rebuilds the vault link index in O(N); preserving that reliable, already-covered behavior is preferred to introducing a risky vault-index cache solely to satisfy a literal zero-regression reading.
+
+Wave-1 exit: both censuses clean (incl. one `SLATE_CENSUS_FULL=1` release run), baselines recorded, scan overhead within 5%, listing within budget, and the amended save gate satisfied at all three sizes without worsening the existing O(N) growth curve.
 
 - [ ] Both censuses + exhaustive sweep
 - [ ] Bench baselines recorded in BENCHMARKS.md

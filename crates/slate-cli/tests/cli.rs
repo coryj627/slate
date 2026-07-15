@@ -1069,6 +1069,13 @@ fn list_json_carries_slim_file_shape() {
         .iter()
         .find(|f| f["path"] == "hub.md")
         .expect("hub.md present");
+    let mut keys = hub.as_object().unwrap().keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec!["mtime_ms", "name", "path", "size_bytes"],
+        "the enriched core/FFI record must not widen slate.cli.v1's manual list shape"
+    );
     assert_eq!(hub["name"], "hub.md");
     assert!(hub["size_bytes"].is_number());
     assert!(hub["mtime_ms"].is_number());
