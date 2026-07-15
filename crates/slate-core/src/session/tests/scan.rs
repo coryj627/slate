@@ -292,6 +292,143 @@ fn scan_batch_reports_meta_fallback_failure_before_later_derivative_error() {
 }
 
 #[test]
+fn scan_meta_failure_invalidates_stale_row_and_next_scan_heals() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", b"old").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_changed_meta
+             BEFORE INSERT ON file_meta
+             BEGIN SELECT RAISE(ABORT, 'transient meta sentinel'); END;",
+        )
+        .unwrap();
+    }
+    FsVaultProvider::new(tmp.path().to_path_buf())
+        .write_file("note.md", b"alpha beta gamma delta")
+        .unwrap();
+
+    let failed = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        failed
+            .errors
+            .iter()
+            .any(|error| error.contains("note.md") && error.contains("transient meta sentinel")),
+        "fixture must exercise the rowwise metadata failure: {:?}",
+        failed.errors
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let stale_completion_marker: Option<(i64, i64, String)> = conn
+            .query_row(
+                "SELECT fm.word_count, fm.char_count, fm.preview
+                 FROM file_meta fm
+                 JOIN files f ON f.id = fm.file_id
+                 WHERE f.path = 'note.md'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(
+            stale_completion_marker, None,
+            "a failed projection must not leave stale metadata marked complete"
+        );
+        conn.execute("DROP TRIGGER reject_changed_meta", [])
+            .unwrap();
+    }
+
+    let recovered = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(recovered.files_indexed, 1);
+    assert_eq!(recovered.files_skipped, 0);
+    assert!(recovered.errors.is_empty(), "{:?}", recovered.errors);
+
+    let conn = session.conn.lock().unwrap();
+    let healed: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(healed, (4, 22, "alpha beta gamma delta".to_string()));
+}
+
+#[test]
+fn scan_meta_invalidation_failure_preserves_old_tuple_for_retry() {
+    let (tmp, session) = make_vault(|provider| {
+        provider.write_file("note.md", b"old").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let old_tuple: (i64, i64, i64) = {
+        let conn = session.conn.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TRIGGER reject_meta_invalidation
+             BEFORE DELETE ON file_meta
+             BEGIN SELECT RAISE(ABORT, 'invalidation sentinel'); END;",
+        )
+        .unwrap();
+        conn.query_row(
+            "SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap()
+    };
+    FsVaultProvider::new(tmp.path().to_path_buf())
+        .write_file("note.md", b"alpha beta gamma delta")
+        .unwrap();
+
+    let failed = session.scan_initial(&CancelToken::new()).unwrap();
+    assert!(
+        failed
+            .errors
+            .iter()
+            .any(|error| { error.contains("note.md") && error.contains("invalidation sentinel") }),
+        "fixture must exercise metadata invalidation failure: {:?}",
+        failed.errors
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let retained_tuple: (i64, i64, i64) = conn
+            .query_row(
+                "SELECT mtime_ms, size_bytes, ctime_ms FROM files WHERE path = 'note.md'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(retained_tuple, old_tuple);
+        conn.execute("DROP TRIGGER reject_meta_invalidation", [])
+            .unwrap();
+    }
+
+    let recovered = session.scan_initial(&CancelToken::new()).unwrap();
+    assert_eq!(recovered.files_indexed, 1);
+    assert_eq!(recovered.files_skipped, 0);
+    assert!(recovered.errors.is_empty(), "{:?}", recovered.errors);
+
+    let conn = session.conn.lock().unwrap();
+    let healed: (i64, i64, String) = conn
+        .query_row(
+            "SELECT fm.word_count, fm.char_count, fm.preview
+             FROM file_meta fm
+             JOIN files f ON f.id = fm.file_id
+             WHERE f.path = 'note.md'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .unwrap();
+    assert_eq!(healed, (4, 22, "alpha beta gamma delta".to_string()));
+}
+
+#[test]
 fn save_path_replaces_file_meta_in_the_save_transaction() {
     let (_tmp, session) = make_vault(|provider| {
         provider.write_file("note.md", b"one two").unwrap();

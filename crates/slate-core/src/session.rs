@@ -6228,6 +6228,21 @@ fn index_file(
         }
     }
 
+    // `file_meta` is the scanner's completion marker: the fast path above
+    // only skips a file when this row exists. Invalidate an existing marker
+    // before changing the file tuple or any derived rows. If a later batched
+    // metadata write fails, the missing marker forces the next scan back
+    // through the slow path so it can heal. If this DELETE itself fails, the
+    // early return leaves the old file tuple intact, which also guarantees a
+    // retry. New files avoid this extra statement entirely.
+    if replacing_existing_file {
+        tx.prepare_cached(
+            "DELETE FROM file_meta
+             WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+        )?
+        .execute(rusqlite::params![path])?;
+    }
+
     // Past the fast path with an EXISTING file whose mtime moved:
     // `files.mtime_ms` (surfaced as `modified_ms`) changed, which is a
     // graph-visible payload delta independent of any structural
