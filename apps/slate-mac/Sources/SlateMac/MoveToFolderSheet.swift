@@ -489,14 +489,17 @@ struct MoveToFolderSheet: View {
     private func dismissSheet() {
         // Clear whichever pending field drove this presentation (#852: the
         // batch sheet reads `pendingBatchMove`, the single reads `pendingMove`).
-        let cancelled: Bool
+        // The presentation item is frozen in MainSplitView. If AppState already
+        // holds a replacement request, identity-safe cancellation intentionally
+        // returns false; this old sheet must still dismiss so onDismiss can
+        // promote that preserved replacement instead of becoming an inert modal.
         switch scope {
         case .single(let move):
-            cancelled = appState.cancelPendingMove(id: move.id)
+            appState.cancelPendingMove(id: move.id)
         case .batch(let batch):
-            cancelled = appState.cancelPendingBatchMove(id: batch.id)
+            appState.cancelPendingBatchMove(id: batch.id)
         }
-        if cancelled { dismiss() }
+        dismiss()
     }
 
     // MARK: - Keyboard monitor (↑/↓ selection, mirrors CommandPaletteView)

@@ -14,6 +14,13 @@ import SwiftUI
 struct MainSplitView: View {
     @EnvironmentObject private var appState: AppState
 
+    /// The item actually owned by each visible Move sheet. AppState may publish
+    /// a replacement request before AppKit finishes dismissing the old sheet;
+    /// keeping the rendered item in `@State` prevents a rebuilt modifier from
+    /// making that old dismissal act on the replacement UUID.
+    @State private var presentedMove: AppState.PendingMove?
+    @State private var presentedBatchMove: AppState.BatchMove?
+
     /// WCAG 2.3.1: the search-overlay transition swaps its slide for a
     /// plain crossfade under Reduce Motion. SwiftUI does NOT substitute
     /// custom transitions automatically — the environment flag must be
@@ -37,6 +44,84 @@ struct MainSplitView: View {
     enum AlertFocusTarget: Hashable {
         case editor
         case tree
+    }
+
+    /// A sheet dismissal can originate outside `MoveToFolderSheet` (Escape,
+    /// AppKit, or the host window closing). Read the owner from persistent view
+    /// state at dismissal time: SwiftUI rebuilds this modifier as AppState
+    /// publishes, so capturing the latest pending UUID in this closure would
+    /// let sheet A's late dismissal erase replacement B.
+    static func pendingMoveSheetBinding(
+        appState: AppState,
+        presented: Binding<AppState.PendingMove?>
+    ) -> Binding<AppState.PendingMove?> {
+        Binding(
+            get: { presented.wrappedValue },
+            set: { next in
+                guard next == nil else {
+                    presented.wrappedValue = next
+                    return
+                }
+                guard let owner = presented.wrappedValue else { return }
+                presented.wrappedValue = nil
+                appState.cancelPendingMove(id: owner.id)
+            })
+    }
+
+    /// Batch counterpart of `pendingMoveSheetBinding`; batch and single move
+    /// presentations have independent UUID owners and must clear independently.
+    static func pendingBatchMoveSheetBinding(
+        appState: AppState,
+        presented: Binding<AppState.BatchMove?>
+    ) -> Binding<AppState.BatchMove?> {
+        Binding(
+            get: { presented.wrappedValue },
+            set: { next in
+                guard next == nil else {
+                    presented.wrappedValue = next
+                    return
+                }
+                guard let owner = presented.wrappedValue else { return }
+                presented.wrappedValue = nil
+                appState.cancelPendingBatchMove(id: owner.id)
+            })
+    }
+
+    /// Adopt a request only while no sheet owns the presentation. Replacements
+    /// wait behind the visible owner and are promoted from `onDismiss`, after
+    /// AppKit has completed the old sheet's lifecycle.
+    private func synchronizeMovePresentation(_ pending: AppState.PendingMove?) {
+        guard let pending else {
+            presentedMove = nil
+            return
+        }
+        guard presentedMove == nil else { return }
+        presentedMove = pending
+    }
+
+    private func synchronizeBatchMovePresentation(_ pending: AppState.BatchMove?) {
+        guard let pending else {
+            presentedBatchMove = nil
+            return
+        }
+        guard presentedBatchMove == nil else { return }
+        presentedBatchMove = pending
+    }
+
+    static func promotePendingMoveAfterDismissal(
+        appState: AppState,
+        presented: Binding<AppState.PendingMove?>
+    ) {
+        guard presented.wrappedValue == nil else { return }
+        presented.wrappedValue = appState.pendingMove
+    }
+
+    static func promotePendingBatchMoveAfterDismissal(
+        appState: AppState,
+        presented: Binding<AppState.BatchMove?>
+    ) {
+        guard presented.wrappedValue == nil else { return }
+        presented.wrappedValue = appState.pendingBatchMove
     }
 
     var body: some View {
@@ -590,6 +675,16 @@ struct MainSplitView: View {
 
     private var splitViewWithSheets: some View {
         splitViewWithBatchAttention
+        .onAppear {
+            synchronizeMovePresentation(appState.pendingMove)
+            synchronizeBatchMovePresentation(appState.pendingBatchMove)
+        }
+        .onChange(of: appState.pendingMove) { _, pending in
+            synchronizeMovePresentation(pending)
+        }
+        .onChange(of: appState.pendingBatchMove) { _, pending in
+            synchronizeBatchMovePresentation(pending)
+        }
         .sheet(isPresented: $appState.isTemplatePickerOpen) {
             TemplatePicker()
                 .environmentObject(appState)
@@ -699,32 +794,40 @@ struct MainSplitView: View {
                 .environmentObject(appState)
         }
         // Move-to-folder picker (U2-5, #463). Presented when a rename/move
-        // command sets `pendingMove`; the sheet's own commit/cancel clears it.
+        // command sets `pendingMove`; explicit and system dismissal both clear
+        // the exact captured request without erasing a newer presentation.
         .sheet(
-            isPresented: Binding(
-                get: { appState.pendingMove != nil },
-                set: { _ in }
-            )
-        ) {
-            if let move = appState.pendingMove {
-                MoveToFolderSheet(move: move)
-                    .environmentObject(appState)
+            item: Self.pendingMoveSheetBinding(
+                appState: appState,
+                presented: $presentedMove),
+            onDismiss: {
+                alertFocusReturn = .tree
+                Self.promotePendingMoveAfterDismissal(
+                    appState: appState,
+                    presented: $presentedMove)
             }
+        ) {
+            MoveToFolderSheet(move: $0)
+                .environmentObject(appState)
         }
         // #852: the BATCH Move-to-folder picker — same sheet, batch initializer.
         // Presented when the file-tree's batch context menu sets
         // `pendingBatchMove`; commit routes the whole selection through
-        // `batchMove` (one summary announcement).
+        // `batchMove` (one summary announcement). External dismissal clears
+        // only the UUID that actually produced the presented sheet.
         .sheet(
-            isPresented: Binding(
-                get: { appState.pendingBatchMove != nil },
-                set: { _ in }
-            )
-        ) {
-            if let batch = appState.pendingBatchMove {
-                MoveToFolderSheet(batch: batch)
-                    .environmentObject(appState)
+            item: Self.pendingBatchMoveSheetBinding(
+                appState: appState,
+                presented: $presentedBatchMove),
+            onDismiss: {
+                alertFocusReturn = .tree
+                Self.promotePendingBatchMoveAfterDismissal(
+                    appState: appState,
+                    presented: $presentedBatchMove)
             }
+        ) {
+            MoveToFolderSheet(batch: $0)
+                .environmentObject(appState)
         }
         // Link-rewrite partial-failure alert (U2-5, #463). A move/rename stood
         // but some notes' links to it couldn't be updated — list exactly which,

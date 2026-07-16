@@ -1308,8 +1308,20 @@ final class FileTreeMultiSelectTests: XCTestCase {
 
         XCTAssertTrue(sidebar.contains("appState.requestPendingMove("))
         XCTAssertFalse(sidebar.contains("appState.pendingMove ="))
-        XCTAssertTrue(main.contains("get: { appState.pendingMove != nil }, set: { _ in }"))
-        XCTAssertTrue(main.contains("get: { appState.pendingBatchMove != nil }, set: { _ in }"))
+        XCTAssertTrue(
+            main.contains(
+                "item: Self.pendingMoveSheetBinding( appState: appState, "
+                    + "presented: $presentedMove)"))
+        XCTAssertTrue(
+            main.contains(
+                "item: Self.pendingBatchMoveSheetBinding( appState: appState, "
+                    + "presented: $presentedBatchMove)"))
+        XCTAssertFalse(
+            main.contains("get: { appState.pendingMove != nil }, set: { _ in }"),
+            "single-move external sheet dismissal must not be ignored")
+        XCTAssertFalse(
+            main.contains("get: { appState.pendingBatchMove != nil }, set: { _ in }"),
+            "batch-move external sheet dismissal must not be ignored")
         XCTAssertTrue(sheet.contains("appState.commitPendingMove(id: move.id, to: target)"))
         XCTAssertTrue(
             sheet.contains(
@@ -1317,9 +1329,16 @@ final class FileTreeMultiSelectTests: XCTestCase {
                     + "newFolderName: name, in:"))
         XCTAssertTrue(sheet.contains("appState.cancelPendingMove(id: move.id)"))
         XCTAssertTrue(sheet.contains("appState.cancelPendingBatchMove(id: batch.id)"))
-        XCTAssertTrue(
+        XCTAssertFalse(
             sheet.contains("if cancelled { dismiss() }"),
-            "a stale captured Cancel/Escape callback cannot dismiss the replacement sheet")
+            "a frozen old sheet must close after identity-safe cancellation so its replacement can promote")
+        XCTAssertTrue(
+            sheet.contains(
+                "private func dismissSheet() { switch scope { "
+                    + "case .single(let move): appState.cancelPendingMove(id: move.id) "
+                    + "case .batch(let batch): appState.cancelPendingBatchMove(id: batch.id) "
+                    + "} dismiss() }"),
+            "Cancel/Escape always closes the frozen owner after its identity-safe cancel attempt")
         XCTAssertFalse(sheet.contains("appState.pendingMove = nil"))
         XCTAssertTrue(
             sheet.contains("if let reason = appState.structuralMutationDisabledReason"))
@@ -1799,8 +1818,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
                     + ".accessibilityFocused($alertFocusReturn, equals: .tree)"),
             "the files sidebar is the real accessibility focus target")
         XCTAssertEqual(
-            main.components(separatedBy: "alertFocusReturn = .tree").count - 1, 2,
-            "Done and Copy Details expose their successful focus return to the alert checker")
+            main.components(separatedBy: "alertFocusReturn = .tree").count - 1, 4,
+            "Done, Copy Details, and both Move sheets expose focus return to the alert checker")
         XCTAssertFalse(main.contains("private func dismissBatchStructuralAttention"))
     }
 
@@ -2751,6 +2770,130 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertEqual(state.pendingBatchMove?.preferredFocusPath, "folder")
     }
 
+    func testSingleMovePresentationBindingClearsCurrentRequestOnExternalDismissal() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "dest/x.md"])
+        XCTAssertTrue(state.requestPendingMove(path: "a.md", isDirectory: false))
+        let request = try XCTUnwrap(state.pendingMove)
+        var presented: AppState.PendingMove? = request
+        let presentedBinding = Binding(
+            get: { presented },
+            set: { presented = $0 })
+        let presentation = MainSplitView.pendingMoveSheetBinding(
+            appState: state,
+            presented: presentedBinding)
+
+        XCTAssertEqual(presentation.wrappedValue?.id, request.id)
+        presentation.wrappedValue = nil
+
+        XCTAssertNil(presented)
+        XCTAssertNil(
+            state.pendingMove,
+            "Escape, system dismissal, and host-window closure must retire the presented request")
+        XCTAssertNil(presentation.wrappedValue, "the dismissed sheet must not re-present")
+    }
+
+    func testSingleMovePresentationBindingCannotDismissReplacementRequest() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md", "dest/x.md"])
+        XCTAssertTrue(state.requestPendingMove(path: "a.md", isDirectory: false))
+        let first = try XCTUnwrap(state.pendingMove)
+        var presented: AppState.PendingMove? = first
+        let presentedBinding = Binding(
+            get: { presented },
+            set: { presented = $0 })
+        _ = MainSplitView.pendingMoveSheetBinding(
+            appState: state,
+            presented: presentedBinding)
+
+        XCTAssertTrue(state.requestPendingMove(path: "b.md", isDirectory: false))
+        let replacement = try XCTUnwrap(state.pendingMove)
+        XCTAssertNotEqual(first.id, replacement.id)
+        // Model SwiftUI rebuilding the sheet modifier after AppState publishes
+        // B while sheet A remains visible. Dismissal must still read the frozen
+        // item owner, not capture B from the newly constructed modifier.
+        let rebuiltPresentation = MainSplitView.pendingMoveSheetBinding(
+            appState: state,
+            presented: presentedBinding)
+        rebuiltPresentation.wrappedValue = nil
+
+        XCTAssertNil(presented)
+        XCTAssertEqual(
+            state.pendingMove?.id,
+            replacement.id,
+            "a late dismissal callback from the old sheet must not erase its replacement")
+        MainSplitView.promotePendingMoveAfterDismissal(
+            appState: state,
+            presented: presentedBinding)
+        XCTAssertEqual(
+            presented?.id,
+            replacement.id,
+            "onDismiss must promote the preserved replacement after sheet A closes")
+    }
+
+    func testBatchMovePresentationBindingClearsCurrentRequestOnExternalDismissal() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md", "dest/x.md"])
+        XCTAssertTrue(
+            state.requestBatchMove(
+                [sel("a.md"), sel("b.md")],
+                preferredFocusPath: "a.md"))
+        let request = try XCTUnwrap(state.pendingBatchMove)
+        var presented: AppState.BatchMove? = request
+        let presentedBinding = Binding(
+            get: { presented },
+            set: { presented = $0 })
+        let presentation = MainSplitView.pendingBatchMoveSheetBinding(
+            appState: state,
+            presented: presentedBinding)
+
+        XCTAssertEqual(presentation.wrappedValue?.id, request.id)
+        presentation.wrappedValue = nil
+
+        XCTAssertNil(presented)
+        XCTAssertNil(
+            state.pendingBatchMove,
+            "Escape, system dismissal, and host-window closure must retire the presented batch")
+        XCTAssertNil(presentation.wrappedValue, "the dismissed batch sheet must not re-present")
+    }
+
+    func testBatchMovePresentationBindingCannotDismissReplacementRequest() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md", "dest/x.md"])
+        XCTAssertTrue(
+            state.requestBatchMove(
+                [sel("a.md"), sel("b.md")],
+                preferredFocusPath: "a.md"))
+        let first = try XCTUnwrap(state.pendingBatchMove)
+        var presented: AppState.BatchMove? = first
+        let presentedBinding = Binding(
+            get: { presented },
+            set: { presented = $0 })
+        _ = MainSplitView.pendingBatchMoveSheetBinding(
+            appState: state,
+            presented: presentedBinding)
+
+        XCTAssertTrue(
+            state.requestBatchMove(
+                [sel("a.md"), sel("b.md")],
+                preferredFocusPath: "b.md"))
+        let replacement = try XCTUnwrap(state.pendingBatchMove)
+        XCTAssertNotEqual(first.id, replacement.id)
+        let rebuiltPresentation = MainSplitView.pendingBatchMoveSheetBinding(
+            appState: state,
+            presented: presentedBinding)
+        rebuiltPresentation.wrappedValue = nil
+
+        XCTAssertNil(presented)
+        XCTAssertEqual(
+            state.pendingBatchMove?.id,
+            replacement.id,
+            "a late dismissal callback from the old batch sheet must not erase its replacement")
+        MainSplitView.promotePendingBatchMoveAfterDismissal(
+            appState: state,
+            presented: presentedBinding)
+        XCTAssertEqual(
+            presented?.id,
+            replacement.id,
+            "onDismiss must promote the preserved replacement batch after sheet A closes")
+    }
+
     func testSameURLReopenRejectsStaleStagedBatchMoveCommitWithoutRunnerCall() async throws {
         let report = moveReport(state: .noOp, planned: [item("a.md")])
         let probe = BatchRunnerProbe(
@@ -3271,8 +3414,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
     func testMainSplitViewWiresBatchSurfacesByInspection() throws {
         let src = try Self.normalizedSource("MainSplitView.swift")
         XCTAssertTrue(
-            src.contains("MoveToFolderSheet(batch: batch)"),
-            "the batch move sheet is presented from pendingBatchMove")
+            src.contains("MoveToFolderSheet(batch: $0)"),
+            "the batch move sheet renders the frozen item owned by its item binding")
         XCTAssertTrue(
             src.contains("appState.confirmPendingBatchDelete(id: pending.id)"),
             "the batch-delete alert confirms through the funnel")
