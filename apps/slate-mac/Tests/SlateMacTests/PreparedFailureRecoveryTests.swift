@@ -144,6 +144,9 @@ final class PreparedFailureRecoveryTests: XCTestCase {
         let oldScene = document.scene
         let reservation = document.beginBatchRetarget(to: "Boards/New.canvas")
         XCTAssertEqual(document.claimRetargetPreparation(), reservation.generation)
+        XCTAssertNil(
+            document.claimRetargetPreparation(),
+            "one retarget generation may schedule only one native open at a time")
 
         XCTAssertTrue(
             document.applyRetargetPreparation(
@@ -219,6 +222,26 @@ final class PreparedFailureRecoveryTests: XCTestCase {
         XCTAssertTrue(document.hasPendingRetargetPreparation)
         XCTAssertEqual(document.outline, oldOutline)
         XCTAssertEqual(document.claimRetargetPreparation(), reservation.generation)
+    }
+
+    func testCanvasPreparedActivationGuardConsumesExactlyOnceForEveryOutcome() {
+        let outcomes: [CanvasPreparedLoad] = [
+            preparedCanvas(handle: 81),
+            .degraded(warnings: [], message: "Prepared degraded state."),
+            .failed("Prepared failure state."),
+        ]
+
+        for (index, prepared) in outcomes.enumerated() {
+            let document = CanvasDocument(path: "Boards/Prepared-\(index).canvas")
+            document.applyPreparedLoad(prepared)
+
+            XCTAssertTrue(
+                document.shouldSkipSynchronousActivationLoad(),
+                "the first activation must trust the already prepared outcome")
+            XCTAssertFalse(
+                document.shouldSkipSynchronousActivationLoad(),
+                "the prepared activation guard must be consumed exactly once")
+        }
     }
 
     private func makeLoadedCanvas(path: String, handle: UInt64) -> CanvasDocument {
