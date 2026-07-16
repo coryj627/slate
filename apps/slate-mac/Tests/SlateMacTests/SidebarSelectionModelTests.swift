@@ -289,6 +289,231 @@ final class SidebarSelectionModelTests: XCTestCase {
         XCTAssertFalse(reconcile.changed, "known remapping happens before generic reconciliation")
     }
 
+    func testBatchMoveRemapsOnlyStandingWithLongestComponentPrefix() {
+        let folder = directory("a", id: 1)
+        let nested = file("a/deep/note.md")
+        let boundary = file("ab/keep.md")
+        let rolledBack = file("rolled/item.md")
+        let exactFileDescendant = file("exact.md/child.md")
+        let anchor = file("a/deep/anchor.md")
+        var model = Model(
+            focused: nested.identity,
+            selected: [
+                folder.identity, nested.identity, boundary.identity,
+                rolledBack.identity, exactFileDescendant.identity,
+            ],
+            selectionPathSnapshots: [
+                folder.identity: folder.path,
+                nested.identity: nested.path,
+                boundary.identity: boundary.path,
+                rolledBack.identity: rolledBack.path,
+                exactFileDescendant.identity: exactFileDescendant.path,
+            ],
+            rangeAnchor: anchor.identity,
+            rangeAnchorPathSnapshot: anchor.path)
+        let index = Model.KnownMoveIndex([
+            Model.KnownMove(oldPath: "a", newPath: "dest/a", isDirectory: true),
+            Model.KnownMove(
+                oldPath: "a/deep", newPath: "special/deep", isDirectory: true),
+            Model.KnownMove(
+                oldPath: "exact.md", newPath: "dest/exact.md", isDirectory: false),
+        ])
+        var visits = 0
+
+        model.remapKnownMoves(
+            using: index,
+            identityForRemappedPath: remappedIdentity,
+            componentVisits: &visits)
+
+        XCTAssertEqual(model.selectionPathSnapshots[folder.identity], "dest/a")
+        XCTAssertTrue(model.selected.contains(.file("special/deep/note.md")))
+        XCTAssertEqual(model.focused, .file("special/deep/note.md"))
+        XCTAssertEqual(model.rangeAnchor, .file("special/deep/anchor.md"))
+        XCTAssertEqual(model.rangeAnchorPathSnapshot, "special/deep/anchor.md")
+        XCTAssertTrue(model.selected.contains(boundary.identity), "a never covers ab")
+        XCTAssertTrue(
+            model.selected.contains(rolledBack.identity),
+            "a rolled-back path absent from the standing index stays unchanged")
+        XCTAssertTrue(
+            model.selected.contains(exactFileDescendant.identity),
+            "an exact-file entry never covers a malformed descendant path")
+        XCTAssertLessThan(visits, 30)
+    }
+
+    func testBatchMoveIndexWorkIsIndependentOfTenThousandChanges() {
+        let changes = (0..<10_000).map {
+            Model.KnownMove(
+                oldPath: "source-\($0)", newPath: "dest/source-\($0)",
+                isDirectory: true)
+        }
+        let index = Model.KnownMoveIndex(changes)
+        let selected = [
+            file("source-1/a.md"), file("source-5000/b.md"),
+            file("source-9999/deep/c.md"),
+        ]
+        var model = Model(
+            focused: selected[1].identity,
+            selected: Set(selected.map(\.identity)),
+            selectionPathSnapshots: Dictionary(
+                uniqueKeysWithValues: selected.map { ($0.identity, $0.path) }),
+            rangeAnchor: selected[2].identity,
+            rangeAnchorPathSnapshot: selected[2].path)
+        var visits = 0
+
+        model.remapKnownMoves(
+            using: index,
+            identityForRemappedPath: remappedIdentity,
+            componentVisits: &visits)
+
+        XCTAssertEqual(index.entryCount, 10_000)
+        XCTAssertEqual(
+            model.focused, .file("dest/source-5000/b.md"))
+        XCTAssertLessThanOrEqual(
+            visits, 11,
+            "lookups visit only selected/anchor path components, never all changes")
+    }
+
+    func testBatchTrashPreservesUntrashedFocusAndUsesNextBiasedFallbacks() {
+        let before = [
+            directory("folder", id: 1),
+            file("folder/child.md"),
+            file("before.md"),
+            file("focused.md"),
+            file("after.md"),
+            file("folderish/keep.md"),
+        ]
+
+        do {
+            var model = Model(
+                focused: before[4].identity,
+                selected: [before[3].identity, before[4].identity],
+                selectionPathSnapshots: [
+                    before[3].identity: before[3].path,
+                    before[4].identity: before[4].path,
+                ])
+            var visits = 0
+            model.removeKnownItems(
+                using: Model.KnownRemovalIndex([
+                    Model.KnownRemoval(path: "focused.md", isDirectory: false)
+                ]),
+                preferredFocusPath: "focused.md",
+                visibleRows: before,
+                componentVisits: &visits)
+
+            XCTAssertEqual(
+                model.focused, before[4].identity,
+                "an untrashed live focus is never stolen by the captured origin")
+            XCTAssertEqual(model.selected, [before[4].identity])
+        }
+
+        do {
+            var model = Model(
+                focused: before[3].identity,
+                selected: [before[2].identity, before[3].identity, before[4].identity],
+                selectionPathSnapshots: [
+                    before[2].identity: before[2].path,
+                    before[3].identity: before[3].path,
+                    before[4].identity: before[4].path,
+                ])
+            var visits = 0
+            model.removeKnownItems(
+                using: Model.KnownRemovalIndex([
+                    Model.KnownRemoval(path: "focused.md", isDirectory: false)
+                ]),
+                preferredFocusPath: "focused.md",
+                visibleRows: before,
+                componentVisits: &visits)
+            XCTAssertEqual(
+                model.focused, before[4].identity,
+                "equal-distance selected survivors prefer the next row")
+            XCTAssertEqual(model.selected, [before[2].identity, before[4].identity])
+        }
+
+        do {
+            var model = Model(
+                focused: before[0].identity,
+                selected: [before[0].identity, before[1].identity],
+                selectionPathSnapshots: [
+                    before[0].identity: before[0].path,
+                    before[1].identity: before[1].path,
+                ])
+            var visits = 0
+            model.removeKnownItems(
+                using: Model.KnownRemovalIndex([
+                    Model.KnownRemoval(path: "folder", isDirectory: true)
+                ]),
+                preferredFocusPath: "folder",
+                visibleRows: before,
+                componentVisits: &visits)
+            XCTAssertFalse(model.selected.contains(before[1].identity))
+            XCTAssertEqual(model.focused, before[2].identity, "next survivor wins")
+            XCTAssertEqual(model.selected, [before[2].identity])
+            XCTAssertFalse(
+                model.selected.contains(before[5].identity),
+                "fallback does not manufacture unrelated multi-selection")
+        }
+
+        do {
+            let rows = [directory("parent", id: 8), file("parent/only.md")]
+            var model = Model(
+                focused: rows[1].identity,
+                selected: [rows[1].identity],
+                selectionPathSnapshots: [rows[1].identity: rows[1].path])
+            var visits = 0
+            model.removeKnownItems(
+                using: Model.KnownRemovalIndex([
+                    Model.KnownRemoval(path: "parent/only.md", isDirectory: false)
+                ]),
+                preferredFocusPath: rows[1].path,
+                visibleRows: rows,
+                componentVisits: &visits)
+            XCTAssertEqual(model.focused, rows[0].identity, "surviving parent is last fallback")
+            XCTAssertEqual(model.selected, [rows[0].identity])
+        }
+
+        do {
+            let rows = [file("before.md"), file("last.md")]
+            var model = Model(
+                focused: rows[1].identity,
+                selected: [rows[1].identity],
+                selectionPathSnapshots: [rows[1].identity: rows[1].path])
+            var visits = 0
+            model.removeKnownItems(
+                using: Model.KnownRemovalIndex([
+                    Model.KnownRemoval(path: "last.md", isDirectory: false)
+                ]),
+                preferredFocusPath: rows[1].path,
+                visibleRows: rows,
+                componentVisits: &visits)
+            XCTAssertEqual(model.focused, rows[0].identity, "previous wins when no next row survives")
+            XCTAssertEqual(model.selected, [rows[0].identity])
+        }
+
+        do {
+            let rows = [directory("folder", id: 20), file("folderish/keep.md")]
+            var model = Model(
+                focused: rows[1].identity,
+                selected: [rows[0].identity, rows[1].identity],
+                selectionPathSnapshots: [
+                    rows[0].identity: rows[0].path,
+                    rows[1].identity: rows[1].path,
+                ])
+            var visits = 0
+            model.removeKnownItems(
+                using: Model.KnownRemovalIndex([
+                    Model.KnownRemoval(path: "folder", isDirectory: true)
+                ]),
+                preferredFocusPath: "folder",
+                visibleRows: rows,
+                componentVisits: &visits)
+            XCTAssertEqual(model.focused, rows[1].identity)
+            XCTAssertEqual(model.selected, [rows[1].identity])
+            XCTAssertEqual(
+                model.selectionPathSnapshots[rows[1].identity], "folderish/keep.md",
+                "folder removal never covers folderish")
+        }
+    }
+
     func testMixedVisualSelectionKeepsEveryRowWhileOperationsPruneDescendants() {
         let folder = directory("folder", id: 1)
         let child = file("folder/child.md")

@@ -18,11 +18,16 @@ struct AddPropertySheet: View {
     @State private var key: String = ""
     @State private var selectedKind: AddPropertyKind = .text
     @State private var inlineError: String?
+    @State private var isCommitting = false
 
     @FocusState private var focusedField: Field?
 
     enum Field: Hashable {
         case key
+    }
+
+    private var disabledReason: String? {
+        appState.addPropertySheetDisabledReason
     }
 
     var body: some View {
@@ -39,6 +44,14 @@ struct AddPropertySheet: View {
                     .accessibilityLabel("Property key")
                     .focused($focusedField, equals: .key)
                     .onSubmit(commit)
+                    .disabled(disabledReason != nil)
+                if disabledReason != nil, !key.isEmpty {
+                    Text(key)
+                        .font(.body.monospaced())
+                        .textSelection(.enabled)
+                        .accessibilityLabel("Property key draft: \(key)")
+                        .accessibilityHint("Selectable copy of the preserved property key draft.")
+                }
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -52,6 +65,15 @@ struct AddPropertySheet: View {
                 .pickerStyle(.menu)
                 .labelsHidden()
                 .accessibilityLabel("Property type")
+                .disabled(disabledReason != nil)
+            }
+
+            if let disabledReason {
+                Text(disabledReason)
+                    .font(.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .accessibilityLabel(disabledReason)
+                    .help(disabledReason)
             }
 
             if let err = inlineError {
@@ -63,8 +85,17 @@ struct AddPropertySheet: View {
             }
 
             HStack {
+                if disabledReason == AppState.batchTrashQuarantineReason {
+                    Button("Check Again") {
+                        _ = appState.retryBatchTrashUnknownReconciliation()
+                    }
+                    .disabled(appState.isMutatingStructure)
+                    .accessibilityHint("Rescan the vault and check whether this note is still present.")
+                    .help("Check whether this note is still present")
+                }
                 Spacer()
                 Button("Cancel", role: .cancel) {
+                    appState.dismissAddPropertySheet()
                     dismiss()
                 }
                 .keyboardShortcut(.cancelAction)
@@ -72,18 +103,30 @@ struct AddPropertySheet: View {
                     commit()
                 }
                 .keyboardShortcut(.defaultAction)
-                .disabled(key.trimmingCharacters(in: .whitespaces).isEmpty || appState.isEditingProperty)
+                .disabled(
+                    key.trimmingCharacters(in: .whitespaces).isEmpty
+                        || appState.isEditingProperty
+                        || isCommitting
+                        || disabledReason != nil)
+                .accessibilityHint(disabledReason ?? "Add this property to the note.")
+                .help(disabledReason ?? "Add this property to the note")
             }
         }
         .padding(20)
         .frame(minWidth: 360)
         .onAppear {
+            appState.ensureAddPropertySheetOwner()
             focusedField = .key
             postAccessibilityAnnouncement("Add property", priority: .high)
         }
     }
 
     private func commit() {
+        if let disabledReason {
+            inlineError = disabledReason
+            postAccessibilityAnnouncement(disabledReason, priority: .high)
+            return
+        }
         let trimmed = key.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else {
             inlineError = "Key can't be empty."
@@ -97,13 +140,41 @@ struct AddPropertySheet: View {
             inlineError = "A property named `\(trimmed)` already exists on this note."
             return
         }
-        guard let path = appState.loadedFilePath else {
+        guard let path = appState.addPropertySheetOwnerPath,
+            let owner = appState.addPropertySheetOwner,
+            appState.ownsNoteAuthoring(owner),
+            BaseExactIdentity.matches(path, appState.loadedFilePath),
+            BaseExactIdentity.matches(owner.path, path)
+        else {
             inlineError = "No note is loaded."
             return
         }
         inlineError = nil
-        appState.setProperty(path: path, key: trimmed, value: selectedKind.zeroValue())
-        dismiss()
+        guard let task = appState.setProperty(
+            path: path,
+            key: trimmed,
+            value: selectedKind.zeroValue(),
+            owner: owner)
+        else {
+            inlineError =
+                appState.addPropertySheetDisabledReason
+                ?? "The property could not be added yet. Try again."
+            return
+        }
+        isCommitting = true
+        Task { @MainActor in
+            await task.value
+            isCommitting = false
+            guard appState.currentNoteProperties.contains(where: { $0.key == trimmed }) else {
+                inlineError =
+                    appState.addPropertySheetDisabledReason
+                    ?? appState.propertyEditError
+                    ?? "The property was not added. Your draft is still here."
+                return
+            }
+            appState.dismissAddPropertySheet()
+            dismiss()
+        }
     }
 }
 

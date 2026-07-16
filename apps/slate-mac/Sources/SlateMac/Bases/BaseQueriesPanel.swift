@@ -148,7 +148,14 @@ struct BaseQueriesPanel: View {
 
     @ViewBuilder
     private var savedQueriesSection: some View {
+        let exportDisabledReason = appState.structuralMutationDisabledReason
         BaseQueriesSectionHeader(title: "Saved queries")
+        if let exportDisabledReason {
+            Text(exportDisabledReason)
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+                .accessibilityLabel(exportDisabledReason)
+        }
         if appState.baseQueries.savedQueries.isEmpty {
             emptyRow("No saved queries")
         } else {
@@ -192,6 +199,7 @@ struct BaseQueriesPanel: View {
 
     private func savedQueryRow(_ summary: SavedQuerySummary) -> some View {
         let isPinned = appState.baseQueries.pinnedSavedQueryIDs.contains(summary.id)
+        let exportDisabledReason = appState.structuralMutationDisabledReason
         return HStack(spacing: Tokens.Spacing.sm) {
             Button {
                 appState.openSavedQuery(summary)
@@ -235,6 +243,13 @@ struct BaseQueriesPanel: View {
                 Button("Export as .base...") {
                     appState.exportSavedQueryUsingSavePanel(id: summary.id)
                 }
+                .disabled(exportDisabledReason != nil)
+                .accessibilityHint(
+                    exportDisabledReason
+                        ?? "Export this saved query to a .base file in the vault.")
+                .help(
+                    exportDisabledReason
+                        ?? "Export this saved query to a .base file in the vault")
                 Button("Dock to Sidebar") {
                     appState.dockSavedQueryToSidebar(id: summary.id)
                 }

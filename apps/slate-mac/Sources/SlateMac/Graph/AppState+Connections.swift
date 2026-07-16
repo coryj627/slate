@@ -236,10 +236,18 @@ extension AppState {
     /// §P1-1 item 4). `create_exclusive` is the no-clobber primitive; the
     /// follow-up scan re-resolves the ghost onto the new note, and the
     /// event-driven refresh then updates the neighborhood.
-    func createNoteFromGhost(targetRaw: String) {
-        guard let session = currentSession else { return }
+    @discardableResult
+    func createNoteFromGhost(targetRaw: String) -> Task<Void, Never>? {
+        guard let session = currentSession else { return nil }
+        guard admitStructuralMutationRequest() else { return nil }
         let path = Self.ghostNotePath(targetRaw)
-        Task { [weak self] in
+        guard let recoveryReservation = admitStructuralRecoveryDestination(path),
+            admitBatchTrashWrite(to: [path])
+        else { return nil }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let refresher = structuralBatchRefreshRunner
+        let task = Task { @MainActor [weak self] in
             let outcome: Result<Void, VaultError> = await Task.detached(
                 priority: .userInitiated
             ) {
@@ -249,9 +257,17 @@ extension AppState {
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
-            guard let self, self.currentSession === session else { return }
+            guard let self else { return }
+            defer { self.endStructuralMutation(token) }
+            guard !Task.isCancelled,
+                self.ownsStructuralMutation(token, session: session)
+            else { return }
             switch outcome {
             case .success:
+                await refresher(self)
+                guard !Task.isCancelled,
+                    self.ownsStructuralMutation(token, session: session)
+                else { return }
                 // #871 Codex round 2: a ghost-note create is a non-undoable
                 // structural mutation that bypasses `publishTreeMutation`, so
                 // clear the structural undo history here too (the barrier) — a
@@ -259,9 +275,9 @@ extension AppState {
                 // just filled. The execution-time guard is the safety net; this
                 // keeps the Edit menu from advertising a doomed undo.
                 self.clearStructuralUndoStacks()
-                await self.loadFiles()
                 self.openFile(path, target: .currentTab)
-                self.renamingNode = RenamingNode(path: path, isDirectory: false)
+                self.installRenameForCreatedEntry(
+                    path: path, isDirectory: false, session: session)
                 self.graphAnnouncer.announce(
                     .status("Created note \((path as NSString).lastPathComponent)."))
                 // The create bumped the graph generation; refresh the
@@ -273,6 +289,8 @@ extension AppState {
                     .error("Couldn't create note: \(self.humanReadable(error))"))
             }
         }
+        recordPendingStructuralTask(task)
+        return task
     }
 
     /// Map an authored ghost target to a vault path: honor an embedded

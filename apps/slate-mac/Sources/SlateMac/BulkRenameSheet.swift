@@ -72,6 +72,26 @@ struct BulkRenameSheet: View {
                     .accessibilityLabel("Error: \(err)")
             }
 
+            if let reason = appState.bulkRenameApplyDisabledReason {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                        .accessibilityLabel(reason)
+                        .help(reason)
+                    Spacer()
+                    if reason == AppState.batchTrashQuarantineReason {
+                        Button("Check Again") {
+                            _ = appState.retryBatchTrashUnknownReconciliation()
+                        }
+                        .disabled(appState.isMutatingStructure)
+                        .accessibilityHint(
+                            "Rescan the vault before applying this rename. Preview remains available.")
+                        .help("Check whether the unresolved Trash items are still present")
+                    }
+                }
+            }
+
             if let report = appState.pendingRenameReport {
                 AccessibleDataGrid<RenameGridRow>(
                     columns: [
@@ -113,7 +133,16 @@ struct BulkRenameSheet: View {
                 Button("Apply") {
                     runApply()
                 }
-                .disabled(!previewLoaded || appState.isRenameInFlight)
+                .disabled(
+                    !previewLoaded
+                        || appState.isRenameInFlight
+                        || appState.bulkRenameApplyDisabledReason != nil)
+                .accessibilityHint(
+                    appState.bulkRenameApplyDisabledReason
+                        ?? "Apply the previewed property rename across the vault.")
+                .help(
+                    appState.bulkRenameApplyDisabledReason
+                        ?? "Apply the previewed property rename")
             }
         }
         .padding(20)
@@ -145,8 +174,9 @@ struct BulkRenameSheet: View {
         let o = oldKey.trimmingCharacters(in: .whitespaces)
         let n = newKey.trimmingCharacters(in: .whitespaces)
         guard !o.isEmpty, !n.isEmpty else { return }
-        applied = true
-        appState.applyPropertyRename(oldKey: o, newKey: n)
+        if appState.applyPropertyRename(oldKey: o, newKey: n) != nil {
+            applied = true
+        }
     }
 
     private func invalidatePreview() {

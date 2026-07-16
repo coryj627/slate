@@ -33,6 +33,90 @@ enum SlateCommandID {
     /// palette, same three homes the inspection pair got. File-only;
     /// folders are out of #853's scope.
     static let duplicateEntry = "slate.file.duplicate"
+
+    /// Native file-tree mutations serialized by AppState's structural gate.
+    /// Palette presentation and registry preflight share this exact catalogue;
+    /// inspection commands deliberately stay interactive while a write runs.
+    static let structuralMutationCommands: Set<String> = [
+        newFromTemplate,
+        newNote,
+        newFolder,
+        renameEntry,
+        moveTo,
+        deleteEntry,
+        duplicateEntry,
+        newCanvas,
+        canvasConvertToNote,
+        basesExportCSV,
+        basesExportMarkdown,
+    ]
+
+    /// Canvas authoring commands. Read-only outcome-unknown snapshots keep
+    /// navigation, zoom, filtering, inspection, marks, and Cancel available;
+    /// every command that can open an editor/mode or reach `canvas_apply` uses
+    /// this catalogue for one palette availability reason.
+    static let canvasMutationCommands: Set<String> = [
+        canvasNewCard,
+        canvasNewGroup,
+        canvasDelete,
+        canvasRenameGroup,
+        canvasMoveIntoGroup,
+        canvasSetColor,
+        canvasClearColor,
+        canvasPlaceBelow,
+        canvasPlaceRightOf,
+        canvasPlaceAbove,
+        canvasPlaceLeftOf,
+        canvasAlignWith,
+        canvasMoveMode,
+        canvasResizeMode,
+        canvasCommitMode,
+        canvasResizeDefault,
+        canvasResizeFit,
+        canvasConnectTo,
+        canvasConnectMode,
+        canvasDeleteConnection,
+        canvasEditConnection,
+        canvasEditCard,
+        canvasCreateConnectedCard,
+        canvasCreateConnectedCardDirectional,
+        canvasDuplicate,
+        canvasConvertToNote,
+        canvasAddNote,
+        canvasAddMedia,
+        canvasAddLink,
+        canvasRemoveFromGroup,
+        canvasLocateFile,
+        canvasGroupMarked,
+        canvasDeleteMarked,
+    ]
+
+    /// Note-local authoring commands whose current destination can become an
+    /// outcome-unknown Trash path. Inspection, Find, reading-mode toggles,
+    /// and source visibility remain available.
+    static let noteAuthoringCommands: Set<String> = [
+        save,
+        addProperty,
+    ]
+
+    /// Base interactions that require an attached native document. Retained
+    /// snapshots keep inspection and row navigation useful while a definition
+    /// reopens, but view/filter/sort commands must expose one shared disabled
+    /// reason in the palette before their dispatch backstop is reached.
+    static let baseInteractionCommands: Set<String> = [
+        basesNextView,
+        basesPreviousView,
+        basesSortByColumn,
+        basesSaveSortToView,
+        basesQuickFilter,
+    ]
+
+    /// File-backed Edit Filters needs the same attached-handle gate, while a
+    /// saved query intentionally opens its handle-independent editor. Keeping
+    /// this ID separate lets palette availability follow the active source.
+    static let baseDefinitionEditingCommands: Set<String> = [
+        basesEditViewFilters,
+    ]
     /// Print… (#869). Prints the current note's rendered reading content
     /// via NSPrintOperation (which also gives Save-as-PDF for free). ⌘P
     /// was free — only ⇧⌘P (Command Palette) was claimed. Disabled with
@@ -444,15 +528,15 @@ enum SlateCommandID {
 /// Closures typically weak-capture `appState` to avoid the
 /// `appState → registry → action → appState` retain cycle.
 final class MenuCommandAction: CommandAction, @unchecked Sendable {
-    private let action: @MainActor () -> Void
+    private let action: @MainActor () throws -> Void
 
-    init(_ action: @escaping @MainActor () -> Void) {
+    init(_ action: @escaping @MainActor () throws -> Void) {
         self.action = action
     }
 
     func invoke() throws {
         if Thread.isMainThread {
-            MainActor.assumeIsolated { action() }
+            try MainActor.assumeIsolated { try action() }
         } else {
             // Block until the main queue runs the action — matches
             // the synchronous shape of `invoke_by_id` on the Rust
@@ -462,8 +546,8 @@ final class MenuCommandAction: CommandAction, @unchecked Sendable {
             // the CLI / HTTP API extensibility tiers (V1.x), per
             // `docs/plans/05_locked_architecture_decisions.md` §10
             // (Extensibility model).
-            DispatchQueue.main.sync {
-                MainActor.assumeIsolated { self.action() }
+            try DispatchQueue.main.sync {
+                try MainActor.assumeIsolated { try self.action() }
             }
         }
     }
@@ -494,7 +578,7 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: CommandSection,
         hotkey: String? = nil,
         hint: String? = nil,
-        action: @escaping @MainActor () -> Void
+        action: @escaping @MainActor () throws -> Void
     ) {
         let replaced = registry.register(
             command: Command(
@@ -509,15 +593,42 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         assert(!replaced, "duplicate command id during core registration: \(id)")
     }
 
+    /// Structural registry actions remain invokable for keyboard, palette, and
+    /// future external callers, so their admission must be synchronous and
+    /// fallible. Busy work throws the same exact reason the UI displays before
+    /// any command wrapper can stage a sheet, field, alert, runner, or write.
+    func registerStructural(
+        _ id: String,
+        label: String,
+        section: CommandSection,
+        hotkey: String? = nil,
+        hint: String? = nil,
+        action: @escaping @MainActor (AppState) -> Void
+    ) {
+        register(
+            id,
+            label: label,
+            section: section,
+            hotkey: hotkey,
+            hint: hint
+        ) { [weak appState] in
+            guard let appState else { return }
+            if let reason = appState.structuralMutationDisabledReason {
+                throw CommandError.ActionFailed(message: reason)
+            }
+            action(appState)
+        }
+    }
+
     // ----- File -----
 
-    register(
+    registerStructural(
         SlateCommandID.newFromTemplate,
         label: "New from Template…",
         section: .file,
         hotkey: "⇧⌘N",
         hint: "Open the template picker to create a new note."
-    ) { [weak appState] in appState?.openTemplatePicker() }
+    ) { appState in appState.openTemplatePicker() }
 
     // ----- Canvas (Milestone T, #369) -----
 
@@ -854,12 +965,12 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Duplicate the selected card or the marked set — one action, one undo."
     ) { [weak appState] in appState?.canvasDuplicate() }
 
-    register(
+    registerStructural(
         SlateCommandID.canvasConvertToNote,
         label: "Canvas: Convert Card to Note…",
         section: .canvas,
         hint: "Create a vault note from the text card; the card then points at it."
-    ) { [weak appState] in appState?.canvasPromptConvertToNote() }
+    ) { appState in appState.canvasPromptConvertToNote() }
 
     // #373: in-canvas filter (a view, never a mutation).
     register(
@@ -956,12 +1067,12 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Delete every marked card and its connections — one summary, one undo."
     ) { [weak appState] in appState?.canvasDeleteMarked() }
 
-    register(
+    registerStructural(
         SlateCommandID.newCanvas,
         label: "New Canvas",
         section: .file,
         hint: "Create an empty canvas file in the vault and open it."
-    ) { [weak appState] in appState?.canvasNewCanvasFile() }
+    ) { appState in appState.canvasNewCanvasFile() }
 
     // ----- Bases (Milestone N, #702) -----
 
@@ -1056,19 +1167,19 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Edit the selected editable base property cell."
     ) { [weak appState] in appState?.basesEditSelectedProperty() }
 
-    register(
+    registerStructural(
         SlateCommandID.basesExportCSV,
         label: "Bases: Export View as CSV",
         section: .bases,
         hint: "Export the active base view as CSV."
-    ) { [weak appState] in appState?.basesExportCSV() }
+    ) { $0.basesExportCSV() }
 
-    register(
+    registerStructural(
         SlateCommandID.basesExportMarkdown,
         label: "Bases: Export View as Markdown Table",
         section: .bases,
         hint: "Export the active base view as a Markdown table."
-    ) { [weak appState] in appState?.basesExportMarkdown() }
+    ) { $0.basesExportMarkdown() }
 
     register(
         SlateCommandID.basesCopyMarkdown,
@@ -1135,15 +1246,15 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
 
     // ----- File management (U2-5, #463) -----
 
-    register(
+    registerStructural(
         SlateCommandID.newNote,
         label: "New Note",
         section: .file,
         hotkey: "⌘N",
         hint: "Create an untitled note in the selected folder, then rename it."
-    ) { [weak appState] in appState?.newNoteCommand() }
+    ) { $0.newNoteCommand() }
 
-    register(
+    registerStructural(
         SlateCommandID.newFolder,
         // No ellipsis (menus.md): the folder is created IMMEDIATELY
         // ("Untitled Folder" + inline rename) — same flow as the
@@ -1152,17 +1263,17 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .file,
         // No global shortcut (spec §U2-5) — context menu + palette only.
         hint: "Create a new folder in the selected folder, then rename it."
-    ) { [weak appState] in appState?.newFolderCommand() }
+    ) { $0.newFolderCommand() }
 
-    register(
+    registerStructural(
         SlateCommandID.renameEntry,
         label: "Rename…",
         section: .file,
         hotkey: "⌥⌘R",
         hint: "Rename the selected file or folder in place."
-    ) { [weak appState] in appState?.renameSelectedCommand() }
+    ) { $0.renameSelectedCommand() }
 
-    register(
+    registerStructural(
         SlateCommandID.moveTo,
         // "Move To…" — the-menu-bar.md's canonical item spelling
         // (title-style: the last word is always capitalized).
@@ -1170,9 +1281,9 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .file,
         hotkey: "⇧⌘M",
         hint: "Move the selected file or folder to another folder."
-    ) { [weak appState] in appState?.moveSelectedCommand() }
+    ) { $0.moveSelectedCommand() }
 
-    register(
+    registerStructural(
         SlateCommandID.deleteEntry,
         label: "Move to Trash",
         section: .file,
@@ -1182,7 +1293,7 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         // AND collide with PropertyEditorRow's sheet-scoped ⌘⌫ in
         // `deliberatelyUnregisteredChords`. The palette row invokes on Return.
         hint: "Move the selected file or folder to the Trash."
-    ) { [weak appState] in appState?.deleteSelectedCommand() }
+    ) { $0.deleteSelectedCommand() }
 
     register(
         SlateCommandID.revealInFinder,
@@ -1199,13 +1310,13 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         hint: "Copy the selected item's full filesystem path."
     ) { [weak appState] in appState?.copySelectedPathCommand() }
 
-    register(
+    registerStructural(
         SlateCommandID.duplicateEntry,
         label: "Duplicate",
         section: .file,
         // No chord (#853) — menu + palette + context menu only.
         hint: "Duplicate the selected file as a copy next to it."
-    ) { [weak appState] in appState?.duplicateSelectedCommand() }
+    ) { $0.duplicateSelectedCommand() }
 
     register(
         SlateCommandID.printNote,
@@ -1569,7 +1680,13 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .editor,
         hotkey: "⌘S",
         hint: "Save the current note to disk."
-    ) { [weak appState] in appState?.saveCurrentNote() }
+    ) { [weak appState] in
+        guard let appState else { return }
+        if let reason = appState.activeNoteSaveDisabledReason {
+            throw CommandError.ActionFailed(message: reason)
+        }
+        appState.saveCurrentNote()
+    }
 
     register(
         SlateCommandID.findInNote,
@@ -1622,7 +1739,7 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         label: "Add Property…",
         section: .editor,
         hint: "Add a new frontmatter property to the current note."
-    ) { [weak appState] in appState?.isAddPropertySheetOpen = true }
+    ) { [weak appState] in appState?.requestAddPropertySheet() }
 
     register(
         SlateCommandID.bulkRenameProperties,

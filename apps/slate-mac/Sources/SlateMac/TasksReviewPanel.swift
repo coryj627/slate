@@ -288,7 +288,11 @@ struct TasksReviewPanel: View {
         // #158: Only block the row whose file matches the editor's
         // dirty buffer — toggling other files from the review
         // surface is safe because there's no live buffer to lose.
-        let blocked = (row.path == appState.loadedFilePath && appState.hasUnsavedChanges)
+        let dirtyReason =
+            "Save \(row.fileName) first. Toggle is disabled while the editor has unsaved changes."
+        let blockedReason = appState.noteAuthoringDisabledReason(for: row.path)
+            ?? ((row.path == appState.loadedFilePath && appState.hasUnsavedChanges)
+                ? dirtyReason : nil)
         return HStack(alignment: .top, spacing: 8) {
             Button {
                 appState.toggleVaultTask(row)
@@ -297,13 +301,14 @@ struct TasksReviewPanel: View {
                     .imageScale(.large)
             }
             .buttonStyle(.plain)
-            .disabled(blocked)
+            .disabled(blockedReason != nil)
             .accessibilityLabel(row.task.completed ? "Mark incomplete" : "Mark complete")
             .accessibilityHint(
-                blocked
-                    ? "Save \(row.fileName) first. Toggle is disabled while the editor has unsaved changes."
-                    : "Toggles the task between open and done."
+                blockedReason ?? "Toggles the task between open and done."
             )
+            .help(
+                blockedReason
+                    ?? (row.task.completed ? "Mark incomplete" : "Mark complete"))
             .accessibilityIsSelected(row.task.completed)
 
             Button {

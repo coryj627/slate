@@ -377,6 +377,185 @@ fileprivate struct OpenedBaseEmbedHandle {
     let savedQueryID: String?
 }
 
+struct BaseEmbedDocumentRefreshSnapshot: @unchecked Sendable {
+    let id: ObjectIdentifier
+    let generation: UInt64
+    let previousViewName: String?
+    let previousViewIndex: Int
+    let quickFilter: String?
+    let sortSelection: BaseGridSortSelection?
+}
+
+struct BaseEmbedHandleRefreshReservation: @unchecked Sendable {
+    let generation: UInt64
+    let replacedHandle: UInt64
+    let request: BaseEmbedRequest
+    let thisPath: String?
+    let resolvedSavedQueryID: String?
+    let documents: [BaseEmbedDocumentRefreshSnapshot]
+}
+
+struct BaseEmbedPreparedDocument: @unchecked Sendable {
+    let id: ObjectIdentifier
+    let views: [BaseViewSummary]
+    let activeViewIndex: Int
+    let result: BasesResultSet?
+    let appliedQuickFilter: String?
+    let sortSelection: BaseGridSortSelection?
+    let failure: String?
+}
+
+enum BaseEmbedPreparedRefresh: @unchecked Sendable {
+    case ready(
+        handle: UInt64,
+        views: [BaseViewSummary],
+        resolvedSavedQueryID: String?,
+        documents: [BaseEmbedPreparedDocument]
+    )
+    case failed(String)
+
+    var retainedHandle: UInt64? {
+        guard case .ready(let handle, _, _, _) = self else { return nil }
+        return handle
+    }
+}
+
+enum BaseEmbedRefreshApplication: Sendable {
+    case applied(replacedHandle: UInt64)
+    case failed
+    case stale
+}
+
+enum BaseEmbedPreparedLoader {
+    nonisolated static func prepare(
+        session: VaultSession,
+        reservation: BaseEmbedHandleRefreshReservation,
+        observer: BaseRetargetNativeExecutionObserver?
+    ) -> BaseEmbedPreparedRefresh {
+        var openedHandle: UInt64?
+        var transferred = false
+        defer {
+            if let openedHandle, !transferred {
+                BasePreparedLoader.observe(.refreshClosePrepared, observer: observer)
+                session.closeBase(handle: openedHandle)
+            }
+        }
+
+        do {
+            BasePreparedLoader.observe(.refreshOpen, observer: observer)
+            let opened = try reservation.request.openHandle(
+                session: session,
+                thisPath: reservation.thisPath,
+                resolvedSavedQueryID: reservation.resolvedSavedQueryID)
+            openedHandle = opened.handle
+            BasePreparedLoader.observe(.refreshViews, observer: observer)
+            let rawViews = try session.baseViews(handle: opened.handle)
+            let displayViews = reservation.request.displayViews(from: rawViews)
+            var preparedDocuments: [BaseEmbedPreparedDocument] = []
+            preparedDocuments.reserveCapacity(reservation.documents.count)
+
+            for snapshot in reservation.documents {
+                let activeViewIndex: Int
+                if let requested = reservation.request.requestedViewName,
+                    let requestedIndex = displayViews.firstIndex(where: {
+                        BaseExactIdentity.matches($0.name, requested)
+                    })
+                {
+                    activeViewIndex = requestedIndex
+                } else if let previousName = snapshot.previousViewName,
+                    let matchingIndex = displayViews.firstIndex(where: {
+                        BaseExactIdentity.matches($0.name, previousName)
+                    })
+                {
+                    activeViewIndex = matchingIndex
+                } else {
+                    activeViewIndex = displayViews.isEmpty
+                        ? 0 : min(snapshot.previousViewIndex, displayViews.count - 1)
+                }
+
+                guard displayViews.indices.contains(activeViewIndex) else {
+                    preparedDocuments.append(
+                        BaseEmbedPreparedDocument(
+                            id: snapshot.id,
+                            views: displayViews,
+                            activeViewIndex: activeViewIndex,
+                            result: nil,
+                            appliedQuickFilter: snapshot.quickFilter,
+                            sortSelection: nil,
+                            failure: "No executable base views were found."))
+                    continue
+                }
+
+                do {
+                    BasePreparedLoader.observe(.refreshSort, observer: observer)
+                    try session.baseSetTransientSort(
+                        handle: opened.handle,
+                        view: UInt32(activeViewIndex),
+                        columnId: snapshot.sortSelection?.columnID,
+                        ascending: snapshot.sortSelection?.ascending ?? true)
+                    BasePreparedLoader.observe(.refreshExecute, observer: observer)
+                    let result = try session.baseExecute(
+                        handle: opened.handle,
+                        view: UInt32(activeViewIndex),
+                        thisPath: reservation.thisPath,
+                        quickFilter: snapshot.quickFilter,
+                        cancel: CancelToken())
+                    let survivingSort = snapshot.sortSelection.flatMap {
+                        $0.sortState(in: result) == nil ? nil : $0
+                    }
+                    preparedDocuments.append(
+                        BaseEmbedPreparedDocument(
+                            id: snapshot.id,
+                            views: displayViews,
+                            activeViewIndex: activeViewIndex,
+                            result: result,
+                            appliedQuickFilter: snapshot.quickFilter,
+                            sortSelection: survivingSort,
+                            failure: nil))
+                } catch {
+                    preparedDocuments.append(
+                        BaseEmbedPreparedDocument(
+                            id: snapshot.id,
+                            views: displayViews,
+                            activeViewIndex: activeViewIndex,
+                            result: nil,
+                            appliedQuickFilter: snapshot.quickFilter,
+                            sortSelection: snapshot.sortSelection,
+                            failure: error.localizedDescription))
+                }
+            }
+
+            transferred = true
+            return .ready(
+                handle: opened.handle,
+                views: rawViews,
+                resolvedSavedQueryID: opened.savedQueryID,
+                documents: preparedDocuments)
+        } catch {
+            return .failed(error.localizedDescription)
+        }
+    }
+
+    nonisolated static func release(
+        _ prepared: BaseEmbedPreparedRefresh,
+        session: VaultSession,
+        observer: BaseRetargetNativeExecutionObserver?
+    ) {
+        guard let handle = prepared.retainedHandle else { return }
+        BasePreparedLoader.observe(.refreshClosePrepared, observer: observer)
+        session.closeBase(handle: handle)
+    }
+
+    nonisolated static func closeReplaced(
+        handle: UInt64,
+        session: VaultSession,
+        observer: BaseRetargetNativeExecutionObserver?
+    ) {
+        BasePreparedLoader.observe(.refreshCloseReplaced, observer: observer)
+        session.closeBase(handle: handle)
+    }
+}
+
 struct BaseEmbedCacheKey: Equatable, Hashable {
     let request: BaseEmbedRequest
     let thisPath: String?
@@ -457,6 +636,7 @@ final class BaseEmbedHandle {
     private(set) weak var session: VaultSession?
     private var documents: [ObjectIdentifier: WeakBaseEmbedDocument] = [:]
     private var mountedLeaseCount = 0
+    private var contentRefreshGeneration: UInt64 = 0
 
     init(request: BaseEmbedRequest, thisPath: String?) {
         self.request = request
@@ -472,6 +652,7 @@ final class BaseEmbedHandle {
             return
         }
         do {
+            contentRefreshGeneration &+= 1
             let opened = try request.openHandle(
                 session: session,
                 thisPath: thisPath,
@@ -528,6 +709,7 @@ final class BaseEmbedHandle {
     }
 
     func close(session: VaultSession) {
+        contentRefreshGeneration &+= 1
         if let handle {
             session.closeBase(handle: handle)
         }
@@ -538,6 +720,73 @@ final class BaseEmbedHandle {
 
     private func pruneDocuments() {
         documents = documents.filter { $0.value.document != nil }
+    }
+
+    func beginContentRefresh() -> BaseEmbedHandleRefreshReservation? {
+        pruneDocuments()
+        guard let handle, session != nil, !documents.isEmpty else { return nil }
+        let liveDocuments = documents.values.compactMap(\.document)
+            .filter { !$0.needsInitialLoad }
+        guard !liveDocuments.isEmpty else { return nil }
+        contentRefreshGeneration &+= 1
+        return BaseEmbedHandleRefreshReservation(
+            generation: contentRefreshGeneration,
+            replacedHandle: handle,
+            request: request,
+            thisPath: thisPath,
+            resolvedSavedQueryID: resolvedSavedQueryID,
+            documents: liveDocuments.map { $0.beginContentRefresh() })
+    }
+
+    func applyContentRefresh(
+        _ prepared: BaseEmbedPreparedRefresh,
+        reservation: BaseEmbedHandleRefreshReservation,
+        session: VaultSession
+    ) -> BaseEmbedRefreshApplication {
+        pruneDocuments()
+        let liveByID = Dictionary(
+            uniqueKeysWithValues: documents.values.compactMap(\.document).map {
+                (ObjectIdentifier($0), $0)
+            })
+        guard self.session === session,
+            contentRefreshGeneration == reservation.generation,
+            handle == reservation.replacedHandle,
+            request == reservation.request,
+            reservation.documents.allSatisfy({ snapshot in
+                liveByID[snapshot.id]?.ownsContentRefresh(snapshot) == true
+            })
+        else { return .stale }
+
+        switch prepared {
+        case .ready(
+            let preparedHandle,
+            let preparedViews,
+            let preparedSavedQueryID,
+            let preparedDocuments
+        ):
+            let replacedHandle = reservation.replacedHandle
+            handle = preparedHandle
+            views = preparedViews
+            resolvedSavedQueryID = preparedSavedQueryID
+            self.session = session
+            let preparedByID = Dictionary(
+                uniqueKeysWithValues: preparedDocuments.map { ($0.id, $0) })
+            for snapshot in reservation.documents {
+                guard let document = liveByID[snapshot.id],
+                    let result = preparedByID[snapshot.id]
+                else { continue }
+                document.applyContentRefresh(result, snapshot: snapshot)
+            }
+            contentRefreshGeneration &+= 1
+            return .applied(replacedHandle: replacedHandle)
+        case .failed(let message):
+            reservation.documents.forEach { snapshot in
+                liveByID[snapshot.id]?.applyContentRefreshFailure(
+                    message, snapshot: snapshot)
+            }
+            contentRefreshGeneration &+= 1
+            return .failed
+        }
     }
 }
 
@@ -573,6 +822,7 @@ final class BaseEmbedDocument: ObservableObject {
     @Published var quickFilterText = ""
     @Published private(set) var sortSelection: BaseGridSortSelection?
     private var appliedQuickFilterText: String?
+    private var contentRefreshGeneration: UInt64 = 0
 
     var handle: UInt64? { sharedHandle.handle }
 
@@ -626,6 +876,7 @@ final class BaseEmbedDocument: ObservableObject {
     }
 
     func load(session: VaultSession) {
+        contentRefreshGeneration &+= 1
         state = .loading
         result = nil
         views = []
@@ -645,17 +896,17 @@ final class BaseEmbedDocument: ObservableObject {
 
     func selectView(index: Int, session: VaultSession) {
         guard views.indices.contains(index), activeViewIndex != index else { return }
-        if let handle = sharedHandle.handle {
-            do {
-                try session.baseSetTransientSort(
-                    handle: handle,
-                    view: UInt32(activeViewIndex),
-                    columnId: nil,
-                    ascending: true)
-            } catch {
-                fail(friendlyMessage(for: error))
-                return
-            }
+        guard let handle = sharedHandle.handle else { return }
+        contentRefreshGeneration &+= 1
+        do {
+            try session.baseSetTransientSort(
+                handle: handle,
+                view: UInt32(activeViewIndex),
+                columnId: nil,
+                ascending: true)
+        } catch {
+            fail(friendlyMessage(for: error))
+            return
         }
         activeViewIndex = index
         sortSelection = nil
@@ -664,7 +915,12 @@ final class BaseEmbedDocument: ObservableObject {
     }
 
     func executeActiveView(session: VaultSession) {
-        guard let handle = sharedHandle.handle, views.indices.contains(activeViewIndex) else {
+        contentRefreshGeneration &+= 1
+        // A quarantined file-backed embed keeps its last truthful result while
+        // the shared native handle is detached. A raced interaction must be a
+        // no-op, not erase the snapshot with a false execution failure.
+        guard let handle = sharedHandle.handle else { return }
+        guard views.indices.contains(activeViewIndex) else {
             fail("No executable base views were found.")
             return
         }
@@ -755,6 +1011,12 @@ final class BaseEmbedDocument: ObservableObject {
         fail(friendlyMessage(for: error))
     }
 
+    func invalidateMovedToTrash() {
+        contentRefreshGeneration &+= 1
+        let name = ((request.targetPath ?? "Base") as NSString).lastPathComponent
+        fail("\(name) was moved to Trash and is no longer available.")
+    }
+
     func acquireRefreshLease() {
         sharedHandle.register(self)
     }
@@ -765,6 +1027,9 @@ final class BaseEmbedDocument: ObservableObject {
 
     @discardableResult
     func applyQuickFilter(_ text: String, session: VaultSession) -> String {
+        guard sharedHandle.handle != nil else {
+            return quickFilterResultAnnouncement
+        }
         if quickFilterText != text {
             quickFilterText = text
         }
@@ -773,6 +1038,7 @@ final class BaseEmbedDocument: ObservableObject {
     }
 
     func setTransientSort(_ newSort: DataGridSortState?, session: VaultSession) {
+        guard sharedHandle.handle != nil else { return }
         guard let result else { return }
         sortSelection = newSort.flatMap {
             BaseGridSortSelection(sortState: $0, result: result)
@@ -783,6 +1049,7 @@ final class BaseEmbedDocument: ObservableObject {
     @discardableResult
     func clearQuickFilter(session: VaultSession?) -> String? {
         guard quickFilterActive else { return nil }
+        guard sharedHandle.handle != nil else { return nil }
         clearQuickFilterState()
         guard let session else { return "Quick filter cleared." }
         executeActiveView(session: session)
@@ -790,7 +1057,69 @@ final class BaseEmbedDocument: ObservableObject {
     }
 
     func close(session: VaultSession) {
+        contentRefreshGeneration &+= 1
         sharedHandle.close(session: session)
+    }
+
+    func beginContentRefresh() -> BaseEmbedDocumentRefreshSnapshot {
+        contentRefreshGeneration &+= 1
+        return BaseEmbedDocumentRefreshSnapshot(
+            id: ObjectIdentifier(self),
+            generation: contentRefreshGeneration,
+            previousViewName: activeViewName,
+            previousViewIndex: activeViewIndex,
+            quickFilter: editedQuickFilterArgument ?? appliedQuickFilterText,
+            sortSelection: sortSelection)
+    }
+
+    func ownsContentRefresh(_ snapshot: BaseEmbedDocumentRefreshSnapshot) -> Bool {
+        contentRefreshGeneration == snapshot.generation
+            && ObjectIdentifier(self) == snapshot.id
+            && activeViewIndex == snapshot.previousViewIndex
+            && activeViewName == snapshot.previousViewName
+            && (editedQuickFilterArgument ?? appliedQuickFilterText) == snapshot.quickFilter
+            && sortSelection == snapshot.sortSelection
+    }
+
+    func applyContentRefresh(
+        _ prepared: BaseEmbedPreparedDocument,
+        snapshot: BaseEmbedDocumentRefreshSnapshot
+    ) {
+        guard ownsContentRefresh(snapshot) else { return }
+        views = prepared.views
+        activeViewIndex = prepared.activeViewIndex
+        if let message = prepared.failure {
+            state = .degraded(message)
+        } else {
+            result = prepared.result
+            appliedQuickFilterText = prepared.appliedQuickFilter
+            sortSelection = prepared.sortSelection
+            if let view = views.indices.contains(activeViewIndex)
+                ? views[activeViewIndex] : nil,
+                view.status == .fallback
+            {
+                state = .degraded("Using fallback view for \(view.name).")
+            } else if let view = views.indices.contains(activeViewIndex)
+                ? views[activeViewIndex] : nil,
+                view.status == .error
+            {
+                state = .degraded("View \(view.name) has errors.")
+            } else if let message = prepared.result?.viewError, !message.isEmpty {
+                state = .degraded(message)
+            } else {
+                state = .ready
+            }
+        }
+        contentRefreshGeneration &+= 1
+    }
+
+    func applyContentRefreshFailure(
+        _ message: String,
+        snapshot: BaseEmbedDocumentRefreshSnapshot
+    ) {
+        guard ownsContentRefresh(snapshot) else { return }
+        state = .degraded(message)
+        contentRefreshGeneration &+= 1
     }
 
     private var quickFilterArgument: String? {

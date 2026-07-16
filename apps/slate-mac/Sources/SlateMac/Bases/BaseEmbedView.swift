@@ -4,6 +4,11 @@
 import AppKit
 import SwiftUI
 
+private enum DataviewConversionOutcome: Sendable {
+    case success(String)
+    case failure(String)
+}
+
 struct BaseEmbedQuickFilterSelectionState: Equatable {
     private(set) var anchorRowID: String? = nil
     private(set) var isActive = false
@@ -45,16 +50,18 @@ struct BaseEmbedView: View {
     let session: VaultSession?
     let thisPath: String?
     let onOpenInTab: (BaseEmbedOpenDestination) -> Void
-    /// #871: after a save-panel write (Dataview → .base), report the written
-    /// URL + whether it existed beforehand so AppState can apply the
-    /// structural-undo barrier. BaseEmbedView holds no AppState reference, so
-    /// the create-vs-overwrite + in-vault decision lives one hop up.
+    /// Retained for source compatibility with embed hosts. Dataview conversion
+    /// now routes through AppState's owned save-panel writer so stale sessions,
+    /// structural admission, refresh, and barriers are one atomic contract.
     let onWroteSaveDestination: (URL, Bool) -> Void
 
+    @EnvironmentObject private var appState: AppState
     @StateObject private var document: BaseEmbedDocument
     @State private var interaction = BaseGridInteractionState()
     @State private var quickFilterSelection = BaseEmbedQuickFilterSelectionState()
     @State private var quickFilterTask: Task<Void, Never>?
+    @State private var dataviewConversionTask: Task<Void, Never>?
+    @State private var dataviewConversionGeneration: UInt64 = 0
     @State private var resultFocusToken = 0
     @FocusState private var quickFilterFocused: Bool
 
@@ -79,6 +86,15 @@ struct BaseEmbedView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            if request.kind == .dataview,
+                let reason = appState.structuralMutationDisabledReason
+            {
+                Text(reason)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .padding(.bottom, Tokens.Spacing.xs)
+                    .accessibilityLabel(reason)
+            }
             banners
             content
         }
@@ -99,12 +115,14 @@ struct BaseEmbedView: View {
             guard let session,
                 document.needsInitialLoad || document.handle == nil
             else { return }
-            document.load(session: session)
+            appState.loadBaseEmbedDocumentIfAllowed(document, session: session)
         }
         .onDisappear {
             document.releaseRefreshLease()
             quickFilterTask?.cancel()
             quickFilterTask = nil
+            dataviewConversionTask?.cancel()
+            dataviewConversionTask = nil
         }
         .onChange(of: document.quickFilterText) { _, _ in
             guard quickFilterFocused else { return }
@@ -139,6 +157,13 @@ struct BaseEmbedView: View {
                 }
                 .labelsHidden()
                 .frame(maxWidth: 180)
+                .disabled(batchTrashInteractionDisabledReason != nil)
+                .accessibilityHint(
+                    batchTrashInteractionDisabledReason
+                        ?? "Choose the active embedded Base view.")
+                .help(
+                    batchTrashInteractionDisabledReason
+                        ?? "Choose the active embedded Base view")
             }
             Spacer(minLength: 0)
             if let result = document.result {
@@ -155,6 +180,13 @@ struct BaseEmbedView: View {
                     .focused($quickFilterFocused)
                     .accessibilityLabel(
                         "Quick filter — temporary, does not change the embedded base")
+                    .disabled(batchTrashInteractionDisabledReason != nil)
+                    .accessibilityHint(
+                        batchTrashInteractionDisabledReason
+                            ?? "Temporarily filter the embedded Base results.")
+                    .help(
+                        batchTrashInteractionDisabledReason
+                            ?? "Quick filter")
             }
             if let recovery = document.recoveryAction {
                 Button(recovery.title) {
@@ -163,11 +195,17 @@ struct BaseEmbedView: View {
                 .accessibilityHint(recovery.accessibilityHint)
             }
             if request.kind == .dataview {
+                let convertDisabledReason = appState.structuralMutationDisabledReason
                 Button("Convert to .base") {
                     convertDataview()
                 }
-                .disabled(session == nil)
-                .accessibilityHint("Converts this Dataview query to a .base file when lossless.")
+                .disabled(session == nil || convertDisabledReason != nil)
+                .accessibilityHint(
+                    convertDisabledReason
+                        ?? "Converts this Dataview query to a .base file when lossless.")
+                .help(
+                    convertDisabledReason
+                        ?? "Convert this Dataview query to a .base file")
             }
         }
         .padding(.bottom, Tokens.Spacing.xs)
@@ -335,40 +373,54 @@ struct BaseEmbedView: View {
     }
 
     private func convertDataview() {
-        guard request.kind == .dataview, let session else { return }
-        do {
-            let text = try session.dqlAsBase(source: request.inlineSource)
-            let panel = NSSavePanel()
-            panel.nameFieldStringValue = "Converted.base"
-            panel.begin { response in
-                guard response == .OK, let url = panel.url else { return }
-                // #871 post-merge audit: the save panel can target ANYWHERE, so
-                // snapshot existence BEFORE the write; the in-vault + create-vs-
-                // overwrite barrier decision is made in `onWroteSaveDestination`
-                // (BaseEmbedView has no AppState, so it delegates the clear).
-                let existedBefore = FileManager.default.fileExists(atPath: url.path)
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let message: String
-                    var wroteOK = false
-                    do {
-                        try text.write(to: url, atomically: true, encoding: .utf8)
-                        message = "Converted Dataview block to .base."
-                        wroteOK = true
-                    } catch {
-                        message = "Dataview conversion could not be saved: \(error.localizedDescription)"
-                    }
-                    DispatchQueue.main.async {
-                        postAccessibilityAnnouncement(message, priority: .medium)
-                        if wroteOK {
-                            onWroteSaveDestination(url, existedBefore)
-                        }
+        guard request.kind == .dataview, let originSession = session else { return }
+        guard appState.currentSession === originSession else { return }
+        guard appState.admitStructuralMutationRequest() else { return }
+        dataviewConversionGeneration &+= 1
+        let generation = dataviewConversionGeneration
+        let source = request.inlineSource
+        let observer = appState.baseRetargetNativeExecutionObserverForTesting
+        dataviewConversionTask?.cancel()
+        dataviewConversionTask = Task { @MainActor in
+            let outcome: DataviewConversionOutcome = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    BasePreparedLoader.observe(.dqlConversion, observer: observer)
+                    return .success(try originSession.dqlAsBase(source: source))
+                } catch {
+                    return .failure(error.localizedDescription)
+                }
+            }.value
+
+            guard !Task.isCancelled,
+                dataviewConversionGeneration == generation,
+                appState.currentSession === originSession
+            else { return }
+
+            switch outcome {
+            case .success(let text):
+                let panel = NSSavePanel()
+                panel.nameFieldStringValue = "Converted.base"
+                panel.begin { response in
+                    guard response == .OK, let url = panel.url else { return }
+                    Task { @MainActor in
+                        guard dataviewConversionGeneration == generation,
+                            appState.currentSession === originSession
+                        else { return }
+                        _ = appState.performBaseSavePanelWrite(
+                            text: text,
+                            to: url,
+                            originSession: originSession,
+                            successMessage: "Converted Dataview block to .base.",
+                            failurePrefix: "Dataview conversion could not be saved")
                     }
                 }
+            case .failure(let message):
+                postAccessibilityAnnouncement(
+                    "Dataview conversion failed: \(message)",
+                    priority: .medium)
             }
-        } catch {
-            postAccessibilityAnnouncement(
-                "Dataview conversion failed: \(error.localizedDescription)",
-                priority: .medium)
         }
     }
 
@@ -376,9 +428,17 @@ struct BaseEmbedView: View {
         Binding(
             get: { document.activeViewIndex },
             set: { index in
+                guard batchTrashInteractionDisabledReason == nil else { return }
                 guard let session else { return }
                 document.selectView(index: index, session: session)
             })
+    }
+
+    private var batchTrashInteractionDisabledReason: String? {
+        guard let path = request.targetPath,
+            case .readOnly(let reason) = appState.batchTrashPathCapability(for: path)
+        else { return nil }
+        return reason
     }
 
     private var activeView: BaseViewSummary? {

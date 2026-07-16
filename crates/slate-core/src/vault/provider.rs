@@ -86,14 +86,20 @@ pub trait VaultProvider: Send + Sync {
     }
 
     /// Inspect the mutation entry itself after a provider call. Unlike a
-    /// content read, this must treat a dangling symlink as present. Providers
-    /// with an lstat-style primitive should override the default.
-    fn mutation_path_exists(&self, path: &str) -> Result<bool, VaultError> {
+    /// content read, this must treat a dangling symlink as present and must
+    /// preserve the entry kind so callers can distinguish an original item
+    /// that survived from an opposite-kind replacement at the same path.
+    /// Providers with an lstat-style primitive should override the default.
+    fn mutation_path_kind(&self, path: &str) -> Result<Option<EntryKind>, VaultError> {
         match self.stat(path) {
-            Ok(_) => Ok(true),
-            Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Ok(stat) => Ok(Some(stat.kind)),
+            Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(error),
         }
+    }
+
+    fn mutation_path_exists(&self, path: &str) -> Result<bool, VaultError> {
+        self.mutation_path_kind(path).map(|kind| kind.is_some())
     }
 
     /// Create a directory (and any missing parents) at a vault-relative

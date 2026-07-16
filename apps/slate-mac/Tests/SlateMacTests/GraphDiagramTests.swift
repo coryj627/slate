@@ -703,6 +703,57 @@ final class GraphDiagramTests: XCTestCase {
             "a ghost exposes Create note + Pin")
     }
 
+    func testBusyGhostAXPressIsUnavailableWhileNotePressAndPinRemainAvailable() async throws {
+        let vault = tempDir.appendingPathComponent("busy-actions-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try "# A\n[[Missing Target]]\n".write(
+            to: vault.appendingPathComponent("a.md"), atomically: true, encoding: .utf8)
+        let session = try VaultSession.openFilesystem(rootPath: vault.path)
+        try session.scanInitial(cancel: CancelToken())
+        let model = try makeModel(session)
+        let (state, view) = makeView(model)
+        view.tickOnceForTesting()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        XCTAssertNotNil(state.currentSession)
+        let note = try XCTUnwrap(model.nodesByID.values.first { $0.kind == .note })
+        let ghost = try XCTUnwrap(model.nodesByID.values.first { $0.kind == .ghost })
+        let ghostIndex = try XCTUnwrap(model.nodeIDs.firstIndex(of: ghost.id))
+        let noteIndex = try XCTUnwrap(model.nodeIDs.firstIndex(of: note.id))
+        let framesBefore = view.nodeFramesForTesting()
+
+        let token = state.beginStructuralMutation()
+        view.refreshStructuralCreationAvailabilityForTesting()
+
+        XCTAssertEqual(
+            view.axCustomActionNamesForTesting(nodeId: ghost.id), ["Pin"],
+            "AX custom actions have no disabled state, so only Create note is omitted")
+        XCTAssertEqual(
+            view.axHelpForTesting(nodeId: ghost.id),
+            AppState.structuralMutationBusyReason)
+        XCTAssertNil(state.lastMutationAnnouncement)
+        view.performPressForTesting(nodeIndex: ghostIndex)
+        XCTAssertNil(
+            state.lastMutationAnnouncement,
+            "busy AXPress must be unavailable instead of invoking the structural rejection funnel")
+        XCTAssertEqual(
+            view.axCustomActionNamesForTesting(nodeId: note.id),
+            GraphRowAction.actions(forGhost: false).map(\.title) + ["Pin"],
+            "nonstructural graph navigation remains available")
+        view.performPressForTesting(nodeIndex: noteIndex)
+        XCTAssertEqual(state.selectedFilePath, note.path, "busy state must not block opening a real note")
+        XCTAssertEqual(view.nodeFramesForTesting(), framesBefore)
+
+        state.endStructuralMutation(token)
+        view.refreshStructuralCreationAvailabilityForTesting()
+        XCTAssertEqual(
+            view.axCustomActionNamesForTesting(nodeId: ghost.id),
+            ["Create note", "Pin"])
+        XCTAssertEqual(
+            view.axHelpForTesting(nodeId: ghost.id),
+            "Unresolved. Press to create note.")
+    }
+
     func testDiagramSelectionMirrorsToTheSharedKey() throws {
         let session = try makeSession()
         let model = try makeModel(session)

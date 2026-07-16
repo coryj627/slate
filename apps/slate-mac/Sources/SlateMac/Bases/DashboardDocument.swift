@@ -37,6 +37,18 @@ struct BaseRowMembership: Equatable {
     var isEmpty: Bool { counts.isEmpty }
 }
 
+struct DashboardSectionRefreshReservation: Sendable {
+    let generation: UInt64
+    let replacedHandle: UInt64?
+    let request: BasePreparedLoadRequest
+}
+
+enum DashboardSectionRefreshApplication: Sendable {
+    case applied(replacedHandle: UInt64?)
+    case failed
+    case stale
+}
+
 enum BasesDockTarget: Equatable {
     case base(path: String, name: String)
     case savedQuery(id: String, name: String)
@@ -227,6 +239,9 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
         case loading
         case ready
         case missing
+        /// A prepared refresh failed after a prior result was published. The
+        /// retained result remains usable while the user decides whether to retry.
+        case degraded(String)
         case failed(String)
     }
 
@@ -239,6 +254,7 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
 
     private var handle: UInt64?
     private var activeViewIndex = 0
+    private var contentRefreshGeneration: UInt64 = 0
 
     init(index: Int, status: DashboardSectionStatus) {
         self.index = index
@@ -274,6 +290,7 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
     }
 
     func load(session: VaultSession, thisPath: String? = nil) {
+        contentRefreshGeneration &+= 1
         close(session: session)
         result = nil
         authoredRenderer = nil
@@ -323,6 +340,7 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
     }
 
     func close(session: VaultSession) {
+        contentRefreshGeneration &+= 1
         if let handle {
             session.closeBase(handle: handle)
         }
@@ -341,6 +359,7 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
     }
 
     private func execute(session: VaultSession, thisPath: String? = nil) {
+        contentRefreshGeneration &+= 1
         guard let handle else {
             result = nil
             state = .failed("Section has no open query.")
@@ -364,6 +383,71 @@ final class DashboardSectionDocument: ObservableObject, Identifiable {
         } catch {
             result = nil
             state = .failed("Section could not run: \(error.localizedDescription)")
+        }
+    }
+
+    func beginContentRefresh(
+        thisPath: String?
+    ) -> DashboardSectionRefreshReservation? {
+        guard !status.missing, rendererOverride != nil || normalizedViewOverride == nil else {
+            return nil
+        }
+        contentRefreshGeneration &+= 1
+        return DashboardSectionRefreshReservation(
+            generation: contentRefreshGeneration,
+            replacedHandle: handle,
+            request: BasePreparedLoadRequest(
+                source: .savedQuery(
+                    id: status.savedQueryId,
+                    name: status.savedQueryName ?? title),
+                previousViewName: nil,
+                previousViewIndex: activeViewIndex,
+                quickFilter: nil,
+                sortColumnID: nil,
+                sortAscending: true,
+                thisPath: thisPath))
+    }
+
+    func applyContentRefresh(
+        _ prepared: BasePreparedLoad,
+        reservation: DashboardSectionRefreshReservation
+    ) -> DashboardSectionRefreshApplication {
+        guard contentRefreshGeneration == reservation.generation,
+            handle == reservation.replacedHandle,
+            status.savedQueryId == {
+                if case .savedQuery(let id, _) = reservation.request.source { return id }
+                return ""
+            }()
+        else { return .stale }
+
+        switch prepared {
+        case .ready(
+            let preparedHandle,
+            let preparedViews,
+            let preparedResult,
+            let preparedActiveViewIndex,
+            _
+        ):
+            let replacedHandle = handle
+            handle = preparedHandle
+            activeViewIndex = preparedActiveViewIndex
+            authoredRenderer = preparedViews.first.map {
+                $0.viewType == "list" ? .list : .table
+            }
+            result = preparedResult
+            if let message = preparedResult?.viewError,
+                !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                state = .failed(message)
+            } else {
+                state = .ready
+            }
+            contentRefreshGeneration &+= 1
+            return .applied(replacedHandle: replacedHandle)
+        case .failed(let message):
+            state = result == nil ? .failed(message) : .degraded(message)
+            contentRefreshGeneration &+= 1
+            return .failed
         }
     }
 }

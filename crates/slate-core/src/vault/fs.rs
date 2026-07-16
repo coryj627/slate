@@ -118,6 +118,101 @@ impl FsVaultProvider {
 
         Ok(())
     }
+
+    fn write_file_if_absent_with_staging<WriteContents, SyncContents, Publish>(
+        &self,
+        relative: &str,
+        contents: &[u8],
+        write_contents: WriteContents,
+        sync_contents: SyncContents,
+        publish: Publish,
+    ) -> Result<(), VaultError>
+    where
+        WriteContents: FnOnce(&mut fs::File, &[u8]) -> io::Result<()>,
+        SyncContents: FnOnce(&fs::File) -> io::Result<()>,
+        Publish: FnOnce(&Path, &Path) -> io::Result<()>,
+    {
+        let path = self.resolve_for_mutation(relative)?;
+        let tmp_dir = self.tmp_dir();
+        fs::create_dir_all(&tmp_dir).map_err(VaultError::Io)?;
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).map_err(VaultError::Io)?;
+        }
+
+        // A managed temp path is the failure guard: every exit before publish,
+        // including partial writes and sync failures, still unlinks the staged
+        // bytes. Keep the `create-` prefix so leaked-file diagnostics remain
+        // recognizable if the filesystem itself refuses cleanup.
+        let mut temp = tempfile::Builder::new()
+            .prefix("create-")
+            .tempfile_in(&tmp_dir)
+            .map_err(VaultError::Io)?;
+
+        let staged = write_contents(temp.as_file_mut(), contents)
+            .and_then(|()| sync_contents(temp.as_file()));
+        if let Err(stage_error) = staged {
+            return match normalize_create_temp_cleanup(temp.close()) {
+                Ok(()) => Err(VaultError::Io(stage_error)),
+                Err(cleanup_error) => Err(VaultError::Io(io_error_with_cleanup(
+                    stage_error,
+                    cleanup_error,
+                ))),
+            };
+        }
+
+        // The shipping no-replace rename is the sole publish point. Success
+        // consumes the staged directory entry, so there is no second unlink
+        // whose failure could turn a committed create into a reported error.
+        // Disarm `TempPath` cleanup explicitly: after the move, a new external
+        // file could race into the old random name and must not be deleted by
+        // the guard's destructor.
+        match publish(temp.path(), &path) {
+            Ok(()) => {
+                let (file, mut path_guard) = temp.into_parts();
+                path_guard.disable_cleanup(true);
+                drop(path_guard);
+                drop(file);
+                Ok(())
+            }
+            Err(publish_error) => {
+                let cleanup = normalize_create_temp_cleanup(temp.close());
+                if publish_error.kind() == io::ErrorKind::AlreadyExists {
+                    return match cleanup {
+                        Ok(()) => Err(VaultError::DestinationExists {
+                            path: relative.to_string(),
+                        }),
+                        Err(cleanup_error) => Err(VaultError::Io(io_error_with_cleanup(
+                            publish_error,
+                            cleanup_error,
+                        ))),
+                    };
+                }
+                match cleanup {
+                    Ok(()) => Err(VaultError::Io(publish_error)),
+                    Err(cleanup_error) => Err(VaultError::Io(io_error_with_cleanup(
+                        publish_error,
+                        cleanup_error,
+                    ))),
+                }
+            }
+        }
+    }
+}
+
+fn normalize_create_temp_cleanup(result: io::Result<()>) -> io::Result<()> {
+    match result {
+        // If an external cleanup service removed the hidden temp first, the
+        // desired postcondition already holds.
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        other => other,
+    }
+}
+
+fn io_error_with_cleanup(primary: io::Error, cleanup: io::Error) -> io::Error {
+    io::Error::new(
+        primary.kind(),
+        format!("{primary}; additionally failed to remove create staging file: {cleanup}"),
+    )
 }
 
 /// Compute the canonical content hash of a byte slice.
@@ -233,42 +328,13 @@ impl VaultProvider for FsVaultProvider {
     }
 
     fn write_file_if_absent(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
-        let path = self.resolve_for_mutation(relative)?;
-        // Full content staged in the temp dir, then HARD-LINKED to the
-        // destination: link(2) fails with EEXIST when the target
-        // exists, making the publish step atomic AND no-replace — a
-        // non-Slate writer racing this call cannot be clobbered
-        // (unlike rename, which replaces). The temp entry is unlinked
-        // either way.
-        let tmp_dir = self.tmp_dir();
-        std::fs::create_dir_all(&tmp_dir).map_err(VaultError::Io)?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(VaultError::Io)?;
-        }
-        // Unique per CALL, not per path: racing threads staging the
-        // same destination must never share a temp file, or the link
-        // could publish a rival's mid-write bytes (caught by the
-        // no-replace race test).
-        static CREATE_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let unique = CREATE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp_path = tmp_dir.join(format!("create-{}-{unique}", std::process::id()));
-        {
-            use std::io::Write as _;
-            let mut tmp = std::fs::File::create(&tmp_path).map_err(VaultError::Io)?;
-            tmp.write_all(contents).map_err(VaultError::Io)?;
-            tmp.sync_data().map_err(VaultError::Io)?;
-        }
-        let linked = std::fs::hard_link(&tmp_path, &path);
-        let _ = std::fs::remove_file(&tmp_path);
-        match linked {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                Err(VaultError::DestinationExists {
-                    path: relative.to_string(),
-                })
-            }
-            Err(e) => Err(VaultError::Io(e)),
-        }
+        self.write_file_if_absent_with_staging(
+            relative,
+            contents,
+            |file, contents| file.write_all(contents),
+            fs::File::sync_data,
+            rename_no_replace,
+        )
     }
 
     fn delete(&self, relative: &str) -> Result<(), VaultError> {
@@ -384,13 +450,23 @@ impl VaultProvider for FsVaultProvider {
         self.require_mutation_parent_access(&path)
     }
 
-    fn mutation_path_exists(&self, relative: &str) -> Result<bool, VaultError> {
+    fn mutation_path_kind(&self, relative: &str) -> Result<Option<EntryKind>, VaultError> {
         let path = self.resolve_for_mutation(relative)?;
         match path.symlink_metadata() {
-            Ok(_) => Ok(true),
-            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+            Ok(metadata) => Ok(Some(if metadata.file_type().is_symlink() {
+                EntryKind::Symlink
+            } else if metadata.is_dir() {
+                EntryKind::Directory
+            } else {
+                EntryKind::File
+            })),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(error) => Err(VaultError::Io(error)),
         }
+    }
+
+    fn mutation_path_exists(&self, relative: &str) -> Result<bool, VaultError> {
+        self.mutation_path_kind(relative).map(|kind| kind.is_some())
     }
 
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError> {
@@ -1035,6 +1111,175 @@ mod tests {
             tmp.path().join(".slate").join("tmp").is_dir(),
             ".slate/tmp/ should exist after the first write"
         );
+    }
+
+    fn create_staging_entries(tmp: &tempfile::TempDir) -> Vec<String> {
+        let staging_dir = tmp.path().join(".slate").join("tmp");
+        match std::fs::read_dir(staging_dir) {
+            Ok(entries) => entries
+                .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| name.starts_with("create-"))
+                .collect(),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Vec::new(),
+            Err(error) => panic!("failed to inspect create staging directory: {error}"),
+        }
+    }
+
+    #[test]
+    fn create_exclusive_cleans_staged_temp_after_write_failure() {
+        let (tmp, provider) = vault();
+
+        let error = provider
+            .write_file_if_absent_with_staging(
+                "fresh.md",
+                b"candidate bytes",
+                |_file, _contents| {
+                    Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "injected staged write failure",
+                    ))
+                },
+                |_file| Ok(()),
+                rename_no_replace,
+            )
+            .expect_err("the injected write failure must escape");
+
+        assert!(
+            matches!(error, VaultError::Io(ref error) if error.kind() == io::ErrorKind::WriteZero)
+        );
+        assert!(!tmp.path().join("fresh.md").exists());
+        assert_eq!(create_staging_entries(&tmp), Vec::<String>::new());
+    }
+
+    #[test]
+    fn create_exclusive_cleans_staged_temp_after_sync_failure() {
+        let (tmp, provider) = vault();
+
+        let error = provider
+            .write_file_if_absent_with_staging(
+                "fresh.md",
+                b"candidate bytes",
+                |file, contents| file.write_all(contents),
+                |_file| Err(io::Error::other("injected staged sync failure")),
+                rename_no_replace,
+            )
+            .expect_err("the injected sync failure must escape");
+
+        assert!(matches!(error, VaultError::Io(ref error) if error.kind() == io::ErrorKind::Other));
+        assert!(!tmp.path().join("fresh.md").exists());
+        assert_eq!(create_staging_entries(&tmp), Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_exclusive_publish_success_does_not_depend_on_unlinking_old_staging_name() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, provider) = vault();
+        let staging_dir = tmp.path().join(".slate").join("tmp");
+
+        let outcome = provider.write_file_if_absent_with_staging(
+            "fresh.md",
+            b"candidate bytes",
+            |file, contents| file.write_all(contents),
+            fs::File::sync_data,
+            |staged, destination| {
+                rename_no_replace(staged, destination)?;
+                // Reproduce the reviewer's post-publish edge: any attempt to
+                // unlink the old staging name now fails. A successful atomic
+                // move must nevertheless remain a successful create.
+                fs::set_permissions(
+                    staged.parent().expect("staging parent"),
+                    fs::Permissions::from_mode(0o000),
+                )?;
+                Ok(())
+            },
+        );
+        fs::set_permissions(&staging_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        outcome.expect("the destination was published and must not report a false failure");
+        assert_eq!(
+            std::fs::read(tmp.path().join("fresh.md")).unwrap(),
+            b"candidate bytes"
+        );
+        assert_eq!(create_staging_entries(&tmp), Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_exclusive_collision_cleanup_failure_is_reported_not_discarded() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, provider) = vault();
+        let staging_dir = tmp.path().join(".slate").join("tmp");
+        std::fs::write(tmp.path().join("occupied.md"), b"external winner").unwrap();
+
+        let error = provider
+            .write_file_if_absent_with_staging(
+                "occupied.md",
+                b"Slate candidate",
+                |file, contents| file.write_all(contents),
+                fs::File::sync_data,
+                |staged, _destination| {
+                    fs::set_permissions(
+                        staged.parent().expect("staging parent"),
+                        fs::Permissions::from_mode(0o000),
+                    )?;
+                    Err(io::Error::new(
+                        io::ErrorKind::AlreadyExists,
+                        "injected no-replace collision",
+                    ))
+                },
+            )
+            .expect_err("cleanup failure after a collision must not be silent");
+        fs::set_permissions(&staging_dir, fs::Permissions::from_mode(0o700)).unwrap();
+
+        let message = match error {
+            VaultError::Io(error) => error.to_string(),
+            other => panic!("cleanup failure must surface as IO context, got {other:?}"),
+        };
+        assert!(
+            message.contains("injected no-replace collision"),
+            "{message}"
+        );
+        assert!(
+            message.contains("failed to remove create staging file"),
+            "{message}"
+        );
+        assert_eq!(
+            std::fs::read(tmp.path().join("occupied.md")).unwrap(),
+            b"external winner"
+        );
+
+        // The filesystem refused deletion, so residue is unavoidable; the
+        // contract is that it is explicitly reported rather than discarded.
+        let staged = create_staging_entries(&tmp);
+        assert_eq!(
+            staged.len(),
+            1,
+            "the injected cleanup failure must be observable"
+        );
+        std::fs::remove_file(staging_dir.join(&staged[0])).unwrap();
+    }
+
+    #[test]
+    fn create_exclusive_collision_preserves_winner_bytes_and_cleans_staged_temp() {
+        let (tmp, provider) = vault();
+        std::fs::write(tmp.path().join("occupied.md"), b"external winner").unwrap();
+
+        let error = provider
+            .write_file_if_absent("occupied.md", b"Slate candidate")
+            .expect_err("an occupied destination must win");
+
+        assert!(matches!(
+            error,
+            VaultError::DestinationExists { ref path } if path == "occupied.md"
+        ));
+        assert_eq!(
+            std::fs::read(tmp.path().join("occupied.md")).unwrap(),
+            b"external winner"
+        );
+        assert_eq!(create_staging_entries(&tmp), Vec::<String>::new());
     }
 
     #[cfg(unix)]

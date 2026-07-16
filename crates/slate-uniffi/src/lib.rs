@@ -204,6 +204,20 @@ pub fn extract_headings(source: String) -> Vec<Heading> {
         .collect()
 }
 
+/// Parse one canonical frontmatter source string into the same property wire
+/// records returned by indexed metadata queries. This is intentionally pure:
+/// callers that have just read `NoteParts` can refresh conflict UI from those
+/// authoritative bytes without rescanning the vault or trusting a stale index.
+#[uniffi::export]
+pub fn parse_frontmatter_properties(fm_source: String) -> Vec<Property> {
+    let source = core::compose_note(&fm_source, "");
+    core::extract_frontmatter(&source)
+        .0
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
 /// Read a Markdown file from disk and return its headings.
 ///
 /// The host platform supplies the absolute path. On sandboxed platforms
@@ -1824,6 +1838,7 @@ pub struct BatchTrashReport {
     pub op_id: Option<i64>,
     pub trashed: Vec<StructuralBatchItem>,
     pub untrashed: Vec<BatchTrashRemainder>,
+    pub unknown: Vec<BatchTrashRemainder>,
     pub bookkeeping_failures: Vec<BatchItemFailure>,
     pub requires_rescan: bool,
 }
@@ -2050,6 +2065,7 @@ impl From<core::structural_batch::BatchTrashReport> for BatchTrashReport {
             op_id: report.op_id,
             trashed: report.trashed.into_iter().map(Into::into).collect(),
             untrashed: report.untrashed.into_iter().map(Into::into).collect(),
+            unknown: report.unknown.into_iter().map(Into::into).collect(),
             bookkeeping_failures: report
                 .bookkeeping_failures
                 .into_iter()
@@ -3046,6 +3062,7 @@ pub struct RenameAffected {
     pub after_excerpt: String,
     /// `false` for dry-run results, `true` for successful applies.
     pub applied: bool,
+    pub new_content_hash: Option<String>,
 }
 
 impl From<core::RenameAffected> for RenameAffected {
@@ -3055,6 +3072,7 @@ impl From<core::RenameAffected> for RenameAffected {
             before_excerpt: a.before_excerpt,
             after_excerpt: a.after_excerpt,
             applied: a.applied,
+            new_content_hash: a.new_content_hash,
         }
     }
 }
@@ -7033,6 +7051,23 @@ impl VaultSession {
 mod tests {
     use super::*;
 
+    #[test]
+    fn parse_frontmatter_properties_uses_authoritative_source_bytes() {
+        let properties = parse_frontmatter_properties(
+            "title: External\ncount: 2\ntags: [one, two]\n".to_string(),
+        );
+        assert_eq!(properties.len(), 3);
+        assert_eq!(properties[0].key, "title");
+        assert_eq!(properties[0].kind, "text");
+        assert_eq!(properties[0].value_json, "\"External\"");
+        assert_eq!(properties[1].key, "count");
+        assert_eq!(properties[1].kind, "number");
+        assert_eq!(properties[1].value_json, "2");
+        assert_eq!(properties[2].key, "tags");
+        assert_eq!(properties[2].kind, "tag_list");
+        assert_eq!(properties[2].value_json, "[\"one\",\"two\"]");
+    }
+
     fn ffi_batch_item(path: &str, is_directory: bool) -> StructuralBatchItem {
         StructuralBatchItem {
             path: path.to_string(),
@@ -7390,7 +7425,7 @@ mod tests {
     }
 
     #[test]
-    fn batch_trash_report_conversion_keeps_trashed_and_untrashed_distinct() {
+    fn batch_trash_report_conversion_keeps_all_outcome_buckets_distinct() {
         use slate_core::structural_batch as c;
 
         for (source_state, expected_state, op_id) in [
@@ -7438,6 +7473,14 @@ mod tests {
                         ),
                     },
                 ],
+                unknown: vec![c::BatchTrashRemainder {
+                    item: core_batch_item("unknown.md", false),
+                    failure: core_batch_failure(
+                        Some(core_batch_item("unknown.md", false)),
+                        c::BatchFailureStage::Reconciliation,
+                        "physical Trash verification failed",
+                    ),
+                }],
                 bookkeeping_failures: vec![
                     core_batch_failure(None, c::BatchFailureStage::Journal, "bookkeeping-z"),
                     core_batch_failure(
@@ -7492,6 +7535,24 @@ mod tests {
                     ),
                     ("untrashed-a", "untrashed-a-global-failure", None),
                 ]
+            );
+            assert_eq!(
+                converted
+                    .unknown
+                    .iter()
+                    .map(|remainder| {
+                        (
+                            remainder.item.path.as_str(),
+                            remainder.failure.message.as_str(),
+                            remainder.failure.stage,
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                vec![(
+                    "unknown.md",
+                    "physical Trash verification failed",
+                    BatchFailureStage::Reconciliation,
+                )]
             );
             assert_eq!(
                 converted
@@ -8103,6 +8164,40 @@ mod tests {
             let back: CommandSection = core.into();
             assert_eq!(sec, back);
         }
+    }
+
+    #[test]
+    fn save_query_as_base_preserves_create_only_errors_through_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("Queries")).unwrap();
+        std::fs::write(
+            tmp.path().join("Queries/Source.base"),
+            b"views:\n  - type: table\n    name: Source\n    order:\n      - file.name\n",
+        )
+        .unwrap();
+        std::fs::write(
+            tmp.path().join("Queries/Occupied.base"),
+            b"external occupant\n",
+        )
+        .unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+        let handle = session.open_base("Queries/Source.base".into()).unwrap();
+        let query_json = session.base_view_query_json(handle, 0).unwrap();
+
+        assert!(matches!(
+            session.save_query_as_base(query_json.clone(), "Queries/Wrong.md".into()),
+            Err(VaultError::InvalidArgument { .. })
+        ));
+        assert!(matches!(
+            session.save_query_as_base(query_json, "Queries/Occupied.base".into()),
+            Err(VaultError::DestinationExists { .. })
+        ));
+        assert_eq!(
+            std::fs::read(tmp.path().join("Queries/Occupied.base")).unwrap(),
+            b"external occupant\n"
+        );
     }
 
     /// The core `CommandSection` discriminants are a wire contract (the

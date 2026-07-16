@@ -222,11 +222,19 @@ struct CanvasOutlineView: View {
             // and the browser hand-off is explicit).
             Button(row.kind == "link" ? "Open in Browser" : "Open") { onActivate(row) }
             if row.kind == "text" {
+                let convertDisabledReason = appState.structuralMutationDisabledReason
                 Button("Edit Card Text…") {
                     selecting(row) { appState.canvasEditCard() }
                 }
                 Button("Convert to Note…") {
                     selecting(row) { appState.canvasPromptConvertToNote() }
+                }
+                .disabled(convertDisabledReason != nil)
+                .accessibilityHint(
+                    convertDisabledReason
+                        ?? "Create a vault note from this card's text.")
+                if let convertDisabledReason {
+                    Text(convertDisabledReason)
                 }
             }
             Button("Create Connected Card") {

@@ -21,6 +21,17 @@ final class AccessibleDataGridTests: XCTestCase {
         }
     }
 
+    private final class ReusingTableView: NSTableView {
+        var nextReusableView: NSView?
+
+        override func makeView(withIdentifier identifier: NSUserInterfaceItemIdentifier, owner: Any?)
+            -> NSView?
+        {
+            defer { nextReusableView = nil }
+            return nextReusableView
+        }
+    }
+
     private struct Row: Identifiable {
         let id: Int
         let a: String
@@ -761,6 +772,57 @@ final class AccessibleDataGridTests: XCTestCase {
     }
 
     @MainActor
+    func testReusedCellClearsCustomActionsWhenTheyBecomeUnavailable() throws {
+        var busy = false
+        let row = Row(id: 0, a: "Ghost", b: "Unresolved")
+        let grid = AccessibleDataGrid<Row>(
+            columns: [.init("Name") { $0.a }],
+            rows: [row],
+            summary: "",
+            accessibilityLabel: "Graph",
+            rowActions: [
+                .init("Create note", isEnabled: { _ in !busy }) { _ in }
+            ])
+        let coordinator = GridCoordinator(grid: grid)
+        let table = ReusingTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+
+        let idleCell = try XCTUnwrap(
+            coordinator.tableView(table, viewFor: table.tableColumns[0], row: 0)
+                as? NSTableCellView)
+        let idleField = try XCTUnwrap(idleCell.textField)
+        XCTAssertEqual(
+            idleField.accessibilityCustomActions()?.map(\.name),
+            ["Create note"])
+
+        busy = true
+        XCTAssertEqual(
+            idleField.accessibilityCustomActions()?.map(\.name),
+            ["Create note"],
+            "changing the model alone cannot mutate the materialized AX element")
+        table.nextReusableView = idleCell
+        let busyCell = try XCTUnwrap(
+            coordinator.tableView(table, viewFor: table.tableColumns[0], row: 0)
+                as? NSTableCellView)
+
+        XCTAssertTrue(busyCell === idleCell, "the regression requires a reused native cell")
+        XCTAssertTrue(busyCell.textField === idleField, "the native text field must be reused too")
+        XCTAssertEqual(
+            busyCell.textField?.accessibilityCustomActions()?.map(\.name) ?? [],
+            [],
+            "busy reuse must not retain the idle Create note action")
+    }
+
+    func testCellConfigurationExplicitlyAssignsEmptyCustomActionSets() throws {
+        let source = try gridSource()
+        XCTAssertFalse(
+            source.contains("if !rowActions.isEmpty"),
+            "cell reuse must explicitly clear AX actions instead of relying on incidental AppKit resets")
+    }
+
+    @MainActor
     func testGroupedSectionsAddAddressableHeadingRows() {
         let grid = makeGrid(
             rows: Self.people,
@@ -910,6 +972,45 @@ final class AccessibleDataGridTests: XCTestCase {
         let adaMenu = try! XCTUnwrap(coordinator.rowMenu(at: 1, in: table))
         adaMenu.performActionForItem(at: 0)
         XCTAssertEqual(opened, [1], "the menu action targets Ada, the selected row")
+    }
+
+    @MainActor
+    func testRowContextMenuRetainsDisabledRelevantActionWithExactReason() throws {
+        let reason = AppState.structuralMutationBusyReason
+        var invocations = 0
+        let grid = AccessibleDataGrid<Row>(
+            columns: [.init("Name") { $0.a }],
+            rows: Self.people,
+            summary: "",
+            accessibilityLabel: "Table",
+            showsRowContextMenu: true,
+            rowActions: [
+                .init(
+                    "Create note",
+                    isVisible: { _ in true },
+                    isEnabled: { _ in false },
+                    disabledReason: { _ in reason }
+                ) { _ in
+                    invocations += 1
+                }
+            ])
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        let item = try XCTUnwrap(
+            coordinator.rowMenu(at: 0, in: table)?.items.first)
+        XCTAssertEqual(item.title, "Create note")
+        XCTAssertFalse(item.isEnabled)
+        XCTAssertEqual(item.toolTip, reason)
+        XCTAssertEqual(item.accessibilityHelp(), reason)
+
+        item.menu?.performActionForItem(at: 0)
+        XCTAssertEqual(invocations, 0)
     }
 
     @MainActor

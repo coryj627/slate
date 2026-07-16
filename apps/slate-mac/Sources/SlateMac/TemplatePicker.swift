@@ -40,6 +40,15 @@ struct TemplatePicker: View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
+            if let reason = appState.structuralMutationDisabledReason {
+                Text(reason)
+                    .font(.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .accessibilityLabel(reason)
+                Divider()
+            }
             content
             Divider()
             footer
@@ -116,7 +125,8 @@ struct TemplatePicker: View {
     }
 
     private func row(for summary: TemplateSummary) -> some View {
-        Button {
+        let disabledReason = appState.structuralMutationDisabledReason
+        return Button {
             appState.selectTemplate(summary)
         } label: {
             VStack(alignment: .leading, spacing: 2) {
@@ -137,7 +147,10 @@ struct TemplatePicker: View {
         .buttonStyle(.plain)
         .focused($focus, equals: .row(summary.path))
         .accessibilityLabel(rowAccessibilityLabel(for: summary))
-        .accessibilityHint("Activate to use this template for a new note.")
+        .accessibilityHint(
+            disabledReason ?? "Activate to use this template for a new note.")
+        .help(disabledReason ?? "Activate to use this template for a new note.")
+        .disabled(disabledReason != nil)
     }
 
     private func rowAccessibilityLabel(for summary: TemplateSummary) -> String {

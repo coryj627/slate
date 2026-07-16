@@ -83,6 +83,9 @@ struct ReadingView: View {
         /// while true (same rule + explanation as `TasksPanel`: the toggle's
         /// post-save reload would overwrite the dirty buffer).
         var isDocumentDirty: Bool = false
+        /// Exact path-capability reason when task mutation is unavailable for
+        /// a quarantined note. Nil leaves the existing dirty-buffer rule.
+        var taskMutationDisabledReason: String? = nil
         var onToggleTask: (TaskItem) -> Void = { _ in }
         /// U3-3 (#467): `TaskItem.line` is a whole-FILE 1-based line; the
         /// rendered `text` is the BODY, so row matching adds this delta
@@ -133,6 +136,7 @@ struct ReadingView: View {
             unresolvedLinkTargets: Set<String> = [],
             linkRecordSets: ReadingLinkRouter.LinkRecordSets? = nil,
             isDocumentDirty: Bool = false,
+            taskMutationDisabledReason: String? = nil,
             onToggleTask: @escaping (TaskItem) -> Void = { _ in },
             taskLineOffset: Int = 0,
             embedResolutions: [String: EmbedResolution] = [:],
@@ -153,6 +157,7 @@ struct ReadingView: View {
             self.unresolvedLinkTargets = unresolvedLinkTargets
             self.linkRecordSets = linkRecordSets
             self.isDocumentDirty = isDocumentDirty
+            self.taskMutationDisabledReason = taskMutationDisabledReason
             self.onToggleTask = onToggleTask
             self.taskLineOffset = taskLineOffset
             self.embedResolutions = embedResolutions
@@ -643,7 +648,10 @@ struct ReadingView: View {
             // buffer is dirty — the toggle's post-save reload would overwrite
             // unsaved edits; disabling gives a visible "save first" signal
             // and routes VoiceOver away from a button that would no-op.
-            let blocked = context.isDocumentDirty
+            let dirtyReason =
+                "Save the note first. Toggle is disabled while the editor has unsaved changes."
+            let blockedReason = context.taskMutationDisabledReason
+                ?? (context.isDocumentDirty ? dirtyReason : nil)
             Button {
                 context.onToggleTask(item)
             } label: {
@@ -652,18 +660,14 @@ struct ReadingView: View {
                     .imageScale(.large)
             }
             .buttonStyle(.plain)
-            .disabled(blocked)
+            .disabled(blockedReason != nil)
             .accessibilityLabel(completed ? "Mark incomplete" : "Mark complete")
             .accessibilityHint(
-                blocked
-                    ? "Save the note first. Toggle is disabled while the editor has unsaved changes."
-                    : "Toggles the task between open and done."
+                blockedReason ?? "Toggles the task between open and done."
             )
             .accessibilityIsSelected(completed)
             .help(
-                blocked
-                    ? "Save the note first. Toggle is disabled while the editor has unsaved changes."
-                    : (completed ? "Mark incomplete" : "Mark complete")
+                blockedReason ?? (completed ? "Mark incomplete" : "Mark complete")
             )
         } else {
             // No TaskItem to route the toggle through (tasks not provided,

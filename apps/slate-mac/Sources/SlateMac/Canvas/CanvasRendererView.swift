@@ -748,7 +748,12 @@ final class CanvasRendererNSView: NSView {
                 : appState.canvasFollowConnection(forward: true)
         case 36 where inMode:  // Return commits the mode
             if let doc = appState.activeCanvasDocument {
-                _ = appState.canvasModeController(for: doc).commit()
+                // Preserve the active mode/transient while the Canvas is
+                // quarantined; the controller clears `active` before running
+                // its commit closure, so admission must happen first.
+                if appState.admitCanvasMutation(for: doc), doc.handle != nil {
+                    _ = appState.canvasModeController(for: doc).commit()
+                }
             }
         default:
             return super.keyDown(with: event)

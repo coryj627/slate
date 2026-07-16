@@ -344,7 +344,8 @@ struct GraphTableView: View {
 
     private func grid(_ rows: [GraphTableRow]) -> some View {
         AccessibleDataGrid(
-            columns: GraphTableColumn.columns,
+            columns: GraphTableColumn.columns(
+                ghostCreationDisabledReason: appState.structuralMutationDisabledReason),
             rows: rows,
             summary: appState.graphTableSnapshot?.audioSummary ?? "",
             accessibilityLabel: "Graph, data grid",
@@ -362,23 +363,26 @@ struct GraphTableView: View {
     }
 
     private func activate(_ row: GraphTableRow) {
-        focusOwningGroup()
-        if row.isGhost {
-            appState.createNoteFromGhost(targetRaw: row.label)
-        } else if let path = row.path {
-            appState.openFile(path, target: .currentTab)
-        }
+        activate(row, fileTarget: .currentTab)
     }
 
     /// ⌘Return / ⌘-double-click: open the row's note in a NEW tab (a
     /// ghost still resolves to Create note). Distinct from plain
     /// activation, which opens in place (round 2 finding 4).
     private func activateInNewTab(_ row: GraphTableRow) {
+        activate(row, fileTarget: .newTab)
+    }
+
+    /// Keep ordinary and modified activation on one availability gate so a
+    /// busy ghost cannot enter the structural rejection funnel from either
+    /// Return or double-click. Real notes remain available in both targets.
+    private func activate(_ row: GraphTableRow, fileTarget: AppState.OpenTarget) {
         focusOwningGroup()
         if row.isGhost {
+            guard appState.structuralMutationDisabledReason == nil else { return }
             appState.createNoteFromGhost(targetRaw: row.label)
         } else if let path = row.path {
-            appState.openFile(path, target: .newTab)
+            appState.openFile(path, target: fileTarget)
         }
     }
 
@@ -408,7 +412,19 @@ struct GraphTableView: View {
     /// in this pane (finding 2).
     private var rowActions: [AccessibleDataGrid<GraphTableRow>.RowAction] {
         GraphRowAction.allCases.map { action in
-            .init(action.title, isEnabled: { action.applies(toGhost: $0.isGhost) }) { row in
+            .init(
+                action.title,
+                isVisible: { row in action.applies(toGhost: row.isGhost) },
+                isEnabled: { row in
+                    action.applies(toGhost: row.isGhost)
+                        && (action != .createNote
+                            || appState.structuralMutationDisabledReason == nil)
+                },
+                disabledReason: { row in
+                    guard action == .createNote, row.isGhost else { return nil }
+                    return appState.structuralMutationDisabledReason
+                }
+            ) { row in
                 focusOwningGroup()
                 Self.perform(action, row: row, appState: appState)
             }
@@ -576,11 +592,20 @@ enum GraphTableColumn: Int, CaseIterable {
     }
 
     static var columns: [AccessibleDataGrid<GraphTableRow>.Column] {
+        columns(ghostCreationDisabledReason: nil)
+    }
+
+    static func columns(ghostCreationDisabledReason: String?)
+        -> [AccessibleDataGrid<GraphTableRow>.Column]
+    {
         allCases.map { col in
             AccessibleDataGrid<GraphTableRow>.Column(
                 col.header,
                 cell: col.cell,
-                directionalSort: { col.directionalComparator($0, $1, ascending: $2) })
+                directionalSort: { col.directionalComparator($0, $1, ascending: $2) },
+                accessibilityHint: { row in
+                    row.isGhost ? ghostCreationDisabledReason : nil
+                })
         }
     }
 

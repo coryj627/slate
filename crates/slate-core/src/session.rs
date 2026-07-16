@@ -22,9 +22,9 @@
 //! `cache_dir` defaults to `<vault_root>/.slate`. Callers can override
 //! for tests or sandbox layouts.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, OptionalExtension};
@@ -32,6 +32,104 @@ use rusqlite::{Connection, OptionalExtension};
 use crate::VaultError;
 use crate::db;
 use crate::vault::{EntryKind, FsVaultProvider, VaultProvider, content_hash};
+
+/// Process-local half of the vault structural writer gate.
+///
+/// BSD `flock` ownership semantics vary enough across platforms that two
+/// independently-opened descriptors in one process are not a portable mutex.
+/// Keep an explicit per-lock-path registry as well as the OS sidecar lock so
+/// separate `VaultSession`s in this process and separate processes obey the
+/// same serialization boundary.
+struct ProcessStructuralLocks {
+    held: Mutex<std::collections::HashSet<PathBuf>>,
+    available: Condvar,
+}
+
+fn process_structural_locks() -> &'static ProcessStructuralLocks {
+    static LOCKS: OnceLock<ProcessStructuralLocks> = OnceLock::new();
+    LOCKS.get_or_init(|| ProcessStructuralLocks {
+        held: Mutex::new(std::collections::HashSet::new()),
+        available: Condvar::new(),
+    })
+}
+
+/// Exclusive vault-wide structural writer guard.
+///
+/// Global lock order is this sidecar first, then the session-local
+/// `structural_operation` mutex, then `conn`.  Event callbacks run only after
+/// this guard is dropped because listeners may synchronously re-enter a
+/// structural endpoint.
+struct VaultStructuralLock {
+    file: Option<std::fs::File>,
+    lock_path: PathBuf,
+}
+
+impl VaultStructuralLock {
+    fn acquire(cache_dir: &Path) -> std::io::Result<Self> {
+        let canonical_cache = std::fs::canonicalize(cache_dir)?;
+        let lock_path = canonical_cache.join("structural.lock");
+        let registry = process_structural_locks();
+        let mut held = registry
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while held.contains(&lock_path) {
+            held = registry
+                .available
+                .wait(held)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        held.insert(lock_path.clone());
+        drop(held);
+
+        let acquired = (|| {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&lock_path)?;
+            let result =
+                unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) };
+            if result != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(file)
+        })();
+
+        match acquired {
+            Ok(file) => Ok(Self {
+                file: Some(file),
+                lock_path,
+            }),
+            Err(error) => {
+                let mut held = registry
+                    .held
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                held.remove(&lock_path);
+                registry.available.notify_all();
+                Err(error)
+            }
+        }
+    }
+}
+
+impl Drop for VaultStructuralLock {
+    fn drop(&mut self) {
+        if let Some(file) = self.file.take() {
+            let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_UN) };
+            drop(file);
+        }
+        let registry = process_structural_locks();
+        let mut held = registry
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        held.remove(&self.lock_path);
+        registry.available.notify_all();
+    }
+}
 
 // --- Configuration ---
 
@@ -319,6 +417,9 @@ pub struct RenameAffected {
     /// `false` for dry-run results, `true` when the per-file save
     /// succeeded.
     pub applied: bool,
+    /// Exact whole-file hash returned by the successful apply. Dry-run rows
+    /// have no committed version and therefore carry `None`.
+    pub new_content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1587,6 +1688,10 @@ impl VaultSession {
         config: SessionConfig,
     ) -> Result<Self, VaultError> {
         std::fs::create_dir_all(&config.cache_dir)?;
+        // Reopen recovery and every live structural writer share this exact
+        // sidecar. Acquire it before SQLite so a second process cannot plan
+        // against a half-renamed vault or race migration/recovery.
+        let vault_structural_lock = VaultStructuralLock::acquire(&config.cache_dir)?;
         let db_path = config.cache_dir.join("cache.sqlite");
 
         let mut conn = db::open_database(&db_path, config.max_db_cache_pages)?;
@@ -1664,7 +1769,7 @@ impl VaultSession {
                 .expect("spawn compaction worker")
         };
 
-        Ok(Self {
+        let session = Self {
             provider,
             conn: Mutex::new(conn),
             config,
@@ -1694,7 +1799,275 @@ impl VaultSession {
             bases_generation: AtomicU64::new(1),
             structural_history_valid: std::sync::atomic::AtomicBool::new(true),
             structural_operation: Mutex::new(()),
-        })
+        };
+        session.recover_structural_batch_inflight_on_open()?;
+        drop(vault_structural_lock);
+        Ok(session)
+    }
+
+    /// Roll back an interrupted batch to its pre-operation truth before the
+    /// session becomes observable. The caller already holds the vault
+    /// sidecar, so no structural writer in this or another process can change
+    /// the classified paths while recovery runs.
+    fn recover_structural_batch_inflight_on_open(&self) -> Result<(), VaultError> {
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let inflight = match structural_batch_load_inflight(&conn) {
+            Ok(Some(inflight)) => inflight,
+            Ok(None) => return Ok(()),
+            Err(error) => return self.fail_structural_batch_recovery_locked(&mut conn, error),
+        };
+        if inflight.version != 1 || inflight.entries.is_empty() {
+            return self.fail_structural_batch_recovery_locked(
+                &mut conn,
+                VaultError::InvalidArgument {
+                    message: "unsupported or empty structural batch recovery plan".into(),
+                },
+            );
+        }
+
+        match self.rollback_structural_batch_inflight_locked(&mut conn, &inflight) {
+            Ok(()) => Ok(()),
+            Err(error) => self.fail_structural_batch_recovery_locked(&mut conn, error),
+        }
+    }
+
+    fn fail_structural_batch_recovery_locked(
+        &self,
+        conn: &mut Connection,
+        cause: VaultError,
+    ) -> Result<(), VaultError> {
+        let barrier = (|| -> Result<(), VaultError> {
+            let tx = conn.transaction()?;
+            journal_append(
+                &tx,
+                crate::structural::StructuralOpKind::RecoveryBarrier,
+                &crate::structural::StructuralOpPayload::default(),
+            )?;
+            tx.execute("DELETE FROM structural_batch_inflight WHERE id = 1", [])?;
+            tx.commit()?;
+            Ok(())
+        })();
+        let message = match barrier {
+            Ok(()) => format!("structural batch recovery failed closed: {cause}"),
+            Err(barrier_error) => format!(
+                "structural batch recovery failed ({cause}); recovery barrier persistence also failed: {barrier_error}"
+            ),
+        };
+        Err(VaultError::InvalidArgument { message })
+    }
+
+    fn rollback_structural_batch_inflight_locked(
+        &self,
+        conn: &mut Connection,
+        inflight: &StructuralBatchInflight,
+    ) -> Result<(), VaultError> {
+        let plans = inflight.plans();
+        let mut physical = Vec::with_capacity(inflight.entries.len());
+        for entry in &inflight.entries {
+            let original =
+                structural_batch_mutation_path_exists(self.provider.as_ref(), &entry.from)?;
+            let forward = structural_batch_mutation_path_exists(self.provider.as_ref(), &entry.to)?;
+            let truth = match (original, forward) {
+                (true, false) => StructuralBatchTruth::Original,
+                (false, true) => StructuralBatchTruth::Forward,
+                (true, true) => {
+                    return Err(VaultError::InvalidArgument {
+                        message: format!(
+                            "ambiguous structural batch topology: both {:?} and {:?} exist",
+                            entry.from, entry.to
+                        ),
+                    });
+                }
+                (false, false) => {
+                    return Err(VaultError::InvalidArgument {
+                        message: format!(
+                            "ambiguous structural batch topology: neither {:?} nor {:?} exists",
+                            entry.from, entry.to
+                        ),
+                    });
+                }
+            };
+            physical.push(truth);
+        }
+
+        let mut indexed_truth = None;
+        for entry in &inflight.entries {
+            let table = if entry.is_directory { "dirs" } else { "files" };
+            let sql = format!(
+                "SELECT EXISTS(SELECT 1 FROM {table} WHERE path = ?1), \
+                        EXISTS(SELECT 1 FROM {table} WHERE path = ?2)"
+            );
+            let (original, forward): (bool, bool) =
+                conn.query_row(&sql, rusqlite::params![entry.from, entry.to], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?;
+            let truth = match (original, forward) {
+                (true, false) => StructuralBatchTruth::Original,
+                (false, true) => StructuralBatchTruth::Forward,
+                _ => {
+                    return Err(VaultError::InvalidArgument {
+                        message: format!(
+                            "structural batch index is ambiguous for {:?} -> {:?}",
+                            entry.from, entry.to
+                        ),
+                    });
+                }
+            };
+            if indexed_truth.is_some_and(|known| known != truth) {
+                return Err(VaultError::InvalidArgument {
+                    message: "structural batch index contains a mixed transaction state".into(),
+                });
+            }
+            indexed_truth = Some(truth);
+        }
+        let indexed_truth = indexed_truth.expect("non-empty inflight entries");
+
+        // When SQLite committed forward, tracked rewrite paths and their file
+        // ids are still at forward locations. Restore their bytes before
+        // reversing either the filesystem or index.
+        if indexed_truth == StructuralBatchTruth::Forward {
+            if physical
+                .iter()
+                .any(|truth| *truth != StructuralBatchTruth::Forward)
+                && !inflight.rewrites.is_empty()
+            {
+                return Err(VaultError::InvalidArgument {
+                    message: "structural batch rewrite recovery found index/path disagreement"
+                        .into(),
+                });
+            }
+            self.restore_structural_batch_rewrites_locked(conn, inflight, true)?;
+        }
+
+        // Reverse only the renames that physically landed, always in strict
+        // reverse plan order. A crash between rename and progress update is
+        // therefore indistinguishable from (and as safe as) a recorded step.
+        for (entry, truth) in inflight.entries.iter().zip(&physical).rev() {
+            if *truth == StructuralBatchTruth::Forward {
+                let rename_result = self.provider.rename(&entry.to, &entry.from);
+                let original =
+                    structural_batch_mutation_path_exists(self.provider.as_ref(), &entry.from)?;
+                let forward =
+                    structural_batch_mutation_path_exists(self.provider.as_ref(), &entry.to)?;
+                if !original || forward {
+                    return Err(rename_result.err().unwrap_or_else(|| {
+                        VaultError::InvalidArgument {
+                            message: format!(
+                                "rollback rename {:?} -> {:?} did not establish physical truth",
+                                entry.to, entry.from
+                            ),
+                        }
+                    }));
+                }
+            }
+        }
+
+        if indexed_truth == StructuralBatchTruth::Forward {
+            let tx = conn.transaction()?;
+            apply_batch_move_index_direction(&tx, &plans, false)?;
+            tx.commit()?;
+        } else {
+            self.restore_structural_batch_rewrites_locked(conn, inflight, false)?;
+        }
+
+        // Compensate only path markers that are observably unmatched. This
+        // covers a kill between the marker append and its progress update
+        // without inventing an inverse marker when no forward marker landed.
+        for (old, new) in &inflight.moved {
+            let forward_count = self.path_changed_marker_count_locked(conn, old, old, new)?;
+            let inverse_count = self.path_changed_marker_count_locked(conn, old, new, old)?;
+            if forward_count > inverse_count {
+                self.append_path_changed_marker_locked(conn, new, old)?;
+            }
+        }
+
+        structural_batch_delete_inflight(conn)?;
+        Ok(())
+    }
+
+    fn restore_structural_batch_rewrites_locked(
+        &self,
+        conn: &mut Connection,
+        inflight: &StructuralBatchInflight,
+        indexed_forward: bool,
+    ) -> Result<(), VaultError> {
+        for rewrite in inflight.rewrites.iter().rev() {
+            let path = if indexed_forward {
+                rewrite.path.as_str()
+            } else {
+                inflight
+                    .original_file_path(&rewrite.path)
+                    .unwrap_or(&rewrite.path)
+            };
+            let bytes = self
+                .provider
+                .read_file_with_cap(path, self.config.large_file_refuse_bytes)?;
+            if bytes.len() as u64 > self.config.large_file_refuse_bytes {
+                return Err(VaultError::FileTooLarge {
+                    path: path.to_string(),
+                    size: bytes.len() as u64,
+                });
+            }
+            let current = crate::vault::content_hash(&bytes);
+            if current == rewrite.hash_before {
+                continue;
+            }
+            if current != rewrite.hash_after {
+                return Err(VaultError::InvalidArgument {
+                    message: format!("rewrite at {path:?} matches neither durable recovery hash"),
+                });
+            }
+            // `hash_before` was read-back verified in the op-log before the
+            // tracked save. The compare-and-swap prevents overwriting bytes
+            // that changed after the classification above.
+            self.restore_file_to_hash_locked(
+                conn,
+                path,
+                &rewrite.hash_before,
+                &rewrite.hash_after,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn path_changed_marker_count_locked(
+        &self,
+        conn: &Connection,
+        indexed_path: &str,
+        marker_from: &str,
+        marker_to: &str,
+    ) -> Result<usize, VaultError> {
+        let log_name = conn
+            .query_row(
+                "SELECT oplog_name FROM files WHERE path = ?1",
+                rusqlite::params![indexed_path],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten();
+        let Some(log_name) = log_name else {
+            return Ok(0);
+        };
+        let entries =
+            crate::oplog::read_oplog(&self.config.cache_dir, &log_name).map_err(VaultError::Io)?;
+        Ok(entries
+            .into_iter()
+            .filter_map(|entry| {
+                (entry.op_kind == crate::oplog::OpKind::Annotated)
+                    .then(|| crate::oplog::decode_annotated(&entry.payload_bytes).ok())
+                    .flatten()
+            })
+            .flat_map(|(_, _, annotations)| annotations)
+            .filter(|annotation| {
+                matches!(
+                    annotation,
+                    crate::oplog::OpAnnotation::PathChanged {
+                        from: entry_from,
+                        to: entry_to,
+                    } if entry_from == marker_from && entry_to == marker_to
+                )
+            })
+            .count())
     }
 
     /// Convenience: open a vault rooted at `root` using `FsVaultProvider`.
@@ -5026,6 +5399,7 @@ impl VaultSession {
                     before_excerpt,
                     after_excerpt,
                     applied: false,
+                    new_content_hash: None,
                 });
                 continue;
             }
@@ -5035,11 +5409,12 @@ impl VaultSession {
             // this one file.
             let expected_hash = crate::vault::content_hash(source.as_bytes());
             match self.save_text(&path, &after_source, Some(&expected_hash)) {
-                Ok(_) => report.affected.push(RenameAffected {
+                Ok(save_report) => report.affected.push(RenameAffected {
                     path,
                     before_excerpt,
                     after_excerpt,
                     applied: true,
+                    new_content_hash: Some(save_report.new_content_hash),
                 }),
                 Err(e) => {
                     report.failed.push(RenameFailed {
@@ -7629,6 +8004,269 @@ struct StructuralBatchIndexSnapshot {
     occupied_lower: std::collections::BTreeMap<String, String>,
 }
 
+/// Durable rollback intent committed before a batch's first filesystem
+/// mutation.  The row is updated after every externally-visible step.  The
+/// counters are diagnostics; recovery always classifies physical and SQLite
+/// truth directly so a crash between a mutation and its progress update is
+/// still safe.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StructuralBatchInflight {
+    version: u32,
+    entries: Vec<StructuralBatchInflightEntry>,
+    moved: Vec<(String, String)>,
+    #[serde(skip)]
+    renames_completed: usize,
+    #[serde(skip)]
+    index_committed: bool,
+    #[serde(skip)]
+    path_markers_completed: usize,
+    #[serde(skip)]
+    rewrites: Vec<StructuralBatchInflightRewrite>,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StructuralBatchInflightEntry {
+    from: String,
+    to: String,
+    is_directory: bool,
+}
+
+/// A content rewrite's exact known states.  `hash_before` is guaranteed
+/// reconstructable in the file's op-log before this record is persisted;
+/// `hash_after` is the hash of the exact bytes about to be atomically saved.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct StructuralBatchInflightRewrite {
+    path: String,
+    hash_before: String,
+    hash_after: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StructuralBatchTruth {
+    Original,
+    Forward,
+}
+
+impl StructuralBatchInflight {
+    fn from_plans(plans: &[crate::structural_batch::PlannedBatchMove]) -> Self {
+        Self {
+            version: 1,
+            entries: plans
+                .iter()
+                .map(|plan| StructuralBatchInflightEntry {
+                    from: plan.item.path.clone(),
+                    to: plan.destination.clone(),
+                    is_directory: plan.item.is_directory,
+                })
+                .collect(),
+            moved: plans
+                .iter()
+                .flat_map(|plan| plan.moved_files.iter().cloned())
+                .collect(),
+            renames_completed: 0,
+            index_committed: false,
+            path_markers_completed: 0,
+            rewrites: Vec::new(),
+        }
+    }
+
+    fn plans(&self) -> Vec<crate::structural_batch::PlannedBatchMove> {
+        self.entries
+            .iter()
+            .map(|entry| {
+                let moved_files = self
+                    .moved
+                    .iter()
+                    .filter(|(old, _)| {
+                        old == &entry.from
+                            || (entry.is_directory
+                                && old.len() > entry.from.len()
+                                && old.starts_with(&entry.from)
+                                && old.as_bytes().get(entry.from.len()) == Some(&b'/'))
+                    })
+                    .cloned()
+                    .collect();
+                crate::structural_batch::PlannedBatchMove {
+                    item: crate::structural_batch::StructuralBatchItem {
+                        path: entry.from.clone(),
+                        is_directory: entry.is_directory,
+                    },
+                    destination: entry.to.clone(),
+                    moved_files,
+                }
+            })
+            .collect()
+    }
+
+    fn original_file_path(&self, forward_path: &str) -> Option<&str> {
+        self.moved
+            .iter()
+            .find_map(|(old, new)| (new == forward_path).then_some(old.as_str()))
+    }
+}
+
+fn structural_batch_inflight_json(
+    inflight: &StructuralBatchInflight,
+) -> Result<String, VaultError> {
+    serde_json::to_string(inflight).map_err(|error| VaultError::InvalidArgument {
+        message: format!("structural batch recovery payload could not be encoded: {error}"),
+    })
+}
+
+fn structural_batch_insert_inflight(
+    conn: &Connection,
+    inflight: &StructuralBatchInflight,
+) -> Result<(), VaultError> {
+    conn.execute(
+        "INSERT INTO structural_batch_inflight
+         (id, started_ms, payload, renames_completed, index_committed, path_markers_completed)
+         VALUES (1, ?1, ?2, ?3, ?4, ?5)",
+        rusqlite::params![
+            now_ms(),
+            structural_batch_inflight_json(inflight)?,
+            inflight.renames_completed as i64,
+            inflight.index_committed as i64,
+            inflight.path_markers_completed as i64,
+        ],
+    )?;
+    Ok(())
+}
+
+fn structural_batch_update_inflight(
+    conn: &Connection,
+    inflight: &StructuralBatchInflight,
+) -> Result<(), VaultError> {
+    let changed = conn.execute(
+        "UPDATE structural_batch_inflight
+         SET renames_completed = ?1, index_committed = ?2, path_markers_completed = ?3
+         WHERE id = 1",
+        rusqlite::params![
+            inflight.renames_completed as i64,
+            inflight.index_committed as i64,
+            inflight.path_markers_completed as i64,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(VaultError::InvalidArgument {
+            message: "structural batch recovery intent disappeared during mutation".into(),
+        });
+    }
+    let persisted_rewrites: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM structural_batch_inflight_rewrites",
+        [],
+        |row| row.get(0),
+    )?;
+    let persisted_rewrites =
+        usize::try_from(persisted_rewrites).map_err(|_| VaultError::InvalidArgument {
+            message: "structural batch rewrite recovery count is invalid".into(),
+        })?;
+    if persisted_rewrites > inflight.rewrites.len() {
+        return Err(VaultError::InvalidArgument {
+            message: "structural batch rewrite recovery ledger moved backwards".into(),
+        });
+    }
+    for (ordinal, rewrite) in inflight
+        .rewrites
+        .iter()
+        .enumerate()
+        .skip(persisted_rewrites)
+    {
+        conn.execute(
+            "INSERT INTO structural_batch_inflight_rewrites
+             (ordinal, path, hash_before, hash_after) VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![
+                ordinal as i64,
+                rewrite.path,
+                rewrite.hash_before,
+                rewrite.hash_after,
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn structural_batch_load_inflight(
+    conn: &Connection,
+) -> Result<Option<StructuralBatchInflight>, VaultError> {
+    let row = conn
+        .query_row(
+            "SELECT payload, renames_completed, index_committed, path_markers_completed
+             FROM structural_batch_inflight WHERE id = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, bool>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    row.map(
+        |(payload, renames_completed, index_committed, path_markers_completed)| {
+            let mut inflight =
+                serde_json::from_str::<StructuralBatchInflight>(&payload).map_err(|error| {
+                    VaultError::InvalidArgument {
+                        message: format!(
+                            "structural batch recovery payload is unreadable: {error}"
+                        ),
+                    }
+                })?;
+            inflight.renames_completed =
+                usize::try_from(renames_completed).map_err(|_| VaultError::InvalidArgument {
+                    message: "structural batch rename progress is invalid".into(),
+                })?;
+            inflight.index_committed = index_committed;
+            inflight.path_markers_completed =
+                usize::try_from(path_markers_completed).map_err(|_| {
+                    VaultError::InvalidArgument {
+                        message: "structural batch marker progress is invalid".into(),
+                    }
+                })?;
+            inflight.rewrites = conn
+                .prepare(
+                    "SELECT path, hash_before, hash_after
+                 FROM structural_batch_inflight_rewrites ORDER BY ordinal",
+                )?
+                .query_map([], |row| {
+                    Ok(StructuralBatchInflightRewrite {
+                        path: row.get(0)?,
+                        hash_before: row.get(1)?,
+                        hash_after: row.get(2)?,
+                    })
+                })?
+                .collect::<Result<_, _>>()?;
+            Ok(inflight)
+        },
+    )
+    .transpose()
+}
+
+fn structural_batch_delete_inflight(conn: &Connection) -> Result<(), VaultError> {
+    let deleted = conn.execute("DELETE FROM structural_batch_inflight WHERE id = 1", [])?;
+    if deleted != 1 {
+        return Err(VaultError::InvalidArgument {
+            message: "structural batch recovery intent disappeared before cleanup".into(),
+        });
+    }
+    Ok(())
+}
+
+fn ensure_structural_batch_idle(conn: &Connection) -> Result<(), VaultError> {
+    let inflight: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM structural_batch_inflight WHERE id = 1)",
+        [],
+        |row| row.get(0),
+    )?;
+    if inflight {
+        return Err(VaultError::InvalidArgument {
+            message: "an interrupted structural batch requires close-and-reopen recovery".into(),
+        });
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct LinkRewriteHealth {
     /// The rewrite reached or may have reached disk after derived
@@ -7653,6 +8291,7 @@ pub(crate) enum BatchFaultPoint {
     MovePathMarker,
     MovePathMarkerPostWrite,
     MoveLinkRewrite,
+    MoveLinkRewritePostWrite,
     MoveJournal,
     MoveReconciliation,
     TrashIndex,
@@ -7736,6 +8375,13 @@ fn structural_batch_mutation_path_exists(
     provider.mutation_path_exists(path)
 }
 
+fn structural_batch_mutation_path_kind(
+    provider: &dyn VaultProvider,
+    path: &str,
+) -> Result<Option<EntryKind>, VaultError> {
+    provider.mutation_path_kind(path)
+}
+
 fn batch_move_file_mapping(
     plans: &[crate::structural_batch::PlannedBatchMove],
     forward: bool,
@@ -7754,6 +8400,51 @@ fn batch_move_file_mapping(
         .collect()
 }
 
+/// Re-check the exact file-source set captured by preflight immediately
+/// before a directory prefix update. The vault lock should make this stable;
+/// treating any drift as an error is the defensive backstop if that lock is
+/// ever regressed or an external SQLite writer bypasses it.
+fn validate_batch_directory_index_source(
+    tx: &rusqlite::Transaction,
+    plan: &crate::structural_batch::PlannedBatchMove,
+    forward: bool,
+) -> Result<(), VaultError> {
+    let prefix = if forward {
+        plan.item.path.as_str()
+    } else {
+        plan.destination.as_str()
+    };
+    let (lo, hi) = subtree_bounds(prefix).expect("validated non-root folder");
+    let actual: Vec<String> = tx
+        .prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2 ORDER BY path")?
+        .query_map(rusqlite::params![lo, hi], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut expected: Vec<String> = plan
+        .moved_files
+        .iter()
+        .map(|(old, new)| if forward { old.clone() } else { new.clone() })
+        .collect();
+    expected.sort();
+    if actual != expected {
+        return Err(VaultError::InvalidPath {
+            path: prefix.to_string(),
+            reason: "batch directory index source set changed after preflight".into(),
+        });
+    }
+    let root_count: i64 = tx.query_row(
+        "SELECT COUNT(*) FROM dirs WHERE path = ?1",
+        rusqlite::params![prefix],
+        |row| row.get(0),
+    )?;
+    if root_count != 1 {
+        return Err(VaultError::InvalidPath {
+            path: prefix.to_string(),
+            reason: "batch directory index root is missing or ambiguous".into(),
+        });
+    }
+    Ok(())
+}
+
 fn apply_batch_move_index_direction(
     tx: &rusqlite::Transaction,
     plans: &[crate::structural_batch::PlannedBatchMove],
@@ -7766,6 +8457,7 @@ fn apply_batch_move_index_direction(
             (plan.destination.as_str(), plan.item.path.as_str())
         };
         if plan.item.is_directory {
+            validate_batch_directory_index_source(tx, plan, forward)?;
             rename_prefix_in_index(tx, from, to)?;
         } else {
             let changed = tx.execute(
@@ -7819,12 +8511,26 @@ fn empty_batch_trash_report(
         op_id: None,
         trashed: Vec::new(),
         untrashed: Vec::new(),
+        unknown: Vec::new(),
         bookkeeping_failures: Vec::new(),
         requires_rescan: false,
     }
 }
 
 impl VaultSession {
+    /// A panic while a structural mutation holds the session-local guard can
+    /// leave filesystem/index truth in an intermediate state. Do not clear
+    /// that poison in-place: the vault must be closed and reopened so the
+    /// durable batch intent can run before another structural writer starts.
+    fn structural_operation_guard(&self) -> Result<std::sync::MutexGuard<'_, ()>, VaultError> {
+        self.structural_operation
+            .lock()
+            .map_err(|_| VaultError::InvalidArgument {
+                message: "an interrupted structural operation requires close-and-reopen recovery"
+                    .into(),
+            })
+    }
+
     /// Move a deterministic, top-level selection as one logical request.
     pub fn batch_move(
         &self,
@@ -7839,10 +8545,8 @@ impl VaultSession {
         faults: &dyn StructuralBatchFaultHook,
     ) -> Result<crate::structural_batch::BatchMoveReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchMoveState};
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
 
         if request.items.is_empty() || request.items.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
             let message = if request.items.is_empty() {
@@ -7867,6 +8571,7 @@ impl VaultSession {
         }
 
         let mut conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
         let (envelope, plans) = self.plan_batch_move_locked(&conn, request)?;
         if !envelope.preflight_failures.is_empty() {
             return Ok(empty_batch_move_report(envelope, BatchMoveState::Rejected));
@@ -7875,6 +8580,8 @@ impl VaultSession {
             return Ok(empty_batch_move_report(envelope, BatchMoveState::NoOp));
         }
 
+        let mut inflight = StructuralBatchInflight::from_plans(&plans);
+        structural_batch_insert_inflight(&conn, &inflight)?;
         let mut applied: Vec<crate::structural_batch::PlannedBatchMove> = Vec::new();
         for plan in &plans {
             if let Err(error) = self.provider.rename(&plan.item.path, &plan.destination) {
@@ -7911,10 +8618,30 @@ impl VaultSession {
                 )?;
                 drop(conn);
                 drop(structural_operation);
+                drop(vault_structural_lock);
                 self.publish_batch_move_recovery(&report, &recovery_candidates);
                 return Ok(report);
             }
             applied.push(plan.clone());
+            inflight.renames_completed = applied.len();
+            if let Err(error) = structural_batch_update_inflight(&conn, &inflight) {
+                let report = self.recover_batch_move_locked(
+                    &mut conn,
+                    envelope,
+                    &applied,
+                    false,
+                    LinkRewriteHealth::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
+                    faults,
+                )?;
+                drop(conn);
+                drop(structural_operation);
+                drop(vault_structural_lock);
+                self.publish_batch_move_recovery(&report, &applied);
+                return Ok(report);
+            }
         }
 
         let moved: Vec<(String, String)> = plans
@@ -7934,12 +8661,19 @@ impl VaultSession {
             }
             for plan in &plans {
                 if plan.item.is_directory {
+                    validate_batch_directory_index_source(&tx, plan, true)?;
                     rename_prefix_in_index(&tx, &plan.item.path, &plan.destination)?;
                 } else {
-                    tx.execute(
+                    let changed = tx.execute(
                         "UPDATE files SET path = ?1 WHERE path = ?2",
                         rusqlite::params![plan.destination, plan.item.path],
                     )?;
+                    if changed != 1 {
+                        return Err(VaultError::InvalidPath {
+                            path: plan.item.path.clone(),
+                            reason: "batch index source is missing".into(),
+                        });
+                    }
                 }
             }
             {
@@ -7969,7 +8703,10 @@ impl VaultSession {
                 envelope,
                 &applied,
                 false,
-                LinkRewriteHealth::default(),
+                LinkRewriteHealth {
+                    requires_rescan: true,
+                    physical_unknown: false,
+                },
                 Vec::new(),
                 Vec::new(),
                 structural_batch_failure(None, BatchFailureStage::Index, error.to_string()),
@@ -7977,14 +8714,38 @@ impl VaultSession {
             )?;
             drop(conn);
             drop(structural_operation);
+            drop(vault_structural_lock);
             self.publish_batch_move_recovery(&report, &applied);
             return Ok(report);
         }
         self.graph_apply(graph_sink);
+        inflight.index_committed = true;
+        if let Err(error) = structural_batch_update_inflight(&conn, &inflight) {
+            let report = self.recover_batch_move_locked(
+                &mut conn,
+                envelope,
+                &applied,
+                true,
+                LinkRewriteHealth::default(),
+                Vec::new(),
+                Vec::new(),
+                structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
+                faults,
+            )?;
+            drop(conn);
+            drop(structural_operation);
+            drop(vault_structural_lock);
+            self.publish_batch_move_recovery(&report, &applied);
+            return Ok(report);
+        }
         for (old, new) in &moved {
             let marker_result = faults
                 .check(BatchFaultPoint::MovePathMarker)
                 .and_then(|_| self.append_path_changed_marker_locked(&conn, old, new))
+                .and_then(|_| {
+                    inflight.path_markers_completed += 1;
+                    structural_batch_update_inflight(&conn, &inflight)
+                })
                 .and_then(|_| faults.check(BatchFaultPoint::MovePathMarkerPostWrite));
             if let Err(error) = marker_result {
                 let report = self.recover_batch_move_locked(
@@ -8000,6 +8761,7 @@ impl VaultSession {
                 )?;
                 drop(conn);
                 drop(structural_operation);
+                drop(vault_structural_lock);
                 self.publish_batch_move_recovery(&report, &applied);
                 return Ok(report);
             }
@@ -8018,11 +8780,12 @@ impl VaultSession {
             )?;
             drop(conn);
             drop(structural_operation);
+            drop(vault_structural_lock);
             self.publish_batch_move_recovery(&report, &applied);
             return Ok(report);
         }
         let (rewritten, rewrite_failures, rewrite_health) =
-            self.apply_link_rewrites(&mut conn, &moved);
+            self.apply_link_rewrites_tracked(&mut conn, &moved, Some(&mut inflight), Some(faults));
         if rewrite_health.requires_rescan {
             let mut graph = self.graph.lock().expect("graph index mutex");
             self.graph_drop_locked(&mut graph);
@@ -8045,6 +8808,7 @@ impl VaultSession {
             )?;
             drop(conn);
             drop(structural_operation);
+            drop(vault_structural_lock);
             self.publish_batch_move_recovery(&report, &applied);
             return Ok(report);
         }
@@ -8070,6 +8834,13 @@ impl VaultSession {
                     ..Default::default()
                 },
             )?;
+            let deleted = tx.execute("DELETE FROM structural_batch_inflight WHERE id = 1", [])?;
+            if deleted != 1 {
+                return Err(VaultError::InvalidArgument {
+                    message: "structural batch recovery intent disappeared before finalization"
+                        .into(),
+                });
+            }
             tx.commit()?;
             Ok(op_id)
         })();
@@ -8089,6 +8860,7 @@ impl VaultSession {
                 )?;
                 drop(conn);
                 drop(structural_operation);
+                drop(vault_structural_lock);
                 self.publish_batch_move_recovery(&report, &applied);
                 return Ok(report);
             }
@@ -8096,6 +8868,7 @@ impl VaultSession {
         let standing = plans.iter().map(|plan| plan.change()).collect();
         drop(conn);
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.bump_bases_generation();
         for (old, new) in &moved {
             self.notify_file_change(FileChangeKind::Renamed, new, Some(old));
@@ -8521,6 +9294,7 @@ impl VaultSession {
                     crate::structural::StructuralOpKind::RecoveryBarrier,
                     &crate::structural::StructuralOpPayload::default(),
                 )?;
+                tx.execute("DELETE FROM structural_batch_inflight WHERE id = 1", [])?;
                 tx.commit()?;
                 Ok(())
             })();
@@ -8533,6 +9307,8 @@ impl VaultSession {
                     error.to_string(),
                 ));
             }
+        } else {
+            structural_batch_delete_inflight(conn)?;
         }
 
         Ok(crate::BatchMoveReport {
@@ -8590,10 +9366,8 @@ impl VaultSession {
     ) -> Result<crate::BatchMoveReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchMoveState};
 
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
 
         if !self
             .structural_history_valid
@@ -8607,6 +9381,7 @@ impl VaultSession {
         // Latest-row validation, inverse preflight, filesystem mutation,
         // reconciliation, and journal append all share this one writer lock.
         let mut conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
         let (latest_id, kind_string, payload_json): (i64, String, String) = conn
             .query_row(
                 "SELECT id, kind, payload FROM structural_ops ORDER BY id DESC LIMIT 1",
@@ -8656,6 +9431,8 @@ impl VaultSession {
             return Ok(empty_batch_move_report(envelope, BatchMoveState::Rejected));
         }
 
+        let mut inflight = StructuralBatchInflight::from_plans(&plans);
+        structural_batch_insert_inflight(&conn, &inflight)?;
         let mut applied = Vec::new();
         for plan in &plans {
             if let Err(error) = self.provider.rename(&plan.item.path, &plan.destination) {
@@ -8688,10 +9465,30 @@ impl VaultSession {
                 )?;
                 drop(conn);
                 drop(structural_operation);
+                drop(vault_structural_lock);
                 self.publish_batch_move_recovery(&report, &recovery_candidates);
                 return Ok(report);
             }
             applied.push(plan.clone());
+            inflight.renames_completed = applied.len();
+            if let Err(error) = structural_batch_update_inflight(&conn, &inflight) {
+                let report = self.recover_batch_move_locked(
+                    &mut conn,
+                    envelope,
+                    &applied,
+                    false,
+                    LinkRewriteHealth::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
+                    faults,
+                )?;
+                drop(conn);
+                drop(structural_operation);
+                drop(vault_structural_lock);
+                self.publish_batch_move_recovery(&report, &applied);
+                return Ok(report);
+            }
         }
 
         let moved = batch_move_file_mapping(&plans, true);
@@ -8708,6 +9505,7 @@ impl VaultSession {
             }
             for plan in &plans {
                 if plan.item.is_directory {
+                    validate_batch_directory_index_source(&tx, plan, true)?;
                     rename_prefix_in_index(&tx, &plan.item.path, &plan.destination)?;
                 } else {
                     let changed = tx.execute(
@@ -8749,7 +9547,10 @@ impl VaultSession {
                 envelope,
                 &applied,
                 false,
-                LinkRewriteHealth::default(),
+                LinkRewriteHealth {
+                    requires_rescan: true,
+                    physical_unknown: false,
+                },
                 Vec::new(),
                 Vec::new(),
                 structural_batch_failure(None, BatchFailureStage::Index, error.to_string()),
@@ -8757,14 +9558,38 @@ impl VaultSession {
             )?;
             drop(conn);
             drop(structural_operation);
+            drop(vault_structural_lock);
             self.publish_batch_move_recovery(&report, &applied);
             return Ok(report);
         }
         self.graph_apply(graph_sink);
+        inflight.index_committed = true;
+        if let Err(error) = structural_batch_update_inflight(&conn, &inflight) {
+            let report = self.recover_batch_move_locked(
+                &mut conn,
+                envelope,
+                &applied,
+                true,
+                LinkRewriteHealth::default(),
+                Vec::new(),
+                Vec::new(),
+                structural_batch_failure(None, BatchFailureStage::Journal, error.to_string()),
+                faults,
+            )?;
+            drop(conn);
+            drop(structural_operation);
+            drop(vault_structural_lock);
+            self.publish_batch_move_recovery(&report, &applied);
+            return Ok(report);
+        }
         for (old, new) in &moved {
             let marker_result = faults
                 .check(BatchFaultPoint::MovePathMarker)
                 .and_then(|_| self.append_path_changed_marker_locked(&conn, old, new))
+                .and_then(|_| {
+                    inflight.path_markers_completed += 1;
+                    structural_batch_update_inflight(&conn, &inflight)
+                })
                 .and_then(|_| faults.check(BatchFaultPoint::MovePathMarkerPostWrite));
             if let Err(error) = marker_result {
                 let report = self.recover_batch_move_locked(
@@ -8780,6 +9605,7 @@ impl VaultSession {
                 )?;
                 drop(conn);
                 drop(structural_operation);
+                drop(vault_structural_lock);
                 self.publish_batch_move_recovery(&report, &applied);
                 return Ok(report);
             }
@@ -8802,6 +9628,7 @@ impl VaultSession {
             )?;
             drop(conn);
             drop(structural_operation);
+            drop(vault_structural_lock);
             self.publish_batch_move_recovery(&report, &applied);
             return Ok(report);
         }
@@ -8816,6 +9643,40 @@ impl VaultSession {
                 .get(&rewrite.path)
                 .cloned()
                 .unwrap_or_else(|| rewrite.path.clone());
+            // The state being undone must itself be reconstructible before
+            // recording a crash-recovery promise to restore it.
+            if let Err(error) =
+                self.restore_contents_for_hash_locked(&conn, &final_path, &rewrite.hash_after)
+            {
+                restore_health.requires_rescan = true;
+                restore_health.physical_unknown = true;
+                rewrite_failures.push(crate::structural::RewriteFailure {
+                    path: final_path,
+                    kind: crate::structural::RewriteFailureKind::Other(format!(
+                        "inverse rewrite preimage is unavailable: {error}"
+                    )),
+                });
+                break;
+            }
+            inflight.rewrites.push(StructuralBatchInflightRewrite {
+                path: final_path.clone(),
+                // Recovery rolls this inverse operation back to the forward
+                // rewrite bytes.
+                hash_before: rewrite.hash_after.clone(),
+                hash_after: rewrite.hash_before.clone(),
+            });
+            if let Err(error) = structural_batch_update_inflight(&conn, &inflight) {
+                inflight.rewrites.pop();
+                restore_health.requires_rescan = true;
+                restore_health.physical_unknown = true;
+                rewrite_failures.push(crate::structural::RewriteFailure {
+                    path: final_path,
+                    kind: crate::structural::RewriteFailureKind::Other(format!(
+                        "inverse rewrite recovery intent could not be persisted: {error}"
+                    )),
+                });
+                break;
+            }
             let (outcome, restore_failure, health) = self.restore_file_to_hash_observed_locked(
                 &mut conn,
                 &final_path,
@@ -8824,6 +9685,15 @@ impl VaultSession {
             );
             if let Some(outcome) = outcome {
                 rewritten.push(outcome);
+                if let Err(error) = faults.check(BatchFaultPoint::MoveLinkRewritePostWrite) {
+                    restore_health.requires_rescan = true;
+                    restore_health.physical_unknown = true;
+                    rewrite_failures.push(crate::structural::RewriteFailure {
+                        path: final_path,
+                        kind: crate::structural::RewriteFailureKind::Other(error.to_string()),
+                    });
+                    break;
+                }
             }
             if let Some(restore_failure) = restore_failure {
                 rewrite_failures.push(restore_failure);
@@ -8852,6 +9722,7 @@ impl VaultSession {
             )?;
             drop(conn);
             drop(structural_operation);
+            drop(vault_structural_lock);
             self.publish_batch_move_recovery(&report, &applied);
             return Ok(report);
         }
@@ -8876,6 +9747,13 @@ impl VaultSession {
                     ..Default::default()
                 },
             )?;
+            let deleted = tx.execute("DELETE FROM structural_batch_inflight WHERE id = 1", [])?;
+            if deleted != 1 {
+                return Err(VaultError::InvalidArgument {
+                    message: "structural batch recovery intent disappeared before finalization"
+                        .into(),
+                });
+            }
             tx.commit()?;
             Ok(id)
         })();
@@ -8895,6 +9773,7 @@ impl VaultSession {
                 )?;
                 drop(conn);
                 drop(structural_operation);
+                drop(vault_structural_lock);
                 self.publish_batch_move_recovery(&report, &applied);
                 return Ok(report);
             }
@@ -8902,6 +9781,7 @@ impl VaultSession {
         let standing = plans.iter().map(|plan| plan.change()).collect();
         drop(conn);
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.bump_bases_generation();
         for (old, new) in &moved {
             self.notify_file_change(FileChangeKind::Renamed, new, Some(old));
@@ -9136,10 +10016,8 @@ impl VaultSession {
         faults: &dyn StructuralBatchFaultHook,
     ) -> Result<crate::BatchTrashReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchTrashState};
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
         if request.items.is_empty() || request.items.len() > crate::MAX_STRUCTURAL_BATCH_ITEMS {
             let message = if request.items.is_empty() {
                 "a structural batch must contain at least one item".to_string()
@@ -9162,6 +10040,7 @@ impl VaultSession {
             ));
         }
         let mut conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
         let (envelope, plans) = self.plan_batch_trash_locked(&conn, request)?;
         if !envelope.preflight_failures.is_empty() {
             return Ok(empty_batch_trash_report(
@@ -9175,36 +10054,65 @@ impl VaultSession {
 
         let mut successful = Vec::new();
         let mut untrashed = Vec::new();
+        let mut unknown = Vec::new();
         let mut bookkeeping_failures = Vec::new();
         let mut requires_rescan = false;
         for plan in &plans {
             let provider_result = self.provider.delete(&plan.item.path);
-            match structural_batch_mutation_path_exists(self.provider.as_ref(), &plan.item.path) {
-                Ok(false) => {
+            let expected_kind = if plan.item.is_directory {
+                EntryKind::Directory
+            } else {
+                EntryKind::File
+            };
+            match structural_batch_mutation_path_kind(self.provider.as_ref(), &plan.item.path) {
+                Ok(Some(observed_kind)) if observed_kind == expected_kind => {
+                    untrashed.push(crate::BatchTrashRemainder {
+                        item: plan.item.clone(),
+                        failure: structural_batch_failure(
+                            Some(plan.item.clone()),
+                            BatchFailureStage::Trash,
+                            match provider_result {
+                                Ok(()) => {
+                                    "provider reported success but the original item still exists"
+                                        .to_string()
+                                }
+                                Err(error) => error.to_string(),
+                            },
+                        ),
+                    });
+                }
+                Ok(None) => {
                     if let Err(error) = provider_result {
                         bookkeeping_failures.push(structural_batch_failure(
                             Some(plan.item.clone()),
                             BatchFailureStage::Trash,
                             format!(
-                                "provider reported failure after the item disappeared: {error}"
+                                "provider reported failure after the original item disappeared or was replaced: {error}"
                             ),
                         ));
                     }
                     successful.push(plan.clone());
                 }
-                Ok(true) => untrashed.push(crate::BatchTrashRemainder {
-                    item: plan.item.clone(),
-                    failure: structural_batch_failure(
+                Ok(Some(observed_kind)) => {
+                    requires_rescan = true;
+                    bookkeeping_failures.push(structural_batch_failure(
                         Some(plan.item.clone()),
-                        BatchFailureStage::Trash,
-                        match provider_result {
-                            Ok(()) => {
-                                "provider reported success but the item still exists".to_string()
-                            }
-                            Err(error) => error.to_string(),
-                        },
-                    ),
-                }),
+                        BatchFailureStage::Reconciliation,
+                        format!(
+                            "the original item was removed but an opposite-kind replacement is now at the same path (expected {expected_kind:?}, observed {observed_kind:?})"
+                        ),
+                    ));
+                    if let Err(error) = provider_result {
+                        bookkeeping_failures.push(structural_batch_failure(
+                            Some(plan.item.clone()),
+                            BatchFailureStage::Trash,
+                            format!(
+                                "provider reported failure after the original item disappeared or was replaced: {error}"
+                            ),
+                        ));
+                    }
+                    successful.push(plan.clone());
+                }
                 Err(probe_error) => {
                     requires_rescan = true;
                     let provider_detail = provider_result
@@ -9214,7 +10122,7 @@ impl VaultSession {
                     let message = format!(
                         "Trash outcome is unknown ({provider_detail}); physical verification failed: {probe_error}"
                     );
-                    untrashed.push(crate::BatchTrashRemainder {
+                    unknown.push(crate::BatchTrashRemainder {
                         item: plan.item.clone(),
                         failure: structural_batch_failure(
                             Some(plan.item.clone()),
@@ -9262,11 +10170,13 @@ impl VaultSession {
                 op_id: None,
                 trashed: Vec::new(),
                 untrashed,
+                unknown,
                 bookkeeping_failures,
                 requires_rescan,
             };
             drop(conn);
             drop(structural_operation);
+            drop(vault_structural_lock);
             if requires_rescan {
                 self.bump_bases_generation();
             }
@@ -9358,7 +10268,7 @@ impl VaultSession {
             }
         };
 
-        let state = if untrashed.is_empty() {
+        let state = if untrashed.is_empty() && unknown.is_empty() {
             BatchTrashState::Succeeded
         } else {
             BatchTrashState::Partial
@@ -9373,6 +10283,7 @@ impl VaultSession {
             .collect::<Vec<_>>();
         drop(conn);
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.bump_bases_generation();
         for path in &deleted_files {
             self.notify_file_change(FileChangeKind::Deleted, path, None);
@@ -9383,6 +10294,7 @@ impl VaultSession {
             op_id,
             trashed,
             untrashed,
+            unknown,
             bookkeeping_failures,
             requires_rescan,
         })
@@ -9411,19 +10323,37 @@ impl VaultSession {
                 if plan.item.is_directory {
                     let (lo, hi) =
                         subtree_bounds(&plan.item.path).expect("validated non-root folder path");
-                    tx.execute(
+                    let deleted_files = tx.execute(
                         "DELETE FROM files WHERE path >= ?1 AND path < ?2",
                         rusqlite::params![lo, hi],
                     )?;
-                    tx.execute(
+                    if deleted_files != plan.deleted_files.len() {
+                        return Err(VaultError::InvalidPath {
+                            path: plan.item.path.clone(),
+                            reason: "batch Trash file source set changed after preflight".into(),
+                        });
+                    }
+                    let deleted_dirs = tx.execute(
                         "DELETE FROM dirs WHERE path = ?1 OR (path >= ?2 AND path < ?3)",
                         rusqlite::params![plan.item.path, lo, hi],
                     )?;
+                    if deleted_dirs == 0 {
+                        return Err(VaultError::InvalidPath {
+                            path: plan.item.path.clone(),
+                            reason: "batch Trash directory source disappeared".into(),
+                        });
+                    }
                 } else {
-                    tx.execute(
+                    let deleted = tx.execute(
                         "DELETE FROM files WHERE path = ?1",
                         rusqlite::params![plan.item.path],
                     )?;
+                    if deleted != 1 {
+                        return Err(VaultError::InvalidPath {
+                            path: plan.item.path.clone(),
+                            reason: "batch Trash file source disappeared".into(),
+                        });
+                    }
                 }
             }
             tx.commit()?;
@@ -9540,13 +10470,12 @@ impl VaultSession {
         &self,
         path: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let _structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let _vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         validate_leaf_component(leaf_name(path))?;
         let mut conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
         if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
             return Err(VaultError::DestinationExists { path: existing });
         }
@@ -9577,10 +10506,8 @@ impl VaultSession {
         path: &str,
         new_name: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
         let new_path = sibling_path(path, new_name)?;
         let report = self.structural_move_folder(
             path,
@@ -9589,6 +10516,7 @@ impl VaultSession {
             true,
         )?;
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -9599,10 +10527,8 @@ impl VaultSession {
         path: &str,
         new_parent: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
         let new_path = child_path(new_parent, leaf_name(path))?;
         let report = self.structural_move_folder(
             path,
@@ -9611,6 +10537,7 @@ impl VaultSession {
             true,
         )?;
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -9621,10 +10548,8 @@ impl VaultSession {
         path: &str,
         new_name: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
         let new_path = sibling_path(path, new_name)?;
         let report = self.structural_move_file(
             path,
@@ -9633,6 +10558,7 @@ impl VaultSession {
             true,
         )?;
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -9643,10 +10569,8 @@ impl VaultSession {
         path: &str,
         new_parent: &str,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
         let new_path = child_path(new_parent, leaf_name(path))?;
         let report = self.structural_move_file(
             path,
@@ -9655,6 +10579,7 @@ impl VaultSession {
             true,
         )?;
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -9662,12 +10587,11 @@ impl VaultSession {
     /// Move a file to the system trash. Journaled for auditability; NOT
     /// undoable via `undo_structural` (the bytes are in the trash).
     pub fn delete_file(&self, path: &str) -> Result<(), VaultError> {
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         let mut conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
         // Capture the op-log binding before the row goes: the journal
         // row is then the durable stem↔path association for a deleted
         // file (O-1 #539 — the `.oplog` itself is deliberately left in
@@ -9711,6 +10635,7 @@ impl VaultSession {
         self.graph_apply(graph_sink);
         drop(conn);
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.bump_bases_generation();
         self.notify_file_change(FileChangeKind::Deleted, path, None);
         Ok(())
@@ -9719,12 +10644,11 @@ impl VaultSession {
     /// Move a folder (recursively) to the system trash. Journaled; not
     /// undoable via `undo_structural`.
     pub fn delete_folder(&self, path: &str) -> Result<(), VaultError> {
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
         validate_save_path(path)?;
         let mut conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
         // #802: the range delete below erases the paths — capture them
         // first so each file's Deleted event can fire after commit.
         // In-memory and O(folder size) by design (Codoki on #846): a
@@ -9775,6 +10699,7 @@ impl VaultSession {
         self.graph_apply(graph_sink);
         drop(conn);
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.bump_bases_generation();
         for file in &deleted_files {
             self.notify_file_change(FileChangeKind::Deleted, file, None);
@@ -9793,10 +10718,8 @@ impl VaultSession {
         op_id: i64,
     ) -> Result<crate::structural::StructuralReport, VaultError> {
         use crate::structural::{StructuralOpKind, StructuralOpPayload};
-        let structural_operation = self
-            .structural_operation
-            .lock()
-            .expect("structural operation mutex");
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
         if !self
             .structural_history_valid
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -9807,6 +10730,7 @@ impl VaultSession {
         }
         let (kind, payload) = {
             let conn = self.conn.lock().expect("session connection mutex");
+            ensure_structural_batch_idle(&conn)?;
             let (max_id, kind_str, payload_json): (i64, String, String) = conn
                 .query_row(
                     "SELECT id, kind, payload FROM structural_ops ORDER BY id DESC LIMIT 1",
@@ -9953,6 +10877,7 @@ impl VaultSession {
         // ride `save_text_locked`, the shared seam, and emit
         // themselves.)
         drop(structural_operation);
+        drop(vault_structural_lock);
         self.notify_moved(&report);
         Ok(report)
     }
@@ -9979,6 +10904,7 @@ impl VaultSession {
             });
         }
         let conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
         let dir_exists: bool = conn
             .query_row(
                 "SELECT 1 FROM dirs WHERE path = ?1",
@@ -10032,6 +10958,7 @@ impl VaultSession {
             });
         }
         let conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
         let file_exists: bool = conn
             .query_row(
                 "SELECT 1 FROM files WHERE path = ?1",
@@ -10067,11 +10994,17 @@ impl VaultSession {
                 let (name, extension, is_markdown) = classify_path(to);
                 let is_base = extension.as_deref() == Some("base");
                 if old_is_base || is_base || old_is_markdown != is_markdown {
-                    tx.execute(
+                    let changed = tx.execute(
                         "UPDATE files SET path = ?1, name = ?2, extension = ?3
                      WHERE path = ?4",
                         rusqlite::params![to, name, extension, from],
                     )?;
+                    if changed != 1 {
+                        return Err(VaultError::InvalidPath {
+                            path: from.to_string(),
+                            reason: "file move index source disappeared".into(),
+                        });
+                    }
                     let file_id: i64 = tx.query_row(
                         "SELECT id FROM files WHERE path = ?1",
                         rusqlite::params![to],
@@ -10090,11 +11023,17 @@ impl VaultSession {
                         sink,
                     )?;
                 } else {
-                    tx.execute(
+                    let changed = tx.execute(
                         "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
                      WHERE path = ?5",
                         rusqlite::params![to, name, extension, is_markdown as i64, from],
                     )?;
+                    if changed != 1 {
+                        return Err(VaultError::InvalidPath {
+                            path: from.to_string(),
+                            reason: "file move index source disappeared".into(),
+                        });
+                    }
                 }
                 Ok(())
             },
@@ -10323,6 +11262,20 @@ impl VaultSession {
         Vec<crate::structural::RewriteFailure>,
         LinkRewriteHealth,
     ) {
+        self.apply_link_rewrites_tracked(conn, moved, None, None)
+    }
+
+    fn apply_link_rewrites_tracked(
+        &self,
+        conn: &mut Connection,
+        moved: &[(String, String)],
+        mut inflight: Option<&mut StructuralBatchInflight>,
+        faults: Option<&dyn StructuralBatchFaultHook>,
+    ) -> (
+        Vec<crate::structural::RewriteOutcome>,
+        Vec<crate::structural::RewriteFailure>,
+        LinkRewriteHealth,
+    ) {
         use crate::structural::{RewriteFailure, RewriteFailureKind, RewriteOutcome};
         let mapping = crate::link_rewrite::MoveMapping::new(moved.iter().cloned());
         if mapping.is_empty() {
@@ -10372,20 +11325,64 @@ impl VaultSession {
             if edits.is_empty() {
                 continue;
             }
+            let new_text = crate::link_rewrite::apply_edits(&text, &edits);
             // Anchor the PRE-rewrite bytes in the op-log before rewriting:
             // scan-indexed files have no log entries yet, so without this
             // anchor `undo_structural`'s reconstruct-at-hash cannot reach
             // the pre-op state (census-found, seed 0). hash_before ==
             // hash_after marks a pure anchor; the state map is updated so
             // the following save appends its EditBatch against it.
-            self.anchor_oplog_snapshot(conn, &path, &text, &hash_before);
-            let new_text = crate::link_rewrite::apply_edits(&text, &edits);
+            if let Some(inflight) = inflight.as_deref_mut() {
+                if let Err(error) =
+                    self.anchor_oplog_snapshot_required(conn, &path, &text, &hash_before)
+                {
+                    failed.push(RewriteFailure {
+                        path,
+                        kind: RewriteFailureKind::Other(format!(
+                            "rewrite preimage could not be made crash-reconstructable: {error}"
+                        )),
+                    });
+                    continue;
+                }
+                inflight.rewrites.push(StructuralBatchInflightRewrite {
+                    path: path.clone(),
+                    hash_before: hash_before.clone(),
+                    hash_after: crate::vault::content_hash(new_text.as_bytes()),
+                });
+                if let Err(error) = structural_batch_update_inflight(conn, inflight) {
+                    inflight.rewrites.pop();
+                    failed.push(RewriteFailure {
+                        path,
+                        kind: RewriteFailureKind::Other(format!(
+                            "rewrite recovery intent could not be persisted: {error}"
+                        )),
+                    });
+                    health.requires_rescan = true;
+                    health.physical_unknown = true;
+                    break;
+                }
+            } else {
+                self.anchor_oplog_snapshot(conn, &path, &text, &hash_before);
+            }
             match self.save_text_locked(conn, &path, &new_text, Some(&hash_before), &[]) {
-                Ok(report) => rewritten.push(RewriteOutcome {
-                    path,
-                    hash_before,
-                    hash_after: report.new_content_hash,
-                }),
+                Ok(report) => {
+                    rewritten.push(RewriteOutcome {
+                        path: path.clone(),
+                        hash_before,
+                        hash_after: report.new_content_hash,
+                    });
+                    if let Some(faults) = faults
+                        && let Err(error) = faults.check(BatchFaultPoint::MoveLinkRewritePostWrite)
+                    {
+                        failed.push(RewriteFailure {
+                            path,
+                            kind: RewriteFailureKind::Other(error.to_string()),
+                        });
+                        health.requires_rescan = true;
+                        health.physical_unknown = true;
+                        break;
+                    }
+                }
                 Err(VaultError::WriteConflict { .. }) => failed.push(RewriteFailure {
                     path,
                     kind: RewriteFailureKind::WriteConflict,
@@ -10428,7 +11425,17 @@ impl VaultSession {
         // outcome or failure lands in the structural report — never
         // silent. Serialization is per-field (#366), so only the
         // changed `file` values are touched on disk.
-        self.rewrite_canvas_references(conn, &mapping, &mut rewritten, &mut failed, &mut health);
+        if !health.physical_unknown {
+            self.rewrite_canvas_references(
+                conn,
+                &mapping,
+                &mut rewritten,
+                &mut failed,
+                &mut health,
+                inflight,
+                faults,
+            );
+        }
 
         (rewritten, failed, health)
     }
@@ -10522,6 +11529,7 @@ impl VaultSession {
     /// moved file. Degraded canvases are skipped (unwritable by the
     /// #359 contract); references inside skipped/unmodelable entries
     /// can't be rewritten and stay exactly as the user wrote them.
+    #[allow(clippy::too_many_arguments)] // mirrors the Markdown rewrite seam plus crash tracker
     fn rewrite_canvas_references(
         &self,
         conn: &mut Connection,
@@ -10529,6 +11537,8 @@ impl VaultSession {
         rewritten: &mut Vec<crate::structural::RewriteOutcome>,
         failed: &mut Vec<crate::structural::RewriteFailure>,
         health: &mut LinkRewriteHealth,
+        mut inflight: Option<&mut StructuralBatchInflight>,
+        faults: Option<&dyn StructuralBatchFaultHook>,
     ) {
         use crate::structural::{RewriteFailure, RewriteFailureKind, RewriteOutcome};
 
@@ -10584,14 +11594,58 @@ impl VaultSession {
             if !changed {
                 continue;
             }
-            self.anchor_oplog_snapshot(conn, &path, &text, &hash_before);
             let new_text = crate::canvas::serialize::serialize(&canvas);
+            if let Some(inflight) = inflight.as_deref_mut() {
+                if let Err(error) =
+                    self.anchor_oplog_snapshot_required(conn, &path, &text, &hash_before)
+                {
+                    failed.push(RewriteFailure {
+                        path,
+                        kind: RewriteFailureKind::Other(format!(
+                            "canvas rewrite preimage could not be made crash-reconstructable: {error}"
+                        )),
+                    });
+                    continue;
+                }
+                inflight.rewrites.push(StructuralBatchInflightRewrite {
+                    path: path.clone(),
+                    hash_before: hash_before.clone(),
+                    hash_after: crate::vault::content_hash(new_text.as_bytes()),
+                });
+                if let Err(error) = structural_batch_update_inflight(conn, inflight) {
+                    inflight.rewrites.pop();
+                    failed.push(RewriteFailure {
+                        path,
+                        kind: RewriteFailureKind::Other(format!(
+                            "canvas rewrite recovery intent could not be persisted: {error}"
+                        )),
+                    });
+                    health.requires_rescan = true;
+                    health.physical_unknown = true;
+                    break;
+                }
+            } else {
+                self.anchor_oplog_snapshot(conn, &path, &text, &hash_before);
+            }
             match self.save_text_locked(conn, &path, &new_text, Some(&hash_before), &[]) {
-                Ok(report) => rewritten.push(RewriteOutcome {
-                    path,
-                    hash_before,
-                    hash_after: report.new_content_hash,
-                }),
+                Ok(report) => {
+                    rewritten.push(RewriteOutcome {
+                        path: path.clone(),
+                        hash_before,
+                        hash_after: report.new_content_hash,
+                    });
+                    if let Some(faults) = faults
+                        && let Err(error) = faults.check(BatchFaultPoint::MoveLinkRewritePostWrite)
+                    {
+                        failed.push(RewriteFailure {
+                            path,
+                            kind: RewriteFailureKind::Other(error.to_string()),
+                        });
+                        health.requires_rescan = true;
+                        health.physical_unknown = true;
+                        break;
+                    }
+                }
                 Err(VaultError::WriteConflict { .. }) => failed.push(RewriteFailure {
                     path,
                     kind: RewriteFailureKind::WriteConflict,
@@ -11022,11 +12076,17 @@ fn rename_prefix_in_index(
     for (id, old_path) in file_rows {
         let new_path = format!("{to}{}", &old_path[from.len()..]);
         let (name, extension, is_markdown) = classify_path(&new_path);
-        tx.execute(
+        let changed = tx.execute(
             "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
              WHERE id = ?5",
             rusqlite::params![new_path, name, extension, is_markdown as i64, id],
         )?;
+        if changed != 1 {
+            return Err(VaultError::InvalidPath {
+                path: old_path,
+                reason: "directory move file row disappeared during update".into(),
+            });
+        }
     }
 
     let dir_rows: Vec<(i64, String)> = {
@@ -11037,6 +12097,12 @@ fn rename_prefix_in_index(
         })?;
         rows.collect::<Result<_, _>>()?
     };
+    if dir_rows.iter().filter(|(_, path)| path == from).count() != 1 {
+        return Err(VaultError::InvalidPath {
+            path: from.to_string(),
+            reason: "directory move root row is missing or ambiguous".into(),
+        });
+    }
     for (id, old_path) in dir_rows {
         let new_path = if old_path == from {
             to.to_string()
@@ -11048,10 +12114,16 @@ fn rename_prefix_in_index(
             Some(idx) => new_path[..idx].to_string(),
             None => String::new(),
         };
-        tx.execute(
+        let changed = tx.execute(
             "UPDATE dirs SET path = ?1, parent_path = ?2, name = ?3 WHERE id = ?4",
             rusqlite::params![new_path, parent, name, id],
         )?;
+        if changed != 1 {
+            return Err(VaultError::InvalidPath {
+                path: old_path,
+                reason: "directory move row disappeared during update".into(),
+            });
+        }
     }
     Ok(())
 }
@@ -11941,9 +13013,19 @@ impl VaultSession {
     }
 
     pub fn save_query_as_base(&self, query_json: &str, path: &str) -> Result<(), VaultError> {
+        let (_, extension, _) = classify_path(path);
+        if extension.as_deref() != Some("base") {
+            return Err(VaultError::InvalidArgument {
+                message: "Base paths must end in .base".to_string(),
+            });
+        }
         let query = parse_query_json(query_json)?;
         let text = query_as_base_text(&query)?;
-        self.save_text(path, &text, None)?;
+        // Save As is create-only. `create_exclusive` holds the cross-process
+        // IMMEDIATE lock and publishes through the provider's atomic
+        // no-replace primitive, so an indexed occupant, an unindexed file, or
+        // a non-Slate writer racing the publish is never clobbered.
+        self.create_exclusive(path, &text)?;
         Ok(())
     }
 

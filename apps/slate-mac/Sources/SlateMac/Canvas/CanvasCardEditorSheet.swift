@@ -18,11 +18,15 @@ struct CanvasCardEditorSheet: View {
     @EnvironmentObject var appState: AppState
     let request: CanvasCardEditorRequest
 
-    @State private var text: String
+    @State private var pendingDiscard = false
+    @AccessibilityFocusState private var draftDialogFocusReturn: DraftFocusTarget?
 
-    init(request: CanvasCardEditorRequest) {
-        self.request = request
-        _text = State(initialValue: request.initialText)
+    private enum DraftFocusTarget: Hashable {
+        case dismiss
+    }
+
+    private var disabledReason: String? {
+        appState.activeCanvasCardEditorDisabledReason
     }
 
     var body: some View {
@@ -30,10 +34,12 @@ struct CanvasCardEditorSheet: View {
             Text("Edit \"\(request.title)\"")
                 .font(Tokens.Typography.body.weight(.semibold))
             NoteEditorView(
-                text: $text,
+                text: $appState.canvasCardEditorDraft,
                 headings: [],
                 accessibilityLabel:
                     "Editor for card \(request.title). Escape saves and returns to the canvas.",
+                isEditable: disabledReason == nil,
+                readOnlyReason: disabledReason,
                 onSave: commit,
                 scrollAnchorRequest: Empty().eraseToAnyPublisher(),
                 lineScrollRequest: Empty().eraseToAnyPublisher(),
@@ -52,21 +58,76 @@ struct CanvasCardEditorSheet: View {
                 spellCheckEnabled: appState.editorSpellCheckEnabled
             )
             .frame(minWidth: 480, minHeight: 280)
+            if let disabledReason {
+                Text(disabledReason)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .accessibilityLabel(disabledReason)
+                    .help(disabledReason)
+            }
             HStack {
-                Text("Escape or Done saves the card.")
+                Text(
+                    disabledReason == nil
+                        ? "Escape or Done saves the card."
+                        : "The draft remains selectable and copyable while editing is unavailable."
+                )
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
                 Spacer()
-                Button("Done", action: commit)
-                    .keyboardShortcut(.cancelAction)
+                if disabledReason == AppState.batchTrashQuarantineReason {
+                    Button("Check Again") {
+                        _ = appState.retryCanvasCardEditorReconciliation()
+                    }
+                    .disabled(appState.isMutatingStructure)
+                    .accessibilityHint("Rescan the vault and check whether this canvas is still present.")
+                    .help("Check whether this canvas is still present")
+                }
+                if disabledReason == nil {
+                    Button("Discard…") { pendingDiscard = true }
+                        .accessibilityFocused($draftDialogFocusReturn, equals: .dismiss)
+                    Button("Done", action: commit)
+                        // M8's established embedded-editor behavior: Escape
+                        // saves while the destination is writable.
+                        .keyboardShortcut(.cancelAction)
+                } else {
+                    Button("Close…") { pendingDiscard = true }
+                        .keyboardShortcut(.cancelAction)
+                        .accessibilityFocused($draftDialogFocusReturn, equals: .dismiss)
+                    Button("Done", action: commit)
+                        .disabled(true)
+                        .accessibilityHint(disabledReason ?? "Editing is unavailable.")
+                        .help(disabledReason ?? "Editing is unavailable")
+                }
             }
         }
         .padding(Tokens.Spacing.lg)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Editing card \(request.title)")
+        .interactiveDismissDisabled(disabledReason != nil)
+        .confirmationDialog(
+            "Discard the unsaved card draft?",
+            isPresented: $pendingDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Cancel", role: .cancel) {
+                draftDialogFocusReturn = .dismiss
+            }
+            Button("Discard Draft", role: .destructive) {
+                appState.dismissCanvasCardEditor()
+            }
+        } message: {
+            Text("Closing without saving discards this draft. Copy it first if you need to keep it.")
+        }
+        .onChange(of: pendingDiscard) { wasPresented, isPresented in
+            if wasPresented, !isPresented, appState.canvasCardEditor != nil {
+                draftDialogFocusReturn = .dismiss
+            }
+        }
     }
 
     private func commit() {
-        appState.canvasCommitCardEdit(nodeId: request.nodeId, newText: text)
+        appState.canvasCommitCardEdit(
+            nodeId: request.nodeId,
+            newText: appState.canvasCardEditorDraft)
     }
 }

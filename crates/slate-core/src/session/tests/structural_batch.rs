@@ -29,10 +29,12 @@ struct FaultState {
     fail_preflight_deletes: BTreeSet<String>,
     fail_renames: BTreeSet<(String, String)>,
     fail_renames_after_mutation: BTreeSet<(String, String)>,
+    panic_after_rename_numbers: BTreeSet<usize>,
     duplicate_then_fail_renames: BTreeSet<(String, String)>,
     remove_then_fail_renames: BTreeSet<(String, String)>,
     fail_delete_numbers: BTreeSet<usize>,
     fail_deletes_after_mutation: BTreeSet<usize>,
+    replace_after_delete_with_kind: BTreeMap<String, EntryKind>,
     fail_existence_after_delete: BTreeSet<String>,
     delete_attempts: BTreeSet<String>,
     fail_stat_after_write: BTreeMap<String, usize>,
@@ -40,6 +42,7 @@ struct FaultState {
     fail_read_after_write: BTreeMap<String, usize>,
     pending_read_failures: BTreeSet<String>,
     delete_number: usize,
+    rename_number: usize,
 }
 
 #[derive(Debug)]
@@ -59,6 +62,38 @@ struct NthBatchFault {
     point: BatchFaultPoint,
     fail_on: usize,
     calls: Mutex<usize>,
+}
+
+struct BlockingBatchFault {
+    point: BatchFaultPoint,
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    release: Mutex<mpsc::Receiver<()>>,
+}
+
+impl StructuralBatchFaultHook for BlockingBatchFault {
+    fn check(&self, point: BatchFaultPoint) -> Result<(), VaultError> {
+        if point != self.point {
+            return Ok(());
+        }
+        if let Some(entered) = self.entered.lock().unwrap().take() {
+            let _ = entered.send(());
+        }
+        self.release
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| FaultInjectingProvider::injected("batch test release timed out"))?;
+        Ok(())
+    }
+}
+
+struct PanicBatchFault(BatchFaultPoint);
+
+impl StructuralBatchFaultHook for PanicBatchFault {
+    fn check(&self, point: BatchFaultPoint) -> Result<(), VaultError> {
+        assert_ne!(point, self.0, "simulated process crash at {point:?}");
+        Ok(())
+    }
 }
 
 struct BlockingRecoveryBarrierFault {
@@ -249,8 +284,25 @@ impl VaultProvider for FaultInjectingProvider {
         state.calls.push(ProviderCall::Delete(relative.to_string()));
         let fail = state.fail_delete_numbers.contains(&number);
         let fail_after = state.fail_deletes_after_mutation.contains(&number);
+        let replacement_kind = state.replace_after_delete_with_kind.get(relative).copied();
         drop(state);
-        if fail {
+        if let Some(replacement_kind) = replacement_kind {
+            let path = self.root.join(relative);
+            let metadata = path.symlink_metadata().map_err(VaultError::Io)?;
+            if metadata.is_dir() {
+                std::fs::remove_dir_all(&path).map_err(VaultError::Io)?;
+            } else {
+                std::fs::remove_file(&path).map_err(VaultError::Io)?;
+            }
+            match replacement_kind {
+                EntryKind::File => {
+                    std::fs::write(path, b"opposite-kind replacement").map_err(VaultError::Io)?
+                }
+                EntryKind::Directory => std::fs::create_dir(path).map_err(VaultError::Io)?,
+                EntryKind::Symlink => unreachable!("batch replacement fixtures use file/folder"),
+            }
+            Ok(())
+        } else if fail {
             Err(Self::injected("injected delete failure"))
         } else if fail_after {
             self.inner.delete(relative)?;
@@ -263,6 +315,8 @@ impl VaultProvider for FaultInjectingProvider {
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
         let pair = (from.to_string(), to.to_string());
         let mut state = self.state.lock().unwrap();
+        state.rename_number += 1;
+        let rename_number = state.rename_number;
         state
             .calls
             .push(ProviderCall::Rename(pair.0.clone(), pair.1.clone()));
@@ -270,6 +324,7 @@ impl VaultProvider for FaultInjectingProvider {
         let fail_after = state.fail_renames_after_mutation.contains(&pair);
         let duplicate_then_fail = state.duplicate_then_fail_renames.contains(&pair);
         let remove_then_fail = state.remove_then_fail_renames.contains(&pair);
+        let panic_after = state.panic_after_rename_numbers.contains(&rename_number);
         drop(state);
         if fail {
             Err(Self::injected("injected rename failure"))
@@ -289,7 +344,12 @@ impl VaultProvider for FaultInjectingProvider {
             self.inner.rename(from, to)?;
             Err(Self::injected("injected post-mutation rename failure"))
         } else {
-            self.inner.rename(from, to)
+            self.inner.rename(from, to)?;
+            assert!(
+                !panic_after,
+                "simulated process crash after rename {rename_number}"
+            );
+            Ok(())
         }
     }
 
@@ -357,6 +417,20 @@ impl VaultProvider for FaultInjectingProvider {
         }
     }
 
+    fn mutation_path_kind(&self, relative: &str) -> Result<Option<EntryKind>, VaultError> {
+        let state = self.state.lock().unwrap();
+        let fail = state.fail_existence_after_delete.contains(relative)
+            && state.delete_attempts.contains(relative);
+        drop(state);
+        if fail {
+            Err(Self::injected(
+                "injected post-delete existence probe failure",
+            ))
+        } else {
+            self.inner.mutation_path_kind(relative)
+        }
+    }
+
     fn watch(&self, sink: Arc<dyn FileEventSink>) -> Result<Option<WatchHandle>, VaultError> {
         self.inner.watch(sink)
     }
@@ -421,6 +495,732 @@ fn path_markers(session: &VaultSession, path: &str) -> Vec<(String, String)> {
                 .collect()
         })
         .collect()
+}
+
+fn shared_filesystem_sessions(
+    files: &[(&str, &str)],
+    directories: &[&str],
+) -> (tempfile::TempDir, Arc<VaultSession>, Arc<VaultSession>) {
+    let tmp = tempfile::tempdir().unwrap();
+    for (path, contents) in files {
+        write_fixture(tmp.path(), path, contents);
+    }
+    for path in directories {
+        std::fs::create_dir_all(tmp.path().join(path)).unwrap();
+    }
+    let first = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    first.scan_initial(&CancelToken::new()).unwrap();
+    let second = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    (tmp, Arc::new(first), Arc::new(second))
+}
+
+fn structural_inflight_count(root: &std::path::Path) -> i64 {
+    let conn = rusqlite::Connection::open(root.join(".slate/cache.sqlite")).unwrap();
+    conn.query_row(
+        "SELECT COUNT(*) FROM structural_batch_inflight",
+        [],
+        |row| row.get(0),
+    )
+    .unwrap()
+}
+
+fn latest_structural_kind(root: &std::path::Path) -> Option<String> {
+    let conn = rusqlite::Connection::open(root.join(".slate/cache.sqlite")).unwrap();
+    conn.query_row(
+        "SELECT kind FROM structural_ops ORDER BY id DESC LIMIT 1",
+        [],
+        |row| row.get(0),
+    )
+    .optional()
+    .unwrap()
+}
+
+#[test]
+fn two_sessions_serialize_child_and_parent_moves_before_preflight() {
+    let (tmp, child_session, folder_session) = shared_filesystem_sessions(
+        &[("folder/child.md", "child")],
+        &["folder", "child-dest", "folder-dest"],
+    );
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (child_tx, child_rx) = mpsc::channel();
+    let moving_child = Arc::clone(&child_session);
+    std::thread::spawn(move || {
+        let result = moving_child.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("folder/child.md")],
+                new_parent: "child-dest".into(),
+            },
+            &BlockingBatchFault {
+                point: BatchFaultPoint::MoveIndex,
+                entered: Mutex::new(Some(entered_tx)),
+                release: Mutex::new(release_rx),
+            },
+        );
+        let _ = child_tx.send(result);
+    });
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("child move reached the post-rename barrier");
+
+    let (folder_tx, folder_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = folder_session.batch_move(BatchMoveRequest {
+            items: vec![folder("folder")],
+            new_parent: "folder-dest".into(),
+        });
+        let _ = folder_tx.send(result);
+    });
+
+    let early_folder = folder_rx.recv_timeout(Duration::from_millis(200));
+    let serialized = early_folder.is_err();
+    release_tx.send(()).unwrap();
+    let child_report = child_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("child move completed after release")
+        .unwrap();
+    let folder_report = match early_folder {
+        Ok(result) => result.unwrap(),
+        Err(_) => folder_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("folder move completed after child")
+            .unwrap(),
+    };
+
+    assert!(
+        serialized,
+        "a second VaultSession for the same vault must wait before taking its preflight snapshot"
+    );
+    assert_eq!(child_report.state, BatchMoveState::Succeeded);
+    assert_eq!(folder_report.state, BatchMoveState::Succeeded);
+    assert!(tmp.path().join("child-dest/child.md").is_file());
+    assert!(tmp.path().join("folder-dest/folder").is_dir());
+    assert!(!tmp.path().join("folder-dest/folder/child.md").exists());
+    let indexed: Vec<String> = child_session
+        .conn
+        .lock()
+        .unwrap()
+        .prepare("SELECT path FROM files ORDER BY path")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(indexed, vec!["child-dest/child.md"]);
+}
+
+#[test]
+fn two_sessions_serialize_batch_and_legacy_folder_move_before_preflight() {
+    let (tmp, batch_session, legacy_session) = shared_filesystem_sessions(
+        &[("folder/child.md", "child")],
+        &["folder", "child-dest", "legacy-dest"],
+    );
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (batch_tx, batch_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = batch_session.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("folder/child.md")],
+                new_parent: "child-dest".into(),
+            },
+            &BlockingBatchFault {
+                point: BatchFaultPoint::MoveIndex,
+                entered: Mutex::new(Some(entered_tx)),
+                release: Mutex::new(release_rx),
+            },
+        );
+        let _ = batch_tx.send(result);
+    });
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("batch reached the post-rename barrier");
+
+    let (legacy_tx, legacy_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = legacy_tx.send(legacy_session.move_folder("folder", "legacy-dest"));
+    });
+    let early_legacy = legacy_rx.recv_timeout(Duration::from_millis(200));
+    let serialized = early_legacy.is_err();
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        batch_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap()
+            .state,
+        BatchMoveState::Succeeded
+    );
+    let legacy_report = match early_legacy {
+        Ok(report) => report.unwrap(),
+        Err(_) => legacy_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap(),
+    };
+
+    assert!(
+        serialized,
+        "legacy structural writers must wait on the same vault-wide gate"
+    );
+    assert_eq!(
+        legacy_report.moved,
+        Vec::<(String, String)>::new(),
+        "the child moved before the now-empty folder"
+    );
+    assert!(tmp.path().join("child-dest/child.md").is_file());
+    assert!(tmp.path().join("legacy-dest/folder").is_dir());
+}
+
+#[test]
+fn structural_operations_in_different_vaults_remain_independent() {
+    let (_first_tmp, first, _first_state) = fixture(&[("a.md", "a")], &["dest"]);
+    let (second_tmp, second, _second_state) = fixture(&[("b.md", "b")], &["dest"]);
+    let first = Arc::new(first);
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let moving_first = Arc::clone(&first);
+    let (first_tx, first_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = moving_first.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("a.md")],
+                new_parent: "dest".into(),
+            },
+            &BlockingBatchFault {
+                point: BatchFaultPoint::MoveIndex,
+                entered: Mutex::new(Some(entered_tx)),
+                release: Mutex::new(release_rx),
+            },
+        );
+        let _ = first_tx.send(result);
+    });
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first vault reached its barrier");
+
+    let (second_tx, second_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = second_tx.send(second.batch_move(BatchMoveRequest {
+            items: vec![file("b.md")],
+            new_parent: "dest".into(),
+        }));
+    });
+    let second_report = second_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("a different vault must not wait on the first vault's sidecar")
+        .unwrap();
+    assert_eq!(second_report.state, BatchMoveState::Succeeded);
+    assert!(second_tmp.path().join("dest/b.md").is_file());
+
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        first_rx
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap()
+            .unwrap()
+            .state,
+        BatchMoveState::Succeeded
+    );
+}
+
+#[test]
+fn two_sessions_serialize_conflicting_batch_undo_latest_checks() {
+    let (_tmp, first, second) = shared_filesystem_sessions(&[("a.md", "a")], &["dest"]);
+    let forward = first
+        .batch_move(BatchMoveRequest {
+            items: vec![file("a.md")],
+            new_parent: "dest".into(),
+        })
+        .unwrap();
+    let op_id = forward.op_id.unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (first_tx, first_rx) = mpsc::channel();
+    let first_undo = Arc::clone(&first);
+    std::thread::spawn(move || {
+        let result = first_undo.undo_batch_move_with_faults(
+            op_id,
+            &BlockingBatchFault {
+                point: BatchFaultPoint::MoveIndex,
+                entered: Mutex::new(Some(entered_tx)),
+                release: Mutex::new(release_rx),
+            },
+        );
+        let _ = first_tx.send(result);
+    });
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first inverse reached the post-rename barrier");
+
+    let (second_tx, second_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = second_tx.send(second.undo_batch_move(op_id));
+    });
+    let early_second = second_rx.recv_timeout(Duration::from_millis(200));
+    let serialized = early_second.is_err();
+    release_tx.send(()).unwrap();
+    let first_report = first_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first inverse completed after release")
+        .unwrap();
+    let second_result = match early_second {
+        Ok(result) => result,
+        Err(_) => second_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("second inverse completed after the latest row changed"),
+    };
+
+    assert!(
+        serialized,
+        "latest-row validation and the inverse mutation must be one vault-wide critical section"
+    );
+    assert_eq!(first_report.state, BatchMoveState::Succeeded);
+    let error = second_result.expect_err("the old op id is no longer latest");
+    assert!(error.to_string().contains("only the latest"));
+}
+
+#[test]
+fn spawned_process_structural_lock_child() {
+    let Ok(root) = std::env::var("SLATE_STRUCTURAL_LOCK_CHILD_ROOT") else {
+        return;
+    };
+    let ready = std::env::var("SLATE_STRUCTURAL_LOCK_CHILD_READY").unwrap();
+    // Signal process startup before `open`: open itself takes the same
+    // sidecar so it can recover an interrupted batch before exposing a
+    // session.
+    std::fs::write(ready, b"ready").unwrap();
+    let session = VaultSession::from_filesystem(root.into()).unwrap();
+    let report = session
+        .batch_move(BatchMoveRequest {
+            items: vec![folder("folder")],
+            new_parent: "folder-dest".into(),
+        })
+        .unwrap();
+    assert_eq!(report.state, BatchMoveState::Succeeded, "{report:?}");
+}
+
+#[test]
+fn spawned_process_waits_for_same_vault_structural_operation() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_fixture(tmp.path(), "folder/child.md", "child");
+    for path in ["folder", "child-dest", "folder-dest"] {
+        std::fs::create_dir_all(tmp.path().join(path)).unwrap();
+    }
+    let session = Arc::new(VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap());
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (move_tx, move_rx) = mpsc::channel();
+    let moving = Arc::clone(&session);
+    std::thread::spawn(move || {
+        let result = moving.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("folder/child.md")],
+                new_parent: "child-dest".into(),
+            },
+            &BlockingBatchFault {
+                point: BatchFaultPoint::MoveIndex,
+                entered: Mutex::new(Some(entered_tx)),
+                release: Mutex::new(release_rx),
+            },
+        );
+        let _ = move_tx.send(result);
+    });
+    entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("parent process reached the post-rename barrier");
+
+    let ready = tmp.path().join("child-ready");
+    let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+        .arg("spawned_process_structural_lock_child")
+        .arg("--nocapture")
+        .env("SLATE_STRUCTURAL_LOCK_CHILD_ROOT", tmp.path())
+        .env("SLATE_STRUCTURAL_LOCK_CHILD_READY", &ready)
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !ready.exists() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        ready.exists(),
+        "child process reached the shared-vault open"
+    );
+    std::thread::sleep(Duration::from_millis(150));
+    let serialized = child.try_wait().unwrap().is_none();
+
+    release_tx.send(()).unwrap();
+    let parent_report = move_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("parent move completed after release")
+        .unwrap();
+    let status = child.wait().unwrap();
+    assert!(status.success());
+    assert!(
+        serialized,
+        "a separately spawned process must wait on the same vault-scoped structural lock"
+    );
+    assert_eq!(parent_report.state, BatchMoveState::Succeeded);
+    assert!(tmp.path().join("child-dest/child.md").is_file());
+    assert!(tmp.path().join("folder-dest/folder").is_dir());
+}
+
+#[test]
+fn crash_after_first_batch_rename_is_durably_recovered_on_reopen() {
+    let (tmp, session, state) = fixture(&[("a.md", "a")], &["dest"]);
+    let provider = Arc::clone(&session.provider);
+    state.lock().unwrap().panic_after_rename_numbers.insert(1);
+
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move(BatchMoveRequest {
+            items: vec![file("a.md")],
+            new_parent: "dest".into(),
+        });
+    }));
+    assert!(crashed.is_err(), "fault hook simulates process termination");
+    assert!(tmp.path().join("dest/a.md").is_file());
+    assert_eq!(
+        structural_inflight_count(tmp.path()),
+        1,
+        "the full recovery plan must predate the first physical rename"
+    );
+    drop(session);
+
+    let reopened = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
+        .expect("reopen rolls the interrupted batch back under the vault lock");
+    assert!(tmp.path().join("a.md").is_file());
+    assert!(!tmp.path().join("dest/a.md").exists());
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    let indexed: String = reopened
+        .conn
+        .lock()
+        .unwrap()
+        .query_row("SELECT path FROM files", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(indexed, "a.md");
+    assert_eq!(latest_structural_kind(tmp.path()), None);
+}
+
+#[test]
+fn caught_crash_intent_blocks_all_further_structural_writers_until_reopen() {
+    let (_tmp, session, state) = fixture(&[("a.md", "a"), ("keep.md", "keep")], &["dest"]);
+    state.lock().unwrap().panic_after_rename_numbers.insert(1);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move(BatchMoveRequest {
+            items: vec![file("a.md")],
+            new_parent: "dest".into(),
+        });
+    }));
+    assert!(crashed.is_err());
+
+    for error in [
+        session.create_folder("must-wait").unwrap_err(),
+        session.move_file("keep.md", "dest").unwrap_err(),
+        session
+            .batch_trash(BatchTrashRequest {
+                items: vec![file("keep.md")],
+            })
+            .unwrap_err(),
+    ] {
+        assert!(
+            error.to_string().contains("close-and-reopen recovery"),
+            "unexpected structural writer error: {error}"
+        );
+    }
+}
+
+#[test]
+fn crash_recovery_restores_multiple_renames_in_reverse_order() {
+    let (tmp, session, state) = fixture(&[("a.md", "a"), ("b.md", "b")], &["dest"]);
+    let provider = Arc::clone(&session.provider);
+    state.lock().unwrap().panic_after_rename_numbers.insert(2);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move(BatchMoveRequest {
+            items: vec![file("a.md"), file("b.md")],
+            new_parent: "dest".into(),
+        });
+    }));
+    assert!(crashed.is_err());
+    assert!(tmp.path().join("dest/a.md").is_file());
+    assert!(tmp.path().join("dest/b.md").is_file());
+    drop(session);
+    state.lock().unwrap().calls.clear();
+
+    let _reopened =
+        VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate"))).unwrap();
+    let recovery_renames = state
+        .lock()
+        .unwrap()
+        .calls
+        .iter()
+        .filter_map(|call| match call {
+            ProviderCall::Rename(from, to) => Some((from.as_str(), to.as_str())),
+            _ => None,
+        })
+        .map(|(from, to)| (from.to_string(), to.to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        recovery_renames,
+        vec![
+            ("dest/b.md".into(), "b.md".into()),
+            ("dest/a.md".into(), "a.md".into()),
+        ]
+    );
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+}
+
+#[test]
+fn crash_after_index_and_link_commit_restores_paths_index_links_and_history() {
+    let (tmp, session, _state) = fixture(
+        &[("left/a.md", "# A\n"), ("refs.md", "[[left/a]]\n")],
+        &["left", "dest"],
+    );
+    // A PathChanged marker is meaningful only for a file that already has
+    // content history; seed that ordinary production precondition.
+    session.save_text("left/a.md", "# A\n", None).unwrap();
+    let provider = Arc::clone(&session.provider);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("left/a.md")],
+                new_parent: "dest".into(),
+            },
+            &PanicBatchFault(BatchFaultPoint::MoveJournal),
+        );
+    }));
+    assert!(crashed.is_err());
+    assert!(tmp.path().join("dest/a.md").is_file());
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("refs.md")).unwrap(),
+        "[[dest/a]]\n"
+    );
+    assert_eq!(structural_inflight_count(tmp.path()), 1);
+    drop(session);
+
+    let reopened = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
+        .expect("late interrupted batch is rolled back completely");
+    assert!(tmp.path().join("left/a.md").is_file());
+    assert!(!tmp.path().join("dest/a.md").exists());
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("refs.md")).unwrap(),
+        "[[left/a]]\n"
+    );
+    let indexed: Vec<String> = reopened
+        .conn
+        .lock()
+        .unwrap()
+        .prepare("SELECT path FROM files ORDER BY path")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(indexed, vec!["left/a.md", "refs.md"]);
+    assert_eq!(
+        path_markers(&reopened, "left/a.md"),
+        vec![
+            ("left/a.md".into(), "dest/a.md".into()),
+            ("dest/a.md".into(), "left/a.md".into()),
+        ]
+    );
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    assert_eq!(latest_structural_kind(tmp.path()), None);
+}
+
+#[test]
+fn crash_immediately_after_canvas_rewrite_write_restores_byte_exact_and_index_truth() {
+    let canvas = concat!(
+        "{\"nodes\":[{\"id\":\"n\",\"type\":\"file\",",
+        "\"file\":\"left/a.md\",\"x\":0,\"y\":0,\"width\":100,\"height\":100}],",
+        "\"edges\":[]}\n"
+    );
+    let (tmp, session, _state) = fixture(
+        &[("left/a.md", "# A\n"), ("board.canvas", canvas)],
+        &["left", "dest"],
+    );
+    let original = std::fs::read(tmp.path().join("board.canvas")).unwrap();
+    let provider = Arc::clone(&session.provider);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("left/a.md")],
+                new_parent: "dest".into(),
+            },
+            &PanicBatchFault(BatchFaultPoint::MoveLinkRewritePostWrite),
+        );
+    }));
+    assert!(crashed.is_err());
+    assert!(
+        std::fs::read_to_string(tmp.path().join("board.canvas"))
+            .unwrap()
+            .contains("\"file\":\"dest/a.md\"")
+    );
+    assert_eq!(structural_inflight_count(tmp.path()), 1);
+    drop(session);
+
+    let reopened = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
+        .expect("the verified canvas preimage restores on reopen");
+    assert_eq!(
+        std::fs::read(tmp.path().join("board.canvas")).unwrap(),
+        original
+    );
+    assert!(tmp.path().join("left/a.md").is_file());
+    assert!(!tmp.path().join("dest/a.md").exists());
+    let target: String = reopened
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT target FROM canvas_nodes WHERE node_id = 'n'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(target, "left/a.md");
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    assert_eq!(latest_structural_kind(tmp.path()), None);
+}
+
+#[test]
+fn crash_after_rewriting_a_moved_document_restores_its_original_path_and_bytes() {
+    let original = b"[[left/b]]\n".to_vec();
+    let (tmp, session, _state) = fixture(
+        &[("left/a.md", "[[left/b]]\n"), ("left/b.md", "# B\n")],
+        &["left", "dest"],
+    );
+    let provider = Arc::clone(&session.provider);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![folder("left")],
+                new_parent: "dest".into(),
+            },
+            &PanicBatchFault(BatchFaultPoint::MoveLinkRewritePostWrite),
+        );
+    }));
+    assert!(crashed.is_err());
+    assert_ne!(
+        std::fs::read(tmp.path().join("dest/left/a.md")).unwrap(),
+        original,
+        "the fault must land after the moved source itself was rewritten"
+    );
+    drop(session);
+
+    let reopened = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
+        .expect("reopen restores a rewritten moved source before reversing its path");
+    assert_eq!(
+        std::fs::read(tmp.path().join("left/a.md")).unwrap(),
+        original
+    );
+    assert!(!tmp.path().join("dest/left").exists());
+    let target: Option<String> = reopened
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT l.target_path FROM links l JOIN files f ON f.id = l.source_file_id
+             WHERE f.path = 'left/a.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(target.as_deref(), Some("left/b.md"));
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+}
+
+#[test]
+fn successful_batch_finalizes_one_undo_row_and_no_inflight_residue() {
+    let (tmp, session, _state) = fixture(&[("a.md", "a"), ("b.md", "b")], &["dest"]);
+    let report = session
+        .batch_move(BatchMoveRequest {
+            items: vec![file("a.md"), file("b.md")],
+            new_parent: "dest".into(),
+        })
+        .unwrap();
+    assert_eq!(report.state, BatchMoveState::Succeeded);
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    let rows: i64 = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM structural_ops WHERE kind = 'move_batch'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(rows, 1);
+}
+
+#[test]
+fn ambiguous_crash_topology_appends_barrier_and_fails_reopen_closed() {
+    for topology in ["both", "neither"] {
+        let (tmp, session, state) = fixture(&[("a.md", "a")], &["dest"]);
+        let provider = Arc::clone(&session.provider);
+        state.lock().unwrap().panic_after_rename_numbers.insert(1);
+        let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = session.batch_move(BatchMoveRequest {
+                items: vec![file("a.md")],
+                new_parent: "dest".into(),
+            });
+        }));
+        assert!(crashed.is_err());
+        drop(session);
+        if topology == "both" {
+            std::fs::write(tmp.path().join("a.md"), "external replacement").unwrap();
+        } else {
+            std::fs::remove_file(tmp.path().join("dest/a.md")).unwrap();
+        }
+
+        let reopened = VaultSession::open(
+            Arc::clone(&provider),
+            SessionConfig::new(tmp.path().join(".slate")),
+        );
+        let error = match reopened {
+            Ok(_) => panic!("{topology} topology must not be guessed"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("structural batch recovery"));
+        assert_eq!(
+            latest_structural_kind(tmp.path()).as_deref(),
+            Some("recovery_barrier")
+        );
+        assert_eq!(structural_inflight_count(tmp.path()), 0);
+    }
+}
+
+#[test]
+fn failed_crash_rollback_appends_barrier_and_surfaces_reopen_error() {
+    let (tmp, session, state) = fixture(&[("a.md", "a")], &["dest"]);
+    let provider = Arc::clone(&session.provider);
+    state.lock().unwrap().panic_after_rename_numbers.insert(1);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move(BatchMoveRequest {
+            items: vec![file("a.md")],
+            new_parent: "dest".into(),
+        });
+    }));
+    assert!(crashed.is_err());
+    drop(session);
+    state
+        .lock()
+        .unwrap()
+        .fail_renames
+        .insert(("dest/a.md".into(), "a.md".into()));
+
+    let reopened = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")));
+    let error = match reopened {
+        Ok(_) => panic!("a failed rollback cannot be hidden by a successful reopen"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("structural batch recovery"));
+    assert_eq!(
+        latest_structural_kind(tmp.path()).as_deref(),
+        Some("recovery_barrier")
+    );
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    assert!(tmp.path().join("dest/a.md").is_file());
 }
 
 #[test]
@@ -2124,6 +2924,115 @@ fn batch_trash_error_after_delete_uses_physical_truth_for_index_and_audit() {
 }
 
 #[test]
+fn batch_trash_file_replaced_by_directory_reports_the_original_file_trashed() {
+    let (tmp, session, state) = fixture(&[("a.md", "original")], &[]);
+    state
+        .lock()
+        .unwrap()
+        .replace_after_delete_with_kind
+        .insert("a.md".into(), EntryKind::Directory);
+
+    let report = session
+        .batch_trash(BatchTrashRequest {
+            items: vec![file("a.md")],
+        })
+        .unwrap();
+
+    assert_eq!(report.state, BatchTrashState::Succeeded, "{report:?}");
+    assert_eq!(report.trashed, vec![file("a.md")]);
+    assert!(report.untrashed.is_empty());
+    assert!(report.unknown.is_empty());
+    assert!(
+        report.requires_rescan,
+        "the replacement needs indexing even though the original outcome is known"
+    );
+    assert!(report.bookkeeping_failures.iter().any(|failure| {
+        failure.stage == crate::BatchFailureStage::Reconciliation
+            && failure.message.contains("opposite-kind replacement")
+    }));
+    assert!(tmp.path().join("a.md").is_dir());
+    let indexed: i64 = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = 'a.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        indexed, 0,
+        "the deleted file row must not describe its replacement"
+    );
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let replacement_indexed: bool = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM dirs WHERE path = 'a.md')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(replacement_indexed);
+}
+
+#[test]
+fn batch_trash_folder_replaced_by_file_reports_the_original_folder_trashed() {
+    let (tmp, session, state) = fixture(&[("folder/child.md", "original")], &["folder"]);
+    state
+        .lock()
+        .unwrap()
+        .replace_after_delete_with_kind
+        .insert("folder".into(), EntryKind::File);
+
+    let report = session
+        .batch_trash(BatchTrashRequest {
+            items: vec![folder("folder")],
+        })
+        .unwrap();
+
+    assert_eq!(report.state, BatchTrashState::Succeeded, "{report:?}");
+    assert_eq!(report.trashed, vec![folder("folder")]);
+    assert!(report.untrashed.is_empty());
+    assert!(report.unknown.is_empty());
+    assert!(
+        report.requires_rescan,
+        "the replacement needs indexing even though the original outcome is known"
+    );
+    assert!(report.bookkeeping_failures.iter().any(|failure| {
+        failure.stage == crate::BatchFailureStage::Reconciliation
+            && failure.message.contains("opposite-kind replacement")
+    }));
+    assert!(tmp.path().join("folder").is_file());
+    let indexed: i64 = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT COUNT(*) FROM files WHERE path = 'folder/child.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(indexed, 0, "the deleted subtree must leave the index");
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let replacement_indexed: bool = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM files WHERE path = 'folder')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(replacement_indexed);
+}
+
+#[test]
 fn batch_trash_unknown_post_call_truth_requires_rescan_and_barrier() {
     let (tmp, session, state) = fixture(&[("a.md", "a")], &[]);
     let prior = session.create_folder("prior").unwrap();
@@ -2142,7 +3051,18 @@ fn batch_trash_unknown_post_call_truth_requires_rescan_and_barrier() {
 
     assert_eq!(report.state, BatchTrashState::Failed);
     assert!(report.trashed.is_empty());
-    assert_eq!(report.untrashed[0].item, file("a.md"));
+    assert!(
+        report.untrashed.is_empty(),
+        "an unverifiable physical outcome must not be presented as definitely not moved"
+    );
+    assert_eq!(report.unknown.len(), 1);
+    assert_eq!(report.unknown[0].item, file("a.md"));
+    assert!(
+        report.unknown[0]
+            .failure
+            .message
+            .contains("outcome is unknown")
+    );
     assert!(report.requires_rescan);
     assert!(tmp.path().join("a.md").is_file());
     assert!(!session.graph_is_built());

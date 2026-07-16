@@ -34,6 +34,11 @@ final class NoteDocument: ObservableObject, Identifiable {
     var bodyLineOffset: Int = 0
     var saveError: String?
     var saveConflict: SaveConflict?
+    /// The tab's file was proven absent after an outcome-unknown Trash
+    /// operation. Dirty buffers remain parked for recovery; activation
+    /// restores them into the missing-file state instead of attempting a
+    /// disk read that would erase the only in-memory copy.
+    var isMissingFromDisk: Bool = false
     /// False until the tab has been activated (and thus disk-loaded) once.
     /// Restore short-circuits the disk read only when true.
     var hasLoaded: Bool = false

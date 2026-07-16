@@ -649,17 +649,27 @@ final class FileTreeKeyboardOpenDragTests: XCTestCase {
             "Return must not create a held-key open storm")
         XCTAssertTrue(source.contains("handleSelectionKeyAction("))
         XCTAssertTrue(source.contains("requestOpenSelected()"))
-        XCTAssertTrue(source.contains("pendingOpenSelection?.title"))
+        XCTAssertTrue(source.contains("activeOpenSelection?.title"))
+        XCTAssertTrue(
+            source.contains(
+                "guard case .open(let request)? = appState.activeBatchAlertPresentation"),
+            "the sidebar renders only AppState's session-owned open alert")
+        XCTAssertTrue(source.contains("appState.confirmOpenSelection(id: request.id)"))
+        XCTAssertTrue(source.contains("appState.cancelOpenSelection(id: request.id)"))
+        XCTAssertTrue(
+            source.contains("get: { activeOpenSelection != nil },\n            set: { _ in }"),
+            "the alert binding is presentation-only; actions own dismissal")
         XCTAssertTrue(source.contains("TreeOpenSelectedKeyMonitor("))
         XCTAssertTrue(source.contains("enabled: fileTreeFocused"))
         XCTAssertTrue(source.contains("isRenaming: appState.renamingNode != nil"))
         XCTAssertFalse(source.contains("openSelectedKeyDownMonitor"))
         XCTAssertFalse(source.contains("installOpenSelectedKeyDownMonitor"))
         XCTAssertEqual(
-            source.components(separatedBy: ".onDrag { dragItem(for: node) } preview: {")
+            source.components(separatedBy: "FileTreeRowDragSource(")
                 .count - 1,
             2,
-            "file and folder rows must both render the shared drag preview")
+            "file and folder rows must both mount the selection-preserving bridge")
+        XCTAssertTrue(source.contains("makeDescriptor: { dragDescriptor(for: node) }"))
         XCTAssertTrue(source.contains("dragPreview(for: node)"))
         let previewStart = try XCTUnwrap(source.range(of: "private func dragPreview("))
         let previewEnd = try XCTUnwrap(
@@ -672,11 +682,6 @@ final class FileTreeKeyboardOpenDragTests: XCTestCase {
         XCTAssertTrue(
             previewSource.contains(".accessibilityHidden(true)"),
             "the visual count badge must not duplicate selection state for VoiceOver")
-        XCTAssertTrue(
-            source.contains(
-                ".onChange(of: appState.currentSession.map(ObjectIdentifier.init))"),
-            "same-URL session replacement must dismiss a staged open request")
-
         let dropStart = try XCTUnwrap(source.range(of: "private func handleDrop("))
         let dropEnd = try XCTUnwrap(
             source.range(
@@ -684,8 +689,8 @@ final class FileTreeKeyboardOpenDragTests: XCTestCase {
                 range: dropStart.upperBound..<source.endIndex))
         let dropSource = source[dropStart.lowerBound..<dropEnd.lowerBound]
         XCTAssertTrue(dropSource.contains("Self.preferredDropProvider(in: providers)"))
-        XCTAssertTrue(dropSource.contains("Self.decodeDragPayload(data)"))
-        XCTAssertTrue(dropSource.contains("appState.moveTreeSelection("))
+        XCTAssertTrue(dropSource.contains("Self.loadAdmittedDropProvider("))
+        XCTAssertTrue(dropSource.contains("Self.performDecodedPrivateDrop("))
         XCTAssertFalse(dropSource.contains("appState.dragSourceNode"))
     }
 

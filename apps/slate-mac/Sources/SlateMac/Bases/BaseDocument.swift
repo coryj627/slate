@@ -3,7 +3,7 @@
 
 import Foundation
 
-enum BaseDocumentSource: Hashable {
+enum BaseDocumentSource: Hashable, Sendable {
     case file(path: String)
     case savedQuery(id: String, name: String)
 
@@ -76,6 +76,247 @@ enum BaseDocumentSource: Hashable {
     }
 }
 
+enum BaseRetargetNativePhase: Sendable, Equatable {
+    case closeReplaced
+    case open
+    case views
+    case sort
+    case execute
+    case closePrepared
+    case listSavedQueries
+    case listBases
+    case listDashboards
+    case export
+    case dqlConversion
+    case refreshOpen
+    case refreshViews
+    case refreshSort
+    case refreshExecute
+    case refreshCloseReplaced
+    case refreshClosePrepared
+}
+
+struct BaseRetargetNativeExecutionEvent: Sendable, Equatable {
+    let phase: BaseRetargetNativePhase
+    let ranOnMainThread: Bool
+}
+
+typealias BaseRetargetNativeExecutionObserver =
+    @Sendable (BaseRetargetNativeExecutionEvent) -> Void
+
+enum BaseRetargetThreadProbe {
+    nonisolated static func isMainThread() -> Bool { Thread.isMainThread }
+}
+
+/// Immutable inputs needed to reproduce the current Base view against a new
+/// path-bound handle. UI objects and mutable document state never cross the
+/// main-actor boundary.
+struct BasePreparedLoadRequest: Sendable {
+    let source: BaseDocumentSource
+    let previousViewName: String?
+    let previousViewIndex: Int
+    let quickFilter: String?
+    let sortColumnID: String?
+    let sortAscending: Bool
+    let thisPath: String?
+}
+
+enum BasePreparedLoad: @unchecked Sendable {
+    case ready(
+        handle: UInt64,
+        views: [BaseViewSummary],
+        result: BasesResultSet?,
+        activeViewIndex: Int,
+        appliedQuickFilter: String?
+    )
+    case failed(String)
+
+    var retainedHandle: UInt64? {
+        guard case .ready(let handle, _, _, _, _) = self else { return nil }
+        return handle
+    }
+}
+
+typealias BaseRetargetPreloadRunner =
+    @Sendable (
+        VaultSession,
+        BasePreparedLoadRequest,
+        BaseRetargetNativeExecutionObserver?
+    ) -> BasePreparedLoad
+
+struct BaseRetargetReservation: Sendable {
+    let generation: UInt64
+    let replacedHandle: UInt64?
+    let request: BasePreparedLoadRequest
+}
+
+struct BaseContentRefreshReservation: Sendable {
+    let generation: UInt64
+    let replacedHandle: UInt64?
+    let request: BasePreparedLoadRequest
+}
+
+enum BaseContentRefreshApplication: Sendable {
+    case applied(replacedHandle: UInt64?)
+    case failed
+    case stale
+}
+
+/// Entire Base open/views/sort/execute boundary for retargets. Ready results
+/// transfer one native handle to the MainActor document; every other path
+/// closes its temporary handle here.
+enum BasePreparedLoader {
+    nonisolated static func prepare(
+        session: VaultSession,
+        request: BasePreparedLoadRequest,
+        observer: BaseRetargetNativeExecutionObserver?
+    ) -> BasePreparedLoad {
+        var openedHandle: UInt64?
+        var transferredHandle = false
+        defer {
+            if let handle = openedHandle, !transferredHandle {
+                close(
+                    handle: handle,
+                    session: session,
+                    phase: .closePrepared,
+                    observer: observer)
+            }
+        }
+
+        do {
+            observe(.open, observer: observer)
+            let handle: UInt64
+            switch request.source {
+            case .file(let path):
+                handle = try session.openBase(path: path)
+            case .savedQuery(let id, _):
+                handle = try session.openSavedQuery(id: id)
+            }
+            openedHandle = handle
+
+            observe(.views, observer: observer)
+            let views = try session.baseViews(handle: handle)
+            let activeViewIndex: Int
+            if let previousViewName = request.previousViewName,
+                let matchingIndex = views.firstIndex(where: {
+                    BaseExactIdentity.matches($0.name, previousViewName)
+                })
+            {
+                activeViewIndex = matchingIndex
+            } else {
+                activeViewIndex = views.isEmpty
+                    ? 0 : min(request.previousViewIndex, views.count - 1)
+            }
+
+            let result: BasesResultSet?
+            if views.indices.contains(activeViewIndex) {
+                if let sortColumnID = request.sortColumnID {
+                    observe(.sort, observer: observer)
+                    try session.baseSetTransientSort(
+                        handle: handle,
+                        view: UInt32(activeViewIndex),
+                        columnId: sortColumnID,
+                        ascending: request.sortAscending)
+                }
+                observe(.execute, observer: observer)
+                result = try session.baseExecute(
+                    handle: handle,
+                    view: UInt32(activeViewIndex),
+                    thisPath: request.thisPath,
+                    quickFilter: request.quickFilter,
+                    cancel: CancelToken())
+            } else {
+                result = nil
+            }
+
+            transferredHandle = true
+            return .ready(
+                handle: handle,
+                views: views,
+                result: result,
+                activeViewIndex: activeViewIndex,
+                appliedQuickFilter: request.quickFilter)
+        } catch {
+            return .failed(BaseDocument.friendlyMessage(source: request.source, for: error))
+        }
+    }
+
+    nonisolated static func release(
+        _ prepared: BasePreparedLoad,
+        session: VaultSession,
+        observer: BaseRetargetNativeExecutionObserver?
+    ) {
+        guard let handle = prepared.retainedHandle else { return }
+        close(
+            handle: handle,
+            session: session,
+            phase: .closePrepared,
+            observer: observer)
+    }
+
+    nonisolated static func closeReplaced(
+        handle: UInt64,
+        session: VaultSession,
+        observer: BaseRetargetNativeExecutionObserver?
+    ) {
+        close(
+            handle: handle,
+            session: session,
+            phase: .closeReplaced,
+            observer: observer)
+    }
+
+    private nonisolated static func close(
+        handle: UInt64,
+        session: VaultSession,
+        phase: BaseRetargetNativePhase,
+        observer: BaseRetargetNativeExecutionObserver?
+    ) {
+        observe(phase, observer: observer)
+        session.closeBase(handle: handle)
+    }
+
+    nonisolated static func observe(
+        _ phase: BaseRetargetNativePhase,
+        observer: BaseRetargetNativeExecutionObserver?
+    ) {
+        observer?(
+            BaseRetargetNativeExecutionEvent(
+                phase: phase,
+                ranOnMainThread: BaseRetargetThreadProbe.isMainThread()))
+    }
+}
+
+/// Immutable ownership snapshot for Base export. The FFI call runs detached;
+/// MainActor publication is allowed only while the document still owns the
+/// same native handle, view, filter, and transient sort.
+struct BaseExportSnapshot: @unchecked Sendable {
+    let source: BaseDocumentSource
+    let handle: UInt64
+    let viewIndex: Int
+    let format: ExportFormat
+    /// The document filter that owned this snapshot. This remains populated
+    /// when an unfiltered export intentionally passes `nil` to native code.
+    let documentQuickFilter: String?
+    let quickFilter: String?
+    let sortState: DataGridSortState?
+}
+
+enum BaseNativeExporter {
+    nonisolated static func run(
+        session: VaultSession,
+        snapshot: BaseExportSnapshot,
+        observer: BaseRetargetNativeExecutionObserver?
+    ) throws -> String {
+        BasePreparedLoader.observe(.export, observer: observer)
+        return try session.baseExport(
+            handle: snapshot.handle,
+            view: UInt32(snapshot.viewIndex),
+            format: snapshot.format,
+            quickFilter: snapshot.quickFilter)
+    }
+}
+
 /// Per-open-base state (Milestone N, #702): loads the `.base` file over
 /// the FFI, owns the handle, and stores the active view result. One
 /// `BaseDocument` is shared by every tab/pane showing the same path.
@@ -100,6 +341,11 @@ final class BaseDocument: ObservableObject {
 
     private(set) var handle: UInt64?
     private var appliedQuickFilterText: String?
+    private var retargetGeneration: UInt64 = 0
+    @Published private var retargetPreparationPending = false
+    @Published private var retargetPreparationInFlight = false
+    private var pendingRetargetRequest: BasePreparedLoadRequest?
+    private var contentRefreshGeneration: UInt64 = 0
 
     init(path: String) {
         self.source = .file(path: path)
@@ -130,7 +376,13 @@ final class BaseDocument: ObservableObject {
         editedQuickFilterArgument != nil || appliedQuickFilterText != nil
     }
 
+    var hasPendingRetargetPreparation: Bool { retargetPreparationPending }
+
+    var isRetargetPreparationInFlight: Bool { retargetPreparationInFlight }
+
     func load(session: VaultSession, thisPath: String? = nil) {
+        contentRefreshGeneration &+= 1
+        invalidateRetargetPreparation()
         let previousViewName = activeViewName
         if let stale = handle {
             session.closeBase(handle: stale)
@@ -175,18 +427,18 @@ final class BaseDocument: ObservableObject {
     func selectView(index: Int, session: VaultSession) {
         guard views.indices.contains(index) else { return }
         guard activeViewIndex != index else { return }
-        if let handle {
-            do {
-                try session.baseSetTransientSort(
-                    handle: handle,
-                    view: UInt32(activeViewIndex),
-                    columnId: nil,
-                    ascending: true)
-            } catch {
-                result = nil
-                state = .failed(friendlyMessage(for: error))
-                return
-            }
+        guard let handle else { return }
+        contentRefreshGeneration &+= 1
+        do {
+            try session.baseSetTransientSort(
+                handle: handle,
+                view: UInt32(activeViewIndex),
+                columnId: nil,
+                ascending: true)
+        } catch {
+            result = nil
+            state = .failed(friendlyMessage(for: error))
+            return
         }
         activeViewIndex = index
         sortState = nil
@@ -206,7 +458,13 @@ final class BaseDocument: ObservableObject {
     }
 
     func executeActiveView(session: VaultSession, thisPath: String? = nil) {
-        guard let handle, views.indices.contains(activeViewIndex) else {
+        contentRefreshGeneration &+= 1
+        // A batch-Trash unknown outcome deliberately detaches the handle while
+        // preserving the last truthful snapshot. Do not replace that snapshot
+        // with a fabricated no-views state merely because an interaction raced
+        // the disabled UI.
+        guard let handle else { return }
+        guard views.indices.contains(activeViewIndex) else {
             result = nil
             state = .degraded("No executable base views were found.")
             return
@@ -239,23 +497,54 @@ final class BaseDocument: ObservableObject {
         }
     }
 
+    func exportSnapshot(
+        format: ExportFormat,
+        includeQuickFilter: Bool = true
+    ) throws -> BaseExportSnapshot {
+        guard let handle, views.indices.contains(activeViewIndex) else {
+            throw BaseDocumentError.noExecutableView
+        }
+        return BaseExportSnapshot(
+            source: source,
+            handle: handle,
+            viewIndex: activeViewIndex,
+            format: format,
+            documentQuickFilter: quickFilterArgument,
+            quickFilter: includeQuickFilter ? quickFilterArgument : nil,
+            sortState: sortState)
+    }
+
+    func ownsExportSnapshot(_ snapshot: BaseExportSnapshot) -> Bool {
+        source == snapshot.source
+            && handle == snapshot.handle
+            && activeViewIndex == snapshot.viewIndex
+            && quickFilterArgument == snapshot.documentQuickFilter
+            && sortState == snapshot.sortState
+    }
+
     func export(
         format: ExportFormat,
         session: VaultSession,
         includeQuickFilter: Bool = true
-    ) throws -> String {
-        guard let handle, views.indices.contains(activeViewIndex) else {
-            throw BaseDocumentError.noExecutableView
-        }
-        return try session.baseExport(
-            handle: handle,
-            view: UInt32(activeViewIndex),
+    ) async throws -> String {
+        let snapshot = try exportSnapshot(
             format: format,
-            quickFilter: includeQuickFilter ? quickFilterArgument : nil)
+            includeQuickFilter: includeQuickFilter)
+        let text = try await Task.detached(priority: .userInitiated) {
+            try BaseNativeExporter.run(
+                session: session,
+                snapshot: snapshot,
+                observer: nil)
+        }.value
+        guard ownsExportSnapshot(snapshot) else {
+            throw BaseDocumentError.staleExport
+        }
+        return text
     }
 
     @discardableResult
     func applyQuickFilter(_ text: String, session: VaultSession) -> String {
+        guard handle != nil else { return quickFilterResultAnnouncement }
         if quickFilterText != text {
             quickFilterText = text
         }
@@ -266,6 +555,7 @@ final class BaseDocument: ObservableObject {
     @discardableResult
     func clearQuickFilter(session: VaultSession?) -> String? {
         guard quickFilterActive else { return nil }
+        guard handle != nil else { return nil }
         clearQuickFilterState()
         if let session {
             executeActiveView(session: session)
@@ -351,13 +641,32 @@ final class BaseDocument: ObservableObject {
     }
 
     func close(session: VaultSession) {
+        contentRefreshGeneration &+= 1
+        invalidateRetargetPreparation()
         if let handle {
             session.closeBase(handle: handle)
         }
         handle = nil
     }
 
+    /// Reconciliation proved that this file was physically moved to Trash.
+    /// Retain the document object for its mounted tab and any open builder,
+    /// while removing native write capability and publishing a terminal state.
+    func markMovedToTrash(session: VaultSession?) {
+        contentRefreshGeneration &+= 1
+        invalidateRetargetPreparation()
+        if let handle, let session {
+            session.closeBase(handle: handle)
+        }
+        handle = nil
+        state = .failed(
+            "\(displayName) was moved to Trash and is no longer available. "
+                + "Choose Refresh if the file is restored.")
+    }
+
     func retarget(to newPath: String, session: VaultSession?) {
+        contentRefreshGeneration &+= 1
+        invalidateRetargetPreparation()
         if let session {
             close(session: session)
         } else {
@@ -370,6 +679,8 @@ final class BaseDocument: ObservableObject {
     }
 
     func retarget(to newSource: BaseDocumentSource, session: VaultSession?) {
+        contentRefreshGeneration &+= 1
+        invalidateRetargetPreparation()
         if let session {
             close(session: session)
         } else {
@@ -381,6 +692,198 @@ final class BaseDocument: ObservableObject {
         }
     }
 
+    /// Rekey without closing, opening, or querying. The previous result stays
+    /// visible while the detached handle is closed and a live replacement is
+    /// prepared away from the main actor.
+    func beginBatchRetarget(
+        to newSource: BaseDocumentSource,
+        thisPath: String? = nil
+    ) -> BaseRetargetReservation {
+        contentRefreshGeneration &+= 1
+        let sortColumnID = sortState.flatMap { sort in
+            result?.columns.indices.contains(sort.columnIndex) == true
+                ? result?.columns[sort.columnIndex].id
+                : nil
+        }
+        let filter = editedQuickFilterArgument ?? appliedQuickFilterText
+        retargetGeneration &+= 1
+        let reservation = BaseRetargetReservation(
+            generation: retargetGeneration,
+            replacedHandle: handle,
+            request: BasePreparedLoadRequest(
+                source: newSource,
+                previousViewName: activeViewName,
+                previousViewIndex: activeViewIndex,
+                quickFilter: filter,
+                sortColumnID: sortColumnID,
+                sortAscending: sortState?.ascending ?? true,
+                thisPath: thisPath))
+        pendingRetargetRequest = reservation.request
+        handle = nil
+        source = newSource
+        retargetPreparationPending = true
+        retargetPreparationInFlight = false
+        return reservation
+    }
+
+    func preparedRetargetRequest(thisPath: String?) -> BasePreparedLoadRequest {
+        let base = pendingRetargetRequest ?? BasePreparedLoadRequest(
+            source: source,
+            previousViewName: activeViewName,
+            previousViewIndex: activeViewIndex,
+            quickFilter: editedQuickFilterArgument ?? appliedQuickFilterText,
+            sortColumnID: sortState.flatMap { sort in
+                result?.columns.indices.contains(sort.columnIndex) == true
+                    ? result?.columns[sort.columnIndex].id
+                    : nil
+            },
+            sortAscending: sortState?.ascending ?? true,
+            thisPath: thisPath)
+        return BasePreparedLoadRequest(
+            source: base.source,
+            previousViewName: base.previousViewName,
+            previousViewIndex: base.previousViewIndex,
+            quickFilter: base.quickFilter,
+            sortColumnID: base.sortColumnID,
+            sortAscending: base.sortAscending,
+            thisPath: thisPath)
+    }
+
+    func claimRetargetPreparation() -> UInt64? {
+        guard retargetPreparationPending, !retargetPreparationInFlight else {
+            return nil
+        }
+        retargetPreparationInFlight = true
+        return retargetGeneration
+    }
+
+    func ownsRetargetPreparation(
+        generation: UInt64,
+        source: BaseDocumentSource
+    ) -> Bool {
+        retargetPreparationPending
+            && retargetPreparationInFlight
+            && retargetGeneration == generation
+            && self.source == source
+    }
+
+    @discardableResult
+    func applyRetargetPreparation(
+        _ prepared: BasePreparedLoad,
+        generation: UInt64,
+        source: BaseDocumentSource
+    ) -> Bool {
+        guard ownsRetargetPreparation(generation: generation, source: source) else {
+            return false
+        }
+        retargetPreparationInFlight = false
+        contentRefreshGeneration &+= 1
+
+        switch prepared {
+        case .ready(let preparedHandle, let preparedViews, let preparedResult,
+            let preparedActiveViewIndex, let preparedFilter):
+            handle = preparedHandle
+            views = preparedViews
+            result = preparedResult
+            activeViewIndex = preparedActiveViewIndex
+            appliedQuickFilterText = preparedFilter
+            state = preparedState(
+                views: preparedViews,
+                result: preparedResult,
+                activeViewIndex: preparedActiveViewIndex)
+            retargetPreparationPending = false
+            pendingRetargetRequest = nil
+        case .failed(let message):
+            // Base renders degraded results with its previous data still
+            // present, avoiding a blank pane while keeping the document
+            // read-only and retryable.
+            state = .degraded(message)
+            retargetPreparationPending = true
+        }
+        return true
+    }
+
+    /// Capture immutable state for a normal post-write refresh without
+    /// detaching the current handle. The existing result remains visible until
+    /// a fully prepared replacement is ready and still owned.
+    func beginContentRefresh(thisPath: String?) -> BaseContentRefreshReservation {
+        contentRefreshGeneration &+= 1
+        let generation = contentRefreshGeneration
+        return BaseContentRefreshReservation(
+            generation: generation,
+            replacedHandle: handle,
+            request: BasePreparedLoadRequest(
+                source: source,
+                previousViewName: activeViewName,
+                previousViewIndex: activeViewIndex,
+                quickFilter: editedQuickFilterArgument ?? appliedQuickFilterText,
+                sortColumnID: currentSortColumnID,
+                sortAscending: sortState?.ascending ?? true,
+                thisPath: thisPath))
+    }
+
+    func ownsContentRefresh(_ reservation: BaseContentRefreshReservation) -> Bool {
+        contentRefreshGeneration == reservation.generation
+            && source == reservation.request.source
+            && handle == reservation.replacedHandle
+            && activeViewIndex == reservation.request.previousViewIndex
+            && activeViewName == reservation.request.previousViewName
+            && (editedQuickFilterArgument ?? appliedQuickFilterText)
+                == reservation.request.quickFilter
+            && currentSortColumnID == reservation.request.sortColumnID
+            && (sortState?.ascending ?? true) == reservation.request.sortAscending
+    }
+
+    func applyContentRefresh(
+        _ prepared: BasePreparedLoad,
+        reservation: BaseContentRefreshReservation
+    ) -> BaseContentRefreshApplication {
+        guard ownsContentRefresh(reservation) else { return .stale }
+        switch prepared {
+        case .ready(
+            let preparedHandle,
+            let preparedViews,
+            let preparedResult,
+            let preparedActiveViewIndex,
+            let preparedFilter
+        ):
+            let replacedHandle = handle
+            handle = preparedHandle
+            views = preparedViews
+            result = preparedResult
+            activeViewIndex = preparedActiveViewIndex
+            appliedQuickFilterText = preparedFilter
+            if let columnID = reservation.request.sortColumnID,
+                let preparedResult,
+                let index = preparedResult.columns.firstIndex(where: {
+                    BaseExactIdentity.matches($0.id, columnID)
+                })
+            {
+                sortState = DataGridSortState(
+                    columnIndex: index,
+                    ascending: reservation.request.sortAscending)
+            } else {
+                sortState = nil
+            }
+            focusedColumnIndex = preparedResult.map {
+                min(focusedColumnIndex, max($0.columns.count - 1, 0))
+            } ?? 0
+            state = preparedState(
+                views: preparedViews,
+                result: preparedResult,
+                activeViewIndex: preparedActiveViewIndex)
+            contentRefreshGeneration &+= 1
+            return .applied(replacedHandle: replacedHandle)
+        case .failed(let message):
+            // Preserve the prior rows and native handle. This is both more
+            // usable and retryable than blanking a visible Base on a transient
+            // refresh failure.
+            state = .degraded(message)
+            contentRefreshGeneration &+= 1
+            return .failed
+        }
+    }
+
     func retargetSavedQueryName(_ name: String) {
         guard case .savedQuery(let id, _) = source else { return }
         source = .savedQuery(id: id, name: name)
@@ -388,6 +891,14 @@ final class BaseDocument: ObservableObject {
 
     private var quickFilterArgument: String? {
         editedQuickFilterArgument
+    }
+
+    private var currentSortColumnID: String? {
+        guard let sortState,
+            let result,
+            result.columns.indices.contains(sortState.columnIndex)
+        else { return nil }
+        return result.columns[sortState.columnIndex].id
     }
 
     private var editedQuickFilterArgument: String? {
@@ -421,13 +932,47 @@ final class BaseDocument: ObservableObject {
         appliedQuickFilterText = nil
     }
 
+    private func invalidateRetargetPreparation() {
+        retargetGeneration &+= 1
+        retargetPreparationPending = false
+        retargetPreparationInFlight = false
+        pendingRetargetRequest = nil
+    }
+
+    private func preparedState(
+        views: [BaseViewSummary],
+        result: BasesResultSet?,
+        activeViewIndex: Int
+    ) -> LoadState {
+        guard views.indices.contains(activeViewIndex) else {
+            return .degraded("No executable base views were found.")
+        }
+        let view = views[activeViewIndex]
+        if view.status == .fallback {
+            return .degraded("Using fallback view for \(view.name).")
+        }
+        if view.status == .error {
+            return .degraded("View \(view.name) has errors.")
+        }
+        if let message = result?.viewError, !message.isEmpty {
+            return .degraded(friendlyViewErrorMessage(message))
+        }
+        if let result, let message = firstSavedQueryThisContextError(in: result) {
+            return .degraded(friendlyViewErrorMessage(message))
+        }
+        return .ready
+    }
+
     private enum BaseDocumentError: LocalizedError {
         case noExecutableView
+        case staleExport
 
         var errorDescription: String? {
             switch self {
             case .noExecutableView:
                 return "No executable base view."
+            case .staleExport:
+                return "The Base view changed before the export finished."
             }
         }
     }
@@ -449,7 +994,11 @@ final class BaseDocument: ObservableObject {
         return "\"\(escaped)\""
     }
 
-    private func friendlyMessage(for error: Error) -> String {
+    nonisolated static func friendlyMessage(
+        source: BaseDocumentSource,
+        for error: Error
+    ) -> String {
+        let displayName = source.displayName
         if let vaultError = error as? VaultError {
             switch vaultError {
             case .Io:
@@ -463,6 +1012,10 @@ final class BaseDocument: ObservableObject {
             }
         }
         return "\(displayName) could not be opened: \(error.localizedDescription)"
+    }
+
+    private func friendlyMessage(for error: Error) -> String {
+        Self.friendlyMessage(source: source, for: error)
     }
 
     private func friendlyViewErrorMessage(_ message: String) -> String {

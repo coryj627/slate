@@ -55,6 +55,404 @@ final class WorkspaceTabsTests: XCTestCase {
         await state.noteLoadTask?.value
     }
 
+    private func successfulBatchMoveReport(
+        planned: [StructuralBatchItem],
+        standing: [BatchPathChange],
+        opID: Int64 = 500
+    ) -> BatchMoveReport {
+        BatchMoveReport(
+            envelope: StructuralBatchEnvelope(
+                planned: planned, skipped: [], preflightFailures: []),
+            state: .succeeded,
+            opId: opID,
+            standing: standing,
+            rolledBack: [],
+            failure: nil,
+            rollbackFailures: [],
+            rewritten: [],
+            rewriteFailures: [],
+            requiresRescan: false)
+    }
+
+    private func partialBatchTrashReport(
+        planned: [StructuralBatchItem],
+        trashed: [StructuralBatchItem],
+        untrashed: [BatchTrashRemainder],
+        unknown: [BatchTrashRemainder] = []
+    ) -> BatchTrashReport {
+        BatchTrashReport(
+            envelope: StructuralBatchEnvelope(
+                planned: planned, skipped: [], preflightFailures: []),
+            state: .partial,
+            opId: 600,
+            trashed: trashed,
+            untrashed: untrashed,
+            unknown: unknown,
+            bookkeepingFailures: [],
+            requiresRescan: false)
+    }
+
+    // MARK: - Batch structural path index (FL-03 Task 5)
+
+    func testVaultComponentPrefixIndexUsesLongestComponentBoundaryAndByteExactIdentity() {
+        let composed = "caf\u{00E9}.base"
+        let decomposed = "cafe\u{0301}.base"
+        let index = VaultComponentPrefixIndex<String>([
+            .init(path: "folder", includesDescendants: true, value: "outer"),
+            .init(path: "folder/nested", includesDescendants: true, value: "inner"),
+            .init(path: "folder/nested/exact.base", includesDescendants: false, value: "exact"),
+            .init(path: composed, includesDescendants: false, value: "composed"),
+            .init(path: decomposed, includesDescendants: false, value: "decomposed"),
+        ])
+
+        let exact = index.longestMatch(for: "folder/nested/exact.base")
+        XCTAssertEqual(exact?.entry.value, "exact", "an exact file beats a folder ancestor")
+        XCTAssertEqual(exact?.relativeSuffix, "")
+
+        let nested = index.longestMatch(for: "folder/nested/child.md")
+        XCTAssertEqual(nested?.entry.value, "inner", "the deepest directory prefix wins")
+        XCTAssertEqual(nested?.relativeSuffix, "child.md")
+
+        let outer = index.longestMatch(for: "folder/elsewhere/child.md")
+        XCTAssertEqual(outer?.entry.value, "outer")
+        XCTAssertEqual(outer?.relativeSuffix, "elsewhere/child.md")
+        XCTAssertNil(index.longestMatch(for: "folderish/child.md"))
+
+        XCTAssertEqual(index.longestMatch(for: composed)?.entry.value, "composed")
+        XCTAssertEqual(index.longestMatch(for: decomposed)?.entry.value, "decomposed")
+        XCTAssertEqual(
+            index.longestMatch(for: "./folder//nested/exact.base/")?.entry.value,
+            "exact",
+            "lookup syntax matches core's CurDir/repeated-separator normalization")
+
+        let descendantOnly = VaultComponentPrefixIndex<String>([
+            .init(
+                path: "folder/note.md",
+                includesDescendants: false,
+                value: "descendant")
+        ])
+        XCTAssertTrue(descendantOnly.containsEntry(atOrBelow: "folder"))
+        XCTAssertTrue(descendantOnly.containsEntry(atOrBelow: "./folder//"))
+        XCTAssertFalse(descendantOnly.containsEntry(atOrBelow: "folderish"))
+
+        let deepComponents = (0..<100).map { "level-\($0)" }
+        let deepPath = deepComponents.joined(separator: "/")
+        let deepIndex = VaultComponentPrefixIndex<String>([
+            .init(path: deepPath, includesDescendants: true, value: "root")
+        ])
+        let deepCandidate = deepPath + "/leaf.md"
+        var componentVisits = 0
+        XCTAssertEqual(
+            deepIndex.longestMatch(
+                for: deepCandidate, componentVisits: &componentVisits)?.entry.value,
+            "root")
+        XCTAssertEqual(
+            componentVisits, deepComponents.count + 1,
+            "lookup walks candidate components once; it never rebuilds every prefix")
+
+        var model = WorkspaceModel()
+        let markdownComposed = "notes/\(composed.replacingOccurrences(of: ".base", with: ".md"))"
+        let markdownDecomposed =
+            "notes/\(decomposed.replacingOccurrences(of: ".base", with: ".md"))"
+        let tabID = model.openTab(.markdown(path: markdownComposed))
+        let retargets = model.retargetFileBackedItems { item in
+            guard case .markdown = item else { return nil }
+            return .markdown(path: markdownDecomposed)
+        }
+        XCTAssertEqual(retargets.map(\.tabID), [tabID])
+        guard case .markdown(let landedPath)? = model.tab(tabID)?.item else {
+            return XCTFail("expected retargeted markdown tab")
+        }
+        XCTAssertTrue(
+            BaseExactIdentity.matches(landedPath, markdownDecomposed),
+            "file-backed retarget decisions are UTF-8 exact, not canonically equivalent")
+    }
+
+    func testBatchFolderMoveRetargetsActiveAndParkedMarkdownWithoutChangingTabIdentity()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("batch-folder-vault")
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("folder"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("dest"), withIntermediateDirectories: true)
+        try "# a\n".write(
+            to: vault.appendingPathComponent("folder/a.md"),
+            atomically: true, encoding: .utf8)
+        try "---\ntitle: B\n---\n# b\n".write(
+            to: vault.appendingPathComponent("folder/b.md"),
+            atomically: true, encoding: .utf8)
+
+        let state = makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "folder/a.md"
+        await state.noteLoadTask?.value
+        await openSecondFile(state, path: "folder/b.md")
+        state.updateEditorText("# dirty body\n")
+        let parkedID = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        state.workspace.setViewMode(.reading, for: parkedID)
+        state.workspace.parkReadingScroll(
+            blockIndex: 7, path: "folder/b.md", for: parkedID)
+        state.selectPreviousTab()
+        await state.noteLoadTask?.value
+
+        let activeID = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        let originalTabIDs = state.workspace.model.allTabs.map(\.id)
+        let parkedBefore = try XCTUnwrap(state.workspace.document(for: parkedID))
+        let preserved = (
+            text: parkedBefore.text,
+            baseline: parkedBefore.savedBaselineText,
+            hash: parkedBefore.contentHash,
+            dirty: parkedBefore.hasUnsavedChanges,
+            fm: parkedBefore.fmSource,
+            byte: parkedBefore.bodyByteOffset,
+            line: parkedBefore.bodyLineOffset,
+            loaded: parkedBefore.hasLoaded)
+
+        let standing = BatchPathChange(
+            oldPath: "folder", newPath: "dest/folder", isDirectory: true)
+        let report = successfulBatchMoveReport(
+            planned: [StructuralBatchItem(path: "folder", isDirectory: true)],
+            standing: [standing])
+        state.batchMoveRunner = { _, _ in report }
+        state.structuralBatchRefreshRunner = { _ in }
+
+        let task = try XCTUnwrap(
+            state.batchMove(
+                [AppState.TreeSelection(path: "folder", isDirectory: true)],
+                to: "dest", preferredFocusPath: "folder/a.md"))
+        await task.value
+
+        XCTAssertEqual(state.workspace.model.allTabs.map(\.id), originalTabIDs)
+        XCTAssertEqual(state.workspace.model.activeGroup.activeTabID, activeID)
+        XCTAssertEqual(
+            state.workspace.model.allTabs.map(\.item),
+            [
+                .markdown(path: "dest/folder/a.md"),
+                .markdown(path: "dest/folder/b.md"),
+            ])
+        XCTAssertEqual(state.loadedFilePath, "dest/folder/a.md")
+        XCTAssertEqual(state.selectedFilePath, "dest/folder/a.md")
+
+        let parkedAfter = try XCTUnwrap(state.workspace.document(for: parkedID))
+        XCTAssertEqual(parkedAfter.path, "dest/folder/b.md")
+        XCTAssertEqual(parkedAfter.text, preserved.text)
+        XCTAssertEqual(parkedAfter.savedBaselineText, preserved.baseline)
+        XCTAssertEqual(parkedAfter.contentHash, preserved.hash)
+        XCTAssertEqual(parkedAfter.hasUnsavedChanges, preserved.dirty)
+        XCTAssertEqual(parkedAfter.fmSource, preserved.fm)
+        XCTAssertEqual(parkedAfter.bodyByteOffset, preserved.byte)
+        XCTAssertEqual(parkedAfter.bodyLineOffset, preserved.line)
+        XCTAssertEqual(parkedAfter.hasLoaded, preserved.loaded)
+        XCTAssertEqual(
+            state.workspace.parkedReadingScroll(
+                for: parkedID, path: "dest/folder/b.md"),
+            7)
+        XCTAssertEqual(state.workspace.viewMode(for: parkedID), .reading)
+    }
+
+    func testBatchFolderMoveReopensCanvasHandleAndPostMoveEditWritesOnlyNewPath()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("batch-canvas-vault")
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("folder"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("dest"), withIntermediateDirectories: true)
+        let canvas = """
+            {"nodes":[{"id":"a","type":"text","text":"A","x":0,"y":0,"width":100,"height":50}],"edges":[]}
+            """
+        try canvas.write(
+            to: vault.appendingPathComponent("folder/board.canvas"),
+            atomically: true, encoding: .utf8)
+
+        let state = makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openCanvasFile("folder/board.canvas", target: .currentTab)
+        let document = try XCTUnwrap(state.canvasDocuments["folder/board.canvas"])
+        let handle = try XCTUnwrap(document.handle)
+        let selection = document.selection
+        let viewport = document.viewport
+        let controller = state.canvasModeController(for: document)
+        document.filterText = "A"
+
+        let task = try XCTUnwrap(
+            state.batchMove(
+                [AppState.TreeSelection(path: "folder", isDirectory: true)],
+                to: "dest", preferredFocusPath: "folder/board.canvas"))
+        await task.value
+        await state.nativeDocumentRetargetTask?.value
+
+        XCTAssertEqual(
+            state.workspace.model.activeGroup.activeTab?.item,
+            .canvas(path: "dest/folder/board.canvas"))
+        XCTAssertNil(state.canvasDocuments["folder/board.canvas"])
+        XCTAssertTrue(state.canvasDocuments["dest/folder/board.canvas"] === document)
+        XCTAssertEqual(document.path, "dest/folder/board.canvas")
+        XCTAssertNotEqual(
+            document.handle, handle,
+            "the native Canvas handle owns its open path and must be reopened after a move")
+        XCTAssertTrue(document.selection === selection)
+        XCTAssertTrue(document.viewport === viewport)
+        XCTAssertEqual(document.filterText, "A")
+        XCTAssertNil(state.canvasModeControllers["folder/board.canvas"])
+        XCTAssertTrue(state.canvasModeControllers["dest/folder/board.canvas"] === controller)
+        XCTAssertEqual(state.selectedFilePath, "dest/folder/board.canvas")
+
+        let newURL = vault.appendingPathComponent("dest/folder/board.canvas")
+        let oldURL = vault.appendingPathComponent("folder/board.canvas")
+        let beforeEdit = try Data(contentsOf: newURL)
+        XCTAssertTrue(
+            state.canvasApply(
+                CanvasAction(
+                    name: "color moved card",
+                    ops: [.setNodeColor(id: "a", color: "2")]),
+                to: document))
+        let afterEdit = try Data(contentsOf: newURL)
+        XCTAssertNotEqual(afterEdit, beforeEdit, "the edit must persist at the moved path")
+        XCTAssertTrue(
+            String(decoding: afterEdit, as: UTF8.self).contains(#""color":"2""#))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: oldURL.path),
+            "the path-bound handle must not recreate or write the moved-away path")
+    }
+
+    func testBatchFolderMoveReopensBaseHandleAndPostMoveEditWritesOnlyNewPath()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("batch-base-vault")
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("folder"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("dest"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Notes"), withIntermediateDirectories: true)
+        try Data(
+            #"""
+            views:
+              - type: table
+                name: Reading
+                filters: "file.inFolder(\"Notes\")"
+                order:
+                  - file.name
+                  - status
+            """#.utf8
+        ).write(to: vault.appendingPathComponent("folder/Reading.base"))
+        try Data("---\nstatus: active\n---\n# Alpha\n".utf8)
+            .write(to: vault.appendingPathComponent("Notes/Alpha.md"))
+
+        let state = makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openFile("folder/Reading.base", target: .currentTab)
+        let document = try XCTUnwrap(state.activeBaseDocument)
+        let handle = try XCTUnwrap(document.handle)
+
+        let task = try XCTUnwrap(
+            state.batchMove(
+                [AppState.TreeSelection(path: "folder", isDirectory: true)],
+                to: "dest", preferredFocusPath: "folder/Reading.base"))
+        await task.value
+        await state.nativeDocumentRetargetTask?.value
+
+        XCTAssertTrue(state.activeBaseDocument === document)
+        XCTAssertEqual(document.path, "dest/folder/Reading.base")
+        XCTAssertNotEqual(
+            document.handle, handle,
+            "the native Base handle owns its open path and must be reopened after a move")
+
+        let newURL = vault.appendingPathComponent("dest/folder/Reading.base")
+        let oldURL = vault.appendingPathComponent("folder/Reading.base")
+        let beforeEdit = try Data(contentsOf: newURL)
+        document.focusColumn(1)
+        state.basesSortByColumn()
+        state.basesSaveSortToView()
+        let afterEdit = try Data(contentsOf: newURL)
+        XCTAssertNotEqual(afterEdit, beforeEdit, "the edit must persist at the moved path")
+        XCTAssertTrue(String(decoding: afterEdit, as: UTF8.self).contains("slate:"))
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: oldURL.path),
+            "the reopened handle must not recreate or write the moved-away path")
+    }
+
+    func testPartialBatchTrashInvalidatesOnlyReturnedTrashedSubtree() async throws {
+        let vault = tempDir.appendingPathComponent("batch-trash-vault")
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("folder"), withIntermediateDirectories: true)
+        try "# doomed\n".write(
+            to: vault.appendingPathComponent("folder/doomed.md"),
+            atomically: true, encoding: .utf8)
+        try "# keep\n".write(
+            to: vault.appendingPathComponent("keep.md"),
+            atomically: true, encoding: .utf8)
+        let canvas = """
+            {"nodes":[{"id":"a","type":"text","text":"A","x":0,"y":0,"width":100,"height":50}],"edges":[]}
+            """
+        try canvas.write(
+            to: vault.appendingPathComponent("folder/board.canvas"),
+            atomically: true, encoding: .utf8)
+
+        let state = makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.selectedFilePath = "folder/doomed.md"
+        await state.noteLoadTask?.value
+        let doomedTab = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        await openSecondFile(state, path: "keep.md")
+        let keepTab = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        let keepText = state.currentNoteText
+        state.openCanvasFile("folder/board.canvas", target: .newTab)
+        let canvasDocument = try XCTUnwrap(state.canvasDocuments["folder/board.canvas"])
+        XCTAssertNotNil(canvasDocument.handle)
+        state.selectPreviousTab()
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.workspace.model.activeGroup.activeTabID, keepTab)
+        XCTAssertNotNil(state.workspace.document(for: doomedTab))
+
+        let folderItem = StructuralBatchItem(path: "folder", isDirectory: true)
+        let keepItem = StructuralBatchItem(path: "keep.md", isDirectory: false)
+        let keepFailure = BatchItemFailure(
+            item: keepItem, stage: .trash, message: "permission denied")
+        let report = partialBatchTrashReport(
+            planned: [folderItem, keepItem],
+            trashed: [folderItem],
+            untrashed: [BatchTrashRemainder(item: keepItem, failure: keepFailure)])
+        state.batchTrashRunner = { _, _ in report }
+        state.structuralBatchRefreshRunner = { _ in }
+
+        let task = try XCTUnwrap(
+            state.batchDelete(
+                [
+                    AppState.TreeSelection(path: "folder", isDirectory: true),
+                    AppState.TreeSelection(path: "keep.md", isDirectory: false),
+                ], preferredFocusPath: "keep.md"))
+        await task.value
+
+        XCTAssertNil(state.workspace.document(for: doomedTab))
+        XCTAssertTrue(
+            state.canvasDocuments["folder/board.canvas"] === canvasDocument,
+            "an open Canvas tab retains its document identity in the unavailable state")
+        XCTAssertNil(canvasDocument.handle)
+        guard case .failed(let canvasFailure) = canvasDocument.state else {
+            return XCTFail("the trashed Canvas must land in a truthful failed state")
+        }
+        XCTAssertTrue(canvasFailure.contains("moved to Trash"))
+        XCTAssertEqual(state.workspace.model.activeGroup.activeTabID, keepTab)
+        XCTAssertEqual(state.selectedFilePath, "keep.md")
+        XCTAssertEqual(state.loadedFilePath, "keep.md")
+        XCTAssertEqual(state.currentNoteText, keepText)
+        XCTAssertEqual(
+            state.workspace.model.allTabs.map(\.item),
+            [
+                .markdown(path: "folder/doomed.md"),
+                .markdown(path: "keep.md"),
+                .canvas(path: "folder/board.canvas"),
+            ],
+            "Trash invalidation keeps error-state tabs open and never touches untrashed paths")
+    }
+
     // MARK: New tab
 
     func testNewTabDuplicatesActiveItem() async throws {

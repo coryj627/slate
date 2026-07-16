@@ -114,7 +114,8 @@ private struct PromptStep: View {
     }
 
     private var footer: some View {
-        HStack {
+        let disabledReason = appState.structuralMutationDisabledReason
+        return HStack {
             Button("Cancel") {
                 appState.cancelTemplateFlow()
             }
@@ -131,7 +132,11 @@ private struct PromptStep: View {
                 appState.submitTemplatePrompts(values)
             }
             .keyboardShortcut(.defaultAction)
-            .accessibilityHint("Continue to choose the new note's name. Return.")
+            .accessibilityHint(
+                disabledReason ?? "Continue to choose the new note's name. Return.")
+            .help(
+                disabledReason ?? "Continue to choose the new note's name. Return.")
+            .disabled(disabledReason != nil)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -172,6 +177,12 @@ private struct NameStep: View {
                         .foregroundStyle(Tokens.ColorRole.destructiveText)
                         .accessibilityLabel("Validation error: \(error)")
                 }
+                if let reason = appState.structuralMutationDisabledReason {
+                    Text(reason)
+                        .font(.caption)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                        .accessibilityLabel(reason)
+                }
             }
             .padding(16)
             Divider()
@@ -179,7 +190,8 @@ private struct NameStep: View {
         }
         .onAppear {
             if !didSeed {
-                noteName = appState.defaultNewNoteName(for: template)
+                noteName = appState.templateRetryNoteName
+                    ?? appState.defaultNewNoteName(for: template)
                 didSeed = true
             }
             DispatchQueue.main.async { nameFocused = true }
@@ -201,7 +213,8 @@ private struct NameStep: View {
     }
 
     private var footer: some View {
-        HStack {
+        let disabledReason = appState.structuralMutationDisabledReason
+        return HStack {
             Button("Cancel") {
                 appState.cancelTemplateFlow()
             }
@@ -216,7 +229,11 @@ private struct NameStep: View {
                 submit()
             }
             .keyboardShortcut(.defaultAction)
-            .accessibilityHint("Render the template and open the new note. Return.")
+            .accessibilityHint(
+                disabledReason ?? "Render the template and open the new note. Return.")
+            .help(
+                disabledReason ?? "Render the template and open the new note. Return.")
+            .disabled(disabledReason != nil)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)

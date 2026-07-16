@@ -157,15 +157,8 @@ struct TabBarView: View {
     }
 
     private func isDirty(_ tab: WorkspaceTab) -> Bool {
-        // Canvas/base tabs are never dirty through the note-buffer close gate.
-        if case .canvas = tab.item { return false }
-        if case .base = tab.item { return false }
-        if case .savedQuery = tab.item { return false }
-        if case .dashboard = tab.item { return false }
-        if tab.id == group.activeTabID {
-            return appState.hasUnsavedChanges
-        }
-        return appState.workspace.document(for: tab.id)?.hasUnsavedChanges ?? false
+        guard case .markdown = tab.item else { return false }
+        return appState.noteTabHasUnsavedChanges(tab.id)
     }
 
     private func title(_ tab: WorkspaceTab) -> String {

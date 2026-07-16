@@ -66,6 +66,8 @@ struct SlateMacApp: App {
             ToolbarCommands()
 
             CommandGroup(replacing: .newItem) {
+                let structuralDisabledReason = appState.structuralMutationDisabledReason
+                let noteSaveDisabledReason = appState.activeNoteSaveDisabledReason
                 // ⇧⌘O (#863; was ⌘O): opening a vault is app-level and
                 // rare — bare ⌘O now belongs to Quick Open below, the
                 // Obsidian-parity quick-switcher chord. The welcome
@@ -106,7 +108,14 @@ struct SlateMacApp: App {
                     appState.newNoteCommand()
                 }
                 .keyboardShortcut("n", modifiers: [.command])
-                .disabled(!appState.isVaultOpen)
+                .disabled(
+                    !appState.isVaultOpen || structuralDisabledReason != nil)
+                .accessibilityHint(
+                    structuralDisabledReason
+                        ?? "Create an untitled note in the selected folder.")
+                .help(
+                    structuralDisabledReason
+                        ?? "Create an untitled note in the selected folder.")
 
                 // ⇧⌘N migrated from the toolbar button's registration
                 // (the #422 dead-zone: a toolbar keyboardShortcut is
@@ -119,14 +128,34 @@ struct SlateMacApp: App {
                     appState.openTemplatePicker()
                 }
                 .keyboardShortcut("n", modifiers: [.command, .shift])
-                .disabled(!appState.isVaultOpen)
+                .disabled(
+                    !appState.isVaultOpen || structuralDisabledReason != nil)
+                .accessibilityHint(
+                    structuralDisabledReason
+                        ?? "Open the template picker to create a new note.")
+                .help(
+                    structuralDisabledReason
+                        ?? "Open the template picker to create a new note.")
 
                 // No ellipsis (menus.md): creation is immediate
                 // (inline rename follows) — the New Note flow.
                 Button("New Folder") {
                     appState.newFolderCommand()
                 }
-                .disabled(!appState.isVaultOpen)
+                .disabled(
+                    !appState.isVaultOpen || structuralDisabledReason != nil)
+                .accessibilityHint(
+                    structuralDisabledReason
+                        ?? "Create a folder in the selected folder.")
+                .help(
+                    structuralDisabledReason
+                        ?? "Create a folder in the selected folder.")
+
+                if let structuralDisabledReason {
+                    Text(structuralDisabledReason)
+                        .accessibilityLabel(structuralDisabledReason)
+                        .help(structuralDisabledReason)
+                }
 
                 Divider()
 
@@ -143,20 +172,41 @@ struct SlateMacApp: App {
                 .disabled(
                     appState.loadedFilePath == nil
                         || appState.isSaving
-                        || !appState.hasUnsavedChanges
+                        || !appState.activeNoteHasUnsavedChanges
+                        || noteSaveDisabledReason != nil
                 )
+                .accessibilityHint(
+                    noteSaveDisabledReason ?? "Save the current note to disk.")
+                .help(
+                    noteSaveDisabledReason ?? "Save the current note to disk")
 
                 Button("Rename…") {
                     appState.renameSelectedCommand()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .option])
-                .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
+                .disabled(
+                    !appState.isVaultOpen
+                        || appState.treeSelectedNode == nil
+                        || structuralDisabledReason != nil)
+                .accessibilityHint(
+                    structuralDisabledReason ?? "Rename the selected item.")
+                .help(
+                    structuralDisabledReason ?? "Rename the selected item.")
 
                 Button("Move To…") {
                     appState.moveSelectedCommand()
                 }
                 .keyboardShortcut("m", modifiers: [.command, .shift])
-                .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
+                .disabled(
+                    !appState.isVaultOpen
+                        || appState.treeSelectedNode == nil
+                        || structuralDisabledReason != nil)
+                .accessibilityHint(
+                    structuralDisabledReason
+                        ?? "Move the selected item to another folder.")
+                .help(
+                    structuralDisabledReason
+                        ?? "Move the selected item to another folder.")
 
                 // Inspection pair — the primary-UI home the context-menu
                 // rule requires (context-menus.md: context items must
@@ -185,7 +235,12 @@ struct SlateMacApp: App {
                     !appState.isVaultOpen
                         || appState.treeSelectedNode == nil
                         || appState.treeSelectedNode?.isDirectory == true
+                        || structuralDisabledReason != nil
                 )
+                .accessibilityHint(
+                    structuralDisabledReason ?? "Duplicate the selected file.")
+                .help(
+                    structuralDisabledReason ?? "Duplicate the selected file.")
 
                 Divider()
 
@@ -485,25 +540,57 @@ struct SlateMacApp: App {
                     appState.canvasNewCard()
                 }
                 .keyboardShortcut("n", modifiers: [.command, .option])
-                .disabled(appState.activeCanvasDocument == nil)
+                .disabled(
+                    appState.activeCanvasDocument == nil
+                        || appState.activeCanvasMutationDisabledReason != nil)
+                .accessibilityHint(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Create a text card next to the selection.")
+                .help(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Create a text card next to the selection.")
 
                 Button("Canvas: Move Mode") {
                     appState.canvasEnterMoveMode()
                 }
                 .keyboardShortcut("g", modifiers: [.control, .command])
-                .disabled(appState.activeCanvasDocument == nil)
+                .disabled(
+                    appState.activeCanvasDocument == nil
+                        || appState.activeCanvasMutationDisabledReason != nil)
+                .accessibilityHint(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Move the selected Canvas item with the arrow keys.")
+                .help(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Move the selected Canvas item with the arrow keys.")
 
                 Button("Canvas: Resize Mode") {
                     appState.canvasCommitOrEnterResize()
                 }
                 .keyboardShortcut("r", modifiers: [.control, .command])
-                .disabled(appState.activeCanvasDocument == nil)
+                .disabled(
+                    appState.activeCanvasDocument == nil
+                        || appState.activeCanvasMutationDisabledReason != nil)
+                .accessibilityHint(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Resize the selected Canvas item with the arrow keys.")
+                .help(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Resize the selected Canvas item with the arrow keys.")
 
                 Button("Canvas: Connect To…") {
                     appState.canvasOpenConnectPicker()
                 }
                 .keyboardShortcut("c", modifiers: [.control, .command])
-                .disabled(appState.activeCanvasDocument == nil)
+                .disabled(
+                    appState.activeCanvasDocument == nil
+                        || appState.activeCanvasMutationDisabledReason != nil)
+                .accessibilityHint(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Choose a Canvas card to connect.")
+                .help(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Choose a Canvas card to connect.")
 
                 Button("Canvas: Toggle Mark") {
                     appState.canvasToggleMark()
@@ -515,7 +602,15 @@ struct SlateMacApp: App {
                     appState.canvasCreateConnectedCard()
                 }
                 .keyboardShortcut("n", modifiers: [.control, .option, .command])
-                .disabled(appState.activeCanvasDocument == nil)
+                .disabled(
+                    appState.activeCanvasDocument == nil
+                        || appState.activeCanvasMutationDisabledReason != nil)
+                .accessibilityHint(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Create a new card connected to the selection.")
+                .help(
+                    appState.activeCanvasMutationDisabledReason
+                        ?? "Create a new card connected to the selection.")
 
                 // ⌘= / ⌘- / ⌘0 (#848; formerly the canvas-scoped "Canvas:
                 // Zoom …" items, #520): the app's conventional zoom

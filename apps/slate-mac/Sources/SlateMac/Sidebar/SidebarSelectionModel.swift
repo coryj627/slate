@@ -17,6 +17,68 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
     struct KnownMove: Equatable {
         let oldPath: String
         let newPath: String
+        let isDirectory: Bool
+
+        init(oldPath: String, newPath: String, isDirectory: Bool = true) {
+            self.oldPath = oldPath
+            self.newPath = newPath
+            self.isDirectory = isDirectory
+        }
+    }
+
+    struct KnownMoveIndex {
+        let entryCount: Int
+        private let storage: VaultComponentPrefixIndex<KnownMove>
+
+        init(_ moves: [KnownMove]) {
+            entryCount = moves.count
+            storage = VaultComponentPrefixIndex(moves.map {
+                .init(
+                    path: $0.oldPath,
+                    includesDescendants: $0.isDirectory,
+                    value: $0)
+            })
+        }
+
+        func remappedPath(
+            _ path: String,
+            componentVisits: inout Int
+        ) -> String? {
+            guard let match = storage.longestMatch(
+                for: path, componentVisits: &componentVisits)
+            else { return nil }
+            guard !match.relativeSuffix.isEmpty else {
+                return match.entry.value.newPath
+            }
+            let root = match.entry.value.newPath
+            return root.isEmpty
+                ? match.relativeSuffix
+                : root + "/" + match.relativeSuffix
+        }
+    }
+
+    struct KnownRemoval: Equatable {
+        let path: String
+        let isDirectory: Bool
+    }
+
+    struct KnownRemovalIndex {
+        let entryCount: Int
+        private let storage: VaultComponentPrefixIndex<KnownRemoval>
+
+        init(_ removals: [KnownRemoval]) {
+            entryCount = removals.count
+            storage = VaultComponentPrefixIndex(removals.map {
+                .init(
+                    path: $0.path,
+                    includesDescendants: $0.isDirectory,
+                    value: $0)
+            })
+        }
+
+        func covers(_ path: String, componentVisits: inout Int) -> Bool {
+            storage.longestMatch(for: path, componentVisits: &componentVisits) != nil
+        }
     }
 
     enum PointerClick: Equatable {
@@ -174,6 +236,24 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
         return transition(from: previous)
     }
 
+    /// Programmatic structural focus that preserves a surviving multi-selection
+    /// when the target is already one of its path-valid members. Otherwise it
+    /// establishes the deterministic single fallback. The view suppresses open.
+    @discardableResult
+    mutating func focusAfterStructuralMutation(_ row: VisibleRow) -> Transition {
+        let previous = self
+        if selected.contains(row.identity),
+            selectionPathSnapshots[row.identity] == row.path {
+            focused = row.identity
+        } else {
+            replaceSelection(with: [row])
+            focused = row.identity
+            rangeAnchor = row.identity
+            rangeAnchorPathSnapshot = row.path
+        }
+        return transition(from: previous)
+    }
+
     /// Shift-Up / Shift-Down recomputes one inclusive range between a fixed
     /// anchor and the next focus. Recomputing (rather than unioning) naturally
     /// grows, shrinks, and crosses the pivot. A list boundary is consumed while
@@ -292,15 +372,32 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
         _ moves: [KnownMove],
         identityForRemappedPath: (Identity, String) -> Identity
     ) -> Transition {
+        var ignored = 0
+        return remapKnownMoves(
+            using: KnownMoveIndex(moves),
+            identityForRemappedPath: identityForRemappedPath,
+            componentVisits: &ignored)
+    }
+
+    /// Indexed batch form: build once from authoritative standing changes,
+    /// then visit only each selected/anchor path's components.
+    @discardableResult
+    mutating func remapKnownMoves(
+        using index: KnownMoveIndex,
+        identityForRemappedPath: (Identity, String) -> Identity,
+        componentVisits: inout Int
+    ) -> Transition {
         let previous = self
-        guard !moves.isEmpty else { return transition(from: previous) }
+        guard index.entryCount > 0 else { return transition(from: previous) }
 
         var remappedSelection: Set<Identity> = []
         var remappedSnapshots: [Identity: String] = [:]
         var identityMap: [Identity: Identity] = [:]
         for identity in selected {
             let snapshot = selectionPathSnapshots[identity]
-            let newPath = snapshot.flatMap { remappedPath($0, moves: moves) }
+            let newPath = snapshot.flatMap {
+                index.remappedPath($0, componentVisits: &componentVisits)
+            }
             let newIdentity = newPath.map { identityForRemappedPath(identity, $0) } ?? identity
             remappedSelection.insert(newIdentity)
             if let path = newPath ?? snapshot {
@@ -316,9 +413,104 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
 
         if let rangeAnchor,
             let snapshot = rangeAnchorPathSnapshot,
-            let newPath = remappedPath(snapshot, moves: moves) {
+            let newPath = index.remappedPath(
+                snapshot, componentVisits: &componentVisits) {
             self.rangeAnchor = identityForRemappedPath(rangeAnchor, newPath)
             rangeAnchorPathSnapshot = newPath
+        }
+        return transition(from: previous)
+    }
+
+    /// Apply the exact physical Trash set in one model transition. The live
+    /// focused survivor wins over the captured submission path; when focus was
+    /// removed, selection falls forward on equal distance, then backward, then
+    /// to the deepest visible surviving parent. The fallback is never opened.
+    @discardableResult
+    mutating func removeKnownItems(
+        using index: KnownRemovalIndex,
+        preferredFocusPath: String?,
+        visibleRows: [VisibleRow],
+        componentVisits: inout Int
+    ) -> Transition {
+        let previous = self
+        guard index.entryCount > 0 else { return transition(from: previous) }
+
+        let originalFocusPath = focused.flatMap { identity in
+            selectionPathSnapshots[identity]
+                ?? visibleRows.first(where: { $0.identity == identity })?.path
+        }
+        let fallbackOriginPath = originalFocusPath ?? preferredFocusPath
+        let focusWasRemoved = fallbackOriginPath.map {
+            index.covers($0, componentVisits: &componentVisits)
+        } ?? false
+
+        var survivingSelection: Set<Identity> = []
+        var survivingSnapshots: [Identity: String] = [:]
+        for identity in selected {
+            guard let path = selectionPathSnapshots[identity] else { continue }
+            if index.covers(path, componentVisits: &componentVisits) { continue }
+            survivingSelection.insert(identity)
+            survivingSnapshots[identity] = path
+        }
+        selected = survivingSelection
+        selectionPathSnapshots = survivingSnapshots
+
+        if let anchorPath = rangeAnchorPathSnapshot,
+            index.covers(anchorPath, componentVisits: &componentVisits) {
+            rangeAnchor = nil
+            rangeAnchorPathSnapshot = nil
+        }
+
+        if !focusWasRemoved,
+            let focused,
+            visibleRows.contains(where: {
+                $0.identity == focused
+                    && (survivingSnapshots[focused] ?? $0.path) == $0.path
+            }) {
+            return transition(from: previous)
+        }
+
+        let originIndex = fallbackOriginPath.flatMap { path in
+            visibleRows.firstIndex(where: { $0.path == path })
+        }
+        let survivorRows = visibleRows.enumerated().filter { _, row in
+            selected.contains(row.identity)
+                && selectionPathSnapshots[row.identity] == row.path
+        }
+        let target: VisibleRow?
+        if let originIndex, !survivorRows.isEmpty {
+            target = survivorRows.min { lhs, rhs in
+                let leftDistance = abs(lhs.offset - originIndex)
+                let rightDistance = abs(rhs.offset - originIndex)
+                if leftDistance == rightDistance {
+                    return lhs.offset > rhs.offset
+                }
+                return leftDistance < rightDistance
+            }?.element
+        } else if !survivorRows.isEmpty {
+            target = survivorRows.first?.element
+        } else {
+            target = Self.removalFallback(
+                originPath: fallbackOriginPath,
+                originIndex: originIndex,
+                visibleRows: visibleRows,
+                index: index,
+                componentVisits: &componentVisits)
+        }
+
+        if let target {
+            focused = target.identity
+            if selected.isEmpty {
+                replaceSelection(with: [target])
+                rangeAnchor = target.identity
+                rangeAnchorPathSnapshot = target.path
+            }
+        } else {
+            focused = nil
+            if selected.isEmpty {
+                rangeAnchor = nil
+                rangeAnchorPathSnapshot = nil
+            }
         }
         return transition(from: previous)
     }
@@ -390,22 +582,42 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
             focusChanged: previous.focused != focused)
     }
 
-    private func remappedPath(_ path: String, moves: [KnownMove]) -> String? {
-        let match = moves.enumerated().filter { _, move in
-            path == move.oldPath || Self.isDescendant(path, of: move.oldPath)
-        }.max { lhs, rhs in
-            if lhs.element.oldPath.count == rhs.element.oldPath.count {
-                return lhs.offset > rhs.offset
-            }
-            return lhs.element.oldPath.count < rhs.element.oldPath.count
-        }?.element
-        guard let match else { return nil }
-        if path == match.oldPath { return match.newPath }
-        return match.newPath + path.dropFirst(match.oldPath.count)
-    }
-
     private static func isDescendant(_ candidate: String, of directory: String) -> Bool {
         if directory.isEmpty { return !candidate.isEmpty }
         return candidate.hasPrefix(directory + "/")
+    }
+
+    private static func removalFallback(
+        originPath: String?,
+        originIndex: Int?,
+        visibleRows: [VisibleRow],
+        index: KnownRemovalIndex,
+        componentVisits: inout Int
+    ) -> VisibleRow? {
+        if let originIndex {
+            if originIndex + 1 < visibleRows.count {
+                for row in visibleRows[(originIndex + 1)...] {
+                    if !index.covers(row.path, componentVisits: &componentVisits) {
+                        return row
+                    }
+                }
+            }
+            if originIndex > 0 {
+                for row in visibleRows[..<originIndex].reversed() {
+                    if !index.covers(row.path, componentVisits: &componentVisits) {
+                        return row
+                    }
+                }
+            }
+        }
+        guard var parent = originPath else { return nil }
+        while let slash = parent.lastIndex(of: "/") {
+            parent = String(parent[..<slash])
+            if let row = visibleRows.first(where: { $0.path == parent }),
+                !index.covers(row.path, componentVisits: &componentVisits) {
+                return row
+            }
+        }
+        return nil
     }
 }

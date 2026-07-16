@@ -193,7 +193,8 @@ extension AppState {
         // still-selected note on the still-open session may publish —
         // or MARK. A stale resume must leave the baseline untouched.
         guard !Task.isCancelled, currentSession === session,
-            selectedFilePath == path, seq == historyLoadSeq
+            BaseExactIdentity.matches(selectedFilePath, path),
+            seq == historyLoadSeq
         else { return }
         switch result {
         case .success(let (changes, page)):
@@ -260,7 +261,8 @@ extension AppState {
                 }
             }.value
         guard !Task.isCancelled, currentSession === session,
-            selectedFilePath == path, seq == historyLoadSeq
+            BaseExactIdentity.matches(selectedFilePath, path),
+            seq == historyLoadSeq
         else { return }
         switch result {
         case .success(let page):
@@ -351,10 +353,12 @@ extension AppState {
     /// head row (position 0 — the restored state; WCAG 2.4.3).
     func performRestore(_ request: HistoryRestoreRequest) async {
         guard let session = currentSession else { return }
+        guard admitBatchTrashWrite(to: [request.path]) else { return }
         // The request is selection-scoped: if the user moved on
         // between staging and confirming, do nothing — never mix one
         // note's captured state with another's path (round 2 High).
-        guard selectedFilePath == request.path, loadedFilePath == request.path
+        guard BaseExactIdentity.matches(selectedFilePath, request.path),
+            BaseExactIdentity.matches(loadedFilePath, request.path)
         else { return }
         let expectedHash = request.expectedContentHash
 
@@ -392,7 +396,7 @@ extension AppState {
         case .success:
             announcer.post(
                 "Restored version from \(request.formattedDate).", priority: .high)
-            if selectedFilePath == request.path {
+            if BaseExactIdentity.matches(selectedFilePath, request.path) {
                 await loadCurrentNote(path: request.path)
                 await scheduleHistoryLoad(path: request.path).value
                 historyFocusHeadToken &+= 1
@@ -454,42 +458,79 @@ extension AppState {
         }
     }
 
-    /// Restore a deleted file from its remnant log. Success announces
-    /// and refreshes through the standard mutation flow (the file tree
-    /// picks the file up via the announced refresh); `DestinationExists`
-    /// gets the spec's alert copy.
-    func recoverDeleted(path: String) async {
-        guard let session = currentSession else { return }
-        let result: Result<SaveReport, VaultError> =
-            await Task.detached(priority: .userInitiated) {
-                do {
-                    return .success(try session.recoverDeletedFile(path: path))
-                } catch let error as VaultError {
-                    return .failure(error)
-                } catch {
-                    return .failure(.Io(message: error.localizedDescription))
-                }
-            }.value
-        guard !Task.isCancelled, currentSession === session else { return }
-        switch result {
-        case .success:
-            // #871 post-merge audit: bypasses publishTreeMutation — barrier the structural undo history so no stale inverse targets this new path.
-            clearStructuralUndoStacks()
-            announcer.post("Restored \(filename(of: path)).", priority: .high)
-            await loadFiles()
-            await loadDeletedFiles()
-        case .failure(.DestinationExists):
-            // #795: offer Restore As… straight from the collision —
-            // the alert copy names the block, the prompt takes a new
-            // destination.
-            historyRestoreAsPrompt = RestoreAsPrompt(
-                source: .deletedFile(path: path),
-                suggestedPath: Self.restoredCopyPath(for: path),
-                sessionID: ObjectIdentifier(session))
-        case .failure(let error):
-            historyAlert = HistoryAlert(
-                title: "Can't restore", message: humanReadable(error))
+    /// Synchronous user-facing admission for normal deleted-file Restore.
+    /// Recovery is a structural CREATE: claim the shared owner before returning
+    /// to the row, keep the native call off the main actor, and retain ownership
+    /// through both the shared file-tree refresh and deleted-list refresh.
+    /// Only the still-current owner may clear undo history, announce, or stage
+    /// collision UI; a stale vault-A completion is inert in vault B.
+    @discardableResult
+    func requestRecoverDeleted(path: String) -> Task<Void, Never>? {
+        guard let session = currentSession else { return nil }
+        guard admitStructuralMutationRequest() else { return nil }
+        guard let recoveryReservation = admitStructuralRecoveryDestination(path),
+            admitBatchTrashWrite(to: [path])
+        else { return nil }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let refresher = structuralBatchRefreshRunner
+        let task = Task { @MainActor [weak self] in
+            let result: Result<SaveReport, VaultError> =
+                await Task.detached(priority: .userInitiated) {
+                    do {
+                        return .success(try session.recoverDeletedFile(path: path))
+                    } catch let error as VaultError {
+                        return .failure(error)
+                    } catch {
+                        return .failure(.Io(message: error.localizedDescription))
+                    }
+                }.value
+            guard let self else { return }
+            defer { self.endStructuralMutation(token) }
+            guard !Task.isCancelled,
+                self.ownsStructuralMutation(token, session: session)
+            else { return }
+
+            switch result {
+            case .success:
+                await refresher(self)
+                guard !Task.isCancelled,
+                    self.ownsStructuralMutation(token, session: session)
+                else { return }
+                await self.loadDeletedFiles()
+                guard !Task.isCancelled,
+                    self.ownsStructuralMutation(token, session: session)
+                else { return }
+
+                // This bypasses publishTreeMutation, so barrier only after the
+                // guarded refreshes settle while this operation still owns the
+                // structural gate. No competing mutation can lose its undo here.
+                self.clearStructuralUndoStacks()
+                self.announcer.post(
+                    "Restored \(self.filename(of: path)).", priority: .high)
+            case .failure(.DestinationExists):
+                // #795: offer Restore As… straight from the collision —
+                // the alert copy names the block, the prompt takes a new
+                // destination.
+                self.historyRestoreAsPrompt = RestoreAsPrompt(
+                    source: .deletedFile(path: path),
+                    suggestedPath: Self.restoredCopyPath(for: path),
+                    sessionID: ObjectIdentifier(session))
+            case .failure(let error):
+                self.historyAlert = HistoryAlert(
+                    title: "Can't restore", message: self.humanReadable(error))
+            }
         }
+        recordPendingStructuralTask(task)
+        return task
+    }
+
+    /// Compatibility wrapper for noninteractive callers and existing tests.
+    /// Live row actions call `requestRecoverDeleted` directly so rejection is
+    /// synchronous and never dismisses or replaces the deleted row.
+    func recoverDeleted(path: String) async {
+        guard let task = requestRecoverDeleted(path: path) else { return }
+        await task.value
     }
 
     // MARK: - Restore As… (#795)
@@ -498,6 +539,7 @@ extension AppState {
     /// selected note as a new file.
     func requestRestoreAs(versionHash: String, formattedDate: String) {
         guard let path = selectedFilePath, let session = currentSession else { return }
+        guard admitStructuralMutationRequest() else { return }
         historyRestoreAsPrompt = RestoreAsPrompt(
             source: .version(path: path, hash: versionHash, formattedDate: formattedDate),
             suggestedPath: Self.restoredCopyPath(for: path),
@@ -509,14 +551,30 @@ extension AppState {
     /// selection (and thus focus) on the new file; a collision at the
     /// CHOSEN destination re-raises the prompt with the standard copy
     /// on the alert channel.
-    func performRestoreAs(_ prompt: RestoreAsPrompt, destination: String) async {
+    @discardableResult
+    func commitRestoreAs(
+        _ prompt: RestoreAsPrompt, destination: String
+    ) -> Task<Void, Never>? {
         guard let session = currentSession,
             ObjectIdentifier(session) == prompt.sessionID
-        else { return }
+        else { return nil }
         let trimmed = destination.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        let result: Result<Void, VaultError> =
-            await Task.detached(priority: .userInitiated) {
+        guard !trimmed.isEmpty else { return nil }
+        guard admitStructuralMutationRequest() else { return nil }
+        guard let recoveryReservation =
+                admitStructuralRecoveryDestination(trimmed),
+            admitBatchTrashWrite(to: [trimmed])
+        else { return nil }
+
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let refresher = structuralBatchRefreshRunner
+        if historyRestoreAsPrompt?.id == prompt.id {
+            historyRestoreAsPrompt = nil
+        }
+        let task = Task { @MainActor [weak self] in
+            let result: Result<Void, VaultError> =
+                await Task.detached(priority: .userInitiated) {
                 do {
                     switch prompt.source {
                     case .deletedFile(let path):
@@ -537,35 +595,57 @@ extension AppState {
                     return .failure(.Io(message: error.localizedDescription))
                 }
             }.value
-        guard currentSession === session else { return }
+            guard let self else { return }
+            defer { self.endStructuralMutation(token) }
+            guard !Task.isCancelled,
+                self.ownsStructuralMutation(token, session: session)
+            else { return }
 
-        switch result {
-        case .success:
-            let sourceName: String
-            switch prompt.source {
-            case .deletedFile(let path): sourceName = filename(of: path)
-            case .version(_, _, let date): sourceName = "version from \(date)"
+            switch result {
+            case .success:
+                await refresher(self)
+                guard !Task.isCancelled,
+                    self.ownsStructuralMutation(token, session: session)
+                else { return }
+                await self.loadDeletedFiles()
+                guard !Task.isCancelled,
+                    self.ownsStructuralMutation(token, session: session)
+                else { return }
+
+                let sourceName: String
+                switch prompt.source {
+                case .deletedFile(let path): sourceName = self.filename(of: path)
+                case .version(_, _, let date): sourceName = "version from \(date)"
+                }
+                self.announcer.post(
+                    "Restored \(sourceName) as \(self.filename(of: trimmed)).",
+                    priority: .high)
+                // #871 Codex round 2: Restore As creates a file outside the
+                // `publishTreeMutation` barrier — clear the structural undo history
+                // so a stale inverse can't target the restored path.
+                self.clearStructuralUndoStacks()
+                // Selection carries focus to the new file (the funnel).
+                self.selectedFilePath = trimmed
+            case .failure(.DestinationExists):
+                self.historyAlert = HistoryAlert(
+                    title: "Can't restore",
+                    message:
+                        "A file already exists at \(trimmed). Choose a different name.")
+                self.historyRestoreAsPrompt = prompt
+            case .failure(let error):
+                self.historyAlert = HistoryAlert(
+                    title: "Can't restore", message: self.humanReadable(error))
             }
-            announcer.post(
-                "Restored \(sourceName) as \(filename(of: trimmed)).", priority: .high)
-            // #871 Codex round 2: Restore As creates a file outside the
-            // `publishTreeMutation` barrier — clear the structural undo history
-            // so a stale inverse can't target the restored path.
-            clearStructuralUndoStacks()
-            await loadFiles()
-            await loadDeletedFiles()
-            // Selection carries focus to the new file (the funnel).
-            selectedFilePath = trimmed
-        case .failure(.DestinationExists):
-            historyAlert = HistoryAlert(
-                title: "Can't restore",
-                message:
-                    "A file already exists at \(trimmed). Choose a different name.")
-            historyRestoreAsPrompt = prompt
-        case .failure(let error):
-            historyAlert = HistoryAlert(
-                title: "Can't restore", message: humanReadable(error))
         }
+        recordPendingStructuralTask(task)
+        return task
+    }
+
+    /// Async compatibility wrapper for existing callers. Interactive surfaces
+    /// call `commitRestoreAs` directly so admission happens before dismissal.
+    func performRestoreAs(_ prompt: RestoreAsPrompt, destination: String) async {
+        guard let task = commitRestoreAs(prompt, destination: destination) else { return }
+        await task.value
     }
 
     /// Collision-avoiding "<stem> (restored).md" suggestion against

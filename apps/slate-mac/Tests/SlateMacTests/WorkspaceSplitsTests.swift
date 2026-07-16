@@ -218,15 +218,20 @@ final class WorkspaceSplitsTests: XCTestCase {
         XCTAssertEqual(state.loadedFilePath, "alpha.md", "survivor pane focused")
     }
 
-    func testCloseActivePaneHaltsOnDirtyTab() async throws {
+    func testCloseActivePaneKeepsDirtyBufferInSamePathSurvivor() async throws {
         let state = try await makeOpenState()
         state.splitActivePane(axis: .horizontal)
         state.updateEditorText("# alpha.md\ndirty in split")
         state.closeActivePane()
-        XCTAssertNotNil(state.pendingTabClose, "dirty tab gates the sweep")
+        await state.noteLoadTask?.value
+        XCTAssertNil(
+            state.pendingTabClose,
+            "a same-path tab in the surviving pane already owns the mirrored draft")
         XCTAssertEqual(
-            state.workspace.model.groupsInOrder.count, 2,
-            "pane survives until the prompt resolves")
+            state.workspace.model.groupsInOrder.count, 1,
+            "the redundant pane may collapse without losing the shared buffer")
+        XCTAssertEqual(state.currentNoteText, "# alpha.md\ndirty in split")
+        XCTAssertTrue(state.hasUnsavedChanges)
     }
 
     // MARK: - Render gates

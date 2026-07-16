@@ -577,6 +577,32 @@ final class FileTreeSidebarTests: XCTestCase {
         XCTAssertTrue(FileTreeSidebar.deleteCommandAllowed(event: cmd))
     }
 
+    /// Caps Lock is typing state, not an added chord. Every other standard
+    /// modifier changes the command and must fall through to its owner in both
+    /// SwiftUI's key-press interceptor and AppKit's delete-command delivery.
+    func testCommandDeleteRequiresExactChordIgnoringCapsLock() {
+        XCTAssertTrue(
+            FileTreeSidebar.deleteKeyModifiersAllowed([.command]))
+        XCTAssertTrue(
+            FileTreeSidebar.deleteKeyModifiersAllowed([.command, .capsLock]))
+
+        for extra: EventModifiers in [.shift, .option, .control] {
+            XCTAssertFalse(
+                FileTreeSidebar.deleteKeyModifiersAllowed([.command, extra]),
+                "SwiftUI must reject Command plus \(extra)")
+        }
+
+        XCTAssertTrue(
+            FileTreeSidebar.deleteCommandAllowed(
+                event: Self.deleteKeyEvent(modifiers: [.command, .capsLock])))
+        for extra: NSEvent.ModifierFlags in [.shift, .option, .control] {
+            XCTAssertFalse(
+                FileTreeSidebar.deleteCommandAllowed(
+                    event: Self.deleteKeyEvent(modifiers: [.command, extra])),
+                "AppKit must reject Command plus \(extra)")
+        }
+    }
+
     /// Non-key deliveries (VoiceOver's AX delete action, a menu `delete:`)
     /// have no matching keyDown — they're deliberate and must pass.
     func testNonKeyDeliveryIsAllowed() {
@@ -1043,6 +1069,50 @@ final class FileTreeSidebarTests: XCTestCase {
         vm.removeExpansion(underPrefix: "gone")
         XCTAssertEqual(vm.expansionRecency, ["kept"])
         XCTAssertEqual(vm.pendingExpandedPaths, ["kept"])
+    }
+
+    func testBatchExpansionMoveUsesStandingIndexAndLinearLookupWork() {
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(
+            fetcher: { _ in self.listing(dirs: [], files: []) },
+            restoringExpandedDirPaths: [
+                "source-9999", "source-9999/deep", "sourceish-9999", "rolled/path",
+            ])
+        let changes = (0..<10_000).map {
+            FileTreeSidebar.SelectionModel.KnownMove(
+                oldPath: "source-\($0)", newPath: "dest/source-\($0)",
+                isDirectory: true)
+        }
+        let index = FileTreeSidebar.SelectionModel.KnownMoveIndex(changes)
+        var visits = 0
+
+        vm.remapExpansions(using: index, componentVisits: &visits)
+
+        XCTAssertEqual(
+            vm.expansionRecency,
+            ["dest/source-9999", "dest/source-9999/deep", "sourceish-9999", "rolled/path"])
+        XCTAssertLessThanOrEqual(visits, 7)
+    }
+
+    func testBatchExpansionTrashRemovesOnlyReportedDirectorySubtrees() {
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(
+            fetcher: { _ in self.listing(dirs: [], files: []) },
+            restoringExpandedDirPaths: [
+                "trash", "trash/deep", "trashish", "exact-file/deep", "kept",
+            ])
+        let index = FileTreeSidebar.SelectionModel.KnownRemovalIndex([
+            .init(path: "trash", isDirectory: true),
+            .init(path: "exact-file", isDirectory: false),
+        ])
+        var visits = 0
+
+        vm.removeExpansions(using: index, componentVisits: &visits)
+
+        XCTAssertEqual(
+            vm.expansionRecency,
+            ["trashish", "exact-file/deep", "kept"])
+        XCTAssertEqual(vm.pendingExpandedPaths, ["trashish", "exact-file/deep", "kept"])
     }
 
     /// Targeted invalidation also drops DESCENDANT caches: a recycled id

@@ -33,7 +33,15 @@ struct BaseContainerView: View {
         }
         .onAppear {
             if document.handle == nil, let session = appState.currentSession {
-                document.load(session: session)
+                if document.hasPendingRetargetPreparation {
+                    appState.scheduleBaseRetargetPreparationIfNeeded(
+                        document: document,
+                        owner: .registry(key: document.source.key),
+                        source: document.source,
+                        session: session)
+                } else {
+                    appState.loadBaseDocumentIfAllowed(document, session: session)
+                }
             }
             updateActiveBaseSelection()
         }
@@ -78,7 +86,15 @@ struct BaseContainerView: View {
             }
             .labelsHidden()
             .frame(maxWidth: 220)
-            .disabled(document.views.isEmpty)
+            .disabled(
+                document.views.isEmpty
+                    || batchTrashInteractionDisabledReason != nil)
+            .accessibilityHint(
+                batchTrashInteractionDisabledReason
+                    ?? "Choose the active Base view.")
+            .help(
+                batchTrashInteractionDisabledReason
+                    ?? "Choose the active Base view")
             Spacer(minLength: 0)
             Text(resultCountText)
                 .font(Tokens.Typography.caption)
@@ -90,20 +106,54 @@ struct BaseContainerView: View {
                 .accessibilityLabel("Quick filter — temporary, does not change the base")
                 .accessibilityValue(
                     document.quickFilterActive ? document.quickFilterText : "No quick filter")
+                .disabled(batchTrashInteractionDisabledReason != nil)
+                .accessibilityHint(
+                    batchTrashInteractionDisabledReason
+                        ?? "Temporarily filter the visible Base results.")
+                .help(
+                    batchTrashInteractionDisabledReason
+                        ?? "Quick filter")
             Button {
                 appState.basesEditViewFilters()
             } label: {
                 SlateSymbol.rename.image(label: "Edit filters")
             }
             .buttonStyle(.interactiveRow())
-            .help("Edit filters")
-            Button {
-                appState.basesRefresh()
-            } label: {
-                SlateSymbol.syncDiagnostics.image(label: "Refresh")
+            .disabled(baseDefinitionEditingDisabledReason != nil)
+            .accessibilityHint(
+                baseDefinitionEditingDisabledReason
+                    ?? "Open the active view filters in the query builder.")
+            .help(baseDefinitionEditingDisabledReason ?? "Edit filters")
+            if let recoveryLabel = appState.baseRecoveryActionLabel(for: document) {
+                let recoveryDisabledReason = appState.structuralMutationDisabledReason
+                Button {
+                    _ = appState.retryBaseRecovery(for: document)
+                } label: {
+                    SlateSymbol.syncDiagnostics.image(label: recoveryLabel)
+                }
+                .buttonStyle(.interactiveRow())
+                .disabled(recoveryDisabledReason != nil)
+                .accessibilityHint(
+                    recoveryDisabledReason
+                        ?? appState.baseRecoveryActionHint(for: document)
+                        ?? "Attempts to restore Base interaction.")
+                .help(
+                    recoveryDisabledReason
+                        ?? appState.baseRecoveryActionHint(for: document)
+                        ?? recoveryLabel)
+            } else {
+                Button {
+                    appState.basesRefresh()
+                } label: {
+                    SlateSymbol.syncDiagnostics.image(label: "Refresh")
+                }
+                .buttonStyle(.interactiveRow())
+                .disabled(baseRefreshDisabledReason != nil)
+                .accessibilityHint(
+                    baseRefreshDisabledReason
+                        ?? "Reload the Base and its current view.")
+                .help(baseRefreshDisabledReason ?? "Refresh")
             }
-            .buttonStyle(.interactiveRow())
-            .help("Refresh")
             Button {
                 appState.basesResultsPopover()
             } label: {
@@ -130,6 +180,34 @@ struct BaseContainerView: View {
                 banner(error)
             }
         }
+        if batchTrashInteractionDisabledReason != nil,
+            !document.quickFilterText.isEmpty
+        {
+            quickFilterDraftRecoveryBanner
+        }
+    }
+
+    private var quickFilterDraftRecoveryBanner: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.xs) {
+            Text("Quick filter draft")
+                .font(Tokens.Typography.caption.weight(.semibold))
+            Text(verbatim: document.quickFilterText)
+                .font(Tokens.Typography.code)
+                .textSelection(.enabled)
+                .lineLimit(2)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel(
+                    "Quick filter draft: \(document.quickFilterText)")
+                .accessibilityHint("Selectable copy of the preserved quick filter draft.")
+            Button("Copy Quick Filter Draft") {
+                appState.copyBaseQuickFilterDraft(document)
+            }
+            .accessibilityHint("Copies the preserved quick filter text.")
+        }
+        .padding(.horizontal, Tokens.Spacing.md)
+        .padding(.vertical, Tokens.Spacing.xs)
+        .background(Tokens.ColorRole.surfaceSecondary)
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
@@ -192,12 +270,7 @@ struct BaseContainerView: View {
                     }
                     updateActiveBaseSelection()
                 }),
-            sortState: Binding(
-                get: { document.sortState },
-                set: { sort in
-                    guard let session = appState.currentSession else { return }
-                    document.setTransientSort(sort, session: session)
-                }),
+            sortState: gridSortBinding,
             cellNavigation: true,
             sortsRowsLocally: false,
             onActivate: { _ = appState.basesOpen(row: $0.row) },
@@ -295,11 +368,14 @@ struct BaseContainerView: View {
     }
 
     private func columns(from result: BasesResultSet) -> [AccessibleDataGrid<BaseGridRow>.Column] {
-        result.columns.enumerated().map { columnIndex, column in
+        let sortingAvailable = batchTrashInteractionDisabledReason == nil
+        return result.columns.enumerated().map { columnIndex, column in
             AccessibleDataGrid<BaseGridRow>.Column(
                 column.label,
                 cell: { row in row.value(at: columnIndex) },
-                sort: { lhs, rhs in lhs.sortsBefore(rhs, at: columnIndex) },
+                sort: sortingAvailable
+                    ? { lhs, rhs in lhs.sortsBefore(rhs, at: columnIndex) }
+                    : nil,
                 accessibilityHint: { _ in
                     BaseCellEditPolicy.propertyKey(for: column) == nil
                         ? BaseCellEditPolicy.readOnlyHint(for: column)
@@ -527,9 +603,46 @@ struct BaseContainerView: View {
         Binding(
             get: { document.activeViewIndex },
             set: { index in
+                guard appState.admitBaseDocumentInteraction(document) else { return }
                 guard let session = appState.currentSession else { return }
                 document.selectView(index: index, session: session)
             })
+    }
+
+    /// Removing both the sort binding and every comparator prevents AppKit
+    /// from exposing clickable/VoiceOver-actionable table headers while the
+    /// native Base handle is detached. The admission check remains in the
+    /// setter as a stale-event backstop if availability changes mid-gesture.
+    private var gridSortBinding: Binding<DataGridSortState?>? {
+        guard batchTrashInteractionDisabledReason == nil else { return nil }
+        return Binding(
+            get: { document.sortState },
+            set: { sort in
+                guard appState.admitBaseDocumentInteraction(document),
+                    let session = appState.currentSession
+                else { return }
+                document.setTransientSort(sort, session: session)
+            })
+    }
+
+    private var batchTrashInteractionDisabledReason: String? {
+        if let path = document.source.filePath {
+            switch appState.batchTrashPathCapability(for: path) {
+            case .writable:
+                break
+            case .readOnly(let reason), .invalid(let reason):
+                return reason
+            }
+        }
+        return appState.baseDocumentAvailabilityDisabledReason(for: document)
+    }
+
+    private var baseRefreshDisabledReason: String? {
+        appState.baseDocumentRefreshDisabledReason(for: document)
+    }
+
+    private var baseDefinitionEditingDisabledReason: String? {
+        appState.baseDefinitionEditingDisabledReason(for: document)
     }
 
     private var activeView: BaseViewSummary? {
@@ -567,6 +680,7 @@ struct BaseContainerView: View {
         Text(text)
             .font(Tokens.Typography.callout)
             .foregroundStyle(Tokens.ColorRole.textSecondary)
+            .textSelection(.enabled)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

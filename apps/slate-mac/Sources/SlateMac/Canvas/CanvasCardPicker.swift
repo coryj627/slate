@@ -59,7 +59,17 @@ struct CanvasCardPicker: View {
 
     @State private var query = ""
     @State private var highlighted: String?
+    @State private var pendingDiscard = false
     @FocusState private var filterFocused: Bool
+    @AccessibilityFocusState private var draftDialogFocusReturn: DraftFocusTarget?
+
+    private enum DraftFocusTarget: Hashable {
+        case dismiss
+    }
+
+    private var mutationDisabledReason: String? {
+        appState.canvasMutationDisabledReason(for: document)
+    }
 
     struct Candidate: Identifiable {
         let id: String
@@ -132,17 +142,66 @@ struct CanvasCardPicker: View {
             .accessibilityLabel("Cards, nearest first")
             HStack {
                 Spacer()
-                Button("Cancel") { appState.canvasCardPicker = nil }
+                if let recoveryLabel = appState.canvasRecoveryActionLabel(for: document) {
+                    let recoveryDisabledReason = appState.structuralMutationDisabledReason
+                    Button(recoveryLabel) {
+                        _ = appState.retryCanvasRecovery(for: document)
+                    }
+                    .disabled(recoveryDisabledReason != nil)
+                    .accessibilityHint(
+                        recoveryDisabledReason
+                            ?? appState.canvasRecoveryActionHint(for: document)
+                            ?? "Try to restore Canvas editing.")
+                    .help(
+                        recoveryDisabledReason
+                            ?? appState.canvasRecoveryActionHint(for: document)
+                            ?? "Try to restore Canvas editing")
+                }
+                Button(mutationDisabledReason == nil ? "Cancel" : "Close…") {
+                    requestDismiss()
+                }
                     .keyboardShortcut(.cancelAction)
+                    .accessibilityFocused($draftDialogFocusReturn, equals: .dismiss)
                 Button(purpose.title) { pickHighlightedOrFirst() }
                     .keyboardShortcut(.defaultAction)
-                    .disabled(candidates.isEmpty)
+                    .disabled(candidates.isEmpty || mutationDisabledReason != nil)
+                    .accessibilityHint(
+                        mutationDisabledReason ?? "Choose the highlighted card.")
+                    .help(mutationDisabledReason ?? "Choose the highlighted card")
+            }
+            if let mutationDisabledReason {
+                Text(mutationDisabledReason)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .textSelection(.enabled)
+                    .accessibilityLabel(mutationDisabledReason)
+                    .help(mutationDisabledReason)
             }
         }
         .padding(Tokens.Spacing.lg)
         .frame(minWidth: 380)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("\(purpose.title): pick a card")
+        .interactiveDismissDisabled(mutationDisabledReason != nil)
+        .confirmationDialog(
+            "Discard this card choice?",
+            isPresented: $pendingDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Cancel", role: .cancel) {
+                draftDialogFocusReturn = .dismiss
+            }
+            Button("Discard Choice", role: .destructive) {
+                appState.canvasCardPicker = nil
+            }
+        } message: {
+            Text("Closing discards the filter and highlighted card in this picker.")
+        }
+        .onChange(of: pendingDiscard) { wasPresented, isPresented in
+            if wasPresented, !isPresented, appState.canvasCardPicker != nil {
+                draftDialogFocusReturn = .dismiss
+            }
+        }
         .onAppear { filterFocused = true }
     }
 
@@ -155,7 +214,16 @@ struct CanvasCardPicker: View {
     }
 
     private func pick(_ nodeId: String) {
-        appState.canvasCardPicker = nil
-        onPick(nodeId)
+        appState.commitCanvasCardPickerSelection(in: document) {
+            onPick(nodeId)
+        }
+    }
+
+    private func requestDismiss() {
+        if mutationDisabledReason != nil {
+            pendingDiscard = true
+        } else {
+            appState.canvasCardPicker = nil
+        }
     }
 }

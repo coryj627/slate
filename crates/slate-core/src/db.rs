@@ -179,6 +179,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "file_meta: derived note counts and preview (#650)",
         sql: include_str!("../migrations/031_file_meta.sql"),
     },
+    Migration {
+        description: "structural batches: durable inflight recovery intent",
+        sql: include_str!("../migrations/032_structural_batch_inflight.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -1143,6 +1147,55 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM file_meta", [], |row| row.get(0))
             .unwrap();
         assert_eq!(meta_rows, 0, "file_meta FK must cascade on file delete");
+    }
+
+    #[test]
+    fn migration_032_adds_single_slot_structural_batch_recovery_intent() {
+        let mut conn = fresh_db();
+        migrate_up_to(&mut conn, 31).unwrap();
+        apply_migration(&conn, 32, &MIGRATIONS[31]).unwrap();
+
+        conn.execute(
+            "INSERT INTO structural_batch_inflight (id, started_ms, payload)
+             VALUES (1, 1, '{}')",
+            [],
+        )
+        .unwrap();
+        let duplicate = conn.execute(
+            "INSERT INTO structural_batch_inflight (id, started_ms, payload)
+             VALUES (1, 2, '{}')",
+            [],
+        );
+        assert!(
+            duplicate.is_err(),
+            "only one structural batch can be inflight"
+        );
+        let invalid_slot = conn.execute(
+            "INSERT INTO structural_batch_inflight (id, started_ms, payload)
+             VALUES (2, 2, '{}')",
+            [],
+        );
+        assert!(
+            invalid_slot.is_err(),
+            "the durable intent has one fixed slot"
+        );
+        conn.execute(
+            "INSERT INTO structural_batch_inflight_rewrites
+             (ordinal, path, hash_before, hash_after)
+             VALUES (0, 'note.md', 'before', 'after')",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM structural_batch_inflight WHERE id = 1", [])
+            .unwrap();
+        let rewrites: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM structural_batch_inflight_rewrites",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rewrites, 0, "finalization must clear rewrite intent too");
     }
 
     #[test]

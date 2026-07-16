@@ -48,6 +48,9 @@ struct NoteEditorView: NSViewRepresentable {
     /// mount. The binding's setter never fires (AppKit blocks edits at
     /// the `isEditable` gate), so no dirty-tracking path exists.
     var isEditable: Bool = true
+    /// Exact reason exposed to VoiceOver/help and announced when a queued
+    /// editing shortcut reaches a live view after it became read-only.
+    var readOnlyReason: String? = nil
     /// Cmd+S handler. Invoked by the `NSTextView` subclass when the
     /// user presses ⌘S inside the editor. Routes to
     /// `AppState.saveCurrentNote()` at the call site.
@@ -199,6 +202,7 @@ struct NoteEditorView: NSViewRepresentable {
         textView.isSelectable = true
         textView.isRichText = false
         textView.allowsUndo = isEditable
+        textView.readOnlyReason = readOnlyReason
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
@@ -271,6 +275,7 @@ struct NoteEditorView: NSViewRepresentable {
 
         textView.setAccessibilityLabel(accessibilityLabel)
         textView.setAccessibilityRole(.textArea)
+        textView.setAccessibilityHelp(readOnlyReason)
 
         // Initial buffer sync. Subsequent updates come through
         // `updateNSView`. (The storage delegate isn't attached until
@@ -279,7 +284,7 @@ struct NoteEditorView: NSViewRepresentable {
         // the contract "every programmatic `string =` resets dirt" holds
         // regardless of attach ordering.)
         context.coordinator.withSuppressedDirtyTracking {
-            if textView.string != text {
+            if !BaseExactIdentity.matches(textView.string, text) {
                 textView.string = text
             }
             // NSTextView leaves the insertion point at the END of the
@@ -322,6 +327,14 @@ struct NoteEditorView: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else {
             return
         }
+        // SwiftUI may reuse the representable/coordinator for a same-path tab
+        // or vault remount. Rebind every update so queued delegate callbacks
+        // target the current note-owner Binding rather than the Binding
+        // captured by `makeCoordinator` for the prior mount.
+        context.coordinator.rebind(
+            text: $text,
+            onSave: onSave,
+            previewEmbedAtCursor: previewEmbedAtCursor)
         // Cache the heading map on the coordinator so a scroll
         // request fired between updates uses the current snapshot.
         context.coordinator.headings = headings
@@ -334,6 +347,20 @@ struct NoteEditorView: NSViewRepresentable {
         context.coordinator.onCaretUTF16Change = onCaretUTF16Change
         context.coordinator.onToggleSpellCheckFromNativeMenu = onToggleSpellCheckFromNativeMenu
         textView.setAccessibilityLabel(accessibilityLabel)
+        textView.setAccessibilityHelp(readOnlyReason)
+        textView.isSelectable = true
+        if textView.isEditable != isEditable {
+            textView.isEditable = isEditable
+        }
+        // AppKit preserves the existing undo stack across this live toggle;
+        // disabling the manager while quarantined prevents responder-chain
+        // Undo from mutating an otherwise read-only buffer.
+        if textView.allowsUndo != isEditable {
+            textView.allowsUndo = isEditable
+        }
+        if let textView = textView as? SlateEditorTextView {
+            textView.readOnlyReason = readOnlyReason
+        }
 
         // Live Text Size tracking (WCAG 1.4.4): reading
         // `dynamicTypeSize` registers it as a dependency, so this
@@ -363,7 +390,7 @@ struct NoteEditorView: NSViewRepresentable {
         // bound text genuinely differs from what the view shows —
         // restamping during a normal keystroke would clobber the
         // user's typing and reset the cursor to the start.
-        if textView.string != text {
+        if !BaseExactIdentity.matches(textView.string, text) {
             // Preserve the user's selection across out-of-band
             // updates that don't change the length wildly (e.g. a
             // same-file reload with identical content). For a real
@@ -464,6 +491,16 @@ struct NoteEditorView: NSViewRepresentable {
             self.onSave = onSave
             self.previewEmbedAtCursor = previewEmbedAtCursor
             self.onCaretUTF16Change = onCaretUTF16Change
+        }
+
+        func rebind(
+            text: Binding<String>,
+            onSave: @escaping () -> Void,
+            previewEmbedAtCursor: ((String, Int) -> Void)?
+        ) {
+            self._text = text
+            self.onSave = onSave
+            self.previewEmbedAtCursor = previewEmbedAtCursor
         }
 
         /// Re-bind point. Called from `makeNSView` on initial setup
@@ -1303,6 +1340,7 @@ struct NoteEditorView: NSViewRepresentable {
 /// a route back to the SwiftUI layer.
 final class SlateEditorTextView: NSTextView {
     weak var coordinator: NoteEditorView.Coordinator?
+    var readOnlyReason: String?
 
     /// The NATIVE context menu retains AppKit's Spelling and Grammar ▸
     /// Check Spelling While Typing item; unrouted, it flips the view
@@ -1345,6 +1383,17 @@ final class SlateEditorTextView: NSTextView {
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        if !isEditable,
+            modifiers.contains(.command),
+            let key = event.charactersIgnoringModifiers?.lowercased(),
+            key == "z" || key == "s"
+        {
+            if let readOnlyReason {
+                postAccessibilityAnnouncement(readOnlyReason, priority: .high)
+            }
+            return true
+        }
         // Cmd+E: open the embed-preview popover for the embed
         // under the cursor. Always swallowed (returns `true`)
         // even when no embed is at the cursor — letting Cmd+E
@@ -1352,7 +1401,7 @@ final class SlateEditorTextView: NSTextView {
         // For Find") silently mutates the system find pasteboard
         // and the user has no idea why a later Cmd+F search has
         // mystery contents in the field (audit #208).
-        if event.modifierFlags.intersection(.deviceIndependentFlagsMask) == .command,
+        if modifiers == .command,
             event.charactersIgnoringModifiers == "e"
         {
             coordinator?.openEmbedPreviewAtCursor()

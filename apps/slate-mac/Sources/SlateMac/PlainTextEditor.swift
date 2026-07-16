@@ -23,6 +23,8 @@ import SwiftUI
 struct PlainTextEditor: NSViewRepresentable {
     @Binding var text: String
     let accessibilityLabel: String
+    var isEditable: Bool = true
+    var readOnlyReason: String? = nil
 
     /// In-app editor text zoom factor (#848) — the NoteEditorView
     /// threading pattern: the host passes `AppState.editorTextScale`
@@ -55,10 +57,10 @@ struct PlainTextEditor: NSViewRepresentable {
         // The NoteEditorView hygiene block: no prose substitutions in
         // structured text (each of these defaults to the user's
         // system-wide setting otherwise).
-        textView.isEditable = true
+        textView.isEditable = isEditable
         textView.isSelectable = true
         textView.isRichText = false
-        textView.allowsUndo = true
+        textView.allowsUndo = isEditable
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
         textView.isAutomaticTextReplacementEnabled = false
@@ -83,6 +85,7 @@ struct PlainTextEditor: NSViewRepresentable {
 
         textView.setAccessibilityLabel(accessibilityLabel)
         textView.setAccessibilityRole(.textArea)
+        textView.setAccessibilityHelp(readOnlyReason)
 
         textView.delegate = context.coordinator
         context.coordinator.textView = textView
@@ -96,6 +99,14 @@ struct PlainTextEditor: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
         context.coordinator.text = $text
         textView.setAccessibilityLabel(accessibilityLabel)
+        textView.setAccessibilityHelp(readOnlyReason)
+        textView.isSelectable = true
+        if textView.isEditable != isEditable {
+            textView.isEditable = isEditable
+        }
+        if textView.allowsUndo != isEditable {
+            textView.allowsUndo = isEditable
+        }
 
         // Live Text Size tracking (the NoteEditorView pattern);
         // `textScale` (#848) is the second observed input.
@@ -108,7 +119,7 @@ struct PlainTextEditor: NSViewRepresentable {
         // External draft swap (mode re-entry, cross-note reset). Skip
         // during user typing — the delegate already synced the
         // binding, and restamping would reset the caret.
-        if textView.string != text {
+        if !BaseExactIdentity.matches(textView.string, text) {
             let previousRange = textView.selectedRange()
             textView.string = text
             let clamped = min(previousRange.location, text.utf16.count)

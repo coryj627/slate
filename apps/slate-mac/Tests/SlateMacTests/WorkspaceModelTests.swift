@@ -84,38 +84,51 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertEqual(workspace.activeGroupBaseTab(forPath: decomposed)?.id, decomposedID)
     }
 
-    func testMarkdownAndCanvasKeepNativeCanonicalPathIdentity() {
+    func testMarkdownAndCanvasKeepByteExactPathIdentity() {
         let composed = "Notes/é.md"
         let decomposed = "Notes/e\u{301}.md"
 
-        XCTAssertEqual(EditorItem.markdown(path: composed), .markdown(path: decomposed))
-        XCTAssertEqual(
+        XCTAssertNotEqual(EditorItem.markdown(path: composed), .markdown(path: decomposed))
+        XCTAssertNotEqual(
             EditorItem.canvas(path: composed + ".canvas"),
             .canvas(path: decomposed + ".canvas"))
         XCTAssertEqual(
             Set([EditorItem.markdown(path: composed), .markdown(path: decomposed)]).count,
-            1)
+            2)
     }
 
     @MainActor
-    func testMarkdownBufferRegistryKeepsNativeCanonicalPathIdentity() throws {
+    func testMarkdownBufferRegistryKeepsByteExactPathIdentity() throws {
         let composed = "Notes/é.md"
         let decomposed = "Notes/e\u{301}.md"
         let workspace = WorkspaceState()
         let tabID = workspace.openTab(.markdown(path: composed))
 
+        // Canonically equivalent UTF-8 spellings can name distinct native
+        // entries. Never park one spelling's buffer under the other's tab.
         workspace.snapshotActiveTab(
             text: "draft", baseline: "saved", contentHash: "hash",
             hasUnsavedChanges: true, saveError: nil, saveConflict: nil,
             loadedFilePath: decomposed)
+        XCTAssertNil(workspace.document(for: tabID))
+
+        workspace.snapshotActiveTab(
+            text: "draft", baseline: "saved", contentHash: "hash",
+            hasUnsavedChanges: true, saveError: nil, saveConflict: nil,
+            loadedFilePath: composed)
         XCTAssertEqual(workspace.document(for: tabID)?.text, "draft")
 
         workspace.mirrorEdit(
             path: decomposed, text: "new draft", hasUnsavedChanges: true)
-        XCTAssertEqual(workspace.document(for: tabID)?.text, "new draft")
+        XCTAssertEqual(workspace.document(for: tabID)?.text, "draft")
+        XCTAssertEqual(workspace.invalidateParkedDocuments(forPath: decomposed), [])
+        XCTAssertFalse(workspace.document(for: tabID)?.isMissingFromDisk == true)
 
-        XCTAssertEqual(workspace.invalidateParkedDocuments(forPath: decomposed), [tabID])
-        XCTAssertNil(workspace.document(for: tabID))
+        workspace.mirrorEdit(
+            path: composed, text: "new draft", hasUnsavedChanges: true)
+        XCTAssertEqual(workspace.document(for: tabID)?.text, "new draft")
+        XCTAssertEqual(workspace.invalidateParkedDocuments(forPath: composed), [tabID])
+        XCTAssertTrue(workspace.document(for: tabID)?.isMissingFromDisk == true)
     }
 
     @MainActor

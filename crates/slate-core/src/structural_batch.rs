@@ -120,6 +120,10 @@ pub struct BatchTrashReport {
     pub op_id: Option<i64>,
     pub trashed: Vec<StructuralBatchItem>,
     pub untrashed: Vec<BatchTrashRemainder>,
+    /// Items whose post-call physical state could not be verified. These are
+    /// neither known to have reached the system Trash nor known to remain in
+    /// the vault; callers must reconcile before presenting either outcome.
+    pub unknown: Vec<BatchTrashRemainder>,
     pub bookkeeping_failures: Vec<BatchItemFailure>,
     pub requires_rescan: bool,
 }
@@ -345,5 +349,35 @@ mod tests {
         assert_eq!(normalized.failures[0].item, Some(item("same", false)));
         assert_eq!(normalized.failures[0].stage, BatchFailureStage::Preflight);
         assert!(normalized.failures[0].message.contains("conflicting kind"));
+    }
+
+    #[test]
+    fn trash_report_keeps_unknown_outcomes_in_a_distinct_bucket() {
+        let uncertain = item("uncertain.md", false);
+        let report = BatchTrashReport {
+            envelope: StructuralBatchEnvelope {
+                planned: vec![uncertain.clone()],
+                ..Default::default()
+            },
+            state: BatchTrashState::Failed,
+            op_id: None,
+            trashed: Vec::new(),
+            untrashed: Vec::new(),
+            unknown: vec![BatchTrashRemainder {
+                item: uncertain.clone(),
+                failure: BatchItemFailure {
+                    item: Some(uncertain.clone()),
+                    stage: BatchFailureStage::Reconciliation,
+                    message: "physical Trash verification failed".into(),
+                },
+            }],
+            bookkeeping_failures: Vec::new(),
+            requires_rescan: true,
+        };
+
+        assert!(report.trashed.is_empty());
+        assert!(report.untrashed.is_empty());
+        assert_eq!(report.unknown[0].item, uncertain);
+        assert!(report.requires_rescan);
     }
 }

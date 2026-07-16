@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import AppKit
 import SwiftUI
 
 /// Split view shown once a vault is open.
@@ -35,6 +36,7 @@ struct MainSplitView: View {
     /// `.accessibilityFocused(_:equals:)` against.
     enum AlertFocusTarget: Hashable {
         case editor
+        case tree
     }
 
     var body: some View {
@@ -54,6 +56,7 @@ struct MainSplitView: View {
         NavigationSplitView {
             FileTreeSidebar(rowPreferences: appState.sidebarPreferences.rowSnapshot)
                 .accessibilityLabel("Files sidebar")
+                .accessibilityFocused($alertFocusReturn, equals: .tree)
         } content: {
             // U1-4 (#456): the center column is the workspace region.
             // With one group and ≤ 1 tab (the U1-4 mirror), WorkspaceView
@@ -103,6 +106,9 @@ struct MainSplitView: View {
         // Liquid Glass on macOS 26 and the system material below 26; only the
         // rendering mode is ours to pin.
         .slateSymbolSurface(.toolbar)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            batchTrashQuarantineRecovery
+        }
         .overlay(alignment: .top) {
             if appState.isSearchOpen {
                 SearchOverlay()
@@ -134,7 +140,43 @@ struct MainSplitView: View {
         //    means the platform routes keyboard dismissal here.
     }
 
-    private var splitViewWithAlerts: some View {
+    /// Always-mounted recovery for an outcome-unknown Trash operation. The
+    /// Files sidebar can be hidden, and the result alert can be dismissed, so
+    /// this window-level action is the durable visible and VoiceOver route.
+    @ViewBuilder private var batchTrashQuarantineRecovery: some View {
+        if let notice = appState.batchTrashQuarantineNotice {
+            let disabledReason = appState.structuralMutationDisabledReason
+            HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.sm) {
+                SlateSymbol.warning.decorative
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                Text(notice)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+                Button(AppState.BatchTrashCopy.checkAgainLabel) {
+                    _ = appState.retryBatchTrashUnknownReconciliation()
+                }
+                .disabled(disabledReason != nil)
+                .accessibilityHint(
+                    disabledReason ?? AppState.BatchTrashCopy.checkAgainHint)
+                .help(disabledReason ?? AppState.BatchTrashCopy.checkAgainHint)
+            }
+            .padding(.horizontal, Tokens.Spacing.md)
+            .padding(.vertical, Tokens.Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.ColorRole.surfaceSecondary)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Tokens.ColorRole.separator)
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+            }
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    private var splitViewWithSystemAlerts: some View {
         splitViewCore
         .alert(
             "File Changed Externally",
@@ -146,7 +188,13 @@ struct MainSplitView: View {
                 alertFocusReturn = .editor
             }
             .accessibilityHint(
-                "Save your version, overwriting the external change."
+                appState.saveConflictKeepMineDisabledReason
+                    ?? "Save your version, overwriting the external change."
+            )
+            .disabled(appState.saveConflictKeepMineDisabledReason != nil)
+            .help(
+                appState.saveConflictKeepMineDisabledReason
+                    ?? "Save your version, overwriting the external change."
             )
             Button("Reload from Disk", role: .destructive) {
                 appState.resolveSaveConflictReloadFromDisk()
@@ -163,9 +211,13 @@ struct MainSplitView: View {
                 "Close this dialog. Your unsaved changes stay in the editor."
             )
         } message: { conflict in
-            Text(
+            let question =
                 "\(filename(of: conflict.path)) was modified outside the editor since you opened it. Choose how to resolve the conflict."
-            )
+            if let reason = appState.saveConflictKeepMineDisabledReason {
+                Text("\(question)\n\n\(reason)")
+            } else {
+                Text(question)
+            }
         }
         // O-5 (#543): the O-2 compaction-error channel's Mac half —
         // non-blocking, once per (path, session) (AppState gates), the
@@ -194,6 +246,10 @@ struct MainSplitView: View {
         } message: { failure in
             Text(failure.message)
         }
+    }
+
+    private var splitViewWithNavigationAlert: some View {
+        splitViewWithSystemAlerts
         // Save-changes prompt for close-vault / file-switch while
         // dirty (#63 + #64). Save is the default action; Cancel is
         // the cancel-role so platform keyboard dismissal leaves
@@ -203,20 +259,32 @@ struct MainSplitView: View {
             isPresented: pendingNavigationPresented,
             presenting: appState.pendingNavigation
         ) { _ in
+            let saveDisabledReason = appState.pendingNavigationSaveDisabledReason
+            let discardDisabledReason =
+                appState.pendingNavigationDiscardDisabledReason
             Button("Save") {
                 appState.resolvePendingNavigationSave()
                 alertFocusReturn = .editor
             }
+            .disabled(saveDisabledReason != nil)
             .accessibilityHint(
-                "Save the current note, then continue with the requested navigation."
-            )
+                saveDisabledReason
+                    ?? "Save the current note, then continue with the requested navigation.")
+            .help(
+                saveDisabledReason
+                    ?? "Save the current note, then continue with the requested navigation.")
             Button("Discard", role: .destructive) {
                 appState.resolvePendingNavigationDiscard()
                 alertFocusReturn = .editor
             }
+            .disabled(discardDisabledReason != nil)
             .accessibilityHint(
-                "Throw away unsaved changes and continue."
+                discardDisabledReason
+                    ?? "Throw away unsaved changes and continue."
             )
+            .help(
+                discardDisabledReason
+                    ?? "Throw away unsaved changes and continue.")
             Button("Cancel", role: .cancel) {
                 appState.resolvePendingNavigationCancel()
                 alertFocusReturn = .editor
@@ -225,13 +293,12 @@ struct MainSplitView: View {
                 "Stay on the current note. Unsaved changes remain in the editor."
             )
         } message: { _ in
-            let name = filename(
-                of: appState.loadedFilePath ?? ""
-            )
-            Text(
-                "Save changes to \(name)?"
-            )
+            pendingNavigationAlertMessage()
         }
+    }
+
+    private var splitViewWithTabCloseAlert: some View {
+        splitViewWithNavigationAlert
         // Tab-close gate (U1-2, #454). Same three-button shape as the
         // navigation gate above so VoiceOver users learn one mental model;
         // scoped to the tab being closed. Lives inline (not in a modifier)
@@ -243,55 +310,85 @@ struct MainSplitView: View {
             isPresented: pendingTabClosePresented,
             presenting: appState.pendingTabClose
         ) { _ in
+            let saveDisabledReason = appState.pendingTabCloseSaveDisabledReason
+            let discardDisabledReason =
+                appState.pendingTabCloseDiscardDisabledReason
             Button("Save") {
                 appState.resolveTabCloseSave()
                 alertFocusReturn = .editor
             }
-            .accessibilityHint("Save the note, then close its tab.")
+            .disabled(saveDisabledReason != nil)
+            .accessibilityHint(
+                saveDisabledReason ?? "Save the note, then close its tab.")
+            .help(saveDisabledReason ?? "Save the note, then close its tab.")
             Button("Discard", role: .destructive) {
                 appState.resolveTabCloseDiscard()
                 alertFocusReturn = .editor
             }
-            .accessibilityHint("Throw away unsaved changes and close the tab.")
+            .disabled(discardDisabledReason != nil)
+            .accessibilityHint(
+                discardDisabledReason
+                    ?? "Throw away unsaved changes and close the tab.")
+            .help(
+                discardDisabledReason
+                    ?? "Throw away unsaved changes and close the tab.")
             Button("Cancel", role: .cancel) {
                 appState.resolveTabCloseCancel()
                 alertFocusReturn = .editor
             }
             .accessibilityHint("Keep the tab open. Unsaved changes remain.")
         } message: { tabID in
-            let name = appState.workspace.model.tab(tabID)
-                .map { filename(of: appState.workspace.tabPath($0)) } ?? "this note"
-            Text("Save changes to \(name) before closing its tab?")
+            tabCloseAlertMessage(for: tabID)
         }
-        // Vault-close gate with multiple dirty tabs (U1-2). The single-
-        // dirty-tab case routes through the navigation gate, unchanged
-        // from pre-tab behavior.
+    }
+
+    private var splitViewWithVaultCloseAlert: some View {
+        splitViewWithTabCloseAlert
+        // Vault-close gate for multiple dirty tabs or any path-scoped recovery
+        // registry. A registry-only draft may have no open tab, so the copy
+        // names notes/changes rather than claiming every owner is a tab.
         .alert(
-            "Save changes to \(appState.pendingVaultClose ?? 0) notes?",
+            "Save changes before closing the vault?",
             isPresented: pendingVaultClosePresented,
             presenting: appState.pendingVaultClose
         ) { _ in
+            let saveDisabledReason = appState.pendingVaultCloseSaveAllDisabledReason
+            let discardDisabledReason =
+                appState.pendingVaultCloseDiscardAllDisabledReason
             Button("Save All") {
                 appState.resolveVaultCloseSaveAll()
                 alertFocusReturn = .editor
             }
+            .disabled(saveDisabledReason != nil)
             .accessibilityHint(
-                "Save every tab with unsaved changes, then close the vault.")
+                saveDisabledReason
+                    ?? "Save every note with unsaved changes, then close the vault.")
+            .help(
+                saveDisabledReason
+                    ?? "Save every note with unsaved changes, then close the vault.")
             Button("Discard All", role: .destructive) {
                 appState.resolveVaultCloseDiscardAll()
                 alertFocusReturn = .editor
             }
-            .accessibilityHint("Throw away all unsaved changes and close the vault.")
+            .disabled(discardDisabledReason != nil)
+            .accessibilityHint(
+                discardDisabledReason
+                    ?? "Throw away all unsaved changes and close the vault.")
+            .help(
+                discardDisabledReason
+                    ?? "Throw away all unsaved changes and close the vault.")
             Button("Cancel", role: .cancel) {
                 appState.resolveVaultCloseCancel()
                 alertFocusReturn = .editor
             }
             .accessibilityHint("Keep the vault open. Unsaved changes remain.")
         } message: { count in
-            Text(
-                "\(count) open tabs have unsaved changes. Save them all before closing the vault?"
-            )
+            vaultCloseAlertMessage(count: count)
         }
+    }
+
+    private var splitViewWithAlerts: some View {
+        splitViewWithVaultCloseAlert
         // Property-edit conflict alert. Mirrors the editor-save
         // conflict alert above but scopes the message + actions to
         // a single key edit (Milestone I / #168). Same three-button
@@ -301,19 +398,25 @@ struct MainSplitView: View {
             isPresented: propertyEditConflictPresented,
             presenting: appState.currentPropertyEditConflict
         ) { conflict in
+            let keepMineDisabledReason =
+                appState.propertyEditConflictKeepMineDisabledReason
             Button("Keep Mine") {
                 appState.resolvePropertyEditConflictKeepMine()
                 alertFocusReturn = .editor
             }
             .accessibilityHint(
-                "Re-apply your property edit, overwriting the external change."
-            )
+                keepMineDisabledReason
+                    ?? "Re-apply your property edit, overwriting the external change.")
+            .disabled(keepMineDisabledReason != nil)
+            .help(
+                keepMineDisabledReason
+                    ?? "Re-apply your property edit, overwriting the external change.")
             Button("Reload from Disk", role: .destructive) {
                 appState.resolvePropertyEditConflictReloadFromDisk()
                 alertFocusReturn = .editor
             }
             .accessibilityHint(
-                "Discard your property edit and reload the note from disk."
+                "Discard this property edit and reload properties from disk. Markdown body edits are kept."
             )
             Button("Cancel", role: .cancel) {
                 appState.resolvePropertyEditConflictCancel()
@@ -323,9 +426,7 @@ struct MainSplitView: View {
                 "Close this dialog. The properties panel stays as it was."
             )
         } message: { conflict in
-            Text(
-                "\(filename(of: conflict.path)) was modified outside the editor while you were editing the `\(conflict.key)` property. Choose how to resolve."
-            )
+            propertyEditConflictMessage(conflict)
         }
         // Non-empty-folder delete confirmation (#860). Files and empty
         // folders keep the no-confirm Finder-parity path; a folder with
@@ -334,33 +435,46 @@ struct MainSplitView: View {
         // is explicit ("Move to Trash", never "OK"), Cancel is the
         // cancel-role so Escape/accidental dismissal deletes nothing.
         .alert(
-            "Delete folder \u{201C}\(appState.pendingFolderDelete?.name ?? "")\u{201D}?",
+            AppState.BatchTrashCopy.singleFolderConfirmationTitle(
+                name: appState.pendingFolderDelete?.name ?? "folder"),
             isPresented: pendingFolderDeletePresented,
             presenting: appState.pendingFolderDelete
-        ) { _ in
+        ) { pending in
             // Focus returns to the TREE, not the editor: this alert is
             // always staged from a tree operation, and the ⌘⌥←-style
             // focusTreeRegion bridge is the established route (red-team;
             // the shared .editor default fits the other alerts, which
             // ARE editor-scoped).
-            Button("Move to Trash", role: .destructive) {
-                appState.confirmPendingFolderDelete()
-                appState.workspace.focusTreeRegion()
+            Button(AppState.BatchTrashCopy.actionLabel, role: .destructive) {
+                if appState.confirmPendingFolderDelete(id: pending.id) {
+                    appState.workspace.focusTreeRegion()
+                }
             }
             .accessibilityHint(
-                "Move the folder and everything inside it to the Trash."
+                appState.structuralMutationDisabledReason
+                    ?? AppState.BatchTrashCopy.singleFolderActionHint(
+                        name: pending.name)
             )
-            Button("Cancel", role: .cancel) {
-                appState.cancelPendingFolderDelete()
-                appState.workspace.focusTreeRegion()
+            .disabled(appState.structuralMutationDisabledReason != nil)
+            Button(AppState.BatchTrashCopy.cancelLabel, role: .cancel) {
+                if appState.cancelPendingFolderDelete(id: pending.id) {
+                    appState.workspace.focusTreeRegion()
+                }
             }
             .accessibilityHint(
-                "Keep the folder. Nothing is deleted."
+                AppState.BatchTrashCopy.singleFolderCancelHint(
+                    name: pending.name)
             )
         } message: { pending in
-            Text(
-                "Moves the folder and its \(pending.itemCount) \(pending.itemCount == 1 ? "item" : "items") to the Trash."
-            )
+            VStack(alignment: .leading) {
+                Text(
+                    AppState.BatchTrashCopy.singleFolderConfirmationMessage(
+                        name: pending.name,
+                        itemCount: pending.itemCount))
+                if let reason = appState.structuralMutationDisabledReason {
+                    Text(reason)
+                }
+            }
         }
         // #852: batch-delete confirmation — the batch analog of the #860 single
         // folder prompt. Staged only when the multi-selection includes a
@@ -369,31 +483,113 @@ struct MainSplitView: View {
         // explicit "Move to Trash", cancel-role Cancel so Escape trashes
         // nothing. Focus returns to the tree, like the single prompt.
         .alert(
-            "Move \(appState.pendingBatchDelete?.itemCount ?? 0) items to Trash?",
+            AppState.BatchTrashCopy.confirmationTitle(
+                itemCount: appState.pendingBatchDelete?.itemCount ?? 0),
             isPresented: pendingBatchDeletePresented,
             presenting: appState.pendingBatchDelete
-        ) { _ in
-            Button("Move to Trash", role: .destructive) {
-                appState.confirmPendingBatchDelete()
-                appState.workspace.focusTreeRegion()
+        ) { pending in
+            Button(AppState.BatchTrashCopy.actionLabel, role: .destructive) {
+                if appState.confirmPendingBatchDelete(id: pending.id) {
+                    appState.workspace.focusTreeRegion()
+                }
             }
             .accessibilityHint(
-                "Move the selected items, including folders and their contents, to the Trash."
-            )
-            Button("Cancel", role: .cancel) {
-                appState.cancelPendingBatchDelete()
-                appState.workspace.focusTreeRegion()
+                appState.structuralMutationDisabledReason
+                    ?? AppState.BatchTrashCopy.actionHint)
+            .disabled(appState.structuralMutationDisabledReason != nil)
+            Button(AppState.BatchTrashCopy.cancelLabel, role: .cancel) {
+                if appState.handlePendingBatchDeleteKey(.cancel, id: pending.id) {
+                    appState.workspace.focusTreeRegion()
+                }
             }
-            .accessibilityHint("Keep the items. Nothing is deleted.")
+            .accessibilityHint(AppState.BatchTrashCopy.cancelHint)
         } message: { pending in
-            Text(
-                "Moves \(pending.itemCount) items to the Trash, including \(pending.nonEmptyFolderCount) \(pending.nonEmptyFolderCount == 1 ? "folder" : "folders") with contents."
-            )
+            VStack(alignment: .leading) {
+                Text(
+                    AppState.BatchTrashCopy.confirmationMessage(
+                        itemCount: pending.itemCount,
+                        nonEmptyFolderCount: pending.nonEmptyFolderCount))
+                if let reason = appState.structuralMutationDisabledReason {
+                    Text(reason)
+                }
+            }
+        }
+        .background {
+            TrashConfirmationReturnKeyMonitor(
+                owner: activeTrashConfirmationOwner,
+                onReturn: handleTrashConfirmationReturn)
+                .frame(width: 0, height: 0)
+        }
+    }
+
+    private func propertyEditConflictMessage(
+        _ conflict: PropertyEditConflict
+    ) -> Text {
+        let name = filename(of: conflict.path)
+        let question: String
+        if case .setSource = conflict.action {
+            question = name
+                + " was modified outside the editor while you were editing "
+                + "the properties source. Keep Mine replaces the note’s entire "
+                + "YAML frontmatter; Reload keeps Markdown body edits and uses "
+                + "the disk properties."
+        } else {
+            question = name
+                + " was modified outside the editor while you were editing the `"
+                + conflict.key
+                + "` property. Choose how to resolve."
+        }
+        guard let reason = appState.propertyEditConflictKeepMineDisabledReason else {
+            return Text(question)
+        }
+        return Text(question + "\n\n" + reason)
+    }
+
+    private var splitViewWithBatchAttention: some View {
+        splitViewWithAlerts.alert(
+            batchStructuralAttention.map {
+                AppState.BatchStructuralCopy.attention(for: $0).title
+            } ?? "Batch Operation",
+            isPresented: batchStructuralAttentionPresented,
+            presenting: batchStructuralAttention
+        ) { result in
+            let copy = AppState.BatchStructuralCopy.attention(for: result)
+            if appState.batchTrashQuarantineNotice != nil {
+                Button(AppState.BatchTrashCopy.checkAgainLabel) {
+                    _ = appState.retryBatchTrashUnknownReconciliation()
+                }
+                .accessibilityHint(AppState.BatchTrashCopy.checkAgainHint)
+            }
+            if copy.hasDetails {
+                Button(AppState.BatchTrashCopy.copyDetailsLabel) {
+                    if BatchAttentionDismissal.resolve(
+                        id: result.id,
+                        dismiss: appState.copyAndDismissBatchStructuralDetails,
+                        focus: appState.workspace.focusTreeRegion
+                    ) {
+                        alertFocusReturn = .tree
+                    }
+                }
+                .accessibilityHint(AppState.BatchTrashCopy.copyDetailsHint)
+            }
+            Button(AppState.BatchTrashCopy.doneLabel, role: .cancel) {
+                if BatchAttentionDismissal.resolve(
+                    id: result.id,
+                    dismiss: appState.dismissBatchStructuralResult,
+                    focus: appState.workspace.focusTreeRegion
+                ) {
+                    alertFocusReturn = .tree
+                }
+            }
+            .keyboardShortcut(.defaultAction)
+            .accessibilityHint("Dismiss this report and return to the files sidebar.")
+        } message: { result in
+            Text(AppState.BatchStructuralCopy.attention(for: result).inlineMessage)
         }
     }
 
     private var splitViewWithSheets: some View {
-        splitViewWithAlerts
+        splitViewWithBatchAttention
         .sheet(isPresented: $appState.isTemplatePickerOpen) {
             TemplatePicker()
                 .environmentObject(appState)
@@ -507,9 +703,7 @@ struct MainSplitView: View {
         .sheet(
             isPresented: Binding(
                 get: { appState.pendingMove != nil },
-                set: { presented in
-                    if !presented { appState.pendingMove = nil }
-                }
+                set: { _ in }
             )
         ) {
             if let move = appState.pendingMove {
@@ -524,9 +718,7 @@ struct MainSplitView: View {
         .sheet(
             isPresented: Binding(
                 get: { appState.pendingBatchMove != nil },
-                set: { presented in
-                    if !presented { appState.pendingBatchMove = nil }
-                }
+                set: { _ in }
             )
         ) {
             if let batch = appState.pendingBatchMove {
@@ -590,22 +782,14 @@ struct MainSplitView: View {
     private var writeConflictPresented: Binding<Bool> {
         Binding(
             get: { appState.currentSaveConflict != nil },
-            set: { presented in
-                if !presented {
-                    appState.currentSaveConflict = nil
-                }
-            }
+            set: { _ in }
         )
     }
 
     private var propertyEditConflictPresented: Binding<Bool> {
         Binding(
             get: { appState.currentPropertyEditConflict != nil },
-            set: { presented in
-                if !presented {
-                    appState.currentPropertyEditConflict = nil
-                }
-            }
+            set: { _ in }
         )
     }
 
@@ -615,12 +799,29 @@ struct MainSplitView: View {
     private var pendingFolderDeletePresented: Binding<Bool> {
         Binding(
             get: { appState.pendingFolderDelete != nil },
-            set: { presented in
-                if !presented {
-                    appState.cancelPendingFolderDelete()
-                }
-            }
+            set: { _ in }
         )
+    }
+
+    private var activeTrashConfirmationOwner: TrashConfirmationReturnKey.Owner? {
+        if let pending = appState.pendingBatchDelete {
+            return .batch(pending.id)
+        }
+        if let pending = appState.pendingFolderDelete {
+            return .singleFolder(pending.id)
+        }
+        return nil
+    }
+
+    private func handleTrashConfirmationReturn(
+        _ owner: TrashConfirmationReturnKey.Owner
+    ) {
+        switch owner {
+        case .singleFolder(let id):
+            _ = appState.handlePendingFolderDeleteReturnKey(id: id)
+        case .batch(let id):
+            _ = appState.handlePendingBatchDeleteKey(.returnKey, id: id)
+        }
     }
 
     /// #852: the batch-delete confirmation. Dismissal from outside (Escape)
@@ -628,22 +829,29 @@ struct MainSplitView: View {
     private var pendingBatchDeletePresented: Binding<Bool> {
         Binding(
             get: { appState.pendingBatchDelete != nil },
-            set: { presented in
-                if !presented {
-                    appState.cancelPendingBatchDelete()
-                }
-            }
+            set: { _ in }
+        )
+    }
+
+    private var batchStructuralAttention: AppState.BatchStructuralResult? {
+        guard case .result(let result)? = appState.activeBatchAlertPresentation else {
+            return nil
+        }
+        return result
+    }
+
+    /// UUID-checked so a stale SwiftUI dismissal cannot clear a newer report.
+    private var batchStructuralAttentionPresented: Binding<Bool> {
+        Binding(
+            get: { batchStructuralAttention != nil },
+            set: { _ in }
         )
     }
 
     private var pendingNavigationPresented: Binding<Bool> {
         Binding(
             get: { appState.pendingNavigation != nil },
-            set: { presented in
-                if !presented {
-                    appState.pendingNavigation = nil
-                }
-            }
+            set: { _ in }
         )
     }
 
@@ -694,13 +902,13 @@ struct MainSplitView: View {
             // Save button (`.disabled` behavior) as the critical
             // `.primaryAction` group.
             ToolbarItem(id: "saveStatus", placement: .primaryAction) {
-                Text(appState.hasUnsavedChanges ? "Modified" : "Saved")
+                Text(appState.activeNoteHasUnsavedChanges ? "Modified" : "Saved")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .accessibilityLabel(
-                        appState.hasUnsavedChanges
-                            ? "Modified. Unsaved changes in the editor."
-                            : "Saved. Editor matches the on-disk file."
+                        appState.activeNoteHasUnsavedChanges
+                            ? "Modified. This note has unsaved changes."
+                            : "Saved. This note matches the on-disk file."
                     )
             }
             .customizationBehavior(.disabled)
@@ -717,11 +925,16 @@ struct MainSplitView: View {
                 .disabled(
                     appState.loadedFilePath == nil
                         || appState.isSaving
-                        || !appState.hasUnsavedChanges
+                        || !appState.activeNoteHasUnsavedChanges
+                        || appState.activeNoteSaveDisabledReason != nil
                 )
                 .accessibilityHint(
-                    "Save the current note to disk. Command-S."
+                    appState.activeNoteSaveDisabledReason
+                        ?? "Save the current note to disk. Command-S."
                 )
+                .help(
+                    appState.activeNoteSaveDisabledReason
+                        ?? "Save the current note to disk")
             }
             // #880: Save is the critical action — pinned (not removable or
             // movable), keeping it and its status as the fixed leading group.
@@ -751,8 +964,14 @@ struct MainSplitView: View {
                 }
                 // ⇧⌘N lives on File ▸ New from Template… (#422 — see
                 // the Save button above). Click/AX-activate only.
+                .disabled(appState.isMutatingStructure)
                 .accessibilityHint(
-                    "Opens the template picker. Command-Shift-N. Escape closes."
+                    appState.structuralMutationDisabledReason
+                        ?? "Opens the template picker. Command-Shift-N. Escape closes."
+                )
+                .help(
+                    appState.structuralMutationDisabledReason
+                        ?? "Opens the template picker. Command-Shift-N. Escape closes."
                 )
             }
             ToolbarItem(id: "tasksReview", placement: .secondaryAction) {
@@ -814,27 +1033,50 @@ struct MainSplitView: View {
     private var pendingTabClosePresented: Binding<Bool> {
         Binding(
             get: { appState.pendingTabClose != nil },
-            set: { presented in
-                if !presented {
-                    appState.pendingTabClose = nil
-                }
-            }
+            set: { _ in }
         )
     }
 
     private var pendingVaultClosePresented: Binding<Bool> {
         Binding(
             get: { appState.pendingVaultClose != nil },
-            set: { presented in
-                if !presented {
-                    appState.pendingVaultClose = nil
-                }
-            }
+            set: { _ in }
         )
     }
 
     private func filename(of path: String) -> String {
         (path as NSString).lastPathComponent
+    }
+
+    private func tabCloseAlertMessage(for tabID: TabID) -> Text {
+        let path = appState.workspace.model.tab(tabID).map {
+            appState.workspace.tabPath($0)
+        }
+        let name = path.map(filename(of:)) ?? "this note"
+        let question = "Save changes to " + name + " before closing its tab?"
+        guard let reason = appState.pendingTabCloseSaveDisabledReason else {
+            return Text(question)
+        }
+        return Text(question + "\n\n" + reason)
+    }
+
+    private func pendingNavigationAlertMessage() -> Text {
+        let name = filename(of: appState.loadedFilePath ?? "")
+        let question = "Save changes to " + name + "?"
+        guard let reason = appState.pendingNavigationSaveDisabledReason else {
+            return Text(question)
+        }
+        return Text(question + "\n\n" + reason)
+    }
+
+    private func vaultCloseAlertMessage(count: Int) -> Text {
+        let subject = count == 1 ? "1 note has" : String(count) + " notes have"
+        let question = subject
+            + " unsaved changes. Save all changes before closing the vault?"
+        guard let reason = appState.pendingVaultCloseSaveAllDisabledReason else {
+            return Text(question)
+        }
+        return Text(question + "\n\n" + reason)
     }
 
     private var vaultTitle: String {
@@ -866,5 +1108,130 @@ struct MainSplitView: View {
         return "The \(report.verb) succeeded, but links in "
             + "\(count) \(count == 1 ? "note" : "notes") couldn't be updated "
             + "(they may have been edited externally):\n\n• \(list)"
+    }
+}
+
+enum BatchAttentionDismissal {
+    @discardableResult
+    static func resolve(
+        id: UUID,
+        dismiss: (UUID) -> Bool,
+        focus: () -> Void
+    ) -> Bool {
+        guard dismiss(id) else { return false }
+        focus()
+        return true
+    }
+}
+
+/// Bare Return and keypad Enter are consumed while a destructive Trash
+/// confirmation owns the window. SwiftUI alerts can otherwise promote their
+/// first button implicitly; this routes the live event to an inert,
+/// captured-UUID resolver before the alert sees it.
+enum TrashConfirmationReturnKey {
+    enum Owner: Equatable {
+        case singleFolder(UUID)
+        case batch(UUID)
+    }
+
+    @discardableResult
+    static func route(
+        keyCode: UInt16,
+        modifierFlags: NSEvent.ModifierFlags,
+        owner: Owner?,
+        onReturn: (Owner) -> Void
+    ) -> Bool {
+        guard let owner, keyCode == 36 || keyCode == 76 else { return false }
+        let meaningfulModifiers = modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.capsLock, .function, .numericPad])
+        guard meaningfulModifiers.isEmpty else { return false }
+        onReturn(owner)
+        return true
+    }
+}
+
+/// Zero-size window-owned bridge for the Return router. The owner value is
+/// refreshed on every SwiftUI update, so the callback always carries the alert
+/// instance that was mounted; AppState rejects a stale UUID.
+struct TrashConfirmationReturnKeyMonitor: NSViewRepresentable {
+    let owner: TrashConfirmationReturnKey.Owner?
+    let onReturn: (TrashConfirmationReturnKey.Owner) -> Void
+
+    func makeNSView(context: Context) -> MonitorView {
+        let view = MonitorView()
+        view.update(owner: owner, onReturn: onReturn)
+        return view
+    }
+
+    func updateNSView(_ view: MonitorView, context: Context) {
+        view.update(owner: owner, onReturn: onReturn)
+    }
+
+    static func dismantleNSView(_ view: MonitorView, coordinator: ()) {
+        view.stopMonitoring()
+    }
+
+    final class MonitorView: NSView {
+        private var monitor: Any?
+        private var owner: TrashConfirmationReturnKey.Owner?
+        private var onReturn: (TrashConfirmationReturnKey.Owner) -> Void = { _ in }
+
+        override var intrinsicContentSize: NSSize { .zero }
+
+        func update(
+            owner: TrashConfirmationReturnKey.Owner?,
+            onReturn: @escaping (TrashConfirmationReturnKey.Owner) -> Void
+        ) {
+            self.owner = owner
+            self.onReturn = onReturn
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if window == nil {
+                stopMonitoring()
+            } else {
+                startMonitoringIfNeeded()
+            }
+        }
+
+        func stopMonitoring() {
+            guard let monitor else { return }
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+
+        private func startMonitoringIfNeeded() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+                [weak self] event in
+                guard let self, let hostWindow = self.window,
+                    NSApp.isActive,
+                    let eventWindow = event.window,
+                    NSApp.keyWindow === eventWindow,
+                    eventWindow === hostWindow
+                        || eventWindow.sheetParent === hostWindow
+                        || hostWindow.attachedSheet === eventWindow
+                else { return event }
+                if let editor = eventWindow.firstResponder as? NSTextView,
+                    editor.hasMarkedText()
+                {
+                    return event
+                }
+                let handled = TrashConfirmationReturnKey.route(
+                    keyCode: event.keyCode,
+                    modifierFlags: event.modifierFlags,
+                    owner: self.owner,
+                    onReturn: self.onReturn)
+                return handled ? nil : event
+            }
+        }
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
     }
 }
