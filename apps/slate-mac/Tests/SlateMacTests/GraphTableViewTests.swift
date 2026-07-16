@@ -8,6 +8,17 @@ import XCTest
 /// GraphTableRow derivation + column sort determinism (P1-2 #555).
 /// Pure logic — no session.
 final class GraphTableViewTests: XCTestCase {
+    private static func source(_ relativePath: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/SlateMac")
+        return try String(
+            contentsOf: root.appendingPathComponent(relativePath),
+            encoding: .utf8)
+    }
+
     private func node(
         _ id: UInt64, _ label: String, path: String?, kind: GraphNodeKind,
         inLinks: UInt32 = 0, outLinks: UInt32 = 0, inEmbeds: UInt32 = 0, outEmbeds: UInt32 = 0,
@@ -140,5 +151,50 @@ final class GraphTableViewTests: XCTestCase {
         }
         XCTAssertTrue(GraphTableView.rowActionEnabled("Create note", isGhost: true))
         XCTAssertFalse(GraphTableView.rowActionEnabled("Create note", isGhost: false))
+    }
+
+    @MainActor
+    func testBusyGhostCellsExposeExactStructuralCreationReason() {
+        let ghost = GraphTableRow(
+            node: node(7, "Missing", path: nil, kind: .ghost), folder: "")
+        let note = GraphTableRow(
+            node: node(8, "Present", path: "Present.md", kind: .note), folder: "")
+        let columns = GraphTableColumn.columns(
+            ghostCreationDisabledReason: AppState.structuralMutationBusyReason)
+
+        XCTAssertEqual(
+            columns.compactMap { $0.accessibilityHint?(ghost) },
+            Array(repeating: AppState.structuralMutationBusyReason, count: 9))
+        XCTAssertTrue(columns.allSatisfy { $0.accessibilityHint?(note) == nil })
+        XCTAssertTrue(
+            GraphTableColumn.columns.allSatisfy {
+                $0.accessibilityHint?(ghost) == nil
+            },
+            "idle ghost rows retain their normal activation behavior")
+    }
+
+    func testBusyGhostPrimaryAndModifiedActivationUseOneSuppressionPolicy() throws {
+        let source = try Self.source("Graph/GraphTableView.swift")
+        let compact = source.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+
+        XCTAssertTrue(
+            compact.contains("onActivate: { row in activate(row) }"),
+            "Return and double-click retain the ordinary activation funnel")
+        XCTAssertTrue(
+            compact.contains("onActivateModified: { row in activateInNewTab(row) }"),
+            "Command-Return and Command-double-click retain the modified funnel")
+        XCTAssertTrue(
+            compact.contains(
+                "private func activate(_ row: GraphTableRow) { activate(row, fileTarget: .currentTab) }"))
+        XCTAssertTrue(
+            compact.contains(
+                "private func activateInNewTab(_ row: GraphTableRow) { activate(row, fileTarget: .newTab) }"))
+        XCTAssertTrue(
+            compact.contains(
+                "if row.isGhost { guard appState.structuralMutationDisabledReason == nil else { return } appState.createNoteFromGhost(targetRaw: row.label) }"),
+            "every primary ghost path must stop before invoking the structural funnel while busy")
+        XCTAssertTrue(
+            compact.contains("else if let path = row.path { appState.openFile(path, target: fileTarget) }"),
+            "ordinary and modified note opening remain available")
     }
 }

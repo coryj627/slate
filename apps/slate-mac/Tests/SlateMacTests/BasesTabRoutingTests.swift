@@ -304,7 +304,7 @@ final class BasesTabRoutingTests: XCTestCase {
                     headingOverride: nil,
                     viewOverride: nil)
             ])
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
 
         state.openBaseFile("Queries/Tasks.base")
         let openBase = state.baseDocument(for: "Queries/Tasks.base")
@@ -395,7 +395,7 @@ final class BasesTabRoutingTests: XCTestCase {
                     headingOverride: nil,
                     viewOverride: nil)
             ])
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
 
         state.openSavedQuery(id: queryID, name: "Active notes")
         let sibling = try XCTUnwrap(state.activeBaseDocument)
@@ -681,7 +681,9 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertTrue(fixture.state.lastBaseRefreshAnnouncements.isEmpty)
     }
 
-    func testStaleSessionNoteSaveCannotPublishIntoReopenedVault() async throws {
+    func testInFlightNoteSaveBlocksDirectReplacementUntilPublishingFinishes()
+        async throws
+    {
         let fixture = try await makeLiveTaskSurfacesState()
         let entered = expectation(description: "save parked before Bases publish")
         let (gateStream, release) = AsyncStream.makeStream(of: Void.self)
@@ -698,36 +700,34 @@ final class BasesTabRoutingTests: XCTestCase {
         try FileManager.default.createDirectory(at: replacement, withIntermediateDirectories: true)
         try Data("# Replacement\n".utf8).write(to: replacement.appendingPathComponent("note.md"))
         fixture.state.openVault(at: replacement)
-        await fixture.state.scanTask?.value
-        fixture.state.openFile("note.md", target: .currentTab)
-        await fixture.state.noteLoadTask?.value
-
-        let replacementEntered = expectation(description: "replacement save parked")
-        let (replacementGate, releaseReplacement) = AsyncStream.makeStream(of: Void.self)
-        fixture.state.basesPostWritePublishGate = {
-            replacementEntered.fulfill()
-            for await _ in replacementGate {}
-        }
-        fixture.state.updateEditorText("# Replacement saved\n")
-        let replacementSave = try XCTUnwrap(fixture.state.saveCurrentNote())
-        await fulfillment(of: [replacementEntered], timeout: 10)
+        XCTAssertEqual(fixture.state.currentVaultURL?.path, vaultURL.path)
         XCTAssertTrue(fixture.state.isSaving)
+        XCTAssertEqual(
+            fixture.state.lastMutationAnnouncement,
+            "Wait for the current save to finish.")
 
         release.finish()
         await staleSave.value
 
-        XCTAssertTrue(
-            fixture.state.isSaving,
-            "a stale old-session save must not clear the replacement session's in-flight flag")
-        XCTAssertTrue(fixture.openBase.result?.rows.isEmpty == true)
-        XCTAssertTrue(fixture.openDashboard.sections[0].result?.rows.isEmpty == true)
-        XCTAssertTrue(fixture.dock.result?.rows.isEmpty == true)
-        XCTAssertTrue(fixture.state.lastBaseRefreshAnnouncements.isEmpty)
-
-        fixture.state.basesPostWritePublishGate = nil
-        releaseReplacement.finish()
-        await replacementSave.value
         XCTAssertFalse(fixture.state.isSaving)
+        XCTAssertEqual(fixture.openBase.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(
+            fixture.openDashboard.sections[0].result?.rows.map(\.filePath),
+            ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.dock.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
+        XCTAssertEqual(fixture.state.lastBaseRefreshAnnouncements, ["Updated: 1 task."])
+
+        fixture.state.openVault(at: replacement)
+        await fixture.state.scanTask?.value
+
+        XCTAssertEqual(fixture.state.currentVaultURL?.path, replacement.path)
+        XCTAssertTrue(fixture.state.baseDocuments.isEmpty)
+        XCTAssertNil(fixture.state.activeDashboardDocument)
+        XCTAssertNil(fixture.state.basesDockDocument)
+        XCTAssertEqual(
+            fixture.state.lastBaseRefreshAnnouncements,
+            ["Updated: 1 task."],
+            "the completed A save may announce once; replacement publishes nothing stale")
     }
 
     func testSummaryFormatterUsesSummaryCellsNotOnlyAudioSummary() async throws {
@@ -993,14 +993,19 @@ final class BasesTabRoutingTests: XCTestCase {
 
         _ = doc.applyQuickFilter("done", session: session)
 
+        let filteredCSV = try await state.basesExportText(format: .csv)
         XCTAssertEqual(
-            try state.basesExportText(format: .csv),
+            filteredCSV,
             "file.name,status\r\nBeta.md,done\r\n")
+        let unfilteredCSV = try await state.basesExportText(
+            format: .csv, includeQuickFilter: false)
         XCTAssertEqual(
-            try state.basesExportText(format: .csv, includeQuickFilter: false),
+            unfilteredCSV,
             "file.name,status\r\nAlpha.md,active\r\nBeta.md,done\r\nCafe.md,café\r\n")
+        let copiedMarkdown = await state.basesCopyViewAsMarkdown(
+            includeQuickFilter: true)?.value
         XCTAssertEqual(
-            state.basesCopyViewAsMarkdown(includeQuickFilter: true),
+            copiedMarkdown,
             "| file.name | status |\n| --- | --- |\n| Beta.md | done |\n")
         XCTAssertEqual(state.lastBaseActionAnnouncement, "Copied base view as Markdown.")
     }
@@ -1020,11 +1025,15 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(doc.applyQuickFilter("cafe", session: session), "1 of 2 results")
         XCTAssertEqual(doc.result?.shownCount, 1)
         XCTAssertEqual(doc.result?.unfilteredShownCount, 2)
+        let filteredExport = try await doc.export(
+            format: .csv, session: session, includeQuickFilter: true)
         XCTAssertEqual(
-            try doc.export(format: .csv, session: session, includeQuickFilter: true),
+            filteredExport,
             "file.name,status\r\nCafe.md,café\r\n")
+        let unfilteredExport = try await doc.export(
+            format: .csv, session: session, includeQuickFilter: false)
         XCTAssertEqual(
-            try doc.export(format: .csv, session: session, includeQuickFilter: false),
+            unfilteredExport,
             "file.name,status\r\nAlpha.md,active\r\nBeta.md,done\r\n")
     }
 
@@ -1062,9 +1071,9 @@ final class BasesTabRoutingTests: XCTestCase {
             "Notes/Beta.md", "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Null.md",
         ]
         XCTAssertEqual(doc.result?.rows.map(\.filePath), numericPaths)
+        let sortedCSV = try await doc.export(format: .csv, session: session)
         XCTAssertEqual(
-            try doc.export(format: .csv, session: session)
-                .split(whereSeparator: \.isNewline).dropFirst()
+            sortedCSV.split(whereSeparator: \.isNewline).dropFirst()
                 .compactMap { $0.split(separator: ",").first.map(String.init) },
             ["Beta.md", "Aardvark.md", "Alpha.md", "Null.md"])
         XCTAssertEqual(
@@ -1351,7 +1360,7 @@ final class BasesTabRoutingTests: XCTestCase {
             BaseListProjection(result: result, options: BaseListOptions(slateStateJson: nil))
                 .items.map { $0.row.filePath },
             enginePaths)
-        let csv = try doc.export(format: .csv, session: session)
+        let csv = try await doc.export(format: .csv, session: session)
         let one = try XCTUnwrap(csv.range(of: "One.md")?.lowerBound)
         let two = try XCTUnwrap(csv.range(of: "Two.md")?.lowerBound)
         XCTAssertLessThan(one, two)
@@ -1748,6 +1757,7 @@ final class BasesTabRoutingTests: XCTestCase {
         XCTAssertEqual(fixture.active.result?.rows.map(\.filePath), ["Notes/Alpha.md"])
 
         fixture.state.basesSaveSortToView()
+        _ = await fixture.state.visibleBasesRefreshTask?.value
 
         XCTAssertEqual(
             fixture.active.handle,
@@ -1800,6 +1810,7 @@ final class BasesTabRoutingTests: XCTestCase {
 
         await state.renameEntry(
             path: "Queries/Reading.base", isDirectory: false, to: "Renamed.base")?.value
+        await state.nativeDocumentRetargetTask?.value
 
         let oldKey = BaseDocumentSource.file(path: "Queries/Reading.base").key
         let newKey = BaseDocumentSource.file(path: "Queries/Renamed.base").key
@@ -1836,6 +1847,7 @@ final class BasesTabRoutingTests: XCTestCase {
 
         await state.renameEntry(
             path: "Queries/Reading.base", isDirectory: false, to: "Renamed.base")?.value
+        await state.nativeDocumentRetargetTask?.value
 
         XCTAssertEqual(
             state.basesDock.target,

@@ -42,6 +42,7 @@ extension AppState {
     /// ⌃⌘G "grab": move the selection (or the marked set, rigidly).
     func canvasEnterMoveMode() {
         guard let doc = activeCanvasDocument else { return }
+        guard admitCanvasMutation(for: doc) else { return }
         let moving = canvasMovingSet(in: doc)
         guard !moving.isEmpty else {
             canvasAnnouncer.announce(.status("Nothing selected."))
@@ -84,6 +85,7 @@ extension AppState {
     /// ⌃⌘R: resize the selected card (single card only).
     func canvasEnterResizeMode() {
         guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
             let selected = doc.selection.selected,
             let node = doc.scene.nodes.first(where: { $0.nodeId == selected })
         else {
@@ -122,6 +124,7 @@ extension AppState {
     /// grab-adjust-done loop); otherwise enters resize mode.
     func canvasCommitOrEnterResize() {
         guard let doc = activeCanvasDocument else { return }
+        guard admitCanvasMutation(for: doc) else { return }
         let controller = canvasModeController(for: doc)
         if controller.active?.name == "Resize mode" {
             _ = controller.commit()
@@ -158,6 +161,7 @@ extension AppState {
     /// enforced with announcement.
     func canvasModeStep(dx: Double, dy: Double, large: Bool) {
         guard let doc = activeCanvasDocument, var transient = canvasTransient else { return }
+        guard admitCanvasMutation(for: doc) else { return }
         let step = large ? Self.canvasGridStepLarge : Self.canvasGridStep
 
         if transient.isResize {
@@ -200,6 +204,7 @@ extension AppState {
         guard let doc = activeCanvasDocument, let transient = canvasTransient,
             transient.isResize, let id = transient.ids.first
         else { return }
+        guard admitCanvasMutation(for: doc) else { return }
         // Approximation: default width; height from the text length
         // (the real editor's metrics land with the Wave-4 editor).
         let fetched = try? currentSession?.canvasNodeText(handle: doc.handle ?? 0, nodeId: id)
@@ -214,6 +219,7 @@ extension AppState {
             transient.isResize, let id = transient.ids.first,
             let rect = transient.rects[id]
         else { return }
+        guard admitCanvasMutation(for: doc) else { return }
         transient.rects[id] = CanvasRect(x: rect.x, y: rect.y, width: width, height: height)
         canvasTransient = transient
         doc.transientRects = transient.rects
@@ -232,6 +238,7 @@ extension AppState {
     private func canvasCommitTransient(doc: CanvasDocument, verb: String, object: String)
         -> String?
     {
+        guard admitCanvasMutation(for: doc) else { return nil }
         guard let transient = canvasTransient else { return nil }
         var ops: [CanvasOp] = []
         for id in transient.ids {

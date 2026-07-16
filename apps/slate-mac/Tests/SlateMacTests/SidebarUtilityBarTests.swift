@@ -24,6 +24,18 @@ import XCTest
 @MainActor
 final class SidebarUtilityBarTests: XCTestCase {
 
+    private final class RecordingAnnouncer: AnnouncementPosting {
+        private(set) var messages: [String] = []
+
+        func post(_ message: String, priority: AnnouncementPriority) {
+            messages.append(message)
+        }
+
+        func reset() {
+            messages = []
+        }
+    }
+
     private var tempDir: URL!
 
     override func setUpWithError() throws {
@@ -50,11 +62,15 @@ final class SidebarUtilityBarTests: XCTestCase {
         return vault
     }
 
-    private func makeState(externalOpener: @escaping (URL) -> Bool = { _ in true }) -> AppState {
+    private func makeState(
+        externalOpener: @escaping (URL) -> Bool = { _ in true },
+        announcer: AnnouncementPosting = AppKitAnnouncementPoster()
+    ) -> AppState {
         AppState(
             recentsStore: RecentVaultsStore(
                 fileURL: tempDir.appendingPathComponent("recents-\(UUID().uuidString).json")),
-            externalOpener: externalOpener)
+            externalOpener: externalOpener,
+            announcer: announcer)
     }
 
     // MARK: - Help action routing (recording externalOpener)
@@ -162,6 +178,18 @@ final class SidebarUtilityBarTests: XCTestCase {
         XCTAssertTrue(state.hasUnsavedChanges, "note must be dirty for the gate to engage")
     }
 
+    private func loadTwoDirtyDocuments(_ state: AppState) async {
+        state.selectedFilePath = "two.md"
+        await state.noteLoadTask?.value
+        state.updateEditorText("# two\n\ndirty two.\n")
+        state.newTab()
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        state.updateEditorText("# note\n\ndirty note.\n")
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertEqual(state.workspace.dirtyParkedDocuments().count, 1)
+    }
+
     /// Switching while DIRTY raises the "Save changes?" gate and parks the
     /// target; the current vault is still open (nothing closed yet).
     func testSwitchToRecentDirtyRaisesGateAndParksTarget() async throws {
@@ -223,6 +251,116 @@ final class SidebarUtilityBarTests: XCTestCase {
         state.closeVaultFromUserAction()
 
         XCTAssertNil(state.currentVaultURL, "plain close returns to welcome, not into B")
+    }
+
+    func testPlainCloseAnnouncementUsesInjectableAnnouncer() async throws {
+        let announcer = RecordingAnnouncer()
+        let state = makeState(announcer: announcer)
+        state.openVault(at: try makeVault("A"))
+        await state.scanTask?.value
+        announcer.reset()
+
+        state.closeVaultFromUserAction()
+
+        XCTAssertEqual(
+            announcer.messages,
+            ["Vault closed. Returned to the welcome screen."])
+    }
+
+    func testPlainDiscardAllAnnouncementUsesInjectableAnnouncer() async throws {
+        let announcer = RecordingAnnouncer()
+        let state = makeState(announcer: announcer)
+        let vault = try makeVault("A")
+        try "# two\n".write(
+            to: vault.appendingPathComponent("two.md"),
+            atomically: true,
+            encoding: .utf8)
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        await loadTwoDirtyDocuments(state)
+        announcer.reset()
+
+        state.closeVaultFromUserAction()
+        state.resolveVaultCloseDiscardAll()
+
+        XCTAssertEqual(
+            announcer.messages,
+            ["Changes discarded. Vault closed. Returned to the welcome screen."])
+    }
+
+    func testPlainSaveAllAnnouncementUsesInjectableAnnouncer() async throws {
+        let announcer = RecordingAnnouncer()
+        let state = makeState(announcer: announcer)
+        let vault = try makeVault("A")
+        try "# two\n".write(
+            to: vault.appendingPathComponent("two.md"),
+            atomically: true,
+            encoding: .utf8)
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        await loadTwoDirtyDocuments(state)
+        announcer.reset()
+
+        state.closeVaultFromUserAction()
+        state.resolveVaultCloseSaveAll()
+        await state.vaultCloseSaveAllTask?.value
+
+        XCTAssertEqual(
+            announcer.messages,
+            ["All changes saved. Vault closed. Returned to the welcome screen."])
+    }
+
+    func testDiscardAllSwitchAnnouncesOpenedVaultNotWelcome() async throws {
+        let announcer = RecordingAnnouncer()
+        let state = makeState(announcer: announcer)
+        let vaultA = try makeVault("A")
+        let vaultB = try makeVault("B")
+        try "# two\n".write(
+            to: vaultA.appendingPathComponent("two.md"),
+            atomically: true,
+            encoding: .utf8)
+        state.openVault(at: vaultA)
+        await state.scanTask?.value
+        await loadTwoDirtyDocuments(state)
+        announcer.reset()
+
+        state.switchToRecent(RecentVault(url: vaultB))
+        XCTAssertEqual(state.pendingVaultClose, 2)
+        state.resolveVaultCloseDiscardAll()
+        await state.scanTask?.value
+
+        XCTAssertEqual(
+            announcer.messages,
+            ["Vault B opened. Scanning files for the sidebar."])
+        XCTAssertFalse(
+            announcer.messages.contains { $0.contains("welcome screen") })
+    }
+
+    func testSaveAllSwitchAnnouncesOpenedVaultNotWelcome() async throws {
+        let announcer = RecordingAnnouncer()
+        let state = makeState(announcer: announcer)
+        let vaultA = try makeVault("A")
+        let vaultB = try makeVault("B")
+        try "# two\n".write(
+            to: vaultA.appendingPathComponent("two.md"),
+            atomically: true,
+            encoding: .utf8)
+        state.openVault(at: vaultA)
+        await state.scanTask?.value
+        await loadTwoDirtyDocuments(state)
+        announcer.reset()
+
+        state.switchToRecent(RecentVault(url: vaultB))
+        XCTAssertEqual(state.pendingVaultClose, 2)
+        state.resolveVaultCloseSaveAll()
+        await state.vaultCloseSaveAllTask?.value
+        await state.scanTask?.value
+
+        XCTAssertEqual(
+            announcer.messages,
+            ["Vault B opened. Scanning files for the sidebar."])
+        XCTAssertFalse(
+            announcer.messages.contains { $0.contains("welcome screen") })
     }
 
     /// Switching to the already-open vault is a no-op (the menu also disables

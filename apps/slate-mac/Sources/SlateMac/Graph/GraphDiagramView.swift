@@ -264,6 +264,17 @@ final class GraphDiagramNSView: NSView {
                     Task { @MainActor [weak self] in self?.syncSelectionFromSharedKey() }
                 }
                 .store(in: &subscriptions)
+            // A structural busy flip changes only the ghost creation
+            // affordance. Refresh the existing AX metadata in O(visible
+            // nodes); never rebuild graph topology or restart layout.
+            appState.$isMutatingStructure
+                .dropFirst()
+                .sink { [weak self] _ in
+                    Task { @MainActor [weak self] in
+                        self?.refreshGhostCreationAvailability()
+                    }
+                }
+                .store(in: &subscriptions)
             didInitialFit = false
             startSettling()
         } else if motionFlip {
@@ -753,10 +764,8 @@ final class GraphDiagramNSView: NSView {
         element.setAccessibilityRole(.button)
         element.setAccessibilityParent(self)
         element.setAccessibilityLabel(axLabel(node, model: model))
-        element.setAccessibilityHelp("Graph node. Press to open.")
         element.setAccessibilityValue(model.pinned.contains(id) ? "pinned" : "")
         element.accessibilityCustomContent = neighborCustomContent(of: id, model: model)
-        element.onPress = { [weak self] in self?.activate(id) }
         element.onAXFocus = { [weak self] in
             guard let self else { return }
             // Sync selection only when it changed, but ALWAYS pan the
@@ -766,12 +775,31 @@ final class GraphDiagramNSView: NSView {
             if self.model?.selection != id { self.appState?.graphDiagramSelect(id, announce: false) }
             self.scrollNodeIntoView(id)
         }
+        configureActionsAndHelp(for: element, id: id, node: node, model: model)
+        return element
+    }
+
+    private func configureActionsAndHelp(
+        for element: GraphNodeAXElement,
+        id: UInt64,
+        node: GraphNode,
+        model: GraphDiagramModel
+    ) {
+        let disabledReason =
+            node.kind == .ghost ? appState?.structuralMutationDisabledReason : nil
+        element.onPress = disabledReason == nil ? { [weak self] in self?.activate(id) } : nil
+        element.setAccessibilityHelp(
+            disabledReason
+                ?? (node.kind == .ghost
+                    ? "Unresolved. Press to create note."
+                    : "Graph node. Press to open."))
+
         // Build the shared, canonical action set (P2-5 #561, DoD §P-B
-        // parity): the SAME `GraphRowAction`s the Table and Connections
-        // expose, in the same order with the same labels — so the three
-        // projections can't drift. A ghost gets "Create note"; a real note
-        // gets Open / Open in New Tab / Show connections / Reveal.
-        var actions = GraphRowAction.actions(forGhost: node.kind == .ghost).map { action in
+        // parity). A temporarily unavailable contextual Create action is
+        // omitted while the node's exact AX help explains why; Pin remains.
+        var actions = GraphRowAction.actions(forGhost: node.kind == .ghost)
+            .filter { $0 != .createNote || disabledReason == nil }
+            .map { action in
             NSAccessibilityCustomAction(name: action.title) { [weak self] in
                 self?.performRowAction(action, id: id)
                 return true
@@ -786,7 +814,15 @@ final class GraphDiagramNSView: NSView {
                 return true
             })
         element.setAccessibilityCustomActions(actions)
-        return element
+    }
+
+    private func refreshGhostCreationAvailability() {
+        guard let model else { return }
+        for element in axElements {
+            guard let node = model.node(element.nodeId) else { continue }
+            configureActionsAndHelp(
+                for: element, id: element.nodeId, node: node, model: model)
+        }
     }
 
     /// Dispatch a canonical `GraphRowAction` on the diagram node `id` — the
@@ -944,6 +980,7 @@ final class GraphDiagramNSView: NSView {
         guard let appState, let node = model?.node(id) else { return }
         focusOwningGroup()
         if node.kind == .ghost {
+            guard appState.structuralMutationDisabledReason == nil else { return }
             appState.createNoteFromGhost(targetRaw: node.label)
         } else if let path = node.path {
             appState.openFile(path, target: .currentTab)
@@ -1267,6 +1304,14 @@ final class GraphDiagramNSView: NSView {
     func axCustomActionNamesForTesting(nodeId: UInt64) -> [String] {
         guard let el = axElements.first(where: { $0.nodeId == nodeId }) else { return [] }
         return (el.accessibilityCustomActions() ?? []).map { $0.name }
+    }
+
+    func axHelpForTesting(nodeId: UInt64) -> String? {
+        axElements.first(where: { $0.nodeId == nodeId })?.accessibilityHelp()
+    }
+
+    func refreshStructuralCreationAvailabilityForTesting() {
+        refreshGhostCreationAvailability()
     }
 
     /// Feed a frame directly (tests the generation/size guard in

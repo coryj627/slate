@@ -35,6 +35,8 @@ jobs:
     runs-on: namespace-profile-arm64-fast
     permissions:
       contents: read
+    env:
+      ROOT_LISTING_PERF_GUARD: session::tests::dir_tree::perf_guard_root_listing_under_100ms_on_10k_files
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
@@ -55,7 +57,20 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo test
-        run: cargo test --workspace
+        # This wall-clock guard is run in isolation below. Running it beside
+        # the long dir-tree census makes scheduler contention indistinguishable
+        # from a list_dir_children regression on shared CI runners.
+        run: >-
+          cargo test --workspace --
+          --skip "$ROOT_LISTING_PERF_GUARD"
+
+      - name: root-listing performance guard (isolated)
+        run: |
+          set -o pipefail
+          cargo test -p slate-core --lib "$ROOT_LISTING_PERF_GUARD" -- --exact --list |
+            grep -F -x "$ROOT_LISTING_PERF_GUARD: test"
+          cargo test -p slate-core --lib "$ROOT_LISTING_PERF_GUARD" -- \
+            --exact --test-threads=1 --include-ignored
 
       - name: cargo bench --no-run
         # Compile every bench in the workspace without running them.

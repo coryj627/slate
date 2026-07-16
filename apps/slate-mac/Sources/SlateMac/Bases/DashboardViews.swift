@@ -43,6 +43,9 @@ struct DashboardContainerView: View {
                     DashboardSectionView(
                         section: section,
                         replacementChoices: appState.baseQueries.savedQueries,
+                        onRetry: {
+                            retryDashboardSection(section)
+                        },
                         onRemove: {
                             appState.removeMissingDashboardSection(
                                 dashboardID: document.id,
@@ -68,15 +71,34 @@ struct DashboardContainerView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityLabel(text)
     }
+
+    /// Retry only while this exact dashboard and section are still owned by
+    /// the current vault. The shared unfiltered scheduler preserves its global
+    /// generation contract and prepares all native work off the main actor.
+    private func retryDashboardSection(
+        _ section: DashboardSectionDocument
+    ) -> Task<[String], Never>? {
+        guard let session = appState.currentSession,
+            document.sections.contains(where: { $0 === section }),
+            appState.dashboardDocuments[document.id] === document
+                || appState.basesDockDashboardDocument === document
+        else { return nil }
+
+        return appState.refreshVisibleBasesAfterInAppWrite(
+            session: session,
+            changedPath: "")
+    }
 }
 
 private struct DashboardSectionView: View {
     @ObservedObject var section: DashboardSectionDocument
     let replacementChoices: [SavedQuerySummary]
+    let onRetry: () -> Task<[String], Never>?
     let onRemove: () -> Void
     let onReplace: (String) -> Void
     @State private var showingReplacementPicker = false
     @State private var gridInteraction = BaseGridInteractionState()
+    @State private var retryInFlight = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
@@ -97,24 +119,38 @@ private struct DashboardSectionView: View {
             placeholder("Loading section...")
         case .missing:
             missingSection
+        case .degraded(let message):
+            degradedContent(message)
         case .failed(let message):
             failureBanner(message)
         case .ready:
-            if let result = section.result {
-                switch BaseResultContentState(result: result) {
-                case .empty:
-                    placeholder("No results in this section.")
-                case .rowOnly, .tabular:
-                    BaseReadOnlyResultView(
-                        result: result,
-                        accessibilityLabel: "\(section.title) grid",
-                        rendererOverride: section.resolvedRenderer,
-                        interaction: $gridInteraction)
-                        .frame(minHeight: 160)
-                }
-            } else {
+            sectionResult
+        }
+    }
+
+    private func degradedContent(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.sm) {
+            failureBanner(message, onRetry: retryDegradedSection)
+            sectionResult
+        }
+    }
+
+    @ViewBuilder
+    private var sectionResult: some View {
+        if let result = section.result {
+            switch BaseResultContentState(result: result) {
+            case .empty:
                 placeholder("No results in this section.")
+            case .rowOnly, .tabular:
+                BaseReadOnlyResultView(
+                    result: result,
+                    accessibilityLabel: "\(section.title) grid",
+                    rendererOverride: section.resolvedRenderer,
+                    interaction: $gridInteraction)
+                    .frame(minHeight: 160)
             }
+        } else {
+            placeholder("No results in this section.")
         }
     }
 
@@ -169,19 +205,52 @@ private struct DashboardSectionView: View {
         }
     }
 
-    private func failureBanner(_ message: String) -> some View {
+    private func failureBanner(
+        _ message: String,
+        onRetry: (() -> Void)? = nil
+    ) -> some View {
         HStack(alignment: .top, spacing: Tokens.Spacing.xs) {
             SlateSymbol.warning.decorative
-            Text(message)
-                .font(Tokens.Typography.callout)
-                .foregroundStyle(Tokens.ColorRole.textPrimary)
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+                Text("Dashboard section error")
+                    .font(Tokens.Typography.callout.weight(.semibold))
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
+                Text(message)
+                    .font(Tokens.Typography.callout)
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("Dashboard section error: \(message)")
             Spacer(minLength: 0)
+            if let onRetry {
+                if retryInFlight {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Retrying dashboard section")
+                }
+                Button("Retry") { onRetry() }
+                    .buttonStyle(.bordered)
+                    .disabled(retryInFlight)
+                    .accessibilityHint("Runs the dashboard refresh again.")
+            }
         }
         .padding(Tokens.Spacing.sm)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Tokens.ColorRole.surfaceSecondary)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Dashboard section error: \(message)")
+        .accessibilityElement(children: .contain)
+    }
+
+    private func retryDegradedSection() {
+        guard !retryInFlight else { return }
+        retryInFlight = true
+        guard let task = onRetry() else {
+            retryInFlight = false
+            return
+        }
+        Task { @MainActor in
+            _ = await task.value
+            retryInFlight = false
+        }
     }
 
     private func placeholder(_ text: String) -> some View {

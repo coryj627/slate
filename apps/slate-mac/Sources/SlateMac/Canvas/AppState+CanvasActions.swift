@@ -74,7 +74,9 @@ extension AppState {
     /// (interview decision 1), announced relatively, selected, and
     /// landed in edit mode (G22) via the #368 card editor.
     func canvasNewCard() {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle
         else { return }
         let id = Self.newCanvasEntityID()
@@ -112,7 +114,9 @@ extension AppState {
     /// New Group: prompts ride the UI (container sheet); this is the
     /// commit path. Placed via the engine like any creation.
     func canvasNewGroup(label: String) {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle
         else { return }
         let id = Self.newCanvasEntityID()
@@ -146,32 +150,157 @@ extension AppState {
     /// New Canvas (file-level, CommandSection.file): creates
     /// `name.canvas` beside the tree selection via the U2-2 create API
     /// and opens it — closes the "can't start from empty" gap (G22).
-    func canvasNewCanvasFile() {
-        guard let session = currentSession else { return }
-        let base = "Untitled Canvas"
-        var name = "\(base).canvas"
-        var counter = 2
-        // Root-level creation; collision-avoid like New Note.
-        while (try? session.readText(path: name)) != nil {
-            name = "\(base) \(counter).canvas"
-            counter += 1
+    @discardableResult
+    func canvasNewCanvasFile() -> Task<Void, Never>? {
+        guard let session = currentSession else { return nil }
+        guard admitStructuralMutationRequest() else { return nil }
+        let candidatePaths = (0..<200).map { attempt in
+            attempt == 0
+                ? "Untitled Canvas.canvas"
+                : "Untitled Canvas \(attempt + 1).canvas"
         }
-        do {
-            // create_exclusive (#796): the readText probe above races an
-            // external create of the same name — an unconditional save
-            // would overwrite it with "{}". The no-clobber primitive
-            // surfaces DestinationExists instead.
-            _ = try session.createExclusive(path: name, content: "{}\n")
+        let writableCandidatePaths = candidatePaths.filter {
+            batchTrashPathCapability(for: $0) == .writable
+        }
+        guard !writableCandidatePaths.isEmpty else {
+            _ = admitBatchTrashWrite(to: candidatePaths)
+            return nil
+        }
+
+        let token = beginStructuralMutation()
+        let refresher = structuralBatchRefreshRunner
+        let nativeObserver = canvasNewFileNativeExecutionObserverForTesting
+        let preloader = canvasNewFilePreloadRunner
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.endStructuralMutation(token) }
+            var createdName: String?
+            // Each exact candidate is admitted and reserved on the main actor
+            // before its exclusive native create. If a raced physical file
+            // occupies that candidate, the next candidate gets its own fresh
+            // admission/reservation; user-owned recovery is never treated as
+            // a suffix collision and silently skipped.
+            for name in writableCandidatePaths {
+                guard !Task.isCancelled,
+                    self.ownsStructuralMutation(token, session: session)
+                else { return }
+                guard let recoveryReservation =
+                        self.admitStructuralRecoveryDestination(name),
+                    self.admitBatchTrashWrite(to: [name]),
+                    self.installStructuralRecoveryReservation(
+                        recoveryReservation, token: token)
+                else { return }
+
+                let create: Result<Void, VaultError> = await Task.detached(
+                    priority: .userInitiated
+                ) {
+                    do {
+                        nativeObserver?(
+                            CanvasNewFileNativeExecutionEvent(
+                                phase: .create,
+                                ranOnMainThread: CanvasNewFileThreadProbe.isMainThread()))
+                        _ = try session.createExclusive(path: name, content: "{}\n")
+                        return .success(())
+                    } catch let error as VaultError {
+                        return .failure(error)
+                    } catch {
+                        return .failure(.Io(message: error.localizedDescription))
+                    }
+                }.value
+                guard !Task.isCancelled,
+                    self.ownsStructuralMutation(token, session: session)
+                else { return }
+
+                switch create {
+                case .success:
+                    createdName = name
+                case .failure(.DestinationExists):
+                    continue
+                case .failure(let error):
+                    self.canvasAnnouncer.announce(
+                        .error("New canvas failed: \(error.localizedDescription)"))
+                    return
+                }
+                break
+            }
+
+            guard let name = createdName else {
+                let error = VaultError.Io(
+                    message: "could not find a free canvas name after 200 attempts")
+                self.canvasAnnouncer.announce(
+                    .error("New canvas failed: \(error.localizedDescription)"))
+                return
+            }
+
+            // Reserve (and reuse) the per-path object before the slower
+            // native open/outline/table/scene preparation begins. An
+            // existing missing-file tab can be activated throughout that
+            // suspension without falling back to main-actor native work.
+            let document = self.canvasDocument(for: name)
+            let replacedHandle = document.beginPreparedReplacement()
+            if let replacedHandle {
+                await Task.detached(priority: .utility) {
+                    CanvasPreparedLoader.closeReplaced(
+                        handle: replacedHandle,
+                        session: session,
+                        observer: nativeObserver)
+                }.value
+            }
+            guard !Task.isCancelled,
+                self.ownsStructuralMutation(token, session: session)
+            else {
+                self.abandonCanvasPreparedReplacement(
+                    document, path: name, session: session)
+                return
+            }
+
+            let prepared = await Task.detached(priority: .userInitiated) {
+                preloader(session, name, nativeObserver)
+            }.value
+            guard !Task.isCancelled,
+                self.ownsStructuralMutation(token, session: session)
+            else {
+                await Task.detached(priority: .utility) {
+                    CanvasPreparedLoader.release(
+                        prepared,
+                        session: session,
+                        observer: nativeObserver)
+                }.value
+                self.abandonCanvasPreparedReplacement(
+                    document, path: name, session: session)
+                return
+            }
+
+            await refresher(self)
+            guard !Task.isCancelled,
+                self.ownsStructuralMutation(token, session: session)
+            else {
+                await Task.detached(priority: .utility) {
+                    CanvasPreparedLoader.release(
+                        prepared,
+                        session: session,
+                        observer: nativeObserver)
+                }.value
+                self.abandonCanvasPreparedReplacement(
+                    document, path: name, session: session)
+                return
+            }
             // #871 Codex round 2: a non-undoable structural create that
             // bypasses `publishTreeMutation` — clear the structural undo
             // history (barrier) so no stale inverse targets this new path.
-            clearStructuralUndoStacks()
-            openFile(name, target: .currentTab)
-            canvasAnnouncer.announce(
-                .confirmation("Created canvas \"\((name as NSString).deletingPathExtension)\"."))
-        } catch {
-            canvasAnnouncer.announce(.error("New canvas failed: \(error.localizedDescription)"))
+            self.clearStructuralUndoStacks()
+            self.dropCanvasModeState(for: name)
+            document.applyPreparedLoad(prepared)
+            // New documents get their own tab. Replacing the current tab
+            // would destroy the only owner of an unsaved Markdown buffer;
+            // it could also synchronously release a native editor object.
+            self.openFile(name, target: .newTab)
+            self.canvasAnnouncer.announce(
+                .confirmation(
+                    "Created canvas \"\((name as NSString).deletingPathExtension)\"."))
         }
+        recordPendingStructuralTask(task)
+        return task
     }
 
     /// Delete the selected card/group. Group delete keeps children
@@ -179,6 +308,7 @@ extension AppState {
     /// carries the undo hint at standard+ verbosity (t0 §1.3).
     func canvasDeleteSelection() {
         guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else { return }
@@ -200,6 +330,7 @@ extension AppState {
     /// announced with the color NAME (t0 §1.1; #370 verifies contrast).
     func canvasSetColor(preset: Int?) {
         guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected })
         else { return }
@@ -219,6 +350,7 @@ extension AppState {
     /// order (t4).
     func canvasRenameGroup(to label: String) {
         guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected }),
             row.kind == "group"
@@ -239,8 +371,10 @@ extension AppState {
     // MARK: Prompt openers (the container renders the sheets)
 
     func canvasPromptNewGroup() {
-        guard activeCanvasDocument != nil else { return }
-        canvasPrompt = .newGroup
+        guard let document = activeCanvasDocument,
+            admitCanvasMutation(for: document)
+        else { return }
+        presentCanvasPrompt(.newGroup)
     }
 
     func canvasPromptRenameGroup() {
@@ -252,7 +386,8 @@ extension AppState {
             canvasAnnouncer.announce(.status("Not a group."))
             return
         }
-        canvasPrompt = .renameGroup(current: row.title)
+        guard admitCanvasMutation(for: doc) else { return }
+        presentCanvasPrompt(.renameGroup(current: row.title), draft: row.title)
     }
 
     func canvasPromptMoveIntoGroup() {
@@ -268,7 +403,8 @@ extension AppState {
             canvasAnnouncer.announce(.status("This canvas has no groups."))
             return
         }
-        canvasPrompt = .moveIntoGroup(groups: groups)
+        guard admitCanvasMutation(for: doc) else { return }
+        presentCanvasPrompt(.moveIntoGroup(groups: groups))
     }
 
     func canvasPromptSetColor() {
@@ -276,14 +412,17 @@ extension AppState {
             canvasAnnouncer.announce(.status("Nothing selected."))
             return
         }
-        canvasPrompt = .setColor
+        guard admitCanvasMutation(for: doc) else { return }
+        presentCanvasPrompt(.setColor)
     }
 
     /// Move the selected card into a group by name — the voice-friendly
     /// reparent (R22): zero coordinates for the user, engine placement
     /// inside the target's bounds.
     func canvasMoveIntoGroup(groupId: String) {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle,
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected }),
@@ -341,6 +480,7 @@ extension AppState {
 extension AppState {
     func canvasOpenCardPicker(_ purpose: CanvasCardPickerPurpose) {
         guard let doc = activeCanvasDocument else { return }
+        guard admitCanvasMutation(for: doc) else { return }
         guard doc.selection.selected != nil else {
             canvasAnnouncer.announce(.status("Nothing selected."))
             return
@@ -363,7 +503,9 @@ extension AppState {
     /// card/set excluded from collision, one action, one undo, one
     /// announcement.
     func canvasPlaceRelative(target: String, direction: CanvasPlaceDirection) {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle
         else { return }
         let moving = canvasMovingSet(in: doc)
@@ -429,7 +571,9 @@ extension AppState {
     /// engine's overlap check gates it — a collision is announced,
     /// never silently stacked (G20 spirit).
     func canvasAlignWith(target: String) {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle,
             let selected = doc.selection.selected,
             let node = doc.scene.nodes.first(where: { $0.nodeId == selected }),
@@ -480,12 +624,17 @@ extension AppState {
             guard let doc = activeCanvasDocument,
                 let row = doc.outline.first(where: { $0.nodeId == target })
             else { return }
-            canvasPrompt = .connectLabel(targetId: target, targetTitle: row.title)
+            guard admitCanvasMutation(for: doc) else { return }
+            presentCanvasPrompt(
+                .connectLabel(targetId: target, targetTitle: row.title))
         }
     }
 
     /// Palette entries for existing connections (#523).
     func canvasPromptDeleteConnection() {
+        guard let document = activeCanvasDocument,
+            admitCanvasMutation(for: document)
+        else { return }
         let choices = canvasConnectionChoices()
         guard !choices.isEmpty else {
             canvasAnnouncer.announce(.status("The selected card has no connections."))
@@ -494,11 +643,14 @@ extension AppState {
         if choices.count == 1 {
             canvasDeleteConnection(edgeId: choices[0].edgeId)
         } else {
-            canvasPrompt = .pickConnection(choices: choices, toDelete: true)
+            presentCanvasPrompt(.pickConnection(choices: choices, toDelete: true))
         }
     }
 
     func canvasPromptEditConnection() {
+        guard let document = activeCanvasDocument,
+            admitCanvasMutation(for: document)
+        else { return }
         let choices = canvasConnectionChoices()
         guard !choices.isEmpty else {
             canvasAnnouncer.announce(.status("The selected card has no connections."))
@@ -507,7 +659,7 @@ extension AppState {
         if choices.count == 1 {
             canvasOpenConnectionEditor(edgeId: choices[0].edgeId)
         } else {
-            canvasPrompt = .pickConnection(choices: choices, toDelete: false)
+            presentCanvasPrompt(.pickConnection(choices: choices, toDelete: false))
         }
     }
 
@@ -515,7 +667,10 @@ extension AppState {
         guard let doc = activeCanvasDocument,
             let edge = doc.scene.edges.first(where: { $0.edgeId == edgeId })
         else { return }
-        canvasPrompt = .editConnection(edgeId: edgeId, currentLabel: edge.label ?? "")
+        guard admitCanvasMutation(for: doc) else { return }
+        presentCanvasPrompt(
+            .editConnection(edgeId: edgeId, currentLabel: edge.label ?? ""),
+            draft: edge.label ?? "")
     }
 }
 
@@ -562,7 +717,7 @@ extension AppState {
             canvasAnnouncer.announce(.status("No marks."))
             return
         }
-        canvasPrompt = .marksList
+        presentCanvasPrompt(.marksList)
     }
 
     /// Marked ids in reading order (deterministic everywhere).
@@ -572,7 +727,9 @@ extension AppState {
 
     /// Bulk delete: one action, one undo, one summary.
     func canvasDeleteMarked() {
-        guard let doc = activeCanvasDocument else { return }
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc)
+        else { return }
         let marked = canvasMarkedInOrder(doc)
         guard !marked.isEmpty else {
             canvasAnnouncer.announce(.status("No marks."))
@@ -592,7 +749,9 @@ extension AppState {
 
     /// Bulk color: one action, one summary.
     func canvasColorMarked(preset: Int?) {
-        guard let doc = activeCanvasDocument else { return }
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc)
+        else { return }
         let marked = canvasMarkedInOrder(doc)
         guard !marked.isEmpty else {
             canvasAnnouncer.announce(.status("No marks."))
@@ -612,7 +771,9 @@ extension AppState {
     /// Group the marked set: one group sized to the set's padded
     /// bounds — geometric containment (t1 rule 1) does the parenting.
     func canvasGroupMarked(label: String) {
-        guard let doc = activeCanvasDocument else { return }
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc)
+        else { return }
         let marked = canvasMarkedInOrder(doc)
         guard marked.count >= 1 else {
             canvasAnnouncer.announce(.status("No marks."))
@@ -655,6 +816,7 @@ extension AppState {
             canvasAnnouncer.announce(.status("No marks."))
             return
         }
-        canvasPrompt = .groupMarked
+        guard admitCanvasMutation(for: doc) else { return }
+        presentCanvasPrompt(.groupMarked)
     }
 }

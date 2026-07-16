@@ -29,6 +29,9 @@ struct CanvasContainerView: View {
     /// #373: keyboard focus for the in-canvas filter field (⌘F).
     @FocusState private var filterFocused: Bool
 
+    /// Local feedback for the retry control. Native ownership and staleness
+    /// remain governed by the document reservation and AppState scheduler.
+    @State private var retargetRetryInFlight = false
 
     var body: some View {
         Group {
@@ -40,6 +43,8 @@ struct CanvasContainerView: View {
                 stateMessage(message)
             case .degraded(let detail):
                 degradedState(detail)
+            case .retargetFailed(let message):
+                retargetFailureSnapshot(message)
             case .ready:
                 readyBody
             }
@@ -57,7 +62,7 @@ struct CanvasContainerView: View {
         .onKeyPress(.escape) {
             if modeController.handleEscape() { return .handled }
             if document.filterActive || filterFocused {
-                appState.canvasClearFilter()
+                clearFilter()
                 filterFocused = false
                 return .handled
             }
@@ -74,9 +79,18 @@ struct CanvasContainerView: View {
         .onChange(of: document.filterText) { _, _ in
             appState.canvasAnnounceFilterCount(doc: document)
         }
+        .onChange(of: document.state) { _, newState in
+            guard case .retargetFailed(let message) = newState else { return }
+            announceCanvasRetargetFailure(message)
+        }
         // M2: Return commits the active spatial mode (#521).
         .onKeyPress(.return) {
             guard modeController.active != nil else { return .ignored }
+            // Consume Return with the exact recovery announcement before the
+            // controller clears its mode. The transient and active mode stay
+            // intact for a later present reconciliation.
+            guard appState.admitCanvasMutation(for: document) else { return .handled }
+            guard document.handle != nil else { return .handled }
             return modeController.commit() ? .handled : .ignored
         }
         // M4: leaving the canvas (tab switch/pane move) auto-cancels
@@ -217,30 +231,83 @@ struct CanvasContainerView: View {
     // MARK: Ready
 
     @ViewBuilder private var readyBody: some View {
+        if let reason = appState.canvasMutationDisabledReason(for: document) {
+            VStack(spacing: 0) {
+                canvasQuarantineBanner(reason)
+                Divider()
+                canvasBody(readOnly: true)
+            }
+        } else {
+            canvasBody(readOnly: false)
+        }
+    }
+
+    @ViewBuilder private func canvasBody(readOnly: Bool) -> some View {
         VStack(spacing: 0) {
             header
             if document.outline.isEmpty {
-                emptyOnboarding
-            } else {
-                switch surface {
-                case .outline:
-                    CanvasOutlineView(document: document, tabID: tabID) { row in
-                        activate(nodeId: row.nodeId, kind: row.kind, title: row.title)
-                    }
-                    .accessibilityFocused($contentFocused)
-                case .table:
-                    CanvasTableView(document: document) { nodeId in
-                        if let row = document.outline.first(where: { $0.nodeId == nodeId }) {
-                            activate(nodeId: nodeId, kind: row.kind, title: row.title)
-                        }
-                    }
-                    .accessibilityFocused($contentFocused)
-                case .visual:
-                    CanvasRendererView(document: document)
-                        .accessibilityFocused($contentFocused)
+                if readOnly {
+                    readOnlyEmptySnapshot
+                } else {
+                    emptyOnboarding
                 }
+            } else {
+                Group {
+                    switch surface {
+                    case .outline:
+                        CanvasOutlineView(document: document, tabID: tabID) { row in
+                            activate(nodeId: row.nodeId, kind: row.kind, title: row.title)
+                        }
+                        .accessibilityFocused($contentFocused)
+                    case .table:
+                        CanvasTableView(document: document) { nodeId in
+                            if let row = document.outline.first(where: { $0.nodeId == nodeId }) {
+                                activate(nodeId: nodeId, kind: row.kind, title: row.title)
+                            }
+                        }
+                        .accessibilityFocused($contentFocused)
+                    case .visual:
+                        CanvasRendererView(document: document)
+                            .accessibilityFocused($contentFocused)
+                    }
+                }
+                .disabled(readOnly)
             }
         }
+    }
+
+    private func canvasQuarantineBanner(_ reason: String) -> some View {
+        HStack(alignment: .top, spacing: Tokens.Spacing.sm) {
+            SlateSymbol.warning.decorative
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+                Text("Canvas is read-only")
+                    .font(Tokens.Typography.body.weight(.semibold))
+                Text(reason)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .textSelection(.enabled)
+            }
+            Spacer(minLength: 0)
+            if let recoveryLabel = appState.canvasRecoveryActionLabel(for: document) {
+                let disabledReason = appState.structuralMutationDisabledReason
+                Button(recoveryLabel) {
+                    _ = appState.retryCanvasRecovery(for: document)
+                }
+                .disabled(disabledReason != nil)
+                .accessibilityHint(
+                    disabledReason
+                        ?? appState.canvasRecoveryActionHint(for: document)
+                        ?? "Try to restore Canvas editing.")
+                .help(
+                    disabledReason
+                        ?? appState.canvasRecoveryActionHint(for: document)
+                        ?? "Try to restore Canvas editing")
+            }
+        }
+        .padding(Tokens.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.ColorRole.surfaceSecondary)
+        .accessibilityElement(children: .contain)
     }
 
     /// Surface switcher + t0 §5 warning banner. The switcher mirrors
@@ -271,7 +338,7 @@ struct CanvasContainerView: View {
                     Text("\(document.filteredOutline.count) of \(document.outline.count) cards match")
                         .font(Tokens.Typography.caption)
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
-                    Button("Clear") { appState.canvasClearFilter() }
+                    Button("Clear") { clearFilter() }
                         .accessibilityLabel("Clear filter")
                 }
             }
@@ -307,6 +374,97 @@ struct CanvasContainerView: View {
     }
 
     // MARK: Empty / error states
+
+    private func retargetFailureSnapshot(_ message: String) -> some View {
+        VStack(spacing: 0) {
+            retargetFailureBanner(message)
+            Divider()
+            canvasBody(readOnly: true)
+        }
+    }
+
+    private func retargetFailureBanner(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: Tokens.Spacing.sm) {
+            SlateSymbol.warning.decorative
+            VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+                Text("Canvas could not be reopened")
+                    .font(Tokens.Typography.body.weight(.semibold))
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
+                Text(message)
+                    .font(Tokens.Typography.callout)
+                    .foregroundStyle(Tokens.ColorRole.textPrimary)
+                    .textSelection(.enabled)
+                Text("The previous snapshot is read-only.")
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+            }
+            Spacer(minLength: 0)
+            if retargetRetryInFlight {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityHidden(true)
+            }
+            Button("Retry") { retryCanvasRetarget() }
+                .buttonStyle(.bordered)
+                .disabled(retargetRetryInFlight)
+                .accessibilityHint("Attempts to reopen the moved canvas at its current path.")
+        }
+        .padding(Tokens.Spacing.sm)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Tokens.ColorRole.surfaceSecondary)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func retryCanvasRetarget() {
+        guard !retargetRetryInFlight,
+            document.hasPendingRetargetPreparation,
+            let session = appState.currentSession,
+            appState.canvasDocuments[document.path] === document
+        else { return }
+
+        retargetRetryInFlight = true
+        appState.scheduleCanvasRetargetPreparationIfNeeded(
+            document: document,
+            path: document.path,
+            session: session)
+        guard let task = appState.nativeDocumentRetargetTask else {
+            retargetRetryInFlight = false
+            return
+        }
+        Task { @MainActor in
+            await task.value
+            retargetRetryInFlight = false
+        }
+    }
+
+    private func announceCanvasRetargetFailure(_ message: String) {
+        guard case .canvas(let activePath)? = workspace.activeTab?.item,
+            BaseExactIdentity.matches(activePath, document.path),
+            appState.canvasDocuments[activePath] === document
+        else { return }
+        appState.canvasAnnouncer.announce(
+            .error(
+                "Canvas could not be reopened. The previous snapshot is read-only. \(message)"))
+    }
+
+    private func clearFilter() {
+        if case .retargetFailed = document.state {
+            guard document.filterActive || !document.filterText.isEmpty else { return }
+            document.filterText = ""
+            appState.canvasAnnouncer.announce(
+                .filter("Filter cleared — \(document.outline.count) cards."))
+        } else {
+            appState.canvasClearFilter()
+        }
+    }
+
+    private var readOnlyEmptySnapshot: some View {
+        Text("The previous canvas snapshot is empty and read-only.")
+            .font(Tokens.Typography.body)
+            .foregroundStyle(Tokens.ColorRole.textSecondary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .accessibilityFocused($contentFocused)
+    }
 
     /// Actionable onboarding (#368: leads with New Card).
     private var emptyOnboarding: some View {
@@ -346,6 +504,7 @@ struct CanvasContainerView: View {
                 .font(Tokens.Typography.body)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
                 .multilineTextAlignment(.center)
+                .textSelection(.enabled)
             Spacer()
         }
         .padding(Tokens.Spacing.lg)

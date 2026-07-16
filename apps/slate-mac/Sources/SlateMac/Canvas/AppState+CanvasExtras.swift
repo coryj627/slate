@@ -3,6 +3,29 @@
 
 import Foundation
 
+private enum CanvasConvertThreadProbe {
+    nonisolated static func isMainThread() -> Bool {
+        Thread.isMainThread
+    }
+}
+
+private enum CanvasConvertToNoteOutcome: Sendable {
+    case converted(CanvasApplyResult)
+    case destinationExists
+    case readFailed(String)
+    case createFailed(String)
+    case retargetFailed(String)
+
+    var createdNote: Bool {
+        switch self {
+        case .converted, .retargetFailed:
+            return true
+        case .destinationExists, .readFailed, .createFailed:
+            return false
+        }
+    }
+}
+
 /// Obsidian-parity authoring extras (Milestone T, #525) — all
 /// keyboard-first: create-connected-card (the mind-mapping gesture),
 /// duplicate (selection or marked set, one action), convert card →
@@ -17,7 +40,9 @@ extension AppState {
     /// connected FROM the selection, engine-placed (default below),
     /// landed in edit mode for immediate typing.
     func canvasCreateConnectedCard(direction: CanvasPlaceDirection = .below) {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle
         else { return }
         guard let origin = doc.selection.selected,
@@ -76,7 +101,8 @@ extension AppState {
             canvasAnnouncer.announce(.status("Nothing selected."))
             return
         }
-        canvasPrompt = .connectedDirection
+        guard admitCanvasMutation(for: doc) else { return }
+        presentCanvasPrompt(.connectedDirection)
     }
 
     // MARK: Duplicate (selection or marked set — ONE action)
@@ -87,7 +113,9 @@ extension AppState {
     /// set-placement preserves pairwise offsets; edges are not copied
     /// (cards duplicate, connections are authored intent).
     func canvasDuplicate() {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle
         else { return }
         let seed = canvasMovingSet(in: doc)
@@ -193,27 +221,38 @@ extension AppState {
             canvasAnnouncer.announce(.status("Only text cards convert to notes."))
             return
         }
+        guard admitCanvasMutation(for: doc) else { return }
+        guard admitStructuralMutationRequest() else { return }
         // Suggested path: the card's first-line title, slugged lightly.
         let stem = row.title
             .replacingOccurrences(of: "/", with: "-")
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        canvasPrompt = .convertToNote(
-            nodeId: selected, suggested: (stem.isEmpty ? "Untitled" : stem) + ".md")
+        let suggested = (stem.isEmpty ? "Untitled" : stem) + ".md"
+        presentCanvasPrompt(
+            .convertToNote(nodeId: selected, suggested: suggested),
+            draft: suggested)
     }
 
     /// Commit: create the note via the U2-2 save path (journaled file
     /// creation), then ONE canvas_apply retargets the card at it.
     /// Canvas undo restores the text card; the note file remains (the
     /// U2 convention — file ops have their own journal).
-    func canvasConvertToNote(nodeId: String, path: String) {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+    @discardableResult
+    func canvasConvertToNote(
+        nodeId: String,
+        path: String,
+        nativeThreadObserver: (@Sendable (Bool) -> Void)? = nil
+    ) -> Task<Void, Never>? {
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle,
             let row = doc.outline.first(where: { $0.nodeId == nodeId })
-        else { return }
+        else { return nil }
         let cleanPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanPath.isEmpty, cleanPath.lowercased().hasSuffix(".md") else {
             canvasAnnouncer.announce(.error("The note path must end in .md."))
-            return
+            return nil
         }
         // The `files` snapshot is a cheap early bail; it is NOT the
         // collision guard — a file present on disk but absent from the
@@ -221,46 +260,116 @@ extension AppState {
         // guard is the backend's create-if-absent contract below.
         guard !files.contains(where: { $0.path == cleanPath }) else {
             canvasAnnouncer.announce(.error("\(cleanPath) already exists. Pick another name."))
-            return
+            return nil
         }
-        let text = (try? session.canvasNodeText(handle: handle, nodeId: nodeId)) ?? ""
-        do {
-            // Data-safety (adversarial review): expectedContentHash ""
-            // is the create-IF-ABSENT idiom — the on-disk hash of a
-            // missing file is "" (session.rs read_disk_contents_and_hash),
-            // so an existing file mismatches and returns WriteConflict
-            // rather than being overwritten with the card text. `nil`
-            // would save unconditionally and clobber it.
-            _ = try session.saveText(
-                path: cleanPath, contents: text, expectedContentHash: "")
-            // #871 post-merge audit: bypasses publishTreeMutation — barrier the structural undo history so no stale inverse targets this new path.
-            clearStructuralUndoStacks()
-        } catch let error as VaultError {
-            if case .WriteConflict = error {
-                canvasAnnouncer.announce(
-                    .error("\(cleanPath) already exists on disk. Pick another name."))
-            } else {
-                canvasAnnouncer.announce(
-                    .error("Could not create \(cleanPath): \(error.localizedDescription)"))
-            }
-            return
-        } catch {
+        guard canvasTransient == nil else {
             canvasAnnouncer.announce(
-                .error("Could not create \(cleanPath): \(error.localizedDescription)"))
-            return
+                .error(
+                    "A move or resize is in progress. Return to place it or Escape to cancel first."
+                ))
+            return nil
         }
-        let ok = canvasApply(
-            CanvasAction(
-                name: "convert \"\(row.title)\" to note",
-                ops: [
-                    .setNodeContent(
-                        id: nodeId, content: .file(file: cleanPath, subpath: nil))
-                ]),
-            to: doc)
-        guard ok else { return }
-        canvasAnnouncer.announce(
-            .confirmation(
-                "Converted to note \(cleanPath). The card now points at it."))
+        guard admitStructuralMutationRequest() else { return nil }
+        guard let recoveryReservation =
+                admitStructuralRecoveryDestination(cleanPath),
+            admitBatchTrashWrite(to: [cleanPath])
+        else { return nil }
+
+        let action = CanvasAction(
+            name: "convert \"\(row.title)\" to note",
+            ops: [
+                .setNodeContent(
+                    id: nodeId, content: .file(file: cleanPath, subpath: nil))
+            ])
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let refresher = structuralBatchRefreshRunner
+        let task = Task { @MainActor [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                let text: String
+                do {
+                    nativeThreadObserver?(CanvasConvertThreadProbe.isMainThread())
+                    guard
+                        let fetched = try session.canvasNodeText(
+                            handle: handle, nodeId: nodeId)
+                    else {
+                        return CanvasConvertToNoteOutcome.readFailed(
+                            "The card text is unavailable.")
+                    }
+                    text = fetched
+                } catch {
+                    return CanvasConvertToNoteOutcome.readFailed(error.localizedDescription)
+                }
+
+                do {
+                    nativeThreadObserver?(CanvasConvertThreadProbe.isMainThread())
+                    // `expectedContentHash: ""` is the backend's exclusive
+                    // create idiom. An on-disk collision fails instead of
+                    // replacing content the file index hasn't seen yet.
+                    _ = try session.saveText(
+                        path: cleanPath, contents: text, expectedContentHash: "")
+                } catch let error as VaultError {
+                    switch error {
+                    case .WriteConflict, .DestinationExists:
+                        return CanvasConvertToNoteOutcome.destinationExists
+                    default:
+                        return CanvasConvertToNoteOutcome.createFailed(
+                            error.localizedDescription)
+                    }
+                } catch {
+                    return CanvasConvertToNoteOutcome.createFailed(
+                        error.localizedDescription)
+                }
+
+                do {
+                    nativeThreadObserver?(CanvasConvertThreadProbe.isMainThread())
+                    return CanvasConvertToNoteOutcome.converted(
+                        try session.canvasApply(handle: handle, action: action))
+                } catch {
+                    return CanvasConvertToNoteOutcome.retargetFailed(
+                        error.localizedDescription)
+                }
+            }.value
+
+            guard let self else { return }
+            defer { self.endStructuralMutation(token) }
+            guard self.ownsStructuralMutation(token, session: session) else { return }
+
+            if outcome.createdNote {
+                await refresher(self)
+                guard self.ownsStructuralMutation(token, session: session) else { return }
+                // The new note bypasses publishTreeMutation, so it is a
+                // structural-history barrier even if the subsequent canvas
+                // retarget failed after creation.
+                self.clearStructuralUndoStacks()
+            }
+
+            switch outcome {
+            case .converted(let result):
+                doc.undoStack.append((name: action.name, inverse: result.inverse))
+                doc.redoStack = []
+                doc.reloadAfterMutation(session: session)
+                self.noteUndoStacksChanged()
+                self.canvasAnnouncer.announce(
+                    .confirmation(
+                        "Converted to note \(cleanPath). The card now points at it."))
+            case .destinationExists:
+                self.canvasAnnouncer.announce(
+                    .error("\(cleanPath) already exists on disk. Pick another name."))
+            case .readFailed(let message):
+                self.canvasAnnouncer.announce(
+                    .error("Could not read the card text: \(message)"))
+            case .createFailed(let message):
+                self.canvasAnnouncer.announce(
+                    .error("Could not create \(cleanPath): \(message)"))
+            case .retargetFailed(let message):
+                self.canvasAnnouncer.announce(
+                    .error(
+                        "Created \(cleanPath), but could not retarget the card: \(message)"))
+            }
+        }
+        recordPendingStructuralTask(task)
+        return task
     }
 
     // MARK: In-canvas filter (#373)

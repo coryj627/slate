@@ -258,7 +258,13 @@ final class CommandPaletteModel: ObservableObject {
             try registry.invokeById(id: command.id)
             return .success
         } catch let CommandError.ActionFailed(message) {
-            let announcement = "\(command.label) failed: \(message)"
+            // Structural busy is an availability rejection, not an operation
+            // failure. The row already exposes this exact reason; announce it
+            // verbatim so VoiceOver does not hear a misleading second prefix.
+            let announcement =
+                message == AppState.structuralMutationBusyReason
+                ? message
+                : "\(command.label) failed: \(message)"
             pendingAnnouncement = announcement
             return .actionFailed(label: command.label, message: message)
         } catch let CommandError.UnknownId(id) {

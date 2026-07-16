@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import Combine
 import UniformTypeIdentifiers
 import XCTest
 
@@ -54,6 +55,320 @@ final class FileTreeDragDropTests: XCTestCase {
         FileManager.default.fileExists(atPath: vault.appendingPathComponent(rel).path)
     }
 
+    private func fileRow(_ path: String) -> FileTreeSidebar.RowID {
+        .node(.file(path: path))
+    }
+
+    /// Deterministic suspension for structural-busy admission tests. The first
+    /// batch occupies AppState's structural gate until the test explicitly
+    /// releases it; no timing sleeps or filesystem races are involved.
+    private actor SuspensionGate {
+        private var permits = 0
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        private var entrants = 0
+        private var entrantWaiters: [(Int, CheckedContinuation<Void, Never>)] = []
+
+        func enter() async {
+            entrants += 1
+            var remaining: [(Int, CheckedContinuation<Void, Never>)] = []
+            for (expected, continuation) in entrantWaiters {
+                if entrants >= expected {
+                    continuation.resume()
+                } else {
+                    remaining.append((expected, continuation))
+                }
+            }
+            entrantWaiters = remaining
+            if permits > 0 {
+                permits -= 1
+                return
+            }
+            await withCheckedContinuation { continuation in
+                waiters.append(continuation)
+            }
+        }
+
+        func waitForEntrants(_ expected: Int) async {
+            guard entrants < expected else { return }
+            await withCheckedContinuation { continuation in
+                entrantWaiters.append((expected, continuation))
+            }
+        }
+
+        func releaseOne() {
+            if waiters.isEmpty {
+                permits += 1
+            } else {
+                waiters.removeFirst().resume()
+            }
+        }
+
+        func entrantCount() -> Int { entrants }
+    }
+
+    private actor BatchMoveProbe {
+        private(set) var requests: [BatchMoveRequest] = []
+        let report: BatchMoveReport
+
+        init(report: BatchMoveReport) {
+            self.report = report
+        }
+
+        func run(_ request: BatchMoveRequest) -> BatchMoveReport {
+            requests.append(request)
+            return report
+        }
+
+        func lastRequest() -> BatchMoveRequest? { requests.last }
+        func callCount() -> Int { requests.count }
+    }
+
+    private func batchItem(_ path: String, dir: Bool = false) -> StructuralBatchItem {
+        StructuralBatchItem(path: path, isDirectory: dir)
+    }
+
+    private func batchMoveReport(
+        state: BatchMoveState,
+        planned: [StructuralBatchItem],
+        opID: Int64? = nil,
+        standing: [BatchPathChange] = [],
+        requiresRescan: Bool = false
+    ) -> BatchMoveReport {
+        BatchMoveReport(
+            envelope: StructuralBatchEnvelope(
+                planned: planned, skipped: [], preflightFailures: []),
+            state: state,
+            opId: opID,
+            standing: standing,
+            rolledBack: [],
+            failure: nil,
+            rollbackFailures: [],
+            rewritten: [],
+            rewriteFailures: [],
+            requiresRescan: requiresRescan)
+    }
+
+    private func parkStructuralMutation(
+        in state: AppState,
+        gate: SuspensionGate,
+        path: String = "busy.md"
+    ) async throws -> Task<Void, Never> {
+        let report = batchMoveReport(
+            state: .noOp, planned: [batchItem(path)])
+        state.batchMoveRunner = { _, _ in
+            await gate.enter()
+            return report
+        }
+        state.structuralBatchRefreshRunner = { _ in }
+        let task = try XCTUnwrap(
+            state.batchMove(
+                [AppState.TreeSelection(path: path, isDirectory: false)],
+                to: "busy-destination", preferredFocusPath: nil))
+        await gate.waitForEntrants(1)
+        return task
+    }
+
+    private static func source(_ filename: String) throws -> String {
+        let url = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SlateMacTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // slate-mac
+            .appendingPathComponent("Sources/SlateMac/")
+            .appendingPathComponent(filename)
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func assertBusyDropRejectsBeforeSessionEndOrProviderLoad(
+        _ preferred: FileTreeSidebar.PreferredDropProvider,
+        state: AppState,
+        busyTask: Task<Void, Never>,
+        gate: SuspensionGate,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        var announcements: [String] = []
+        let cancellable = state.$lastMutationAnnouncement
+            .dropFirst()
+            .compactMap { $0 }
+            .sink { announcements.append($0) }
+        var endSessionCount = 0
+        var providerLoadCount = 0
+
+        let accepted = FileTreeSidebar.performAdmittedDrop(
+            preferred, appState: state
+        ) { _ in
+            endSessionCount += 1
+            providerLoadCount += 1
+            return true
+        }
+
+        XCTAssertFalse(accepted, "busy drops must report rejection", file: file, line: line)
+        XCTAssertEqual(endSessionCount, 0, file: file, line: line)
+        XCTAssertEqual(providerLoadCount, 0, file: file, line: line)
+        XCTAssertEqual(
+            announcements, [AppState.structuralMutationBusyReason],
+            "busy-at-drop announces exactly once", file: file, line: line)
+
+        withExtendedLifetime(cancellable) {}
+        await gate.releaseOne()
+        await busyTask.value
+    }
+
+    // MARK: - Versioned private batch payload
+
+    func testPrivateDragPayloadRoundTripsOrderAndKindDeterministically() throws {
+        let items = [
+            FileTreeSidebar.DragPayloadItem(path: "folder", isDirectory: true),
+            FileTreeSidebar.DragPayloadItem(path: "folder/note.md", isDirectory: false),
+            FileTreeSidebar.DragPayloadItem(path: "other.md", isDirectory: false),
+        ]
+        let first = try XCTUnwrap(FileTreeSidebar.encodeDragPayload(items))
+        let second = try XCTUnwrap(FileTreeSidebar.encodeDragPayload(items))
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(FileTreeSidebar.decodeDragPayload(first), items)
+    }
+
+    func testPrivateDragPayloadRejectsEmptyMalformedUnsafeAndDuplicateBatches() {
+        let invalidPayloads = [
+            #"{"version":1,"items":[]}"#,
+            #"{"version":2,"items":[{"path":"a.md","isDirectory":false}]}"#,
+            #"{"version":1,"items":[{"path":"","isDirectory":false}]}"#,
+            #"{"version":1,"items":[{"path":"/tmp/a.md","isDirectory":false}]}"#,
+            #"{"version":1,"items":[{"path":"a/../b.md","isDirectory":false}]}"#,
+            #"{"version":1,"items":[{"path":"a.md","isDirectory":false},{"path":"a.md","isDirectory":true}]}"#,
+            "not-json",
+            "legacy.md",
+        ]
+
+        for payload in invalidPayloads {
+            XCTAssertNil(
+                FileTreeSidebar.decodeDragPayload(Data(payload.utf8)),
+                "must fail closed: \(payload)")
+        }
+        XCTAssertNil(FileTreeSidebar.encodeDragPayload([]))
+    }
+
+    func testPrivateDropFlavorWinsEvenWhenItsDataIsInvalid() {
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.nodeUTType,
+            visibility: .ownProcess
+        ) { completion in
+            completion(Data("malformed".utf8), nil)
+            return nil
+        }
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { completion in
+            completion(URL(fileURLWithPath: "/tmp/fallback.md").dataRepresentation, nil)
+            return nil
+        }
+
+        guard case .privatePayload = FileTreeSidebar.preferredDropProvider(in: [provider]) else {
+            return XCTFail("private data must win; invalid private data must not become an import")
+        }
+    }
+
+    func testForgedPrivatePayloadCannotDispatchAnInAppMove() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "dest/keep.md"])
+        let forged = try XCTUnwrap(
+            FileTreeSidebar.encodeDragPayload([
+                .init(path: "a.md", isDirectory: false),
+            ], preferredFocusPath: "a.md"))
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.nodeUTType,
+            visibility: .all
+        ) { completion in
+            completion(forged, nil)
+            return nil
+        }
+        let privateDispatch = expectation(description: "forged private dispatch")
+        privateDispatch.isInverted = true
+
+        XCTAssertTrue(
+            FileTreeSidebar.loadAdmittedDropProvider(
+                .privatePayload(provider),
+                appState: state,
+                onPrivate: { _, _ in privateDispatch.fulfill() },
+                onFileURL: { _ in XCTFail("private bytes must not fall through as a URL") }))
+
+        await fulfillment(of: [privateDispatch], timeout: 0.2)
+    }
+
+    func testRegisteredPrivatePayloadCannotCrossVaults() async throws {
+        let (state, _) = try await makeVault(files: ["dest/keep.md"])
+        let originVault = tempDir.appendingPathComponent("other-vault")
+        let originURL = originVault.appendingPathComponent("a.md")
+        let provider = FileTreeSidebar.makeDragProvider(
+            items: [.init(path: "a.md", isDirectory: false)],
+            originFileURL: originURL,
+            preferredFocusPath: "a.md",
+            originSession: state.currentSession)
+        XCTAssertTrue(
+            provider.registeredTypeIdentifiers.contains(FileTreeSidebar.fileURLUTType),
+            "cross-app interoperability must retain the public file URL")
+        let privateDispatch = expectation(description: "cross-vault private dispatch")
+        privateDispatch.isInverted = true
+
+        XCTAssertTrue(
+            FileTreeSidebar.loadAdmittedDropProvider(
+                .privatePayload(provider),
+                appState: state,
+                onPrivate: { _, _ in privateDispatch.fulfill() },
+                onFileURL: { _ in XCTFail("the preferred private flavor must not fall through") }))
+
+        await fulfillment(of: [privateDispatch], timeout: 0.2)
+    }
+
+    func testRegisteredPrivatePayloadDispatchesWithinItsOriginVault() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+        let provider = FileTreeSidebar.makeDragProvider(
+            items: [.init(path: "a.md", isDirectory: false)],
+            originFileURL: vault.appendingPathComponent("a.md"),
+            preferredFocusPath: "a.md",
+            originSession: state.currentSession)
+        let privateDispatch = expectation(description: "same-vault private dispatch")
+
+        XCTAssertTrue(
+            FileTreeSidebar.loadAdmittedDropProvider(
+                .privatePayload(provider),
+                appState: state,
+                onPrivate: { items, preferredFocusPath in
+                    XCTAssertEqual(items, [.init(path: "a.md", isDirectory: false)])
+                    XCTAssertEqual(preferredFocusPath, "a.md")
+                    privateDispatch.fulfill()
+                },
+                onFileURL: { _ in XCTFail("the preferred private flavor must not fall through") }))
+
+        await fulfillment(of: [privateDispatch], timeout: 1)
+    }
+
+    func testTreeDropMoveIntentUsesSingleAndBatchFunnels() async throws {
+        do {
+            let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+            await state.moveTreeSelection(
+                [AppState.TreeSelection(path: "a.md", isDirectory: false)],
+                to: "dest")?.value
+            XCTAssertTrue(exists(vault, "dest/a.md"))
+            XCTAssertEqual(state.lastMutationAnnouncement, "Moved a.md to dest.")
+        }
+
+        try FileManager.default.removeItem(at: tempDir.appendingPathComponent("vault"))
+        let (state, vault) = try await makeVault(files: ["a.md", "b.md", "dest/keep.md"])
+        await state.moveTreeSelection(
+            [
+                AppState.TreeSelection(path: "a.md", isDirectory: false),
+                AppState.TreeSelection(path: "b.md", isDirectory: false),
+            ],
+            to: "dest")?.value
+        XCTAssertTrue(exists(vault, "dest/a.md"))
+        XCTAssertTrue(exists(vault, "dest/b.md"))
+        XCTAssertEqual(state.lastMutationAnnouncement, "Moved 2 items to dest.")
+    }
+
     // MARK: - Drag payload carries public.file-url (drag OUT)
 
     func testDragProviderCarriesBothPrivateTypeAndFileURL() {
@@ -69,6 +384,112 @@ final class FileTreeDragDropTests: XCTestCase {
             "public.file-url is carried so the item can be dragged OUT to Finder")
         XCTAssertEqual(
             provider.suggestedName, "idea.md", "the drop gets a sensible file name")
+    }
+
+    func testDragProviderPrivateFlavorCarriesSelfDescribingOrderedBatch() async throws {
+        let items = [
+            FileTreeSidebar.DragPayloadItem(path: "folder", isDirectory: true),
+            FileTreeSidebar.DragPayloadItem(path: "other.md", isDirectory: false),
+        ]
+        let originURL = URL(fileURLWithPath: "/Vaults/demo/folder")
+        let provider = FileTreeSidebar.makeDragProvider(
+            items: items, originFileURL: originURL)
+
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(
+                forTypeIdentifier: FileTreeSidebar.nodeUTType
+            ) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: error ?? URLError(.cannotDecodeRawData)) }
+            }
+        }
+
+        XCTAssertEqual(FileTreeSidebar.decodeDragPayload(data), items)
+        XCTAssertEqual(provider.suggestedName, "folder")
+    }
+
+    func testDragProviderProjectsSelectionButKeepsOriginPublicFileURL() async throws {
+        let a = fileRow("a.md")
+        let b = fileRow("nested/b.md")
+        let rows = [
+            FileTreeSidebar.SelectionRow(identity: a, path: "a.md", isDirectory: false),
+            FileTreeSidebar.SelectionRow(
+                identity: b, path: "nested/b.md", isDirectory: false),
+        ]
+        let model = FileTreeSidebar.SelectionModel(
+            focused: b,
+            selected: [b, a],
+            selectionPathSnapshots: [a: "a.md", b: "nested/b.md"],
+            rangeAnchor: a,
+            rangeAnchorPathSnapshot: "a.md")
+        let vaultURL = URL(fileURLWithPath: "/Vaults/demo")
+
+        let provider = FileTreeSidebar.makeDragProvider(
+            origin: rows[1], from: model, visibleRows: rows, vaultURL: vaultURL)
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(
+                forTypeIdentifier: FileTreeSidebar.nodeUTType
+            ) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else { continuation.resume(throwing: error ?? URLError(.cannotDecodeRawData)) }
+            }
+        }
+
+        XCTAssertEqual(
+            FileTreeSidebar.decodeDragPayload(data)?.map(\.path), ["a.md", "nested/b.md"])
+        XCTAssertEqual(provider.suggestedName, "b.md")
+        let publicURL: URL = try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadObject(ofClass: URL.self) { url, error in
+                if let url { continuation.resume(returning: url) }
+                else { continuation.resume(throwing: error ?? URLError(.badURL)) }
+            }
+        }
+        XCTAssertEqual(publicURL.standardizedFileURL.path, "/Vaults/demo/nested/b.md")
+    }
+
+    func testC2PrivateDragPayloadCarriesTheOriginAsPreferredFocus() async throws {
+        let a = fileRow("a.md")
+        let b = fileRow("nested/b.md")
+        let rows = [
+            FileTreeSidebar.SelectionRow(identity: a, path: "a.md", isDirectory: false),
+            FileTreeSidebar.SelectionRow(
+                identity: b, path: "nested/b.md", isDirectory: false),
+        ]
+        let model = FileTreeSidebar.SelectionModel(
+            focused: b,
+            selected: [b, a],
+            selectionPathSnapshots: [a: "a.md", b: "nested/b.md"],
+            rangeAnchor: a,
+            rangeAnchorPathSnapshot: "a.md")
+        let provider = FileTreeSidebar.makeDragProvider(
+            origin: rows[1], from: model, visibleRows: rows,
+            vaultURL: URL(fileURLWithPath: "/Vaults/demo"))
+
+        let data: Data = try await withCheckedThrowingContinuation { continuation in
+            provider.loadDataRepresentation(
+                forTypeIdentifier: FileTreeSidebar.nodeUTType
+            ) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else {
+                    continuation.resume(
+                        throwing: error ?? URLError(.cannotDecodeRawData))
+                }
+            }
+        }
+        let object = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(
+            object["preferredFocusPath"] as? String,
+            "nested/b.md",
+            "the initiating row must survive decode as the batch focus locus")
+    }
+
+    func testC2PrivateDragPayloadRejectsPreferredFocusOutsideItsItems() {
+        let invalid = Data(
+            #"{"version":1,"items":[{"path":"a.md","isDirectory":false}],"preferredFocusPath":"missing.md"}"#.utf8)
+        XCTAssertNil(
+            FileTreeSidebar.decodeDragPayload(invalid),
+            "an injected focus path that was not dragged must fail closed")
     }
 
     /// The file-URL flavor round-trips the real on-disk URL (what Finder reads
@@ -449,6 +870,446 @@ final class FileTreeDragDropTests: XCTestCase {
         XCTAssertEqual(
             flat.components(separatedBy: "refuseBytes: ceiling").count - 1, 2,
             "both the preflight and the definitive gate must pass the clamped ceiling")
+    }
+
+    // MARK: - C2 structural-busy drop admission
+
+    func testC2BusyAtDropRejectsPrivatePayloadBeforeSessionEndOrProviderLoad()
+        async throws
+    {
+        let (state, _) = try await makeVault(
+            files: ["busy.md", "busy-destination/keep.md"])
+        let gate = SuspensionGate()
+        let busyTask = try await parkStructuralMutation(in: state, gate: gate)
+        let provider = FileTreeSidebar.makeDragProvider(
+            items: [
+                .init(path: "a.md", isDirectory: false),
+                .init(path: "b.md", isDirectory: false),
+            ],
+            originFileURL: URL(fileURLWithPath: "/Vaults/demo/b.md"))
+
+        await assertBusyDropRejectsBeforeSessionEndOrProviderLoad(
+            .privatePayload(provider), state: state, busyTask: busyTask, gate: gate)
+    }
+
+    func testC2BusyAtDropRejectsInVaultFileURLBeforeSessionEndOrProviderLoad()
+        async throws
+    {
+        let (state, vault) = try await makeVault(
+            files: ["a.md", "busy.md", "busy-destination/keep.md"])
+        let gate = SuspensionGate()
+        let busyTask = try await parkStructuralMutation(in: state, gate: gate)
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { completion in
+            completion(vault.appendingPathComponent("a.md").dataRepresentation, nil)
+            return nil
+        }
+
+        await assertBusyDropRejectsBeforeSessionEndOrProviderLoad(
+            .fileURL(provider), state: state, busyTask: busyTask, gate: gate)
+    }
+
+    func testC2BusyAtDropRejectsExternalFileURLBeforeSessionEndOrProviderLoad()
+        async throws
+    {
+        let external = tempDir.appendingPathComponent("outside.md")
+        try "# outside\n".write(to: external, atomically: true, encoding: .utf8)
+        let (state, _) = try await makeVault(
+            files: ["busy.md", "busy-destination/keep.md"])
+        let gate = SuspensionGate()
+        let busyTask = try await parkStructuralMutation(in: state, gate: gate)
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { completion in
+            completion(external.dataRepresentation, nil)
+            return nil
+        }
+
+        await assertBusyDropRejectsBeforeSessionEndOrProviderLoad(
+            .fileURL(provider), state: state, busyTask: busyTask, gate: gate)
+    }
+
+    func testC2UnsupportedProviderRemainsRejectedWithoutAdmissionAnnouncement() async throws {
+        let (state, _) = try await makeVault(files: [])
+        var performed = false
+        let accepted = FileTreeSidebar.performAdmittedDrop(
+            .none, appState: state
+        ) { _ in
+            performed = true
+            return true
+        }
+
+        XCTAssertFalse(accepted)
+        XCTAssertFalse(performed)
+        XCTAssertNil(state.lastMutationAnnouncement)
+    }
+
+    func testC2BusyDropTargetPolicySuppressesRowWashRootRingAndSpringArming() {
+        XCTAssertTrue(FileTreeSidebar.dropTargetIsActive(true, busy: false))
+        XCTAssertFalse(FileTreeSidebar.dropTargetIsActive(false, busy: false))
+        XCTAssertFalse(
+            FileTreeSidebar.dropTargetIsActive(true, busy: true),
+            "busy row/root targets must neither display acceptance nor arm spring-loading")
+    }
+
+    func testC2DelayedPrivateAndPublicCallbacksIgnoreReplacementSessionBeforeDispatch()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+
+        let privateProvider = NSItemProvider()
+        var finishPrivate: ((Data?, Error?) -> Void)?
+        let privateLoadStarted = expectation(description: "private load started")
+        privateProvider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.nodeUTType,
+            visibility: .ownProcess
+        ) { completion in
+            finishPrivate = completion
+            privateLoadStarted.fulfill()
+            return nil
+        }
+        var privateDispatches = 0
+        let privateStale = expectation(description: "private stale owner rejected")
+        XCTAssertTrue(
+            FileTreeSidebar.loadAdmittedDropProvider(
+                .privatePayload(privateProvider),
+                appState: state,
+                onPrivate: { _, _ in privateDispatches += 1 },
+                onFileURL: { _ in XCTFail("private flavor must not classify as a URL") },
+                onStaleSession: { privateStale.fulfill() }))
+        await fulfillment(of: [privateLoadStarted], timeout: 1)
+
+        let replacement = tempDir.appendingPathComponent("replacement-private")
+        try FileManager.default.createDirectory(
+            at: replacement, withIntermediateDirectories: true)
+        state.openVault(at: replacement)
+        await state.scanTask?.value
+        let privatePayload = try XCTUnwrap(
+            FileTreeSidebar.encodeDragPayload([
+                .init(path: "a.md", isDirectory: false),
+            ]))
+        try XCTUnwrap(finishPrivate)(privatePayload, nil)
+        await fulfillment(of: [privateStale], timeout: 1)
+        XCTAssertEqual(privateDispatches, 0)
+        XCTAssertTrue(exists(vault, "a.md"), "the stale private callback cannot mutate vault A")
+
+        let publicProvider = NSItemProvider()
+        var finishPublic: ((Data?, Error?) -> Void)?
+        let publicLoadStarted = expectation(description: "public load started")
+        publicProvider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { completion in
+            finishPublic = completion
+            publicLoadStarted.fulfill()
+            return nil
+        }
+        var publicDispatches = 0
+        let publicStale = expectation(description: "public stale owner rejected")
+        XCTAssertTrue(
+            FileTreeSidebar.loadAdmittedDropProvider(
+                .fileURL(publicProvider),
+                appState: state,
+                onPrivate: { _, _ in XCTFail("public flavor must not decode privately") },
+                onFileURL: { _ in publicDispatches += 1 },
+                onStaleSession: { publicStale.fulfill() }))
+        await fulfillment(of: [publicLoadStarted], timeout: 1)
+
+        let secondReplacement = tempDir.appendingPathComponent("replacement-public")
+        try FileManager.default.createDirectory(
+            at: secondReplacement, withIntermediateDirectories: true)
+        state.openVault(at: secondReplacement)
+        await state.scanTask?.value
+        try XCTUnwrap(finishPublic)(vault.appendingPathComponent("a.md").dataRepresentation, nil)
+        await fulfillment(of: [publicStale], timeout: 1)
+        XCTAssertEqual(publicDispatches, 0)
+        XCTAssertTrue(exists(vault, "a.md"), "the stale public callback cannot mutate vault A")
+    }
+
+    func testC2PrivateIllegalAndNoOpDropsAnnounceWithoutRequestOrSelectionChange()
+        async throws
+    {
+        let (state, _) = try await makeVault(
+            files: [
+                "dest/a.md", "dest/b.md", "folder/child/keep.md",
+            ])
+        state.selectedFilePath = "dest/a.md"
+        state.treeSelectedNode = .init(path: "dest/a.md", isDirectory: false)
+        let originalFile = state.selectedFilePath
+        let originalTreeNode = state.treeSelectedNode
+        let probe = BatchMoveProbe(
+            report: batchMoveReport(state: .noOp, planned: []))
+        state.batchMoveRunner = { _, request in await probe.run(request) }
+
+        let cases: [([FileTreeSidebar.DragPayloadItem], String, String)] = [
+            (
+                [.init(path: "dest/a.md", isDirectory: false)],
+                "dest",
+                "Nothing moved. The item is already in this folder."
+            ),
+            (
+                [.init(path: "folder", isDirectory: true)],
+                "folder",
+                "Nothing moved. A folder can’t be moved into itself."
+            ),
+            (
+                [.init(path: "folder", isDirectory: true)],
+                "folder/child",
+                "Nothing moved. A folder can’t be moved into itself."
+            ),
+            (
+                [
+                    .init(path: "dest/a.md", isDirectory: false),
+                    .init(path: "dest/b.md", isDirectory: false),
+                ],
+                "dest",
+                "Nothing moved. The selected items can’t be moved to this folder."
+            ),
+        ]
+
+        for (items, destination, message) in cases {
+            XCTAssertFalse(
+                FileTreeSidebar.performDecodedPrivateDrop(
+                    items,
+                    preferredFocusPath: items.last?.path,
+                    into: destination,
+                    appState: state))
+            XCTAssertEqual(state.lastMutationAnnouncement, message)
+            XCTAssertEqual(state.selectedFilePath, originalFile)
+            XCTAssertEqual(state.treeSelectedNode, originalTreeNode)
+        }
+        let nativeRequests = await probe.callCount()
+        XCTAssertEqual(nativeRequests, 0, "all-invalid private drops never reach native batch move")
+    }
+
+    func testC2BusyDuringPrivateMultiDecodeRejectsOnceWithoutRunnerOrWrite()
+        async throws
+    {
+        let (state, vault) = try await makeVault(
+            files: [
+                "a.md", "b.md", "busy.md", "dest/keep.md",
+                "busy-destination/keep.md",
+            ])
+        let provider = FileTreeSidebar.makeDragProvider(
+            items: [
+                .init(path: "a.md", isDirectory: false),
+                .init(path: "b.md", isDirectory: false),
+            ],
+            originFileURL: vault.appendingPathComponent("b.md"),
+            preferredFocusPath: "b.md")
+        var providerLoadCount = 0
+        var decodedDispatch: (() -> Task<Void, Never>?)?
+        XCTAssertTrue(
+            FileTreeSidebar.performAdmittedDrop(
+                .privatePayload(provider), appState: state
+            ) { _ in
+                providerLoadCount += 1
+                decodedDispatch = {
+                    state.moveTreeSelection(
+                        [
+                            .init(path: "a.md", isDirectory: false),
+                            .init(path: "b.md", isDirectory: false),
+                        ],
+                        to: "dest",
+                        preferredFocusPath: "b.md")
+                }
+                return true
+            })
+        XCTAssertEqual(providerLoadCount, 1, "the provider load was initially accepted")
+        let gate = SuspensionGate()
+        let busyTask = try await parkStructuralMutation(in: state, gate: gate)
+        var announcements: [String] = []
+        let cancellable = state.$lastMutationAnnouncement
+            .dropFirst()
+            .compactMap { $0 }
+            .sink { announcements.append($0) }
+
+        let rejected = try XCTUnwrap(decodedDispatch)()
+
+        XCTAssertNil(rejected, "a decoded private payload must not start a second runner")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement, AppState.structuralMutationBusyReason)
+        XCTAssertEqual(
+            announcements, [AppState.structuralMutationBusyReason],
+            "the decode-race rejection is announced exactly once")
+        let entrantCount = await gate.entrantCount()
+        XCTAssertEqual(entrantCount, 1, "only the parked runner entered")
+        XCTAssertTrue(exists(vault, "a.md"))
+        XCTAssertTrue(exists(vault, "b.md"))
+        XCTAssertFalse(exists(vault, "dest/a.md"))
+        XCTAssertFalse(exists(vault, "dest/b.md"))
+
+        withExtendedLifetime(cancellable) {}
+        await gate.releaseOne()
+        await busyTask.value
+    }
+
+    func testC2BusyDuringInVaultFileURLDecodeRejectsOnceWithoutMoveOrWrite()
+        async throws
+    {
+        let (state, vault) = try await makeVault(
+            files: [
+                "a.md", "busy.md", "dest/keep.md", "busy-destination/keep.md",
+            ])
+        let provider = NSItemProvider()
+        var providerLoadCount = 0
+        var decodedDispatch: (() -> Task<Void, Never>?)?
+        XCTAssertTrue(
+            FileTreeSidebar.performAdmittedDrop(
+                .fileURL(provider), appState: state
+            ) { _ in
+                providerLoadCount += 1
+                decodedDispatch = {
+                    state.handleFileURLDrop(
+                        vault.appendingPathComponent("a.md"),
+                        into: "dest")
+                }
+                return true
+            })
+        XCTAssertEqual(providerLoadCount, 1, "the provider load was initially accepted")
+        let gate = SuspensionGate()
+        let busyTask = try await parkStructuralMutation(in: state, gate: gate)
+        var announcements: [String] = []
+        let cancellable = state.$lastMutationAnnouncement
+            .dropFirst()
+            .compactMap { $0 }
+            .sink { announcements.append($0) }
+
+        let rejected = try XCTUnwrap(decodedDispatch)()
+
+        XCTAssertNil(rejected, "a decoded in-vault URL must not start a move while busy")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement, AppState.structuralMutationBusyReason)
+        XCTAssertEqual(announcements, [AppState.structuralMutationBusyReason])
+        let entrantCount = await gate.entrantCount()
+        XCTAssertEqual(entrantCount, 1)
+        XCTAssertTrue(exists(vault, "a.md"))
+        XCTAssertFalse(exists(vault, "dest/a.md"))
+
+        withExtendedLifetime(cancellable) {}
+        await gate.releaseOne()
+        await busyTask.value
+    }
+
+    func testC2BusyDuringExternalFileURLDecodeRejectsOnceWithoutImportOrWrite()
+        async throws
+    {
+        let external = tempDir.appendingPathComponent("external.md")
+        try "# external\n".write(to: external, atomically: true, encoding: .utf8)
+        let (state, vault) = try await makeVault(
+            files: ["busy.md", "busy-destination/keep.md"])
+        let provider = NSItemProvider()
+        var providerLoadCount = 0
+        var decodedDispatch: (() -> Task<Void, Never>?)?
+        XCTAssertTrue(
+            FileTreeSidebar.performAdmittedDrop(
+                .fileURL(provider), appState: state
+            ) { _ in
+                providerLoadCount += 1
+                decodedDispatch = { state.handleFileURLDrop(external, into: "") }
+                return true
+            })
+        XCTAssertEqual(providerLoadCount, 1, "the provider load was initially accepted")
+        let gate = SuspensionGate()
+        let busyTask = try await parkStructuralMutation(in: state, gate: gate)
+        var announcements: [String] = []
+        let cancellable = state.$lastMutationAnnouncement
+            .dropFirst()
+            .compactMap { $0 }
+            .sink { announcements.append($0) }
+
+        let rejected = try XCTUnwrap(decodedDispatch)()
+
+        XCTAssertNil(rejected, "a decoded external URL must not start an import while busy")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement, AppState.structuralMutationBusyReason)
+        XCTAssertEqual(announcements, [AppState.structuralMutationBusyReason])
+        let entrantCount = await gate.entrantCount()
+        XCTAssertEqual(entrantCount, 1)
+        XCTAssertFalse(exists(vault, "external.md"))
+
+        withExtendedLifetime(cancellable) {}
+        await gate.releaseOne()
+        await busyTask.value
+    }
+
+    func testC2ExplicitMultiDropKeepsFolderAndDescendantInOneOrderedNativeRequest()
+        async throws
+    {
+        let items = [
+            batchItem("folder", dir: true),
+            batchItem("folder/child.md"),
+        ]
+        let report = batchMoveReport(
+            state: .rejected,
+            planned: items,
+            requiresRescan: true)
+        let probe = BatchMoveProbe(report: report)
+        let (state, _) = try await makeVault(
+            files: ["folder/child.md", "dest/keep.md"])
+        state.batchMoveRunner = { _, request in await probe.run(request) }
+        state.structuralBatchRefreshRunner = { _ in }
+
+        await state.moveTreeSelection(
+            [
+                AppState.TreeSelection(path: "folder", isDirectory: true),
+                AppState.TreeSelection(path: "folder/child.md", isDirectory: false),
+            ],
+            to: "dest",
+            preferredFocusPath: "folder/child.md")?.value
+
+        let callCount = await probe.callCount()
+        let request = await probe.lastRequest()
+        XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(
+            request?.items,
+            items,
+            "Swift must not erase core-owned CoveredBySelectedFolder skip facts")
+        XCTAssertEqual(
+            state.treeMutation?.preferredFocusPath,
+            "folder/child.md",
+            "the drag origin must survive the native batch landing")
+    }
+
+    func testC2DropSourceWiringRequiresEarlyAdmissionDecodeRecheckAndBusyFeedbackCleanup()
+        throws
+    {
+        let sidebar = try Self.source("FileTreeSidebar.swift")
+        let appState = try Self.source("AppState.swift")
+
+        XCTAssertTrue(
+            sidebar.contains("Self.loadAdmittedDropProvider("),
+            "the instance handler needs a behavior-testable admission coordinator")
+        XCTAssertTrue(
+            sidebar.contains("appState.admitStructuralDropRequest()"),
+            "supported providers must re-use the exact shared admission reason")
+        XCTAssertTrue(
+            sidebar.contains("Self.dropTargetIsActive("),
+            "row/root targeting and spring timers need one busy-aware policy")
+        XCTAssertTrue(
+            sidebar.contains(".onChange(of: appState.isMutatingStructure)"),
+            "a mutation beginning mid-hover must cancel stale target/spring state")
+        XCTAssertTrue(
+            sidebar.contains("guard appState.currentSession === capturedSession"),
+            "both delayed provider callbacks must retain the admitted session identity")
+        XCTAssertTrue(
+            sidebar.contains("preferredFocusPath: preferredFocusPath"),
+            "the decoded private origin must reach the native batch landing")
+        XCTAssertTrue(
+            sidebar.contains("appState.moveTreeSelection("),
+            "private decode must re-enter an admission-aware AppState funnel")
+        XCTAssertTrue(
+            sidebar.contains("appState.handleFileURLDrop("),
+            "both decoded file-URL branches need one admission-aware AppState funnel")
+        XCTAssertTrue(
+            appState.contains("func admitStructuralDropRequest() -> Bool"))
+        XCTAssertTrue(
+            appState.contains("func handleFileURLDrop("))
     }
 
     // MARK: - In-vault file-URL drop → move end-to-end

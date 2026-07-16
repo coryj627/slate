@@ -793,6 +793,33 @@ final class CommandPaletteViewTests: XCTestCase {
     }
 
     @MainActor
+    func testBusyStructuralFailureAnnouncesTheExactReasonAndIsNotSuccess() async {
+        let model = CommandPaletteModel()
+        let registry = CommandRegistry()
+        let reason = "Wait for the current file operation to finish."
+        let action = StubAction(failWith: .ActionFailed(message: reason))
+        let command = Command(
+            id: SlateCommandID.newNote,
+            label: "New Note",
+            accessibilityHint: "Create an untitled note.",
+            hotkeyHint: "⌘N",
+            section: .file)
+        _ = registry.register(command: command, action: action)
+        model.loadCommands(registry.list())
+
+        let outcome = model.invokeSelected(via: registry)
+
+        XCTAssertEqual(
+            outcome,
+            .actionFailed(label: "New Note", message: reason),
+            "busy structural work must not masquerade as a successful invocation")
+        XCTAssertEqual(
+            model.pendingAnnouncement, reason,
+            "VoiceOver must hear the shared reason verbatim, without a second failure prefix")
+        XCTAssertEqual(action.invocationCount, 1)
+    }
+
+    @MainActor
     func testInvokeNoSelectionIsNoOp() async {
         let model = CommandPaletteModel()
         let registry = CommandRegistry()

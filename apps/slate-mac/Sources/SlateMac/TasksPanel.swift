@@ -128,7 +128,10 @@ struct TasksPanel: View {
         // also no-ops in this case but disabling here gives the
         // user a visible "save first" signal and routes VoiceOver
         // away from a button that would do nothing.
-        let blocked = appState.hasUnsavedChanges
+        let dirtyReason =
+            "Save the note first. Toggle is disabled while the editor has unsaved changes."
+        let blockedReason = appState.activeNoteAuthoringDisabledReason
+            ?? (appState.hasUnsavedChanges ? dirtyReason : nil)
         return Button {
             appState.toggleCurrentTask(task)
         } label: {
@@ -140,21 +143,17 @@ struct TasksPanel: View {
                 .imageScale(.large)
         }
         .buttonStyle(.plain)
-        .disabled(blocked)
+        .disabled(blockedReason != nil)
         .accessibilityLabel(task.completed ? "Mark incomplete" : "Mark complete")
         .accessibilityHint(
-            blocked
-                ? "Save the note first. Toggle is disabled while the editor has unsaved changes."
-                : "Toggles the task between open and done."
+            blockedReason ?? "Toggles the task between open and done."
         )
         .accessibilityIsSelected(task.completed)
         // WCAG 1.4.1: status NOT communicated via colour alone.
         // The accessibility label carries the explicit state; the
         // SF Symbol carries the visual; both flip together.
         .help(
-            blocked
-                ? "Save the note first. Toggle is disabled while the editor has unsaved changes."
-                : (task.completed ? "Mark incomplete" : "Mark complete")
+            blockedReason ?? (task.completed ? "Mark incomplete" : "Mark complete")
         )
     }
 

@@ -111,18 +111,29 @@ struct HistoryPanel: View {
                 focusedVersion = visibleVersions.first?.positionFromTail
             }
             Button("Restore") {
-                appState.historyRestoreAsPrompt = nil
                 let destination = restoreAsDestination
-                Task { await appState.performRestoreAs(prompt, destination: destination) }
+                appState.commitRestoreAs(prompt, destination: destination)
             }
+            .disabled(appState.structuralMutationDisabledReason != nil)
+            .accessibilityHint(
+                appState.structuralMutationDisabledReason
+                    ?? "Restore this version as a new file.")
+            .help(
+                appState.structuralMutationDisabledReason
+                    ?? "Restore this version as a new file.")
         } message: { prompt in
-            switch prompt.source {
-            case .deletedFile(let path):
-                Text(
-                    "A file already exists at \(path). Restore the deleted file to a different location."
-                )
-            case .version(_, _, let date):
-                Text("Save a copy of the version from \(date) to a new file.")
+            VStack(alignment: .leading) {
+                switch prompt.source {
+                case .deletedFile(let path):
+                    Text(
+                        "A file already exists at \(path). Restore the deleted file to a different location."
+                    )
+                case .version(_, _, let date):
+                    Text("Save a copy of the version from \(date) to a new file.")
+                }
+                if let reason = appState.structuralMutationDisabledReason {
+                    Text(reason)
+                }
             }
         }
         .onChange(of: appState.historyRestoreAsPrompt) { _, prompt in
@@ -477,6 +488,13 @@ struct HistoryPanel: View {
                     SlateSymbol.restore.label("Restore As…")
                 }
                 .buttonStyle(.borderless)
+                .disabled(appState.structuralMutationDisabledReason != nil)
+                .accessibilityHint(
+                    appState.structuralMutationDisabledReason
+                        ?? "Save this version as a new file.")
+                .help(
+                    appState.structuralMutationDisabledReason
+                        ?? "Save this version as a new file.")
             }
             Text(version.audioFragment)
                 .font(.caption)
@@ -643,11 +661,18 @@ struct HistoryPanel: View {
             Spacer()
             if entry.recoverable {
                 Button {
-                    Task { await appState.recoverDeleted(path: entry.path) }
+                    appState.requestRecoverDeleted(path: entry.path)
                 } label: {
                     SlateSymbol.restore.label("Restore")
                 }
                 .buttonStyle(.borderless)
+                .disabled(appState.structuralMutationDisabledReason != nil)
+                .accessibilityHint(
+                    appState.structuralMutationDisabledReason
+                        ?? "Restore this deleted file.")
+                .help(
+                    appState.structuralMutationDisabledReason
+                        ?? "Restore this deleted file.")
             }
         }
         .padding(.horizontal, 12)

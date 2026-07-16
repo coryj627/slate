@@ -299,6 +299,80 @@ struct CountingWriteProvider {
     writes: Arc<std::sync::atomic::AtomicUsize>,
 }
 
+/// Injects a non-Slate writer immediately before the publish primitive. The
+/// unconditional writer overwrites the injected bytes; a correct exclusive
+/// writer reaches `write_file_if_absent` and receives DestinationExists.
+struct ExternalCreateRaceProvider {
+    inner: FsVaultProvider,
+    root: PathBuf,
+    injected: std::sync::atomic::AtomicBool,
+}
+
+impl ExternalCreateRaceProvider {
+    fn new(root: PathBuf) -> Self {
+        Self {
+            inner: FsVaultProvider::new(root.clone()),
+            root,
+            injected: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn inject_external_create(&self, relative: &str) {
+        if relative == "Queries/Race.base"
+            && !self
+                .injected
+                .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
+            let path = self.root.join(relative);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"external winner\n").unwrap();
+        }
+    }
+}
+
+impl crate::VaultProvider for ExternalCreateRaceProvider {
+    fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+        self.inner.list_dir(relative)
+    }
+
+    fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+        self.inner.read_file(relative)
+    }
+
+    fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.inject_external_create(relative);
+        self.inner.write_file(relative, contents)
+    }
+
+    fn write_file_if_absent(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.inject_external_create(relative);
+        self.inner.write_file_if_absent(relative, contents)
+    }
+
+    fn delete(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.delete(relative)
+    }
+
+    fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.inner.rename(from, to)
+    }
+
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
+
+    fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        self.inner.stat(relative)
+    }
+
+    fn watch(
+        &self,
+        sink: Arc<dyn crate::FileEventSink>,
+    ) -> Result<Option<crate::WatchHandle>, VaultError> {
+        self.inner.watch(sink)
+    }
+}
+
 impl crate::VaultProvider for CountingWriteProvider {
     fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
         self.inner.list_dir(relative)
@@ -2299,6 +2373,73 @@ fn save_query_as_base_and_dql_as_base_write_canonical_executable_base() {
         )
         .unwrap_err();
     assert!(median_err.to_string().contains("median"), "{median_err}");
+}
+
+#[test]
+fn save_query_as_base_requires_base_extension_but_accepts_case_insensitively() {
+    let (_tmp, session) = make_vault(|_| {});
+    let (query, warnings) =
+        crate::bases::dql::parse_dql("TABLE WITHOUT ID file.name\nFROM \"Notes\"\n");
+    assert!(warnings.is_empty());
+    let query_json = serde_json::to_string(&query).unwrap();
+
+    assert!(matches!(
+        session.save_query_as_base(&query_json, "Queries/Wrong.md"),
+        Err(VaultError::InvalidArgument { .. })
+    ));
+    assert!(session.read_text("Queries/Wrong.md").is_err());
+
+    session
+        .save_query_as_base(&query_json, "Queries/Upper.BASE")
+        .unwrap();
+    assert!(session.read_text("Queries/Upper.BASE").is_ok());
+}
+
+#[test]
+fn save_query_as_base_refuses_existing_target_and_preserves_bytes() {
+    let (tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("Queries/Existing.base", b"sentinel occupant\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let (query, warnings) =
+        crate::bases::dql::parse_dql("TABLE WITHOUT ID file.name\nFROM \"Notes\"\n");
+    assert!(warnings.is_empty());
+    let query_json = serde_json::to_string(&query).unwrap();
+
+    assert!(matches!(
+        session.save_query_as_base(&query_json, "Queries/Existing.base"),
+        Err(VaultError::DestinationExists { .. })
+    ));
+    assert_eq!(
+        std::fs::read(tmp.path().join("Queries/Existing.base")).unwrap(),
+        b"sentinel occupant\n"
+    );
+}
+
+#[test]
+fn save_query_as_base_external_create_race_never_clobbers_winner() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().to_path_buf();
+    let session = VaultSession::open(
+        Arc::new(ExternalCreateRaceProvider::new(root.clone())),
+        SessionConfig::new(root.join(".slate")),
+    )
+    .unwrap();
+    let (query, warnings) =
+        crate::bases::dql::parse_dql("TABLE WITHOUT ID file.name\nFROM \"Notes\"\n");
+    assert!(warnings.is_empty());
+    let query_json = serde_json::to_string(&query).unwrap();
+
+    assert!(matches!(
+        session.save_query_as_base(&query_json, "Queries/Race.base"),
+        Err(VaultError::DestinationExists { .. })
+    ));
+    assert_eq!(
+        std::fs::read(root.join("Queries/Race.base")).unwrap(),
+        b"external winner\n"
+    );
 }
 
 #[test]

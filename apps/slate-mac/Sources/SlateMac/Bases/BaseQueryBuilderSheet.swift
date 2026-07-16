@@ -1058,7 +1058,9 @@ struct BaseQueryBuilderSheet: View {
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let saveBaseDisabledReason = appState.structuralMutationDisabledReason
+        let saveToViewDisabledReason = appState.baseQueryBuilderSaveToViewDisabledReason
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("Base path")
@@ -1067,10 +1069,27 @@ struct BaseQueryBuilderSheet: View {
                     TextField("Save as .base", text: $saveAsBasePath)
                         .textFieldStyle(.roundedBorder)
                         .accessibilityLabel("Base file path")
+                        .onChange(of: saveAsBasePath) { _, _ in
+                            appState.clearBaseQueryBuilderSaveError()
+                        }
+                    if let saveError = appState.baseQueryBuilderSaveError {
+                        Text(saveError)
+                            .font(.caption)
+                            .foregroundStyle(Tokens.ColorRole.destructiveText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel("Base path error: \(saveError)")
+                    }
                 }
                 Button("Save as .base") {
                     appState.basesBuilderSaveAsBase(path: saveAsBasePath)
                 }
+                .disabled(saveBaseDisabledReason != nil)
+                .accessibilityHint(
+                    saveBaseDisabledReason
+                        ?? "Save this query builder draft as a .base file in the vault.")
+                .help(
+                    saveBaseDisabledReason
+                        ?? "Save this query builder draft as a .base file")
                 if model.editingSavedQuery != nil {
                     Button("Update saved query") {
                         appState.basesBuilderUpdateSavedQuery()
@@ -1094,11 +1113,46 @@ struct BaseQueryBuilderSheet: View {
                 Text(model.conditionsListAccessibilityValue)
                     .foregroundStyle(Color(nsColor: .secondaryLabelColor))
                 Spacer()
+                if let recoveryLabel = appState.baseQueryBuilderRecoveryActionLabel {
+                    let recoveryDisabledReason = appState.structuralMutationDisabledReason
+                    Button(recoveryLabel) {
+                        _ = appState.retryBaseQueryBuilderSourceRecovery()
+                    }
+                    .disabled(recoveryDisabledReason != nil)
+                    .accessibilityHint(
+                        recoveryDisabledReason
+                            ?? appState.baseQueryBuilderRecoveryActionHint
+                            ?? "Try to restore the source Base.")
+                    .help(
+                        recoveryDisabledReason
+                            ?? appState.baseQueryBuilderRecoveryActionHint
+                            ?? "Try to restore the source Base")
+                }
                 if model.editingBaseView != nil {
                     Button("Save to view") { appState.basesBuilderSaveToView() }
+                        .disabled(saveToViewDisabledReason != nil)
+                        .accessibilityHint(
+                            saveToViewDisabledReason
+                                ?? "Save this builder draft into the source Base view.")
+                        .help(
+                            saveToViewDisabledReason
+                                ?? "Save this builder draft into the source Base view")
                 }
                 Button("Done") { appState.basesCloseQueryBuilder() }
                     .keyboardShortcut(.defaultAction)
+            }
+            if let saveBaseDisabledReason {
+                Text(saveBaseDisabledReason)
+                    .font(.caption)
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .accessibilityLabel(saveBaseDisabledReason)
+            }
+            if let saveToViewDisabledReason {
+                Text(saveToViewDisabledReason)
+                    .font(.caption)
+                    .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+                    .accessibilityLabel(saveToViewDisabledReason)
+                    .help(saveToViewDisabledReason)
             }
         }
         .padding(.horizontal, 18)

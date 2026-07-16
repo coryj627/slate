@@ -108,12 +108,22 @@ struct CommandPaletteView: View {
             guard let newID,
                   let command = model.displayOrder.first(where: { $0.id == newID })
             else { return }
+            let disabledReason = Self.disabledReason(
+                for: command,
+                structuralMutationDisabledReason: appState.structuralMutationDisabledReason,
+                canvasMutationDisabledReason: appState.activeCanvasMutationDisabledReason,
+                noteAuthoringDisabledReason: appState.activeNoteAuthoringDisabledReason,
+                baseInteractionDisabledReason: appState.activeBaseInteractionDisabledReason,
+                baseDefinitionEditingDisabledReason:
+                    appState.activeBaseDefinitionEditingDisabledReason,
+                baseRefreshDisabledReason: appState.activeBaseRefreshDisabledReason)
             // #418 (F-A1): was .low — anything else speaking (typing
             // echoes, filter-count announcements) superseded it and
             // the VO test heard nothing while arrowing. Medium is
             // the politeness floor that actually survives.
             postAccessibilityAnnouncement(
-                "Selected: \(command.label)",
+                Self.selectionAnnouncement(
+                    for: command, disabledReason: disabledReason),
                 priority: .medium
             )
         }
@@ -225,31 +235,47 @@ struct CommandPaletteView: View {
 
     private func commandRow(_ command: Command) -> some View {
         let isSelected = command.id == model.selectedID
+        let disabledReason = Self.disabledReason(
+            for: command,
+            structuralMutationDisabledReason: appState.structuralMutationDisabledReason,
+            canvasMutationDisabledReason: appState.activeCanvasMutationDisabledReason,
+            noteAuthoringDisabledReason: appState.activeNoteAuthoringDisabledReason,
+            baseInteractionDisabledReason: appState.activeBaseInteractionDisabledReason,
+            baseDefinitionEditingDisabledReason:
+                appState.activeBaseDefinitionEditingDisabledReason,
+            baseRefreshDisabledReason: appState.activeBaseRefreshDisabledReason)
         return Button {
-            // Restore focus to the search field so a subsequent
-            // Enter actually fires onSubmit (red-team finding P2 #4
-            // — click-then-Enter would otherwise no-op).
-            searchFocused = true
             invoke(command)
         } label: {
-            HStack(spacing: 12) {
-                Text(command.label)
-                    .foregroundStyle(
-                        isSelected
-                            ? Color(nsColor: .selectedMenuItemTextColor)
-                            : Color(nsColor: .labelColor)
-                    )
-                Spacer()
-                if let hotkey = command.hotkeyHint {
-                    Text(hotkey)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 12) {
+                    Text(command.label)
                         .foregroundStyle(
                             isSelected
                                 ? Color(nsColor: .selectedMenuItemTextColor)
-                                : Color(nsColor: .secondaryLabelColor)
+                                : Color(nsColor: .labelColor)
                         )
-                        .font(.callout)
-                        .monospacedDigit()
-                        .accessibilityHidden(true)
+                    Spacer()
+                    if let hotkey = command.hotkeyHint {
+                        Text(hotkey)
+                            .foregroundStyle(
+                                isSelected
+                                    ? Color(nsColor: .selectedMenuItemTextColor)
+                                    : Color(nsColor: .secondaryLabelColor)
+                            )
+                            .font(.callout)
+                            .monospacedDigit()
+                            .accessibilityHidden(true)
+                    }
+                }
+                if let disabledReason {
+                    Text(disabledReason)
+                        .font(.caption)
+                        .foregroundStyle(
+                            isSelected
+                                ? Color(nsColor: .selectedMenuItemTextColor)
+                                : Color(nsColor: .secondaryLabelColor))
+                        .lineLimit(2)
                 }
             }
             .padding(.horizontal, 16)
@@ -263,6 +289,7 @@ struct CommandPaletteView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(disabledReason != nil)
         .onHover { hovering in
             // Hover-update is debounced against recent keyboard
             // nav so stationary mouse jitter doesn't yank selection
@@ -273,7 +300,8 @@ struct CommandPaletteView: View {
             }
         }
         .accessibilityLabel(Self.voiceOverLabel(for: command))
-        .accessibilityHint(command.accessibilityHint ?? "")
+        .accessibilityHint(disabledReason ?? command.accessibilityHint ?? "")
+        .help(disabledReason ?? command.accessibilityHint ?? "")
         // Conditional modifier instead of `.accessibilityAddTraits(
         // isSelected ? [.isSelected] : [])`. The empty-array branch
         // theoretically would have to be a no-op, but the `Add` in
@@ -287,6 +315,66 @@ struct CommandPaletteView: View {
     }
 
     // MARK: - VoiceOver label
+
+    /// One availability resolver drives the visible row state, the selection
+    /// announcement, and Return routing so those surfaces cannot disagree.
+    static func disabledReason(
+        for command: Command,
+        structuralMutationDisabledReason: String?,
+        canvasMutationDisabledReason: String? = nil,
+        noteAuthoringDisabledReason: String? = nil,
+        baseInteractionDisabledReason: String? = nil,
+        baseDefinitionEditingDisabledReason: String? = nil,
+        baseRefreshDisabledReason: String? = nil
+    ) -> String? {
+        if SlateCommandID.structuralMutationCommands.contains(command.id),
+            let structuralMutationDisabledReason
+        {
+            return structuralMutationDisabledReason
+        }
+        if SlateCommandID.canvasMutationCommands.contains(command.id) {
+            return canvasMutationDisabledReason
+        }
+        if SlateCommandID.noteAuthoringCommands.contains(command.id) {
+            return noteAuthoringDisabledReason
+        }
+        if SlateCommandID.baseInteractionCommands.contains(command.id) {
+            return baseInteractionDisabledReason
+        }
+        if SlateCommandID.baseDefinitionEditingCommands.contains(command.id) {
+            return baseDefinitionEditingDisabledReason
+        }
+        if command.id == SlateCommandID.basesRefresh {
+            return baseRefreshDisabledReason
+        }
+        return nil
+    }
+
+    static func selectionAnnouncement(
+        for command: Command,
+        disabledReason: String?
+    ) -> String {
+        guard let disabledReason else { return "Selected: \(command.label)" }
+        return "Selected: \(command.label). Unavailable: \(disabledReason)"
+    }
+
+    /// View-layer Return/click gate. A disabled selection keeps search focus,
+    /// announces its exact reason, and never reaches the registry action. The
+    /// registry's own guard remains the backstop for non-palette callers.
+    @discardableResult
+    static func invokeIfAvailable(
+        disabledReason: String?,
+        restoreSearchFocus: () -> Void,
+        announceUnavailable: (String) -> Void,
+        invoke: () -> InvocationOutcome
+    ) -> InvocationOutcome? {
+        restoreSearchFocus()
+        if let disabledReason {
+            announceUnavailable(disabledReason)
+            return nil
+        }
+        return invoke()
+    }
 
     /// Compose the command's label with the spelled-out chord so
     /// VoiceOver users hear "Save, Command S" the way the macOS
@@ -519,7 +607,25 @@ struct CommandPaletteView: View {
     /// launch, then dismiss. On failure: stay open and let the
     /// model's pending announcement surface the error (#315).
     private func invoke(_ command: Command) {
-        let outcome = model.invoke(command, via: appState.commandRegistry)
+        let disabledReason = Self.disabledReason(
+            for: command,
+            structuralMutationDisabledReason: appState.structuralMutationDisabledReason,
+            canvasMutationDisabledReason: appState.activeCanvasMutationDisabledReason,
+            noteAuthoringDisabledReason: appState.activeNoteAuthoringDisabledReason,
+            baseInteractionDisabledReason: appState.activeBaseInteractionDisabledReason,
+            baseDefinitionEditingDisabledReason:
+                appState.activeBaseDefinitionEditingDisabledReason,
+            baseRefreshDisabledReason: appState.activeBaseRefreshDisabledReason)
+        guard let outcome = Self.invokeIfAvailable(
+            disabledReason: disabledReason,
+            restoreSearchFocus: { searchFocused = true },
+            announceUnavailable: {
+                postAccessibilityAnnouncement($0, priority: .high)
+            },
+            invoke: {
+                model.invoke(command, via: appState.commandRegistry)
+            })
+        else { return }
         if case .success = outcome {
             // Persist the invocation to recents so it surfaces in
             // the Recent section next time the palette opens.

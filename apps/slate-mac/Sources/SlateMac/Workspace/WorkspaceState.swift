@@ -39,6 +39,12 @@ final class WorkspaceState: ObservableObject {
     /// here is stale while active and overwritten on park.
     private(set) var documents: [TabID: NoteDocument] = [:]
 
+    /// Monotonic stamp for the set and values returned by
+    /// `loadedBaselineSnapshots`. Detached NoteParts validation compares large
+    /// bodies away from MainActor, then requires this cheap stamp to remain
+    /// unchanged before advancing any document hash.
+    private(set) var loadedBaselineRevision: UInt64 = 0
+
     /// Per-tab view mode (U3-2, #466). Sparse: only tabs in reading mode
     /// have an entry — absent means `.editing` (today's behavior and the
     /// workspace.json backward-compat rule). Cleared on tab close; persisted
@@ -99,7 +105,9 @@ final class WorkspaceState: ObservableObject {
     /// parked or the park belongs to a different note (path changed
     /// under the same tab — the #856 "clear on note switch" rule).
     func parkedReadingScroll(for tabID: TabID, path: String?) -> Int? {
-        guard let park = readingScrollParks[tabID], park.path == path else { return nil }
+        guard let park = readingScrollParks[tabID],
+            BaseExactIdentity.matches(Optional(park.path), path)
+        else { return nil }
         return park.blockIndex
     }
 
@@ -205,7 +213,10 @@ final class WorkspaceState: ObservableObject {
     /// real vault file whose path equalled the graph's sentinel hijack
     /// (or be hijacked by) the graph tab (round 2 finding 5).
     func activeGroupTab(forPath path: String) -> WorkspaceTab? {
-        model.activeGroup.tabs.first { $0.item != .graph && $0.item.path == path }
+        model.activeGroup.tabs.first {
+            $0.item != .graph
+                && BaseExactIdentity.matches($0.item.path, path)
+        }
     }
 
     /// The `.base` tab in the active group whose path has the exact UTF-8
@@ -271,7 +282,7 @@ final class WorkspaceState: ObservableObject {
     ) {
         guard let tab = activeTab, case .markdown(let path) = tab.item,
             let text, let baseline,
-            loadedFilePath == path
+            BaseExactIdentity.matches(loadedFilePath, path)
         else { return }
         let doc = documents[tab.id] ?? NoteDocument(id: tab.id, path: path)
         doc.text = text
@@ -285,6 +296,7 @@ final class WorkspaceState: ObservableObject {
         doc.bodyLineOffset = bodyLineOffset
         doc.hasLoaded = true
         documents[tab.id] = doc
+        loadedBaselineRevision &+= 1
     }
 
     /// U3-3: a property edit (or U3-4 source commit) rewrote the file's
@@ -295,7 +307,9 @@ final class WorkspaceState: ObservableObject {
         path: String, fmSource: String, bodyByteOffset: Int,
         bodyLineOffset: Int, contentHash: String?
     ) {
-        for doc in documents.values where doc.path == path {
+        for doc in documents.values
+        where BaseExactIdentity.matches(doc.path, path)
+        {
             doc.fmSource = fmSource
             doc.bodyByteOffset = bodyByteOffset
             doc.bodyLineOffset = bodyLineOffset
@@ -303,11 +317,46 @@ final class WorkspaceState: ObservableObject {
         }
     }
 
+    /// Conflict Reload may learn authoritative FM while the disk body no
+    /// longer matches the saved body baseline. Mirror only FM/offsets and keep
+    /// each old hash so every later composed save must still conflict before
+    /// it can replace the external body.
+    func mirrorFrontmatterWithoutAdvancingHash(
+        path: String,
+        fmSource: String,
+        bodyByteOffset: Int,
+        bodyLineOffset: Int
+    ) {
+        for doc in documents.values
+        where BaseExactIdentity.matches(doc.path, path)
+        {
+            doc.fmSource = fmSource
+            doc.bodyByteOffset = bodyByteOffset
+            doc.bodyLineOffset = bodyLineOffset
+        }
+    }
+
+    /// A frontmatter-only writer may advance a parked document's whole-file
+    /// hash only when the body read back from disk is still that document's
+    /// saved baseline. Otherwise a later composed body save could treat an
+    /// external body edit as its new baseline and overwrite it without a
+    /// conflict. Unloaded placeholders have no bytes to validate and are
+    /// ignored until their first normal disk load.
+    func loadedBaselineSnapshots(forPath path: String) -> [String] {
+        documents.values.compactMap { document in
+            BaseExactIdentity.matches(document.path, path) && document.hasLoaded
+                ? document.savedBaselineText
+                : nil
+        }
+    }
+
     /// Mirror a live edit into every same-path parked document so a
     /// duplicated tab renders current bytes (copy-on-write: O(1) per doc).
     /// Dirty state mirrors too — the duplicate IS the same buffer.
     func mirrorEdit(path: String, text: String, hasUnsavedChanges: Bool) {
-        for doc in documents.values where doc.path == path {
+        for doc in documents.values
+        where BaseExactIdentity.matches(doc.path, path)
+        {
             doc.text = text
             doc.hasUnsavedChanges = hasUnsavedChanges
         }
@@ -316,17 +365,64 @@ final class WorkspaceState: ObservableObject {
     /// Same-path parked documents also share save results (baseline/hash
     /// move together — they are one file).
     func mirrorSaveResult(path: String, baseline: String, contentHash: String?) {
-        for doc in documents.values where doc.path == path {
+        for doc in documents.values
+        where BaseExactIdentity.matches(doc.path, path)
+        {
             doc.savedBaselineText = baseline
-            doc.text = baseline
             doc.contentHash = contentHash
-            doc.hasUnsavedChanges = false
+            doc.hasUnsavedChanges = !BaseExactIdentity.matches(doc.text, baseline)
             doc.saveConflict = nil
             doc.saveError = nil
         }
+        loadedBaselineRevision &+= 1
     }
 
     // MARK: Retarget (U2-5 file rename/move follow)
+
+    /// Batch-capable one-pass file-tab retarget. Parked markdown state follows
+    /// its concrete tab mapping byte-for-byte; canvas/Base registries are owned
+    /// by AppState and consume the returned change ledger.
+    @discardableResult
+    func retargetFileBackedTabs(
+        _ transform: (EditorItem) -> EditorItem?
+    ) -> [WorkspaceModel.FileTabRetarget] {
+        let changes = model.retargetFileBackedItems(transform)
+        for change in changes {
+            guard case .markdown = change.oldItem,
+                case .markdown = change.newItem
+            else { continue }
+            if let park = readingScrollParks[change.tabID],
+                BaseExactIdentity.matches(park.path, change.oldPath)
+            {
+                readingScrollParks[change.tabID] = ReadingScrollPark(
+                    path: change.newPath, blockIndex: park.blockIndex)
+            }
+            guard let old = documents[change.tabID],
+                BaseExactIdentity.matches(old.path, change.oldPath)
+            else { continue }
+            let rebound = NoteDocument(id: change.tabID, path: change.newPath)
+            rebound.text = old.text
+            rebound.savedBaselineText = old.savedBaselineText
+            rebound.contentHash = old.contentHash
+            rebound.hasUnsavedChanges = old.hasUnsavedChanges
+            rebound.fmSource = old.fmSource
+            rebound.bodyByteOffset = old.bodyByteOffset
+            rebound.bodyLineOffset = old.bodyLineOffset
+            rebound.saveError = old.saveError
+            rebound.saveConflict = old.saveConflict
+            rebound.isMissingFromDisk = old.isMissingFromDisk
+            rebound.hasLoaded = old.hasLoaded
+            documents[change.tabID] = rebound
+        }
+        if changes.contains(where: {
+            if case .markdown = $0.oldItem { return true }
+            return false
+        }) {
+            loadedBaselineRevision &+= 1
+        }
+        assert(model.validate().isEmpty, "workspace invariants: \(model.validate())")
+        return changes
+    }
 
     /// The single mutation point for an open file whose PATH changed on disk —
     /// rename, move, or an ancestor folder moving (U2-5, #463). Every tab
@@ -345,43 +441,19 @@ final class WorkspaceState: ObservableObject {
     /// A no-op (`old == new`, or the file isn't open anywhere) returns `[]`.
     @discardableResult
     func retarget(old: String, new: String) -> [TabID] {
-        let crossesBaseBoundary = old.lowercased().hasSuffix(".base")
-            || new.lowercased().hasSuffix(".base")
-        let isSamePath = crossesBaseBoundary
-            ? BaseExactIdentity.matches(old, new)
-            : old == new
-        guard !isSamePath else { return [] }
-        var changed = model.retargetItem(
-            from: .markdown(path: old), to: .markdown(path: new))
-        changed += model.retargetItem(
-            from: .canvas(path: old), to: .canvas(path: new))
-        changed += model.retargetItem(
-            from: .base(path: old), to: .base(path: new))
-        // Rebind parked documents: `NoteDocument.path` is a `let`, so a moved
-        // file gets a fresh document that inherits the old one's buffer state.
-        // Only tabs that were actually retargeted are touched (the ACTIVE tab
-        // has no `documents` entry while active — AppState owns its fields).
-        for tabID in changed {
-            // Rebind reading-scroll parks alongside documents (red-team:
-            // a rename while the note was parked in reading mode
-            // orphaned the offset — park.path kept the OLD path).
-            if let park = readingScrollParks[tabID], park.path == old {
-                readingScrollParks[tabID] = ReadingScrollPark(
-                    path: new, blockIndex: park.blockIndex)
+        guard !BaseExactIdentity.matches(old, new) else { return [] }
+        return retargetFileBackedTabs { item in
+            switch item {
+            case .markdown(let path) where BaseExactIdentity.matches(path, old):
+                return .markdown(path: new)
+            case .canvas(let path) where BaseExactIdentity.matches(path, old):
+                return .canvas(path: new)
+            case .base(let path) where BaseExactIdentity.matches(path, old):
+                return .base(path: new)
+            default:
+                return nil
             }
-            guard let old = documents[tabID] else { continue }
-            let rebound = NoteDocument(id: tabID, path: new)
-            rebound.text = old.text
-            rebound.savedBaselineText = old.savedBaselineText
-            rebound.contentHash = old.contentHash
-            rebound.hasUnsavedChanges = old.hasUnsavedChanges
-            rebound.saveError = old.saveError
-            rebound.saveConflict = old.saveConflict
-            rebound.hasLoaded = old.hasLoaded
-            documents[tabID] = rebound
-        }
-        assert(model.validate().isEmpty, "workspace invariants: \(model.validate())")
-        return changed
+        }.map(\.tabID)
     }
 
     @discardableResult
@@ -410,15 +482,58 @@ final class WorkspaceState: ObservableObject {
     /// for the parked-tab arm: a deleted file open in a *background* tab should
     /// surface its error the next time it's activated. We keep those tabs open
     /// (they load lazily and hit `noteLoadError`), so this returns the set for
-    /// bookkeeping without mutating — the parked documents are simply dropped so
-    /// the next activation re-reads from disk and fails into the error state.
+    /// bookkeeping without mutating. Clean parked documents are dropped so
+    /// the next activation re-reads from disk and fails into the error state;
+    /// dirty documents are retained and marked missing so the user's only
+    /// in-memory draft remains recoverable.
     @discardableResult
     func invalidateParkedDocuments(forPath path: String) -> [TabID] {
         let affected = model.allTabs
             .filter { $0.item == .markdown(path: path) }
             .map(\.id)
-        for id in affected { documents[id] = nil }
+        invalidateParkedDocuments(tabIDs: affected)
         return affected
+    }
+
+    /// Batch invalidation arm after AppState's one-pass typed-tab match.
+    /// No model scan occurs here; tabs stay open and reload into errors later.
+    func invalidateParkedDocuments(tabIDs: [TabID]) {
+        var removedLoadedDocument = false
+        for id in tabIDs {
+            guard let document = documents[id] else { continue }
+            if document.hasUnsavedChanges {
+                document.isMissingFromDisk = true
+            } else {
+                removedLoadedDocument = removedLoadedDocument || document.hasLoaded
+                documents[id] = nil
+            }
+        }
+        if removedLoadedDocument { loadedBaselineRevision &+= 1 }
+    }
+
+    /// Mark the live active document missing after AppState snapshots its dirty
+    /// fields. Keeping this funnel here prevents AppState from mutating the
+    /// private parked-document registry directly.
+    func markDocumentMissing(_ id: TabID, retainAsDirty: Bool = false) {
+        guard let document = documents[id] else { return }
+        document.isMissingFromDisk = true
+        if retainAsDirty {
+            document.hasUnsavedChanges = true
+        }
+    }
+
+    /// Explicit recovery discard. Tabs remain open, but their missing parked
+    /// buffers are removed so a later activation shows the ordinary disk-load
+    /// error rather than resurrecting discarded text.
+    func discardMissingDocuments(forPath path: String) {
+        let ids = documents.compactMap { id, document in
+            BaseExactIdentity.matches(document.path, path)
+                && document.isMissingFromDisk ? id : nil
+        }
+        if ids.contains(where: { documents[$0]?.hasLoaded == true }) {
+            loadedBaselineRevision &+= 1
+        }
+        for id in ids { documents[id] = nil }
     }
 
     // MARK: Model mutations (funneled)
@@ -444,6 +559,9 @@ final class WorkspaceState: ObservableObject {
             previous.item != model.activeGroup.activeTab?.item {
             // Same tab, new item: the old item's parked snapshot (keyed by
             // this tab id) no longer describes the tab's content.
+            if documents[previous.id]?.hasLoaded == true {
+                loadedBaselineRevision &+= 1
+            }
             documents[previous.id] = nil
             // #856: same rule for the reading-scroll park (belt — the
             // path check in `parkedReadingScroll` is the braces).
@@ -491,6 +609,9 @@ final class WorkspaceState: ObservableObject {
             }
         }
         let outcome = model.closeTab(tabID)
+        if documents[tabID]?.hasLoaded == true {
+            loadedBaselineRevision &+= 1
+        }
         documents[tabID] = nil
         viewModes[tabID] = nil
         readingScrollParks[tabID] = nil
@@ -507,6 +628,7 @@ final class WorkspaceState: ObservableObject {
     func reset() {
         model = WorkspaceModel()
         documents = [:]
+        loadedBaselineRevision &+= 1
         viewModes = [:]
         readingScrollParks = [:]
         propertiesCollapsed = []
@@ -534,6 +656,7 @@ final class WorkspaceState: ObservableObject {
         assert(restored.validate().isEmpty)
         model = restored
         documents = [:]
+        loadedBaselineRevision &+= 1
         // #856: transient by contract — a restored session starts with
         // no reading-scroll parks (never persisted; see the property doc).
         readingScrollParks = [:]

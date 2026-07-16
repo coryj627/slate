@@ -26,6 +26,12 @@ struct NoteContentView: View {
     @ObservedObject var workspace: WorkspaceState
 
     @State private var announcedFilePath: String?
+    /// Destructive recovery cleanup is always explicit. Holding the exact path
+    /// also prevents a confirmation opened for note A from discarding note B
+    /// if the selection changes before the user responds.
+    @State private var pendingMissingRecoveryDiscardPath: String?
+    @AccessibilityFocusState private var missingRecoveryFocus:
+        MissingRecoveryFocusTarget?
     /// Respect the system "Reduce motion" setting (WCAG 2.3.1). When
     /// true, scroll-to-anchor jumps instantly instead of animating —
     /// vestibular-sensitive users see no movement.
@@ -51,6 +57,11 @@ struct NoteContentView: View {
 
     enum PopoverInitialFocusTarget: Hashable {
         case closeButton
+    }
+
+    enum MissingRecoveryFocusTarget: Hashable {
+        case discardButton
+        case errorHeading
     }
 
     /// U3-2: VoiceOver focus target for the reading surface. Set when the
@@ -83,6 +94,26 @@ struct NoteContentView: View {
         }
         .onAppear {
             announceIfNeeded()
+        }
+        .confirmationDialog(
+            "Discard recovered drafts?",
+            isPresented: Binding(
+                get: { pendingMissingRecoveryDiscardPath != nil },
+                set: { if !$0 { pendingMissingRecoveryDiscardPath = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Cancel", role: .cancel) {
+                pendingMissingRecoveryDiscardPath = nil
+                missingRecoveryFocus = .discardButton
+            }
+            Button("Discard Recovered Drafts", role: .destructive) {
+                guard let path = pendingMissingRecoveryDiscardPath else { return }
+                pendingMissingRecoveryDiscardPath = nil
+                appState.discardMissingNoteRecoveryDraft(for: path)
+                missingRecoveryFocus = .errorHeading
+            }
+        } message: {
+            Text("This permanently removes Slate’s in-memory recovery copy. This can’t be undone.")
         }
     }
 
@@ -121,12 +152,101 @@ struct NoteContentView: View {
             Text("Could not load file")
                 .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
+                .accessibilityFocused(
+                    $missingRecoveryFocus, equals: .errorHeading)
             Text(message)
                 .font(Tokens.Typography.body)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
+
+            if let path = appState.loadedFilePath ?? appState.selectedFilePath,
+                let recovery = appState.missingNoteRecoveryDraft(for: path)
+            {
+                Divider()
+                    .padding(.vertical, Tokens.Spacing.xs)
+                Text("Recovery copy preserved")
+                    .font(Tokens.Typography.sectionHeader)
+                    .accessibilityAddTraits(.isHeader)
+                Text(
+                    "Slate kept the note text, any property drafts, and any unverified saved property update available in memory. Copy what you need before discarding recovery."
+                )
+                .font(Tokens.Typography.body)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
+                        recoverySection(
+                            title: "Markdown body",
+                            value: recovery.body)
+                        if !recovery.frontmatterSource.isEmpty {
+                            recoverySection(
+                                title: "Saved frontmatter source",
+                                value: recovery.frontmatterSource)
+                        }
+                        if let sourceDraft = recovery.propertiesSourceDraft {
+                            recoverySection(
+                                title: "Uncommitted properties source",
+                                value: sourceDraft)
+                        }
+                        ForEach(recovery.propertyDrafts) { draft in
+                            recoverySection(
+                                title: "Uncommitted property: \(draft.key)",
+                                value: draft.value)
+                        }
+                        ForEach(recovery.retainedPropertyUpdates) { update in
+                            recoverySection(
+                                title: "Saved update awaiting verification: \(update.key)",
+                                value: update.value)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                LazyVGrid(
+                    columns: [
+                        GridItem(
+                            .adaptive(minimum: 190),
+                            spacing: Tokens.Spacing.sm)
+                    ],
+                    alignment: .leading,
+                    spacing: Tokens.Spacing.xs
+                ) {
+                    Button("Copy Recovered Drafts") {
+                        appState.copyMissingNoteRecoveryDraft(for: path)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .accessibilityHint(
+                        "Copies the Markdown body, every properties draft, and every saved property update awaiting verification.")
+
+                    Button("Discard Recovered Drafts…", role: .destructive) {
+                        pendingMissingRecoveryDiscardPath = path
+                    }
+                    .accessibilityFocused(
+                        $missingRecoveryFocus, equals: .discardButton)
+                    .accessibilityHint(
+                        "Opens a confirmation before permanently removing the recovery copy.")
+                }
+                .padding(.top, Tokens.Spacing.xs)
+            }
         }
         .padding(Tokens.Spacing.lg)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+
+    private func recoverySection(title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+            Text(title)
+                .font(.callout.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
+            Text(verbatim: value)
+                .font(.system(.body, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(Tokens.Spacing.sm)
+                .background(
+                    Tokens.ColorRole.surfaceSecondary,
+                    in: RoundedRectangle(cornerRadius: Tokens.Radius.small))
+                .accessibilityLabel("\(title). \(value)")
+        }
     }
 
     @ViewBuilder
@@ -137,6 +257,7 @@ struct NoteContentView: View {
         // frontmatter physically lives in the file.
         VStack(spacing: 0) {
             NotePropertiesHeader(workspace: workspace)
+                .id(appState.noteAuthoringOwner())
             // U3-2 (#466): one mode mounted at a time — `if` (never the
             // ZStack-retention pattern): an offscreen editor duplicates the
             // whole text tree for VO and double-fires publishers; the
@@ -196,6 +317,7 @@ struct NoteContentView: View {
                         records: appState.currentOutgoingLinks)
                     : ReadingLinkRouter.LinkRecordSets(),
                 isDocumentDirty: appState.hasUnsavedChanges,
+                taskMutationDisabledReason: appState.activeNoteAuthoringDisabledReason,
                 onToggleTask: { [appState] item in
                     appState.toggleCurrentTask(item)
                 },
@@ -271,6 +393,8 @@ struct NoteContentView: View {
             text: appState.noteTextBinding(),
             headings: appState.currentNoteHeadings,
             accessibilityLabel: accessibilityLabelForContent,
+            isEditable: appState.activeNoteAuthoringDisabledReason == nil,
+            readOnlyReason: appState.activeNoteAuthoringDisabledReason,
             onSave: { [appState] in appState.saveCurrentNote() },
             scrollAnchorRequest: appState.scrollAnchorRequest.eraseToAnyPublisher(),
             lineScrollRequest: appState.lineScrollRequest.eraseToAnyPublisher(),

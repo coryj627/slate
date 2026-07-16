@@ -13,6 +13,79 @@ final class CanvasNavigatorTests: XCTestCase {
     private var tempDir: URL!
     private var posted: [String] = []
 
+    private final class NativeEventRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: [CanvasNewFileNativeExecutionEvent] = []
+
+        func append(_ event: CanvasNewFileNativeExecutionEvent) {
+            lock.lock()
+            storage.append(event)
+            lock.unlock()
+        }
+
+        func events() -> [CanvasNewFileNativeExecutionEvent] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
+    private final class SynchronousPreloadGate: @unchecked Sendable {
+        private let condition = NSCondition()
+        private var entered = false
+        private var released = false
+
+        func block() {
+            condition.lock()
+            entered = true
+            condition.broadcast()
+            while !released {
+                condition.wait()
+            }
+            condition.unlock()
+        }
+
+        func waitUntilEntered() async {
+            while true {
+                condition.lock()
+                let hasEntered = entered
+                condition.unlock()
+                if hasEntered { return }
+                await Task.yield()
+            }
+        }
+
+        func release() {
+            condition.lock()
+            released = true
+            condition.broadcast()
+            condition.unlock()
+        }
+    }
+
+    private actor AsyncSuspensionGate {
+        private var entered = false
+        private var entranceWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+        func enter() async {
+            entered = true
+            for waiter in entranceWaiters { waiter.resume() }
+            entranceWaiters = []
+            await withCheckedContinuation { releaseWaiter = $0 }
+        }
+
+        func waitUntilEntered() async {
+            guard !entered else { return }
+            await withCheckedContinuation { entranceWaiters.append($0) }
+        }
+
+        func release() {
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
+    }
+
     override func setUpWithError() throws {
         try super.setUpWithError()
         tempDir = FileManager.default.temporaryDirectory
@@ -363,10 +436,12 @@ extension CanvasNavigatorTests {
             to: doc)
         XCTAssertEqual(doc.undoStack.count, 1)
 
-        // Simulate reopen: releasing and recreating the document (what
-        // a restart does) starts with empty stacks; the journal keeps
-        // the durable record (backend test pins that half).
-        state.invalidateCanvasDocument(path: "nav.canvas")
+        // Simulate a session teardown: releasing and recreating the document
+        // (what a restart does) starts with empty stacks; the journal keeps
+        // the durable record (backend test pins that half). Missing-file
+        // invalidation deliberately retains the same document and undo stack
+        // for recovery, so it is not a session boundary.
+        state.releaseAllCanvasDocuments()
         state.openFile("nav.canvas", target: .currentTab)
         let fresh = try XCTUnwrap(state.activeCanvasDocument)
         XCTAssertTrue(fresh.undoStack.isEmpty)
@@ -457,7 +532,7 @@ extension CanvasNavigatorTests {
 
     func testNewCanvasFileCreatesOpensAndAnnounces() async throws {
         let state = try await makeState()
-        state.canvasNewCanvasFile()
+        try await XCTUnwrap(state.canvasNewCanvasFile()).value
         state.canvasAnnouncer.flushForTests()
         guard case .canvas(let path) = state.workspace.activeTab?.item else {
             return XCTFail("new canvas should open as the active tab")
@@ -468,11 +543,287 @@ extension CanvasNavigatorTests {
         XCTAssertTrue(doc.outline.isEmpty, "empty canvas — onboarding state")
         XCTAssertTrue(posted.contains("Created canvas \"Untitled Canvas\"."))
         // Collision-avoidance on the second create.
-        state.canvasNewCanvasFile()
+        try await XCTUnwrap(state.canvasNewCanvasFile()).value
         guard case .canvas(let second) = state.workspace.activeTab?.item else {
             return XCTFail("second canvas opens")
         }
         XCTAssertEqual(second, "Untitled Canvas 2.canvas")
+    }
+
+    func testNewCanvasPreservesTheSoleDirtyMarkdownBufferInItsOwnTab() async throws {
+        let state = try await makeState()
+        let session = try XCTUnwrap(state.currentSession)
+        _ = try session.createExclusive(path: "draft.md", content: "# Saved\n")
+        state.openFile("draft.md", target: .newTab)
+        await state.noteLoadTask?.value
+        state.updateEditorText("# Unsaved\n")
+        let sourceTabID = try XCTUnwrap(state.workspace.activeTab?.id)
+
+        try await XCTUnwrap(state.canvasNewCanvasFile()).value
+
+        XCTAssertEqual(
+            state.workspace.model.tab(sourceTabID)?.item,
+            .markdown(path: "draft.md"),
+            "creating a document must not replace the only owner of a dirty buffer")
+        XCTAssertEqual(
+            state.workspace.document(for: sourceTabID)?.text,
+            "# Unsaved\n")
+        XCTAssertEqual(
+            state.workspace.document(for: sourceTabID)?.hasUnsavedChanges,
+            true)
+
+        state.activateTab(sourceTabID)
+        XCTAssertEqual(state.currentNoteText, "# Unsaved\n")
+        XCTAssertTrue(state.hasUnsavedChanges)
+    }
+
+    func testNewCanvasNativePreparationAndLandingNeverUseMainThreadFFI() async throws {
+        let state = try await makeState()
+        let recorder = NativeEventRecorder()
+        state.canvasNewFileNativeExecutionObserverForTesting = { event in
+            recorder.append(event)
+        }
+
+        try await XCTUnwrap(state.canvasNewCanvasFile()).value
+
+        let events = recorder.events()
+        let phases = events.map(\.phase)
+        XCTAssertTrue(phases.contains(.create), "missing create phase: \(phases)")
+        XCTAssertTrue(phases.contains(.open), "missing open phase: \(phases)")
+        XCTAssertTrue(phases.contains(.outline), "missing outline phase: \(phases)")
+        XCTAssertTrue(phases.contains(.table), "missing table phase: \(phases)")
+        XCTAssertTrue(phases.contains(.scene), "missing scene phase: \(phases)")
+        XCTAssertFalse(
+            phases.contains(.activationLoad),
+            "prepared activation must not fall back to CanvasDocument.load")
+        XCTAssertTrue(
+            events.allSatisfy { !$0.ranOnMainThread },
+            "all New Canvas native calls must stay off-main: \(events)")
+    }
+
+    func testNewCanvasReusesMissingPathDocumentAndResetsOldIdentityState() async throws {
+        let state = try await makeState()
+        let originalTabID = try XCTUnwrap(state.workspace.activeTab?.id)
+
+        state.openFile("Untitled Canvas.canvas", target: .newTab)
+        let missingDocument = state.canvasDocument(for: "Untitled Canvas.canvas")
+        guard case .failed = missingDocument.state else {
+            return XCTFail("the pre-existing path should begin as a missing-file document")
+        }
+        let missingTabID = try XCTUnwrap(state.workspace.activeTab?.id)
+
+        missingDocument.selection.selected = "old-selection"
+        missingDocument.selection.marked = ["old-mark"]
+        missingDocument.lastActivatedNode = "old-activation"
+        missingDocument.undoStack = [
+            (name: "old undo", inverse: CanvasAction(name: "old", ops: []))
+        ]
+        missingDocument.redoStack = [
+            (name: "old redo", inverse: CanvasAction(name: "old", ops: []))
+        ]
+        missingDocument.filterText = "old filter"
+        missingDocument.transientRects = [:]
+        missingDocument.viewport.scale = 2
+        missingDocument.viewport.offset = CGPoint(x: 42, y: 24)
+        missingDocument.viewport.followSelection = false
+        _ = state.canvasModeController(for: missingDocument)
+        state.activateTab(originalTabID)
+
+        let recorder = NativeEventRecorder()
+        state.canvasNewFileNativeExecutionObserverForTesting = { event in
+            recorder.append(event)
+        }
+        try await XCTUnwrap(state.canvasNewCanvasFile()).value
+
+        XCTAssertTrue(
+            state.canvasDocument(for: "Untitled Canvas.canvas") === missingDocument,
+            "same-path tabs retain their shared Swift document object")
+        XCTAssertEqual(state.workspace.activeTab?.id, missingTabID)
+        XCTAssertEqual(missingDocument.state, .ready)
+        XCTAssertNotNil(missingDocument.handle)
+        XCTAssertNil(missingDocument.selection.selected)
+        XCTAssertTrue(missingDocument.selection.marked.isEmpty)
+        XCTAssertNil(missingDocument.lastActivatedNode)
+        XCTAssertTrue(missingDocument.undoStack.isEmpty)
+        XCTAssertTrue(missingDocument.redoStack.isEmpty)
+        XCTAssertEqual(missingDocument.filterText, "")
+        XCTAssertNil(missingDocument.transientRects)
+        XCTAssertEqual(missingDocument.viewport.scale, 1)
+        XCTAssertEqual(missingDocument.viewport.offset, .zero)
+        XCTAssertTrue(missingDocument.viewport.followSelection)
+        XCTAssertNil(state.canvasModeControllers["Untitled Canvas.canvas"])
+        XCTAssertFalse(
+            recorder.events().contains { $0.phase == .activationLoad },
+            "the reused object must consume the prepared snapshot")
+    }
+
+    func testNewCanvasReservationSurvivesTabAwayAndBackDuringBlockedPreload() async throws {
+        let state = try await makeState()
+        let originalTabID = try XCTUnwrap(state.workspace.activeTab?.id)
+        state.openFile("Untitled Canvas.canvas", target: .newTab)
+        let missingTabID = try XCTUnwrap(state.workspace.activeTab?.id)
+        let reservedDocument = state.canvasDocument(for: "Untitled Canvas.canvas")
+        state.activateTab(originalTabID)
+
+        let recorder = NativeEventRecorder()
+        state.canvasNewFileNativeExecutionObserverForTesting = { event in
+            recorder.append(event)
+        }
+        let gate = SynchronousPreloadGate()
+        let realPreloader = state.canvasNewFilePreloadRunner
+        state.canvasNewFilePreloadRunner = { session, path, observer in
+            gate.block()
+            return realPreloader(session, path, observer)
+        }
+
+        let creation = try XCTUnwrap(state.canvasNewCanvasFile())
+        await gate.waitUntilEntered()
+        XCTAssertTrue(reservedDocument.hasPreparedLoadReservation)
+
+        state.activateTab(missingTabID)
+        XCTAssertNil(reservedDocument.handle)
+        XCTAssertEqual(reservedDocument.state, .loading)
+        state.activateTab(originalTabID)
+        state.activateTab(missingTabID)
+        XCTAssertFalse(
+            recorder.events().contains { $0.phase == .activationLoad },
+            "navigation during preparation must trust the published reservation")
+
+        gate.release()
+        await creation.value
+        XCTAssertTrue(
+            state.canvasDocument(for: "Untitled Canvas.canvas") === reservedDocument)
+        XCTAssertEqual(reservedDocument.state, .ready)
+        XCTAssertNotNil(reservedDocument.handle)
+        XCTAssertFalse(recorder.events().contains { $0.phase == .activationLoad })
+    }
+
+    func testNewCanvasCloseLastSamePathTabDuringRefreshKeepsPreparedOwner() async throws {
+        let state = try await makeState()
+        let originalTabID = try XCTUnwrap(state.workspace.activeTab?.id)
+        state.openFile("Untitled Canvas.canvas", target: .newTab)
+        let missingTabID = try XCTUnwrap(state.workspace.activeTab?.id)
+        let reservedDocument = state.canvasDocument(for: "Untitled Canvas.canvas")
+        state.activateTab(originalTabID)
+
+        let refresh = AsyncSuspensionGate()
+        state.structuralBatchRefreshRunner = { _ in await refresh.enter() }
+        let recorder = NativeEventRecorder()
+        state.canvasNewFileNativeExecutionObserverForTesting = { event in
+            recorder.append(event)
+        }
+        let creation = try XCTUnwrap(state.canvasNewCanvasFile())
+        await refresh.waitUntilEntered()
+
+        XCTAssertTrue(reservedDocument.hasPreparedLoadReservation)
+        state.performCloseTab(missingTabID)
+        XCTAssertFalse(
+            state.workspace.model.allTabs.contains {
+                $0.item == .canvas(path: "Untitled Canvas.canvas")
+            })
+        XCTAssertTrue(
+            state.canvasDocuments["Untitled Canvas.canvas"] === reservedDocument,
+            "the reservation remains registry-owned after its last tab closes")
+
+        await refresh.release()
+        await creation.value
+        XCTAssertTrue(
+            state.canvasDocument(for: "Untitled Canvas.canvas") === reservedDocument)
+        XCTAssertEqual(reservedDocument.state, .ready)
+        XCTAssertNotNil(reservedDocument.handle)
+        guard case .canvas(let path) = state.workspace.activeTab?.item else {
+            return XCTFail("completion should reopen the created canvas")
+        }
+        XCTAssertEqual(path, "Untitled Canvas.canvas")
+        XCTAssertFalse(recorder.events().contains { $0.phase == .activationLoad })
+        XCTAssertFalse(
+            recorder.events().contains { $0.phase == .closePrepared },
+            "the installed prepared handle must remain owned by the live document")
+    }
+
+    func testNewCanvasPreparedFailureStillLandsCreatedFileWithoutActivationLoad() async throws {
+        let state = try await makeState()
+        let recorder = NativeEventRecorder()
+        state.canvasNewFileNativeExecutionObserverForTesting = { event in
+            recorder.append(event)
+        }
+        state.canvasNewFilePreloadRunner = { _, _, _ in
+            .failed("Injected prepared load failure.")
+        }
+
+        try await XCTUnwrap(state.canvasNewCanvasFile()).value
+
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: vault.appendingPathComponent("Untitled Canvas.canvas").path),
+            "native preparation failure must not misreport the successful file create")
+        guard case .canvas(let path) = state.workspace.activeTab?.item else {
+            return XCTFail("the created canvas should still land in a tab")
+        }
+        XCTAssertEqual(path, "Untitled Canvas.canvas")
+        XCTAssertEqual(
+            state.canvasDocument(for: path).state,
+            .failed("Injected prepared load failure."))
+        XCTAssertFalse(
+            recorder.events().contains { $0.phase == .activationLoad },
+            "the immediate activation must preserve the prepared error state")
+        state.canvasAnnouncer.flushForTests()
+        XCTAssertTrue(posted.contains("Created canvas \"Untitled Canvas\"."))
+    }
+
+    func testNewCanvasReplacesStaleSamePathHandleOffMainExactlyOnce() async throws {
+        let state = try await makeState()
+        let session = try XCTUnwrap(state.currentSession)
+        _ = try session.createExclusive(
+            path: "Untitled Canvas.canvas",
+            content: "{}\n")
+        let originalTabID = try XCTUnwrap(state.workspace.activeTab?.id)
+        state.openFile("Untitled Canvas.canvas", target: .newTab)
+        let reusedDocument = state.canvasDocument(for: "Untitled Canvas.canvas")
+        XCTAssertNotNil(reusedDocument.handle)
+        try session.deleteFile(path: "Untitled Canvas.canvas")
+        state.activateTab(originalTabID)
+
+        let recorder = NativeEventRecorder()
+        state.canvasNewFileNativeExecutionObserverForTesting = { event in
+            recorder.append(event)
+        }
+        try await XCTUnwrap(state.canvasNewCanvasFile()).value
+
+        XCTAssertTrue(
+            state.canvasDocument(for: "Untitled Canvas.canvas") === reusedDocument)
+        XCTAssertEqual(reusedDocument.state, .ready)
+        XCTAssertNotNil(reusedDocument.handle)
+        let replacedCloses = recorder.events().filter { $0.phase == .closeReplaced }
+        XCTAssertEqual(replacedCloses.count, 1)
+        XCTAssertTrue(replacedCloses.allSatisfy { !$0.ranOnMainThread })
+        XCTAssertFalse(recorder.events().contains { $0.phase == .activationLoad })
+    }
+
+    func testPreparedLoaderReleasesDegradedOpenHandleOffMainExactlyOnce() async throws {
+        let state = try await makeState()
+        let session = try XCTUnwrap(state.currentSession)
+        _ = try session.createExclusive(
+            path: "invalid.canvas",
+            content: "not json canvas")
+        let recorder = NativeEventRecorder()
+
+        let prepared = await Task.detached(priority: .userInitiated) {
+            CanvasPreparedLoader.prepare(
+                session: session,
+                path: "invalid.canvas",
+                observer: { event in recorder.append(event) })
+        }.value
+
+        guard case .degraded = prepared else {
+            return XCTFail("invalid JSON should produce a prepared degraded state")
+        }
+        let events = recorder.events()
+        XCTAssertEqual(events.filter { $0.phase == .open }.count, 1)
+        XCTAssertEqual(events.filter { $0.phase == .closePrepared }.count, 1)
+        XCTAssertFalse(events.contains { $0.phase == .outline })
+        XCTAssertTrue(events.allSatisfy { !$0.ranOnMainThread })
     }
 }
 
@@ -1217,7 +1568,9 @@ extension CanvasNavigatorTests {
         let (state, doc) = try await normalizedState()
         state.canvasSelect(nodeId: "b", in: doc, announce: false)
         posted = []
-        state.canvasConvertToNote(nodeId: "b", path: "Beta.md")
+        try await XCTUnwrap(
+            state.canvasConvertToNote(nodeId: "b", path: "Beta.md")
+        ).value
         state.canvasAnnouncer.flushForTests()
 
         let vault = try XCTUnwrap(state.currentVaultURL)
@@ -1236,7 +1589,7 @@ extension CanvasNavigatorTests {
         XCTAssertTrue(FileManager.default.fileExists(atPath: noteURL.path))
 
         // Bad extension: honest error, nothing written.
-        state.canvasConvertToNote(nodeId: "b", path: "nope.txt")
+        XCTAssertNil(state.canvasConvertToNote(nodeId: "b", path: "nope.txt"))
         state.canvasAnnouncer.flushForTests()
         XCTAssertTrue(posted.contains { $0.contains("must end in .md") })
     }

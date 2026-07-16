@@ -55,6 +55,126 @@ final class StructuralUndoTests: XCTestCase {
         FileManager.default.fileExists(atPath: vault.appendingPathComponent(rel).path)
     }
 
+    private actor BatchUndoRunnerProbe {
+        private var reports: [BatchMoveReport]
+        private var opIDs: [Int64] = []
+
+        init(reports: [BatchMoveReport]) {
+            self.reports = reports
+        }
+
+        func run(opID: Int64) -> BatchMoveReport {
+            opIDs.append(opID)
+            return reports.removeFirst()
+        }
+
+        func calls() -> [Int64] { opIDs }
+    }
+
+    private actor SuspendedBatchUndoRunner {
+        private let report: BatchMoveReport
+        private var opIDs: [Int64] = []
+        private var entered = false
+        private var entranceWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+        init(report: BatchMoveReport) {
+            self.report = report
+        }
+
+        func run(opID: Int64) async -> BatchMoveReport {
+            opIDs.append(opID)
+            entered = true
+            for waiter in entranceWaiters { waiter.resume() }
+            entranceWaiters = []
+            await withCheckedContinuation { releaseWaiter = $0 }
+            return report
+        }
+
+        func waitUntilEntered() async {
+            guard !entered else { return }
+            await withCheckedContinuation { entranceWaiters.append($0) }
+        }
+
+        func release() {
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
+
+        func calls() -> [Int64] { opIDs }
+    }
+
+    @MainActor
+    private final class BatchRefreshProbe {
+        private(set) var calls = 0
+
+        func run(_ state: AppState) async {
+            calls += 1
+        }
+    }
+
+    private func batchMoveReport(
+        state: BatchMoveState = .succeeded,
+        planned: [StructuralBatchItem],
+        opID: Int64? = nil,
+        standing: [BatchPathChange] = [],
+        rolledBack: [BatchPathChange] = [],
+        requiresRescan: Bool = false
+    ) -> BatchMoveReport {
+        BatchMoveReport(
+            envelope: StructuralBatchEnvelope(
+                planned: planned, skipped: [], preflightFailures: []),
+            state: state,
+            opId: opID,
+            standing: standing,
+            rolledBack: rolledBack,
+            failure: nil,
+            rollbackFailures: [],
+            rewritten: [],
+            rewriteFailures: [],
+            requiresRescan: requiresRescan)
+    }
+
+    private func batchTrashReport(
+        state: BatchTrashState = .succeeded,
+        planned: [StructuralBatchItem],
+        opID: Int64? = nil,
+        trashed: [StructuralBatchItem] = [],
+        requiresRescan: Bool = false
+    ) -> BatchTrashReport {
+        BatchTrashReport(
+            envelope: StructuralBatchEnvelope(
+                planned: planned, skipped: [], preflightFailures: []),
+            state: state,
+            opId: opID,
+            trashed: trashed,
+            untrashed: [],
+            unknown: [],
+            bookkeepingFailures: [],
+            requiresRescan: requiresRescan)
+    }
+
+    private func armBatchHistory(
+        on state: AppState,
+        opID: Int64 = 700,
+        standing: [BatchPathChange] = [
+            BatchPathChange(oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)
+        ]
+    ) async {
+        let items = [StructuralBatchItem(path: "a.md", isDirectory: false)]
+        let report = batchMoveReport(planned: items, opID: opID, standing: standing)
+        state.batchMoveRunner = { _, _ in report }
+        state.structuralBatchRefreshRunner = { _ in }
+        await state.batchMove(
+            [.init(path: "a.md", isDirectory: false)], to: "dest").value
+    }
+
+    private enum BatchUndoProbeError: LocalizedError {
+        case unavailable
+
+        var errorDescription: String? { "history endpoint unavailable" }
+    }
+
     // MARK: - Move undo/redo reverses + re-applies
 
     func testMoveThenUndoMovesBackToOriginalParent() async throws {
@@ -91,6 +211,418 @@ final class StructuralUndoTests: XCTestCase {
         XCTAssertEqual(state.lastMutationAnnouncement, "Redid move of a.md.")
         XCTAssertEqual(state.structuralUndoStack.count, 1, "redo re-armed undo")
         XCTAssertTrue(state.structuralRedoStack.isEmpty)
+    }
+
+    func testBatchMoveUndoRedoUseDedicatedEndpointAndReturnedStanding() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "sub/b.md", "dest/x.md"])
+        let items = [
+            StructuralBatchItem(path: "a.md", isDirectory: false),
+            StructuralBatchItem(path: "sub/b.md", isDirectory: false),
+        ]
+        let forwardStanding = [
+            BatchPathChange(oldPath: "a.md", newPath: "dest/a.md", isDirectory: false),
+            BatchPathChange(oldPath: "sub/b.md", newPath: "dest/b.md", isDirectory: false),
+        ]
+        let forwardReport = batchMoveReport(
+            planned: items, opID: 700, standing: forwardStanding)
+        state.batchMoveRunner = { _, _ in forwardReport }
+        state.structuralBatchRefreshRunner = { _ in }
+        await state.batchMove(
+            [
+                .init(path: "a.md", isDirectory: false),
+                .init(path: "sub/b.md", isDirectory: false),
+            ],
+            to: "dest").value
+        XCTAssertEqual(
+            state.structuralUndoStack,
+            [.batchMove(opId: 700, entries: forwardStanding)])
+
+        let undoStanding = [
+            BatchPathChange(oldPath: "dest/a.md", newPath: "a.md", isDirectory: false),
+            BatchPathChange(oldPath: "dest/b.md", newPath: "sub/b.md", isDirectory: false),
+        ]
+        let redoStanding = forwardStanding
+        let probe = BatchUndoRunnerProbe(
+            reports: [
+                batchMoveReport(planned: items, opID: 701, standing: undoStanding),
+                batchMoveReport(planned: items, opID: 702, standing: redoStanding),
+            ])
+        state.batchUndoMoveRunner = { _, opID in await probe.run(opID: opID) }
+
+        state.structuralUndo()
+        await state.pendingStructuralTaskForTesting?.value
+
+        let undoCalls = await probe.calls()
+        XCTAssertEqual(undoCalls, [700], "undo uses one dedicated native call")
+        XCTAssertTrue(state.structuralUndoStack.isEmpty)
+        XCTAssertEqual(
+            state.structuralRedoStack,
+            [.batchMove(opId: 701, entries: undoStanding)],
+            "redo is armed from core's returned standing paths and operation id")
+        guard case .batchMove(let standing, _)? = state.treeMutation?.kind else {
+            return XCTFail("the returned undo report must publish one typed batch event")
+        }
+        XCTAssertEqual(standing, undoStanding)
+        guard case let .move(report, mode)? = state.batchStructuralResult?.payload else {
+            return XCTFail("the complete undo report must remain available")
+        }
+        XCTAssertEqual(report.opId, 701)
+        XCTAssertEqual(mode, .undo)
+        XCTAssertEqual(state.lastMutationAnnouncement, "Undid move of 2 items.")
+
+        state.structuralRedo()
+        await state.pendingStructuralTaskForTesting?.value
+
+        let redoCalls = await probe.calls()
+        XCTAssertEqual(
+            redoCalls, [700, 701],
+            "redo reverses the operation id returned by undo, not a synthesized path list")
+        XCTAssertTrue(state.structuralRedoStack.isEmpty)
+        XCTAssertEqual(
+            state.structuralUndoStack,
+            [.batchMove(opId: 702, entries: redoStanding)])
+        guard case let .move(redoReport, redoMode)? = state.batchStructuralResult?.payload else {
+            return XCTFail("the complete redo report must remain available")
+        }
+        XCTAssertEqual(redoReport.opId, 702)
+        XCTAssertEqual(redoMode, .redo)
+        XCTAssertEqual(state.lastMutationAnnouncement, "Redid move of 2 items.")
+    }
+
+    func testUnknownBatchTrashBarriersBatchMoveUndoBeforeItCanReachNativeCode()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: [
+            "a.md", "dest/x.md", "unknown.md",
+        ])
+        await armBatchHistory(on: state)
+        XCTAssertEqual(state.structuralUndoStack.count, 1)
+
+        let uncertain = StructuralBatchItem(path: "unknown.md", isDirectory: false)
+        let unknownReport = BatchTrashReport(
+            envelope: StructuralBatchEnvelope(
+                planned: [uncertain], skipped: [], preflightFailures: []),
+            state: .failed,
+            opId: nil,
+            trashed: [],
+            untrashed: [],
+            unknown: [
+                BatchTrashRemainder(
+                    item: uncertain,
+                    failure: BatchItemFailure(
+                        item: uncertain,
+                        stage: .reconciliation,
+                        message: "physical Trash verification failed"))
+            ],
+            bookkeepingFailures: [],
+            requiresRescan: true)
+        state.batchTrashRunner = { _, _ in unknownReport }
+        state.batchTrashPresenceProbeRunner = { _, _ in .indeterminate }
+        state.structuralBatchRefreshRunner = { _ in }
+        await state.batchDelete([
+            .init(path: uncertain.path, isDirectory: uncertain.isDirectory)
+        ]).value
+        XCTAssertTrue(
+            state.structuralUndoStack.isEmpty,
+            "an indeterminate Trash outcome is a mandatory history barrier")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            AppState.BatchTrashCopy.announcement(for: unknownReport))
+
+        let undoReport = batchMoveReport(
+            planned: [StructuralBatchItem(path: "dest/a.md", isDirectory: false)],
+            opID: 701,
+            standing: [
+                BatchPathChange(
+                    oldPath: "dest/a.md", newPath: "a.md", isDirectory: false)
+            ])
+        let probe = BatchUndoRunnerProbe(reports: [undoReport])
+        state.batchUndoMoveRunner = { _, opID in await probe.run(opID: opID) }
+
+        state.structuralUndo()
+        await state.pendingStructuralTaskForTesting?.value
+
+        let undoCalls = await probe.calls()
+        XCTAssertEqual(
+            undoCalls, [],
+            "the cleared history must make the native batch-undo funnel unreachable")
+        XCTAssertTrue(state.structuralUndoStack.isEmpty)
+        XCTAssertEqual(state.lastMutationAnnouncement, "Nothing to undo.")
+    }
+
+    func testBatchUndoRejectedNoOpAndRolledBackRetainSourceHistory() async throws {
+        let attempted = BatchPathChange(
+            oldPath: "dest/a.md", newPath: "a.md", isDirectory: false)
+        let planned = [StructuralBatchItem(path: "dest/a.md", isDirectory: false)]
+        let scenarios: [(name: String, report: BatchMoveReport, announcement: String, attention: Bool)] = [
+            (
+                "rejected",
+                batchMoveReport(state: .rejected, planned: planned),
+                "Move could not start. No items were moved.",
+                true
+            ),
+            (
+                "no-op",
+                batchMoveReport(state: .noOp, planned: planned),
+                "Nothing moved.",
+                false
+            ),
+            (
+                "rolled-back",
+                batchMoveReport(state: .rolledBack, planned: planned, rolledBack: [attempted]),
+                "Move stopped. Slate restored every item to its original location.",
+                true
+            ),
+        ]
+
+        for (index, scenario) in scenarios.enumerated() {
+            let (state, _) = try await makeVault(
+                named: "retain-\(index)", files: ["a.md", "dest/x.md"])
+            await armBatchHistory(on: state)
+            let source = try XCTUnwrap(state.structuralUndoStack.last)
+            let oldTreeToken = state.treeMutation?.token
+            state.batchUndoMoveRunner = { _, _ in scenario.report }
+
+            state.structuralUndo()
+            await state.pendingStructuralTaskForTesting?.value
+
+            XCTAssertEqual(
+                state.structuralUndoStack.last, source,
+                "\(scenario.name) must leave the captured undo entry available")
+            XCTAssertTrue(state.structuralRedoStack.isEmpty)
+            guard case let .move(report, mode)? = state.batchStructuralResult?.payload else {
+                XCTFail("\(scenario.name) must retain its complete report")
+                continue
+            }
+            XCTAssertEqual(report, scenario.report)
+            XCTAssertEqual(mode, .undo)
+            XCTAssertEqual(state.batchStructuralResult?.requiresAttention, scenario.attention)
+            XCTAssertEqual(state.lastMutationAnnouncement, scenario.announcement)
+            if scenario.report.state == .rolledBack {
+                guard case .batchMove(let standing, let touched)? = state.treeMutation?.kind else {
+                    XCTFail("full rollback must publish restored paths once")
+                    continue
+                }
+                XCTAssertTrue(standing.isEmpty)
+                XCTAssertEqual(touched, [attempted])
+            } else {
+                XCTAssertEqual(
+                    state.treeMutation?.token, oldTreeToken,
+                    "\(scenario.name) without rescan has no physical tree landing")
+            }
+        }
+    }
+
+    func testBatchUndoIncompleteAndContradictoryReportsClearHistory() async throws {
+        let planned = [StructuralBatchItem(path: "dest/a.md", isDirectory: false)]
+        let reverse = BatchPathChange(
+            oldPath: "dest/a.md", newPath: "a.md", isDirectory: false)
+        let reports = [
+            batchMoveReport(
+                state: .rollbackIncomplete, planned: planned,
+                standing: [reverse], rolledBack: [reverse]),
+            batchMoveReport(state: .succeeded, planned: planned, opID: 801),
+            batchMoveReport(state: .succeeded, planned: planned, standing: [reverse]),
+        ]
+
+        for (index, report) in reports.enumerated() {
+            let (state, _) = try await makeVault(
+                named: "barrier-\(index)", files: ["a.md", "dest/x.md"])
+            await armBatchHistory(on: state)
+            state.batchUndoMoveRunner = { _, _ in report }
+
+            state.structuralUndo()
+            await state.pendingStructuralTaskForTesting?.value
+
+            XCTAssertTrue(
+                state.structuralUndoStack.isEmpty,
+                "\(report.state) makes the captured history unsafe")
+            XCTAssertTrue(state.structuralRedoStack.isEmpty)
+            guard case let .move(landed, mode)? = state.batchStructuralResult?.payload else {
+                XCTFail("\(report.state) must surface its complete report")
+                continue
+            }
+            XCTAssertEqual(landed, report)
+            XCTAssertEqual(mode, .undo)
+            XCTAssertTrue(state.batchStructuralResult?.requiresAttention ?? false)
+            if report.state == .rollbackIncomplete {
+                XCTAssertFalse(state.treeMutation?.requiresRescan ?? true)
+                guard case .batchMove(let standing, let touched)? = state.treeMutation?.kind else {
+                    XCTFail("incomplete rollback must publish standing and restored paths")
+                    continue
+                }
+                XCTAssertEqual(standing, [reverse])
+                XCTAssertEqual(touched, [reverse])
+                XCTAssertEqual(
+                    state.lastMutationAnnouncement,
+                    "Move stopped. Slate restored 1 item. 1 item remains in its new location.")
+            } else {
+                XCTAssertTrue(state.treeMutation?.requiresRescan ?? false)
+                XCTAssertEqual(
+                    state.lastMutationAnnouncement,
+                    "Move could not be reconciled safely.")
+            }
+        }
+    }
+
+    func testBatchUndoInfrastructureFailureRefreshesAndClearsHistory() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "dest/x.md"])
+        await armBatchHistory(on: state)
+        let refresh = BatchRefreshProbe()
+        state.structuralBatchRefreshRunner = { appState in await refresh.run(appState) }
+        state.batchUndoMoveRunner = { _, _ in throw BatchUndoProbeError.unavailable }
+
+        state.structuralUndo()
+        await state.pendingStructuralTaskForTesting?.value
+
+        XCTAssertTrue(state.structuralUndoStack.isEmpty)
+        XCTAssertTrue(state.structuralRedoStack.isEmpty)
+        XCTAssertEqual(refresh.calls, 1, "unknown physical outcome refreshes exactly once")
+        XCTAssertTrue(state.treeMutation?.requiresRescan ?? false)
+        guard case let .infrastructure(operation, message)? =
+            state.batchStructuralResult?.payload
+        else { return XCTFail("unknown physical outcome must surface as infrastructure") }
+        XCTAssertEqual(operation, .move(.undo))
+        XCTAssertEqual(message, "history endpoint unavailable")
+        XCTAssertTrue(state.batchStructuralResult?.requiresAttention ?? false)
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            "Undo failed: history endpoint unavailable")
+    }
+
+    func testDoubleCommandZDuringBatchUndoCallsCoreOnceAndKeepsFirstTask() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "dest/x.md"])
+        await armBatchHistory(on: state)
+        let reverse = BatchPathChange(
+            oldPath: "dest/a.md", newPath: "a.md", isDirectory: false)
+        let runner = SuspendedBatchUndoRunner(
+            report: batchMoveReport(
+                planned: [StructuralBatchItem(path: "dest/a.md", isDirectory: false)],
+                opID: 701,
+                standing: [reverse]))
+        state.batchUndoMoveRunner = { _, opID in await runner.run(opID: opID) }
+
+        state.structuralUndo()
+        let firstTask = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await runner.waitUntilEntered()
+        let source = state.structuralUndoStack
+
+        state.structuralUndo()
+
+        let callsWhileSuspended = await runner.calls()
+        XCTAssertEqual(callsWhileSuspended, [700], "the second chord submits no native call")
+        XCTAssertEqual(state.structuralUndoStack, source, "the source edge stays armed in flight")
+        XCTAssertNotNil(
+            state.pendingStructuralTaskForTesting,
+            "a rejected second chord must not discard the first task handle")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            "Wait for the current file operation to finish.")
+
+        await runner.release()
+        await firstTask.value
+        XCTAssertTrue(state.structuralUndoStack.isEmpty)
+        XCTAssertEqual(
+            state.structuralRedoStack,
+            [.batchMove(opId: 701, entries: [reverse])])
+    }
+
+    func testBatchUndoCompletionAfterVaultSwitchChangesNoNewVaultState() async throws {
+        let (state, _) = try await makeVault(named: "stale-A", files: ["a.md", "dest/x.md"])
+        await armBatchHistory(on: state)
+        let reverse = BatchPathChange(
+            oldPath: "dest/a.md", newPath: "a.md", isDirectory: false)
+        let runner = SuspendedBatchUndoRunner(
+            report: batchMoveReport(
+                planned: [StructuralBatchItem(path: "dest/a.md", isDirectory: false)],
+                opID: 701,
+                standing: [reverse]))
+        state.batchUndoMoveRunner = { _, opID in await runner.run(opID: opID) }
+
+        state.structuralUndo()
+        let oldTask = try XCTUnwrap(state.pendingStructuralTaskForTesting)
+        await runner.waitUntilEntered()
+
+        let vaultB = tempDir.appendingPathComponent("stale-B")
+        try FileManager.default.createDirectory(at: vaultB, withIntermediateDirectories: true)
+        try "# B\n".write(
+            to: vaultB.appendingPathComponent("b.md"), atomically: true, encoding: .utf8)
+        state.openVault(at: vaultB)
+        await state.scanTask?.value
+        let resultAfterSwitch = state.batchStructuralResult
+        let treeAfterSwitch = state.treeMutation
+        let announcementAfterSwitch = state.lastMutationAnnouncement
+
+        await runner.release()
+        await oldTask.value
+
+        XCTAssertTrue(state.currentVaultURL?.standardizedFileURL == vaultB.standardizedFileURL)
+        XCTAssertTrue(state.structuralUndoStack.isEmpty)
+        XCTAssertTrue(state.structuralRedoStack.isEmpty)
+        XCTAssertEqual(state.batchStructuralResult, resultAfterSwitch)
+        XCTAssertEqual(state.treeMutation, treeAfterSwitch)
+        XCTAssertEqual(state.lastMutationAnnouncement, announcementAfterSwitch)
+    }
+
+    func testBatchUndoUsesReturnedFolderAndEmptyFolderStandingPaths() async throws {
+        let (state, vault) = try await makeVault(
+            files: ["full/inside.md", "dest/x.md"])
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("empty"), withIntermediateDirectories: true)
+        let items = [
+            StructuralBatchItem(path: "full", isDirectory: true),
+            StructuralBatchItem(path: "empty", isDirectory: true),
+        ]
+        let forward = [
+            BatchPathChange(oldPath: "full", newPath: "dest/full", isDirectory: true),
+            BatchPathChange(oldPath: "empty", newPath: "dest/empty", isDirectory: true),
+        ]
+        let forwardReport = batchMoveReport(planned: items, opID: 900, standing: forward)
+        state.batchMoveRunner = { _, _ in forwardReport }
+        state.structuralBatchRefreshRunner = { _ in }
+        await state.batchMove(
+            [
+                .init(path: "full", isDirectory: true),
+                .init(path: "empty", isDirectory: true),
+            ],
+            to: "dest").value
+
+        let reverse = [
+            BatchPathChange(oldPath: "dest/full", newPath: "full", isDirectory: true),
+            BatchPathChange(oldPath: "dest/empty", newPath: "empty", isDirectory: true),
+        ]
+        let probe = BatchUndoRunnerProbe(
+            reports: [batchMoveReport(planned: items, opID: 901, standing: reverse)])
+        state.batchUndoMoveRunner = { _, opID in await probe.run(opID: opID) }
+        state.structuralUndo()
+        await state.pendingStructuralTaskForTesting?.value
+
+        let calls = await probe.calls()
+        XCTAssertEqual(calls, [900])
+        XCTAssertEqual(
+            state.structuralRedoStack,
+            [.batchMove(opId: 901, entries: reverse)],
+            "the empty folder remains a first-class returned history entry")
+        XCTAssertEqual(state.treeMutation?.affectedParents, ["dest", nil])
+        XCTAssertEqual(state.lastMutationAnnouncement, "Undid move of 2 items.")
+    }
+
+    func testSuccessfulBatchTrashClearsArmedMoveHistoryAndCreatesNoUndoEdge() async throws {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md", "dest/x.md"])
+        await armBatchHistory(on: state)
+        XCTAssertEqual(state.structuralUndoStack.count, 1)
+        let item = StructuralBatchItem(path: "b.md", isDirectory: false)
+        let report = batchTrashReport(planned: [item], opID: 990, trashed: [item])
+        state.batchTrashRunner = { _, _ in report }
+        state.structuralBatchRefreshRunner = { _ in }
+
+        await state.batchDelete(
+            [.init(path: "b.md", isDirectory: false)]).value
+
+        XCTAssertTrue(state.structuralUndoStack.isEmpty)
+        XCTAssertTrue(state.structuralRedoStack.isEmpty)
+        state.structuralUndo()
+        XCTAssertEqual(state.lastMutationAnnouncement, "Nothing to undo.")
     }
 
     func testMoveToVaultRootUndoReturnsToOriginalFolder() async throws {
@@ -202,7 +734,8 @@ final class StructuralUndoTests: XCTestCase {
         XCTAssertTrue(
             state.undoTargetsStructural, "precondition: tree focus, not renaming")
 
-        state.renamingNode = AppState.RenamingNode(path: "a.md", isDirectory: false)
+        XCTAssertTrue(state.requestRename(path: "a.md", isDirectory: false))
+        let pending = try XCTUnwrap(state.renamingNode)
         XCTAssertEqual(
             state.workspace.focusRegion, .tree,
             "the rename field is focus-within: focusRegion stays .tree")
@@ -210,7 +743,7 @@ final class StructuralUndoTests: XCTestCase {
             state.undoTargetsStructural,
             "an open inline rename hands ⌘Z to the field editor, not the file-op stack")
 
-        state.renamingNode = nil
+        XCTAssertTrue(state.cancelPendingRename(id: pending.id))
         XCTAssertTrue(
             state.undoTargetsStructural,
             "ending the rename returns the chord to the structural domain")
@@ -457,7 +990,7 @@ final class StructuralUndoTests: XCTestCase {
         XCTAssertEqual(state.structuralUndoStack.count, 1, "move armed an inverse")
 
         // New Canvas creates a file via createExclusive, NOT publishTreeMutation.
-        state.canvasNewCanvasFile()
+        try await XCTUnwrap(state.canvasNewCanvasFile()).value
 
         XCTAssertTrue(
             state.structuralUndoStack.isEmpty,
@@ -602,34 +1135,35 @@ final class StructuralUndoTests: XCTestCase {
         }
         let funnels = [
             Funnel(
-                name: "recoverDeleted", file: "AppState+History.swift",
+                name: "requestRecoverDeleted", file: "AppState+History.swift",
                 createAnchor: "case .success:",
                 barrier: "clearStructuralUndoStacks()", successGuard: nil),
             Funnel(
                 name: "canvasConvertToNote", file: "Canvas/AppState+CanvasExtras.swift",
                 createAnchor: "session.saveText(",
-                barrier: "clearStructuralUndoStacks()", successGuard: nil),
+                barrier: "clearStructuralUndoStacks()",
+                successGuard: "if outcome.createdNote"),
             Funnel(
                 name: "exportSavedQuery", file: "Bases/AppState+Bases.swift",
                 createAnchor: "exportSavedQueryAsBase(",
-                barrier: "barrierStructuralUndoForCreatedVaultPath(", successGuard: nil),
+                barrier: "barrierStructuralUndoForCreatedVaultPath(",
+                successGuard: "case .success"),
             Funnel(
                 name: "basesBuilderSaveAsBase", file: "Bases/AppState+Bases.swift",
                 createAnchor: "saveQueryAsBase(",
-                barrier: "barrierStructuralUndoForCreatedVaultPath(", successGuard: nil),
+                barrier: "barrierStructuralUndoForCreatedVaultPath(",
+                successGuard: "case .success"),
             Funnel(
                 name: "performSave", file: "AppState.swift",
                 createAnchor: "if case .success = outcome {",
                 barrier: "barrierStructuralUndoForCreatedVaultPath(", successGuard: nil,
-                mustPrecede: "guard loadedFilePath == path"),
+                mustPrecede:
+                    "guard BaseExactIdentity.matches(loadedFilePath, path) else {"),
             Funnel(
-                name: "basesExportToSavePanel", file: "Bases/AppState+Bases.swift",
+                name: "performBaseSavePanelWrite", file: "Bases/AppState+Bases.swift",
                 createAnchor: "text.write(to: url",
-                barrier: "barrierStructuralUndoForExternalWrite(", successGuard: "if wroteOK"),
-            Funnel(
-                name: "convertDataview", file: "Bases/BaseEmbedView.swift",
-                createAnchor: "text.write(to: url",
-                barrier: "onWroteSaveDestination(", successGuard: "if wroteOK"),
+                barrier: "barrierStructuralUndoForCreatedVaultPath(",
+                successGuard: "if let relativePath"),
         ]
         for funnel in funnels {
             guard let source = Self.slateMacSource(funnel.file) else {
@@ -756,7 +1290,9 @@ final class StructuralUndoTests: XCTestCase {
         // NEW path: the export creates a .base that did not exist → barrier.
         await state.moveEntry(path: "b.md", isDirectory: false, to: "dest")?.value
         XCTAssertEqual(state.structuralUndoStack.count, 1, "move armed an inverse")
-        state.exportSavedQuery(id: queryID, path: "new.base")
+        try await XCTUnwrap(
+            state.exportSavedQuery(id: queryID, path: "new.base")
+        ).value
         XCTAssertTrue(exists(vault, "new.base"), "the export created the file")
         XCTAssertTrue(
             state.structuralUndoStack.isEmpty,
@@ -765,7 +1301,9 @@ final class StructuralUndoTests: XCTestCase {
         // EXISTING path: the export OVERWRITES new.base → must NOT barrier.
         await state.moveEntry(path: "dest/b.md", isDirectory: false, to: "")?.value
         XCTAssertEqual(state.structuralUndoStack.count, 1, "second move re-armed")
-        state.exportSavedQuery(id: queryID, path: "new.base")
+        try await XCTUnwrap(
+            state.exportSavedQuery(id: queryID, path: "new.base")
+        ).value
         XCTAssertEqual(
             state.structuralUndoStack.count, 1,
             "overwriting an EXISTING .base must NOT drop the legit move undo")
@@ -845,13 +1383,11 @@ final class StructuralUndoTests: XCTestCase {
     }
 
     /// #871 Keep-Mine ORDERING race (Codex round 2, finding 1). The
-    /// create-from-missing barrier is SESSION-GLOBAL and must fire even when the
-    /// user switches to another note WHILE the recreate save is in flight —
-    /// i.e. `loadedFilePath != path` at completion. We park the Keep-Mine save
-    /// at the post-write gate, switch the loaded note, then release: the barrier
-    /// must still clear the stale inverse (it now runs BEFORE the per-note
-    /// `loadedFilePath` publication guard, not after it).
-    func testKeepMineBarriersEvenWhenTheNoteSwitchesAwayMidWrite() async throws {
+    /// The create-from-missing barrier is SESSION-GLOBAL and fires before the
+    /// per-note publication guard. Save ownership now blocks navigation for its
+    /// entire lifetime, so the former reachable switch-away race is tested as
+    /// a rejected navigation plus the still-required success barrier.
+    func testKeepMineBarrierRunsWhileNavigationIsBlockedMidWrite() async throws {
         let (state, vault) = try await makeVault(files: ["note.md", "other.md", "b.md"])
 
         // Load note.md.
@@ -883,14 +1419,19 @@ final class StructuralUndoTests: XCTestCase {
         await fulfillment(of: [entered], timeout: 10)
         state.basesPostWritePublishGate = nil
 
-        // Switch to a DIFFERENT note in the SAME vault → loadedFilePath diverges
-        // from the path the recreate save is committing.
+        // A save owns the body for the full operation. A queued sidebar write
+        // must roll back instead of moving the editor underneath Keep Mine.
         state.selectedFilePath = "other.md"
-        await state.noteLoadTask?.value
-        XCTAssertEqual(state.loadedFilePath, "other.md")
+        await Task.yield()
+        await Task.yield()
+        XCTAssertEqual(state.loadedFilePath, "note.md")
+        XCTAssertEqual(state.selectedFilePath, "note.md")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            "Wait for the current save to finish.")
 
-        // Release the gate → the recreate completes with loadedFilePath !=
-        // "note.md". The session-global barrier must STILL have fired.
+        // Release the gate. The session-global barrier must still clear the
+        // inverse before the active-note publication tail.
         release.finish()
         await keepMine?.value
 
@@ -927,30 +1468,41 @@ final class StructuralUndoTests: XCTestCase {
             "a normal save of an existing file must NOT drop the legit move undo")
     }
 
-    /// #871 over-clearing regression for the builder funnel (Codex round 2,
-    /// finding 2c), mirroring the exportSavedQuery new-vs-overwrite test.
-    /// `basesBuilderSaveAsBase` calls the UNCONDITIONAL `saveQueryAsBase`, so it
-    /// must barrier ONLY when a NEW in-vault `.base` is created.
-    func testBasesBuilderSaveAsBaseBarriersOnlyWhenCreatingANewBasePath() async throws {
+    /// A successful builder save is now an exclusive create, so it always
+    /// barriers stale structural history. A collision is a failed create: it
+    /// must preserve both the occupant and the still-valid inverse.
+    func testBasesBuilderSaveAsBaseBarriersOnlyAfterExclusiveCreateCommits() async throws {
         let (state, vault) = try await makeVault(files: ["b.md", "dest/x.md"])
         state.activeBaseQueryBuilder = BaseQueryBuilderModel()
 
         // NEW path: saving creates a .base that did not exist → barrier.
         await state.moveEntry(path: "b.md", isDirectory: false, to: "dest")?.value
         XCTAssertEqual(state.structuralUndoStack.count, 1, "move armed an inverse")
-        state.basesBuilderSaveAsBase(path: "builder.base")
+        try await XCTUnwrap(
+            state.basesBuilderSaveAsBase(path: "builder.base")
+        ).value
         XCTAssertTrue(exists(vault, "builder.base"), "the builder save created the file")
         XCTAssertTrue(
             state.structuralUndoStack.isEmpty,
             "saving to a NEW in-vault path barriers the stale inverse")
 
-        // EXISTING path: saving OVER builder.base → must NOT barrier.
+        // EXISTING path: exclusive create fails without clobbering or barrier.
         await state.moveEntry(path: "dest/b.md", isDirectory: false, to: "")?.value
         XCTAssertEqual(state.structuralUndoStack.count, 1, "second move re-armed")
-        state.basesBuilderSaveAsBase(path: "builder.base")
+        let occupant = try Data(contentsOf: vault.appendingPathComponent("builder.base"))
+        try await XCTUnwrap(
+            state.basesBuilderSaveAsBase(path: "builder.base")
+        ).value
         XCTAssertEqual(
             state.structuralUndoStack.count, 1,
-            "overwriting an EXISTING .base must NOT drop the legit move undo")
+            "a failed exclusive create must NOT drop the legit move undo")
+        XCTAssertEqual(
+            try Data(contentsOf: vault.appendingPathComponent("builder.base")),
+            occupant,
+            "a collision must preserve the existing Base byte-for-byte")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            "A file already exists at builder.base. Choose a different Base path.")
     }
 
     /// A minimal valid saved-query envelope (mirrors BaseEmbedTests) — a

@@ -5,6 +5,20 @@ import AppKit
 import Foundation
 import SwiftUI
 
+struct PropertyEditorRowIdentity: Hashable {
+    let owner: NoteAuthoringOwner
+    let key: String
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.owner == rhs.owner && BaseExactIdentity.matches(lhs.key, rhs.key)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(owner)
+        BaseExactIdentity.hash(key, into: &hasher)
+    }
+}
+
 /// Editable row for one frontmatter property. The editor shape
 /// switches on the inferred kind: scalar text / numeric / boolean
 /// renders inline; list and tag-list render with add/remove
@@ -24,13 +38,19 @@ struct PropertyEditorRow: View {
     let property: Property
     let path: String
     let vaultRoot: URL?
+    let owner: NoteAuthoringOwner
 
     @EnvironmentObject private var appState: AppState
     @State private var draft: PropertyEditDraft
+    /// Stable committed comparison point. Keeping it in State closes the
+    /// property-refresh ordering window where resetting `draft` could be
+    /// observed against the previous Property and re-cache a clean value.
+    @State private var committedBaseline: PropertyEditDraft
     @State private var pendingDelete: Bool = false
     @State private var inputValidationError: String?
     /// One-slot newest-wins re-commit (see commitDraft's coalescing note).
     @State private var pendingRecommitDraft: PropertyEditDraft?
+    @State private var lastHandledResetRevision: UInt64 = 0
 
     /// Focus-return target for the delete-confirmation dialog
     /// (WCAG 2.4.3 / 2.1.2). The Cancel and Delete branches both
@@ -43,11 +63,19 @@ struct PropertyEditorRow: View {
         case row
     }
 
-    init(property: Property, path: String, vaultRoot: URL?) {
+    init(
+        property: Property,
+        path: String,
+        vaultRoot: URL?,
+        owner: NoteAuthoringOwner
+    ) {
         self.property = property
         self.path = path
         self.vaultRoot = vaultRoot
-        _draft = State(initialValue: PropertyEditDraft.from(property: property))
+        self.owner = owner
+        let initial = PropertyEditDraft.from(property: property)
+        _draft = State(initialValue: initial)
+        _committedBaseline = State(initialValue: initial)
     }
 
     var body: some View {
@@ -84,6 +112,7 @@ struct PropertyEditorRow: View {
 
             HStack(alignment: .top, spacing: 12) {
                 editor
+                    .disabled(authoringDisabledReason != nil)
                 Spacer(minLength: 4)
                 actionButtons
             }
@@ -93,6 +122,34 @@ struct PropertyEditorRow: View {
                     .font(.caption)
                     .foregroundStyle(Tokens.ColorRole.destructiveText)
                     .accessibilityLabel("Validation error: \(err)")
+            }
+            // The header owns the path-wide disabled/recovery explanation.
+            // Repeating it — and the same committed recovery payload — once
+            // per property made VoiceOver traverse identical high-stakes copy
+            // for every row. A genuinely row-local uncommitted draft remains
+            // selectable and copyable here.
+            if authoringDisabledReason != nil, hasUnsavedChanges {
+                VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
+                    Text("Uncommitted property draft")
+                        .font(.caption.weight(.semibold))
+                    Text(verbatim: draft.recoveryText)
+                        .font(Tokens.Typography.code)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(Tokens.Spacing.sm)
+                        .background(
+                            Tokens.ColorRole.surfaceSecondary,
+                            in: RoundedRectangle(
+                                cornerRadius: Tokens.Radius.small))
+                        .accessibilityLabel(
+                            "Uncommitted draft for \(property.key). \(draft.recoveryText)")
+                    Button("Copy Property Draft") {
+                        copyPropertyDraft()
+                    }
+                    .accessibilityHint(
+                        "Copies the uncommitted value for \(property.key).")
+                }
+                .accessibilityElement(children: .contain)
             }
         }
         .padding(.vertical, 2)
@@ -115,17 +172,63 @@ struct PropertyEditorRow: View {
                 deleteDialogFocusReturn = .row
             }
             Button("Delete", role: .destructive) {
-                appState.deleteProperty(path: path, key: property.key)
+                appState.deleteProperty(
+                    path: path, key: property.key, owner: owner)
                 deleteDialogFocusReturn = .row
             }
+            .disabled(deleteDisabledReason != nil)
         } message: {
             Text("This removes the `\(property.key)` key from the note's frontmatter.")
         }
         // Reset draft when the property updates from disk (e.g.
         // after a successful commit or external reload).
         .onChange(of: property) { _, newValue in
-            draft = PropertyEditDraft.from(property: newValue)
+            let refreshed = PropertyEditDraft.from(property: newValue)
+            let resetRevision = appState.propertyDraftResetRevision(
+                path: path, key: property.key)
+            let reset = resetRevision > lastHandledResetRevision
+            if reset { lastHandledResetRevision = resetRevision }
+            let preserved = appState.preservedPropertyDraft(
+                path: path, key: property.key)
+            let localWasDirty = draft != committedBaseline
+            committedBaseline = refreshed
+            if reset || (!localWasDirty && preserved == nil) || draft == refreshed {
+                draft = refreshed
+                appState.clearPreservedPropertyDraft(
+                    path: path, key: property.key, owner: owner)
+            } else {
+                if let preserved { draft = preserved }
+                appState.preservePropertyDraft(
+                    draft,
+                    baseline: refreshed,
+                    path: path,
+                    key: property.key,
+                    owner: owner)
+            }
             inputValidationError = nil
+        }
+        .onChange(of: draft) { _, newDraft in
+            appState.preservePropertyDraft(
+                newDraft,
+                baseline: committedBaseline,
+                path: path,
+                key: property.key,
+                owner: owner)
+        }
+        .onAppear {
+            lastHandledResetRevision = appState.propertyDraftResetRevision(
+                path: path, key: property.key)
+            if let preserved = appState.preservedPropertyDraft(
+                path: path, key: property.key)
+            {
+                draft = preserved
+            }
+        }
+        .onChange(of: appState.propertyDraftResetRevision) {
+            applyRequestedDraftReset()
+        }
+        .onExitCommand {
+            revertDraft()
         }
     }
 
@@ -216,10 +319,11 @@ struct PropertyEditorRow: View {
                     return Date()
                 },
                 set: { newDate in
-                    draft = .scalarText(
+                    guard setDraftIfAdmitted(.scalarText(
                         ScalarTextKind(
                             kind: "date",
-                            value: PropertyDateEditing.dateString(from: newDate)))
+                            value: PropertyDateEditing.dateString(from: newDate))))
+                    else { return }
                     commitDraft()
                 }
             ),
@@ -262,11 +366,12 @@ struct PropertyEditorRow: View {
                     {
                         form = parsed.form
                     }
-                    draft = .scalarText(
+                    guard setDraftIfAdmitted(.scalarText(
                         ScalarTextKind(
                             kind: "datetime",
                             value: PropertyDateEditing.datetimeString(
-                                from: newDate, form: form)))
+                                from: newDate, form: form))))
+                    else { return }
                     commitDraft()
                 }
             ),
@@ -298,7 +403,7 @@ struct PropertyEditorRow: View {
                 set: { newValue in
                     var copy = kind
                     copy.value = newValue
-                    draft = .scalarText(copy)
+                    setDraftIfAdmitted(.scalarText(copy))
                 }
             )
         )
@@ -316,7 +421,7 @@ struct PropertyEditorRow: View {
                         if case .integer(let s) = draft { return s }
                         return ""
                     },
-                    set: { draft = .integer($0) }
+                    set: { setDraftIfAdmitted(.integer($0)) }
                 )
             )
             .textFieldStyle(.roundedBorder)
@@ -342,7 +447,7 @@ struct PropertyEditorRow: View {
                         if case .float(let s) = draft { return s }
                         return ""
                     },
-                    set: { draft = .float($0) }
+                    set: { setDraftIfAdmitted(.float($0)) }
                 )
             )
             .textFieldStyle(.roundedBorder)
@@ -367,7 +472,7 @@ struct PropertyEditorRow: View {
                     return false
                 },
                 set: { newValue in
-                    draft = .boolean(newValue)
+                    guard setDraftIfAdmitted(.boolean(newValue)) else { return }
                     // Commit immediately on toggle change — booleans
                     // have no intermediate edit state worth preserving.
                     commitDraft()
@@ -390,7 +495,7 @@ struct PropertyEditorRow: View {
                         if case .wikilink(let s) = draft { return s }
                         return ""
                     },
-                    set: { draft = .wikilink($0) }
+                    set: { setDraftIfAdmitted(.wikilink($0)) }
                 )
             )
             .textFieldStyle(.roundedBorder)
@@ -417,7 +522,7 @@ struct PropertyEditorRow: View {
                                 set: { new in
                                     var copy = items
                                     copy[idx] = new
-                                    draft = .list(copy)
+                                    setDraftIfAdmitted(.list(copy))
                                 }
                             )
                         )
@@ -428,14 +533,14 @@ struct PropertyEditorRow: View {
                         Button("Remove") {
                             var copy = items
                             copy.remove(at: idx)
-                            draft = .list(copy)
+                            setDraftIfAdmitted(.list(copy))
                         }
                         .accessibilityLabel("Remove item \(idx + 1) from \(property.key)")
                     }
                 }
                 Button("Add item") {
                     items.append("")
-                    draft = .list(items)
+                    setDraftIfAdmitted(.list(items))
                 }
                 .accessibilityLabel("Add item to \(property.key)")
             }
@@ -456,7 +561,7 @@ struct PropertyEditorRow: View {
                                 set: { new in
                                     var copy = tags
                                     copy[idx] = new
-                                    draft = .tagList(copy)
+                                    setDraftIfAdmitted(.tagList(copy))
                                 }
                             )
                         )
@@ -467,14 +572,14 @@ struct PropertyEditorRow: View {
                         Button("Remove") {
                             var copy = tags
                             copy.remove(at: idx)
-                            draft = .tagList(copy)
+                            setDraftIfAdmitted(.tagList(copy))
                         }
                         .accessibilityLabel("Remove tag \(idx + 1) from \(property.key)")
                     }
                 }
                 Button("Add tag") {
                     tags.append("")
-                    draft = .tagList(tags)
+                    setDraftIfAdmitted(.tagList(tags))
                 }
                 .accessibilityLabel("Add tag to \(property.key)")
             }
@@ -502,22 +607,71 @@ struct PropertyEditorRow: View {
         // the icon was carrying.
         HStack(spacing: 4) {
             Button("Save") { commitDraft() }
-                .disabled(!hasUnsavedChanges || appState.isEditingProperty)
+                .disabled(
+                    !hasUnsavedChanges || appState.isEditingProperty
+                        || authoringDisabledReason != nil)
                 .accessibilityLabel("Save changes to \(property.key)")
-                .help("Save changes to \(property.key)")
+                .accessibilityHint(
+                    authoringDisabledReason ?? "Save changes to \(property.key).")
+                .help(authoringDisabledReason ?? "Save changes to \(property.key)")
+            if hasUnsavedChanges {
+                Button("Revert") { revertDraft() }
+                    .disabled(draftDiscardDisabledReason != nil)
+                    .accessibilityLabel("Revert changes to \(property.key)")
+                    .accessibilityHint(
+                        draftDiscardDisabledReason
+                            ?? "Restores the last committed value for \(property.key).")
+                    .help(
+                        draftDiscardDisabledReason
+                            ?? "Revert \(property.key) to its last committed value")
+            }
             Button("Delete", role: .destructive) {
                 pendingDelete = true
             }
+            .disabled(deleteDisabledReason != nil)
             .keyboardShortcut(.delete, modifiers: .command)
             .accessibilityLabel("Delete property \(property.key)")
-            .help("Delete property \(property.key)")
+            .accessibilityHint(
+                deleteDisabledReason ?? "Delete property \(property.key).")
+            .help(deleteDisabledReason ?? "Delete property \(property.key)")
         }
     }
 
     // MARK: Commit / revert
 
     private var hasUnsavedChanges: Bool {
-        self.draft != PropertyEditDraft.from(property: property)
+        !isCommittedPendingVerification
+            && self.draft != PropertyEditDraft.from(property: property)
+    }
+
+    private var isCommittedPendingVerification: Bool {
+        appState.propertyDraftIsCommittedPendingVerification(
+            path: path, key: property.key, draft: draft)
+    }
+
+    private var authoringDisabledReason: String? {
+        appState.propertyAuthoringDisabledReason(for: path)
+    }
+
+    private var deleteDisabledReason: String? {
+        hasUnsavedChanges
+            ? AppState.propertyDraftDeleteReason
+            : authoringDisabledReason
+    }
+
+    private var draftDiscardDisabledReason: String? {
+        appState.propertyRowDraftDiscardDisabledReason(
+            path: path, key: property.key, draft: draft)
+    }
+
+    /// Reject a callback that was queued before the disabled state reached the
+    /// AppKit control. The local draft changes only after central admission, so
+    /// visible input and the recovery cache can never disagree.
+    @discardableResult
+    private func setDraftIfAdmitted(_ next: PropertyEditDraft) -> Bool {
+        guard appState.admitNoteAuthoring(for: path, owner: owner) else { return false }
+        draft = next
+        return true
     }
 
     /// Validate the draft, convert to FFI `PropertyValue`, and call
@@ -529,11 +683,20 @@ struct PropertyEditorRow: View {
     /// reload then visibly reverted the control. One-slot newest-wins
     /// re-commit when the in-flight edit completes.
     private func commitDraft() {
+        if let draftDiscardDisabledReason {
+            appState.postMutationAnnouncement(draftDiscardDisabledReason)
+            return
+        }
         inputValidationError = nil
         let currentDraft: PropertyEditDraft = self.draft
         switch currentDraft.toPropertyValue() {
         case .success(let value):
-            if appState.setProperty(path: path, key: property.key, value: value) == nil,
+            if appState.setProperty(
+                path: path,
+                key: property.key,
+                value: value,
+                submittedDraft: currentDraft,
+                owner: owner) == nil,
                 appState.isEditingProperty {
                 pendingRecommitDraft = currentDraft
             }
@@ -542,18 +705,53 @@ struct PropertyEditorRow: View {
         }
     }
 
+    private func copyPropertyDraft() {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(draft.recoveryText, forType: .string)
+        appState.postMutationAnnouncement("Property draft copied.")
+    }
+
+    private func revertDraft() {
+        guard appState.ownsNoteAuthoring(owner) else { return }
+        if let draftDiscardDisabledReason {
+            appState.postMutationAnnouncement(draftDiscardDisabledReason)
+            return
+        }
+        draft = appState.propertyDraftRevertTarget(
+            path: path, key: property.key, fallback: committedBaseline)
+        pendingRecommitDraft = nil
+        inputValidationError = nil
+        appState.clearPreservedPropertyDraft(
+            path: path, key: property.key, owner: owner)
+        appState.postMutationAnnouncement("Reverted changes to \(property.key).")
+    }
+
+    private func applyRequestedDraftReset() {
+        let revision = appState.propertyDraftResetRevision(
+            path: path, key: property.key)
+        guard revision > lastHandledResetRevision else { return }
+        lastHandledResetRevision = revision
+        let refreshed = PropertyEditDraft.from(property: property)
+        committedBaseline = refreshed
+        draft = refreshed
+        pendingRecommitDraft = nil
+        inputValidationError = nil
+        appState.clearPreservedPropertyDraft(
+            path: path, key: property.key, owner: owner)
+    }
+
     private func bumpInteger(by delta: Int64) {
         guard case .integer(let s) = draft else { return }
         let current = Int64(s) ?? 0
         let next = current.addingReportingOverflow(delta)
         if next.overflow { return }
-        draft = .integer(String(next.partialValue))
+        setDraftIfAdmitted(.integer(String(next.partialValue)))
     }
 
     private func bumpFloat(by delta: Double) {
         guard case .float(let s) = draft else { return }
         let current = Double(s) ?? 0
-        draft = .float(String(current + delta))
+        setDraftIfAdmitted(.float(String(current + delta)))
     }
 
     private func pickVaultFile() {
@@ -570,11 +768,11 @@ struct PropertyEditorRow: View {
             let rel = chosen.path.removingPrefix(root.path + "/")
         {
             let stripped = (rel as NSString).deletingPathExtension
-            draft = .wikilink(stripped)
+            setDraftIfAdmitted(.wikilink(stripped))
         } else {
             // Fallback: file outside the vault root — store as-is
             // (the user can fix it manually).
-            draft = .wikilink(chosen.lastPathComponent)
+            setDraftIfAdmitted(.wikilink(chosen.lastPathComponent))
         }
     }
 
@@ -613,6 +811,42 @@ enum PropertyEditDraft: Equatable {
     case wikilink(String)
     case list([String])
     case tagList([String])
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        func exactArray(_ lhs: [String], _ rhs: [String]) -> Bool {
+            lhs.count == rhs.count
+                && zip(lhs, rhs).allSatisfy(BaseExactIdentity.matches)
+        }
+        switch (lhs, rhs) {
+        case (.scalarText(let lhs), .scalarText(let rhs)):
+            return lhs == rhs
+        case (.integer(let lhs), .integer(let rhs)),
+            (.float(let lhs), .float(let rhs)),
+            (.wikilink(let lhs), .wikilink(let rhs)):
+            return BaseExactIdentity.matches(lhs, rhs)
+        case (.boolean(let lhs), .boolean(let rhs)):
+            return lhs == rhs
+        case (.list(let lhs), .list(let rhs)),
+            (.tagList(let lhs), .tagList(let rhs)):
+            return exactArray(lhs, rhs)
+        default:
+            return false
+        }
+    }
+
+    /// Plain-text recovery representation used only for selection/copy while
+    /// the typed editor is read-only. It deliberately preserves partial and
+    /// invalid scalar input instead of attempting validation or serialization.
+    var recoveryText: String {
+        switch self {
+        case .scalarText(let kind): return kind.value
+        case .integer(let value), .float(let value), .wikilink(let value):
+            return value
+        case .boolean(let value): return value ? "true" : "false"
+        case .list(let values), .tagList(let values):
+            return values.joined(separator: "\n")
+        }
+    }
 
     static func from(property: Property) -> PropertyEditDraft {
         let display = PropertyValueDisplay.decode(
@@ -712,6 +946,11 @@ enum PropertyEditDraft: Equatable {
 struct ScalarTextKind: Equatable {
     let kind: String  // "text" | "date" | "datetime"
     var value: String
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        BaseExactIdentity.matches(lhs.kind, rhs.kind)
+            && BaseExactIdentity.matches(lhs.value, rhs.value)
+    }
 }
 
 /// Wrapper so `Result`'s failure type satisfies the Error protocol

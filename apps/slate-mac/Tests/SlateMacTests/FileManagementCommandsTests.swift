@@ -74,9 +74,13 @@ final class FileManagementCommandsTests: XCTestCase {
 
         XCTAssertTrue(fileExists(vault, "Untitled.md"), "note created on disk")
         XCTAssertEqual(state.selectedFilePath, "Untitled.md", "opened in the current tab")
+        let pending = try XCTUnwrap(
+            state.renamingNode, "drops into inline rename of the new note")
+        XCTAssertEqual(pending.path, "Untitled.md")
+        XCTAssertFalse(pending.isDirectory)
         XCTAssertEqual(
-            state.renamingNode, AppState.RenamingNode(path: "Untitled.md", isDirectory: false),
-            "drops into inline rename of the new note")
+            pending.sessionIdentity,
+            state.currentSession.map(ObjectIdentifier.init))
     }
 
     func testCreateNoteAutoSuffixesOnCollision() async throws {
@@ -123,14 +127,91 @@ final class FileManagementCommandsTests: XCTestCase {
 
     func testRenameCollisionSurfacesInlineErrorAndKeepsRenamingNode() async throws {
         let (state, _) = try await makeVault(files: ["a.md", "b.md"])
-        state.renamingNode = AppState.RenamingNode(path: "a.md", isDirectory: false)
+        XCTAssertTrue(state.requestRename(path: "a.md", isDirectory: false))
+        let pending = try XCTUnwrap(state.renamingNode)
         // Rename a.md → b.md (collides).
-        await state.renameEntry(path: "a.md", isDirectory: false, to: "b.md")?.value
+        XCTAssertTrue(state.commitPendingRename(id: pending.id, to: "b.md"))
+        await state.pendingStructuralTaskForTesting?.value
 
         XCTAssertNotNil(state.structuralRenameError, "collision surfaces a specific inline error")
         XCTAssertEqual(
-            state.renamingNode, AppState.RenamingNode(path: "a.md", isDirectory: false),
+            state.renamingNode?.id, pending.id,
             "rename field stays open + focused so the user can correct — never silent")
+    }
+
+    func testPendingRenameIsUUIDSessionOwnedAndDiesAcrossVaultLifecycle()
+        async throws
+    {
+        let (state, vaultA) = try await makeVault(files: ["a.md", "b.md"])
+        XCTAssertTrue(state.requestRename(path: "a.md", isDirectory: false))
+        let a = try XCTUnwrap(state.renamingNode)
+        XCTAssertEqual(
+            a.sessionIdentity,
+            state.currentSession.map(ObjectIdentifier.init))
+        XCTAssertTrue(state.cancelPendingRename(id: a.id))
+
+        XCTAssertTrue(state.requestRename(path: "a.md", isDirectory: false))
+        let b = try XCTUnwrap(state.renamingNode)
+        XCTAssertNotEqual(a.id, b.id, "re-staging the same path gets a fresh owner")
+        XCTAssertFalse(state.cancelPendingRename(id: a.id))
+        XCTAssertFalse(state.commitPendingRename(id: a.id, to: "alpha.md"))
+        XCTAssertEqual(state.renamingNode?.id, b.id, "stale A cannot clear or commit B")
+        XCTAssertTrue(fileExists(vaultA, "a.md"))
+        XCTAssertFalse(fileExists(vaultA, "alpha.md"))
+
+        let vaultB = tempDir.appendingPathComponent("vault-b")
+        try FileManager.default.createDirectory(
+            at: vaultB, withIntermediateDirectories: true)
+        try "# B\n".write(
+            to: vaultB.appendingPathComponent("a.md"), atomically: true,
+            encoding: .utf8)
+        state.openVault(at: vaultB)
+        await state.scanTask?.value
+        XCTAssertNil(state.renamingNode, "direct A→B open clears the old capture")
+        XCTAssertFalse(state.commitPendingRename(id: b.id, to: "alpha.md"))
+        XCTAssertTrue(fileExists(vaultB, "a.md"), "stale vault-A commit writes nothing in B")
+        XCTAssertFalse(fileExists(vaultB, "alpha.md"))
+
+        XCTAssertTrue(state.requestRename(path: "a.md", isDirectory: false))
+        let c = try XCTUnwrap(state.renamingNode)
+        state.closeVault()
+        XCTAssertNil(state.renamingNode, "close/reset clears the captured rename")
+        XCTAssertFalse(state.cancelPendingRename(id: c.id))
+    }
+
+    func testNewFolderInContextIgnoresStaleErrorAndStagesTheCreatedFolder()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: ["seed.md"])
+        state.lastError = "an old unrelated failure"
+
+        state.newFolderInContext(parent: "")
+        await state.pendingStructuralTaskForTesting?.value
+
+        XCTAssertTrue(fileExists(vault, "Untitled Folder"))
+        let pending = try XCTUnwrap(state.renamingNode)
+        XCTAssertEqual(pending.path, "Untitled Folder")
+        XCTAssertTrue(pending.isDirectory)
+        XCTAssertEqual(
+            pending.sessionIdentity,
+            state.currentSession.map(ObjectIdentifier.init))
+    }
+
+    func testNewFolderInContextBackendFailureNeverStagesRename() async throws {
+        let (state, vault) = try await makeVault(files: ["seed.md"])
+        state.lastError = nil
+
+        // Dot-prefixed path components are rejected by the real structural
+        // backend. This is a non-busy admitted create whose actual result is
+        // failure — distinct from the synchronous busy-rejection regression.
+        state.newFolderInContext(parent: ".slate")
+        await state.pendingStructuralTaskForTesting?.value
+
+        XCTAssertFalse(fileExists(vault, ".slate/Untitled Folder"))
+        XCTAssertNil(
+            state.renamingNode,
+            "a failed backend create cannot stage a rename from global error state")
+        XCTAssertNotNil(state.lastError, "the underlying create failure still surfaces")
     }
 
     func testRenameInvalidNameSurfacesInlineError() async throws {
@@ -277,8 +358,8 @@ final class FileManagementCommandsTests: XCTestCase {
     /// selection is a transient mirror (it briefly holds the requested
     /// destination while the tab stays put and the rollback is async).
     /// Deleting the dirty note while such a mirror points elsewhere
-    /// must still flip THIS tab to the error state, never leave the
-    /// deleted file's dirty buffer standing.
+    /// must still flip THIS tab to the error state while retaining the dirty
+    /// buffer in the explicit missing-note recovery surface.
     func testDeleteOfDirtyNoteDuringDirtyNavStillFlipsToError() async throws {
         let (state, _) = try await makeVault(files: ["a.md", "b.md"])
         state.selectedFilePath = "a.md"
@@ -295,8 +376,11 @@ final class FileManagementCommandsTests: XCTestCase {
         await deletion?.value
 
         XCTAssertNotNil(state.noteLoadError, "the deleted tab flips to the error state")
-        XCTAssertNil(state.currentNoteText, "the deleted file's dirty buffer is dropped")
-        XCTAssertFalse(state.hasUnsavedChanges)
+        XCTAssertEqual(state.currentNoteText, "# a.md\nEDITED, unsaved\n")
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertEqual(
+            state.missingNoteRecoveryDraft(for: "a.md")?.body,
+            "# a.md\nEDITED, unsaved\n")
     }
 
     /// Codex round 8, direction one: select a note and delete it
@@ -495,8 +579,11 @@ final class FileManagementCommandsTests: XCTestCase {
         let (state, _) = try await makeVault(files: ["a.md"])
         state.treeSelectedNode = AppState.TreeSelection(path: "a.md", isDirectory: false)
         try state.commandRegistry.invokeById(id: SlateCommandID.renameEntry)
+        XCTAssertEqual(state.renamingNode?.path, "a.md")
+        XCTAssertEqual(state.renamingNode?.isDirectory, false)
         XCTAssertEqual(
-            state.renamingNode, AppState.RenamingNode(path: "a.md", isDirectory: false))
+            state.renamingNode?.sessionIdentity,
+            state.currentSession.map(ObjectIdentifier.init))
     }
 
     func testMoveCommandOpensSheetForSelection() async throws {
@@ -588,6 +675,51 @@ final class FileManagementCommandsTests: XCTestCase {
                 rewrittenCount: 0
             ).affectedParents,
             ["src", nil])
+
+        let standing = [
+            BatchPathChange(
+                oldPath: "src/a.md", newPath: "dest/a.md", isDirectory: false),
+            BatchPathChange(
+                oldPath: "src/b.md", newPath: "dest/b.md", isDirectory: false),
+            BatchPathChange(
+                oldPath: "root.md", newPath: "dest/root.md", isDirectory: false),
+        ]
+        let rollbackTouched = [
+            BatchPathChange(
+                oldPath: "rollback/x.md", newPath: "src/x.md", isDirectory: false),
+            BatchPathChange(
+                oldPath: "root-2.md", newPath: "dest/root-2.md", isDirectory: false),
+        ]
+        XCTAssertEqual(
+            AppState.TreeMutation(
+                token: 2,
+                kind: .batchMove(standing: standing, touched: rollbackTouched),
+                rewrittenCount: 0
+            ).affectedParents,
+            ["src", "dest", nil, "rollback"],
+            "batch Move invalidates standing and rollback-touched parents once, in report order")
+        XCTAssertEqual(
+            AppState.TreeMutation(
+                token: 3,
+                kind: .batchTrash(trashed: [
+                    StructuralBatchItem(path: "src/a.md", isDirectory: false),
+                    StructuralBatchItem(path: "root.md", isDirectory: false),
+                    StructuralBatchItem(path: "src/b.md", isDirectory: false),
+                    StructuralBatchItem(path: "root-2.md", isDirectory: false),
+                ]),
+                rewrittenCount: 0
+            ).affectedParents,
+            ["src", nil],
+            "batch Trash stable-deduplicates repeated parent levels, including root")
+        XCTAssertEqual(
+            AppState.TreeMutation(
+                token: 4,
+                kind: .batchMove(standing: standing, touched: rollbackTouched),
+                rewrittenCount: 0,
+                requiresRescan: true
+            ).affectedParents,
+            [nil],
+            "uncertain reports request exactly one authoritative root invalidation")
     }
 
     func testDistinctRewrittenCount() {
@@ -721,13 +853,12 @@ final class FileManagementCommandsTests: XCTestCase {
     func testRequestDeleteFolderWithChildrenStagesConfirmation() async throws {
         let (state, vault) = try await makeVault(files: ["proj/a.md", "proj/b.md"])
         state.requestDeleteEntry(path: "proj", isDirectory: true)
-        XCTAssertEqual(
-            state.pendingFolderDelete,
-            AppState.PendingFolderDelete(path: "proj", itemCount: 2),
-            "staged with the FileManager shallow count")
+        let pending = try XCTUnwrap(state.pendingFolderDelete)
+        XCTAssertEqual(pending.path, "proj")
+        XCTAssertEqual(pending.itemCount, 2, "staged with the FileManager shallow count")
         XCTAssertTrue(fileExists(vault, "proj/a.md"), "nothing deleted yet")
 
-        state.confirmPendingFolderDelete()
+        XCTAssertTrue(state.confirmPendingFolderDelete(id: pending.id))
         await state.pendingStructuralTaskForTesting?.value
         XCTAssertNil(state.pendingFolderDelete)
         XCTAssertFalse(fileExists(vault, "proj/a.md"), "confirmed → trashed")
@@ -737,9 +868,9 @@ final class FileManagementCommandsTests: XCTestCase {
     func testCancelPendingFolderDeleteKeepsEverything() async throws {
         let (state, vault) = try await makeVault(files: ["proj/a.md"])
         state.requestDeleteEntry(path: "proj", isDirectory: true)
-        XCTAssertNotNil(state.pendingFolderDelete)
+        let pending = try XCTUnwrap(state.pendingFolderDelete)
 
-        state.cancelPendingFolderDelete()
+        XCTAssertTrue(state.cancelPendingFolderDelete(id: pending.id))
         await state.pendingStructuralTaskForTesting?.value
         XCTAssertNil(state.pendingFolderDelete)
         XCTAssertTrue(fileExists(vault, "proj/a.md"), "cancel deletes nothing")
@@ -776,7 +907,7 @@ final class FileManagementCommandsTests: XCTestCase {
         state.requestDeleteEntry(path: "proj", isDirectory: true, knownChildCount: 0)
         let pending = try XCTUnwrap(state.pendingFolderDelete)
         XCTAssertEqual(pending.itemCount, 1)
-        state.cancelPendingFolderDelete()
+        XCTAssertTrue(state.cancelPendingFolderDelete(id: pending.id))
 
         // HIDDEN-only contents still confirm (Codex r2/r3: .skipsHiddenFiles
         // made a folder holding only `.env` fail OPEN — exactly the
@@ -788,17 +919,17 @@ final class FileManagementCommandsTests: XCTestCase {
         let hiddenPending = try XCTUnwrap(
             state.pendingFolderDelete, "hidden-only folder must still confirm")
         XCTAssertEqual(hiddenPending.itemCount, 1)
-        state.confirmPendingFolderDelete()
+        XCTAssertTrue(state.confirmPendingFolderDelete(id: hiddenPending.id))
         await state.pendingStructuralTaskForTesting?.value
         XCTAssertFalse(fileExists(vault, "proj"))
 
         // knownChildCount: 3 stages without touching the filesystem — the
         // path doesn't even exist anymore.
         state.requestDeleteEntry(path: "proj", isDirectory: true, knownChildCount: 3)
-        XCTAssertEqual(
-            state.pendingFolderDelete,
-            AppState.PendingFolderDelete(path: "proj", itemCount: 3))
-        state.cancelPendingFolderDelete()
+        let trusted = try XCTUnwrap(state.pendingFolderDelete)
+        XCTAssertEqual(trusted.path, "proj")
+        XCTAssertEqual(trusted.itemCount, 3)
+        XCTAssertTrue(state.cancelPendingFolderDelete(id: trusted.id))
     }
 
     /// The registry's Move to Trash routes folder selections through the
@@ -807,9 +938,10 @@ final class FileManagementCommandsTests: XCTestCase {
         let (state, vault) = try await makeVault(files: ["proj/a.md"])
         state.treeSelectedNode = AppState.TreeSelection(path: "proj", isDirectory: true)
         try state.commandRegistry.invokeById(id: SlateCommandID.deleteEntry)
-        XCTAssertNotNil(state.pendingFolderDelete, "palette/menu path stages too")
+        let pending = try XCTUnwrap(
+            state.pendingFolderDelete, "palette/menu path stages too")
         XCTAssertTrue(fileExists(vault, "proj/a.md"))
-        state.cancelPendingFolderDelete()
+        XCTAssertTrue(state.cancelPendingFolderDelete(id: pending.id))
     }
 
     // MARK: - Expansion persistence (#873, AppState round trip)

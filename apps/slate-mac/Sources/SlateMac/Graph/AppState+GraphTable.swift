@@ -28,6 +28,10 @@ extension AppState {
     /// rather than opening a second (review round 1 finding 6 — the
     /// per-group `openTab` dedup alone let a split duplicate it).
     func openGraphTab() {
+        if let reason = propertyEditNavigationDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         // Literal "opens/activates" (spec): a fresh tab shows the DEFAULT
         // view (transient filter/kind state is reset when a graph tab
         // closes — see `releaseGraphStateIfUnreferenced` — so a new tab
@@ -293,6 +297,10 @@ extension AppState {
     /// already correct, and the resting count/hub is announced once the
     /// fresh snapshot publishes (via `graphTablePendingPreset`).
     func openGraphPreset(_ preset: GraphPreset) {
+        if let reason = propertyEditNavigationDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         graphTableTextFilter = ""
         graphTableKindFilter = Self.graphPresetKind(preset)
         graphTableFilter = Self.graphPresetFilter(preset)

@@ -187,12 +187,46 @@ struct PropertyEditConflict: Equatable {
     let currentMtimeMs: Int64
 }
 
+/// Captured identity for a mounted Markdown authoring surface. AppKit can
+/// deliver text/edit callbacks after SwiftUI has already replaced the view;
+/// path equality alone is insufficient because another tab or vault can mount
+/// the same relative path. Every view-owned callback carries this token and is
+/// accepted only while the exact session + mount generation still owns it.
+struct NoteAuthoringOwner: Hashable {
+    fileprivate let generation: UInt64
+    fileprivate let sessionID: ObjectIdentifier
+    let path: String
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.generation == rhs.generation
+            && lhs.sessionID == rhs.sessionID
+            && BaseExactIdentity.matches(lhs.path, rhs.path)
+    }
+
+    func hash(into hasher: inout Hasher) {
+        hasher.combine(generation)
+        hasher.combine(sessionID)
+        BaseExactIdentity.hash(path, into: &hasher)
+    }
+}
+
 /// Destination the user asked to navigate to while the editor was
 /// dirty. Held in `AppState.pendingNavigation` until the user
 /// responds to the "Save changes?" alert.
 enum PendingNavigation: Equatable {
     case closeVault
     case selectFile(String?)
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        switch (lhs, rhs) {
+        case (.closeVault, .closeVault):
+            return true
+        case (.selectFile(let lhsPath), .selectFile(let rhsPath)):
+            return BaseExactIdentity.matches(lhsPath, rhsPath)
+        default:
+            return false
+        }
+    }
 }
 
 /// State machine driving the create-from-template flow (Milestone H).
@@ -211,6 +245,167 @@ enum PendingTemplateFlow: Equatable {
     case idle
     case needsPrompts(TemplateSummary, [TemplatePrompt])
     case needsName(TemplateSummary, [String: String])
+}
+
+enum NativeDocumentRetargetOwner: Sendable, Equatable {
+    case registry(key: String)
+    case basesDock
+}
+
+/// Value-only work captured while a batch report lands. Document objects stay
+/// on MainActor; the executor receives only path/source identities, generation
+/// tokens, and detached native handles.
+enum NativeDocumentRetargetPlan: @unchecked Sendable {
+    case canvas(
+        path: String,
+        generation: UInt64,
+        replacedHandle: UInt64?,
+        prepare: Bool
+    )
+    case base(
+        owner: NativeDocumentRetargetOwner,
+        source: BaseDocumentSource,
+        generation: UInt64,
+        replacedHandle: UInt64?,
+        request: BasePreparedLoadRequest,
+        prepare: Bool
+    )
+
+    var shouldPrepare: Bool {
+        switch self {
+        case .canvas(_, _, _, let prepare),
+            .base(_, _, _, _, _, let prepare):
+            return prepare
+        }
+    }
+}
+
+enum NativeDocumentRetargetResult: @unchecked Sendable {
+    case canvas(path: String, generation: UInt64, prepared: CanvasPreparedLoad)
+    case base(
+        owner: NativeDocumentRetargetOwner,
+        source: BaseDocumentSource,
+        generation: UInt64,
+        prepared: BasePreparedLoad
+    )
+}
+
+/// A byte-preserving, user-readable snapshot of an uncommitted property row.
+/// Values are intentionally rendered as plain text: this is a recovery
+/// artifact, not an attempt to reconstruct or commit typed frontmatter.
+struct MissingPropertyRecoveryDraft: Identifiable, Equatable {
+    let key: String
+    let value: String
+
+    var id: String {
+        BaseExactIdentity.key(
+            prefix: "missing-property-recovery", components: [key])
+    }
+}
+
+/// Durable in-memory recovery payload for a dirty Markdown note whose file is
+/// proven absent after an outcome-unknown Trash operation. The active editor,
+/// properties-source editor, and row editors all unmount in the missing-file
+/// state, so AppState must own the last recoverable copy until the user
+/// explicitly discards it or closes the vault.
+struct MissingNoteRecoveryDraft: Equatable {
+    let path: String
+    let body: String
+    let frontmatterSource: String
+    let propertiesSourceDraft: String?
+    let propertyDrafts: [MissingPropertyRecoveryDraft]
+    let retainedPropertyUpdates: [MissingPropertyRecoveryDraft]
+
+    var copyText: String {
+        var sections: [String] = [
+            "Path: \(path)",
+            "Markdown body:\n\(body)",
+        ]
+        if !frontmatterSource.isEmpty {
+            sections.append("Saved frontmatter source:\n\(frontmatterSource)")
+        }
+        if let propertiesSourceDraft {
+            sections.append("Uncommitted properties source:\n\(propertiesSourceDraft)")
+        }
+        for draft in propertyDrafts {
+            sections.append("Uncommitted property \(draft.key):\n\(draft.value)")
+        }
+        for update in retainedPropertyUpdates {
+            sections.append(
+                "Saved property update awaiting verification \(update.key):\n\(update.value)")
+        }
+        return sections.joined(separator: "\n\n")
+    }
+}
+
+enum BatchTrashPhysicalPresence: Sendable, Equatable {
+    case present
+    case absent
+    case indeterminate
+}
+
+enum BatchTrashPathCapability: Equatable {
+    case writable
+    case readOnly(String)
+    case invalid(String)
+}
+
+private enum BatchTrashAdmissionPath {
+    case normalized(String)
+    case invalid(String)
+}
+
+private struct BatchTrashPresenceProbe: Sendable {
+    let path: String
+    let isDirectory: Bool
+}
+
+private struct BatchTrashPresenceResult: Sendable {
+    let path: String
+    let isDirectory: Bool
+    let presence: BatchTrashPhysicalPresence
+}
+
+/// FIFO two-permit gate shared by every path that prepares a replacement
+/// Canvas/Base/embed native handle. Waiting is asynchronous so overlapping
+/// refreshes do not occupy cooperative executor threads while permits are busy.
+actor NativeDocumentPreparationLimiter {
+    private let limit: Int
+    private var availablePermits: Int
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    init(limit: Int = 2) {
+        precondition(limit > 0)
+        self.limit = limit
+        availablePermits = limit
+    }
+
+    func acquire() async {
+        if availablePermits > 0 {
+            availablePermits -= 1
+            return
+        }
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func release() {
+        if !waiters.isEmpty {
+            waiters.removeFirst().resume()
+            return
+        }
+        precondition(availablePermits < limit)
+        availablePermits += 1
+    }
+}
+
+/// Cursor park deferred because the dirty-note navigation gate retained the
+/// current editor. It may land only after this exact vault/path has loaded.
+private struct DeferredTemplateCursorLanding {
+    let sessionID: ObjectIdentifier
+    let path: String
+    let fileByteOffset: Int
 }
 
 enum BaseQueryBuilderPreviewExecutionPhase: Sendable, Equatable {
@@ -246,6 +441,29 @@ enum BaseQueryBuilderPreviewExecutionOutcome: Sendable {
 /// reference.
 @MainActor
 final class AppState: ObservableObject {
+    /// Invalidated synchronously whenever the mounted note identity changes.
+    /// Kept separate from path/session so same-path tab remounts are distinct.
+    private var noteAuthoringGeneration: UInt64 = 0
+
+    private func invalidateNoteAuthoringOwnership() {
+        noteAuthoringGeneration &+= 1
+    }
+
+    func noteAuthoringOwner(for path: String? = nil) -> NoteAuthoringOwner? {
+        guard let session = currentSession, let loadedFilePath else { return nil }
+        if let path, !BaseExactIdentity.matches(path, loadedFilePath) { return nil }
+        return NoteAuthoringOwner(
+            generation: noteAuthoringGeneration,
+            sessionID: ObjectIdentifier(session),
+            path: loadedFilePath)
+    }
+
+    func ownsNoteAuthoring(_ owner: NoteAuthoringOwner) -> Bool {
+        guard let session = currentSession else { return false }
+        return noteAuthoringGeneration == owner.generation
+            && ObjectIdentifier(session) == owner.sessionID
+            && BaseExactIdentity.matches(loadedFilePath, owner.path)
+    }
     @Published private(set) var currentSession: VaultSession?
     @Published private(set) var currentVaultURL: URL?
     @Published private(set) var recentVaults: [RecentVault] = []
@@ -310,18 +528,865 @@ final class AppState: ObservableObject {
     /// tree row swaps its label for a `TextField` while this matches the row's
     /// node. Nil = no rename in progress. Set by the rename command, cleared on
     /// commit/cancel.
-    @Published var renamingNode: RenamingNode?
+    @Published private(set) var renamingNode: RenamingNode?
 
     /// Drives the Move-to-folder sheet (U2-5). Non-nil = the sheet is up,
     /// carrying the node being moved. Cleared on commit/cancel.
-    @Published var pendingMove: PendingMove?
+    @Published private(set) var pendingMove: PendingMove?
 
     /// Drives the BATCH Move-to-folder sheet (#852): a multi-selection's items
     /// awaiting a destination. The same `MoveToFolderSheet` renders it (a batch
     /// initializer); commit routes every item through `batchMove`. Separate from
     /// `pendingMove` so the single-node path (U2-5) is untouched. Cleared on
     /// commit/cancel.
-    @Published var pendingBatchMove: BatchMove?
+    @Published private(set) var pendingBatchMove: BatchMove?
+
+    /// The complete native report for the latest batch structural operation.
+    /// No report vector is flattened or discarded; MainSplitView derives its
+    /// single attention presentation and copied details from this value.
+    struct BatchStructuralResult: Identifiable, Equatable {
+        enum MoveMode: Equatable {
+            case forward(destination: String)
+            case undo
+            case redo
+        }
+
+        enum Operation: Equatable {
+            case move(MoveMode)
+            case trash
+        }
+
+        enum Payload: Equatable {
+            case move(BatchMoveReport, mode: MoveMode)
+            case trash(BatchTrashReport)
+            case infrastructure(operation: Operation, message: String)
+        }
+
+        let id: UUID
+        let payload: Payload
+        let requiresAttention: Bool
+
+        init(id: UUID = UUID(), payload: Payload, requiresAttention: Bool) {
+            self.id = id
+            self.payload = payload
+            self.requiresAttention = requiresAttention
+        }
+    }
+
+    /// Pure copy and deterministic detail formatting shared by Move and Trash
+    /// batch presentations. Preview generation is bounded to twenty entries;
+    /// the complete report is expanded only when the user chooses Copy Details.
+    struct BatchStructuralCopy {
+        static let previewLimit = 20
+        static let inlinePreviewLimit = 3
+
+        struct Attention: Equatable {
+            let title: String
+            /// Bounded diagnostic preview retained for non-UI consumers.
+            let message: String
+            /// Alert-sized copy: summary, at most three detail lines, then the
+            /// exact omitted count. This is the only copy rendered inline.
+            let inlineMessage: String
+            /// True whenever the complete report has at least one ledger line,
+            /// even when every line fits in the inline preview.
+            let hasDetails: Bool
+            let hasOmittedDetails: Bool
+            /// Deterministic operation-count seam for the O(20) preview gate.
+            let previewWorkCount: Int
+        }
+
+        struct PreviewAccumulator {
+            private(set) var lines: [String] = []
+            private(set) var workCount = 0
+
+            var remaining: Int { max(0, previewLimit - lines.count) }
+
+            mutating func append(_ line: @autoclosure () -> String) {
+                guard remaining > 0 else { return }
+                workCount += 1
+                lines.append(line())
+            }
+
+            mutating func append<Element>(
+                contentsOf values: [Element],
+                render: (Element) -> String
+            ) {
+                for value in values.prefix(remaining) {
+                    workCount += 1
+                    lines.append(render(value))
+                }
+            }
+        }
+
+        static func failureStageLabel(_ stage: BatchFailureStage) -> String {
+            switch stage {
+            case .preflight: return "Preflight"
+            case .move: return "Move"
+            case .index: return "Index"
+            case .linkRewrite: return "Link update"
+            case .linkRewriteRestore: return "Link restoration"
+            case .journal: return "History recording"
+            case .rollback: return "Restoration"
+            case .trash: return "Trash"
+            case .reconciliation: return "Reconciliation"
+            case .recoveryBarrier: return "Recovery safety"
+            }
+        }
+
+        static func failureLine(_ failure: BatchItemFailure) -> String {
+            let identity = failure.item?.path ?? "Request"
+            return "\(identity) — \(failureStageLabel(failure.stage)): \(failure.message)"
+        }
+
+        static func skipReasonLabel(_ reason: BatchSkipReason) -> String {
+            switch reason {
+            case .duplicate: return "Duplicate selection"
+            case .coveredBySelectedFolder: return "Covered by selected folder"
+            case .alreadyInDestination: return "Already in destination"
+            }
+        }
+
+        /// UniFFI flattens this Rust enum into `(kind, detail)`. Preserve the
+        /// raw value for future variants while giving every current kind useful
+        /// copy even when its authoritative detail string is empty.
+        static func rewriteFailureReason(_ failure: RewriteFailureKind) -> String {
+            switch failure.kind {
+            case "write_conflict":
+                return failure.detail.isEmpty
+                    ? "Write conflict" : "Write conflict: \(failure.detail)"
+            case "malformed_frontmatter":
+                return failure.detail.isEmpty
+                    ? "Malformed frontmatter"
+                    : "Malformed frontmatter: \(failure.detail)"
+            case "cancelled":
+                return failure.detail.isEmpty
+                    ? "Cancelled" : "Cancelled: \(failure.detail)"
+            case "other":
+                return failure.detail.isEmpty
+                    ? "Other error" : "Other: \(failure.detail)"
+            default:
+                return failure.detail.isEmpty
+                    ? failure.kind : "\(failure.kind): \(failure.detail)"
+            }
+        }
+
+        static func attention(for result: BatchStructuralResult) -> Attention {
+            switch result.payload {
+            case .trash(let report):
+                return BatchTrashCopy.attention(for: report)
+            case .move(let report, let mode):
+                let preview = movePreviewEntries(report)
+                let summary = moveSummary(report, mode: mode)
+                let detailCount = moveDetailEntryCount(report)
+                return Attention(
+                    title: moveAttentionTitle(report.state),
+                    message: previewMessage(
+                        summary: summary,
+                        entries: preview.lines,
+                        totalEntryCount: detailCount),
+                    inlineMessage: previewMessage(
+                        summary: summary,
+                        entries: preview.lines,
+                        totalEntryCount: detailCount,
+                        visibleEntryLimit: inlinePreviewLimit),
+                    hasDetails: detailCount > 0,
+                    hasOmittedDetails: detailCount > inlinePreviewLimit,
+                    previewWorkCount: preview.workCount)
+            case .infrastructure(let operation, let message):
+                let verb = operationLabel(operation)
+                let copy =
+                    "\(verb) could not finish safely.\nRequest — Infrastructure: \(message)"
+                return Attention(
+                    title: "\(verb) Did Not Finish Safely",
+                    message: copy,
+                    inlineMessage: copy,
+                    hasDetails: true,
+                    hasOmittedDetails: false,
+                    previewWorkCount: 0)
+            }
+        }
+
+        static func copiedDetails(for result: BatchStructuralResult) -> String {
+            switch result.payload {
+            case .trash(let report):
+                return BatchTrashCopy.copiedDetails(for: report)
+            case .move(let report, let mode):
+                var lines = [
+                    "Move",
+                    "State: \(moveStateLabel(report.state))",
+                    "Mode: \(moveModeLabel(mode))",
+                    "Summary: \(moveSummary(report, mode: mode))",
+                ]
+                if let opID = report.opId {
+                    lines.append("Operation ID: \(opID)")
+                }
+                lines.append(contentsOf: moveDetailEntries(report))
+                lines.append(
+                    "Reconciliation required: \(report.requiresRescan ? "Yes" : "No")")
+                return lines.joined(separator: "\n")
+            case .infrastructure(let operation, let message):
+                let verb = operationLabel(operation)
+                return [
+                    verb,
+                    "State: Infrastructure failure",
+                    "Request — Infrastructure: \(message)",
+                    "Reconciliation required: Yes",
+                ].joined(separator: "\n")
+            }
+        }
+
+        static func previewMessage(
+            summary: String,
+            entries: [String],
+            totalEntryCount: Int,
+            visibleEntryLimit: Int = previewLimit
+        ) -> String {
+            var lines = [summary]
+            let visibleEntries = entries.prefix(visibleEntryLimit)
+            lines.append(contentsOf: visibleEntries)
+            let omitted = totalEntryCount - visibleEntries.count
+            if omitted > 0 {
+                lines.append("…and \(omitted) more")
+            }
+            return lines.joined(separator: "\n")
+        }
+
+        private static func operationLabel(
+            _ operation: BatchStructuralResult.Operation
+        ) -> String {
+            switch operation {
+            case .move: return "Move"
+            case .trash: return "Trash"
+            }
+        }
+
+        private static func moveModeLabel(
+            _ mode: BatchStructuralResult.MoveMode
+        ) -> String {
+            switch mode {
+            case .forward(let destination):
+                return "Forward to \(destination.isEmpty ? "vault root" : destination)"
+            case .undo: return "Undo"
+            case .redo: return "Redo"
+            }
+        }
+
+        private static func moveStateLabel(_ state: BatchMoveState) -> String {
+            switch state {
+            case .rejected: return "Rejected"
+            case .noOp: return "No operation"
+            case .succeeded: return "Succeeded"
+            case .rolledBack: return "Restored"
+            case .rollbackIncomplete: return "Restoration incomplete"
+            }
+        }
+
+        private static func moveAttentionTitle(_ state: BatchMoveState) -> String {
+            switch state {
+            case .rejected: return "Move Could Not Start"
+            case .noOp: return "Nothing Moved"
+            case .succeeded: return "Move Completed with Details"
+            case .rolledBack: return "Move Was Restored"
+            case .rollbackIncomplete: return "Move Restoration Needs Attention"
+            }
+        }
+
+        private static func moveSummary(
+            _ report: BatchMoveReport,
+            mode: BatchStructuralResult.MoveMode
+        ) -> String {
+            switch report.state {
+            case .rejected:
+                return "Move could not start. No items were moved."
+            case .noOp:
+                return "Nothing moved."
+            case .succeeded:
+                switch mode {
+                case .forward(let destination):
+                    let where_ = destination.isEmpty
+                        ? "vault root" : (destination as NSString).lastPathComponent
+                    return "Moved \(itemCountText(report.standing.count)) to \(where_)."
+                case .undo:
+                    return "Undid move of \(itemCountText(report.standing.count))."
+                case .redo:
+                    return "Redid move of \(itemCountText(report.standing.count))."
+                }
+            case .rolledBack:
+                return "Move stopped. Slate restored every item to its original location."
+            case .rollbackIncomplete:
+                return "Move stopped. Slate restored "
+                    + "\(itemCountText(report.rolledBack.count)). "
+                    + "\(itemCountText(report.standing.count)) "
+                    + "\(report.standing.count == 1 ? "remains in its" : "remain in their") "
+                    + "new location."
+            }
+        }
+
+        private static func itemCountText(_ count: Int) -> String {
+            "\(count) \(count == 1 ? "item" : "items")"
+        }
+
+        private static func moveDetailEntryCount(_ report: BatchMoveReport) -> Int {
+            (report.failure == nil ? 0 : 1)
+                + report.rollbackFailures.count
+                + report.envelope.preflightFailures.count
+                + report.rewriteFailures.count
+                + report.envelope.skipped.count
+                + report.standing.count
+                + report.rolledBack.count
+                + report.rewritten.count
+                + report.envelope.planned.count
+        }
+
+        private static func movePreviewEntries(
+            _ report: BatchMoveReport
+        ) -> PreviewAccumulator {
+            var preview = PreviewAccumulator()
+            if let failure = report.failure {
+                preview.append(failureLine(failure))
+            }
+            preview.append(contentsOf: report.rollbackFailures, render: failureLine)
+            preview.append(
+                contentsOf: report.envelope.preflightFailures, render: failureLine)
+            preview.append(contentsOf: report.rewriteFailures) { failure in
+                "Link update failed — \(failure.path): "
+                    + rewriteFailureReason(failure.kind)
+            }
+            preview.append(contentsOf: report.envelope.skipped) { skipped in
+                    "Skipped — \(skipped.item.path): "
+                        + "\(skipReasonLabel(skipped.reason)) — \(skipped.detail)"
+            }
+            preview.append(contentsOf: report.standing) { change in
+                "Standing — \(change.oldPath) → \(change.newPath)"
+            }
+            preview.append(contentsOf: report.rolledBack) { change in
+                "Restored — \(change.newPath) → \(change.oldPath)"
+            }
+            preview.append(contentsOf: report.rewritten) { outcome in
+                "Link updated — \(outcome.path)"
+            }
+            preview.append(contentsOf: report.envelope.planned) { item in
+                "Planned — \(item.path)"
+            }
+            return preview
+        }
+
+        private static func moveDetailEntries(_ report: BatchMoveReport) -> [String] {
+            var lines: [String] = []
+            if let failure = report.failure { lines.append(failureLine(failure)) }
+            lines.append(contentsOf: report.rollbackFailures.map(failureLine))
+            lines.append(contentsOf: report.envelope.preflightFailures.map(failureLine))
+            lines.append(contentsOf: report.rewriteFailures.map {
+                "Link update failed — \($0.path): "
+                    + rewriteFailureReason($0.kind)
+            })
+            lines.append(contentsOf: report.envelope.skipped.map {
+                "Skipped — \($0.item.path): \(skipReasonLabel($0.reason)) — \($0.detail)"
+            })
+            lines.append(contentsOf: report.standing.map {
+                "Standing — \($0.oldPath) → \($0.newPath)"
+            })
+            lines.append(contentsOf: report.rolledBack.map {
+                "Restored — \($0.newPath) → \($0.oldPath)"
+            })
+            lines.append(contentsOf: report.rewritten.map {
+                "Link updated — \($0.path)"
+            })
+            lines.append(contentsOf: report.envelope.planned.map {
+                "Planned — \($0.path)"
+            })
+            return lines
+        }
+    }
+
+    /// Pure, report-driven copy for the batch system-Trash boundary. Keeping
+    /// every state in one exhaustive switch prevents a partial/failed result
+    /// from claiming that zero items moved when core returned exact successes.
+    struct BatchTrashCopy {
+        static let actionLabel = "Move to Trash"
+        static let destructiveWarning = "Slate can't undo this action."
+        static let actionHint =
+            "Move the selected items and folder contents to the system Trash. "
+            + destructiveWarning
+        static let cancelLabel = "Cancel"
+        static let cancelHint = "Keep the selected items. Nothing is moved to Trash."
+        static let doneLabel = "Done"
+        static let checkAgainLabel = "Check Again"
+        static let checkAgainHint =
+            "Refresh the vault and check whether the affected items are still present."
+        static let copyDetailsLabel = "Copy Details and Close"
+        static let copyDetailsHint =
+            "Copies the complete batch report, closes this report, and returns to the files sidebar."
+
+        static func singleFolderConfirmationTitle(name: String) -> String {
+            "Move “\(name)” to Trash?"
+        }
+
+        static func singleFolderConfirmationMessage(
+            name: String,
+            itemCount: Int
+        ) -> String {
+            "Move “\(name)” and its \(countText(itemCount)) to the system Trash. "
+                + destructiveWarning
+        }
+
+        static func singleFolderCancelHint(name: String) -> String {
+            "Keep “\(name)” and everything inside it. Nothing is moved to Trash."
+        }
+
+        static func singleFolderActionHint(name: String) -> String {
+            "Move “\(name)” and everything inside it to the system Trash. "
+                + destructiveWarning
+        }
+
+        static func confirmationTitle(itemCount: Int) -> String {
+            "Move \(countText(itemCount)) to Trash?"
+        }
+
+        static func confirmationMessage(
+            itemCount: Int,
+            nonEmptyFolderCount: Int
+        ) -> String {
+            let folderClause: String
+            if nonEmptyFolderCount > 0 {
+                folderClause = ", including \(countText(nonEmptyFolderCount, noun: "folder")) "
+                    + "with contents,"
+            } else {
+                folderClause = ""
+            }
+            return "Move \(countText(itemCount))\(folderClause) to the system Trash. "
+                + destructiveWarning
+        }
+
+        static func countText(_ count: Int) -> String {
+            "\(count) \(count == 1 ? "item" : "items")"
+        }
+
+        private static func countText(_ count: Int, noun: String) -> String {
+            "\(count) \(count == 1 ? noun : noun + "s")"
+        }
+
+        static func ledgerCount(_ report: BatchTrashReport) -> Int {
+            max(
+                report.envelope.planned.count,
+                report.trashed.count + report.untrashed.count + report.unknown.count)
+        }
+
+        static func announcement(for report: BatchTrashReport) -> String {
+            switch report.state {
+            case .rejected:
+                if !report.unknown.isEmpty {
+                    return "Couldn’t start moving the selected items to Trash. "
+                        + unknownOutcomeSentence(report.unknown.count)
+                        + rescanSentence(report)
+                }
+                return "Couldn’t start moving the selected items to Trash."
+            case .noOp:
+                if !report.unknown.isEmpty {
+                    return unknownOutcomeSentence(report.unknown.count)
+                        + rescanSentence(report)
+                }
+                return "Nothing was moved to Trash."
+            case .succeeded:
+                guard !report.trashed.isEmpty else {
+                    if !report.unknown.isEmpty {
+                        return unknownOutcomeSentence(report.unknown.count)
+                            + rescanSentence(report)
+                    }
+                    return "Trash result could not be reconciled safely."
+                }
+                var message = "Moved \(countText(report.trashed.count)) to Trash."
+                if !report.unknown.isEmpty {
+                    message += " " + unknownOutcomeSentence(report.unknown.count)
+                        + rescanSentence(report)
+                }
+                return message
+            case .partial:
+                let total = ledgerCount(report)
+                let stayed = report.untrashed.count
+                var sentences = [
+                    "Moved \(report.trashed.count) of \(countText(total)) to Trash."
+                ]
+                if stayed > 0 {
+                    sentences.append(
+                        "\(countText(stayed)) \(stayed == 1 ? "was" : "were") not moved.")
+                }
+                if !report.unknown.isEmpty {
+                    sentences.append(unknownOutcomeSentence(report.unknown.count))
+                    if report.requiresRescan { sentences.append("Rescan required.") }
+                }
+                return sentences.joined(separator: " ")
+            case .failed:
+                let total = ledgerCount(report)
+                if !report.unknown.isEmpty {
+                    var sentences: [String] = []
+                    if !report.trashed.isEmpty {
+                        sentences.append(
+                            "Moved \(report.trashed.count) of \(countText(total)) to Trash.")
+                    }
+                    let stayed = report.untrashed.count
+                    if stayed > 0 {
+                        sentences.append(
+                            "\(countText(stayed)) \(stayed == 1 ? "was" : "were") not moved.")
+                    }
+                    sentences.append(unknownOutcomeSentence(report.unknown.count))
+                    if report.requiresRescan { sentences.append("Rescan required.") }
+                    return sentences.joined(separator: " ")
+                }
+                guard !report.trashed.isEmpty else {
+                    return "Couldn’t move \(countText(total)) to Trash."
+                }
+                return "Moved \(report.trashed.count) of \(countText(total)) to Trash, "
+                    + "but the operation did not finish safely."
+            }
+        }
+
+        static func attention(
+            for report: BatchTrashReport
+        ) -> BatchStructuralCopy.Attention {
+            let preview = previewEntries(report)
+            let total = detailEntryCount(report)
+            var message = [announcement(for: report)]
+            message.append(contentsOf: preview.lines)
+            let omitted = total - preview.lines.count
+            if omitted > 0 {
+                message.append("…and \(omitted) more")
+            }
+            return BatchStructuralCopy.Attention(
+                title: attentionTitle(report),
+                message: message.joined(separator: "\n"),
+                inlineMessage: BatchStructuralCopy.previewMessage(
+                    summary: announcement(for: report),
+                    entries: preview.lines,
+                    totalEntryCount: total,
+                    visibleEntryLimit: BatchStructuralCopy.inlinePreviewLimit),
+                hasDetails: total > 0,
+                hasOmittedDetails: total > BatchStructuralCopy.inlinePreviewLimit,
+                previewWorkCount: preview.workCount)
+        }
+
+        static func copiedDetails(for report: BatchTrashReport) -> String {
+            var lines = [
+                "Trash",
+                "State: \(stateLabel(report.state))",
+                "Summary: \(announcement(for: report))",
+            ]
+            if let opID = report.opId {
+                lines.append("Operation ID: \(opID)")
+            }
+            lines.append(contentsOf: detailEntries(report))
+            lines.append(
+                "Reconciliation required: \(report.requiresRescan ? "Yes" : "No")")
+            return lines.joined(separator: "\n")
+        }
+
+        private static func stateLabel(_ state: BatchTrashState) -> String {
+            switch state {
+            case .rejected: return "Rejected"
+            case .noOp: return "No operation"
+            case .succeeded: return "Succeeded"
+            case .partial: return "Partial"
+            case .failed: return "Failed"
+            }
+        }
+
+        private static func attentionTitle(_ report: BatchTrashReport) -> String {
+            if !report.unknown.isEmpty { return "Trash Outcome Needs Review" }
+            switch report.state {
+            case .rejected: return "Trash Could Not Start"
+            case .noOp: return "Nothing Moved to Trash"
+            case .succeeded: return "Trash Completed with Details"
+            case .partial: return "Some Items Were Not Moved"
+            case .failed: return "Trash Did Not Finish Safely"
+            }
+        }
+
+        private static func detailEntryCount(_ report: BatchTrashReport) -> Int {
+            report.bookkeepingFailures.count
+                + (report.untrashed.count * 2)
+                + (report.unknown.count * 2)
+                + report.envelope.preflightFailures.count
+                + report.envelope.skipped.count
+                + report.trashed.count
+                + report.envelope.planned.count
+        }
+
+        private static func previewEntries(
+            _ report: BatchTrashReport
+        ) -> BatchStructuralCopy.PreviewAccumulator {
+            var preview = BatchStructuralCopy.PreviewAccumulator()
+            preview.append(
+                contentsOf: report.bookkeepingFailures,
+                render: BatchStructuralCopy.failureLine)
+            for remainder in report.unknown {
+                guard preview.remaining > 0 else { break }
+                preview.append("Outcome unknown — \(remainder.item.path)")
+                preview.append(BatchStructuralCopy.failureLine(remainder.failure))
+            }
+            for remainder in report.untrashed {
+                guard preview.remaining > 0 else { break }
+                preview.append("Not moved — \(remainder.item.path)")
+                preview.append(BatchStructuralCopy.failureLine(remainder.failure))
+            }
+            preview.append(
+                contentsOf: report.envelope.preflightFailures,
+                render: BatchStructuralCopy.failureLine)
+            preview.append(contentsOf: report.envelope.skipped) { skipped in
+                    "Skipped — \(skipped.item.path): "
+                        + "\(BatchStructuralCopy.skipReasonLabel(skipped.reason)) — "
+                        + skipped.detail
+            }
+            preview.append(contentsOf: report.trashed) { item in
+                "Moved to system Trash — \(item.path)"
+            }
+            preview.append(contentsOf: report.envelope.planned) { item in
+                "Planned — \(item.path)"
+            }
+            return preview
+        }
+
+        private static func detailEntries(_ report: BatchTrashReport) -> [String] {
+            var lines = report.bookkeepingFailures.map(BatchStructuralCopy.failureLine)
+            for remainder in report.unknown {
+                lines.append("Outcome unknown — \(remainder.item.path)")
+                lines.append(BatchStructuralCopy.failureLine(remainder.failure))
+            }
+            for remainder in report.untrashed {
+                lines.append("Not moved — \(remainder.item.path)")
+                lines.append(BatchStructuralCopy.failureLine(remainder.failure))
+            }
+            lines.append(
+                contentsOf: report.envelope.preflightFailures.map(
+                    BatchStructuralCopy.failureLine))
+            lines.append(contentsOf: report.envelope.skipped.map {
+                "Skipped — \($0.item.path): "
+                    + "\(BatchStructuralCopy.skipReasonLabel($0.reason)) — \($0.detail)"
+            })
+            lines.append(contentsOf: report.trashed.map {
+                "Moved to system Trash — \($0.path)"
+            })
+            lines.append(contentsOf: report.envelope.planned.map {
+                "Planned — \($0.path)"
+            })
+            return lines
+        }
+
+        private static func unknownOutcomeSentence(_ count: Int) -> String {
+            "Couldn’t verify whether \(countText(count)) moved to Trash."
+        }
+
+        private static func rescanSentence(_ report: BatchTrashReport) -> String {
+            report.requiresRescan ? " Rescan required." : ""
+        }
+    }
+
+    @Published private(set) var batchStructuralResult: BatchStructuralResult?
+
+    /// One presentation owner shared by the sidebar's 10+ file Open gate and
+    /// MainSplitView's batch-attention result. A second alert is retained in a
+    /// typed deferred slot and can only advance after the active UUID resolves.
+    enum BatchAlertPresentation: Equatable, Identifiable {
+        case open(FileTreeSidebar.OpenSelectionRequest)
+        case result(BatchStructuralResult)
+
+        var id: UUID {
+            switch self {
+            case .open(let request): return request.id
+            case .result(let result): return result.id
+            }
+        }
+    }
+
+    @Published private(set) var activeBatchAlertPresentation: BatchAlertPresentation?
+    @Published private(set) var deferredBatchAlertPresentation: BatchAlertPresentation?
+
+    @discardableResult
+    func enqueueOpenSelection(_ request: FileTreeSidebar.OpenSelectionRequest) -> Bool {
+        guard isCurrentOpenSelection(request) else { return false }
+        enqueueBatchAlert(.open(request))
+        return true
+    }
+
+    func confirmOpenSelection(id: UUID) -> [String] {
+        guard case .open(let request)? = activeBatchAlertPresentation,
+            request.id == id
+        else { return [] }
+        let paths = FileTreeSidebar.resolvedOpenPaths(
+            request,
+            confirmed: true,
+            currentSessionIdentity: currentSession.map(ObjectIdentifier.init))
+        activeBatchAlertPresentation = nil
+        promoteDeferredBatchAlert()
+        return paths
+    }
+
+    @discardableResult
+    func cancelOpenSelection(id: UUID) -> Bool {
+        guard case .open(let request)? = activeBatchAlertPresentation,
+            request.id == id
+        else { return false }
+        activeBatchAlertPresentation = nil
+        promoteDeferredBatchAlert()
+        return true
+    }
+
+    @discardableResult
+    func dismissBatchStructuralResult(id: UUID) -> Bool {
+        guard case .result(let result)? = activeBatchAlertPresentation,
+            result.id == id
+        else { return false }
+        if batchStructuralResult?.id == id {
+            batchStructuralResult = nil
+        }
+        activeBatchAlertPresentation = nil
+        promoteDeferredBatchAlert()
+        return true
+    }
+
+    @discardableResult
+    func copyBatchStructuralDetails(id: UUID) -> Bool {
+        guard case .result(let result)? = activeBatchAlertPresentation,
+            result.id == id
+        else {
+            return false
+        }
+        let details = BatchStructuralCopy.copiedDetails(for: result)
+        return batchStructuralDetailsCopier(details)
+    }
+
+    /// Injectable only so the copy+dismiss interaction is deterministic in
+    /// behavior tests; production owns the one system-pasteboard write here.
+    var batchStructuralDetailsCopier: (String) -> Bool = { details in
+        NSPasteboard.general.clearContents()
+        return NSPasteboard.general.setString(details, forType: .string)
+    }
+
+    /// Copy Details is one UUID-owned action: copy the complete report, then
+    /// dismiss exactly that result and promote its deferred alert (if any).
+    @discardableResult
+    func copyAndDismissBatchStructuralDetails(id: UUID) -> Bool {
+        guard copyBatchStructuralDetails(id: id) else { return false }
+        return dismissBatchStructuralResult(id: id)
+    }
+
+    private func setBatchStructuralResult(_ result: BatchStructuralResult) {
+        batchStructuralResult = result
+        guard result.requiresAttention else {
+            if case .result? = deferredBatchAlertPresentation {
+                deferredBatchAlertPresentation = nil
+            }
+            return
+        }
+        enqueueBatchAlert(.result(result))
+    }
+
+    private func enqueueBatchAlert(_ presentation: BatchAlertPresentation) {
+        guard activeBatchAlertPresentation != nil else {
+            activeBatchAlertPresentation = presentation
+            return
+        }
+        deferredBatchAlertPresentation = presentation
+    }
+
+    private func promoteDeferredBatchAlert() {
+        guard activeBatchAlertPresentation == nil else { return }
+        guard let deferred = deferredBatchAlertPresentation else { return }
+        deferredBatchAlertPresentation = nil
+        guard isCurrentBatchAlert(deferred) else {
+            promoteDeferredBatchAlert()
+            return
+        }
+        activeBatchAlertPresentation = deferred
+    }
+
+    private func isCurrentBatchAlert(_ presentation: BatchAlertPresentation) -> Bool {
+        switch presentation {
+        case .open(let request):
+            return isCurrentOpenSelection(request)
+        case .result(let result):
+            return batchStructuralResult?.id == result.id
+        }
+    }
+
+    private func isCurrentOpenSelection(
+        _ request: FileTreeSidebar.OpenSelectionRequest
+    ) -> Bool {
+        guard let session = currentSession else { return false }
+        return request.sessionIdentity == ObjectIdentifier(session)
+    }
+
+    private func resetBatchAlertPresentations() {
+        activeBatchAlertPresentation = nil
+        deferredBatchAlertPresentation = nil
+        batchStructuralResult = nil
+    }
+
+    typealias BatchMoveRunner =
+        @Sendable (VaultSession, BatchMoveRequest) async throws -> BatchMoveReport
+    typealias BatchTrashRunner =
+        @Sendable (VaultSession, BatchTrashRequest) async throws -> BatchTrashReport
+    typealias BatchDeleteConfirmationProbeRunner =
+        @Sendable (URL, [String]) async -> Int
+    typealias BatchTrashPresenceProbeRunner =
+        @Sendable (URL, Bool) -> BatchTrashPhysicalPresence
+    typealias BatchUndoMoveRunner =
+        @Sendable (VaultSession, Int64) async throws -> BatchMoveReport
+    typealias StructuralBatchRefreshRunner =
+        @MainActor @Sendable (AppState) async -> Void
+    typealias StructuralRenameRunner =
+        @Sendable (VaultSession, String, Bool, String) async throws -> StructuralReport
+
+    var batchMoveRunner: BatchMoveRunner = { session, request in
+        try await Task.detached(priority: .userInitiated) {
+            try session.batchMove(request: request)
+        }.value
+    }
+    var batchTrashRunner: BatchTrashRunner = { session, request in
+        try await Task.detached(priority: .userInitiated) {
+            try session.batchTrash(request: request)
+        }.value
+    }
+    var batchTrashPresenceProbeRunner: BatchTrashPresenceProbeRunner = {
+        url, expectedIsDirectory in
+        AppState.batchTrashPhysicalPresence(
+            at: url, expectedIsDirectory: expectedIsDirectory)
+    }
+    var batchDeleteConfirmationProbeRunner: BatchDeleteConfirmationProbeRunner = {
+        vaultURL, folderPaths in
+        await Task.detached(priority: .userInitiated) {
+            folderPaths.reduce(into: 0) { count, path in
+                let url = vaultURL.appendingPathComponent(path, isDirectory: true)
+                if AppState.batchDeleteFolderRequiresConfirmation(at: url) {
+                    count += 1
+                }
+            }
+        }.value
+    }
+    var batchUndoMoveRunner: BatchUndoMoveRunner = { session, opID in
+        try await Task.detached(priority: .userInitiated) {
+            try session.undoBatchMove(opId: opID)
+        }.value
+    }
+    var structuralBatchRefreshRunner: StructuralBatchRefreshRunner = { state in
+        await state.loadFiles()
+    }
+    /// Deterministic race seam for the accepted two-phase New Folder → Move
+    /// carve-out. Tests park after the folder create releases its owner and
+    /// before the dependent move tries to claim the gate. Nil in production.
+    var createFolderMoveContinuationGateForTesting: (() async -> Void)?
+    /// Deterministic race seam after Duplicate installs its exact dynamic
+    /// destination reservation and before the exclusive native create. Nil in
+    /// production; ownership is revalidated after any test suspension.
+    var duplicateCandidateReservationGateForTesting:
+        (@MainActor @Sendable (String) async -> Void)?
+    var structuralRenameRunner: StructuralRenameRunner = {
+        session, path, isDirectory, newName in
+        try await Task.detached(priority: .userInitiated) {
+            isDirectory
+                ? try session.renameFolder(path: path, newName: newName)
+                : try session.renameFile(path: path, newName: newName)
+        }.value
+    }
 
     /// The tree's currently-selected node (file OR folder), mirrored from
     /// `FileTreeSidebar` so the file-management COMMANDS (which run from the
@@ -336,11 +1401,6 @@ final class AppState: ObservableObject {
         let path: String
         let isDirectory: Bool
     }
-
-    /// The node currently being dragged in the tree (U2-5 drag & drop), recorded
-    /// when a drag starts so the drop handler knows whether it's a directory
-    /// (the drag payload carries only the path). Transient; cleared on drop.
-    @Published var dragSourceNode: TreeSelection?
 
     /// The folder a new note/folder should be created in, given the current
     /// tree selection: the selected folder itself, a selected file's parent
@@ -367,16 +1427,73 @@ final class AppState: ObservableObject {
     /// (the tab must stay open while the user resolves).
     var pendingTabCloseAfterSave: TabID?
 
+    /// Vault-close and vault-switch recovery supersede a narrower tab-close
+    /// prompt. Keep exactly one alert owner so cancelling the newer request
+    /// cannot resurrect an obsolete tab-close dialog.
+    private func supersedePendingTabCloseForVaultTransition() {
+        pendingTabClose = nil
+        pendingTabCloseAfterSave = nil
+    }
+
     /// Open canvas documents keyed by vault-relative path (Milestone T,
     /// #369) — one per path (t2), shared by every pane/tab showing that
     /// canvas. Not @Published: views observe each document directly.
     var canvasDocuments: [String: CanvasDocument] = [:]
+    /// Nil-default deterministic observation seam for the New Canvas native
+    /// boundary. Production never installs one; tests record call-site threads.
+    var canvasNewFileNativeExecutionObserverForTesting:
+        CanvasNewFileNativeExecutionObserver?
+    /// Nil in production. Focused safety tests use this to prove a rejected
+    /// prompt/keyboard action stopped before the native `canvas_apply` call.
+    var canvasApplyObserverForTesting: ((CanvasAction) -> Void)?
+    /// Injectable background preparation seam. Production opens and decodes
+    /// the complete immutable snapshot before activation; tests can force a
+    /// deterministic prepared failure without reaching native state.
+    var canvasNewFilePreloadRunner: CanvasNewFilePreloadRunner = {
+        session, path, observer in
+        CanvasPreparedLoader.prepare(
+            session: session,
+            path: path,
+            observer: observer)
+    }
 
     /// Open base documents keyed by vault-relative path (Milestone N,
     /// #702) or saved-query source — one per source, shared by every
     /// pane/tab showing that base.
     /// Not @Published: views observe each document directly.
     var baseDocuments: [String: BaseDocument] = [:]
+    /// Nil-default native-thread probe shared by Base retarget cleanup and
+    /// preparation. Later Base writer/read refreshes use the same event stream.
+    var baseRetargetNativeExecutionObserverForTesting:
+        BaseRetargetNativeExecutionObserver?
+    var baseRetargetPreloadRunner: BaseRetargetPreloadRunner = {
+        session, request, observer in
+        BasePreparedLoader.prepare(
+            session: session,
+            request: request,
+            observer: observer)
+    }
+    let nativeDocumentPreparationLimiter = NativeDocumentPreparationLimiter()
+    /// Cumulative scheduler tail, retained for lifecycle and deterministic
+    /// tests. Each new call awaits the prior tail plus its own concurrently
+    /// admitted work, while generation/session guards dispose stale prepared
+    /// handles exactly once.
+    var nativeDocumentRetargetTask: Task<Void, Never>?
+
+    /// Latest-wins query-list refresh. Native listing is detached; only this
+    /// generation may publish into the current vault's Queries panel.
+    var baseQueriesRefreshGeneration: UInt64 = 0
+    var baseQueriesRefreshTask: Task<Void, Never>?
+
+    /// Serialized Builder updates. A later edit waits for any admitted native
+    /// write, then supersedes its UI landing in the same vault.
+    var savedQueryUpdateGeneration: UInt64 = 0
+    var savedQueryUpdateTask: Task<Void, Never>?
+
+    /// Latest all-consumer post-write refresh, retained for ordering-sensitive
+    /// writers and deterministic lifecycle tests.
+    var visibleBasesRefreshGeneration: UInt64 = 0
+    var visibleBasesRefreshTask: Task<[String], Never>?
 
     /// Right-pane Queries leaf snapshot (#709): saved queries, `.base`
     /// files, dashboards, and app-level saved-query pins.
@@ -607,13 +1724,25 @@ final class AppState: ObservableObject {
     /// The pending canvas input prompt (#368): non-nil presents the
     /// matching sheet in the canvas container (M6 visible controls).
     @Published var canvasPrompt: CanvasPrompt?
+    /// User-authored prompt text lives with the prompt owner instead of the
+    /// ephemeral sheet. A quarantine or other failed commit therefore cannot
+    /// destroy the only copy when SwiftUI re-renders the sheet.
+    @Published var canvasPromptDraft: String = ""
 
     /// The pending card-picker request (#522/#523): non-nil presents
     /// the reusable proximity-sorted picker in the container.
     @Published var canvasCardPicker: CanvasCardPickerRequest?
 
-    /// #368: the open text-card edit session (sheet; Esc commits — M8).
-    @Published var canvasCardEditor: CanvasCardEditorRequest?
+    /// #368: the open text-card edit session. The draft is owned beside the
+    /// request instead of by the ephemeral sheet so a quarantine-triggered
+    /// remount (and even a later missing-file state) cannot discard it.
+    @Published var canvasCardEditor: CanvasCardEditorRequest? {
+        didSet {
+            guard oldValue?.id != canvasCardEditor?.id else { return }
+            canvasCardEditorDraft = canvasCardEditor?.initialText ?? ""
+        }
+    }
+    @Published var canvasCardEditorDraft: String = ""
 
     /// #373: bumped to move keyboard focus into the canvas filter
     /// field (⌘F while a canvas has focus).
@@ -637,6 +1766,12 @@ final class AppState: ObservableObject {
     /// correctly (a path-keyed funnel cannot distinguish them).
     func activateTab(_ id: TabID) {
         guard let tab = workspace.model.tab(id) else { return }
+        if id != workspace.model.activeGroup.activeTabID,
+            let reason = propertyEditNavigationDisabledReason
+        {
+            postMutationAnnouncement(reason)
+            return
+        }
         clearBaseQuickFilterIfLeavingActiveTab(for: id)
         if case .base(let path) = tab.item {
             activateBaseTab(id, path: path)
@@ -659,7 +1794,9 @@ final class AppState: ObservableObject {
             return
         }
         guard case .markdown(let path) = tab.item else { return }
-        if id == workspace.model.activeGroup.activeTabID, loadedFilePath == path {
+        if id == workspace.model.activeGroup.activeTabID,
+            BaseExactIdentity.matches(loadedFilePath, path)
+        {
             return
         }
         // U4-4 (#473): any tab activation lands keyboard focus in the editor
@@ -678,6 +1815,7 @@ final class AppState: ObservableObject {
         }
         isActivatingTab = true
         defer { isActivatingTab = false }
+        parkPropertiesSourceDraftForTransition()
         workspace.snapshotActiveTab(
             text: currentNoteText, baseline: savedBaselineText,
             contentHash: currentNoteContentHash,
@@ -693,10 +1831,12 @@ final class AppState: ObservableObject {
         restoreParkedOrLoadFromDisk(path: path)
         // Sidebar highlight mirrors the active tab. The sink is latched;
         // `removeDuplicates` additionally swallows same-path switches.
-        if selectedFilePath != path {
+        if !BaseExactIdentity.matches(selectedFilePath, path) {
             selectedFilePath = path
         }
-        fireCollectionLoads(path: path)
+        if noteLoadError == nil {
+            fireCollectionLoads(path: path)
+        }
         scheduleBasesDockFollowActiveRefresh()
     }
 
@@ -708,6 +1848,10 @@ final class AppState: ObservableObject {
     /// always hosts an item (u1_spec §U1-2); with no active tab it is
     /// a no-op.
     func newTab() {
+        if let reason = propertyEditNavigationDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         guard let item = workspace.activeTab?.item else { return }
         // The graph is a workspace-global singleton: Duplicate Tab must
         // not spawn a second graph (round 2 finding 6). It's already the
@@ -760,11 +1904,72 @@ final class AppState: ObservableObject {
             performCloseTab(target)
             return
         }
+        if let tab = workspace.model.tab(target),
+            case .markdown(let path) = tab.item,
+            hasAuthoredPropertyPublicationRecovery(for: path),
+            !hasOtherMarkdownTab(for: path, excluding: target)
+        {
+            postMutationAnnouncement(
+                "Resolve the saved property update awaiting verification in \(filename(of: path)) before closing its final tab. Copy the retained update, reapply it, or use the current version.")
+            pendingTabClose = nil
+            return
+        }
+        if let tab = workspace.model.tab(target),
+            case .markdown(let path) = tab.item,
+            propertyEditBlocksFinalTabClose(path: path, excluding: target)
+        {
+            postMutationAnnouncement(Self.propertyEditInProgressReason)
+            pendingTabClose = nil
+            return
+        }
         let isActive = target == workspace.model.activeGroup.activeTabID
-        let dirty =
+        if isActive, isEditingProperty,
+            let tab = workspace.model.tab(target),
+            case .markdown(let path) = tab.item,
+            BaseExactIdentity.matches(path, loadedFilePath)
+        {
+            postMutationAnnouncement(Self.propertyEditInProgressReason)
+            pendingTabClose = nil
+            return
+        }
+        // Once a save owns this exact active note, a second close must not
+        // present a destructive Discard action that cannot revoke native I/O.
+        // A plain Save followed by close queues the close on that save; an
+        // existing Save-and-close continuation is idempotent.
+        if isActive, isSaving,
+            let tab = workspace.model.tab(target),
+            case .markdown(let path) = tab.item,
+            BaseExactIdentity.matches(path, loadedFilePath)
+        {
+            if pendingTabCloseAfterSave == nil {
+                pendingTabCloseAfterSave = target
+            }
+            pendingTabClose = nil
+            return
+        }
+        let rawBodyDirty =
             isActive
             ? hasUnsavedChanges
             : (workspace.document(for: target)?.hasUnsavedChanges ?? false)
+        let bodyDirty: Bool
+        if let tab = workspace.model.tab(target), case .markdown(let path) = tab.item,
+            hasOtherMarkdownTab(for: path, excluding: target)
+        {
+            bodyDirty = false
+        } else {
+            bodyDirty = rawBodyDirty
+        }
+        let recoveryDirty: Bool
+        if let tab = workspace.model.tab(target), case .markdown(let path) = tab.item {
+            // Recovery is path-owned rather than tab-owned. Closing one clean
+            // duplicate is safe while another tab retains that exact path; the
+            // final owner receives the destructive-resolution prompt.
+            recoveryDirty = hasDirtyNoteRecovery(for: path)
+                && !hasOtherMarkdownTab(for: path, excluding: target)
+        } else {
+            recoveryDirty = false
+        }
+        let dirty = bodyDirty || recoveryDirty
         if dirty {
             pendingTabClose = target
         } else {
@@ -775,20 +1980,66 @@ final class AppState: ObservableObject {
     /// Alert "Save": activate the tab if parked (snapshot/restore through
     /// the identity funnel), then save through the standard path; the close
     /// completes in `performSave`'s success branch.
+    var pendingTabCloseSaveDisabledReason: String? {
+        guard let target = pendingTabClose,
+            let tab = workspace.model.tab(target),
+            case .markdown(let path) = tab.item
+        else { return nil }
+        return dirtyCloseSaveDisabledReason(for: path)
+    }
+
+    var pendingTabCloseDiscardDisabledReason: String? {
+        guard pendingTabClose != nil else { return nil }
+        return inFlightDraftDiscardDisabledReason
+    }
+
+    private func dirtyCloseSaveDisabledReason(for path: String) -> String? {
+        noteSaveDisabledReason(for: path)
+    }
+
     func resolveTabCloseSave() {
         guard let target = pendingTabClose else { return }
-        pendingTabClose = nil
+        if let reason = pendingTabCloseSaveDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         if target != workspace.model.activeGroup.activeTabID {
             activateTab(target)
         }
+        // Transactional close-after-save: a quarantine race, an already
+        // running save, or an unavailable editor must leave the alert and its
+        // dirty draft intact. Arm the continuation only after the standard
+        // save path has returned a concrete task.
+        guard saveCurrentNote() != nil else { return }
         pendingTabCloseAfterSave = target
-        saveCurrentNote()
+        pendingTabClose = nil
     }
 
     /// Alert "Discard": drop the tab's buffer and close it.
     func resolveTabCloseDiscard() {
         guard let target = pendingTabClose else { return }
+        if let reason = inFlightDraftDiscardDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        let discardedRecoveryPath: String? = {
+            guard let tab = workspace.model.tab(target),
+                case .markdown(let path) = tab.item,
+                hasDirtyNoteRecovery(for: path),
+                !hasOtherMarkdownTab(for: path, excluding: target)
+            else { return nil }
+            return path
+        }()
         pendingTabClose = nil
+        if let discardedRecoveryPath {
+            if missingNoteRecoveryDraft(for: discardedRecoveryPath) != nil {
+                discardMissingNoteRecoveryDraft(
+                    path: discardedRecoveryPath,
+                    announce: false)
+            } else {
+                discardRecoverablePropertyDrafts(for: discardedRecoveryPath)
+            }
+        }
         if target == workspace.model.activeGroup.activeTabID {
             // Neutralize the dirty state so the close path's teardown
             // doesn't trip the navigation gate.
@@ -806,7 +2057,32 @@ final class AppState: ObservableObject {
     /// when it shares a path with the closed tab).
     func performCloseTab(_ id: TabID) {
         let closingActive = id == workspace.model.activeGroup.activeTabID
-        let closedTitle = workspace.model.tab(id).map { filename(of: workspace.tabPath($0)) }
+        let closedTab = workspace.model.tab(id)
+        let closedTitle = closedTab.map { filename(of: workspace.tabPath($0)) }
+        let closedItem = closedTab?.item
+        if case .markdown(let path) = closedItem,
+            hasAuthoredPropertyPublicationRecovery(for: path),
+            !hasOtherMarkdownTab(for: path, excluding: id)
+        {
+            postMutationAnnouncement(
+                "Resolve the saved property update awaiting verification in \(filename(of: path)) before closing its final tab. Copy the retained update, reapply it, or use the current version.")
+            pendingTabClose = nil
+            return
+        }
+        if case .markdown(let path) = closedItem,
+            propertyEditBlocksFinalTabClose(path: path, excluding: id)
+        {
+            postMutationAnnouncement(Self.propertyEditInProgressReason)
+            pendingTabClose = nil
+            return
+        }
+        if case .markdown(let path) = closedItem,
+            hasPropertyPublicationUncertainty(for: path),
+            !hasOtherMarkdownTab(for: path, excluding: id),
+            !hasDirtyNoteRecovery(for: path)
+        {
+            clearCloseSafeBulkPropertyPublicationVerification(for: path)
+        }
         if closingActive {
             // The buffer being closed must not leak into the successor's
             // snapshot: tear the active fields down BEFORE the model close
@@ -818,7 +2094,6 @@ final class AppState: ObservableObject {
             clearActiveNoteFields()
         }
         editorCaretReturn[id] = nil
-        let closedItem = workspace.model.tab(id)?.item
         let outcome = workspace.close(id)
         releaseCanvasDocumentIfUnreferenced(closedItem)
         releaseBaseDocumentIfUnreferenced(closedItem)
@@ -875,6 +2150,10 @@ final class AppState: ObservableObject {
 
     func reopenClosedTab() {
         guard isVaultOpen else { return }
+        if let reason = propertyEditNavigationDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         while let record = workspace.popClosedTab() {
             // Dead-record skip runs BEFORE any pane-focus movement: a
             // pure skip must be a focus/park no-op. The first draft
@@ -999,20 +2278,123 @@ final class AppState: ObservableObject {
     /// `savedBaselineText`, and a dirty buffer keeps its edits. Same-path
     /// parked duplicates mirror the fresh fm so their eventual composed
     /// saves can't resurrect stale frontmatter.
-    private func refreshNoteParts(session: VaultSession, path: String) async {
-        let parts: NotePartsBundle? = await Task.detached(priority: .userInitiated) {
-            try? session.readNoteParts(path: path)
+    private enum NotePartsRefreshOutcome {
+        case published
+        case propertiesOnly
+        case changedAgain(currentContentHash: String)
+        case stale
+        case failed(String)
+    }
+
+    private struct NotePartsRefreshSnapshot: Sendable {
+        let parts: NotePartsBundle
+        let properties: [Property]
+        let bodyBaselinesMatch: Bool
+    }
+
+    /// Publish a frontmatter-only write as one validated unit. A fresh hash is
+    /// never paired with stale FM bytes, nor with a body that differs from the
+    /// editor's saved baseline. `allowPropertiesOnlyOnBodyMismatch` is the
+    /// property-conflict Reload path: rows may truthfully show authoritative
+    /// disk values while the old expected hash remains in place so a later
+    /// body save still conflicts instead of overwriting an external body edit.
+    private func refreshNoteParts(
+        session: VaultSession,
+        path: String,
+        expectedContentHash: String? = nil,
+        allowPropertiesOnlyOnBodyMismatch: Bool = false
+    ) async -> NotePartsRefreshOutcome {
+        // Strings are copy-on-write values, so capturing the current saved
+        // baselines is O(number of open duplicates) on MainActor. The
+        // potentially 50 MiB byte comparisons happen with the disk read and
+        // frontmatter parse in the detached worker below.
+        let activeBaselineRequired = BaseExactIdentity.matches(loadedFilePath, path)
+        let activeBaseline = activeBaselineRequired ? savedBaselineText : nil
+        let activeBaselineRevision = noteBodyBaselineRevision
+        let parkedBaselines = workspace.loadedBaselineSnapshots(forPath: path)
+        let parkedBaselineRevision = workspace.loadedBaselineRevision
+        let outcome: Result<NotePartsRefreshSnapshot, VaultError> = await Task.detached(
+            priority: .userInitiated
+        ) {
+            do {
+                let parts = try session.readNoteParts(path: path)
+                let activeBaselineMatches = !activeBaselineRequired
+                    || activeBaseline.map {
+                        BaseExactIdentity.matches($0, parts.body)
+                    } == true
+                let parkedBaselinesMatch = parkedBaselines.allSatisfy {
+                    BaseExactIdentity.matches($0, parts.body)
+                }
+                return .success(
+                    NotePartsRefreshSnapshot(
+                        parts: parts,
+                        properties: parseFrontmatterProperties(
+                            fmSource: parts.fmSource),
+                        bodyBaselinesMatch:
+                            activeBaselineMatches && parkedBaselinesMatch))
+            } catch let error as VaultError {
+                return .failure(error)
+            } catch {
+                return .failure(.Io(message: error.localizedDescription))
+            }
         }.value
-        guard let parts, currentSession === session, loadedFilePath == path else { return }
-        currentNoteFMSource = parts.fmSource
-        bodyByteOffset = Int(parts.bodyByteOffset)
-        bodyLineOffset = Int(parts.bodyLineOffset)
-        currentNoteContentHash = parts.contentHash
+        guard currentSession === session else { return .stale }
+        guard noteBodyBaselineRevision == activeBaselineRevision,
+            workspace.loadedBaselineRevision == parkedBaselineRevision
+        else {
+            return .failed(
+                "The editor baseline changed before Slate could publish the property update.")
+        }
+        let snapshot: NotePartsRefreshSnapshot
+        switch outcome {
+        case .success(let value):
+            snapshot = value
+        case .failure(let error):
+            return .failed(humanReadable(error))
+        }
+        let parts = snapshot.parts
+        if let expectedContentHash,
+            parts.contentHash != expectedContentHash
+        {
+            return .changedAgain(currentContentHash: parts.contentHash)
+        }
+
+        guard snapshot.bodyBaselinesMatch else {
+            guard allowPropertiesOnlyOnBodyMismatch,
+                BaseExactIdentity.matches(loadedFilePath, path)
+            else {
+                return .failed(
+                    "The note body changed externally before Slate could publish the property update.")
+            }
+            // Source Reload still needs to show the authoritative YAML. Keep
+            // the OLD expected hash deliberately: the FM/body pair is not a
+            // safe body-save baseline, so the next composed save must conflict
+            // until the user explicitly resolves the external body edit.
+            currentNoteFMSource = parts.fmSource
+            bodyByteOffset = Int(parts.bodyByteOffset)
+            bodyLineOffset = Int(parts.bodyLineOffset)
+            workspace.mirrorFrontmatterWithoutAdvancingHash(
+                path: path,
+                fmSource: parts.fmSource,
+                bodyByteOffset: Int(parts.bodyByteOffset),
+                bodyLineOffset: Int(parts.bodyLineOffset))
+            currentNoteProperties = snapshot.properties
+            return .propertiesOnly
+        }
+
         workspace.mirrorFrontmatter(
             path: path, fmSource: parts.fmSource,
             bodyByteOffset: Int(parts.bodyByteOffset),
             bodyLineOffset: Int(parts.bodyLineOffset),
             contentHash: parts.contentHash)
+        if BaseExactIdentity.matches(loadedFilePath, path) {
+            currentNoteFMSource = parts.fmSource
+            bodyByteOffset = Int(parts.bodyByteOffset)
+            bodyLineOffset = Int(parts.bodyLineOffset)
+            currentNoteContentHash = parts.contentHash
+            currentNoteProperties = snapshot.properties
+        }
+        return .published
     }
 
     // MARK: - View mode (U3-2, #466)
@@ -1179,7 +2561,13 @@ final class AppState: ObservableObject {
     /// empty-stack ⌘Z announces "Nothing to undo." (t0 §1.3) — a
     /// deliberate VoiceOver affordance a disabled item would silence.
     var undoMenuItemEnabled: Bool {
-        if undoTargetsCanvas { return true }
+        if undoTargetsCanvas { return activeCanvasMutationDisabledReason == nil }
+        if canvasCardEditor != nil,
+            activeCanvasCardEditorDisabledReason != nil
+        {
+            return false
+        }
+        if activeNoteAuthoringDisabledReason != nil { return false }
         // #871: the structural domain stays ALWAYS enabled while the tree
         // owns the chord — an empty-stack ⌘Z announces "Nothing to undo."
         // (`structuralUndo()`), the same deliberate VoiceOver affordance the
@@ -1191,7 +2579,13 @@ final class AppState: ObservableObject {
 
     /// ⇧⌘Z symmetric to `undoMenuItemEnabled`.
     var redoMenuItemEnabled: Bool {
-        if undoTargetsCanvas { return true }
+        if undoTargetsCanvas { return activeCanvasMutationDisabledReason == nil }
+        if canvasCardEditor != nil,
+            activeCanvasCardEditorDisabledReason != nil
+        {
+            return false
+        }
+        if activeNoteAuthoringDisabledReason != nil { return false }
         if undoTargetsStructural { return true }
         guard let manager = responderChainUndoManager else { return true }
         return manager.canRedo
@@ -1373,6 +2767,10 @@ final class AppState: ObservableObject {
     /// row, backlink/outgoing-link/embed activation, search result, palette
     /// command — routes here with an explicit target.
     func openFile(_ path: String, target: OpenTarget) {
+        if let reason = propertyEditNavigationDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         // Record the open into the vault's file-recents (#495) at this
         // single funnel — every user-visible open routes here, launch
         // restores (activateTab) do not. Recorded once per call, before
@@ -1393,7 +2791,7 @@ final class AppState: ObservableObject {
         clearActiveBaseQuickFilter()
         switch target {
         case .currentTab:
-            if selectedFilePath != path {
+            if !BaseExactIdentity.matches(selectedFilePath, path) {
                 selectedFilePath = path
             }
         case .newTab:
@@ -1405,6 +2803,7 @@ final class AppState: ObservableObject {
             // then create + activate the tab; `activateTab` loads the new
             // path (its snapshot guard blocks a double-park: the fields no
             // longer match the new active tab).
+            parkPropertiesSourceDraftForTransition()
             workspace.snapshotActiveTab(
                 text: currentNoteText, baseline: savedBaselineText,
                 contentHash: currentNoteContentHash,
@@ -1426,7 +2825,7 @@ final class AppState: ObservableObject {
             }
             // The new pane holds a duplicate of the previous document;
             // retarget it (same funnel as a sidebar click in that pane).
-            if selectedFilePath != path {
+            if !BaseExactIdentity.matches(selectedFilePath, path) {
                 selectedFilePath = path
             }
         }
@@ -1449,6 +2848,10 @@ final class AppState: ObservableObject {
     /// fields remain valid — no funnel hop needed; the model split already
     /// moved group focus).
     func splitActivePane(axis: SplitBranch.Axis) {
+        if let reason = propertyEditNavigationDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         // A split duplicates the active item into the new pane; for the
         // graph that would violate the workspace-global singleton (round
         // 2 finding 6). Refuse and say why — the graph opens in one pane;
@@ -1505,9 +2908,17 @@ final class AppState: ObservableObject {
         let neighbor = workspace.peekNeighbor(direction)
         switch workspace.resolveFocusRouting(direction, interiorNeighbor: neighbor) {
         case .editorGroup(let target):
+            if let reason = propertyEditNavigationDisabledReason {
+                postMutationAnnouncement(reason)
+                return
+            }
             workspace.focusGroup(target)
             enterEditorGroup(target)
         case .returnToEditor:
+            if let reason = propertyEditNavigationDisabledReason {
+                postMutationAnnouncement(reason)
+                return
+            }
             let landed = workspace.focusEditorRegion()
             enterEditorGroup(landed)
         case .enterTree:
@@ -1561,15 +2972,11 @@ final class AppState: ObservableObject {
         guard workspace.hasSplits else { return }
         let group = workspace.model.activeGroup
         for tab in group.tabs.reversed() {
-            let dirty =
-                tab.id == group.activeTabID
-                ? hasUnsavedChanges
-                : (workspace.document(for: tab.id)?.hasUnsavedChanges ?? false)
-            if dirty {
-                pendingTabClose = tab.id
-                return
-            }
-            performCloseTab(tab.id)
+            requestCloseTab(tab.id)
+            // A surviving tab means the standard close funnel either staged a
+            // recovery prompt or rejected the close because its writer owns
+            // native I/O. Stop the pane sweep without bypassing that owner.
+            if workspace.model.tab(tab.id) != nil { return }
             if workspace.model.group(group.id) == nil { return }
         }
     }
@@ -1629,7 +3036,13 @@ final class AppState: ObservableObject {
     /// note. `hasUnsavedChanges` is derived from
     /// `currentNoteText != savedBaselineText`. Stored separately so
     /// the editor can compare without losing the live buffer.
-    @Published private(set) var savedBaselineText: String?
+    @Published private(set) var savedBaselineText: String? {
+        didSet { noteBodyBaselineRevision &+= 1 }
+    }
+    /// Cheap ownership stamp for detached whole-body validation. A property
+    /// publication may capture String values and compare their bytes off the
+    /// main actor, but it must not publish against a newer editor baseline.
+    private var noteBodyBaselineRevision: UInt64 = 0
     /// blake3 hex digest of the file's content at the moment we
     /// loaded it (or last saved it). Used as
     /// `expectedContentHash` in `saveCurrentNote` so an external
@@ -1654,6 +3067,27 @@ final class AppState: ObservableObject {
     /// file) while `hasUnsavedChanges == true`. Drives the
     /// "Save changes?" prompt. Nil otherwise.
     @Published var pendingNavigation: PendingNavigation?
+    private(set) var pendingNavigationSaveTask: Task<Void, Never>?
+    private var pendingNavigationSaveGeneration: UInt64 = 0
+
+    private func cancelPendingNavigationSave() {
+        pendingNavigationSaveGeneration &+= 1
+        pendingNavigationSaveTask?.cancel()
+        pendingNavigationSaveTask = nil
+    }
+
+    private func ownsPendingNavigationSave(
+        _ generation: UInt64,
+        session: VaultSession,
+        pending: PendingNavigation,
+        noteOwner: NoteAuthoringOwner
+    ) -> Bool {
+        pendingNavigationSaveGeneration == generation
+            && !Task.isCancelled
+            && currentSession === session
+            && pendingNavigation == pending
+            && ownsNoteAuthoring(noteOwner)
+    }
     /// Surfaced when `saveCurrentNote` fails with anything other
     /// than `WriteConflict` (which goes through `currentSaveConflict`
     /// instead). Independent of `noteLoadError` so a load alert
@@ -1665,6 +3099,33 @@ final class AppState: ObservableObject {
     /// Handle on the in-flight save task. Exposed (internal) so
     /// tests can `await state.saveTask?.value`.
     private(set) var saveTask: Task<Void, Never>?
+    /// Owner generation for the native save + every post-write publication.
+    /// Cancellation alone cannot stop an already-dispatched detached FFI call;
+    /// the generation makes every stale continuation inert in a replacement
+    /// vault or newer save lifecycle.
+    private var saveGeneration: UInt64 = 0
+
+    private func beginSaveOwnership() -> UInt64 {
+        saveGeneration &+= 1
+        isSaving = true
+        return saveGeneration
+    }
+
+    private func ownsSave(_ generation: UInt64, session: VaultSession) -> Bool {
+        saveGeneration == generation && currentSession === session
+    }
+
+    private func finishSaveOwnership(_ generation: UInt64) {
+        guard saveGeneration == generation else { return }
+        isSaving = false
+    }
+
+    private func cancelSaveOwnership() {
+        saveGeneration &+= 1
+        saveTask?.cancel()
+        saveTask = nil
+        isSaving = false
+    }
     /// Parsed Markdown headings of the currently-selected note, in
     /// document order. Empty while no note is selected (or when the
     /// note has no `#` headings).
@@ -1716,10 +3177,81 @@ final class AppState: ObservableObject {
     /// Handle on the in-flight property edit task. Exposed (internal)
     /// so tests can `await state.propertyEditTask?.value`.
     private(set) var propertyEditTask: Task<Void, Never>?
+    private var propertyEditGeneration: UInt64 = 0
+    /// Vault-relative note path owned by the current property-edit generation.
+    /// Navigation may move that note off screen after native success, so
+    /// `loadedFilePath` is not sufficient to protect its final tab while
+    /// authoritative publication is still pending.
+    private var propertyEditOwnerPath: String?
+    /// The exact property-edit generation whose native write has committed.
+    /// Same-vault navigation may resume in this post-write publication phase:
+    /// any verification failure is retained in the path-owned recovery
+    /// registry. Before native success, navigation stays blocked because a
+    /// rejected Delete/Add may have no independent draft to preserve.
+    private var propertyEditNativeWriteSucceededGeneration: UInt64?
+
+    private func beginPropertyEditOwnership(path: String) -> UInt64 {
+        propertyEditGeneration &+= 1
+        propertyEditNativeWriteSucceededGeneration = nil
+        propertyEditOwnerPath = path
+        isEditingProperty = true
+        return propertyEditGeneration
+    }
+
+    private func ownsPropertyEdit(
+        _ generation: UInt64,
+        session: VaultSession
+    ) -> Bool {
+        propertyEditGeneration == generation && currentSession === session
+    }
+
+    private func finishPropertyEditOwnership(_ generation: UInt64) {
+        guard propertyEditGeneration == generation else { return }
+        propertyEditNativeWriteSucceededGeneration = nil
+        propertyEditOwnerPath = nil
+        isEditingProperty = false
+    }
+
+    private func cancelPropertyEditOwnership() {
+        propertyEditGeneration &+= 1
+        propertyEditNativeWriteSucceededGeneration = nil
+        propertyEditOwnerPath = nil
+        propertyEditTask?.cancel()
+        propertyEditTask = nil
+        isEditingProperty = false
+    }
+
+    /// Navigation is unsafe only until the current generation has a committed
+    /// native write. Writers, discard, close, and vault replacement continue
+    /// to use the stronger full-duration `isEditingProperty` gate.
+    var propertyEditNavigationDisabledReason: String? {
+        guard isEditingProperty,
+            propertyEditNativeWriteSucceededGeneration != propertyEditGeneration
+        else { return nil }
+        return Self.propertyEditInProgressReason
+    }
+
+    /// Closing a duplicate is safe because the exact path remains mounted.
+    /// The final owner must survive the full property-edit lifetime, including
+    /// the post-native-write interval in which same-vault navigation is safe.
+    private func propertyEditBlocksFinalTabClose(
+        path: String,
+        excluding tabID: TabID
+    ) -> Bool {
+        isEditingProperty
+            && BaseExactIdentity.matches(propertyEditOwnerPath, path)
+            && !hasOtherMarkdownTab(for: path, excluding: tabID)
+    }
 
     /// True when the Add-Property sheet is presented. Driven by
     /// `PropertiesPanel`'s header button.
     @Published var isAddPropertySheetOpen: Bool = false
+    /// Stable owner for a mounted Add Property sheet. `loadedFilePath` can
+    /// become nil if a Check Again proves the note absent; retaining the owner
+    /// keeps the sheet read-only and prevents its draft from targeting a later
+    /// note that happens to become active.
+    @Published private(set) var addPropertySheetOwnerPath: String?
+    private(set) var addPropertySheetOwner: NoteAuthoringOwner?
 
     /// True when the Bulk-Rename sheet is presented. Driven by
     /// `PropertiesPanel`'s header button + Cmd+Shift+R shortcut.
@@ -1739,11 +3271,19 @@ final class AppState: ObservableObject {
     /// trigger the sheet on the next vault open).
     @Published var isCommandPaletteOpen: Bool = false
 
+    /// Persistent validation/native-save feedback for the active builder. It
+    /// stays visible beside the Base path until the user edits that path,
+    /// retries, succeeds, or starts a different builder flow.
+    @Published var baseQueryBuilderSaveError: String?
+
     /// Active Bases query-builder draft (Milestone N4-1, #707).
     /// Non-nil presents `BaseQueryBuilderSheet`; the draft is in-memory
     /// only until N4-2 adds preview/save.
     @Published var activeBaseQueryBuilder: BaseQueryBuilderModel? {
         didSet {
+            if oldValue !== activeBaseQueryBuilder {
+                baseQueryBuilderSaveError = nil
+            }
             guard let previous = oldValue else { return }
             if let current = activeBaseQueryBuilder, previous === current { return }
             baseQueryBuilderPreviewGeneration += 1
@@ -1791,6 +3331,21 @@ final class AppState: ObservableObject {
     /// call so a stale `cancel()` from a previous sheet open doesn't
     /// kill a fresh request.
     private var renameCancelToken: CancelToken?
+
+    /// Deterministic race-test seam. Always nil in production. Apply awaits
+    /// this after its synchronous admission but before the second admission
+    /// immediately adjacent to the native vault-wide writer.
+    var renameApplySecondAdmissionGate: (() async -> Void)?
+    /// Deterministic test seam after the native apply has committed but before
+    /// open-note publication verifies the returned content hashes. Always nil
+    /// in production.
+    var renamePostWritePublishGate: (() async -> Void)?
+    /// Companion deterministic seam: tests can install an outcome-unknown
+    /// ledger entry in the exact gate-to-native window without starting a
+    /// structural operation that the stronger shared ownership must reject.
+    /// Always nil in production.
+    var renameApplySecondAdmissionUnknownItemsForTesting:
+        (() -> [StructuralBatchItem])?
 
     /// Inbound links to the currently-selected note. Updated whenever
     /// `selectedFilePath` changes. Empty while no note is selected or
@@ -2376,6 +3931,9 @@ final class AppState: ObservableObject {
     /// (empty / `.` / `..` / absolute paths, render/save failures).
     /// `nil` when the field is in a valid state.
     @Published var templateNoteNameError: String?
+    /// Exact destination text restored when an admitted render/write fails and
+    /// the name sheet is re-presented. Nil for a fresh flow.
+    @Published private(set) var templateRetryNoteName: String?
 
     /// One-shot channel for "park the editor cursor at byte offset N
     /// of the freshly-loaded note." Used by the create-from-template
@@ -2534,6 +4092,13 @@ final class AppState: ObservableObject {
     private(set) var templatePickerTask: Task<Void, Never>?
     private(set) var templateSelectionTask: Task<Void, Never>?
     private(set) var templateCreateTask: Task<Void, Never>?
+    /// Deterministic C4 race seam after template source I/O and before the
+    /// selection task is allowed to present its next sheet.
+    var templateSelectionLandingGateForTesting: ((TemplateSummary) async -> Void)?
+    /// Deterministic C4 race seam around the deferred template cursor landing.
+    /// Nil in production; tests suspend after the intended note load settles.
+    var templateCursorLandingGateForTesting: (() async -> Void)?
+    private var deferredTemplateCursorLanding: DeferredTemplateCursorLanding?
 
     /// Total announcements fired since the most recent vault was
     /// opened. Internal so the test target can verify the rate-guard
@@ -2820,7 +4385,7 @@ final class AppState: ObservableObject {
         // `handleSelectionChange` (hence `noteLoadTask`) running
         // synchronously on assignment.
         $selectedFilePath
-            .removeDuplicates()
+            .removeDuplicates(by: BaseExactIdentity.matches)
             .dropFirst()
             .sink { [weak self] path in
                 self?.handleSelectionChange(to: path)
@@ -3332,6 +4897,15 @@ final class AppState: ObservableObject {
     /// any in-flight note load and kicks off a fresh one — or clears
     /// content if `path` is nil.
     private func handleSelectionChange(to path: String?) {
+        // A deferred template cursor belongs only to the dirty-gated target.
+        // Preserve it during the gate's rollback (pendingNavigation is still
+        // armed), but drop it if a later ordinary navigation chooses elsewhere.
+        if pendingNavigation == nil,
+            let deferred = deferredTemplateCursorLanding,
+            !BaseExactIdentity.matches(path, deferred.path)
+        {
+            deferredTemplateCursorLanding = nil
+        }
         // Same file re-selected → no-op. This guard matters
         // because the dirty-state rollback below writes
         // `selectedFilePath = loadedFilePath` to re-highlight the
@@ -3340,22 +4914,26 @@ final class AppState: ObservableObject {
         // guard, the rollback would clear and reload the file the
         // user is still editing, blowing away the dirty buffer
         // we're trying to preserve.
-        if let loaded = loadedFilePath, path == loaded {
+        if let loaded = loadedFilePath,
+            BaseExactIdentity.matches(path, loaded)
+        {
             return
         }
         // U1-2 (#454): re-entrancy guard — `activateTab` drives the funnel
         // itself and updates `selectedFilePath` as a mirror; the sink must
         // not run the funnel a second time on that assignment.
         if isActivatingTab { return }
-        // Milestone T/N: non-markdown selections reaching the sink (e.g.
-        // a direct selectedFilePath write) reroute to their document arms —
-        // never the note loader.
-        if let path, path.lowercased().hasSuffix(".canvas") {
-            openCanvasFile(path, target: .currentTab)
-            return
-        }
-        if let path, path.lowercased().hasSuffix(".base") {
-            openBaseFile(path, target: .currentTab)
+        if let loaded = loadedFilePath,
+            !BaseExactIdentity.matches(path, loaded),
+            let reason = inFlightNavigationDisabledReason
+        {
+            postMutationAnnouncement(reason)
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                    !BaseExactIdentity.matches(self.selectedFilePath, loaded)
+                else { return }
+                self.selectedFilePath = loaded
+            }
             return
         }
         // U1-2: a selection naming a path that is already open as ANOTHER
@@ -3366,6 +4944,39 @@ final class AppState: ObservableObject {
             let incomingTab = workspace.activeGroupTab(forPath: path),
             incomingTab.id != workspace.model.activeGroup.activeTabID {
             activateTab(incomingTab.id)
+            return
+        }
+        let propertyRecoverySurvivesElsewhere: Bool = {
+            guard let loaded = loadedFilePath,
+                let activeID = workspace.model.activeGroup.activeTabID
+            else { return false }
+            return hasOtherMarkdownTab(for: loaded, excluding: activeID)
+        }()
+        if let loaded = loadedFilePath,
+            !BaseExactIdentity.matches(path, loaded),
+            hasAuthoredPropertyPublicationRecovery(for: loaded),
+            !propertyRecoverySurvivesElsewhere
+        {
+            postMutationAnnouncement(
+                "Resolve the saved property update awaiting verification in \(filename(of: loaded)) before replacing its final tab. Copy the retained update, reapply it, or use the current version.")
+            DispatchQueue.main.async { [weak self] in
+                guard let self,
+                    !BaseExactIdentity.matches(self.selectedFilePath, loaded)
+                else { return }
+                self.selectedFilePath = loaded
+            }
+            return
+        }
+        // Milestone T/N: non-markdown selections reaching the sink (e.g.
+        // a direct selectedFilePath write) reroute to their document arms —
+        // never the note loader. This lives below the final-owner recovery
+        // guard because these arms replace the current tab in place.
+        if let path, path.lowercased().hasSuffix(".canvas") {
+            openCanvasFile(path, target: .currentTab)
+            return
+        }
+        if let path, path.lowercased().hasSuffix(".base") {
+            openBaseFile(path, target: .currentTab)
             return
         }
         // Dirty-state gate (issue #63): switching files while the
@@ -3380,9 +4991,17 @@ final class AppState: ObservableObject {
         // mirrored on every keystroke). No prompt in that case.
         let dirtyBufferSurvivesElsewhere =
             loadedFilePath.map { loaded in
-                workspace.model.allTabs.filter { $0.item == .markdown(path: loaded) }.count > 1
+                workspace.model.allTabs.filter { tab in
+                    guard case .markdown(let candidate) = tab.item else {
+                        return false
+                    }
+                    return BaseExactIdentity.matches(candidate, loaded)
+                }.count > 1
             } ?? false
-        if hasUnsavedChanges, path != loadedFilePath, !dirtyBufferSurvivesElsewhere {
+        if hasUnsavedChanges,
+            !BaseExactIdentity.matches(path, loadedFilePath),
+            !dirtyBufferSurvivesElsewhere
+        {
             pendingNavigation = .selectFile(path)
             // Roll the selection back so the file list re-highlights
             // the dirty file while the alert is up. The async hop is
@@ -3396,15 +5015,28 @@ final class AppState: ObservableObject {
             if let loaded = loadedFilePath {
                 DispatchQueue.main.async { [weak self] in
                     guard let self else { return }
-                    if self.selectedFilePath != loaded {
+                    if !BaseExactIdentity.matches(self.selectedFilePath, loaded) {
                         self.selectedFilePath = loaded
                     }
                 }
             }
             return
         }
+        if let loaded = loadedFilePath,
+            hasPropertyPublicationUncertainty(for: loaded),
+            !hasAuthoredPropertyPublicationRecovery(for: loaded),
+            !hasDirtyNoteRecovery(for: loaded),
+            !dirtyBufferSurvivesElsewhere
+        {
+            // Replacing the final tab owner is equivalent to closing it: the
+            // already-committed property version will be read normally on a
+            // future open, and leaving a hidden marker would globally disable
+            // structural commands with no Reload control on screen.
+            clearCloseSafeBulkPropertyPublicationVerification(for: loaded)
+        }
         // U1-2: park the outgoing tab's buffer BEFORE the teardown below
         // clears the fields. No-ops when nothing is loaded (guards inside).
+        parkPropertiesSourceDraftForTransition()
         workspace.snapshotActiveTab(
             text: currentNoteText, baseline: savedBaselineText,
             contentHash: currentNoteContentHash,
@@ -3529,6 +5161,12 @@ final class AppState: ObservableObject {
     /// Clear the active-note fields for a transition. Shared by the
     /// selection funnel and `activateTab`.
     func clearActiveNoteFields() {
+        invalidateNoteAuthoringOwnership()
+        // Preserve the view-owned source Binding synchronously before its
+        // owner path disappears. SwiftUI's loaded-path onChange is a UI-state
+        // synchronization belt, not the sole data-preservation boundary.
+        parkPropertiesSourceDraftForTransition()
+        clearMountedPropertiesSourceDraft()
         currentNoteText = nil
         savedBaselineText = nil
         currentNoteContentHash = nil
@@ -3578,20 +5216,31 @@ final class AppState: ObservableObject {
     private func restoreParkedOrLoadFromDisk(path: String) {
         if let activeTabID = workspace.model.activeGroup.activeTabID,
             let parked = workspace.document(for: activeTabID),
-            parked.hasLoaded, parked.path == path {
+            parked.hasLoaded,
+            BaseExactIdentity.matches(parked.path, path)
+        {
             currentNoteText = parked.text
             savedBaselineText = parked.savedBaselineText
             currentNoteContentHash = parked.contentHash
             currentNoteFMSource = parked.fmSource
             bodyByteOffset = parked.bodyByteOffset
             bodyLineOffset = parked.bodyLineOffset
+            _ = restoreParkedPropertiesSourceDraft(
+                for: path,
+                authoritativeFrontmatterSource: parked.fmSource)
             loadedFilePath = path
             hasUnsavedChanges = parked.hasUnsavedChanges
             saveError = parked.saveError
             currentSaveConflict = parked.saveConflict
             isLoadingNote = false
-            noteLoadError = nil
-            if let session = currentSession {
+            if parked.isMissingFromDisk {
+                let name = (path as NSString).lastPathComponent
+                noteLoadError =
+                    "\(name) was moved to Trash and is no longer available."
+            } else {
+                noteLoadError = nil
+            }
+            if !parked.isMissingFromDisk, let session = currentSession {
                 refreshHeadingsAfterSave(session: session, path: path)
             }
         } else {
@@ -3728,7 +5377,9 @@ final class AppState: ObservableObject {
         // U1-5: honor a live ⌘ modifier (row ⌘-click or ⌘Return through
         // the overlay's key monitor — both leave NSApp.currentEvent set).
         let target = openTargetFromCurrentEvent()
-        let wasAlreadyOpen = selectedFilePath == hit.path && target == .currentTab
+        let wasAlreadyOpen =
+            BaseExactIdentity.matches(selectedFilePath, hit.path)
+            && target == .currentTab
         if !wasAlreadyOpen {
             openFile(hit.path, target: target)
         }
@@ -3756,7 +5407,8 @@ final class AppState: ObservableObject {
             // different file while we were waiting) cancels this
             // scroll — sending into the subject would land on the
             // wrong file's anchors.
-            guard self.selectedFilePath == hit.path else { return }
+            guard BaseExactIdentity.matches(self.selectedFilePath, hit.path)
+            else { return }
             // Derive the line UI-side from the loaded body. Up
             // through PR 94 this came back on the QueryHit, but
             // computing it Rust-side meant pulling `body_text`
@@ -3910,6 +5562,23 @@ final class AppState: ObservableObject {
     var isVaultOpen: Bool { currentSession != nil }
 
     func openVault(at url: URL) {
+        if isVaultOpen, let reason = authoredPropertyPublicationRecoveryReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        if isVaultOpen, let reason = inFlightDraftDiscardDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        // `openVault(at:)` is also the lower-level open-document handoff used
+        // by AppKit. When A is already open it must honor the same dirty close
+        // transaction as Open Recent and the folder picker; replacing the
+        // session directly would silently clear every authoring surface.
+        if isVaultOpen, !dirtyVaultClosePaths().isEmpty {
+            switchToRecent(RecentVault(url: url))
+            return
+        }
+        cancelPendingNavigationSave()
         // MainSplitView posts the initial open announcement when the newly
         // mounted interface is ready. It stays mounted during a direct A→B
         // switch, so remember that case and announce it here after B is fully
@@ -3946,6 +5615,7 @@ final class AppState: ObservableObject {
             // Drop document handles while `currentSession` still names the
             // previous vault. Calling close on the freshly-opened session
             // would pair old native handles with the wrong registry.
+            resetBaseRefreshTasksForVaultTransition()
             releaseAllCanvasDocuments()
             releaseAllBaseDocuments()
             releaseAllBaseEmbedDocuments()
@@ -3953,12 +5623,21 @@ final class AppState: ObservableObject {
             // A directly reopened vault replaces the operation lifecycle too.
             // Cancel/reset before installing the new session so an old task
             // resuming later cannot own the new vault's saving/editing flags.
-            saveTask?.cancel()
-            saveTask = nil
-            isSaving = false
-            propertyEditTask?.cancel()
-            propertyEditTask = nil
-            isEditingProperty = false
+            cancelVaultCloseSaveAll()
+            cancelSaveOwnership()
+            cancelPropertyEditOwnership()
+            dismissAddPropertySheet()
+            currentPropertyEditConflict = nil
+            propertyEditError = nil
+            // A direct A→B open bypasses `closeVault`. Tear down A's active
+            // note while its workspace still owns the buffer, before the
+            // vault-scoped recovery registries and tabs are reset below.
+            // Relying on `selectedFilePath = nil` is unsafe here: its normal
+            // selection funnel is dirty-gated and can roll back to A's path,
+            // allowing an equal relative path in B to inherit A's text.
+            cancelNoteScopedWork()
+            clearActiveNoteFields()
+            resetVaultScopedPropertyRecovery()
             // #876 Codex round 2: Open Vault / Open Recent reach here
             // WITHOUT `closeVault`, so vault A's live search must be torn
             // down too — else the still-open overlay shows A's results
@@ -3972,6 +5651,8 @@ final class AppState: ObservableObject {
             // per-vault `searchRecents` load below then reflects B.
             closeSearchOverlay()
             searchQuery = ""
+            deferredTemplateCursorLanding = nil
+            invalidateNoteAuthoringOwnership()
             currentSession = session
             currentVaultURL = url
             lastError = nil
@@ -4060,8 +5741,12 @@ final class AppState: ObservableObject {
             pendingFolderDelete = nil
             // #852: the batch move sheet / batch delete confirmation are tied
             // to the old vault's selection — drop them for the same reason.
+            pendingMove = nil
             pendingBatchMove = nil
             pendingBatchDelete = nil
+            renamingNode = nil
+            structuralRenameError = nil
+            resetBatchAlertPresentations()
             scanProgress = nil
             scanAnnouncementCount = 0
             scanAnnouncementLastMessage = nil
@@ -4249,9 +5934,26 @@ final class AppState: ObservableObject {
         // Already the open vault → no-op (the menu also disables the current
         // vault's row; this guards the programmatic path).
         guard entry.path != currentVaultURL?.path else { return }
+        if let reason = authoredPropertyPublicationRecoveryReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        if let reason = inFlightDraftDiscardDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        // Do not close the current vault for a stale recent. `openRecent` also
+        // performs this check, but direct switch callers need the same
+        // preservation guarantee before the close half of the transition.
+        guard Self.vaultDirectoryExists(entry) else {
+            missingRecentVault = entry
+            return
+        }
+        supersedePendingTabCloseForVaultTransition()
         pendingVaultSwitchTarget = entry
         let parkedDirty = workspace.dirtyParkedDocuments()
-        if parkedDirty.isEmpty {
+        let recoveryPaths = uncommittedNoteDraftPaths()
+        if parkedDirty.isEmpty, recoveryPaths.isEmpty {
             if hasUnsavedChanges {
                 // Single dirty document → "Save changes?" (pendingNavigation
                 // = .closeVault). On Save/Discard the resolver calls
@@ -4264,7 +5966,7 @@ final class AppState: ObservableObject {
             }
         } else {
             // Multiple dirty tabs → Save All / Discard All / Cancel prompt.
-            pendingVaultClose = parkedDirty.count + (hasUnsavedChanges ? 1 : 0)
+            pendingVaultClose = dirtyVaultClosePaths().count
         }
     }
 
@@ -4287,7 +5989,11 @@ final class AppState: ObservableObject {
             missingRecentVault = entry
             return
         }
-        openVault(at: URL(fileURLWithPath: entry.path))
+        if isVaultOpen {
+            switchToRecent(entry)
+        } else {
+            openVault(at: URL(fileURLWithPath: entry.path))
+        }
     }
 
     /// Whether a directory exists at the entry's path — the existence
@@ -4321,7 +6027,11 @@ final class AppState: ObservableObject {
         // panel — cancelling then strands it open, choosing opens two.
         hasAttemptedLaunchRestore = true
         guard let url = vaultPicker() else { return }
-        openVault(at: url)
+        if isVaultOpen {
+            switchToRecent(RecentVault(url: url))
+        } else {
+            openVault(at: url)
+        }
     }
 
     /// Directory-picker seam. Production runs the real `NSOpenPanel`
@@ -4441,21 +6151,33 @@ final class AppState: ObservableObject {
     /// - Clean editor → closes immediately and posts the
     ///   announcement inline here.
     func closeVaultFromUserAction() {
+        if let reason = authoredPropertyPublicationRecoveryReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        if let reason = inFlightDraftDiscardDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        supersedePendingTabCloseForVaultTransition()
         // U1-2: the dirty check aggregates over every tab. With no parked
         // dirty documents the flow is exactly the pre-tabs behavior (the
         // active document routes through the existing single-file alert).
         let parkedDirty = workspace.dirtyParkedDocuments()
-        if parkedDirty.isEmpty {
+        let recoveryPaths = uncommittedNoteDraftPaths()
+        if parkedDirty.isEmpty, recoveryPaths.isEmpty {
             if hasUnsavedChanges {
                 attemptCloseVault()
             } else {
-                closeVault()
-                postAccessibilityAnnouncement(
-                    "Vault closed. Returned to the welcome screen."
-                )
+                if closeVault() {
+                    announcer.post(
+                        "Vault closed. Returned to the welcome screen.",
+                        priority: .medium
+                    )
+                }
             }
         } else {
-            pendingVaultClose = parkedDirty.count + (hasUnsavedChanges ? 1 : 0)
+            pendingVaultClose = dirtyVaultClosePaths().count
         }
     }
 
@@ -4466,19 +6188,92 @@ final class AppState: ObservableObject {
 
     /// Test hook for the sequential Save All chain.
     private(set) var vaultCloseSaveAllTask: Task<Void, Never>?
+    /// Owner generation for the outer sequential Save All continuation.
+    /// Inner saves already capture a session; this closes the separate race
+    /// where the outer loop resumes after a discard/switch and acts on the
+    /// replacement vault's clean global fields.
+    private var vaultCloseSaveAllGeneration = 0
+
+    private func cancelVaultCloseSaveAll() {
+        vaultCloseSaveAllGeneration &+= 1
+        vaultCloseSaveAllTask?.cancel()
+        vaultCloseSaveAllTask = nil
+    }
+
+    private func ownsVaultCloseSaveAll(
+        generation: Int,
+        session: VaultSession
+    ) -> Bool {
+        !Task.isCancelled
+            && vaultCloseSaveAllGeneration == generation
+            && currentSession === session
+    }
+
+    /// Save All is unavailable if any dirty note is covered by an
+    /// outcome-unknown Trash root. Include parked tabs up front so the chain
+    /// cannot save one note, activate a quarantined note, then spin on a nil
+    /// save. The first exact capability reason drives both the alert and the
+    /// defensive action.
+    var pendingVaultCloseSaveAllDisabledReason: String? {
+        guard pendingVaultClose != nil else { return nil }
+        for path in dirtyVaultClosePaths() {
+            if let reason = dirtyCloseSaveDisabledReason(for: path) { return reason }
+        }
+        return nil
+    }
+
+    var pendingVaultCloseDiscardAllDisabledReason: String? {
+        guard pendingVaultClose != nil else { return nil }
+        return inFlightDraftDiscardDisabledReason
+    }
 
     /// "Save All": save every dirty tab through the STANDARD save path
     /// (activate → saveCurrentNote → await), sequentially. Aborts on the
     /// first conflict/error, leaving the user on that tab with the standard
     /// resolution dialog up; the vault stays open. Closes on full success.
     func resolveVaultCloseSaveAll() {
-        pendingVaultClose = nil
-        vaultCloseSaveAllTask = Task { [weak self] in
+        guard pendingVaultClose != nil, let session = currentSession else { return }
+        if let reason = authoredPropertyPublicationRecoveryReason {
+            pendingVaultClose = nil
+            postMutationAnnouncement(reason)
+            return
+        }
+        if let reason = pendingVaultCloseSaveAllDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        cancelVaultCloseSaveAll()
+        let generation = vaultCloseSaveAllGeneration
+        let task = Task { [weak self] in
             guard let self else { return }
+            defer {
+                if self.vaultCloseSaveAllGeneration == generation {
+                    self.vaultCloseSaveAllTask = nil
+                }
+            }
+            guard self.ownsVaultCloseSaveAll(
+                generation: generation, session: session)
+            else { return }
+            var startedSaving = false
             while true {
                 if self.hasUnsavedChanges {
-                    self.saveCurrentNote()
-                    await self.saveTask?.value
+                    // A quarantine can arrive after the synchronous preflight
+                    // but before this task runs, or between two sequential
+                    // saves. Never await an optional/stale task: retain or
+                    // re-present the prompt and stop on a nil admission.
+                    guard let save = self.saveCurrentNote() else {
+                        let dirtyCount = self.dirtyVaultClosePaths().count
+                        self.pendingVaultClose = dirtyCount > 0 ? dirtyCount : nil
+                        return
+                    }
+                    if !startedSaving {
+                        self.pendingVaultClose = nil
+                        startedSaving = true
+                    }
+                    await save.value
+                    guard self.ownsVaultCloseSaveAll(
+                        generation: generation, session: session)
+                    else { return }
                     if self.currentSaveConflict != nil || self.saveError != nil {
                         // U4-3: an aborted Save All also aborts an in-flight
                         // vault switch — the vault stays open, so a stale
@@ -4491,23 +6286,56 @@ final class AppState: ObservableObject {
                 }
                 guard let next = self.workspace.dirtyParkedDocuments().first else { break }
                 self.activateTab(next.id)
+                guard self.ownsVaultCloseSaveAll(
+                    generation: generation, session: session)
+                else { return }
             }
-            self.closeVault()
-            postAccessibilityAnnouncement(
-                "All changes saved. Vault closed. Returned to the welcome screen."
-            )
+            // A property editor can become dirty while a sequential body Save
+            // All is running. It has no body-save representation, so restore
+            // the prompt instead of claiming all changes were saved.
+            if !self.uncommittedNoteDraftPaths().isEmpty {
+                self.pendingVaultClose = self.dirtyVaultClosePaths().count
+                if let reason = self.pendingVaultCloseSaveAllDisabledReason {
+                    self.postMutationAnnouncement(reason)
+                }
+                return
+            }
+            guard self.ownsVaultCloseSaveAll(
+                generation: generation, session: session)
+            else { return }
+            self.pendingVaultClose = nil
+            let completesVaultSwitch = self.pendingVaultSwitchTarget != nil
+            if self.closeVault(), !completesVaultSwitch {
+                self.announcer.post(
+                    "All changes saved. Vault closed. Returned to the welcome screen.",
+                    priority: .medium
+                )
+            }
         }
+        vaultCloseSaveAllTask = task
     }
 
     /// "Discard All": close without saving any tab. The per-tab buffers are
     /// dropped by `closeVault`'s workspace reset.
     func resolveVaultCloseDiscardAll() {
+        if let reason = authoredPropertyPublicationRecoveryReason {
+            pendingVaultClose = nil
+            postMutationAnnouncement(reason)
+            return
+        }
+        if let reason = inFlightDraftDiscardDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         pendingVaultClose = nil
         hasUnsavedChanges = false
-        closeVault()
-        postAccessibilityAnnouncement(
-            "Changes discarded. Vault closed. Returned to the welcome screen."
-        )
+        let completesVaultSwitch = pendingVaultSwitchTarget != nil
+        if closeVault(), !completesVaultSwitch {
+            announcer.post(
+                "Changes discarded. Vault closed. Returned to the welcome screen.",
+                priority: .medium
+            )
+        }
     }
 
     func resolveVaultCloseCancel() {
@@ -4517,7 +6345,50 @@ final class AppState: ObservableObject {
         pendingVaultSwitchTarget = nil
     }
 
-    func closeVault() {
+    /// Property/source recovery identities are vault-owned even though their
+    /// keys are relative paths. A direct A→B open does not pass through
+    /// `closeVault`, so both transition funnels must clear these registries
+    /// before B can restore an equal path such as `alpha.md`.
+    private func resetVaultScopedPropertyRecovery() {
+        missingNoteRecoveryDrafts = [:]
+        preservedPropertyDrafts = [:]
+        propertyPublicationUncertainties = [:]
+        propertyDraftResetRequests = [:]
+        parkedPropertiesSourceDrafts = [:]
+        propertiesSourceDraft = ""
+        propertiesSourceDraftPath = nil
+        propertiesSourceCommitRequests = [:]
+        propertiesSourceShowing = false
+        propertiesSourceError = nil
+    }
+
+    @discardableResult
+    func closeVault() -> Bool {
+        if let reason = authoredPropertyPublicationRecoveryReason {
+            pendingVaultSwitchTarget = nil
+            pendingVaultClose = nil
+            if case .closeVault? = pendingNavigation {
+                pendingNavigation = nil
+            }
+            postMutationAnnouncement(reason)
+            return false
+        }
+        if let reason = inFlightDraftDiscardDisabledReason {
+            pendingVaultSwitchTarget = nil
+            pendingVaultClose = nil
+            if case .closeVault? = pendingNavigation {
+                pendingNavigation = nil
+            }
+            postMutationAnnouncement(reason)
+            return false
+        }
+        invalidateNoteAuthoringOwnership()
+        cancelSaveOwnership()
+        cancelPendingNavigationSave()
+        // Cancel outer close continuations before clearing globals. Their
+        // inner save tasks already carry session guards; their wrappers must
+        // not resume and interpret a replacement vault as their completion.
+        cancelVaultCloseSaveAll()
         // U1-6: persist the layout FIRST — the teardown below clears
         // `currentVaultURL`, and the save is a no-op once it's gone.
         saveWorkspaceLayout()
@@ -4556,6 +6427,7 @@ final class AppState: ObservableObject {
         // with the `requestCommandPalette()` open-guard.
         isCommandPaletteOpen = false
         activeBaseQueryBuilder = nil
+        resetBaseRefreshTasksForVaultTransition()
         resetBaseQueriesForClosedVault()
         // Quick switcher (#495): same stuck-bool reset as the palette,
         // enforced by CloseVaultSheetParityTests. Also drop the in-memory
@@ -4587,7 +6459,7 @@ final class AppState: ObservableObject {
         // that scrapes every `@Published var is*Open` and asserts
         // each is reset here, so a newly-added sheet bool that
         // misses this method fails CI.
-        isAddPropertySheetOpen = false
+        dismissAddPropertySheet()
         // Bulk-rename: clear the sheet bool plus the in-flight
         // bookkeeping. A rename task in flight against the old
         // vault would race the close — the Rust call holds the
@@ -4603,6 +6475,9 @@ final class AppState: ObservableObject {
         renameCancelToken = nil
         renameTask?.cancel()
         renameTask = nil
+        renameApplySecondAdmissionGate = nil
+        renamePostWritePublishGate = nil
+        renameApplySecondAdmissionUnknownItemsForTesting = nil
         pendingRenameReport = nil
         isRenameInFlight = false
         renameError = nil
@@ -4615,11 +6490,10 @@ final class AppState: ObservableObject {
         // matters most: `currentPropertyEditConflict` drives a
         // `.alert(...)` in MainSplitView; without the reset the
         // conflict dialog survives onto the welcome screen.
-        propertyEditTask?.cancel()
-        propertyEditTask = nil
-        isEditingProperty = false
+        cancelPropertyEditOwnership()
         propertyEditError = nil
         currentPropertyEditConflict = nil
+        resetVaultScopedPropertyRecovery()
         // Template picker: cancel any in-flight picker / select /
         // create task so they can't write back into the old
         // session's state, then drop the flow + listed templates
@@ -4632,8 +6506,10 @@ final class AppState: ObservableObject {
         templateSelectionTask = nil
         templateCreateTask?.cancel()
         templateCreateTask = nil
+        deferredTemplateCursorLanding = nil
         pendingTemplateFlow = .idle
         templateNoteNameError = nil
+        templateRetryNoteName = nil
         availableTemplates = []
         // Release native document handles before clearing `currentSession`;
         // the release helpers need the session that created those handles.
@@ -4687,8 +6563,12 @@ final class AppState: ObservableObject {
         treeSelectedNode = nil
         treeExpandedDirPaths = []  // #873: expansion dies with the vault
         pendingFolderDelete = nil  // #860: staged confirmation dies with it
+        pendingMove = nil  // U2-5: single Move capture dies with the vault
         pendingBatchMove = nil  // #852: batch sheet dies with the vault
         pendingBatchDelete = nil  // #852: batch confirmation dies with the vault
+        renamingNode = nil  // inline rename belongs to the closed vault/session
+        structuralRenameError = nil
+        resetBatchAlertPresentations()  // FL-03: typed alerts belong to the closed session
         currentNoteText = nil
         currentNoteHeadings = []
         noteLoadError = nil
@@ -4773,6 +6653,7 @@ final class AppState: ObservableObject {
             openRecent(target)
             announceNextOpenAfterClose = false
         }
+        return true
     }
 
     /// Drop a recent-vaults entry by path. Used by the welcome screen
@@ -5218,7 +7099,9 @@ final class AppState: ObservableObject {
         // on. Same reasoning as `loadCurrentLinks`: the newer task
         // already set the flag, and clearing it here would flicker
         // the loading state off briefly.
-        guard !Task.isCancelled, currentSession === session, selectedFilePath == path else { return }
+        guard !Task.isCancelled, currentSession === session,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
 
         switch result {
         case .success(let (parts, headings)):
@@ -5228,6 +7111,9 @@ final class AppState: ObservableObject {
             currentNoteFMSource = parts.fmSource
             bodyByteOffset = Int(parts.bodyByteOffset)
             bodyLineOffset = Int(parts.bodyLineOffset)
+            _ = restoreParkedPropertiesSourceDraft(
+                for: path,
+                authoritativeFrontmatterSource: parts.fmSource)
             loadedFilePath = path
             hasUnsavedChanges = false
             // The editor + reading view live in BODY space; backend
@@ -5237,7 +7123,9 @@ final class AppState: ObservableObject {
             currentNoteHeadings = Self.rebasedToBody(
                 headings, prefixBytes: Int(parts.bodyByteOffset))
             noteLoadError = nil
+            deliverDeferredTemplateCursorIfReady(session: session, path: path)
         case .failure(let error):
+            clearDeferredTemplateCursorIfMatching(session: session, path: path)
             currentNoteText = nil
             savedBaselineText = nil
             currentNoteContentHash = nil
@@ -5272,7 +7160,7 @@ final class AppState: ObservableObject {
     /// lands when we wire link activation in #C5. Vaults with more
     /// than 200 inbound links to a single note are vanishingly rare
     /// in V1 territory and will get a "+ more" affordance later.
-    func loadCurrentLinks(path: String) async {
+    func loadCurrentLinks(path: String, publishProperties: Bool = true) async {
         guard let session = currentSession else { return }
         // Codex round 7: same late-body guard as `loadCurrentNote` —
         // explicit-clear loaders must never set a flag under a
@@ -5308,14 +7196,18 @@ final class AppState: ObservableObject {
         // flag to `true`, so clearing it here would flicker the
         // spinner off mid-load. The newer task owns the flag's
         // lifecycle from this point on.
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled, currentSession === session,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
 
         switch result {
         case .success(let (backlinks, outgoing, properties)):
             currentBacklinks = backlinks
             currentOutgoingLinks = outgoing
             currentOutgoingLinksPath = path
-            currentNoteProperties = properties
+            if publishProperties {
+                currentNoteProperties = properties
+            }
             linksLoadError = nil
         case .failure(let error):
             currentBacklinks = []
@@ -5324,7 +7216,9 @@ final class AppState: ObservableObject {
             // + error surface) — stamp ownership so reading classifies
             // against it rather than a previous note's records.
             currentOutgoingLinksPath = path
-            currentNoteProperties = []
+            if publishProperties {
+                currentNoteProperties = []
+            }
             linksLoadError = humanReadable(error)
         }
         isLoadingLinks = false
@@ -5383,7 +7277,9 @@ final class AppState: ObservableObject {
         // clear the NEW note's resolutions through the empty-targets
         // path, nor set the loading flag after the newer chain has
         // finished. Mirrors the landing guard below.
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
         if embedTargets.isEmpty {
             currentNoteEmbedResolutions = [:]
             embedsLoadError = nil
@@ -5439,7 +7335,9 @@ final class AppState: ObservableObject {
         // panel to "not yet resolved" placeholders. Set explicitly
         // at the end, gated on the selection-change check below —
         // same pattern `loadCurrentLinks` uses.
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
 
         currentNoteEmbedResolutions = resolutions
         embedsLoadError = nil
@@ -5488,7 +7386,7 @@ final class AppState: ObservableObject {
 
         // Drop the write if the user navigated away mid-resolve — same
         // stale-guard the batch path uses.
-        guard selectedFilePath == path else { return }
+        guard BaseExactIdentity.matches(selectedFilePath, path) else { return }
         // Merge (never replace): the batch may have populated other keys while
         // this single resolve was in flight.
         currentNoteEmbedResolutions[target] = resolution
@@ -5521,7 +7419,9 @@ final class AppState: ObservableObject {
                 }
             }
             .value
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
         switch result {
         case .success(let blocks):
             currentNoteMathBlocks = blocks
@@ -5550,7 +7450,9 @@ final class AppState: ObservableObject {
                 }
             }
             .value
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
         switch result {
         case .success(let blocks):
             currentNoteCodeBlocks = blocks
@@ -5618,7 +7520,9 @@ final class AppState: ObservableObject {
                 }
             }
             .value
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
         switch result {
         case .success(let (refs, renders)):
             currentNoteCitationRefs = refs
@@ -5925,7 +7829,9 @@ final class AppState: ObservableObject {
                 }
             }
             .value
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
         switch result {
         case .success(let blocks):
             currentNoteDiagramBlocks = blocks
@@ -6089,7 +7995,9 @@ final class AppState: ObservableObject {
         }
         .value
 
-        guard !Task.isCancelled, selectedFilePath == path else { return }
+        guard !Task.isCancelled,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return }
 
         switch result {
         case .success(let tasks):
@@ -6121,7 +8029,7 @@ final class AppState: ObservableObject {
             }
             .value
             guard let self else { return }
-            guard self.loadedFilePath == path else { return }
+            guard BaseExactIdentity.matches(self.loadedFilePath, path) else { return }
             self.currentNoteTasks = tasks ?? []
         }
     }
@@ -6146,7 +8054,7 @@ final class AppState: ObservableObject {
             }
             .value
             guard let self else { return }
-            guard self.loadedFilePath == path else { return }
+            guard BaseExactIdentity.matches(self.loadedFilePath, path) else { return }
             self.currentNoteMathBlocks = blocks ?? []
         }
     }
@@ -6162,7 +8070,7 @@ final class AppState: ObservableObject {
             }
             .value
             guard let self else { return }
-            guard self.loadedFilePath == path else { return }
+            guard BaseExactIdentity.matches(self.loadedFilePath, path) else { return }
             self.currentNoteCodeBlocks = blocks ?? []
         }
     }
@@ -6178,7 +8086,7 @@ final class AppState: ObservableObject {
             }
             .value
             guard let self else { return }
-            guard self.loadedFilePath == path else { return }
+            guard BaseExactIdentity.matches(self.loadedFilePath, path) else { return }
             self.currentNoteDiagramBlocks = blocks ?? []
         }
     }
@@ -6200,6 +8108,7 @@ final class AppState: ObservableObject {
     func toggleCurrentTask(_ task: TaskItem) -> Task<Void, Never>? {
         guard let session = currentSession else { return nil }
         guard let path = loadedFilePath else { return nil }
+        guard admitBatchTrashWrite(to: [path]) else { return nil }
         // #158: The editor buffer is the user's authority. The
         // toggle's post-save reload (`reloadEditorBufferAfterToggle`)
         // unconditionally overwrites `currentNoteText` from disk —
@@ -6239,6 +8148,7 @@ final class AppState: ObservableObject {
         newChar: String,
         expectedHash: String?
     ) async {
+        guard admitBatchTrashWrite(to: [path]) else { return }
         let outcome: Result<SaveReport, VaultError> = await Task.detached(
             priority: .userInitiated
         ) {
@@ -6262,7 +8172,7 @@ final class AppState: ObservableObject {
         // toggle completion. Drop the result rather than mutating
         // state attributed to a file that's no longer the active
         // selection.
-        guard loadedFilePath == path else { return }
+        guard BaseExactIdentity.matches(loadedFilePath, path) else { return }
 
         switch outcome {
         case .success(let report):
@@ -6340,7 +8250,7 @@ final class AppState: ObservableObject {
             }
             .value
             guard let self, let parts else { return }
-            guard self.loadedFilePath == path else { return }
+            guard BaseExactIdentity.matches(self.loadedFilePath, path) else { return }
             self.currentNoteText = parts.body
             self.savedBaselineText = parts.body
             self.currentNoteFMSource = parts.fmSource
@@ -6649,13 +8559,14 @@ final class AppState: ObservableObject {
     @discardableResult
     func toggleVaultTask(_ row: TaskWithLocation) -> Task<Void, Never>? {
         guard let session = currentSession else { return nil }
+        guard admitBatchTrashWrite(to: [row.path]) else { return nil }
         // #158: Toggling the currently-loaded file's task would
         // clobber any unsaved buffer edits on the post-save
         // reload — see the comment in `toggleCurrentTask` for the
         // full reasoning. Toggles against *other* files in the
         // review are safe because there's no live editor buffer
         // to lose, so we only block the loaded-file case.
-        if row.path == loadedFilePath && hasUnsavedChanges {
+        if BaseExactIdentity.matches(row.path, loadedFilePath), hasUnsavedChanges {
             postAccessibilityAnnouncement(
                 "Cannot toggle task. The editor has unsaved changes in \(filename(of: row.path)). Save the note first.",
                 priority: .high
@@ -6684,6 +8595,7 @@ final class AppState: ObservableObject {
         ordinal: UInt32,
         newChar: String
     ) async {
+        guard admitBatchTrashWrite(to: [path]) else { return }
         let outcome: Result<SaveReport, VaultError> = await Task.detached(
             priority: .userInitiated
         ) {
@@ -6716,7 +8628,7 @@ final class AppState: ObservableObject {
             // reload so this toggle's `taskToggleTask` resolves
             // only after the full settle lands (#161 — lets tests
             // skip the `Task.sleep(50ms)` pattern).
-            if loadedFilePath == path {
+            if BaseExactIdentity.matches(loadedFilePath, path) {
                 let refresh = refreshTasksAfterSave(session: session, path: path)
                 tasksRefreshTask = refresh
                 let reload = reloadEditorBufferAfterToggle(session: session, path: path)
@@ -6743,7 +8655,7 @@ final class AppState: ObservableObject {
         let line = Int(row.task.line)
 
         // If we're already on the file, just scroll.
-        if selectedFilePath == target {
+        if BaseExactIdentity.matches(selectedFilePath, target) {
             // U3-3: task lines are whole-file; the editor buffer is body.
             lineScrollRequest.send(bodyLine(fromFileLine: line))
             postAccessibilityAnnouncement(
@@ -6767,7 +8679,8 @@ final class AppState: ObservableObject {
                 await pendingLoad.value
             }
             guard let self else { return }
-            guard self.selectedFilePath == target else { return }
+            guard BaseExactIdentity.matches(self.selectedFilePath, target)
+            else { return }
             // Offsets are current here — the awaited load set them.
             self.lineScrollRequest.send(self.bodyLine(fromFileLine: line))
             postAccessibilityAnnouncement(
@@ -6788,10 +8701,20 @@ final class AppState: ObservableObject {
     /// is a no-op (the equality check below) — SwiftUI sometimes
     /// re-applies bindings during view updates, and we don't want
     /// that to spuriously flip the dirty flag.
-    func updateEditorText(_ newText: String) {
-        if currentNoteText == newText { return }
+    func updateEditorText(
+        _ newText: String,
+        owner: NoteAuthoringOwner? = nil
+    ) {
+        if let owner, !ownsNoteAuthoring(owner) { return }
+        guard let path = loadedFilePath else { return }
+        if let reason = markdownAuthoringDisabledReason(for: path) {
+            postMutationAnnouncement(reason)
+            return
+        }
+        if BaseExactIdentity.matches(currentNoteText, newText) { return }
         currentNoteText = newText
-        hasUnsavedChanges = (newText != (savedBaselineText ?? ""))
+        hasUnsavedChanges = !BaseExactIdentity.matches(
+            newText, savedBaselineText ?? "")
         // U1-2: a duplicated tab (same path in another tab) is the same
         // buffer — mirror the edit into same-path parked documents so an
         // unfocused pane never renders stale bytes. Copy-on-write assign.
@@ -6807,9 +8730,22 @@ final class AppState: ObservableObject {
     /// exactly once per buffer change, regardless of how many
     /// times SwiftUI re-applies the binding during a render pass.
     func noteTextBinding() -> Binding<String> {
-        Binding(
+        let owner = noteAuthoringOwner()
+        return Binding(
             get: { self.currentNoteText ?? "" },
-            set: { self.updateEditorText($0) }
+            set: { newText in
+                // The NSTextView delegate callback can already be queued when
+                // quarantine or an absent reconciliation flips the live view.
+                // Bind the callback to the note that created it and re-check
+                // capability before accepting even one late character.
+                guard let owner, self.ownsNoteAuthoring(owner)
+                else { return }
+                if let reason = self.markdownAuthoringDisabledReason(for: owner.path) {
+                    self.postMutationAnnouncement(reason)
+                    return
+                }
+                self.updateEditorText(newText, owner: owner)
+            }
         )
     }
 
@@ -6832,7 +8768,12 @@ final class AppState: ObservableObject {
             let path = loadedFilePath,
             let contents = currentNoteText
         else { return nil }
-        isSaving = true
+        if let reason = noteSaveDisabledReason(for: path) {
+            postMutationAnnouncement(reason)
+            return nil
+        }
+        guard admitBatchTrashWrite(to: [path]) else { return nil }
+        let generation = beginSaveOwnership()
         saveError = nil
         let expected = currentNoteContentHash
         let fmSource = currentNoteFMSource
@@ -6842,12 +8783,59 @@ final class AppState: ObservableObject {
                 path: path,
                 contents: contents,
                 fmSource: fmSource,
-                expectedHash: expected
+                expectedHash: expected,
+                saveGeneration: generation
             )
             return
         }
         saveTask = task
         return task
+    }
+
+    /// A queued save has a second admission immediately before native IO.
+    /// Quarantine can land after the synchronous caller check, and a later
+    /// absence reconciliation can replace quarantine with missing-draft
+    /// ownership. Either state must reject the queued write without consuming
+    /// the close workflow that still owns the dirty draft.
+    private func rejectQueuedSave(
+        generation: UInt64,
+        session: VaultSession,
+        path: String,
+        reason: String?,
+        rejectedConflict: SaveConflict? = nil
+    ) {
+        guard ownsSave(generation, session: session) else { return }
+        if let reason { postMutationAnnouncement(reason) }
+        // Keep Mine dismisses its alert while the retry owns the operation.
+        // If a second admission rejects that queued retry, restore the exact
+        // conflict instead of silently consuming the user's recovery choice.
+        if let rejectedConflict,
+            currentSaveConflict == nil,
+            BaseExactIdentity.matches(loadedFilePath, path),
+            (hasUnsavedChanges || hasDirtyNoteRecovery(for: path))
+        {
+            currentSaveConflict = rejectedConflict
+        }
+        // The close prompt's first admission can race an already-queued Trash
+        // result. If this exact active dirty note still owns the close-after-
+        // save continuation, restore its recovery prompt before consuming the
+        // continuation. A tab switch, retarget, clean buffer, or newer tab /
+        // vault / navigation recovery owner must never be displaced.
+        if let pending = pendingTabCloseAfterSave,
+            (pendingTabClose == nil || pendingTabClose == pending),
+            pendingVaultClose == nil,
+            pendingNavigation == nil,
+            workspace.model.activeGroup.activeTabID == pending,
+            let tab = workspace.model.tab(pending),
+            case .markdown(let pendingPath) = tab.item,
+            BaseExactIdentity.matches(pendingPath, path),
+            BaseExactIdentity.matches(loadedFilePath, path),
+            (hasUnsavedChanges || hasDirtyNoteRecovery(for: path))
+        {
+            pendingTabClose = pending
+        }
+        pendingTabCloseAfterSave = nil
+        finishSaveOwnership(generation)
     }
 
     /// Inner save body. Split out so it can be reused by
@@ -6858,8 +8846,61 @@ final class AppState: ObservableObject {
         path: String,
         contents: String,
         fmSource: String,
-        expectedHash: String?
+        expectedHash: String?,
+        saveGeneration: UInt64,
+        structuralToken: Int? = nil,
+        structuralRefresher: StructuralBatchRefreshRunner? = nil,
+        rejectedConflict: SaveConflict? = nil
     ) async {
+        guard ownsSave(saveGeneration, session: session) else { return }
+        guard !Task.isCancelled else {
+            finishSaveOwnership(saveGeneration)
+            return
+        }
+        // Save does not commit property drafts. Prefer that exact actionable
+        // reason to the structural destination diagnosis when a missing-path
+        // Keep Mine targets its own recovery identity.
+        if let reason = noteSaveDisabledReason(
+            for: path,
+            ignoringStructuralRecoveryReservationToken: structuralToken)
+        {
+            rejectQueuedSave(
+                generation: saveGeneration,
+                session: session,
+                path: path,
+                reason: reason,
+                rejectedConflict: rejectedConflict)
+            return
+        }
+        // Missing-path Keep Mine is a structural create. Repeat destination
+        // admission immediately before native I/O so recovery that appeared
+        // after the alert action cannot be overwritten.
+        if let structuralToken {
+            guard let reservation = admitStructuralRecoveryRecreation(path),
+                installStructuralRecoveryReservation(
+                    reservation, token: structuralToken)
+            else {
+                rejectQueuedSave(
+                    generation: saveGeneration,
+                    session: session,
+                    path: path,
+                    reason: nil,
+                    rejectedConflict: rejectedConflict)
+                return
+            }
+        }
+        guard admitBatchTrashWrite(
+            to: [path],
+            ignoringStructuralRecoveryReservationToken: structuralToken)
+        else {
+            rejectQueuedSave(
+                generation: saveGeneration,
+                session: session,
+                path: path,
+                reason: nil,
+                rejectedConflict: rejectedConflict)
+            return
+        }
         // Detached so the SQLite-mutex-holding save doesn't pin the main
         // actor while disk IO + tree rewrites run. U3-3 (#469): `contents`
         // is the BODY; `save_composed` reassembles fm ⊕ body through the
@@ -6887,11 +8928,53 @@ final class AppState: ObservableObject {
         // while we were saving. Drop the result in that case
         // rather than mutating state for a file the user has
         // already moved on from.
-        guard currentSession === session else { return }
+        guard ownsSave(saveGeneration, session: session) else { return }
+        guard !Task.isCancelled else {
+            finishSaveOwnership(saveGeneration)
+            return
+        }
+        if let structuralToken {
+            guard ownsStructuralMutation(structuralToken, session: session) else {
+                finishSaveOwnership(saveGeneration)
+                return
+            }
+        }
         if case .success = outcome {
+            // Recreating an externally-deleted note is a structural create,
+            // even though it enters through the save-conflict alert. Keep its
+            // shared owner through the same authoritative tree refresh as the
+            // other creation funnels, then revalidate after the suspension
+            // before any undo barrier or editor state can land.
+            if let structuralToken {
+                guard let structuralRefresher else {
+                    finishSaveOwnership(saveGeneration)
+                    return
+                }
+                await structuralRefresher(self)
+                guard ownsSave(saveGeneration, session: session) else { return }
+                guard !Task.isCancelled,
+                    ownsStructuralMutation(structuralToken, session: session)
+                else {
+                    finishSaveOwnership(saveGeneration)
+                    return
+                }
+            }
             // Bases are session-global consumers. A same-session note switch
             // must not suppress their refresh after this write committed.
-            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
+            _ = await refreshVisibleBasesAfterInAppWrite(
+                session: session,
+                changedPath: path)?.value
+            guard ownsSave(saveGeneration, session: session) else { return }
+            guard !Task.isCancelled else {
+                finishSaveOwnership(saveGeneration)
+                return
+            }
+            if let structuralToken {
+                guard ownsStructuralMutation(structuralToken, session: session) else {
+                    finishSaveOwnership(saveGeneration)
+                    return
+                }
+            }
             // #871 post-merge audit: `expectedHash == ""` is the create-IF-ABSENT
             // idiom — the app observed this path as MISSING, so a successful save
             // just CREATED it (e.g. Keep Mine after the note's path was externally
@@ -6907,9 +8990,19 @@ final class AppState: ObservableObject {
                 barrierStructuralUndoForCreatedVaultPath(
                     relativePath: path, existedBefore: false)
             }
+            if case .success(let report) = outcome {
+                // File truth is path-owned, not active-tab-owned. Publish the
+                // committed baseline/hash to every exact-path parked document
+                // before the live-note guard so an unexpected programmatic
+                // switch cannot restore a stale self-conflicting snapshot.
+                workspace.mirrorSaveResult(
+                    path: path,
+                    baseline: contents,
+                    contentHash: report.newContentHash)
+            }
         }
-        guard loadedFilePath == path else {
-            isSaving = false
+        guard BaseExactIdentity.matches(loadedFilePath, path) else {
+            finishSaveOwnership(saveGeneration)
             return
         }
 
@@ -6917,18 +9010,30 @@ final class AppState: ObservableObject {
         case .success(let report):
             currentNoteContentHash = report.newContentHash
             savedBaselineText = contents
-            hasUnsavedChanges = false
-            // U1-2: same-path parked documents share the file — a save
-            // updates their baseline/hash too (one file, one truth).
-            workspace.mirrorSaveResult(
-                path: path, baseline: contents,
-                contentHash: report.newContentHash)
+            // Defensive newest-buffer check even though the visible editor is
+            // read-only during Save. A queued/programmatic producer must never
+            // let an older captured save claim a newer live buffer.
+            hasUnsavedChanges = !BaseExactIdentity.matches(
+                currentNoteText, Optional(contents))
             // U1-2: a close-tab request that chose "Save" completes its
             // close once the save lands cleanly.
             if let pending = pendingTabCloseAfterSave,
                 workspace.model.activeGroup.activeTabID == pending {
                 pendingTabCloseAfterSave = nil
-                performCloseTab(pending)
+                if hasUnsavedChanges {
+                    pendingTabClose = pending
+                } else if let tab = workspace.model.tab(pending),
+                    case .markdown(let pendingPath) = tab.item,
+                    hasDirtyNoteRecovery(for: pendingPath),
+                    !hasOtherMarkdownTab(for: pendingPath, excluding: pending)
+                {
+                    pendingTabClose = pending
+                    if let reason = dirtyCloseSaveDisabledReason(for: pendingPath) {
+                        postMutationAnnouncement(reason)
+                    }
+                } else {
+                    performCloseTab(pending)
+                }
             }
             // Refresh headings so the outline matches the just-
             // saved buffer. Same shape as `loadCurrentNote` —
@@ -6989,7 +9094,7 @@ final class AppState: ObservableObject {
             pendingTabCloseAfterSave = nil
             saveError = humanReadable(error)
         }
-        isSaving = false
+        finishSaveOwnership(saveGeneration)
     }
 
     /// Re-run the save with `expected_content_hash` set to the
@@ -6999,32 +9104,94 @@ final class AppState: ObservableObject {
     /// goes through.
     @discardableResult
     func resolveSaveConflictKeepMine() -> Task<Void, Never>? {
+        guard !isSaving else { return nil }
         guard let conflict = currentSaveConflict,
             let session = currentSession,
-            loadedFilePath == conflict.path
+            BaseExactIdentity.matches(loadedFilePath, conflict.path)
         else {
             currentSaveConflict = nil
             return nil
         }
+        // A body overwrite cannot commit a property editor's independent
+        // draft. Leave the conflict alert in place until that draft is
+        // explicitly applied or discarded.
+        if let reason = noteSaveDisabledReason(for: conflict.path) {
+            postMutationAnnouncement(reason)
+            return nil
+        }
+        let recreatesMissingFile = conflict.currentContentHash.isEmpty
+        let structuralToken: Int?
+        let structuralRefresher: StructuralBatchRefreshRunner?
+        if recreatesMissingFile {
+            // A missing-path Keep Mine is create-if-absent. Admit it through
+            // the shared structural gate before dismissing the alert so a busy
+            // rejection leaves the user's recovery choice available to retry.
+            guard admitStructuralMutationRequest() else { return nil }
+            guard let recoveryReservation =
+                admitStructuralRecoveryRecreation(conflict.path)
+            else {
+                return nil
+            }
+            guard admitBatchTrashWrite(to: [conflict.path]) else { return nil }
+            structuralToken = beginStructuralMutation(
+                recoveryReservation: recoveryReservation)
+            structuralRefresher = structuralBatchRefreshRunner
+        } else {
+            // A regular conflict overwrite changes bytes but does not create a
+            // tree entry, so it remains independent of structural operations.
+            guard admitBatchTrashWrite(to: [conflict.path]) else { return nil }
+            structuralToken = nil
+            structuralRefresher = nil
+        }
+        let fmSource = currentNoteFMSource
+        // The conflict/session/path snapshot identifies the incident, while
+        // “Mine” means the latest visible buffer—not the superseded contents
+        // captured by the first save attempt.
+        let latestContents = currentNoteText ?? conflict.attemptedContents
         // Clear the conflict so the alert dismisses immediately
         // — the in-flight task takes over from here.
         currentSaveConflict = nil
-        isSaving = true
+        let generation = beginSaveOwnership()
         let task: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                if let structuralToken {
+                    self.endStructuralMutation(structuralToken)
+                }
+            }
             // Keep-mine composes MY fm ⊕ MY body over the external write —
             // the same "my whole state wins" semantics the whole-file
             // keep-mine had before the body flip.
-            await self?.performSave(
+            await self.performSave(
                 session: session,
                 path: conflict.path,
-                contents: conflict.attemptedContents,
-                fmSource: self?.currentNoteFMSource ?? "",
-                expectedHash: conflict.currentContentHash
+                contents: latestContents,
+                fmSource: fmSource,
+                expectedHash: conflict.currentContentHash,
+                saveGeneration: generation,
+                structuralToken: structuralToken,
+                structuralRefresher: structuralRefresher,
+                rejectedConflict: conflict
             )
             return
         }
         saveTask = task
+        if recreatesMissingFile {
+            recordPendingStructuralTask(task)
+        }
         return task
+    }
+
+    /// Keep Mine only participates in the structural gate when the conflicting
+    /// path disappeared and the retry would recreate it. Existing-file
+    /// overwrites remain available while an unrelated tree operation runs.
+    var saveConflictKeepMineDisabledReason: String? {
+        guard let conflict = currentSaveConflict else { return nil }
+        if let reason = noteSaveDisabledReason(for: conflict.path) {
+            return reason
+        }
+        guard conflict.currentContentHash.isEmpty else { return nil }
+        return structuralMutationDisabledReason
     }
 
     /// Discard the in-editor buffer for the conflicted file and
@@ -7076,6 +9243,16 @@ final class AppState: ObservableObject {
             case move(oldPath: String, newPath: String, oldParent: String, newParent: String)
             /// `path` was deleted; `parent` is the level it left ("" = root).
             case delete(path: String, parent: String, wasDirectory: Bool)
+            /// One native batch Move landing. `standing` is the only physical
+            /// transform; `touched` additionally carries restored paths whose
+            /// levels must be refreshed without remapping selection or tabs.
+            case batchMove(standing: [BatchPathChange], touched: [BatchPathChange])
+            /// One native batch Trash landing. Only these exact items left the
+            /// vault; failed/untrashed report entries never appear here.
+            case batchTrash(trashed: [StructuralBatchItem])
+            /// Report/infrastructure state requires one authoritative root
+            /// reconciliation but contains no truthful path transform.
+            case batchReconcile
         }
 
         let token: Int
@@ -7083,11 +9260,32 @@ final class AppState: ObservableObject {
         /// The op's rewritten-file count (distinct files whose links were
         /// updated) — U2-6's ", updated links in N notes." suffix reads this.
         let rewrittenCount: Int
+        /// Core could not identify every touched level. The tree must perform
+        /// one authoritative root invalidation instead of guessing paths.
+        let requiresRescan: Bool
+        /// Captured keyboard locus for one atomic post-batch focus decision.
+        /// Nil leaves the tree's deterministic report-order fallback in charge.
+        let preferredFocusPath: String?
+
+        init(
+            token: Int,
+            kind: Kind,
+            rewrittenCount: Int,
+            requiresRescan: Bool = false,
+            preferredFocusPath: String? = nil
+        ) {
+            self.token = token
+            self.kind = kind
+            self.rewrittenCount = rewrittenCount
+            self.requiresRescan = requiresRescan
+            self.preferredFocusPath = preferredFocusPath
+        }
 
         /// The parent-level paths this mutation dirtied (nil = the vault root
         /// level). The tree invalidates each. A move dirties two; everything
         /// else dirties one.
         var affectedParents: [String?] {
+            if requiresRescan { return [nil] }
             switch kind {
             case let .createFolder(path), let .createNote(path):
                 return [Self.parentPath(of: path)]
@@ -7097,6 +9295,26 @@ final class AppState: ObservableObject {
                 return [Self.normalizedParent(oldParent), Self.normalizedParent(newParent)]
             case let .delete(path, _, _):
                 return [Self.parentPath(of: path)]
+            case let .batchMove(standing, touched):
+                var seen = Set<String?>()
+                var parents: [String?] = []
+                for change in standing + touched {
+                    for path in [change.oldPath, change.newPath] {
+                        let parent = Self.parentPath(of: path)
+                        if seen.insert(parent).inserted { parents.append(parent) }
+                    }
+                }
+                return parents
+            case let .batchTrash(trashed):
+                var seen = Set<String?>()
+                var parents: [String?] = []
+                for item in trashed {
+                    let parent = Self.parentPath(of: item.path)
+                    if seen.insert(parent).inserted { parents.append(parent) }
+                }
+                return parents
+            case .batchReconcile:
+                return [nil]
             }
         }
 
@@ -7213,38 +9431,677 @@ final class AppState: ObservableObject {
     }
 
     /// A tree node in inline-rename mode (U2-5).
-    struct RenamingNode: Equatable {
+    struct RenamingNode: Equatable, Identifiable {
+        let id: UUID
+        let sessionIdentity: ObjectIdentifier
         let path: String
         let isDirectory: Bool
         /// The current final component (the field's initial text).
         var name: String { (path as NSString).lastPathComponent }
     }
 
-    /// The node whose Move-to-folder sheet is open (U2-5).
+    /// Install rename state for a path that the captured session just created.
+    /// Create flows call this only after their operation reports success; it
+    /// intentionally bypasses the structural-busy presentation gate because
+    /// the create still owns that gate until its task returns.
+    @discardableResult
+    func installRenameForCreatedEntry(
+        path: String, isDirectory: Bool, session: VaultSession
+    ) -> Bool {
+        guard currentSession === session else { return false }
+        structuralRenameError = nil
+        renamingNode = RenamingNode(
+            id: UUID(),
+            sessionIdentity: ObjectIdentifier(session),
+            path: path,
+            isDirectory: isDirectory)
+        return true
+    }
+
+    /// The one user-facing inline-rename staging resolver. F2, context menus,
+    /// VoiceOver actions, and the selected-node command all route here.
+    @discardableResult
+    func requestRename(path: String, isDirectory: Bool) -> Bool {
+        guard let session = currentSession else { return false }
+        guard admitStructuralMutationRequest() else { return false }
+        return installRenameForCreatedEntry(
+            path: path, isDirectory: isDirectory, session: session)
+    }
+
+    /// Commit only the exact rendered rename owner. A busy rejection retains
+    /// the field for retry; stale IDs and stale sessions are inert.
+    @discardableResult
+    func commitPendingRename(id: UUID, to newName: String) -> Bool {
+        guard let pending = currentRename(id: id) else { return false }
+        let trimmed = newName.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != pending.name else {
+            return cancelPendingRename(id: id)
+        }
+        guard admitStructuralMutationRequest() else { return false }
+        guard
+            let task = renameEntry(
+                path: pending.path,
+                isDirectory: pending.isDirectory,
+                to: trimmed,
+                renameOwnerID: id)
+        else { return false }
+        pendingStructuralTaskForTesting = task
+        return true
+    }
+
+    /// Cancel only the exact rendered rename owner. This overload is distinct
+    /// from Bulk Rename's no-argument cancellation method.
+    @discardableResult
+    func cancelPendingRename(id: UUID) -> Bool {
+        guard currentRename(id: id) != nil else { return false }
+        renamingNode = nil
+        structuralRenameError = nil
+        return true
+    }
+
+    private func currentRename(id: UUID) -> RenamingNode? {
+        guard let pending = renamingNode, pending.id == id,
+            let session = currentSession,
+            pending.sessionIdentity == ObjectIdentifier(session)
+        else { return nil }
+        return pending
+    }
+
+    private func clearPendingRename(id: UUID, session: VaultSession) {
+        guard let pending = renamingNode, pending.id == id,
+            pending.sessionIdentity == ObjectIdentifier(session),
+            currentSession === session
+        else { return }
+        renamingNode = nil
+        structuralRenameError = nil
+    }
+
+    /// A captured single-node Move awaiting a destination. Identity is unique
+    /// per presentation (never path-derived), and the originating session rides
+    /// with it so stale sheet callbacks cannot act after a vault switch.
     struct PendingMove: Equatable, Identifiable {
+        let id: UUID
+        let sessionIdentity: ObjectIdentifier
         let path: String
         let isDirectory: Bool
-        var id: String { path }
         var name: String { (path as NSString).lastPathComponent }
     }
 
-    /// A multi-selection awaiting a Move-to-folder destination (#852). `items`
-    /// is the deduplicated top-level selection (a folder and something inside
-    /// it collapse to just the folder — see `topLevelSelection`). `id` is
-    /// content-stable so `.sheet(item:)`-style presentation is well-behaved.
+    /// Stage a single Move sheet against the current vault. A structural
+    /// operation already in flight rejects the presentation with the same
+    /// reason the destination rows expose.
+    @discardableResult
+    func requestPendingMove(path: String, isDirectory: Bool) -> Bool {
+        guard let session = currentSession else { return false }
+        guard admitStructuralMutationRequest() else { return false }
+        pendingMove = PendingMove(
+            id: UUID(),
+            sessionIdentity: ObjectIdentifier(session),
+            path: path,
+            isDirectory: isDirectory)
+        return true
+    }
+
+    /// Commit only the exact single-Move presentation captured by the caller.
+    /// The sheet clears after synchronous structural admission; a busy reject
+    /// keeps the same request alive for retry or explicit cancellation.
+    @discardableResult
+    func commitPendingMove(id: UUID, to destination: String) -> Bool {
+        guard let pending = pendingMove, pending.id == id,
+            let session = currentSession,
+            pending.sessionIdentity == ObjectIdentifier(session)
+        else { return false }
+        guard admitStructuralMutationRequest() else { return false }
+        guard let task = moveEntry(
+            path: pending.path,
+            isDirectory: pending.isDirectory,
+            to: destination)
+        else { return false }
+        pendingMove = nil
+        pendingStructuralTaskForTesting = task
+        return true
+    }
+
+    /// The New Folder counterpart of `commitPendingMove`: creating the folder
+    /// must itself be admitted synchronously before the presentation clears.
+    @discardableResult
+    func commitPendingMoveToNewFolder(
+        id: UUID, newFolderName: String, in parent: String
+    ) -> Bool {
+        guard let pending = pendingMove, pending.id == id,
+            let session = currentSession,
+            pending.sessionIdentity == ObjectIdentifier(session)
+        else { return false }
+        guard admitStructuralMutationRequest() else { return false }
+        guard let task = createFolderThenMove(
+            newFolderName: newFolderName,
+            in: parent,
+            movePath: pending.path,
+            isDirectory: pending.isDirectory)
+        else { return false }
+        pendingMove = nil
+        pendingStructuralTaskForTesting = task
+        return true
+    }
+
+    /// Cancel only the captured presentation while it still belongs to the
+    /// current vault session. A stale UUID/session pair is a no-op.
+    @discardableResult
+    func cancelPendingMove(id: UUID) -> Bool {
+        guard let pending = pendingMove, pending.id == id,
+            let session = currentSession,
+            pending.sessionIdentity == ObjectIdentifier(session)
+        else { return false }
+        pendingMove = nil
+        return true
+    }
+
+    /// A captured batch action awaiting a Move-to-folder destination. Identity
+    /// is operation-unique (never derived from content), and session/focus ride
+    /// with the presentation so a same-URL reopen cannot commit stale work.
     struct BatchMove: Equatable, Identifiable {
+        let id: UUID
+        let sessionIdentity: ObjectIdentifier
         let items: [TreeSelection]
-        var id: String { items.map(\.path).joined(separator: "\n") }
+        let preferredFocusPath: String?
         /// The sheet's title/hint noun phrase — "3 items".
         var displayName: String {
             "\(items.count) \(items.count == 1 ? "item" : "items")"
         }
     }
 
+    /// Stage a batch Move without changing the captured order or pruning
+    /// descendants. Core owns projection/preflight and must receive the full
+    /// user action even when it will project to one top-level item.
+    @discardableResult
+    func requestBatchMove(
+        _ items: [TreeSelection], preferredFocusPath: String?
+    ) -> Bool {
+        guard !items.isEmpty, let session = currentSession else { return false }
+        guard admitStructuralMutationRequest() else { return false }
+        pendingBatchMove = BatchMove(
+            id: UUID(),
+            sessionIdentity: ObjectIdentifier(session),
+            items: items,
+            preferredFocusPath: preferredFocusPath)
+        return true
+    }
+
+    /// Commit only the exact sheet instance that requested the destination.
+    /// The presentation clears after synchronous batch admission succeeds; a
+    /// busy race leaves it in place so the user can retry or cancel.
+    @discardableResult
+    func commitPendingBatchMove(id: UUID, to destination: String) -> Bool {
+        guard let pending = pendingBatchMove, pending.id == id else { return false }
+        guard let session = currentSession,
+            pending.sessionIdentity == ObjectIdentifier(session)
+        else {
+            pendingBatchMove = nil
+            return false
+        }
+        guard admitStructuralMutationRequest() else { return false }
+        guard batchMove(
+            pending.items,
+            to: destination,
+            preferredFocusPath: pending.preferredFocusPath) != nil
+        else { return false }
+        pendingBatchMove = nil
+        return true
+    }
+
+    @discardableResult
+    func commitPendingBatchMoveToNewFolder(
+        id: UUID, newFolderName: String, in parent: String
+    ) -> Bool {
+        guard let pending = pendingBatchMove, pending.id == id else { return false }
+        guard let session = currentSession,
+            pending.sessionIdentity == ObjectIdentifier(session)
+        else {
+            pendingBatchMove = nil
+            return false
+        }
+        guard admitStructuralMutationRequest() else { return false }
+        guard createFolderThenBatchMove(
+            newFolderName: newFolderName,
+            in: parent,
+            items: pending.items,
+            preferredFocusPath: pending.preferredFocusPath) != nil
+        else { return false }
+        pendingBatchMove = nil
+        return true
+    }
+
+    @discardableResult
+    func cancelPendingBatchMove(id: UUID) -> Bool {
+        guard let pending = pendingBatchMove, pending.id == id,
+            let session = currentSession,
+            pending.sessionIdentity == ObjectIdentifier(session)
+        else { return false }
+        pendingBatchMove = nil
+        return true
+    }
+
     /// True while any structural mutation FFI call is in flight — serializes the
     /// commands (the session lock does too, but this stops the UI from firing a
     /// second mutation before the first's tree refresh lands).
-    private var isMutatingStructure = false
+    @Published private(set) var isMutatingStructure = false
+
+    /// Physical verification failed for these Trash roots. Keep the user's
+    /// in-memory document state, but deny every path-bound write until a scan
+    /// proves the item present or absent. The trie keeps the write check
+    /// component-safe for folder selections without an O(batch) hot path.
+    @Published private var batchTrashUnknownItems: [StructuralBatchItem] = []
+    private var batchTrashUnknownPathIndex:
+        VaultComponentPrefixIndex<StructuralBatchItem>?
+
+    static let batchTrashQuarantineReason =
+        "Slate couldn’t verify whether this item moved to Trash. "
+        + "It remains read-only. Choose Check Again to retry."
+
+    private static let invalidAbsoluteVaultPathReason =
+        "Choose a vault-relative path. Absolute paths aren’t allowed."
+    private static let invalidParentVaultPathReason =
+        "Choose a vault-relative path without parent-directory references."
+
+    var batchTrashQuarantineNotice: String? {
+        guard !batchTrashUnknownItems.isEmpty else { return nil }
+        let count = batchTrashUnknownItems.count
+        let subject = count == 1 ? "1 item" : "\(count) items"
+        let pronoun = count == 1 ? "It remains" : "They remain"
+        return "Slate couldn’t verify whether \(subject) moved to Trash. "
+            + "\(pronoun) read-only."
+    }
+
+    func batchTrashPathCapability(for path: String) -> BatchTrashPathCapability {
+        let normalized: String
+        switch Self.normalizeBatchTrashAdmissionPath(path) {
+        case .normalized(let path): normalized = path
+        case .invalid(let reason): return .invalid(reason)
+        }
+        return batchTrashUnknownPathIndex?.longestMatch(for: normalized) == nil
+            ? .writable
+            : .readOnly(Self.batchTrashQuarantineReason)
+    }
+
+    /// One capability for every note-authoring surface: Markdown body,
+    /// frontmatter fields/source, Add Property, Save, and task toggles. Views
+    /// use the exact reason for disabled/help/AX state; write funnels retain
+    /// their own admission check as the race-proof backstop.
+    private func noteAuthoringDisabledReason(
+        for path: String,
+        ignoringStructuralRecoveryReservationToken: Int?,
+        ignoringPropertyPublicationUncertainty: Bool = false
+    ) -> String? {
+        if missingNoteRecoveryDraft(for: path) != nil {
+            return Self.missingNoteDraftReason
+        }
+        if !ignoringPropertyPublicationUncertainty,
+            hasPropertyPublicationUncertainty(for: path)
+        {
+            return propertyPublicationUncertaintyReason(for: path)
+        }
+        let ownsIgnoredReservation =
+            ignoringStructuralRecoveryReservationToken.map {
+                isMutatingStructure && structuralMutationToken == $0
+            } ?? false
+        if isMutatingStructure && !ownsIgnoredReservation {
+            // A structural operation with a known recovery reservation owns
+            // only its destination-only identities. Moving sources and
+            // unrelated notes remain editable; their recovery is rekeyed after
+            // native success. Operations without a bounded reservation retain
+            // the conservative vault-wide authoring block.
+            guard let reservation = activeStructuralRecoveryReservation else {
+                return Self.structuralMutationBusyReason
+            }
+            if reservation.blocksAuthoring(at: path) {
+                return Self.structuralMutationBusyReason
+            }
+        }
+        switch batchTrashPathCapability(for: path) {
+        case .writable:
+            return ownsIgnoredReservation
+                ? nil
+                : structuralRecoveryReservationDisabledReason(for: path)
+        case .readOnly(let reason), .invalid(let reason):
+            return reason
+        }
+    }
+
+    func noteAuthoringDisabledReason(for path: String) -> String? {
+        noteAuthoringDisabledReason(
+            for: path,
+            ignoringStructuralRecoveryReservationToken: nil)
+    }
+
+    /// Defensive action admission for view callbacks that were queued before
+    /// a disabled state reached AppKit. Returning false means the UI setter
+    /// must leave its local value unchanged.
+    @discardableResult
+    func admitNoteAuthoring(
+        for path: String,
+        owner: NoteAuthoringOwner? = nil
+    ) -> Bool {
+        if let owner, !ownsNoteAuthoring(owner) { return false }
+        guard let reason = propertyAuthoringDisabledReason(for: path) else {
+            return true
+        }
+        postMutationAnnouncement(reason)
+        return false
+    }
+
+    var activeNoteAuthoringDisabledReason: String? {
+        guard let path = loadedFilePath else { return nil }
+        return markdownAuthoringDisabledReason(for: path)
+    }
+
+    private func markdownAuthoringDisabledReason(for path: String) -> String? {
+        if isSaving, BaseExactIdentity.matches(loadedFilePath, path) {
+            return Self.saveInProgressReason
+        }
+        return noteAuthoringDisabledReason(for: path)
+    }
+
+    func propertyAuthoringDisabledReason(for path: String) -> String? {
+        if isSaving, BaseExactIdentity.matches(loadedFilePath, path) {
+            return Self.saveInProgressReason
+        }
+        if isEditingProperty, BaseExactIdentity.matches(loadedFilePath, path) {
+            return Self.propertyEditInProgressReason
+        }
+        return noteAuthoringDisabledReason(for: path)
+    }
+
+    var activePropertyAuthoringDisabledReason: String? {
+        guard let path = loadedFilePath else { return nil }
+        return propertyAuthoringDisabledReason(for: path)
+    }
+
+    /// Local Revert/Discard never writes the vault and remains available in a
+    /// persistent read-only/quarantine state. Only a bounded in-flight writer
+    /// may temporarily own those draft bytes and delay their destruction.
+    func draftDiscardDisabledReason(for path: String) -> String? {
+        _ = path
+        return inFlightDraftDiscardDisabledReason
+    }
+
+    var inFlightDraftDiscardDisabledReason: String? {
+        if isSaving { return Self.saveInProgressReason }
+        if isEditingProperty { return Self.propertyEditInProgressReason }
+        return nil
+    }
+
+    /// Same-note navigation may resume after a property write commits while
+    /// its path-owned verification is still running. Saving and the
+    /// pre-commit property phase remain non-navigable.
+    var inFlightNavigationDisabledReason: String? {
+        if isSaving { return Self.saveInProgressReason }
+        return propertyEditNavigationDisabledReason
+    }
+
+    var activeDraftDiscardDisabledReason: String? {
+        guard let path = loadedFilePath else { return nil }
+        return draftDiscardDisabledReason(for: path)
+    }
+
+    func propertiesSourceApplyDisabledReason(for path: String) -> String? {
+        if let reason = propertyAuthoringDisabledReason(for: path) { return reason }
+        if hasDirtyPreservedPropertyDrafts(for: path) {
+            return Self.propertyRowsSourceApplyReason
+        }
+        return nil
+    }
+
+    private func hasDirtyPreservedPropertyDrafts(for path: String) -> Bool {
+        preservedPropertyDrafts.values.contains {
+            BaseExactIdentity.matches($0.path, path) && $0.isDirty
+        }
+    }
+
+    var activePropertiesSourceApplyDisabledReason: String? {
+        guard let path = loadedFilePath else { return nil }
+        return propertiesSourceApplyDisabledReason(for: path)
+    }
+
+    /// Save commits the composed frontmatter baseline plus Markdown body; it
+    /// does not commit a source editor or property row's local draft. Surface
+    /// that capability difference everywhere Save is presented and retain the
+    /// authoring reason's higher-priority missing/quarantine diagnosis.
+    func noteSaveDisabledReason(for path: String) -> String? {
+        noteSaveDisabledReason(
+            for: path,
+            ignoringStructuralRecoveryReservationToken: nil)
+    }
+
+    private func noteSaveDisabledReason(
+        for path: String,
+        ignoringStructuralRecoveryReservationToken: Int?
+    ) -> String? {
+        // The property writer and composed body writer both replace the same
+        // whole file. Keep admission symmetric so Cmd-S cannot race a
+        // no-draft Add/Delete property operation and pair stale FM/hash state.
+        if isEditingProperty { return Self.propertyEditInProgressReason }
+        if let reason = noteAuthoringDisabledReason(
+            for: path,
+            ignoringStructuralRecoveryReservationToken:
+                ignoringStructuralRecoveryReservationToken)
+        {
+            return reason
+        }
+        if hasRecoverablePropertyDrafts(for: path) {
+            return Self.propertyDraftSaveReason
+        }
+        return nil
+    }
+
+    var activeNoteSaveDisabledReason: String? {
+        guard let path = loadedFilePath else { return nil }
+        return noteSaveDisabledReason(for: path)
+    }
+
+    /// One truthful UI dirty signal for the active note. Body dirtiness stays
+    /// separately observable for save mechanics and duplicate-tab mirroring.
+    var activeNoteHasUnsavedChanges: Bool {
+        _ = propertyRecoveryRevision
+        guard let path = loadedFilePath else { return hasUnsavedChanges }
+        return hasUnsavedChanges || hasDirtyNoteRecovery(for: path)
+    }
+
+    /// Path-owned recovery must project onto every Markdown tab that can keep
+    /// it alive, including parked and duplicate tabs. Body dirtiness remains
+    /// tab-owned, so only the globally active document reads the live buffer.
+    func noteTabHasUnsavedChanges(_ id: TabID) -> Bool {
+        _ = propertyRecoveryRevision
+        guard let tab = workspace.model.tab(id),
+            case .markdown(let path) = tab.item
+        else { return false }
+        let bodyDirty: Bool
+        if id == workspace.model.activeGroup.activeTabID,
+            BaseExactIdentity.matches(loadedFilePath, path)
+        {
+            bodyDirty = hasUnsavedChanges
+        } else {
+            bodyDirty = workspace.document(for: id)?.hasUnsavedChanges ?? false
+        }
+        return bodyDirty || hasDirtyNoteRecovery(for: path)
+    }
+
+    /// Admission-only canonicalization matching core's vault resolver on
+    /// macOS: repeated separators and `.` disappear; absolute paths and every
+    /// `..` component are rejected. Normal components remain byte-exact — no
+    /// Unicode normalization or case folding is permitted at this boundary.
+    private static func normalizeBatchTrashAdmissionPath(
+        _ path: String
+    ) -> BatchTrashAdmissionPath {
+        guard !path.hasPrefix("/") else {
+            return .invalid(invalidAbsoluteVaultPathReason)
+        }
+        var components: [Substring] = []
+        for component in path.split(separator: "/", omittingEmptySubsequences: true) {
+            if component == "." { continue }
+            guard component != ".." else {
+                return .invalid(invalidParentVaultPathReason)
+            }
+            components.append(component)
+        }
+        return .normalized(components.joined(separator: "/"))
+    }
+
+    /// The single admission gate for every path-bound writer. Callers pass
+    /// every vault-relative path the operation can write; component-safe
+    /// matching blocks an unknown folder's descendants without treating a
+    /// prefix lookalike (or a file's textual suffix) as related.
+    @discardableResult
+    func admitBatchTrashWrite(
+        to paths: [String],
+        ignoringStructuralRecoveryReservationToken: Int? = nil
+    ) -> Bool {
+        let ownsIgnoredReservation =
+            ignoringStructuralRecoveryReservationToken.map {
+                isMutatingStructure && structuralMutationToken == $0
+            } ?? false
+        for path in paths {
+            if missingNoteRecoveryDraft(for: path) != nil {
+                postMutationAnnouncement(Self.missingNoteDraftReason)
+                return false
+            }
+            switch batchTrashPathCapability(for: path) {
+            case .writable:
+                break
+            case .readOnly(let reason), .invalid(let reason):
+                postMutationAnnouncement(reason)
+                return false
+            }
+            if !ownsIgnoredReservation,
+                let reason = structuralRecoveryReservationDisabledReason(for: path)
+            {
+                postMutationAnnouncement(reason)
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Destructive path admission. A file checks its exact path; a directory
+    /// also checks whether it contains an indexed unknown root so deleting an
+    /// ancestor can never erase an item whose physical outcome is unresolved.
+    @discardableResult
+    func admitBatchTrashMutation(of items: [StructuralBatchItem]) -> Bool {
+        for item in items {
+            let normalized: String
+            switch Self.normalizeBatchTrashAdmissionPath(item.path) {
+            case .normalized(let path): normalized = path
+            case .invalid(let reason):
+                postMutationAnnouncement(reason)
+                return false
+            }
+            if batchTrashUnknownPathIndex?.longestMatch(for: normalized) != nil
+                || (item.isDirectory
+                    && batchTrashUnknownPathIndex?.containsEntry(
+                        atOrBelow: normalized) == true)
+            {
+                postMutationAnnouncement(Self.batchTrashQuarantineReason)
+                return false
+            }
+        }
+        return true
+    }
+
+    /// Finder-parity duplicate naming is case-insensitive. Snapshot the names
+    /// of outcome-unknown siblings on the owning actor so the detached chooser
+    /// can treat them exactly like occupied directory-listing entries.
+    private func batchTrashUnknownSiblingNames(in parent: String) -> Set<String> {
+        guard case .normalized(let normalizedParent) =
+            Self.normalizeBatchTrashAdmissionPath(parent)
+        else { return [] }
+        return Set(batchTrashUnknownItems.compactMap { item in
+            guard case .normalized(let path) =
+                Self.normalizeBatchTrashAdmissionPath(item.path),
+                (TreeMutation.parentPath(of: path) ?? "") == normalizedParent
+            else { return nil }
+            let name = (path as NSString).lastPathComponent
+            return name.isEmpty ? nil : name.lowercased()
+        })
+    }
+
+    /// Vault-wide writers cannot prove which files they will touch before the
+    /// native call. Fail closed while any Trash outcome remains indeterminate;
+    /// ordinary path-scoped writers continue to use `admitBatchTrashWrite` and
+    /// remain available for unrelated files.
+    @discardableResult
+    func admitBatchTrashVaultWideWrite() -> Bool {
+        guard batchTrashUnknownItems.isEmpty else {
+            postMutationAnnouncement(Self.batchTrashQuarantineReason)
+            return false
+        }
+        return true
+    }
+
+    static let structuralMutationBusyReason =
+        "Wait for the current file operation to finish."
+
+    /// A structural destination can be physically absent while still owning
+    /// user-authored recovery bytes in Slate. Treat that identity as occupied:
+    /// moving or creating into it would otherwise leave the filesystem at the
+    /// destination while the only recoverable draft remains keyed elsewhere.
+    static let structuralRecoveryDestinationReason =
+        "Resolve or discard the uncommitted note or property draft at the destination before continuing."
+
+    /// Body Save does not commit the independent properties-source or row
+    /// editors. Never present it as a successful resolution for their drafts.
+    static let propertyDraftSaveReason =
+        "Apply or discard the uncommitted property changes before saving the note."
+
+    static let propertyDraftDeleteReason =
+        "Revert or save this property draft before deleting the property."
+
+    static let propertyRowsSourceApplyReason =
+        "Revert or save uncommitted property row drafts before applying properties source."
+
+    static let propertyDraftBulkRenameReason =
+        "Apply or discard uncommitted property changes before renaming properties."
+
+    static let propertyPublicationUncertainReason =
+        "Slate couldn’t verify the latest saved property version. Check the saved version before continuing."
+
+    static let authoredPropertyPublicationUncertainReason =
+        "Slate saved this property update, but a newer disk version may have replaced it before verification. Copy or resolve the retained update before leaving this note."
+
+    static let bulkPropertyPublicationUncertainReason =
+        "Slate couldn’t verify the bulk property rename in this note. Reload Properties before continuing."
+
+    static let saveInProgressReason =
+        "Wait for the current save to finish."
+
+    static let propertyEditInProgressReason =
+        "Wait for the current property update to finish."
+
+    var structuralMutationDisabledReason: String? {
+        if isSaving { return Self.saveInProgressReason }
+        if isEditingProperty { return Self.propertyEditInProgressReason }
+        if !propertyPublicationUncertainties.isEmpty {
+            return Self.propertyPublicationUncertainReason
+        }
+        return isMutatingStructure ? Self.structuralMutationBusyReason : nil
+    }
+
+    /// Shared synchronous admission policy for every user-facing, non-drag
+    /// structural request. Controls that cannot be disabled (keyboard and
+    /// VoiceOver actions) still reject before staging UI or starting a runner,
+    /// and announce the exact same reason the disableable controls display.
+    @discardableResult
+    func admitStructuralMutationRequest() -> Bool {
+        guard let reason = structuralMutationDisabledReason else { return true }
+        postMutationAnnouncement(reason)
+        return false
+    }
+
+    /// Drop admission seam. The tree calls this only after it has classified a
+    /// supported provider and before it settles the drag session or asks the
+    /// provider to load anything.
+    @discardableResult
+    func admitStructuralDropRequest() -> Bool {
+        admitStructuralMutationRequest()
+    }
 
     /// Ownership token for the in-flight structural mutation (#871 Codex
     /// round 2). Every structural op captures the token `beginStructuralMutation`
@@ -7257,19 +10114,46 @@ final class AppState: ObservableObject {
     /// open/close bumps the token, so any such stale completion is a no-op.
     private var structuralMutationToken = 0
 
+    /// The destination identities owned by the current native structural
+    /// operation. Admission and reservation are installed synchronously on the
+    /// main actor before any asynchronous handoff, keeping property-authoring
+    /// surfaces read-only until the operation publishes or fails. Moving source
+    /// scopes are exempt because their recovery is intentionally rekeyed.
+    @Published private var activeStructuralRecoveryReservation:
+        StructuralRecoveryReservation?
+
     /// Claim the structural-mutation guard for a new op and return its
     /// ownership token. Callers have already checked `!isMutatingStructure`.
-    private func beginStructuralMutation() -> Int {
+    func beginStructuralMutation(
+        recoveryReservation: StructuralRecoveryReservation? = nil
+    ) -> Int {
         structuralMutationToken &+= 1
         isMutatingStructure = true
+        activeStructuralRecoveryReservation = recoveryReservation
         return structuralMutationToken
+    }
+
+    /// Dynamic-destination operations (Duplicate) determine their exact path
+    /// only after asynchronous preparation. They still install the reservation
+    /// on the main actor before launching the exclusive native create.
+    @discardableResult
+    func installStructuralRecoveryReservation(
+        _ reservation: StructuralRecoveryReservation,
+        token: Int
+    ) -> Bool {
+        guard isMutatingStructure, structuralMutationToken == token else {
+            return false
+        }
+        activeStructuralRecoveryReservation = reservation
+        return true
     }
 
     /// Release the structural-mutation guard IFF `token` still owns it — a
     /// stale task whose vault was switched out from under it (its token was
     /// bumped by open/close, or a newer op) must NOT clear a newer op's flag.
-    private func endStructuralMutation(_ token: Int) {
+    func endStructuralMutation(_ token: Int) {
         guard structuralMutationToken == token else { return }
+        activeStructuralRecoveryReservation = nil
         isMutatingStructure = false
     }
 
@@ -7281,7 +10165,16 @@ final class AppState: ObservableObject {
     /// returns before its release, so nothing else clears it).
     private func cancelStructuralMutationOwnership() {
         structuralMutationToken &+= 1
+        activeStructuralRecoveryReservation = nil
         isMutatingStructure = false
+        batchTrashUnknownItems = []
+        batchTrashUnknownPathIndex = nil
+    }
+
+    func ownsStructuralMutation(_ token: Int, session: VaultSession) -> Bool {
+        isMutatingStructure
+            && structuralMutationToken == token
+            && currentSession === session
     }
 
     /// Monotone token backing `TreeMutation.token`.
@@ -7294,13 +10187,29 @@ final class AppState: ObservableObject {
     /// role `scanTask`/`noteLoadTask` play for their flows.
     private(set) var pendingStructuralTaskForTesting: Task<Void, Never>?
 
+    /// Record an admitted structural task from a feature extension. Keeping the
+    /// setter here makes it impossible for a rejected extension funnel to
+    /// accidentally replace the active task before admission succeeds.
+    func recordPendingStructuralTask(_ task: Task<Void, Never>) {
+        pendingStructuralTaskForTesting = task
+    }
+
     /// Publish a tree mutation to the sidebar seam, bumping the edge-trigger
     /// token. Also fires the U2-6 announcement (`postMutationAnnouncement`,
     /// filled in that PR; a no-op stub until then).
-    private func publishTreeMutation(_ kind: TreeMutation.Kind, rewrittenCount: Int) {
+    private func publishTreeMutation(
+        _ kind: TreeMutation.Kind,
+        rewrittenCount: Int,
+        requiresRescan: Bool = false,
+        preferredFocusPath: String? = nil
+    ) {
         treeMutationCounter += 1
         treeMutation = TreeMutation(
-            token: treeMutationCounter, kind: kind, rewrittenCount: rewrittenCount)
+            token: treeMutationCounter,
+            kind: kind,
+            rewrittenCount: rewrittenCount,
+            requiresRescan: requiresRescan,
+            preferredFocusPath: preferredFocusPath)
         // #871 Codex round 1: every structural mutation that is NOT a recorded
         // move/rename is a structural-history BARRIER — it clears the undo/redo
         // stacks. A create / duplicate / import / delete can FREE or REFILL a
@@ -7311,9 +10220,9 @@ final class AppState: ObservableObject {
         // after this call, so they must NOT clear. This is the single choke
         // point every structural op routes through on success.
         switch kind {
-        case .move, .rename:
+        case .move, .rename, .batchMove, .batchReconcile:
             break
-        case .createFolder, .createNote, .delete:
+        case .createFolder, .createNote, .delete, .batchTrash:
             clearStructuralUndoStacks()
         }
     }
@@ -7370,12 +10279,20 @@ final class AppState: ObservableObject {
     func createFolder(
         name: String, in parent: String, onResult: ((Bool) -> Void)? = nil
     ) -> Task<Void, Never>? {
-        guard !isMutatingStructure, let session = currentSession else {
+        guard admitStructuralMutationRequest(), let session = currentSession else {
             onResult?(false)
             return nil
         }
         let path = Self.joinVaultPath(parent, name)
-        let token = beginStructuralMutation()
+        guard let recoveryReservation = admitStructuralRecoveryDestination(
+                path, includesDescendants: true),
+            admitBatchTrashWrite(to: [path])
+        else {
+            onResult?(false)
+            return nil
+        }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
         let task = Task { [weak self] in
             let outcome: Result<StructuralReport, VaultError> = await Task.detached(
                 priority: .userInitiated
@@ -7415,13 +10332,18 @@ final class AppState: ObservableObject {
     /// never a dead end.
     @discardableResult
     func createNote(in parent: String) -> Task<Void, Never>? {
-        guard !isMutatingStructure, let session = currentSession else { return nil }
-        let token = beginStructuralMutation()
+        guard admitStructuralMutationRequest(), let session = currentSession else { return nil }
         // Compute a non-colliding name against the known file set. The backend
         // still guards the collision (DestinationExists) — this just spares the
         // user a failure on the common "several untitled notes" flow.
         let name = uniqueUntitledName(in: parent)
         let path = Self.joinVaultPath(parent, name)
+        guard let recoveryReservation = admitStructuralRecoveryDestination(path),
+            admitBatchTrashWrite(to: [path])
+        else { return nil }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let refresher = structuralBatchRefreshRunner
         let task = Task { [weak self] in
             let outcome: Result<StructuralReport, VaultError> = await Task.detached(
                 priority: .userInitiated
@@ -7439,26 +10361,42 @@ final class AppState: ObservableObject {
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
-            guard let self, self.currentSession === session else { return }
+            guard let self else { return }
+            defer { self.endStructuralMutation(token) }
+            guard !Task.isCancelled,
+                self.ownsStructuralMutation(token, session: session)
+            else { return }
             switch outcome {
             case .success:
+                await refresher(self)
+                guard !Task.isCancelled,
+                    self.ownsStructuralMutation(token, session: session)
+                else { return }
                 self.publishTreeMutation(.createNote(path: path), rewrittenCount: 0)
-                self.postMutationAnnouncement(
-                    "Created note \((path as NSString).lastPathComponent).")
-                // Refresh the flat file list so the row exists, then open it.
-                await self.loadFiles()
                 self.openFile(path, target: .currentTab)
                 // Drop the user straight into renaming the fresh note's title.
-                self.renamingNode = RenamingNode(path: path, isDirectory: false)
+                self.installRenameForCreatedEntry(
+                    path: path, isDirectory: false, session: session)
+                self.postMutationAnnouncement(
+                    "Created note \((path as NSString).lastPathComponent).")
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
                 self.announceMutationFailure(
                     verb: "create note",
                     name: (path as NSString).lastPathComponent, error: error)
             }
-            self.endStructuralMutation(token)
         }
         return task
+    }
+
+    /// User-facing New Note admission. Unlike the low-level runner above, a
+    /// busy request is never a silent `nil`: it announces the shared reason
+    /// synchronously, stages no rename UI, and starts no write.
+    @discardableResult
+    func requestCreateNote(in parent: String) -> Task<Void, Never>? {
+        guard currentSession != nil else { return nil }
+        guard admitStructuralMutationRequest() else { return nil }
+        return createNote(in: parent)
     }
 
     // MARK: Duplicate (#853)
@@ -7477,12 +10415,19 @@ final class AppState: ObservableObject {
     /// "Duplicated <src> as <copy>.".
     @discardableResult
     func duplicateEntry(path: String) -> Task<Void, Never>? {
-        guard !isMutatingStructure, let session = currentSession else { return nil }
-        let token = beginStructuralMutation()
+        guard admitStructuralMutationRequest(), let session = currentSession else { return nil }
         let sourceName = (path as NSString).lastPathComponent
         let parent = TreeMutation.parentPath(of: path) ?? ""
-        let task = Task { [weak self] in
-            let outcome: Result<String, VaultError> = await Task.detached(
+        guard admitBatchTrashWrite(to: [path, parent]) else { return nil }
+        // Treat every quarantined sibling as occupied before entering detached
+        // name selection. This preserves Duplicate's original behavior of
+        // jumping past arbitrarily many listed collisions without spending its
+        // 200 create-exclusive race attempts, while ensuring no concrete
+        // unknown-outcome candidate can be selected.
+        let quarantinedSiblingNames = batchTrashUnknownSiblingNames(in: parent)
+        let token = beginStructuralMutation()
+        let task = Task { @MainActor [weak self] in
+            let preparation: Result<(String, Set<String>), VaultError> = await Task.detached(
                 priority: .userInitiated
             ) {
                 do {
@@ -7491,7 +10436,7 @@ final class AppState: ObservableObject {
                     // (files AND folders — a folder named "a copy" blocks
                     // that name too). The index can lag disk; the exclusive-
                     // create below is the authoritative guard.
-                    var existing = Set<String>()
+                    var existing = quarantinedSiblingNames
                     if let listing = try? session.listDirChildren(
                         parentPath: parent,
                         paging: Paging(cursor: nil, limit: FileTreeViewModel.levelPageLimit))
@@ -7499,42 +10444,107 @@ final class AppState: ObservableObject {
                         for dir in listing.dirs { existing.insert(dir.name.lowercased()) }
                         for file in listing.files.items { existing.insert(file.name.lowercased()) }
                     }
-                    // Exclusive-create loop: on DestinationExists (an
-                    // un-indexed on-disk sibling), record the candidate as
-                    // taken and re-derive. Bounded so a pathological
-                    // directory can't spin forever.
-                    for _ in 0..<200 {
-                        let candidate = Self.duplicateName(
-                            for: sourceName, existingLowercasedNames: existing)
-                        let candidatePath = Self.joinVaultPath(parent, candidate)
-                        do {
-                            _ = try session.createExclusive(
-                                path: candidatePath, content: content)
-                            return .success(candidatePath)
-                        } catch VaultError.DestinationExists {
-                            existing.insert(candidate.lowercased())
-                        }
-                    }
-                    return .failure(
-                        .Io(message: "could not find a free name after 200 attempts"))
+                    return .success((content, existing))
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
-            guard let self, self.currentSession === session else { return }
-            switch outcome {
-            case .success(let copyPath):
-                let copyName = (copyPath as NSString).lastPathComponent
-                self.publishTreeMutation(.createNote(path: copyPath), rewrittenCount: 0)
-                self.postMutationAnnouncement("Duplicated \(sourceName) as \(copyName).")
-                await self.loadFiles()
+            guard let self, self.ownsStructuralMutation(token, session: session) else {
+                return
+            }
+            switch preparation {
             case .failure(let error):
                 self.lastError = self.humanReadable(error)
                 self.announceMutationFailure(
                     verb: "duplicate", name: sourceName, error: error)
+                self.endStructuralMutation(token)
+                return
+            case .success(let prepared):
+                var existing = prepared.1
+                // Candidate selection must remain live-list/race aware, but the
+                // recovery registry is main-actor state. Choose one candidate,
+                // admit that exact identity, then perform only its exclusive
+                // create. A user-owned recovery candidate rejects instead of
+                // being silently treated as another suffix collision.
+                for _ in 0..<200 {
+                    let candidate = Self.duplicateName(
+                        for: sourceName,
+                        existingLowercasedNames: existing)
+                    let candidatePath = Self.joinVaultPath(parent, candidate)
+                    guard let recoveryReservation =
+                            self.admitStructuralRecoveryDestination(candidatePath),
+                        self.admitBatchTrashWrite(to: [candidatePath]),
+                        self.installStructuralRecoveryReservation(
+                            recoveryReservation, token: token)
+                    else {
+                        self.endStructuralMutation(token)
+                        return
+                    }
+                    if let reservationGate =
+                        self.duplicateCandidateReservationGateForTesting
+                    {
+                        await reservationGate(candidatePath)
+                        guard self.ownsStructuralMutation(token, session: session)
+                        else { return }
+                    }
+                    let create: Result<Void, VaultError> = await Task.detached(
+                        priority: .userInitiated
+                    ) {
+                        do {
+                            _ = try session.createExclusive(
+                                path: candidatePath,
+                                content: prepared.0)
+                            return .success(())
+                        } catch let error as VaultError {
+                            return .failure(error)
+                        } catch {
+                            return .failure(.Io(message: error.localizedDescription))
+                        }
+                    }.value
+                    guard self.ownsStructuralMutation(token, session: session) else {
+                        return
+                    }
+                    switch create {
+                    case .success:
+                        self.publishTreeMutation(
+                            .createNote(path: candidatePath),
+                            rewrittenCount: 0)
+                        self.postMutationAnnouncement(
+                            "Duplicated \(sourceName) as \(candidate).")
+                        await self.loadFiles()
+                        guard self.ownsStructuralMutation(token, session: session) else {
+                            return
+                        }
+                        self.endStructuralMutation(token)
+                        return
+                    case .failure(.DestinationExists):
+                        existing.insert(candidate.lowercased())
+                    case .failure(let error):
+                        self.lastError = self.humanReadable(error)
+                        self.announceMutationFailure(
+                            verb: "duplicate", name: sourceName, error: error)
+                        self.endStructuralMutation(token)
+                        return
+                    }
+                }
+                let error = VaultError.Io(
+                    message: "could not find a free name after 200 attempts")
+                self.lastError = self.humanReadable(error)
+                self.announceMutationFailure(
+                    verb: "duplicate", name: sourceName, error: error)
+                self.endStructuralMutation(token)
             }
-            self.endStructuralMutation(token)
         }
         return task
+    }
+
+    /// User-facing Duplicate admission. Direct UI surfaces use this wrapper so
+    /// keyboard and VoiceOver requests reject busy work with the same exact
+    /// announcement as every other structural command.
+    @discardableResult
+    func requestDuplicateEntry(path: String) -> Task<Void, Never>? {
+        guard currentSession != nil else { return nil }
+        guard admitStructuralMutationRequest() else { return nil }
+        return duplicateEntry(path: path)
     }
 
     /// Pure: the next collision-safe duplicate name for `name` given the
@@ -7587,30 +10597,43 @@ final class AppState: ObservableObject {
     @discardableResult
     func renameEntry(
         path: String, isDirectory: Bool, to newName: String,
-        undoContext: StructuralUndoContext = .record
+        undoContext: StructuralUndoContext = .record,
+        renameOwnerID: UUID? = nil
     ) -> Task<Void, Never>? {
-        guard !isMutatingStructure, let session = currentSession else { return nil }
-        let token = beginStructuralMutation()
-        structuralRenameError = nil
+        guard admitStructuralMutationRequest(), let session = currentSession else { return nil }
+        let newPath = Self.siblingPath(of: path, newName: newName)
+        guard let recoveryReservation = admitStructuralRecoveryRetargets([
+                NoteRecoveryPathRetarget(
+                    oldPath: path,
+                    newPath: newPath,
+                    includesDescendants: isDirectory)
+            ]),
+            admitBatchTrashWrite(to: [path, newPath]),
+            admitBatchTrashVaultWideWrite()
+        else { return nil }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        if renameOwnerID == nil || renameOwnerID.flatMap({ currentRename(id: $0) }) != nil {
+            structuralRenameError = nil
+        }
+        let runner = structuralRenameRunner
         let task = Task { [weak self] in
-            let outcome: Result<StructuralReport, VaultError> = await Task.detached(
-                priority: .userInitiated
-            ) {
-                do {
-                    let report =
-                        isDirectory
-                        ? try session.renameFolder(path: path, newName: newName)
-                        : try session.renameFile(path: path, newName: newName)
-                    return .success(report)
-                } catch let e as VaultError { return .failure(e) }
-                catch { return .failure(.Io(message: error.localizedDescription)) }
-            }.value
+            let outcome: Result<StructuralReport, VaultError>
+            do {
+                outcome = .success(
+                    try await runner(session, path, isDirectory, newName))
+            } catch let error as VaultError {
+                outcome = .failure(error)
+            } catch {
+                outcome = .failure(.Io(message: error.localizedDescription))
+            }
             guard let self, self.currentSession === session else { return }
             switch outcome {
             case .success(let report):
-                let newPath = Self.siblingPath(of: path, newName: newName)
                 self.applyRetargets(report, movedFrom: path, movedTo: newPath, isDirectory: isDirectory)
-                self.renamingNode = nil
+                if let renameOwnerID {
+                    self.clearPendingRename(id: renameOwnerID, session: session)
+                }
                 self.publishTreeMutation(
                     .rename(oldPath: path, newPath: newPath),
                     rewrittenCount: Self.distinctRewrittenCount(report))
@@ -7641,7 +10664,11 @@ final class AppState: ObservableObject {
                 if undoContext == .record {
                     // Inline rename: keep the field open + focused with a
                     // specific message it renders below itself.
-                    self.structuralRenameError = self.humanReadable(error)
+                    if renameOwnerID == nil
+                        || renameOwnerID.flatMap({ self.currentRename(id: $0) }) != nil
+                    {
+                        self.structuralRenameError = self.humanReadable(error)
+                    }
                 } else {
                     // #871 Codex round 1: an undo/redo rename has NO inline
                     // field (structural undo routes only when
@@ -7694,8 +10721,20 @@ final class AppState: ObservableObject {
         announce: Bool = true,
         onResult: ((Bool) -> Void)? = nil
     ) -> Task<Void, Never>? {
-        guard !isMutatingStructure, let session = currentSession else { return nil }
-        let token = beginStructuralMutation()
+        guard admitStructuralMutationRequest(), let session = currentSession else { return nil }
+        let newPath = Self.joinVaultPath(
+            newParent, (path as NSString).lastPathComponent)
+        guard let recoveryReservation = admitStructuralRecoveryRetargets([
+                NoteRecoveryPathRetarget(
+                    oldPath: path,
+                    newPath: newPath,
+                    includesDescendants: isDirectory)
+            ]),
+            admitBatchTrashWrite(to: [path, newPath]),
+            admitBatchTrashVaultWideWrite()
+        else { return nil }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
         let task = Task { [weak self] in
             let outcome: Result<StructuralReport, VaultError> = await Task.detached(
                 priority: .userInitiated
@@ -7712,10 +10751,8 @@ final class AppState: ObservableObject {
             guard let self, self.currentSession === session else { return }
             switch outcome {
             case .success(let report):
-                let newPath = Self.joinVaultPath(newParent, (path as NSString).lastPathComponent)
                 let oldParent = TreeMutation.parentPath(of: path) ?? ""
                 self.applyRetargets(report, movedFrom: path, movedTo: newPath, isDirectory: isDirectory)
-                self.pendingMove = nil
                 self.publishTreeMutation(
                     .move(
                         oldPath: path, newPath: newPath,
@@ -7801,60 +10838,414 @@ final class AppState: ObservableObject {
         "Moved \(count) \(count == 1 ? "item" : "items") to Trash."
     }
 
-    /// Move every item of a multi-selection under `newParent` ("" = vault root),
-    /// then announce ONCE (#852). Each item routes through the existing per-item
-    /// `moveEntry` funnel — so per-item link rewrite AND the #871 per-item
-    /// structural-undo inverse both happen exactly as a single move would (a
-    /// K-item batch is K ⌘Z to fully undo; the structural stack is per-op and we
-    /// deliberately don't coalesce). `moveEntry` serializes on
-    /// `isMutatingStructure`, so the items are awaited SEQUENTIALLY — a second
-    /// `moveEntry` fired before the first's tree refresh lands would be rejected.
-    /// No-op items (already directly in `newParent`) and backend-illegal ones
-    /// (a folder into its own subtree) are skipped so the count is truthful.
+    @discardableResult
+    func moveTreeSelection(
+        _ items: [TreeSelection],
+        to newParent: String,
+        preferredFocusPath: String? = nil
+    ) -> Task<Void, Never>? {
+        guard !items.isEmpty, currentSession != nil else { return nil }
+        guard admitStructuralMutationRequest() else { return nil }
+        if items.count == 1, let item = items.first {
+            let currentParent = TreeMutation.parentPath(of: item.path) ?? ""
+            guard currentParent != newParent else { return nil }
+            guard !item.isDirectory
+                || !Self.pathIsWithin(newParent, path: item.path, isDirectory: true)
+            else { return nil }
+            return moveEntry(
+                path: item.path,
+                isDirectory: item.isDirectory,
+                to: newParent)
+        }
+        let validatedFocus = preferredFocusPath.flatMap { preferred in
+            items.contains(where: { $0.path == preferred }) ? preferred : nil
+        }
+        return batchMove(
+            items,
+            to: newParent,
+            preferredFocusPath: validatedFocus)
+    }
+
+    /// Compatibility entry used by older call sites that don't yet carry a
+    /// preferred focus row. Admission-sensitive surfaces use the overload below
+    /// so a busy second submission can observe `nil`.
     @discardableResult
     func batchMove(_ items: [TreeSelection], to newParent: String) -> Task<Void, Never> {
-        let targets = Self.topLevelSelection(items)
+        batchMove(items, to: newParent, preferredFocusPath: nil) ?? Task {}
+    }
+
+    /// Submit the full captured selection to core exactly once. Swift does not
+    /// prune descendants or no-ops: those are typed `envelope.skipped` facts in
+    /// the native report and must survive for the result presentation.
+    @discardableResult
+    func batchMove(
+        _ items: [TreeSelection],
+        to newParent: String,
+        preferredFocusPath: String?
+    ) -> Task<Void, Never>? {
+        guard !items.isEmpty, admitStructuralMutationRequest(),
+            let session = currentSession
+        else {
+            return nil
+        }
+        let affectedPaths = items.flatMap { item in
+            [
+                item.path,
+                Self.joinVaultPath(
+                    newParent, (item.path as NSString).lastPathComponent),
+            ]
+        }
+        guard let recoveryReservation = admitStructuralRecoveryRetargets(
+                Self.topLevelSelection(items).map { item in
+                    NoteRecoveryPathRetarget(
+                        oldPath: item.path,
+                        newPath: Self.joinVaultPath(
+                            newParent,
+                            (item.path as NSString).lastPathComponent),
+                        includesDescendants: item.isDirectory)
+                }),
+            admitBatchTrashWrite(to: affectedPaths),
+            admitBatchTrashVaultWideWrite()
+        else { return nil }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let runner = batchMoveRunner
+        let refresher = structuralBatchRefreshRunner
+        let request = BatchMoveRequest(
+            items: items.map {
+                StructuralBatchItem(path: $0.path, isDirectory: $0.isDirectory)
+            },
+            newParent: newParent)
         let task = Task { @MainActor [weak self] in
-            guard let self, let session = self.currentSession else { return }
-            var moved = 0
-            for item in targets {
-                // #852 red-team: a mid-batch DIRECT vault switch (Open Recent /
-                // Open Vault fires at a per-item await suspension) makes the
-                // remaining old-vault paths meaningless against the new vault —
-                // abort rather than move/announce against the wrong vault.
-                guard self.currentSession === session else { break }
-                let currentParent = TreeMutation.parentPath(of: item.path) ?? ""
-                if currentParent == newParent { continue }  // no-op: already here
-                if item.isDirectory,
-                    Self.pathIsWithin(newParent, path: item.path, isDirectory: true) {
-                    continue  // folder into its own subtree — backend rejects
-                }
-                var succeeded = false
-                if let t = self.moveEntry(
-                    path: item.path, isDirectory: item.isDirectory, to: newParent,
-                    announce: false, onResult: { succeeded = $0 }) {
-                    await t.value
-                    // #852 red-team: count only ACTUAL successes — moveEntry
-                    // returns a non-nil task even when the op then FAILS (e.g. a
-                    // name collision at the destination), so incrementing on
-                    // mere completion over-reported "Moved N items".
-                    if succeeded { moved += 1 }
-                }
+            let outcome: Result<BatchMoveReport, Error>
+            do {
+                outcome = .success(try await runner(session, request))
+            } catch {
+                outcome = .failure(error)
             }
-            // #852 (Codex finding 5): the post-loop writes must NOT touch a
-            // vault that was switched in mid-batch. A direct switch A→B during a
-            // per-item await suspension would otherwise clear B's freshly-opened
-            // batch-move sheet (`pendingBatchMove = nil`) and announce A's
-            // partial result under B. Recheck ownership before either write.
-            guard self.currentSession === session else { return }
-            self.pendingBatchMove = nil
-            if moved > 0 {
-                self.postMutationAnnouncement(
-                    Self.batchMoveAnnouncement(count: moved, destination: newParent))
+            guard let self, self.ownsStructuralMutation(token, session: session) else {
+                return
             }
+
+            switch outcome {
+            case .success(let report):
+                // Core has already changed the filesystem when its report
+                // arrives. Quarantine only the physically-standing paths now,
+                // before the inventory refresh can suspend, so no open editor
+                // can keep writing through a moved-away native handle/path.
+                self.quarantineBatchMovePathsBeforeRefresh(report)
+                if Self.batchMoveNeedsRefresh(report) {
+                    await refresher(self)
+                    guard self.ownsStructuralMutation(token, session: session) else {
+                        return
+                    }
+                }
+                self.landForwardBatchMove(
+                    report,
+                    destination: newParent,
+                    preferredFocusPath: preferredFocusPath)
+            case .failure(let error):
+                await refresher(self)
+                guard self.ownsStructuralMutation(token, session: session) else {
+                    return
+                }
+                self.clearStructuralUndoStacks()
+                self.publishTreeMutation(
+                    .batchReconcile,
+                    rewrittenCount: 0,
+                    requiresRescan: true,
+                    preferredFocusPath: preferredFocusPath)
+                let message = error.localizedDescription
+                self.setBatchStructuralResult(BatchStructuralResult(
+                    payload: .infrastructure(
+                        operation: .move(.forward(destination: newParent)),
+                        message: message),
+                    requiresAttention: true))
+                self.postMutationAnnouncement("Move failed: \(message)")
+            }
+            self.endStructuralMutation(token)
         }
         pendingStructuralTaskForTesting = task
         return task
+    }
+
+    private static func batchMoveNeedsRefresh(_ report: BatchMoveReport) -> Bool {
+        switch report.state {
+        case .rejected, .noOp:
+            return report.requiresRescan
+        case .succeeded, .rolledBack, .rollbackIncomplete:
+            return true
+        }
+    }
+
+    /// Synchronous host half of a native Move landing. The typed report is the
+    /// sole path authority; history, tree mutation, result, and announcement
+    /// still land once after the one inventory refresh.
+    private func quarantineBatchMovePathsBeforeRefresh(_ report: BatchMoveReport) {
+        switch report.state {
+        case .succeeded, .rollbackIncomplete:
+            applyBatchMoveRetargets(report.standing)
+        case .rejected, .noOp, .rolledBack:
+            break
+        }
+    }
+
+    /// A no-op can still carry a native ledger that needs the user's attention.
+    /// `planned` is only request context; every other vector describes work,
+    /// rejection, recovery, or reconciliation that must not be hidden.
+    private static func batchMoveHasActionableLedger(_ report: BatchMoveReport) -> Bool {
+        report.failure != nil
+            || !report.rollbackFailures.isEmpty
+            || !report.envelope.preflightFailures.isEmpty
+            || !report.rewriteFailures.isEmpty
+            || !report.envelope.skipped.isEmpty
+            || !report.standing.isEmpty
+            || !report.rolledBack.isEmpty
+            || !report.rewritten.isEmpty
+            || report.requiresRescan
+    }
+
+    /// Execute one native batch-history edge. Core validates the journal id and
+    /// returns the authoritative reverse/redo standing paths; Swift never
+    /// synthesizes per-item destinations (which would be false for batches
+    /// originating in multiple parent folders).
+    @discardableResult
+    private func executeBatchMoveInverse(
+        _ inverse: StructuralUndoOp,
+        opID: Int64,
+        context: StructuralUndoContext
+    ) -> Task<Void, Never>? {
+        guard admitStructuralMutationRequest(), let session = currentSession else { return nil }
+        guard case .batchMove(_, let entries) = inverse,
+            let recoveryReservation = admitStructuralRecoveryRetargets(
+                entries.map {
+                    NoteRecoveryPathRetarget(
+                        oldPath: $0.newPath,
+                        newPath: $0.oldPath,
+                        includesDescendants: $0.isDirectory)
+                })
+        else { return nil }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let runner = batchUndoMoveRunner
+        let refresher = structuralBatchRefreshRunner
+        let task = Task { @MainActor [weak self] in
+            let outcome: Result<BatchMoveReport, Error>
+            do {
+                outcome = .success(try await runner(session, opID))
+            } catch {
+                outcome = .failure(error)
+            }
+            guard let self, self.ownsStructuralMutation(token, session: session) else {
+                return
+            }
+
+            switch outcome {
+            case .success(let report):
+                self.quarantineBatchMovePathsBeforeRefresh(report)
+                if Self.batchMoveNeedsRefresh(report) {
+                    await refresher(self)
+                    guard self.ownsStructuralMutation(token, session: session) else {
+                        return
+                    }
+                }
+                self.landBatchMoveInverse(report, source: inverse, context: context)
+            case .failure(let error):
+                await refresher(self)
+                guard self.ownsStructuralMutation(token, session: session) else {
+                    return
+                }
+                let mode: BatchStructuralResult.MoveMode =
+                    context == .undoing ? .undo : .redo
+                self.clearStructuralUndoStacks()
+                self.publishTreeMutation(
+                    .batchReconcile,
+                    rewrittenCount: 0,
+                    requiresRescan: true,
+                    preferredFocusPath: nil)
+                let message = error.localizedDescription
+                self.setBatchStructuralResult(BatchStructuralResult(
+                    payload: .infrastructure(
+                        operation: .move(mode), message: message),
+                    requiresAttention: true))
+                let verb = context == .undoing ? "Undo" : "Redo"
+                self.postMutationAnnouncement("\(verb) failed: \(message)")
+            }
+            self.endStructuralMutation(token)
+        }
+        return task
+    }
+
+    private enum BatchMoveHistoryPolicy {
+        case recordForward
+        case transition(source: StructuralUndoOp, context: StructuralUndoContext)
+    }
+
+    private func landBatchMoveInverse(
+        _ report: BatchMoveReport,
+        source: StructuralUndoOp,
+        context: StructuralUndoContext
+    ) {
+        let mode: BatchStructuralResult.MoveMode =
+            context == .undoing ? .undo : .redo
+        landBatchMove(
+            report,
+            mode: mode,
+            history: .transition(source: source, context: context),
+            preferredFocusPath: nil)
+    }
+
+    private func landForwardBatchMove(
+        _ report: BatchMoveReport,
+        destination: String,
+        preferredFocusPath: String?
+    ) {
+        let mode = BatchStructuralResult.MoveMode.forward(destination: destination)
+        landBatchMove(
+            report,
+            mode: mode,
+            history: .recordForward,
+            preferredFocusPath: preferredFocusPath)
+    }
+
+    /// Shared physical Move matrix for forward, undo, and redo. The report is
+    /// the sole authority for paths that stand or were restored; `history`
+    /// changes only the stack edge and never changes physical interpretation.
+    private func landBatchMove(
+        _ report: BatchMoveReport,
+        mode: BatchStructuralResult.MoveMode,
+        history: BatchMoveHistoryPolicy,
+        preferredFocusPath: String?
+    ) {
+        let attention: Bool
+        let announcement: String
+        let rewritten = Set(report.rewritten.map(\.path)).count
+        switch report.state {
+        case .rejected:
+            attention = true
+            announcement = "Move could not start. No items were moved."
+            if report.requiresRescan {
+                publishTreeMutation(
+                    .batchReconcile,
+                    rewrittenCount: 0,
+                    requiresRescan: true,
+                    preferredFocusPath: preferredFocusPath)
+            }
+        case .noOp:
+            attention = Self.batchMoveHasActionableLedger(report)
+            announcement = "Nothing moved."
+            if report.requiresRescan {
+                publishTreeMutation(
+                    .batchReconcile,
+                    rewrittenCount: 0,
+                    requiresRescan: true,
+                    preferredFocusPath: preferredFocusPath)
+                }
+        case .succeeded:
+            guard !report.standing.isEmpty, let opID = report.opId else {
+                clearStructuralUndoStacks()
+                if report.standing.isEmpty {
+                    publishTreeMutation(
+                        .batchReconcile,
+                        rewrittenCount: rewritten,
+                        requiresRescan: true,
+                        preferredFocusPath: preferredFocusPath)
+                } else {
+                    publishTreeMutation(
+                        .batchMove(standing: report.standing, touched: []),
+                        rewrittenCount: rewritten,
+                        requiresRescan: true,
+                        preferredFocusPath: preferredFocusPath)
+                }
+                setBatchStructuralResult(BatchStructuralResult(
+                    payload: .move(report, mode: mode), requiresAttention: true))
+                postMutationAnnouncement("Move could not be reconciled safely.")
+                return
+            }
+            let landed = StructuralUndoOp.batchMove(
+                opId: opID, entries: report.standing)
+            let historyLanded: Bool
+            switch history {
+            case .recordForward:
+                recordStructuralUndo(inverse: landed, context: .record)
+                historyLanded = true
+            case .transition(let source, let context):
+                let sourceStillTop: Bool
+                switch context {
+                case .undoing:
+                    sourceStillTop = structuralUndoStack.last == source
+                case .redoing:
+                    sourceStillTop = structuralRedoStack.last == source
+                case .record:
+                    sourceStillTop = false
+                }
+                if sourceStillTop {
+                    recordStructuralUndo(inverse: landed, context: context)
+                }
+                historyLanded = sourceStillTop
+            }
+            guard historyLanded else {
+                clearStructuralUndoStacks()
+                publishTreeMutation(
+                    .batchMove(standing: report.standing, touched: []),
+                    rewrittenCount: rewritten,
+                    requiresRescan: true,
+                    preferredFocusPath: preferredFocusPath)
+                setBatchStructuralResult(BatchStructuralResult(
+                    payload: .move(report, mode: mode), requiresAttention: true))
+                postMutationAnnouncement("Move could not be reconciled safely.")
+                return
+            }
+            publishTreeMutation(
+                .batchMove(standing: report.standing, touched: []),
+                rewrittenCount: rewritten,
+                requiresRescan: report.requiresRescan,
+                preferredFocusPath: preferredFocusPath)
+            attention = !report.envelope.skipped.isEmpty
+                || !report.envelope.preflightFailures.isEmpty
+                || !report.rewriteFailures.isEmpty
+                || report.requiresRescan
+            let baseAnnouncement: String
+            switch mode {
+            case .forward(let destination):
+                baseAnnouncement = Self.batchMoveAnnouncement(
+                    count: report.standing.count, destination: destination)
+            case .undo:
+                baseAnnouncement = "Undid \(Self.structuralUndoActionName(landed))."
+            case .redo:
+                baseAnnouncement = "Redid \(Self.structuralUndoActionName(landed))."
+            }
+            announcement = Self.withLinksSuffix(
+                baseAnnouncement, rewrittenCount: rewritten)
+        case .rolledBack:
+            attention = true
+            publishTreeMutation(
+                .batchMove(standing: [], touched: report.rolledBack),
+                rewrittenCount: rewritten,
+                requiresRescan: report.requiresRescan,
+                preferredFocusPath: preferredFocusPath)
+            announcement = "Move stopped. Slate restored every item to its original location."
+        case .rollbackIncomplete:
+            attention = true
+            clearStructuralUndoStacks()
+            publishTreeMutation(
+                .batchMove(standing: report.standing, touched: report.rolledBack),
+                rewrittenCount: rewritten,
+                requiresRescan: report.requiresRescan,
+                preferredFocusPath: preferredFocusPath)
+            announcement = "Move stopped. Slate restored "
+                + "\(Self.batchItemCountText(report.rolledBack.count)). "
+                + "\(Self.batchItemCountText(report.standing.count)) "
+                + "\(report.standing.count == 1 ? "remains in its" : "remain in their") "
+                + "new location."
+        }
+        setBatchStructuralResult(BatchStructuralResult(
+            payload: .move(report, mode: mode), requiresAttention: attention))
+        postMutationAnnouncement(announcement)
+    }
+
+    private static func batchItemCountText(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "item" : "items")"
     }
 
     // MARK: - Structural undo/redo (#871)
@@ -7869,6 +11260,10 @@ final class AppState: ObservableObject {
         case move(path: String, isDirectory: Bool, targetParent: String)
         /// Reverse a rename: rename `path` to `newName` (a single component).
         case rename(path: String, isDirectory: Bool, newName: String)
+        /// One native batch Move is one undo step. `opId` is the journal row
+        /// core validates and reverses atomically; `entries` name the physical
+        /// standing paths for truthful menu copy and later report comparison.
+        case batchMove(opId: Int64, entries: [BatchPathChange])
     }
 
     /// Which structural-undo stack a completed move/rename feeds. Threaded
@@ -7910,6 +11305,8 @@ final class AppState: ObservableObject {
             return "move of \((path as NSString).lastPathComponent)"
         case .rename(_, _, let newName):
             return "rename to \(newName)"
+        case .batchMove(_, let entries):
+            return "move of \(entries.count) \(entries.count == 1 ? "item" : "items")"
         }
     }
 
@@ -7975,6 +11372,10 @@ final class AppState: ObservableObject {
             return exists(path) && !exists(dest)
         case .rename(let path, _, let newName):
             return exists(path) && !exists(Self.siblingPath(of: path, newName: newName))
+        case .batchMove:
+            // Core performs latest-journal validation and complete inverse
+            // preflight under one lock. A Swift lstat loop would be a TOCTOU.
+            return true
         }
     }
 
@@ -7984,6 +11385,10 @@ final class AppState: ObservableObject {
     /// than no-oping silently — the canvas-parity VoiceOver affordance
     /// (`undoMenuItemEnabled` keeps the item enabled to preserve it).
     func structuralUndo() {
+        if let reason = structuralMutationDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         guard let inverse = structuralUndoStack.last else {
             postMutationAnnouncement("Nothing to undo.")
             return
@@ -7995,11 +11400,17 @@ final class AppState: ObservableObject {
             postMutationAnnouncement("Can't undo — the files have changed.")
             return
         }
-        pendingStructuralTaskForTesting = executeStructuralInverse(inverse, context: .undoing)
+        if let task = executeStructuralInverse(inverse, context: .undoing) {
+            pendingStructuralTaskForTesting = task
+        }
     }
 
     /// ⇧⌘Z twin of `structuralUndo`.
     func structuralRedo() {
+        if let reason = structuralMutationDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
         guard let inverse = structuralRedoStack.last else {
             postMutationAnnouncement("Nothing to redo.")
             return
@@ -8009,7 +11420,9 @@ final class AppState: ObservableObject {
             postMutationAnnouncement("Can't redo — the files have changed.")
             return
         }
-        pendingStructuralTaskForTesting = executeStructuralInverse(inverse, context: .redoing)
+        if let task = executeStructuralInverse(inverse, context: .redoing) {
+            pendingStructuralTaskForTesting = task
+        }
     }
 
     /// Dispatch a stack-top inverse back through the forward wrappers with the
@@ -8036,6 +11449,9 @@ final class AppState: ObservableObject {
         case .rename(let path, let isDirectory, let newName):
             return renameEntry(
                 path: path, isDirectory: isDirectory, to: newName, undoContext: context)
+        case .batchMove(let opID, _):
+            return executeBatchMoveInverse(
+                inverse, opID: opID, context: context)
         }
     }
 
@@ -8113,10 +11529,15 @@ final class AppState: ObservableObject {
     /// barriers the structural-undo stacks (#871) and records no undo entry.
     @discardableResult
     func importEntry(externalURL: URL, into destinationFolder: String) -> Task<Void, Never>? {
-        guard !isMutatingStructure, let session = currentSession else { return nil }
-        let token = beginStructuralMutation()
+        guard let session = currentSession else { return nil }
+        guard admitStructuralMutationRequest() else { return nil }
         let name = externalURL.lastPathComponent
         let destPath = Self.joinVaultPath(destinationFolder, name)
+        guard let recoveryReservation = admitStructuralRecoveryDestination(destPath),
+            admitBatchTrashWrite(to: [destPath])
+        else { return nil }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
         let task = Task { [weak self] in
             let outcome: Result<Void, VaultError> = await Task.detached(
                 priority: .userInitiated
@@ -8319,6 +11740,32 @@ final class AppState: ObservableObject {
         return .importFile(url: url, into: destinationFolder)
     }
 
+    /// Dispatch one decoded public file-URL drop through the admission-aware
+    /// move/import request funnels. Classification stays pure and preserves the
+    /// existing same-parent, own-subtree, and vault-root no-op outcomes.
+    @discardableResult
+    func handleFileURLDrop(
+        _ url: URL,
+        into destinationFolder: String
+    ) -> Task<Void, Never>? {
+        let isDirectory = Self.urlIsDirectory(url)
+        switch Self.fileURLDropAction(
+            url: url,
+            vaultURL: currentVaultURL,
+            destinationFolder: destinationFolder,
+            isDirectory: isDirectory)
+        {
+        case .move(let path, let isDirectory, let destination):
+            return moveTreeSelection(
+                [TreeSelection(path: path, isDirectory: isDirectory)],
+                to: destination)
+        case .importFile(let externalURL, let destination):
+            return importEntry(externalURL: externalURL, into: destination)
+        case .none:
+            return nil
+        }
+    }
+
     /// Whether `url` IS the current vault root (#870 Codex round 3). Fully
     /// resolves symlinks on both sides (the root is a container, so — unlike a
     /// dropped item — its own final component is safe to resolve) and honors
@@ -8395,16 +11842,17 @@ final class AppState: ObservableObject {
     /// no-confirm Finder-parity path (a file trash is recoverable; a whole
     /// subtree moving on one chord is the heavier loss-of-context event).
     struct PendingFolderDelete: Equatable, Identifiable {
+        let id: UUID
+        let sessionIdentity: ObjectIdentifier
         let path: String
         /// Immediate (non-recursive) child count — the "its N items" the
         /// alert message speaks. Advisory: the delete itself takes the whole
         /// subtree regardless.
         let itemCount: Int
-        var id: String { path }
         var name: String { (path as NSString).lastPathComponent }
     }
 
-    @Published var pendingFolderDelete: PendingFolderDelete?
+    @Published private(set) var pendingFolderDelete: PendingFolderDelete?
 
     /// The single delete entry point every surface routes through (#860):
     /// tree ⌘⌫ / rotor / context menu, and the menu/palette command. A
@@ -8414,7 +11862,11 @@ final class AppState: ObservableObject {
     /// immediate count; callers without one (the selection-scoped command)
     /// leave it nil and a shallow FileManager enumerate fills in.
     func requestDeleteEntry(path: String, isDirectory: Bool, knownChildCount: Int? = nil) {
-        guard isVaultOpen else { return }
+        guard let session = currentSession else { return }
+        guard admitStructuralMutationRequest() else { return }
+        guard admitBatchTrashMutation(
+            of: [StructuralBatchItem(path: path, isDirectory: isDirectory)])
+        else { return }
         if isDirectory {
             // A cached count of ZERO is treated as unknown: the tree's
             // itemCount can be stale (folder filled externally since the
@@ -8424,7 +11876,11 @@ final class AppState: ObservableObject {
             let count = knownChildCount.flatMap { $0 > 0 ? $0 : nil }
                 ?? shallowChildCount(ofFolder: path)
             if count > 0 {
-                pendingFolderDelete = PendingFolderDelete(path: path, itemCount: count)
+                pendingFolderDelete = PendingFolderDelete(
+                    id: UUID(),
+                    sessionIdentity: ObjectIdentifier(session),
+                    path: path,
+                    itemCount: count)
                 return
             }
         }
@@ -8433,15 +11889,40 @@ final class AppState: ObservableObject {
 
     /// Alert "Move to Trash" — run the staged folder delete through the
     /// normal funnel (announcement + tree focus move ride along unchanged).
-    func confirmPendingFolderDelete() {
-        guard let pending = pendingFolderDelete else { return }
+    @discardableResult
+    func confirmPendingFolderDelete(id: UUID) -> Bool {
+        guard let pending = pendingFolderDelete, pending.id == id else {
+            return false
+        }
+        guard let session = currentSession,
+            pending.sessionIdentity == ObjectIdentifier(session)
+        else {
+            pendingFolderDelete = nil
+            return false
+        }
+        guard admitStructuralMutationRequest() else { return false }
+        guard let task = deleteEntry(path: pending.path, isDirectory: true) else {
+            return false
+        }
         pendingFolderDelete = nil
-        pendingStructuralTaskForTesting = deleteEntry(path: pending.path, isDirectory: true)
+        pendingStructuralTaskForTesting = task
+        return true
+    }
+
+    /// The live alert monitor consumes bare Return without admitting the
+    /// destructive action or changing the staged request.
+    @discardableResult
+    func handlePendingFolderDeleteReturnKey(id: UUID) -> Bool {
+        guard pendingFolderDelete?.id == id else { return false }
+        return false
     }
 
     /// Alert "Cancel" — nothing is deleted.
-    func cancelPendingFolderDelete() {
+    @discardableResult
+    func cancelPendingFolderDelete(id: UUID) -> Bool {
+        guard pendingFolderDelete?.id == id else { return false }
         pendingFolderDelete = nil
+        return true
     }
 
     // MARK: - Batch delete (#852)
@@ -8452,16 +11933,40 @@ final class AppState: ObservableObject {
     /// trashes straight through, Finder-parity. The MainSplitView alert consumes
     /// it.
     struct BatchDelete: Equatable, Identifiable {
-        /// The deduplicated top-level items to trash.
+        let id: UUID
+        let sessionIdentity: ObjectIdentifier
+        /// The complete captured selection. Core returns the projected ledger.
         let items: [TreeSelection]
+        let preferredFocusPath: String?
         /// How many non-empty folders the batch includes — drives the alert
         /// message ("including N folders with contents").
         let nonEmptyFolderCount: Int
-        var id: String { items.map(\.path).joined(separator: "\n") }
         var itemCount: Int { items.count }
     }
 
-    @Published var pendingBatchDelete: BatchDelete?
+    @Published private(set) var pendingBatchDelete: BatchDelete?
+
+    enum BatchDeleteConfirmationKey {
+        case returnKey
+        case cancel
+    }
+
+    /// Behavior seam for the destructive confirmation's keyboard contract:
+    /// Return never admits Trash; Escape/Command-Period take the captured
+    /// cancel path. SwiftUI's cancel-role button routes through this resolver.
+    @discardableResult
+    func handlePendingBatchDeleteKey(
+        _ key: BatchDeleteConfirmationKey,
+        id: UUID
+    ) -> Bool {
+        guard pendingBatchDelete?.id == id else { return false }
+        switch key {
+        case .returnKey:
+            return false
+        case .cancel:
+            return cancelPendingBatchDelete(id: id)
+        }
+    }
 
     /// The batch delete entry point (#852): trashes a whole multi-selection with
     /// ONE summary announcement. Mirrors `requestDeleteEntry`'s #860 gate at the
@@ -8470,77 +11975,648 @@ final class AppState: ObservableObject {
     /// all-files / empty-folder batch falls straight through to `batchDelete`.
     /// The selection is deduplicated to its top-level items first so a folder +
     /// something inside it don't double-delete.
-    func requestBatchDelete(_ items: [TreeSelection]) {
-        guard isVaultOpen else { return }
-        let targets = Self.topLevelSelection(items)
-        guard !targets.isEmpty else { return }
+    @discardableResult
+    func requestBatchDelete(
+        _ items: [TreeSelection], preferredFocusPath: String? = nil
+    ) -> Bool {
+        guard let session = currentSession, !items.isEmpty else { return false }
+        guard admitStructuralMutationRequest() else { return false }
+        guard admitBatchTrashMutation(
+            of: items.map {
+                StructuralBatchItem(path: $0.path, isDirectory: $0.isDirectory)
+            })
+        else { return false }
         // A single item routes through the single funnel so it gets the exact
         // #860 single-folder confirmation copy (and its own announcement).
-        if targets.count == 1, let only = targets.first {
+        if items.count == 1, let only = items.first {
             requestDeleteEntry(
                 path: only.path, isDirectory: only.isDirectory)
-            return
+            return true
         }
-        let nonEmptyFolders = targets.filter {
-            $0.isDirectory && shallowChildCount(ofFolder: $0.path) > 0
+        guard let vaultURL = currentVaultURL else { return false }
+        let capturedItems = items
+        let capturedFocusPath = preferredFocusPath
+        let sessionIdentity = ObjectIdentifier(session)
+        let confirmationID = UUID()
+        let folderPaths = items.compactMap { $0.isDirectory ? $0.path : nil }
+        let probeRunner = batchDeleteConfirmationProbeRunner
+        let trashRunner = batchTrashRunner
+        let refresher = structuralBatchRefreshRunner
+        let trashRequest = BatchTrashRequest(
+            items: capturedItems.map {
+                StructuralBatchItem(path: $0.path, isDirectory: $0.isDirectory)
+            })
+        let token = beginStructuralMutation()
+        let task = Task { @MainActor [weak self] in
+            let nonEmptyFolderCount = await probeRunner(vaultURL, folderPaths)
+            guard let self, self.ownsStructuralMutation(token, session: session) else {
+                return
+            }
+            guard nonEmptyFolderCount > 0 else {
+                await self.performBatchTrash(
+                    request: trashRequest,
+                    preferredFocusPath: capturedFocusPath,
+                    session: session,
+                    token: token,
+                    runner: trashRunner,
+                    refresher: refresher)
+                return
+            }
+            self.pendingBatchDelete = BatchDelete(
+                id: confirmationID,
+                sessionIdentity: sessionIdentity,
+                items: capturedItems,
+                preferredFocusPath: capturedFocusPath,
+                nonEmptyFolderCount: nonEmptyFolderCount)
+            self.endStructuralMutation(token)
         }
-        if !nonEmptyFolders.isEmpty {
-            pendingBatchDelete = BatchDelete(
-                items: targets, nonEmptyFolderCount: nonEmptyFolders.count)
-            return
-        }
-        pendingStructuralTaskForTesting = batchDelete(targets)
+        pendingStructuralTaskForTesting = task
+        return true
     }
 
     /// Alert "Move to Trash" — run the staged batch delete through the funnel.
-    func confirmPendingBatchDelete() {
-        guard let pending = pendingBatchDelete else { return }
+    @discardableResult
+    func confirmPendingBatchDelete(id: UUID) -> Bool {
+        guard let pending = pendingBatchDelete, pending.id == id else { return false }
+        guard let session = currentSession,
+            pending.sessionIdentity == ObjectIdentifier(session)
+        else {
+            pendingBatchDelete = nil
+            return false
+        }
+        guard admitStructuralMutationRequest() else { return false }
+        guard batchDelete(
+            pending.items, preferredFocusPath: pending.preferredFocusPath) != nil
+        else { return false }
         pendingBatchDelete = nil
-        pendingStructuralTaskForTesting = batchDelete(pending.items)
+        return true
     }
 
     /// Alert "Cancel" — nothing is deleted.
-    func cancelPendingBatchDelete() {
+    @discardableResult
+    func cancelPendingBatchDelete(id: UUID) -> Bool {
+        guard pendingBatchDelete?.id == id else { return false }
         pendingBatchDelete = nil
+        return true
     }
 
-    /// Trash every item, then announce ONCE (#852). Each routes through the
-    /// per-item `deleteEntry` funnel (announce:false) — same tab-error-flip and
-    /// tree refresh a single delete does — awaited sequentially because
-    /// `deleteEntry` serializes on `isMutatingStructure`. `items` is expected
-    /// already deduplicated (`topLevelSelection`), so no item is nested in
-    /// another and no delete acts on an already-trashed path.
+    /// Compatibility entry for call sites without a captured focus path.
     @discardableResult
     func batchDelete(_ items: [TreeSelection]) -> Task<Void, Never> {
-        let targets = Self.topLevelSelection(items)
+        batchDelete(items, preferredFocusPath: nil) ?? Task {}
+    }
+
+    /// Submit the captured Trash selection to core exactly once.
+    @discardableResult
+    func batchDelete(
+        _ items: [TreeSelection],
+        preferredFocusPath: String?
+    ) -> Task<Void, Never>? {
+        guard !items.isEmpty, admitStructuralMutationRequest(),
+            let session = currentSession
+        else {
+            return nil
+        }
+        guard admitBatchTrashMutation(
+            of: items.map {
+                StructuralBatchItem(path: $0.path, isDirectory: $0.isDirectory)
+            })
+        else { return nil }
+        let token = beginStructuralMutation()
+        let runner = batchTrashRunner
+        let refresher = structuralBatchRefreshRunner
+        let request = BatchTrashRequest(
+            items: items.map {
+                StructuralBatchItem(path: $0.path, isDirectory: $0.isDirectory)
+            })
         let task = Task { @MainActor [weak self] in
-            guard let self, let session = self.currentSession else { return }
-            var deleted = 0
-            for item in targets {
-                // #852 red-team: abort the rest if the vault switched mid-batch
-                // (the remaining old-vault paths are meaningless against a new
-                // vault).
-                guard self.currentSession === session else { break }
-                var succeeded = false
-                if let t = self.deleteEntry(
-                    path: item.path, isDirectory: item.isDirectory, announce: false,
-                    onResult: { succeeded = $0 }) {
-                    await t.value
-                    // #852 red-team: count only ACTUAL successes (deleteEntry
-                    // returns a non-nil task even when it fails), so the summary
-                    // doesn't claim a failed trash as trashed.
-                    if succeeded { deleted += 1 }
-                }
-            }
-            // #852 (Codex finding 5): don't announce the OLD vault's partial
-            // result under a vault switched in mid-batch — recheck ownership.
-            guard self.currentSession === session else { return }
-            if deleted > 0 {
-                self.postMutationAnnouncement(Self.batchDeleteAnnouncement(count: deleted))
-            }
+            guard let self else { return }
+            await self.performBatchTrash(
+                request: request,
+                preferredFocusPath: preferredFocusPath,
+                session: session,
+                token: token,
+                runner: runner,
+                refresher: refresher)
         }
         pendingStructuralTaskForTesting = task
         return task
+    }
+
+    /// Execute and land one native batch Trash while retaining the caller's
+    /// structural ownership. Both direct submission and the asynchronous
+    /// confirmation probe use this helper so the all-empty transition never
+    /// publishes a false idle state or duplicates the landing matrix.
+    private func performBatchTrash(
+        request: BatchTrashRequest,
+        preferredFocusPath: String?,
+        session: VaultSession,
+        token: Int,
+        runner: BatchTrashRunner,
+        refresher: StructuralBatchRefreshRunner
+    ) async {
+        let outcome: Result<BatchTrashReport, Error>
+        do {
+            outcome = .success(try await runner(session, request))
+        } catch {
+            outcome = .failure(error)
+        }
+        guard ownsStructuralMutation(token, session: session) else { return }
+        switch outcome {
+        case .success(let report):
+            // As with single-item Trash, invalidate the exact paths that core
+            // says left the vault before any awaited refresh. The final tree,
+            // result, and VoiceOver landing remains below the refresh.
+            quarantineBatchTrashPathsBeforeRefresh(report)
+            if Self.batchTrashNeedsRefresh(report) {
+                await refresher(self)
+                guard ownsStructuralMutation(token, session: session) else { return }
+            }
+            if !report.unknown.isEmpty {
+                let probes = report.unknown.map {
+                    BatchTrashPresenceProbe(
+                        path: $0.item.path,
+                        isDirectory: $0.item.isDirectory)
+                }
+                let vaultURL = currentVaultURL
+                let presenceProbe = batchTrashPresenceProbeRunner
+                let presence = await Task.detached(priority: .utility) {
+                    probes.map { probe in
+                        BatchTrashPresenceResult(
+                            path: probe.path,
+                            isDirectory: probe.isDirectory,
+                            presence: vaultURL.map {
+                                presenceProbe(
+                                    $0.appendingPathComponent(probe.path),
+                                    probe.isDirectory)
+                            } ?? .indeterminate)
+                    }
+                }.value
+                guard ownsStructuralMutation(token, session: session) else { return }
+                reconcileBatchTrashUnknownPathsAfterRefresh(
+                    presence,
+                    session: session)
+            }
+            landBatchTrash(report, preferredFocusPath: preferredFocusPath)
+        case .failure(let error):
+            await refresher(self)
+            guard ownsStructuralMutation(token, session: session) else { return }
+            clearStructuralUndoStacks()
+            publishTreeMutation(
+                .batchReconcile,
+                rewrittenCount: 0,
+                requiresRescan: true,
+                preferredFocusPath: preferredFocusPath)
+            let message = error.localizedDescription
+            setBatchStructuralResult(BatchStructuralResult(
+                payload: .infrastructure(operation: .trash, message: message),
+                requiresAttention: true))
+            postMutationAnnouncement("Trash operation failed: \(message)")
+        }
+        endStructuralMutation(token)
+    }
+
+    private static func batchTrashNeedsRefresh(_ report: BatchTrashReport) -> Bool {
+        if !report.unknown.isEmpty { return true }
+        switch report.state {
+        case .rejected, .noOp:
+            return report.requiresRescan
+        case .succeeded, .partial:
+            return true
+        case .failed:
+            return report.requiresRescan || !report.trashed.isEmpty
+        }
+    }
+
+    private func quarantineBatchTrashPathsBeforeRefresh(_ report: BatchTrashReport) {
+        switch report.state {
+        case .succeeded, .partial:
+            invalidateTrashedBatchItems(report.trashed)
+        case .failed where report.requiresRescan || !report.trashed.isEmpty:
+            invalidateTrashedBatchItems(report.trashed)
+        case .rejected, .noOp, .failed:
+            break
+        }
+        quarantineUnknownBatchTrashItems(report.unknown.map(\.item))
+    }
+
+    /// Unknown is not a synonym for either moved or not moved. Keep open Swift
+    /// documents and dirty Markdown bytes intact, but synchronously sever every
+    /// native handle and install a component-safe write gate before refresh can
+    /// suspend. Claiming each reservation without preparing it prevents tab
+    /// activation from reopening the ambiguous path during that window.
+    private func quarantineUnknownBatchTrashItems(_ items: [StructuralBatchItem]) {
+        guard !items.isEmpty else { return }
+        mergeBatchTrashUnknownItems(items)
+        guard let session = currentSession else { return }
+        quarantineUnknownBaseEmbedHandles(session: session)
+        let index = Self.batchTrashPathIndex(items)
+        var plans: [NativeDocumentRetargetPlan] = []
+
+        for (path, document) in canvasDocuments
+        where index.longestMatch(for: path) != nil {
+            let reservation = document.beginBatchRetarget(to: path)
+            _ = document.claimRetargetPreparation()
+            plans.append(
+                .canvas(
+                    path: path,
+                    generation: reservation.generation,
+                    replacedHandle: reservation.replacedHandle,
+                    prepare: false))
+        }
+
+        var reservedBases = Set<ObjectIdentifier>()
+        for (key, document) in baseDocuments {
+            guard let path = document.source.filePath,
+                index.longestMatch(for: path) != nil,
+                reservedBases.insert(ObjectIdentifier(document)).inserted
+            else { continue }
+            let source = BaseDocumentSource.file(path: path)
+            let reservation = document.beginBatchRetarget(to: source)
+            _ = document.claimRetargetPreparation()
+            plans.append(
+                .base(
+                    owner: .registry(key: key),
+                    source: source,
+                    generation: reservation.generation,
+                    replacedHandle: reservation.replacedHandle,
+                    request: reservation.request,
+                    prepare: false))
+        }
+        if let document = basesDockDocument,
+            let path = document.source.filePath,
+            index.longestMatch(for: path) != nil,
+            reservedBases.insert(ObjectIdentifier(document)).inserted
+        {
+            let source = BaseDocumentSource.file(path: path)
+            let reservation = document.beginBatchRetarget(
+                to: source, thisPath: basesDock.thisPath)
+            _ = document.claimRetargetPreparation()
+            plans.append(
+                .base(
+                    owner: .basesDock,
+                    source: source,
+                    generation: reservation.generation,
+                    replacedHandle: reservation.replacedHandle,
+                    request: reservation.request,
+                    prepare: false))
+        }
+        scheduleNativeDocumentRetargets(plans, session: session)
+    }
+
+    /// Re-enable only roots a post-refresh filesystem probe proves present;
+    /// invalidate only roots whose absence is explicit. Permission failures and
+    /// other ambiguous errors stay quarantined and preserve their live state.
+    private func reconcileBatchTrashUnknownPathsAfterRefresh(
+        _ results: [BatchTrashPresenceResult],
+        session: VaultSession
+    ) {
+        let reportKeys = Set(results.map {
+            Self.batchTrashUnknownKey(path: $0.path, isDirectory: $0.isDirectory)
+        })
+        var present: [StructuralBatchItem] = []
+        var absent: [StructuralBatchItem] = []
+        var indeterminate: [StructuralBatchItem] = []
+        for result in results {
+            let item = StructuralBatchItem(
+                path: result.path, isDirectory: result.isDirectory)
+            switch result.presence {
+            case .present: present.append(item)
+            case .absent: absent.append(item)
+            case .indeterminate: indeterminate.append(item)
+            }
+        }
+
+        let priorUnrelated = batchTrashUnknownItems.filter {
+            !reportKeys.contains(
+                Self.batchTrashUnknownKey(
+                    path: $0.path, isDirectory: $0.isDirectory))
+        }
+        replaceBatchTrashUnknownItems(priorUnrelated + indeterminate)
+
+        if !absent.isEmpty {
+            invalidateTrashedBatchItems(absent)
+            invalidateAbsentBaseEmbedHandles(absent, session: session)
+        }
+        resumePresentBatchTrashDocuments(present, session: session)
+    }
+
+    private func resumePresentBatchTrashDocuments(
+        _ items: [StructuralBatchItem],
+        session: VaultSession
+    ) {
+        guard !items.isEmpty else { return }
+        let index = Self.batchTrashPathIndex(items)
+        var plans: [NativeDocumentRetargetPlan] = []
+
+        for (path, document) in canvasDocuments
+        where index.longestMatch(for: path) != nil
+            && !isBatchTrashPathQuarantined(path)
+        {
+            let reservation = document.beginBatchRetarget(to: path)
+            let prepare =
+                document.claimRetargetPreparation() == reservation.generation
+            plans.append(
+                .canvas(
+                    path: path,
+                    generation: reservation.generation,
+                    replacedHandle: reservation.replacedHandle,
+                    prepare: prepare))
+        }
+
+        var resumedBases = Set<ObjectIdentifier>()
+        for (key, document) in baseDocuments {
+            guard let path = document.source.filePath,
+                index.longestMatch(for: path) != nil,
+                !isBatchTrashPathQuarantined(path),
+                resumedBases.insert(ObjectIdentifier(document)).inserted
+            else { continue }
+            let source = BaseDocumentSource.file(path: path)
+            let reservation = document.beginBatchRetarget(to: source)
+            let prepare =
+                document.claimRetargetPreparation() == reservation.generation
+            plans.append(
+                .base(
+                    owner: .registry(key: key),
+                    source: source,
+                    generation: reservation.generation,
+                    replacedHandle: reservation.replacedHandle,
+                    request: reservation.request,
+                    prepare: prepare))
+        }
+        if let document = basesDockDocument,
+            let path = document.source.filePath,
+            index.longestMatch(for: path) != nil,
+            !isBatchTrashPathQuarantined(path),
+            resumedBases.insert(ObjectIdentifier(document)).inserted
+        {
+            let source = BaseDocumentSource.file(path: path)
+            let reservation = document.beginBatchRetarget(
+                to: source, thisPath: basesDock.thisPath)
+            let prepare =
+                document.claimRetargetPreparation() == reservation.generation
+            plans.append(
+                .base(
+                    owner: .basesDock,
+                    source: source,
+                    generation: reservation.generation,
+                    replacedHandle: reservation.replacedHandle,
+                    request: reservation.request,
+                    prepare: prepare))
+        }
+        resumePresentBaseEmbedHandles(items, session: session)
+        scheduleNativeDocumentRetargets(plans, session: session)
+    }
+
+    func isBatchTrashPathQuarantined(_ path: String) -> Bool {
+        if case .readOnly = batchTrashPathCapability(for: path) { return true }
+        return false
+    }
+
+    private func mergeBatchTrashUnknownItems(_ items: [StructuralBatchItem]) {
+        replaceBatchTrashUnknownItems(batchTrashUnknownItems + items)
+    }
+
+    private func replaceBatchTrashUnknownItems(_ items: [StructuralBatchItem]) {
+        var seen = Set<String>()
+        batchTrashUnknownItems = items.filter {
+            seen.insert(
+                Self.batchTrashUnknownKey(
+                    path: $0.path, isDirectory: $0.isDirectory)).inserted
+        }
+        batchTrashUnknownPathIndex = batchTrashUnknownItems.isEmpty
+            ? nil
+            : Self.batchTrashPathIndex(batchTrashUnknownItems)
+    }
+
+    private static func batchTrashPathIndex(
+        _ items: [StructuralBatchItem]
+    ) -> VaultComponentPrefixIndex<StructuralBatchItem> {
+        VaultComponentPrefixIndex(
+            items.map {
+                .init(
+                    path: $0.path,
+                    includesDescendants: $0.isDirectory,
+                    value: $0)
+            })
+    }
+
+    private static func batchTrashUnknownKey(
+        path: String,
+        isDirectory: Bool
+    ) -> String {
+        BaseExactIdentity.key(
+            prefix: "batch-trash-unknown",
+            components: [isDirectory ? "directory" : "file", path])
+    }
+
+    private nonisolated static func batchTrashPhysicalPresence(
+        at url: URL,
+        expectedIsDirectory: Bool
+    ) -> BatchTrashPhysicalPresence {
+        do {
+            let values = try url.resourceValues(
+                forKeys: [
+                    .isDirectoryKey,
+                    .isRegularFileKey,
+                    .isSymbolicLinkKey,
+                ])
+            if values.isSymbolicLink == true { return .absent }
+            if expectedIsDirectory {
+                guard let isDirectory = values.isDirectory else {
+                    return .indeterminate
+                }
+                return isDirectory ? .present : .absent
+            }
+            guard let isRegularFile = values.isRegularFile else {
+                return .indeterminate
+            }
+            return isRegularFile ? .present : .absent
+        } catch {
+            let nsError = error as NSError
+            if nsError.domain == NSCocoaErrorDomain,
+                nsError.code == NSFileNoSuchFileError
+                    || nsError.code == NSFileReadNoSuchFileError
+            {
+                return .absent
+            }
+            if nsError.domain == NSPOSIXErrorDomain, nsError.code == 2 {
+                return .absent
+            }
+            return .indeterminate
+        }
+    }
+
+    /// Re-run authoritative tree refresh and physical probes for every item
+    /// that remains outcome-unknown. The quarantine is released only after
+    /// both suspension points revalidate this exact vault/session owner.
+    @discardableResult
+    func retryBatchTrashUnknownReconciliation() -> Task<Void, Never>? {
+        guard !batchTrashUnknownItems.isEmpty, let session = currentSession else {
+            return nil
+        }
+        guard admitStructuralMutationRequest() else { return nil }
+        let token = beginStructuralMutation()
+        let items = batchTrashUnknownItems
+        let refresher = structuralBatchRefreshRunner
+        let presenceProbe = batchTrashPresenceProbeRunner
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.endStructuralMutation(token) }
+
+            await refresher(self)
+            guard self.ownsStructuralMutation(token, session: session),
+                let vaultURL = self.currentVaultURL
+            else { return }
+
+            let probes = items.map {
+                BatchTrashPresenceProbe(path: $0.path, isDirectory: $0.isDirectory)
+            }
+            let results = await Task.detached(priority: .utility) {
+                probes.map { probe in
+                    BatchTrashPresenceResult(
+                        path: probe.path,
+                        isDirectory: probe.isDirectory,
+                        presence: presenceProbe(
+                            vaultURL.appendingPathComponent(probe.path),
+                            probe.isDirectory))
+                }
+            }.value
+            guard self.ownsStructuralMutation(token, session: session) else { return }
+
+            self.reconcileBatchTrashUnknownPathsAfterRefresh(
+                results,
+                session: session)
+            self.publishTreeMutation(
+                .batchReconcile,
+                rewrittenCount: 0,
+                requiresRescan: !self.batchTrashUnknownItems.isEmpty)
+            self.retireResolvedBatchTrashUnknownResult()
+            self.postMutationAnnouncement(
+                self.batchTrashRetryAnnouncement(for: results))
+        }
+        pendingStructuralTaskForTesting = task
+        return task
+    }
+
+    private func batchTrashRetryAnnouncement(
+        for results: [BatchTrashPresenceResult]
+    ) -> String {
+        let present = results.filter { $0.presence == .present }.count
+        let absent = results.filter { $0.presence == .absent }.count
+        let unresolved = results.count - present - absent
+        if unresolved > 0 {
+            let subject = unresolved == 1 ? "1 item" : "\(unresolved) items"
+            let pronoun = unresolved == 1 ? "It remains" : "They remain"
+            return "Slate still couldn’t verify whether \(subject) moved to Trash. "
+                + "\(pronoun) read-only."
+        }
+        if absent == 0 {
+            let subject = present == 1 ? "The item is" : "The items are"
+            return "Checked again. \(subject) still in the vault and writable."
+        }
+        if present == 0 {
+            let subject = absent == 1 ? "The item is" : "The items are"
+            return "Checked again. \(subject) no longer in the vault."
+        }
+        return "Checked again. \(present) items are still in the vault and writable; "
+            + "\(absent) are no longer in the vault."
+    }
+
+    private func retireResolvedBatchTrashUnknownResult() {
+        guard batchTrashUnknownItems.isEmpty,
+            let result = batchStructuralResult,
+            case .trash(let report) = result.payload,
+            !report.unknown.isEmpty
+        else { return }
+        batchStructuralResult = nil
+        if case .result(let active)? = activeBatchAlertPresentation,
+            active.id == result.id
+        {
+            activeBatchAlertPresentation = nil
+            promoteDeferredBatchAlert()
+        }
+        if case .result(let deferred)? = deferredBatchAlertPresentation,
+            deferred.id == result.id
+        {
+            deferredBatchAlertPresentation = nil
+        }
+    }
+
+    private func landBatchTrash(
+        _ report: BatchTrashReport,
+        preferredFocusPath: String?
+    ) {
+        let attention: Bool
+        switch report.state {
+        case .rejected:
+            attention = true
+            if report.requiresRescan {
+                publishTreeMutation(
+                    .batchReconcile,
+                    rewrittenCount: 0,
+                    requiresRescan: true,
+                    preferredFocusPath: preferredFocusPath)
+            }
+        case .noOp:
+            attention = false
+            if report.requiresRescan {
+                publishTreeMutation(
+                    .batchReconcile,
+                    rewrittenCount: 0,
+                    requiresRescan: true,
+                    preferredFocusPath: preferredFocusPath)
+            }
+        case .succeeded:
+            clearStructuralUndoStacks()
+            if report.trashed.isEmpty {
+                publishTreeMutation(
+                    .batchReconcile,
+                    rewrittenCount: 0,
+                    requiresRescan: true,
+                    preferredFocusPath: preferredFocusPath)
+            } else {
+                publishTreeMutation(
+                    .batchTrash(trashed: report.trashed),
+                    rewrittenCount: 0,
+                    requiresRescan: report.requiresRescan,
+                    preferredFocusPath: preferredFocusPath)
+            }
+            attention = !report.envelope.skipped.isEmpty
+                || !report.envelope.preflightFailures.isEmpty
+                || !report.bookkeepingFailures.isEmpty
+                || report.requiresRescan
+                || report.trashed.isEmpty
+        case .partial:
+            clearStructuralUndoStacks()
+            publishTreeMutation(
+                .batchTrash(trashed: report.trashed),
+                rewrittenCount: 0,
+                requiresRescan: report.requiresRescan,
+                preferredFocusPath: preferredFocusPath)
+            attention = true
+        case .failed:
+            attention = true
+            if report.requiresRescan || !report.trashed.isEmpty {
+                clearStructuralUndoStacks()
+                if report.trashed.isEmpty {
+                    publishTreeMutation(
+                        .batchReconcile,
+                        rewrittenCount: 0,
+                        requiresRescan: true,
+                        preferredFocusPath: preferredFocusPath)
+                } else {
+                    publishTreeMutation(
+                        .batchTrash(trashed: report.trashed),
+                        rewrittenCount: 0,
+                        requiresRescan: true,
+                        preferredFocusPath: preferredFocusPath)
+                }
+            }
+        }
+        setBatchStructuralResult(BatchStructuralResult(
+            payload: .trash(report), requiresAttention: attention))
+        postMutationAnnouncement(BatchTrashCopy.announcement(for: report))
     }
 
     /// Immediate child count of a vault folder via a shallow FileManager
@@ -8562,6 +12638,37 @@ final class AppState: ObservableObject {
         return contents.filter { $0.lastPathComponent != ".DS_Store" }.count
     }
 
+    /// Probe one folder for the batch confirmation threshold without allocating
+    /// its complete child list. Hidden entries count; only Finder's `.DS_Store`
+    /// noise is ignored. Every unknown/error path returns true so an unreadable
+    /// folder can never bypass the destructive confirmation.
+    nonisolated private static func batchDeleteFolderRequiresConfirmation(at url: URL) -> Bool {
+        let fileManager = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: url.path, isDirectory: &isDirectory),
+            isDirectory.boolValue
+        else { return true }
+
+        var enumerationFailed = false
+        guard
+            let enumerator = fileManager.enumerator(
+                at: url,
+                includingPropertiesForKeys: nil,
+                options: [.skipsSubdirectoryDescendants],
+                errorHandler: { _, _ in
+                    enumerationFailed = true
+                    return false
+                })
+        else { return true }
+
+        while let child = enumerator.nextObject() as? URL {
+            if child.lastPathComponent != ".DS_Store" {
+                return true
+            }
+        }
+        return enumerationFailed
+    }
+
     /// Send the file or folder at `path` to the system trash. Any open tab
     /// holding the file (or a descendant of the folder) flips to the missing-
     /// file error state (spec §U2-5). Refreshes the parent level + moves the
@@ -8575,7 +12682,10 @@ final class AppState: ObservableObject {
         path: String, isDirectory: Bool, announce: Bool = true,
         onResult: ((Bool) -> Void)? = nil
     ) -> Task<Void, Never>? {
-        guard !isMutatingStructure, let session = currentSession else { return nil }
+        guard admitStructuralMutationRequest(), let session = currentSession else { return nil }
+        guard admitBatchTrashMutation(
+            of: [StructuralBatchItem(path: path, isDirectory: isDirectory)])
+        else { return nil }
         let token = beginStructuralMutation()
         let task = Task { [weak self] in
             let outcome: Result<Void, VaultError> = await Task.detached(
@@ -8591,6 +12701,11 @@ final class AppState: ObservableObject {
             guard let self, self.currentSession === session else { return }
             switch outcome {
             case .success:
+                // Moving an item to the system Trash is not undoable through
+                // Slate. It is therefore a structural-history barrier: an
+                // older inverse must not remain armed against paths the user
+                // can now recreate with different content.
+                self.clearStructuralUndoStacks()
                 // Codex round 8: active-tab ownership is decided AT
                 // COMPLETION, against the LIVE selection — the old
                 // call-time `loadedFilePath` capture was stale in both
@@ -8666,22 +12781,51 @@ final class AppState: ObservableObject {
         let suffixed = uniqueName(
             base: newFolderName, ext: nil, siblingsIn: parent)
         let newFolderPath = Self.joinVaultPath(parent, suffixed)
-        return Task { [weak self] in
+        let movedPath = Self.joinVaultPath(
+            newFolderPath,
+            (movePath as NSString).lastPathComponent)
+        guard admitStructuralRecoveryDestination(
+                newFolderPath, includesDescendants: true) != nil,
+            admitStructuralRecoveryRetargets([
+                NoteRecoveryPathRetarget(
+                    oldPath: movePath,
+                    newPath: movedPath,
+                    includesDescendants: isDirectory)
+            ]) != nil,
+            admitBatchTrashWrite(to: [parent, newFolderPath]),
+            admitBatchTrashMutation(
+                of: [
+                    StructuralBatchItem(
+                        path: movePath, isDirectory: isDirectory)
+                ]),
+            admitBatchTrashVaultWideWrite()
+        else { return nil }
+        // Admit the first structural edge synchronously. Returning an outer
+        // Task before this check made a busy rejection look accepted to the
+        // sheet, which dismissed even though no folder or move could run.
+        var created = false
+        guard let createTask = createFolder(
+            name: suffixed, in: parent, onResult: { created = $0 })
+        else { return nil }
+        let task = Task { [weak self] in
+            await createTask.value
             guard let self else { return }
-            // #852 (Codex finding 1): guard the CREATE itself against a vault
-            // switch — if B was opened before this task ran, `createFolder`
-            // would capture B's session and create/announce the folder in the
-            // WRONG vault. Abort before creating anything.
-            guard self.currentSession === session else { return }
-            // #852 (Codex finding 2): gate the move SOLELY on the create's actual
-            // success result (true only on .success) + same session — never
-            // folder existence (an empty pre-existing "New Folder" would false-
-            // pass an existence check while the create actually FAILED).
-            var created = false
-            await self.createFolder(name: suffixed, in: parent, onResult: { created = $0 })?.value
+            // Gate the dependent move SOLELY on the create's actual success
+            // result + captured session, never folder existence.
             guard created, self.currentSession === session else { return }
+            if let continuationGate = self.createFolderMoveContinuationGateForTesting {
+                await continuationGate()
+            }
+            guard self.currentSession === session else { return }
+            if let reason = self.structuralMutationDisabledReason {
+                self.postMutationAnnouncement(
+                    "\(reason) \((movePath as NSString).lastPathComponent) was not moved.")
+                return
+            }
             await self.moveEntry(path: movePath, isDirectory: isDirectory, to: newFolderPath)?.value
         }
+        pendingStructuralTaskForTesting = task
+        return task
     }
 
     /// #852: the batch analog of `createFolderThenMove` — create a fresh folder,
@@ -8689,22 +12833,59 @@ final class AppState: ObservableObject {
     /// The Move sheet's "New Folder…" row for a multi-selection.
     @discardableResult
     func createFolderThenBatchMove(
-        newFolderName: String, in parent: String, items: [TreeSelection]
+        newFolderName: String,
+        in parent: String,
+        items: [TreeSelection],
+        preferredFocusPath: String? = nil
     ) -> Task<Void, Never>? {
         guard let session = currentSession else { return nil }
         let suffixed = uniqueName(base: newFolderName, ext: nil, siblingsIn: parent)
         let newFolderPath = Self.joinVaultPath(parent, suffixed)
+        guard admitStructuralRecoveryDestination(
+                newFolderPath, includesDescendants: true) != nil,
+            admitStructuralRecoveryRetargets(
+                Self.topLevelSelection(items).map { item in
+                    NoteRecoveryPathRetarget(
+                        oldPath: item.path,
+                        newPath: Self.joinVaultPath(
+                            newFolderPath,
+                            (item.path as NSString).lastPathComponent),
+                        includesDescendants: item.isDirectory)
+                }) != nil,
+            admitBatchTrashWrite(to: [parent, newFolderPath]),
+            admitBatchTrashMutation(
+                of: items.map {
+                    StructuralBatchItem(
+                        path: $0.path, isDirectory: $0.isDirectory)
+                }),
+            admitBatchTrashVaultWideWrite()
+        else { return nil }
+        // As above, the create itself is the synchronous admission boundary.
+        // A busy caller receives nil before its sheet can clear.
+        var created = false
+        guard let createTask = createFolder(
+            name: suffixed, in: parent, onResult: { created = $0 })
+        else { return nil }
         let task = Task { [weak self] in
+            await createTask.value
             guard let self else { return }
-            // #852 (Codex finding 1): don't CREATE in a vault switched in before
-            // this task ran.
-            guard self.currentSession === session else { return }
-            // #852 (Codex finding 2): gate the batch move on the create's actual
-            // success result + same session, never folder existence.
-            var created = false
-            await self.createFolder(name: suffixed, in: parent, onResult: { created = $0 })?.value
+            // Gate the batch move on the create's actual success result + same
+            // session, never folder existence.
             guard created, self.currentSession === session else { return }
-            await self.batchMove(items, to: newFolderPath).value
+            if let continuationGate = self.createFolderMoveContinuationGateForTesting {
+                await continuationGate()
+            }
+            guard self.currentSession === session else { return }
+            if let reason = self.structuralMutationDisabledReason {
+                let subject = items.count == 1 ? "1 item was" : "\(items.count) items were"
+                self.postMutationAnnouncement(
+                    "\(reason) \(subject) not moved.")
+                return
+            }
+            await self.batchMove(
+                items,
+                to: newFolderPath,
+                preferredFocusPath: preferredFocusPath)?.value
         }
         pendingStructuralTaskForTesting = task
         return task
@@ -8752,6 +12933,277 @@ final class AppState: ObservableObject {
 
     // MARK: Retarget / error-flip helpers
 
+    /// Run detached-handle cleanup first, then prepare at most two visible
+    /// native documents concurrently. Batch result/history/announcement
+    /// landing never awaits this task.
+    func scheduleNativeDocumentRetargets(
+        _ plans: [NativeDocumentRetargetPlan],
+        session explicitSession: VaultSession? = nil
+    ) {
+        guard !plans.isEmpty,
+            let originSession = explicitSession ?? currentSession
+        else { return }
+        let canvasObserver = canvasNewFileNativeExecutionObserverForTesting
+        let canvasRunner = canvasNewFilePreloadRunner
+        let baseObserver = baseRetargetNativeExecutionObserverForTesting
+        let baseRunner = baseRetargetPreloadRunner
+        let preparationLimiter = nativeDocumentPreparationLimiter
+
+        let workTask = Task { @MainActor [weak self] in
+            await Task.detached(priority: .userInitiated) {
+                for plan in plans {
+                    Self.closeReplacedNativeHandle(
+                        for: plan,
+                        session: originSession,
+                        canvasObserver: canvasObserver,
+                        baseObserver: baseObserver)
+                }
+            }.value
+
+            let preparations = plans.filter(\.shouldPrepare)
+            var offset = 0
+            while offset < preparations.count {
+                let end = min(offset + 2, preparations.count)
+                let chunk = Array(preparations[offset..<end])
+                let results = await withTaskGroup(
+                    of: NativeDocumentRetargetResult?.self,
+                    returning: [NativeDocumentRetargetResult].self
+                ) { group in
+                    for plan in chunk {
+                        group.addTask {
+                            await preparationLimiter.acquire()
+                            let result = await Task.detached(priority: .userInitiated) {
+                                Self.prepareNativeDocumentRetarget(
+                                    plan,
+                                    session: originSession,
+                                    canvasRunner: canvasRunner,
+                                    canvasObserver: canvasObserver,
+                                    baseRunner: baseRunner,
+                                    baseObserver: baseObserver)
+                            }.value
+                            await preparationLimiter.release()
+                            return result
+                        }
+                    }
+                    var prepared: [NativeDocumentRetargetResult] = []
+                    for await result in group {
+                        if let result { prepared.append(result) }
+                    }
+                    return prepared
+                }
+
+                guard let self else {
+                    for result in results {
+                        Self.releaseStaleNativeRetargetResult(
+                            result,
+                            session: originSession,
+                            canvasObserver: canvasObserver,
+                            baseObserver: baseObserver)
+                    }
+                    return
+                }
+                for result in results {
+                    self.applyNativeDocumentRetargetResult(
+                        result,
+                        session: originSession,
+                        canvasObserver: canvasObserver,
+                        baseObserver: baseObserver)
+                }
+                offset = end
+            }
+        }
+        let predecessor = nativeDocumentRetargetTask
+        let aggregateTask = Task { @MainActor in
+            await predecessor?.value
+            await workTask.value
+        }
+        nativeDocumentRetargetTask = aggregateTask
+    }
+
+    private nonisolated static func closeReplacedNativeHandle(
+        for plan: NativeDocumentRetargetPlan,
+        session: VaultSession,
+        canvasObserver: CanvasNewFileNativeExecutionObserver?,
+        baseObserver: BaseRetargetNativeExecutionObserver?
+    ) {
+        switch plan {
+        case .canvas(_, _, let replacedHandle, _):
+            if let replacedHandle {
+                CanvasPreparedLoader.closeReplaced(
+                    handle: replacedHandle,
+                    session: session,
+                    observer: canvasObserver)
+            }
+        case .base(_, _, _, let replacedHandle, _, _):
+            if let replacedHandle {
+                BasePreparedLoader.closeReplaced(
+                    handle: replacedHandle,
+                    session: session,
+                    observer: baseObserver)
+            }
+        }
+    }
+
+    private nonisolated static func prepareNativeDocumentRetarget(
+        _ plan: NativeDocumentRetargetPlan,
+        session: VaultSession,
+        canvasRunner: CanvasNewFilePreloadRunner,
+        canvasObserver: CanvasNewFileNativeExecutionObserver?,
+        baseRunner: BaseRetargetPreloadRunner,
+        baseObserver: BaseRetargetNativeExecutionObserver?
+    ) -> NativeDocumentRetargetResult? {
+        switch plan {
+        case .canvas(let path, let generation, _, let prepare):
+            guard prepare else { return nil }
+            return .canvas(
+                path: path,
+                generation: generation,
+                prepared: canvasRunner(session, path, canvasObserver))
+        case .base(let owner, let source, let generation, _, let request, let prepare):
+            guard prepare else { return nil }
+            return .base(
+                owner: owner,
+                source: source,
+                generation: generation,
+                prepared: baseRunner(session, request, baseObserver))
+        }
+    }
+
+    private func applyNativeDocumentRetargetResult(
+        _ result: NativeDocumentRetargetResult,
+        session: VaultSession,
+        canvasObserver: CanvasNewFileNativeExecutionObserver?,
+        baseObserver: BaseRetargetNativeExecutionObserver?
+    ) {
+        let applied: Bool
+        switch result {
+        case .canvas(let path, let generation, let prepared):
+            applied = currentSession === session
+                && canvasDocuments[path]?.applyRetargetPreparation(
+                    prepared, generation: generation, path: path) == true
+        case .base(let owner, let source, let generation, let prepared):
+            let document: BaseDocument?
+            switch owner {
+            case .registry(let key):
+                document = baseDocuments[key]
+            case .basesDock:
+                document = basesDockDocument
+            }
+            applied = currentSession === session
+                && document?.applyRetargetPreparation(
+                    prepared, generation: generation, source: source) == true
+            if applied, owner == .basesDock, let document {
+                basesDock.rebaseMembership(
+                    BaseRowMembership(rows: document.result?.rows ?? []))
+            }
+        }
+        guard !applied else { return }
+        Task.detached(priority: .utility) {
+            Self.releaseStaleNativeRetargetResult(
+                result,
+                session: session,
+                canvasObserver: canvasObserver,
+                baseObserver: baseObserver)
+        }
+    }
+
+    private nonisolated static func releaseStaleNativeRetargetResult(
+        _ result: NativeDocumentRetargetResult,
+        session: VaultSession,
+        canvasObserver: CanvasNewFileNativeExecutionObserver?,
+        baseObserver: BaseRetargetNativeExecutionObserver?
+    ) {
+        switch result {
+        case .canvas(_, _, let prepared):
+            CanvasPreparedLoader.release(
+                prepared, session: session, observer: canvasObserver)
+        case .base(_, _, _, let prepared):
+            BasePreparedLoader.release(
+                prepared, session: session, observer: baseObserver)
+        }
+    }
+
+    /// Apply only core's physically-standing batch paths. The prefix trie is
+    /// built once, then every file-backed tab is visited once; folder suffixes
+    /// follow the longest component-safe selected root.
+    private func applyBatchMoveRetargets(_ standing: [BatchPathChange]) {
+        guard !standing.isEmpty else { return }
+        // Draft/recovery ownership must move before WorkspaceState publishes
+        // retargeted tabs. Otherwise the mounted properties header observes a
+        // new loaded path while its draft still claims the old path and parks
+        // the only copy under an identity that can no longer be reached.
+        rekeyNoteRecoveryPaths(
+            standing.map {
+                NoteRecoveryPathRetarget(
+                    oldPath: $0.oldPath,
+                    newPath: $0.newPath,
+                    includesDescendants: $0.isDirectory)
+            })
+        let index = VaultComponentPrefixIndex<BatchPathChange>(
+            standing.map {
+                .init(
+                    path: $0.oldPath,
+                    includesDescendants: $0.isDirectory,
+                    value: $0)
+            })
+        let activeID = workspace.model.activeGroup.activeTabID
+        let changes = workspace.retargetFileBackedTabs { item in
+            guard let match = index.longestMatch(for: item.path) else { return nil }
+            let root = match.entry.value.newPath
+            let newPath = match.relativeSuffix.isEmpty
+                ? root
+                : Self.joinVaultPath(root, match.relativeSuffix)
+            switch item {
+            case .markdown:
+                return .markdown(path: newPath)
+            case .canvas:
+                return .canvas(path: newPath)
+            case .base:
+                return .base(path: newPath)
+            case .savedQuery, .dashboard, .graph:
+                return nil
+            }
+        }
+        var nativeRetargetPlans: [NativeDocumentRetargetPlan] = []
+        for change in changes {
+            if case .base = change.oldItem {
+                nativeRetargetPlans.append(
+                    contentsOf: detachBaseDocumentsForRetarget(
+                        [change.tabID], oldPath: change.oldPath, newPath: change.newPath))
+            } else if case .canvas = change.oldItem {
+                let prepare = workspace.model.groupsInOrder.contains { group in
+                    guard case .canvas(let path)? = group.activeTab?.item else { return false }
+                    return BaseExactIdentity.matches(path, change.newPath)
+                }
+                if let plan = detachCanvasDocumentForRetarget(
+                    oldPath: change.oldPath,
+                    newPath: change.newPath,
+                    prepare: prepare)
+                {
+                    nativeRetargetPlans.append(plan)
+                }
+            }
+        }
+        // A docked Base can exist without an open tab. Retarget it through the
+        // same index rather than requiring a synthetic tab change.
+        if case .base(let dockPath, _) = basesDock.target,
+            let match = index.longestMatch(for: dockPath)
+        {
+            let newPath = match.relativeSuffix.isEmpty
+                ? match.entry.value.newPath
+                : Self.joinVaultPath(match.entry.value.newPath, match.relativeSuffix)
+            nativeRetargetPlans.append(
+                contentsOf: detachBaseDocumentsForRetarget(
+                    [], oldPath: dockPath, newPath: newPath))
+        }
+        scheduleNativeDocumentRetargets(nativeRetargetPlans)
+        if let activeID,
+            let activeChange = changes.first(where: { $0.tabID == activeID })
+        {
+            rebindActiveIfRetargeted([activeID], to: activeChange.newPath)
+        }
+    }
+
     /// Retarget open tabs after a rename/move: the moved node itself, and — for
     /// a folder — every open descendant path (they moved with the folder). Uses
     /// the report's `moved` list (authoritative: it's exactly the files whose
@@ -8759,6 +13211,27 @@ final class AppState: ObservableObject {
     private func applyRetargets(
         _ report: StructuralReport, movedFrom: String, movedTo: String, isDirectory: Bool
     ) {
+        // A successful directory move/rename retargets the requested root,
+        // including registry-only or missing descendants that cannot appear in
+        // core's physical-file report. File operations retain the report's
+        // exact mappings. Rekey the complete set before Workspace publishes.
+        let recoveryRetargets: [NoteRecoveryPathRetarget]
+        if isDirectory {
+            recoveryRetargets = [
+                NoteRecoveryPathRetarget(
+                    oldPath: movedFrom,
+                    newPath: movedTo,
+                    includesDescendants: true)
+            ]
+        } else {
+            recoveryRetargets = report.moved.map {
+                NoteRecoveryPathRetarget(
+                    oldPath: $0.oldPath,
+                    newPath: $0.newPath,
+                    includesDescendants: false)
+            }
+        }
+        rekeyNoteRecoveryPaths(recoveryRetargets)
         if isDirectory {
             // Folder: retarget each moved file by its own old→new mapping.
             for m in report.moved {
@@ -8789,7 +13262,8 @@ final class AppState: ObservableObject {
         // return and NO new link query restamps the marker — left
         // behind, every reading link classifies unresolved and
         // refuses activation until an unrelated reload.
-        let ownershipLanded = currentOutgoingLinksPath == selectedFilePath
+        let ownershipLanded = BaseExactIdentity.matches(
+            currentOutgoingLinksPath, selectedFilePath)
         if ownershipLanded {
             currentOutgoingLinksPath = newPath
         }
@@ -8802,7 +13276,8 @@ final class AppState: ObservableObject {
         if case .base = workspace.activeTab?.item {
             selectionMatches = BaseExactIdentity.matches(selectedFilePath, newPath)
         } else {
-            selectionMatches = selectedFilePath == newPath
+            selectionMatches = BaseExactIdentity.matches(
+                selectedFilePath, newPath)
         }
         if !selectionMatches {
             selectedFilePath = newPath
@@ -8840,6 +13315,7 @@ final class AppState: ObservableObject {
             }
             switch tab.item {
             case .markdown:
+                preserveParkedMissingNoteRecovery(tabID: tab.id)
                 _ = workspace.invalidateParkedDocuments(forPath: tabPath)
             case .canvas:
                 invalidateCanvasDocument(path: tabPath)
@@ -8854,44 +13330,127 @@ final class AppState: ObservableObject {
                 continue
             }
         }
-        if activeWasDeleted {
-            // `loadedFilePath` may be nil when the doomed load never
-            // landed (round 8: select-then-delete) — fall back to the
-            // selection the ownership check was made against.
-            let deletedName = (loadedFilePath ?? selectedFilePath)
-                .map { ($0 as NSString).lastPathComponent }
-            cancelNoteScopedWork()
-            // Codex round 7: note/links/embeds clear their spinners
-            // explicitly at landing (audit #201 — a deferred clear
-            // raced the next task's set), relying on "a newer task
-            // will clear" after a dropped landing. Deletion is the one
-            // path with NO newer task — clear the trio here. (The
-            // other legs self-clear via defer, audit #257 M2.)
-            isLoadingNote = false
-            isLoadingLinks = false
-            isLoadingEmbeds = false
+        if activeWasDeleted { flipActiveMarkdownToTrashError() }
+    }
+
+    /// One-pass batch invalidation driven only by the report's `trashed`
+    /// vector. File-backed tabs remain open; parked/live documents become the
+    /// existing missing-file state without touching any `untrashed` item.
+    private func invalidateTrashedBatchItems(_ trashed: [StructuralBatchItem]) {
+        guard !trashed.isEmpty else { return }
+        let index = VaultComponentPrefixIndex<StructuralBatchItem>(
+            trashed.map {
+                .init(path: $0.path, includesDescendants: $0.isDirectory, value: $0)
+            })
+        let activeID = workspace.model.activeGroup.activeTabID
+        var markdownTabs: [TabID] = []
+        var canvasPaths: [String: String] = [:]
+        var basePaths: [String: String] = [:]
+        var activeMarkdownWasTrashed = false
+
+        for tab in workspace.model.allTabs {
+            guard index.longestMatch(for: tab.item.path) != nil else { continue }
+            switch tab.item {
+            case .markdown(let path):
+                if tab.id == activeID {
+                    activeMarkdownWasTrashed = true
+                } else {
+                    preserveParkedMissingNoteRecovery(tabID: tab.id)
+                    markdownTabs.append(tab.id)
+                }
+                _ = path
+            case .canvas(let path):
+                canvasPaths[
+                    BaseExactIdentity.registryKey(prefix: "canvas-trash", value: path)] = path
+            case .base(let path):
+                basePaths[
+                    BaseExactIdentity.registryKey(prefix: "base-trash", value: path)] = path
+            case .savedQuery, .dashboard, .graph:
+                continue
+            }
+        }
+        workspace.invalidateParkedDocuments(tabIDs: markdownTabs)
+        for path in canvasPaths.values { invalidateCanvasDocument(path: path) }
+        for path in basePaths.values { invalidateBaseDocument(path: path) }
+        if activeMarkdownWasTrashed { flipActiveMarkdownToTrashError() }
+    }
+
+    private func preserveParkedMissingNoteRecovery(tabID: TabID) {
+        guard let document = workspace.document(for: tabID) else { return }
+        let hasPropertyDrafts = hasRecoverablePropertyDrafts(
+            for: document.path,
+            frontmatterSource: document.fmSource)
+        guard document.hasUnsavedChanges || hasPropertyDrafts else { return }
+        preserveMissingNoteRecovery(
+            path: document.path,
+            body: document.text,
+            frontmatterSource: document.fmSource)
+        // Property-only edits do not make the Markdown body dirty, but they
+        // still own user input and must participate in tab/vault close gates.
+        workspace.markDocumentMissing(tabID, retainAsDirty: true)
+    }
+
+    private func flipActiveMarkdownToTrashError() {
+        // `loadedFilePath` may be nil when the doomed load never landed — fall
+        // back to the selection used for live active-tab ownership.
+        let deletedPath = loadedFilePath ?? selectedFilePath
+        let deletedName = deletedPath
+            .map { ($0 as NSString).lastPathComponent }
+        cancelNoteScopedWork()
+        isLoadingNote = false
+        isLoadingLinks = false
+        isLoadingEmbeds = false
+        currentNoteHeadings = []
+        propertiesSourceShowing = false
+        propertiesSourceError = nil
+        noteLoadError =
+            "\(deletedName ?? "This note") was moved to Trash and is no longer available."
+
+        guard let path = deletedPath,
+            let body = currentNoteText,
+            hasUnsavedChanges
+                || hasRecoverablePropertyDrafts(
+                    for: path,
+                    frontmatterSource: currentNoteFMSource)
+        else {
             currentNoteText = nil
             savedBaselineText = nil
             currentNoteContentHash = nil
+            currentNoteFMSource = ""
+            bodyByteOffset = 0
+            bodyLineOffset = 0
             hasUnsavedChanges = false
-            currentNoteHeadings = []
-            // #868 red-team: this delete arm clears a BESPOKE field
-            // list (not `clearActiveNoteFields`), so it must also reset
-            // the properties-source mirror + inline error the funnel
-            // resets there. NoteContentView flips to the error pane and
-            // UNMOUNTS NotePropertiesHeader, so the widget's
-            // `.onChange(of: isSourceMode)` never fires — leaving
-            // `propertiesSourceShowing` stuck true would latch the
-            // View ▸ "Hide Properties Source" title wrong-direction
-            // over a note that no longer exists (the exact "worse than
-            // static" failure #868 calls out), and ⇧⌘D would no-op
-            // against the `loadedFilePath != nil` guard.
-            propertiesSourceShowing = false
-            propertiesSourceError = nil
             loadedFilePath = nil
-            noteLoadError =
-                "\(deletedName ?? "This note") was moved to Trash and is no longer available."
+            return
         }
+
+        // A proven-absent file must not turn a dirty note into a clean empty
+        // error. Snapshot first so a background tab activation can restore
+        // the same draft, then mark that parked copy missing and retain the
+        // live fields for the recovery surface.
+        let baseline = savedBaselineText ?? ""
+        savedBaselineText = baseline
+        preserveMissingNoteRecovery(
+            path: path,
+            body: body,
+            frontmatterSource: currentNoteFMSource)
+        workspace.snapshotActiveTab(
+            text: body,
+            baseline: baseline,
+            contentHash: currentNoteContentHash,
+            hasUnsavedChanges: true,
+            saveError: saveError,
+            saveConflict: currentSaveConflict,
+            loadedFilePath: path,
+            fmSource: currentNoteFMSource,
+            bodyByteOffset: bodyByteOffset,
+            bodyLineOffset: bodyLineOffset)
+        if let activeID = workspace.model.activeGroup.activeTabID {
+            workspace.markDocumentMissing(activeID)
+        }
+        currentNoteContentHash = nil
+        loadedFilePath = path
+        hasUnsavedChanges = true
     }
 
     // MARK: Path helpers
@@ -8956,7 +13515,7 @@ final class AppState: ObservableObject {
     /// for renaming. The command-surface funnel for `createNote(in:)`.
     func newNoteCommand() {
         guard isVaultOpen else { return }
-        pendingStructuralTaskForTesting = createNote(in: creationParentPath)
+        pendingStructuralTaskForTesting = requestCreateNote(in: creationParentPath)
     }
 
     /// Context-menu / palette "New Folder…". Opens an inline-named folder in the
@@ -8972,33 +13531,37 @@ final class AppState: ObservableObject {
     /// targets the right-clicked folder rather than the current selection), then
     /// drop into inline rename of the new folder.
     func newFolderInContext(parent: String) {
-        guard isVaultOpen else { return }
+        guard let session = currentSession else { return }
+        guard admitStructuralMutationRequest() else { return }
         let name = uniqueUntitledFolderName(in: parent)
         let path = Self.joinVaultPath(parent, name)
-        let task = createFolder(name: name, in: parent)
-        // After the create lands, drop into inline rename of the new folder.
-        pendingStructuralTaskForTesting = Task { [weak self] in
-            await task?.value
-            guard let self, self.currentSession != nil else { return }
-            // Only enter rename if the create actually succeeded (no error).
-            if self.lastError == nil {
-                self.renamingNode = RenamingNode(path: path, isDirectory: true)
-            }
-        }
+        guard
+            let task = createFolder(
+                name: name,
+                in: parent,
+                onResult: { [weak self] created in
+                    guard created, let self else { return }
+                    self.installRenameForCreatedEntry(
+                        path: path, isDirectory: true, session: session)
+                })
+        else { return }
+        // Retain the admitted CREATE itself. Its explicit result callback owns
+        // the dependent rename stage; no outer Task can make a busy reject or
+        // failed create look accepted.
+        pendingStructuralTaskForTesting = task
     }
 
     /// ⌘⌥R — rename the selected node. Enters inline-rename mode (the tree row
     /// swaps to a field); the actual FFI call fires on commit via `renameEntry`.
     func renameSelectedCommand() {
         guard isVaultOpen, let node = treeSelectedNode else { return }
-        structuralRenameError = nil
-        renamingNode = RenamingNode(path: node.path, isDirectory: node.isDirectory)
+        requestRename(path: node.path, isDirectory: node.isDirectory)
     }
 
     /// ⌘⇧M — open the Move-to-folder sheet for the selected node.
     func moveSelectedCommand() {
         guard isVaultOpen, let node = treeSelectedNode else { return }
-        pendingMove = PendingMove(path: node.path, isDirectory: node.isDirectory)
+        requestPendingMove(path: node.path, isDirectory: node.isDirectory)
     }
 
     /// File ▸ Reveal in Finder / palette — jump to the selected node on
@@ -9058,7 +13621,7 @@ final class AppState: ObservableObject {
                 "Duplicate applies to files only.", priority: .medium)
             return
         }
-        pendingStructuralTaskForTesting = duplicateEntry(path: node.path)
+        pendingStructuralTaskForTesting = requestDuplicateEntry(path: node.path)
     }
 
     /// Every folder path in the vault (vault-relative, sorted case-insensitive,
@@ -9112,6 +13675,54 @@ final class AppState: ObservableObject {
 
     // MARK: - Property edits (Milestone I)
 
+    @discardableResult
+    func requestAddPropertySheet() -> Bool {
+        guard let path = loadedFilePath else { return false }
+        if let reason = noteAuthoringDisabledReason(for: path) {
+            postMutationAnnouncement(reason)
+            return false
+        }
+        addPropertySheetOwnerPath = path
+        addPropertySheetOwner = noteAuthoringOwner(for: path)
+        isAddPropertySheetOpen = true
+        return true
+    }
+
+    func ensureAddPropertySheetOwner() {
+        if addPropertySheetOwnerPath == nil {
+            addPropertySheetOwnerPath = loadedFilePath
+            addPropertySheetOwner = noteAuthoringOwner()
+        }
+    }
+
+    func dismissAddPropertySheet() {
+        isAddPropertySheetOpen = false
+        addPropertySheetOwnerPath = nil
+        addPropertySheetOwner = nil
+    }
+
+    static let missingNoteDraftReason =
+        "This note is no longer available. Copy your draft before closing."
+
+    var addPropertySheetDisabledReason: String? {
+        guard let path = addPropertySheetOwnerPath,
+            let owner = addPropertySheetOwner,
+            ownsNoteAuthoring(owner),
+            BaseExactIdentity.matches(owner.path, path)
+        else {
+            return Self.missingNoteDraftReason
+        }
+        if let reason = noteAuthoringDisabledReason(for: path) {
+            return reason
+        }
+        guard BaseExactIdentity.matches(loadedFilePath, path),
+            noteLoadError == nil
+        else {
+            return Self.missingNoteDraftReason
+        }
+        return nil
+    }
+
     /// Insert or replace a frontmatter property on `path`. Routes
     /// through the same `save_text` pipeline as the editor save, so
     /// `WriteConflict` is detected the same way and the F-precedent
@@ -9122,10 +13733,23 @@ final class AppState: ObservableObject {
     /// `currentNoteContentHash` so the panel reflects the new state
     /// and a subsequent edit doesn't carry a stale hash.
     @discardableResult
-    func setProperty(path: String, key: String, value: PropertyValue) -> Task<Void, Never>? {
+    func setProperty(
+        path: String,
+        key: String,
+        value: PropertyValue,
+        submittedDraft: PropertyEditDraft? = nil,
+        owner: NoteAuthoringOwner? = nil
+    ) -> Task<Void, Never>? {
+        if let owner, !ownsNoteAuthoring(owner) { return nil }
         guard !isEditingProperty else { return nil }
+        guard !isMutatingStructure else {
+            postMutationAnnouncement(Self.structuralMutationBusyReason)
+            return nil
+        }
         guard let session = currentSession else { return nil }
-        isEditingProperty = true
+        guard admitNoteAuthoring(for: path, owner: owner) else { return nil }
+        guard admitBatchTrashWrite(to: [path]) else { return nil }
+        let generation = beginPropertyEditOwnership(path: path)
         propertyEditError = nil
         let expected = currentNoteContentHash
         let task: Task<Void, Never> = Task { [weak self] in
@@ -9134,7 +13758,9 @@ final class AppState: ObservableObject {
                 path: path,
                 key: key,
                 action: .set(value),
-                expectedHash: expected
+                expectedHash: expected,
+                generation: generation,
+                submittedRowDraft: submittedDraft
             )
             return
         }
@@ -9149,10 +13775,23 @@ final class AppState: ObservableObject {
     /// in-flight guard, same WriteConflict alert + resolutions, and the
     /// stage-A success refresh (fmSource + offsets + hash + rows).
     @discardableResult
-    func applyPropertiesSource(_ draft: String) -> Task<Void, Never>? {
+    func applyPropertiesSource(
+        _ draft: String,
+        owner: NoteAuthoringOwner? = nil
+    ) -> Task<Void, Never>? {
+        if let owner, !ownsNoteAuthoring(owner) { return nil }
         guard !isEditingProperty else { return nil }
+        guard !isMutatingStructure else {
+            postMutationAnnouncement(Self.structuralMutationBusyReason)
+            return nil
+        }
         guard let session = currentSession, let path = loadedFilePath else { return nil }
-        isEditingProperty = true
+        if let reason = propertiesSourceApplyDisabledReason(for: path) {
+            postMutationAnnouncement(reason)
+            return nil
+        }
+        guard admitBatchTrashWrite(to: [path]) else { return nil }
+        let generation = beginPropertyEditOwnership(path: path)
         propertyEditError = nil
         propertiesSourceError = nil
         let expected = currentNoteContentHash
@@ -9162,7 +13801,8 @@ final class AppState: ObservableObject {
                 path: path,
                 key: "",
                 action: .setSource(draft),
-                expectedHash: expected
+                expectedHash: expected,
+                generation: generation
             )
             return
         }
@@ -9191,12 +13831,1355 @@ final class AppState: ObservableObject {
     /// transitions: the widget self-hides without firing its onChange
     /// when the note vanishes (same belt as `propertiesSourceError`).
     @Published private(set) var propertiesSourceShowing = false
+    /// Source-editor draft ownership survives quarantine-driven remounts. It
+    /// is still uncommitted user input; publishing here is intentional so a
+    /// missing-file transition cannot erase the only copy held by view-local
+    /// state.
+    @Published var propertiesSourceDraft = "" {
+        didSet { publishPropertyRecoveryTransitionIfNeeded() }
+    }
+    @Published var propertiesSourceDraftPath: String? {
+        didSet { publishPropertyRecoveryTransitionIfNeeded() }
+    }
+
+    /// Low-churn observation edge for row/source recovery ownership. The
+    /// revision changes only when the set of dirty recovery paths changes,
+    /// never for each character typed within an already-dirty note.
+    @Published private(set) var propertyRecoveryRevision: UInt64 = 0
+    private var propertyRecoveryPathFingerprint: Set<String> = []
+
+    /// Guarded production setter for the properties-source editor binding.
+    /// SwiftUI disables the editor as soon as a structural destination is
+    /// reserved; this is the race-proof backstop for an already-queued AppKit
+    /// text callback that arrives after that state change.
+    func updatePropertiesSourceDraft(
+        _ draft: String,
+        owner: NoteAuthoringOwner? = nil
+    ) {
+        if let owner, !ownsNoteAuthoring(owner) { return }
+        if let path = propertiesSourceDraftPath,
+            let reason = propertyAuthoringDisabledReason(for: path)
+        {
+            let parkedBaseline = parkedPropertiesSourceDrafts[
+                propertiesSourceDraftKey(path)]?.baseline
+            let baseline = BaseExactIdentity.matches(path, loadedFilePath)
+                ? currentNoteFMSource
+                : parkedBaseline
+            if !BaseExactIdentity.matches(baseline, draft) {
+                postMutationAnnouncement(reason)
+                return
+            }
+        }
+        propertiesSourceDraft = draft
+    }
+    /// Source drafts park by exact path across tab switches. The mounted
+    /// header still exposes one active Binding, while this registry prevents
+    /// its cross-tab leak guard from erasing another tab's uncommitted YAML.
+    private struct ParkedPropertiesSourceDraftRecord {
+        let path: String
+        let draft: String
+        let baseline: String?
+
+        var isDirty: Bool {
+            baseline.map { !BaseExactIdentity.matches(draft, $0) } ?? true
+        }
+    }
+    private var parkedPropertiesSourceDrafts:
+        [String: ParkedPropertiesSourceDraftRecord] = [:] {
+            didSet { publishPropertyRecoveryTransitionIfNeeded() }
+        }
+
+    private func propertiesSourceDraftKey(_ path: String) -> String {
+        BaseExactIdentity.key(
+            prefix: "note-properties-source-draft", components: [path])
+    }
+
+    func parkPropertiesSourceDraftForTransition(
+        owner: NoteAuthoringOwner? = nil
+    ) {
+        if let owner, !ownsNoteAuthoring(owner) { return }
+        guard let path = propertiesSourceDraftPath else { return }
+        let existing = parkedPropertiesSourceDrafts[
+            propertiesSourceDraftKey(path)]
+        let baseline = BaseExactIdentity.matches(path, loadedFilePath)
+            ? currentNoteFMSource
+            : existing?.baseline
+        let cacheKey = propertiesSourceDraftKey(path)
+        if let baseline,
+            BaseExactIdentity.matches(propertiesSourceDraft, baseline)
+        {
+            // Clean source-mode state is presentation state, not recovery.
+            // Retaining it across a close/rewrite can turn old FM bytes into a
+            // false draft that later undoes a property or bulk-rename write.
+            parkedPropertiesSourceDrafts[cacheKey] = nil
+            return
+        }
+        parkedPropertiesSourceDrafts[cacheKey] =
+            ParkedPropertiesSourceDraftRecord(
+                path: path,
+                draft: propertiesSourceDraft,
+                baseline: baseline)
+    }
+
+    /// Clear only the mounted Binding after parking; the exact-path recovery
+    /// registry remains available to a later activation or absence proof.
+    func clearMountedPropertiesSourceDraft(
+        owner: NoteAuthoringOwner? = nil
+    ) {
+        if let owner, !ownsNoteAuthoring(owner) { return }
+        propertiesSourceDraft = ""
+        propertiesSourceDraftPath = nil
+    }
+
+    @discardableResult
+    func restoreParkedPropertiesSourceDraft(
+        for path: String,
+        authoritativeFrontmatterSource: String? = nil,
+        owner: NoteAuthoringOwner? = nil
+    ) -> Bool {
+        if let owner, !ownsNoteAuthoring(owner) { return false }
+        guard let record = parkedPropertiesSourceDrafts[propertiesSourceDraftKey(path)]
+        else { return false }
+        propertiesSourceDraft = record.isDirty
+            ? record.draft
+            : (authoritativeFrontmatterSource ?? record.draft)
+        propertiesSourceDraftPath = path
+        // Transfer ownership to the mounted editor. Leaving a copy parked
+        // would preserve stale V0 after the mounted draft advances to V1 and
+        // can resurrect it on the next tab round-trip.
+        parkedPropertiesSourceDrafts[propertiesSourceDraftKey(path)] = nil
+        return true
+    }
+
+    func discardPropertiesSourceDraft(
+        for path: String?,
+        owner: NoteAuthoringOwner? = nil
+    ) {
+        if let owner, !ownsNoteAuthoring(owner) { return }
+        guard let path else {
+            clearMountedPropertiesSourceDraft()
+            return
+        }
+        parkedPropertiesSourceDrafts[propertiesSourceDraftKey(path)] = nil
+        if BaseExactIdentity.matches(propertiesSourceDraftPath, path) {
+            clearMountedPropertiesSourceDraft()
+        }
+    }
+
+    /// A completed source write may clear only the exact bytes it submitted.
+    /// If a newer draft somehow arrived before publication, it remains
+    /// recoverable and no fields-switch edge is emitted for it.
+    @discardableResult
+    private func clearPropertiesSourceDraftIfCommitted(
+        path: String,
+        submitted: String
+    ) -> Bool {
+        var cleared = false
+        let cacheKey = propertiesSourceDraftKey(path)
+        if let parked = parkedPropertiesSourceDrafts[cacheKey],
+            BaseExactIdentity.matches(parked.draft, submitted)
+        {
+            parkedPropertiesSourceDrafts[cacheKey] = nil
+            cleared = true
+        }
+        if BaseExactIdentity.matches(propertiesSourceDraftPath, path),
+            BaseExactIdentity.matches(propertiesSourceDraft, submitted)
+        {
+            clearMountedPropertiesSourceDraft()
+            cleared = true
+        }
+        return cleared
+    }
+
+    /// Property rows keep local SwiftUI state for low-churn editing, mirrored
+    /// here only as a recovery cache so an absent reconciliation/unmount can
+    /// restore the exact draft if the note returns.
+    private struct PreservedPropertyDraftRecord {
+        let path: String
+        let key: String
+        var draft: PropertyEditDraft
+        let baseline: PropertyEditDraft?
+
+        var isDirty: Bool {
+            baseline.map { draft != $0 } ?? true
+        }
+    }
+    private var preservedPropertyDrafts: [String: PreservedPropertyDraftRecord] = [:] {
+        didSet { publishPropertyRecoveryTransitionIfNeeded() }
+    }
+    private struct PropertyPublicationUncertainty {
+        let path: String
+        let key: String
+        /// Whole-file hash returned by the native write that succeeded. Retry
+        /// may clear recovery only after reading this exact version.
+        let expectedContentHash: String
+        let action: PropertyEditAction?
+        let submittedRowDraft: PropertyEditDraft?
+    }
+    private var propertyPublicationUncertainties:
+        [String: PropertyPublicationUncertainty] = [:] {
+            didSet { publishPropertyRecoveryTransitionIfNeeded() }
+        }
+    /// Observable, per-row reset epochs for an explicit identity-scoped
+    /// Reload. A row listens independently of `Property` equality, because an
+    /// external body/other-key edit can conflict while this key is unchanged.
+    @Published private(set) var propertyDraftResetRevision: UInt64 = 0
+    private var propertyDraftResetRequests: [String: UInt64] = [:]
+
+    private func publishPropertyRecoveryTransitionIfNeeded() {
+        let next = Set(
+            recoverablePropertyDraftPaths().map {
+                BaseExactIdentity.registryKey(
+                    prefix: "property-recovery-observation", value: $0)
+            })
+        guard next != propertyRecoveryPathFingerprint else { return }
+        propertyRecoveryPathFingerprint = next
+        propertyRecoveryRevision &+= 1
+    }
+
+    /// Missing-note recovery is vault-scoped and intentionally survives the
+    /// transition into the error UI. The dictionary is published so that a
+    /// recovery payload captured during reconciliation remounts the error pane
+    /// with selectable/copyable content immediately.
+    @Published private var missingNoteRecoveryDrafts: [String: MissingNoteRecoveryDraft] = [:]
+
+    private func propertyDraftKey(path: String, key: String) -> String {
+        BaseExactIdentity.key(
+            prefix: "note-property-draft",
+            components: [path, key])
+    }
+
+    private func propertyPublicationUncertaintyKey(
+        path: String, key: String
+    ) -> String {
+        BaseExactIdentity.key(
+            prefix: "property-publication-uncertainty",
+            components: [path, key])
+    }
+
+    private func hasPropertyPublicationUncertainty(for path: String) -> Bool {
+        propertyPublicationUncertainties.values.contains {
+            BaseExactIdentity.matches($0.path, path)
+        }
+    }
+
+    func hasAuthoredPropertyPublicationRecovery(for path: String) -> Bool {
+        propertyPublicationUncertainties.values.contains {
+            BaseExactIdentity.matches($0.path, path) && $0.action != nil
+        }
+    }
+
+    private func authoredPropertyPublicationRecoveries(
+        for path: String? = nil
+    ) -> [PropertyPublicationUncertainty] {
+        propertyPublicationUncertainties.values
+            .filter { record in
+                record.action != nil
+                    && (path.map {
+                        BaseExactIdentity.matches(record.path, $0)
+                    } ?? true)
+            }
+            .sorted { lhs, rhs in
+                if BaseExactIdentity.matches(lhs.path, rhs.path) {
+                    return BaseExactIdentity.lessThan(lhs.key, rhs.key)
+                }
+                return BaseExactIdentity.lessThan(lhs.path, rhs.path)
+            }
+    }
+
+    private func activeAuthoredPropertyPublicationRecovery()
+        -> PropertyPublicationUncertainty?
+    {
+        guard let path = loadedFilePath else { return nil }
+        return authoredPropertyPublicationRecoveries(for: path).first
+    }
+
+    private func propertyPublicationUncertaintyReason(for path: String) -> String {
+        hasAuthoredPropertyPublicationRecovery(for: path)
+            ? Self.authoredPropertyPublicationUncertainReason
+            : Self.bulkPropertyPublicationUncertainReason
+    }
+
+    var authoredPropertyPublicationRecoveryPaths: [String] {
+        var paths: [String: String] = [:]
+        for record in authoredPropertyPublicationRecoveries() {
+            paths[BaseExactIdentity.registryKey(
+                prefix: "authored-property-publication-recovery",
+                value: record.path)] = record.path
+        }
+        return paths.values.sorted(by: BaseExactIdentity.lessThan)
+    }
+
+    var authoredPropertyPublicationRecoveryReason: String? {
+        let paths = authoredPropertyPublicationRecoveryPaths
+        guard !paths.isEmpty else { return nil }
+        let names = paths.prefix(3).map {
+            authoredPropertyRecoveryDisplayName(for: $0, among: paths)
+        }
+        let listed = names.joined(separator: ", ")
+        let remainder = paths.count - names.count
+        let subject = remainder > 0
+            ? "\(listed), and \(remainder) more"
+            : listed
+        return "Resolve the saved property update awaiting verification in \(subject) before closing or switching vaults. Open the note to copy the retained update, reapply it, or use the current version."
+    }
+
+    private func announceInactivePropertyPublicationRecovery(for path: String) {
+        guard !BaseExactIdentity.matches(loadedFilePath, path) else { return }
+        let displayName = authoredPropertyRecoveryDisplayName(
+            for: path,
+            among: authoredPropertyPublicationRecoveryPaths)
+        postAccessibilityAnnouncement(
+            "The saved property update in \(displayName) could not be verified. Reopen the note to copy or resolve the retained update.",
+            priority: .high)
+    }
+
+    private func authoredPropertyRecoveryDisplayName(
+        for path: String,
+        among paths: [String]
+    ) -> String {
+        let basename = filename(of: path)
+        let duplicateCount = paths.lazy.filter {
+            self.filename(of: $0) == basename
+        }.count
+        return duplicateCount > 1 ? path : basename
+    }
+
+    func propertyDraftIsCommittedPendingVerification(
+        path: String,
+        key: String,
+        draft: PropertyEditDraft
+    ) -> Bool {
+        propertyPublicationUncertainties.values.contains { record in
+            guard BaseExactIdentity.matches(record.path, path),
+                BaseExactIdentity.matches(record.key, key),
+                case .set? = record.action,
+                let submitted = record.submittedRowDraft
+            else { return false }
+            return submitted == draft
+        }
+    }
+
+    func propertyDraftRevertTarget(
+        path: String,
+        key: String,
+        fallback: PropertyEditDraft
+    ) -> PropertyEditDraft {
+        propertyPublicationUncertainties.values.first { record in
+            BaseExactIdentity.matches(record.path, path)
+                && BaseExactIdentity.matches(record.key, key)
+                && record.submittedRowDraft != nil
+        }?.submittedRowDraft ?? fallback
+    }
+
+    func propertiesSourceDraftIsCommittedPendingVerification(
+        path: String,
+        draft: String
+    ) -> Bool {
+        propertyPublicationUncertainties.values.contains { record in
+            guard BaseExactIdentity.matches(record.path, path),
+                case .setSource(let submitted)? = record.action
+            else { return false }
+            return BaseExactIdentity.matches(submitted, draft)
+        }
+    }
+
+    func propertyRowDraftDiscardDisabledReason(
+        path: String,
+        key: String,
+        draft: PropertyEditDraft
+    ) -> String? {
+        if let reason = inFlightDraftDiscardDisabledReason { return reason }
+        return propertyDraftIsCommittedPendingVerification(
+            path: path, key: key, draft: draft)
+            ? Self.propertyPublicationUncertainReason
+            : nil
+    }
+
+    func propertiesSourceDraftDiscardDisabledReason(
+        path: String,
+        draft: String
+    ) -> String? {
+        if let reason = inFlightDraftDiscardDisabledReason { return reason }
+        return propertiesSourceDraftIsCommittedPendingVerification(
+            path: path, draft: draft)
+            ? Self.propertyPublicationUncertainReason
+            : nil
+    }
+
+    var activePropertyPublicationUncertaintyReason: String? {
+        guard let path = loadedFilePath,
+            hasPropertyPublicationUncertainty(for: path)
+        else { return nil }
+        return propertyPublicationUncertaintyReason(for: path)
+    }
+
+    var activePropertyPublicationRecoveryTitle: String? {
+        guard let record = activeAuthoredPropertyPublicationRecovery(),
+            let action = record.action
+        else { return nil }
+        switch action {
+        case .set:
+            return "Saved update awaiting verification: \(record.key)"
+        case .delete:
+            return "Saved deletion awaiting verification: \(record.key)"
+        case .setSource:
+            return "Saved properties source awaiting verification"
+        }
+    }
+
+    var activePropertyPublicationRecoveryText: String? {
+        guard let record = activeAuthoredPropertyPublicationRecovery() else {
+            return nil
+        }
+        return propertyPublicationRecoveryText(for: record)
+    }
+
+    /// Full-source recovery replaces the complete current frontmatter block;
+    /// the confirmation surface uses this to avoid making the per-key
+    /// "other properties remain unchanged" promise for that action.
+    var activePropertyPublicationRecoveryReplacesAllProperties: Bool {
+        guard let action = activeAuthoredPropertyPublicationRecovery()?.action
+        else { return false }
+        if case .setSource = action { return true }
+        return false
+    }
+
+    private func propertyPublicationRecoveryText(
+        for record: PropertyPublicationUncertainty
+    ) -> String? {
+        guard let action = record.action else { return nil }
+        switch action {
+        case .set(let value):
+            let valueText = record.submittedRowDraft?.recoveryText
+                ?? Self.propertyValueRecoveryText(value)
+            return "Property: \(record.key)\nAction: Set\nValue:\n\(valueText)"
+        case .delete:
+            return "Property: \(record.key)\nAction: Delete"
+        case .setSource(let source):
+            return "Action: Replace properties source\nSource:\n\(source)"
+        }
+    }
+
+    private static func propertyValueRecoveryText(_ value: PropertyValue) -> String {
+        switch value {
+        case .text(let value), .date(let value), .datetime(let value):
+            return value
+        case .integer(let value):
+            return String(value)
+        case .float(let value):
+            return String(value)
+        case .boolean(let value):
+            return value ? "true" : "false"
+        case .wikilink(let target):
+            return "[[\(target)]]"
+        case .list(let items):
+            return items.map(propertyValueRecoveryText).joined(separator: "\n")
+        case .tagList(let tags):
+            return tags.joined(separator: "\n")
+        }
+    }
+
+    func copyActivePropertyPublicationRecovery() {
+        guard let text = activePropertyPublicationRecoveryText else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        postAccessibilityAnnouncement("Retained property update copied.")
+    }
+
+    private func clearPropertyPublicationUncertainty(
+        path: String, key: String
+    ) {
+        propertyPublicationUncertainties[
+            propertyPublicationUncertaintyKey(path: path, key: key)] = nil
+    }
+
+    private func authoredPropertyPublicationRecovery(
+        path: String, key: String
+    ) -> PropertyPublicationUncertainty? {
+        let record = propertyPublicationUncertainties[
+            propertyPublicationUncertaintyKey(path: path, key: key)]
+        return record?.action == nil ? nil : record
+    }
+
+    /// Release only the submitted H1 copy after an explicit disk-wins choice.
+    /// A distinct V2 typed before publication finished remains an ordinary
+    /// uncommitted draft over the newly loaded disk baseline.
+    private func acceptDiskVersion(
+        for record: PropertyPublicationUncertainty
+    ) {
+        clearPropertyPublicationUncertainty(path: record.path, key: record.key)
+        guard let action = record.action else { return }
+        switch action {
+        case .set:
+            let latest = preservedPropertyDraft(
+                path: record.path, key: record.key)
+            if record.submittedRowDraft == nil
+                || latest == nil
+                || latest == record.submittedRowDraft
+            {
+                clearPreservedPropertyDraft(
+                    path: record.path, key: record.key)
+                requestPropertyDraftReset(path: record.path, key: record.key)
+            }
+        case .delete:
+            clearPreservedPropertyDraft(path: record.path, key: record.key)
+            requestPropertyDraftReset(path: record.path, key: record.key)
+        case .setSource(let submitted):
+            let latest: String?
+            if BaseExactIdentity.matches(propertiesSourceDraftPath, record.path) {
+                latest = propertiesSourceDraft
+            } else {
+                latest = parkedPropertiesSourceDrafts[
+                    propertiesSourceDraftKey(record.path)]?.draft
+            }
+            if latest == nil || BaseExactIdentity.matches(latest, submitted) {
+                discardPropertiesSourceDraft(for: record.path)
+                propertiesSourceError = nil
+                propertiesSourceCommitted &+= 1
+                requestPropertiesSourceCommit(path: record.path)
+            }
+        }
+    }
+
+    /// Bulk rename carries no user-authored action to recover. Its verification
+    /// marker may be dropped when the final tab owner closes because a future
+    /// open performs a normal authoritative load. Authored actions are never
+    /// eligible for this cleanup; they require an explicit recovery decision.
+    private func clearCloseSafeBulkPropertyPublicationVerification(for path: String) {
+        propertyPublicationUncertainties =
+            propertyPublicationUncertainties.filter {
+                !BaseExactIdentity.matches($0.value.path, path)
+                    || $0.value.action != nil
+            }
+    }
+
+    func preservePropertyDraft(
+        _ draft: PropertyEditDraft,
+        path: String,
+        key: String,
+        owner: NoteAuthoringOwner? = nil
+    ) {
+        preservePropertyDraft(
+            draft, baseline: nil, path: path, key: key, owner: owner)
+    }
+
+    func preservePropertyDraft(
+        _ draft: PropertyEditDraft,
+        baseline: PropertyEditDraft?,
+        path: String,
+        key: String,
+        owner: NoteAuthoringOwner? = nil
+    ) {
+        if let owner, !ownsNoteAuthoring(owner) { return }
+        let cacheKey = propertyDraftKey(path: path, key: key)
+        if let baseline, draft == baseline {
+            preservedPropertyDrafts[cacheKey] = nil
+            return
+        }
+        // Defensive backstop for a view callback already queued when a
+        // structural destination became reserved. Normal UI authoring is
+        // disabled through `noteAuthoringDisabledReason`; this guard ensures a
+        // stale/programmatic callback cannot create a new colliding recovery
+        // identity after admission and before native I/O.
+        if let reason = propertyAuthoringDisabledReason(for: path) {
+            postMutationAnnouncement(reason)
+            return
+        }
+        preservedPropertyDrafts[cacheKey] =
+            PreservedPropertyDraftRecord(
+                path: path,
+                key: key,
+                draft: draft,
+                baseline: baseline)
+    }
+
+    func preservedPropertyDraft(path: String, key: String) -> PropertyEditDraft? {
+        preservedPropertyDrafts[propertyDraftKey(path: path, key: key)]?.draft
+    }
+
+    func clearPreservedPropertyDraft(
+        path: String,
+        key: String,
+        owner: NoteAuthoringOwner? = nil
+    ) {
+        if let owner, !ownsNoteAuthoring(owner) { return }
+        preservedPropertyDrafts[propertyDraftKey(path: path, key: key)] = nil
+    }
+
+    /// Resolve an inactive row's recovery cache after its exact submitted
+    /// value commits. A later V2 remains dirty and must never be consumed by
+    /// the V1 completion.
+    @discardableResult
+    private func clearPreservedPropertyDraftIfCommitted(
+        path: String,
+        key: String,
+        submittedDraft: PropertyEditDraft
+    ) -> Bool {
+        let cacheKey = propertyDraftKey(path: path, key: key)
+        guard let record = preservedPropertyDrafts[cacheKey],
+            record.draft == submittedDraft
+        else { return false }
+        preservedPropertyDrafts[cacheKey] = nil
+        return true
+    }
+
+    private func requestPropertyDraftReset(path: String, key: String) {
+        propertyDraftResetRevision &+= 1
+        propertyDraftResetRequests[propertyDraftKey(path: path, key: key)] =
+            propertyDraftResetRevision
+    }
+
+    func propertyDraftResetRevision(path: String, key: String) -> UInt64 {
+        propertyDraftResetRequests[propertyDraftKey(path: path, key: key)] ?? 0
+    }
+
+    private func missingNoteRecoveryKey(_ path: String) -> String {
+        BaseExactIdentity.key(
+            prefix: "missing-note-recovery", components: [path])
+    }
+
+    /// One authoritative physical path transform. `includesDescendants` is
+    /// used by batch Move's standing directory roots; single rename/move
+    /// reports provide exact per-file mappings and therefore pass `false`.
+    private struct NoteRecoveryPathRetarget {
+        let oldPath: String
+        let newPath: String
+        let includesDescendants: Bool
+    }
+
+    fileprivate struct NoteRecoveryPathScope {
+        let path: String
+        let includesDescendants: Bool
+    }
+
+    /// O(path-components) reservation lookup used by every property-authoring
+    /// surface while a structural operation is in flight. The indices retain
+    /// byte-exact component identity and folder-descendant semantics identical
+    /// to the recovery collision census.
+    struct StructuralRecoveryReservation {
+        private let sourceIndex: VaultComponentPrefixIndex<Bool>
+        private let destinationIndex: VaultComponentPrefixIndex<Bool>
+
+        fileprivate init(
+            sources: [NoteRecoveryPathScope],
+            destinations: [NoteRecoveryPathScope]
+        ) {
+            sourceIndex = VaultComponentPrefixIndex(
+                sources.map {
+                    .init(
+                        path: $0.path,
+                        includesDescendants: $0.includesDescendants,
+                        value: true)
+                })
+            destinationIndex = VaultComponentPrefixIndex(
+                destinations.map {
+                    .init(
+                        path: $0.path,
+                        includesDescendants: $0.includesDescendants,
+                        value: true)
+                })
+        }
+
+        fileprivate func blocksAuthoring(at path: String) -> Bool {
+            destinationIndex.longestMatch(for: path) != nil
+                && sourceIndex.longestMatch(for: path) == nil
+        }
+    }
+
+    /// Every recovery or verification identity that must block a structural
+    /// destination. This includes publication uncertainty even though those
+    /// bytes already reached disk; structural writes stay fail-closed until
+    /// the exact committed version is verified.
+    private func recoverableNoteDraftPaths() -> [String] {
+        var paths: [String: String] = [:]
+        func include(_ path: String) {
+            paths[BaseExactIdentity.registryKey(
+                prefix: "recoverable-note-draft-path",
+                value: path)] = path
+        }
+        for path in recoverablePropertyDraftPaths() { include(path) }
+        if hasUnsavedChanges, let path = loadedFilePath { include(path) }
+        for document in workspace.dirtyParkedDocuments() {
+            include(document.path)
+        }
+        for recovery in missingNoteRecoveryDrafts.values { include(recovery.path) }
+        return paths.values.sorted(by: BaseExactIdentity.lessThan)
+    }
+
+    /// Only user-authored bytes that closing could actually discard. A
+    /// publication uncertainty is verification state for an already-committed
+    /// write, so it must never create a Save/Discard close prompt.
+    private func uncommittedNoteDraftPaths() -> [String] {
+        var paths: [String: String] = [:]
+        func include(_ path: String) {
+            paths[BaseExactIdentity.registryKey(
+                prefix: "uncommitted-note-draft-path",
+                value: path)] = path
+        }
+        for path in uncommittedPropertyDraftPaths() { include(path) }
+        for recovery in missingNoteRecoveryDrafts.values {
+            include(recovery.path)
+        }
+        return paths.values.sorted(by: BaseExactIdentity.lessThan)
+    }
+
+    private func hasRecoveryDestinationCollision(
+        sources: [NoteRecoveryPathScope],
+        destinations: [NoteRecoveryPathScope],
+        allowingExactRecoveryPaths: [String] = []
+    ) -> Bool {
+        guard !destinations.isEmpty else { return false }
+        let allowedExactRecoveryKeys = Set(
+            allowingExactRecoveryPaths.map {
+                BaseExactIdentity.registryKey(
+                    prefix: "allowed-structural-recovery-path",
+                    value: $0)
+            })
+        let sourceIndex = VaultComponentPrefixIndex<Bool>(
+            sources.map {
+                .init(
+                    path: $0.path,
+                    includesDescendants: $0.includesDescendants,
+                    value: true)
+            })
+        let destinationIndex = VaultComponentPrefixIndex<Bool>(
+            destinations.map {
+                .init(
+                    path: $0.path,
+                    includesDescendants: $0.includesDescendants,
+                    value: true)
+            })
+        return recoverableNoteDraftPaths().contains { path in
+            let exactKey = BaseExactIdentity.registryKey(
+                prefix: "allowed-structural-recovery-path",
+                value: path)
+            return !allowedExactRecoveryKeys.contains(exactKey)
+                && destinationIndex.longestMatch(for: path) != nil
+                && sourceIndex.longestMatch(for: path) == nil
+        }
+    }
+
+    /// Test-visible through the public authoring capability projection. A
+    /// reservation is deliberately reported as the ordinary structural busy
+    /// reason: the user can safely retry when the current operation finishes.
+    private func structuralRecoveryReservationDisabledReason(
+        for path: String
+    ) -> String? {
+        activeStructuralRecoveryReservation?.blocksAuthoring(at: path) == true
+            ? Self.structuralMutationBusyReason
+            : nil
+    }
+
+    /// Central pre-write admission for an exact create destination. Extension
+    /// funnels (Canvas, Graph, History) use this same seam rather than
+    /// reimplementing registry inspection.
+    @discardableResult
+    func admitStructuralRecoveryDestination(
+        _ path: String,
+        includesDescendants: Bool = false
+    ) -> StructuralRecoveryReservation? {
+        let sources: [NoteRecoveryPathScope] = []
+        let destinations = [
+            NoteRecoveryPathScope(
+                path: path,
+                includesDescendants: includesDescendants)
+        ]
+        let collision = hasRecoveryDestinationCollision(
+            sources: [],
+            destinations: destinations)
+        guard !collision else {
+            postMutationAnnouncement(Self.structuralRecoveryDestinationReason)
+            return nil
+        }
+        return StructuralRecoveryReservation(
+            sources: sources,
+            destinations: destinations)
+    }
+
+    /// A missing-file Keep Mine recreates the path already owned by its dirty
+    /// body. That exact byte identity is the recovery source, not a distinct
+    /// destination draft, so it must not collide with itself. Canonically
+    /// equivalent aliases and every other destination recovery remain blocked.
+    /// The returned reservation marks that same exact path as the operation's
+    /// source so the recovery save itself can pass the authoring gate. Save
+    /// ownership still rejects concurrent edits, while aliases and unrelated
+    /// destination drafts remain blocked.
+    private func admitStructuralRecoveryRecreation(
+        _ path: String
+    ) -> StructuralRecoveryReservation? {
+        let destinations = [
+            NoteRecoveryPathScope(path: path, includesDescendants: false)
+        ]
+        let collision = hasRecoveryDestinationCollision(
+            sources: [],
+            destinations: destinations,
+            allowingExactRecoveryPaths: [path])
+        guard !collision else {
+            postMutationAnnouncement(Self.structuralRecoveryDestinationReason)
+            return nil
+        }
+        return StructuralRecoveryReservation(
+            sources: [
+                NoteRecoveryPathScope(path: path, includesDescendants: false)
+            ],
+            destinations: destinations)
+    }
+
+    /// Central pre-write admission for path transforms. Recovery already owned
+    /// by a moving source is allowed and will be rekeyed transactionally;
+    /// destination-only recovery is a separate user identity and blocks.
+    @discardableResult
+    private func admitStructuralRecoveryRetargets(
+        _ retargets: [NoteRecoveryPathRetarget]
+    ) -> StructuralRecoveryReservation? {
+        let sources = retargets.map {
+                NoteRecoveryPathScope(
+                    path: $0.oldPath,
+                    includesDescendants: $0.includesDescendants)
+            }
+        let destinations = retargets.map {
+                NoteRecoveryPathScope(
+                    path: $0.newPath,
+                    includesDescendants: $0.includesDescendants)
+            }
+        let collision = hasRecoveryDestinationCollision(
+            sources: sources,
+            destinations: destinations)
+        guard !collision else {
+            postMutationAnnouncement(Self.structuralRecoveryDestinationReason)
+            return nil
+        }
+        return StructuralRecoveryReservation(
+            sources: sources,
+            destinations: destinations)
+    }
+
+    /// Retarget every Markdown recovery owner as one two-phase transaction:
+    /// snapshot from the old identities first, then clear/install. This keeps
+    /// folder mappings component-safe and prevents a mapping whose destination
+    /// is another mapping's source from cascading in dictionary iteration
+    /// order. It runs before WorkspaceState publishes its corresponding tab
+    /// changes, so a mounted source editor never observes split ownership.
+    ///
+    /// Destination-cache collisions are deliberately left untouched here.
+    /// Those bytes may be user-authored recovery state despite the physical
+    /// destination being free; until admission/surfacing policy resolves the
+    /// two identities, preserving both old and destination entries is safer
+    /// than silently deleting either one.
+    private func rekeyNoteRecoveryPaths(
+        _ retargets: [NoteRecoveryPathRetarget]
+    ) {
+        guard !retargets.isEmpty else { return }
+        let sourceIndex = VaultComponentPrefixIndex<NoteRecoveryPathRetarget>(
+            retargets.map {
+                .init(
+                    path: $0.oldPath,
+                    includesDescendants: $0.includesDescendants,
+                    value: $0)
+            })
+        let destinationIndex = VaultComponentPrefixIndex<NoteRecoveryPathRetarget>(
+            retargets.map {
+                .init(
+                    path: $0.newPath,
+                    includesDescendants: $0.includesDescendants,
+                    value: $0)
+            })
+
+        func destination(for path: String) -> String? {
+            guard let match = sourceIndex.longestMatch(for: path) else {
+                return nil
+            }
+            return match.relativeSuffix.isEmpty
+                ? match.entry.value.newPath
+                : Self.joinVaultPath(
+                    match.entry.value.newPath,
+                    match.relativeSuffix)
+        }
+
+        func isDestinationOnly(_ path: String) -> Bool {
+            destinationIndex.longestMatch(for: path) != nil
+                && sourceIndex.longestMatch(for: path) == nil
+        }
+
+        // Every native structural funnel preflights this same recoverable set.
+        // Keep a defensive fail-closed guard for future callers, but do not let
+        // clean editor caches abort a post-success rekey: they are presentation
+        // state, not a second user-authored identity, and the filter/install
+        // transaction below may safely replace them.
+        let hasDestinationCollision = recoverableNoteDraftPaths().contains(
+            where: isDestinationOnly)
+        guard !hasDestinationCollision else { return }
+
+        let parkedSnapshots = parkedPropertiesSourceDrafts.values.compactMap {
+            record -> (source: String, moved: ParkedPropertiesSourceDraftRecord)? in
+            guard let newPath = destination(for: record.path) else { return nil }
+            return (
+                record.path,
+                ParkedPropertiesSourceDraftRecord(
+                    path: newPath,
+                    draft: record.draft,
+                    baseline: record.baseline))
+        }.sorted { BaseExactIdentity.lessThan($0.source, $1.source) }
+
+        let propertySnapshots = preservedPropertyDrafts.values.compactMap {
+            record -> (source: String, moved: PreservedPropertyDraftRecord)? in
+            guard let newPath = destination(for: record.path) else { return nil }
+            return (
+                record.path,
+                PreservedPropertyDraftRecord(
+                    path: newPath,
+                    key: record.key,
+                    draft: record.draft,
+                    baseline: record.baseline))
+        }.sorted {
+            if BaseExactIdentity.matches($0.source, $1.source) {
+                return BaseExactIdentity.lessThan($0.moved.key, $1.moved.key)
+            }
+            return BaseExactIdentity.lessThan($0.source, $1.source)
+        }
+
+        let recoverySnapshots = missingNoteRecoveryDrafts.values.compactMap {
+            recovery -> (source: String, moved: MissingNoteRecoveryDraft)? in
+            guard let newPath = destination(for: recovery.path) else { return nil }
+            return (
+                recovery.path,
+                MissingNoteRecoveryDraft(
+                    path: newPath,
+                    body: recovery.body,
+                    frontmatterSource: recovery.frontmatterSource,
+                    propertiesSourceDraft: recovery.propertiesSourceDraft,
+                    propertyDrafts: recovery.propertyDrafts,
+                    retainedPropertyUpdates: recovery.retainedPropertyUpdates))
+        }.sorted { BaseExactIdentity.lessThan($0.source, $1.source) }
+
+        let uncertaintySnapshots = propertyPublicationUncertainties.values
+            .compactMap {
+                record
+                    -> (source: String, moved: PropertyPublicationUncertainty)? in
+                guard let newPath = destination(for: record.path) else {
+                    return nil
+                }
+                return (
+                    record.path,
+                    PropertyPublicationUncertainty(
+                        path: newPath,
+                        key: record.key,
+                        expectedContentHash: record.expectedContentHash,
+                        action: record.action,
+                        submittedRowDraft: record.submittedRowDraft))
+            }
+            .sorted {
+                if BaseExactIdentity.matches($0.source, $1.source) {
+                    return BaseExactIdentity.lessThan(
+                        $0.moved.key, $1.moved.key)
+                }
+                return BaseExactIdentity.lessThan($0.source, $1.source)
+            }
+
+        let conflictSnapshot = currentPropertyEditConflict.flatMap { conflict in
+            destination(for: conflict.path).map { newPath in
+                PropertyEditConflict(
+                    path: newPath,
+                    key: conflict.key,
+                    action: conflict.action,
+                    currentContentHash: conflict.currentContentHash,
+                    expectedContentHash: conflict.expectedContentHash,
+                    currentMtimeMs: conflict.currentMtimeMs)
+            }
+        }
+
+        let mountedSnapshot: (path: String, draft: String, baseline: String?)? =
+            propertiesSourceDraftPath.flatMap { path in
+                destination(for: path).map {
+                    (
+                        path: $0,
+                        draft: propertiesSourceDraft,
+                        baseline: BaseExactIdentity.matches(path, loadedFilePath)
+                            ? currentNoteFMSource
+                            : parkedPropertiesSourceDrafts[
+                                propertiesSourceDraftKey(path)]?.baseline)
+                }
+            }
+
+        parkedPropertiesSourceDrafts = parkedPropertiesSourceDrafts.filter {
+            sourceIndex.longestMatch(for: $0.value.path) == nil
+                && destinationIndex.longestMatch(for: $0.value.path) == nil
+        }
+        preservedPropertyDrafts = preservedPropertyDrafts.filter {
+            sourceIndex.longestMatch(for: $0.value.path) == nil
+                && destinationIndex.longestMatch(for: $0.value.path) == nil
+        }
+        missingNoteRecoveryDrafts = missingNoteRecoveryDrafts.filter {
+            sourceIndex.longestMatch(for: $0.value.path) == nil
+                && destinationIndex.longestMatch(for: $0.value.path) == nil
+        }
+        propertyPublicationUncertainties =
+            propertyPublicationUncertainties.filter {
+                sourceIndex.longestMatch(for: $0.value.path) == nil
+                    && destinationIndex.longestMatch(for: $0.value.path) == nil
+            }
+
+        for snapshot in parkedSnapshots {
+            parkedPropertiesSourceDrafts[
+                propertiesSourceDraftKey(snapshot.moved.path)] = snapshot.moved
+        }
+        for snapshot in propertySnapshots {
+            preservedPropertyDrafts[
+                propertyDraftKey(
+                    path: snapshot.moved.path,
+                    key: snapshot.moved.key)] = snapshot.moved
+        }
+        for snapshot in recoverySnapshots {
+            missingNoteRecoveryDrafts[
+                missingNoteRecoveryKey(snapshot.moved.path)] = snapshot.moved
+        }
+        for snapshot in uncertaintySnapshots {
+            propertyPublicationUncertainties[
+                propertyPublicationUncertaintyKey(
+                    path: snapshot.moved.path,
+                    key: snapshot.moved.key)] = snapshot.moved
+        }
+        if let conflictSnapshot {
+            currentPropertyEditConflict = conflictSnapshot
+        }
+        if let ownerPath = propertyEditOwnerPath,
+            let movedOwnerPath = destination(for: ownerPath)
+        {
+            propertyEditOwnerPath = movedOwnerPath
+        }
+        if let mountedSnapshot {
+            propertiesSourceDraftPath = mountedSnapshot.path
+            propertiesSourceDraft = mountedSnapshot.draft
+            // Ownership transfers to the mounted editor. Keeping an identical
+            // parked copy would leave V0 behind after the mounted draft grows
+            // to V1, letting V0 resurrect on the next tab round-trip. Every
+            // unmount funnel parks the current mounted bytes synchronously.
+            parkedPropertiesSourceDrafts[
+                propertiesSourceDraftKey(mountedSnapshot.path)] = nil
+        }
+    }
+
+    func missingNoteRecoveryDraft(for path: String) -> MissingNoteRecoveryDraft? {
+        missingNoteRecoveryDrafts[missingNoteRecoveryKey(path)]
+    }
+
+    private func propertyRecoveryDrafts(for path: String)
+        -> [MissingPropertyRecoveryDraft]
+    {
+        preservedPropertyDrafts.values
+            .filter {
+                BaseExactIdentity.matches($0.path, path) && $0.isDirty
+            }
+            .map {
+                MissingPropertyRecoveryDraft(
+                    key: $0.key,
+                    value: Self.recoveryText(for: $0.draft))
+            }
+            .sorted { $0.key < $1.key }
+    }
+
+    private func propertyPublicationRecoveryDrafts(for path: String)
+        -> [MissingPropertyRecoveryDraft]
+    {
+        authoredPropertyPublicationRecoveries(for: path).compactMap { record in
+            guard let action = record.action,
+                let value = propertyPublicationRecoveryText(for: record)
+            else { return nil }
+            let key: String
+            if case .setSource = action {
+                key = "properties source"
+            } else {
+                key = record.key
+            }
+            return MissingPropertyRecoveryDraft(key: key, value: value)
+        }
+    }
+
+    private static func recoveryText(for draft: PropertyEditDraft) -> String {
+        switch draft {
+        case .scalarText(let kind): return kind.value
+        case .integer(let value), .float(let value), .wikilink(let value):
+            return value
+        case .boolean(let value): return value ? "true" : "false"
+        case .list(let values), .tagList(let values):
+            return values.joined(separator: "\n")
+        }
+    }
+
+    private func preserveMissingNoteRecovery(
+        path: String, body: String, frontmatterSource: String
+    ) {
+        let sourceDraft = propertiesSourceRecoveryDraft(
+            for: path,
+            frontmatterSource: frontmatterSource)
+        missingNoteRecoveryDrafts[missingNoteRecoveryKey(path)] =
+            MissingNoteRecoveryDraft(
+                path: path,
+                body: body,
+                frontmatterSource: frontmatterSource,
+                propertiesSourceDraft: sourceDraft,
+                propertyDrafts: propertyRecoveryDrafts(for: path),
+                retainedPropertyUpdates:
+                    propertyPublicationRecoveryDrafts(for: path))
+    }
+
+    func hasRecoverablePropertyDrafts(
+        for path: String,
+        frontmatterSource: String
+    ) -> Bool {
+        if propertiesSourceRecoveryDraft(
+            for: path,
+            frontmatterSource: frontmatterSource) != nil
+        {
+            return true
+        }
+        return preservedPropertyDrafts.values.contains {
+            BaseExactIdentity.matches($0.path, path) && $0.isDirty
+        }
+    }
+
+    /// Exact paths that still own user-authored properties-source or row
+    /// drafts. Includes registry-only paths so tab/vault close cannot miss a
+    /// draft merely because its tab was already closed or unmounted.
+    func recoverablePropertyDraftPaths() -> [String] {
+        propertyRecoveryPaths(includePublicationUncertainty: true)
+    }
+
+    /// Paths with actual user-authored bytes that a destructive close could
+    /// discard. A publication uncertainty is deliberately excluded: native
+    /// I/O already succeeded, so closing cannot and must not claim to undo it.
+    private func uncommittedPropertyDraftPaths() -> [String] {
+        propertyRecoveryPaths(includePublicationUncertainty: false)
+    }
+
+    private func propertyRecoveryPaths(
+        includePublicationUncertainty: Bool
+    ) -> [String] {
+        var paths: [String: String] = [:]
+        func include(_ path: String) {
+            paths[BaseExactIdentity.registryKey(
+                prefix: "recoverable-property-draft-path",
+                value: path)] = path
+        }
+        for record in parkedPropertiesSourceDrafts.values where record.isDirty {
+            if !includePublicationUncertainty,
+                propertiesSourceDraftIsCommittedPendingVerification(
+                    path: record.path, draft: record.draft)
+            {
+                continue
+            }
+            include(record.path)
+        }
+        for record in preservedPropertyDrafts.values where record.isDirty {
+            if !includePublicationUncertainty,
+                propertyDraftIsCommittedPendingVerification(
+                    path: record.path, key: record.key, draft: record.draft)
+            {
+                continue
+            }
+            include(record.path)
+        }
+        if includePublicationUncertainty {
+            for record in propertyPublicationUncertainties.values {
+                include(record.path)
+            }
+        }
+        if let conflict = currentPropertyEditConflict {
+            include(conflict.path)
+        }
+        if let path = propertiesSourceDraftPath {
+            let baseline: String?
+            if BaseExactIdentity.matches(path, loadedFilePath) {
+                baseline = currentNoteFMSource
+            } else {
+                baseline = parkedPropertiesSourceDrafts[
+                    propertiesSourceDraftKey(path)]?.baseline
+            }
+            if baseline.map({
+                !BaseExactIdentity.matches(propertiesSourceDraft, $0)
+            }) ?? true,
+                includePublicationUncertainty
+                    || !propertiesSourceDraftIsCommittedPendingVerification(
+                        path: path, draft: propertiesSourceDraft)
+            {
+                include(path)
+            }
+        }
+        return paths.values.sorted(by: BaseExactIdentity.lessThan)
+    }
+
+    func hasRecoverablePropertyDrafts(for path: String) -> Bool {
+        recoverablePropertyDraftPaths().contains {
+            BaseExactIdentity.matches($0, path)
+        }
+    }
+
+    private func hasDirtyNoteRecovery(for path: String) -> Bool {
+        uncommittedPropertyDraftPaths().contains {
+            BaseExactIdentity.matches($0, path)
+        }
+            || missingNoteRecoveryDraft(for: path) != nil
+    }
+
+    private func hasOtherMarkdownTab(for path: String, excluding id: TabID) -> Bool {
+        workspace.model.allTabs.contains { tab in
+            guard tab.id != id, case .markdown(let candidate) = tab.item else {
+                return false
+            }
+            return BaseExactIdentity.matches(candidate, path)
+        }
+    }
+
+    /// Non-Markdown current-tab routers (Canvas, Bases, saved queries, and
+    /// dashboards) replace the active item directly instead of passing through
+    /// `selectedFilePath`. Keep their shared admission at AppState so none can
+    /// consume the final tab that owns an authored publication recovery.
+    func admitCurrentTabReplacementForPropertyRecovery() -> Bool {
+        if let reason = propertyEditNavigationDisabledReason {
+            postMutationAnnouncement(reason)
+            return false
+        }
+        guard let activeID = workspace.model.activeGroup.activeTabID,
+            let tab = workspace.model.tab(activeID),
+            case .markdown(let path) = tab.item,
+            hasAuthoredPropertyPublicationRecovery(for: path),
+            !hasOtherMarkdownTab(for: path, excluding: activeID)
+        else { return true }
+        postMutationAnnouncement(
+            "Resolve the saved property update awaiting verification in \(filename(of: path)) before replacing its final tab. Copy the retained update, reapply it, or use the current version.")
+        return false
+    }
+
+    /// Unique note identities at risk during vault close. Duplicate tabs do not
+    /// inflate the count, and registry-only recovery remains visible even when
+    /// its last tab has already unmounted.
+    private func dirtyVaultClosePaths() -> [String] {
+        var paths: [String: String] = [:]
+        func include(_ path: String) {
+            paths[BaseExactIdentity.registryKey(
+                prefix: "dirty-vault-close-path",
+                value: path)] = path
+        }
+        if hasUnsavedChanges, let path = loadedFilePath { include(path) }
+        for document in workspace.dirtyParkedDocuments() { include(document.path) }
+        for path in uncommittedPropertyDraftPaths() { include(path) }
+        for recovery in missingNoteRecoveryDrafts.values {
+            include(recovery.path)
+        }
+        return paths.values.sorted(by: BaseExactIdentity.lessThan)
+    }
+
+    /// Explicit destructive resolution for the close/discard workflows. The
+    /// caller owns confirmation and announcements. A later V2 draft may be
+    /// discarded here, but an authored update whose native write has not been
+    /// verified remains retained as H1 until the user resolves that separate
+    /// recovery state explicitly.
+    func discardRecoverablePropertyDrafts(for path: String) {
+        let retainedAuthored = authoredPropertyPublicationRecoveries(for: path)
+        let priorRows = preservedPropertyDrafts
+        preservedPropertyDrafts = preservedPropertyDrafts.filter {
+            !BaseExactIdentity.matches($0.value.path, path)
+        }
+        if BaseExactIdentity.matches(currentPropertyEditConflict?.path, path) {
+            currentPropertyEditConflict = nil
+        }
+        discardPropertiesSourceDraft(for: path)
+        for record in retainedAuthored {
+            guard let action = record.action else { continue }
+            switch action {
+            case .set:
+                guard let submitted = record.submittedRowDraft else { continue }
+                let cacheKey = propertyDraftKey(path: path, key: record.key)
+                preservedPropertyDrafts[cacheKey] = PreservedPropertyDraftRecord(
+                    path: path,
+                    key: record.key,
+                    draft: submitted,
+                    baseline: priorRows[cacheKey]?.baseline)
+            case .setSource(let submitted):
+                if BaseExactIdentity.matches(loadedFilePath, path) {
+                    propertiesSourceDraft = submitted
+                    propertiesSourceDraftPath = path
+                } else {
+                    parkedPropertiesSourceDrafts[propertiesSourceDraftKey(path)] =
+                        ParkedPropertiesSourceDraftRecord(
+                            path: path,
+                            draft: submitted,
+                            baseline: nil)
+                }
+            case .delete:
+                break
+            }
+        }
+    }
+
+    private func propertiesSourceRecoveryDraft(
+        for path: String,
+        frontmatterSource: String
+    ) -> String? {
+        let candidate: String?
+        if BaseExactIdentity.matches(propertiesSourceDraftPath, path) {
+            candidate = propertiesSourceDraft
+        } else {
+            candidate = parkedPropertiesSourceDrafts[
+                propertiesSourceDraftKey(path)]?.draft
+        }
+        guard let candidate,
+            !BaseExactIdentity.matches(candidate, frontmatterSource)
+        else { return nil }
+        return candidate
+    }
+
+    /// Copies every recoverable editing surface in one plain-text payload so
+    /// users do not have to discover the body/source/row sections separately.
+    func copyMissingNoteRecoveryDraft(for path: String) {
+        guard let recovery = missingNoteRecoveryDraft(for: path) else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(recovery.copyText, forType: .string)
+        postMutationAnnouncement("Recovered drafts copied.")
+    }
+
+    /// Explicit destructive recovery action used by the error pane after its
+    /// confirmation dialog. Normal reconciliation never calls this method.
+    func discardMissingNoteRecoveryDraft(for path: String) {
+        discardMissingNoteRecoveryDraft(path: path, announce: true)
+    }
+
+    private func discardMissingNoteRecoveryDraft(path: String, announce: Bool) {
+        missingNoteRecoveryDrafts[missingNoteRecoveryKey(path)] = nil
+        preservedPropertyDrafts = preservedPropertyDrafts.filter {
+            !BaseExactIdentity.matches($0.value.path, path)
+        }
+        propertyPublicationUncertainties =
+            propertyPublicationUncertainties.filter {
+                !BaseExactIdentity.matches($0.value.path, path)
+            }
+        discardPropertiesSourceDraft(for: path)
+        workspace.discardMissingDocuments(forPath: path)
+        if BaseExactIdentity.matches(loadedFilePath, path), noteLoadError != nil {
+            currentNoteText = nil
+            savedBaselineText = nil
+            currentNoteContentHash = nil
+            currentNoteFMSource = ""
+            bodyByteOffset = 0
+            bodyLineOffset = 0
+            loadedFilePath = nil
+            hasUnsavedChanges = false
+        }
+        if announce {
+            postMutationAnnouncement("Recovered drafts discarded.")
+        }
+    }
 
     /// The widget's single-writer seam for the mirror above — the view
     /// remains the owner of the real state; AppState only reflects it.
     /// The equality guard makes the `.onAppear` resync publish-free on
     /// the common (already-in-sync) mount path.
-    func notePropertiesSourceModeChanged(_ showing: Bool) {
+    func notePropertiesSourceModeChanged(
+        _ showing: Bool,
+        owner: NoteAuthoringOwner? = nil
+    ) {
+        if let owner, !ownsNoteAuthoring(owner) { return }
         guard propertiesSourceShowing != showing else { return }
         propertiesSourceShowing = showing
     }
@@ -9212,22 +15195,51 @@ final class AppState: ObservableObject {
 
     /// The widget's exit paths reset the inline error without widening
     /// the setter (state mutations stay funneled through AppState).
-    func clearPropertiesSourceError() {
+    func clearPropertiesSourceError(owner: NoteAuthoringOwner? = nil) {
+        if let owner, !ownsNoteAuthoring(owner) { return }
         propertiesSourceError = nil
     }
 
     /// Bumped on every successful `.setSource` commit — the widget flips
-    /// back to the fields view on this edge (the row list re-read from
-    /// disk state is the round-trip guarantee: no client-side YAML parse).
+    /// back to the fields view through the path-scoped edge below. Retained as
+    /// a coarse diagnostic/test counter; UI must not consume it because a
+    /// commit for an inactive note cannot dismiss the active note's draft.
     @Published private(set) var propertiesSourceCommitted: Int = 0
+    @Published private(set) var propertiesSourceCommitRevision: UInt64 = 0
+    private var propertiesSourceCommitRequests: [String: UInt64] = [:]
+
+    private func requestPropertiesSourceCommit(path: String) {
+        propertiesSourceCommitRevision &+= 1
+        propertiesSourceCommitRequests[propertiesSourceDraftKey(path)] =
+            propertiesSourceCommitRevision
+    }
+
+    func propertiesSourceCommitRevision(for path: String) -> UInt64 {
+        propertiesSourceCommitRequests[propertiesSourceDraftKey(path)] ?? 0
+    }
 
     /// Remove a frontmatter property. Symmetric to `setProperty`:
     /// same conflict path, same refresh on success.
     @discardableResult
-    func deleteProperty(path: String, key: String) -> Task<Void, Never>? {
+    func deleteProperty(
+        path: String,
+        key: String,
+        owner: NoteAuthoringOwner? = nil
+    ) -> Task<Void, Never>? {
+        if let owner, !ownsNoteAuthoring(owner) { return nil }
         guard !isEditingProperty else { return nil }
+        guard !isMutatingStructure else {
+            postMutationAnnouncement(Self.structuralMutationBusyReason)
+            return nil
+        }
         guard let session = currentSession else { return nil }
-        isEditingProperty = true
+        guard admitNoteAuthoring(for: path, owner: owner) else { return nil }
+        if preservedPropertyDrafts[propertyDraftKey(path: path, key: key)]?.isDirty == true {
+            postMutationAnnouncement(Self.propertyDraftDeleteReason)
+            return nil
+        }
+        guard admitBatchTrashWrite(to: [path]) else { return nil }
+        let generation = beginPropertyEditOwnership(path: path)
         propertyEditError = nil
         let expected = currentNoteContentHash
         let task: Task<Void, Never> = Task { [weak self] in
@@ -9236,7 +15248,8 @@ final class AppState: ObservableObject {
                 path: path,
                 key: key,
                 action: .delete,
-                expectedHash: expected
+                expectedHash: expected,
+                generation: generation
             )
             return
         }
@@ -9248,13 +15261,84 @@ final class AppState: ObservableObject {
     /// the SQLite-mutex-holding FFI call off the main actor, then
     /// routes the outcome to one of three paths (success / conflict
     /// / error) on the main actor.
+    private func rejectQueuedPropertyEdit(
+        generation: UInt64,
+        session: VaultSession,
+        path: String,
+        reason: String?,
+        rejectedConflict: PropertyEditConflict?
+    ) {
+        guard ownsPropertyEdit(generation, session: session) else { return }
+        if let reason { postMutationAnnouncement(reason) }
+        if let rejectedConflict,
+            currentPropertyEditConflict == nil,
+            BaseExactIdentity.matches(loadedFilePath, path)
+        {
+            currentPropertyEditConflict = rejectedConflict
+        }
+        finishPropertyEditOwnership(generation)
+    }
+
+    private func queuedPropertyEditDisabledReason(
+        path: String,
+        action: PropertyEditAction,
+        ignoringPropertyPublicationUncertainty: Bool
+    ) -> String? {
+        if isSaving { return Self.saveInProgressReason }
+        if let reason = noteAuthoringDisabledReason(
+            for: path,
+            ignoringStructuralRecoveryReservationToken: nil,
+            ignoringPropertyPublicationUncertainty:
+                ignoringPropertyPublicationUncertainty)
+        {
+            return reason
+        }
+        if case .setSource = action,
+            hasDirtyPreservedPropertyDrafts(for: path)
+        {
+            return Self.propertyRowsSourceApplyReason
+        }
+        return nil
+    }
+
     private func performPropertyEdit(
         session: VaultSession,
         path: String,
         key: String,
         action: PropertyEditAction,
-        expectedHash: String?
+        expectedHash: String?,
+        generation: UInt64,
+        rejectedConflict: PropertyEditConflict? = nil,
+        submittedRowDraft: PropertyEditDraft? = nil,
+        isPublicationRecovery: Bool = false
     ) async {
+        guard ownsPropertyEdit(generation, session: session) else { return }
+        guard !Task.isCancelled else {
+            finishPropertyEditOwnership(generation)
+            return
+        }
+        if let reason = queuedPropertyEditDisabledReason(
+            path: path,
+            action: action,
+            ignoringPropertyPublicationUncertainty: isPublicationRecovery)
+        {
+            rejectQueuedPropertyEdit(
+                generation: generation,
+                session: session,
+                path: path,
+                reason: reason,
+                rejectedConflict: rejectedConflict)
+            return
+        }
+        guard admitBatchTrashWrite(to: [path]) else {
+            rejectQueuedPropertyEdit(
+                generation: generation,
+                session: session,
+                path: path,
+                reason: nil,
+                rejectedConflict: rejectedConflict)
+            return
+        }
         let outcome: Result<SaveReport, VaultError> = await Task.detached(priority: .userInitiated) {
             do {
                 switch action {
@@ -9291,58 +15375,158 @@ final class AppState: ObservableObject {
             }
         }.value
 
+        if case .success = outcome,
+            ownsPropertyEdit(generation, session: session),
+            !Task.isCancelled
+        {
+            propertyEditNativeWriteSucceededGeneration = generation
+        }
+
         if let gate = basesPostWritePublishGate { await gate() }
 
         // If the user navigated away mid-edit, drop the result
         // rather than mutating state for a file the user has
         // already moved on from. Same shape as `performSave`.
-        guard currentSession === session else { return }
+        guard ownsPropertyEdit(generation, session: session) else { return }
+        guard !Task.isCancelled else {
+            finishPropertyEditOwnership(generation)
+            return
+        }
         if case .success = outcome {
             // The native property write is already indexed. Refresh global
             // Bases consumers before guarding active-note-only publication.
-            refreshVisibleBasesAfterInAppWrite(session: session, changedPath: path)
+            _ = await refreshVisibleBasesAfterInAppWrite(
+                session: session,
+                changedPath: path)?.value
+            guard ownsPropertyEdit(generation, session: session) else { return }
+            guard !Task.isCancelled else {
+                finishPropertyEditOwnership(generation)
+                return
+            }
         }
-        guard loadedFilePath == path else {
-            isEditingProperty = false
-            return
-        }
-
         switch outcome {
         case .success(let report):
-            currentNoteContentHash = report.newContentHash
             // U3-3 (#469 handoff): the edit rewrote the file's frontmatter —
-            // refresh fmSource + offsets from ONE read so the next composed
-            // save can't resurrect stale fm. The body on disk is unchanged
-            // by an fm-only edit, so the buffer + baseline stay untouched
-            // (property edits are allowed while the body is dirty).
-            await refreshNoteParts(session: session, path: path)
-            guard currentSession === session else { return }
-            guard loadedFilePath == path else {
-                isEditingProperty = false
+            // publish fmSource + offsets + hash atomically from ONE read. The
+            // read must still describe this exact native write and its body
+            // must equal every open document's saved baseline; otherwise keep
+            // the old expected hash so a later body save fails closed.
+            let refresh = await refreshNoteParts(
+                session: session,
+                path: path,
+                expectedContentHash: report.newContentHash)
+            guard ownsPropertyEdit(generation, session: session) else { return }
+            switch refresh {
+            case .published:
+                break
+            case .changedAgain(let currentContentHash):
+                propertyPublicationUncertainties[
+                    propertyPublicationUncertaintyKey(path: path, key: key)] =
+                    PropertyPublicationUncertainty(
+                        path: path, key: key,
+                        expectedContentHash: report.newContentHash,
+                        action: action,
+                        submittedRowDraft: submittedRowDraft)
+                announceInactivePropertyPublicationRecovery(for: path)
+                if BaseExactIdentity.matches(loadedFilePath, path) {
+                    currentPropertyEditConflict = PropertyEditConflict(
+                        path: path,
+                        key: key,
+                        action: action,
+                        currentContentHash: currentContentHash,
+                        expectedContentHash: report.newContentHash,
+                        currentMtimeMs: 0)
+                    propertyEditError =
+                        "The property update was saved, but the note changed again before Slate could verify it. Choose Keep Mine or Reload from Disk."
+                    postAccessibilityAnnouncement(
+                        propertyEditError ?? "The note changed again.",
+                        priority: .high)
+                }
+                finishPropertyEditOwnership(generation)
+                return
+            case .stale:
+                return
+            case .propertiesOnly:
+                // This outcome is reserved for explicit conflict Reload.
+                let reason = "Slate could not safely publish the property update."
+                propertyPublicationUncertainties[
+                    propertyPublicationUncertaintyKey(path: path, key: key)] =
+                    PropertyPublicationUncertainty(
+                        path: path, key: key,
+                        expectedContentHash: report.newContentHash,
+                        action: action,
+                        submittedRowDraft: submittedRowDraft)
+                announceInactivePropertyPublicationRecovery(for: path)
+                propertyEditError =
+                    "The property was saved, but Slate could not safely reload it. Choose Reload Properties to try again. \(reason)"
+                finishPropertyEditOwnership(generation)
+                return
+            case .failed(let reason):
+                propertyPublicationUncertainties[
+                    propertyPublicationUncertaintyKey(path: path, key: key)] =
+                    PropertyPublicationUncertainty(
+                        path: path, key: key,
+                        expectedContentHash: report.newContentHash,
+                        action: action,
+                        submittedRowDraft: submittedRowDraft)
+                announceInactivePropertyPublicationRecovery(for: path)
+                if BaseExactIdentity.matches(loadedFilePath, path) {
+                    propertyEditError =
+                        "The property was saved, but Slate could not safely reload it. Choose Reload Properties to try again. \(reason)"
+                    postAccessibilityAnnouncement(
+                        propertyEditError ?? reason,
+                        priority: .high)
+                }
+                finishPropertyEditOwnership(generation)
                 return
             }
-            // Refresh the properties panel so the row updates in
-            // place. `loadCurrentLinks` already runs one trip
-            // through the SQLite mutex for backlinks + outgoing +
-            // properties — reusing it keeps the panel coherent
-            // without a second round-trip.
-            await loadCurrentLinks(path: path)
-            guard currentSession === session else { return }
-            guard loadedFilePath == path else {
-                isEditingProperty = false
-                return
+            clearPropertyPublicationUncertainty(path: path, key: key)
+            if BaseExactIdentity.matches(loadedFilePath, path) {
+                // Frontmatter can contain link-valued properties, so refresh
+                // the active note's link collections after the authoritative
+                // property publication. The index belongs to this same report.
+                await loadCurrentLinks(path: path, publishProperties: false)
+                guard ownsPropertyEdit(generation, session: session) else { return }
             }
-            if case .setSource = action {
+
+            switch action {
+            case .set:
+                if let submittedRowDraft {
+                    let cleared = clearPreservedPropertyDraftIfCommitted(
+                        path: path, key: key,
+                        submittedDraft: submittedRowDraft)
+                    if cleared {
+                        requestPropertyDraftReset(path: path, key: key)
+                    }
+                }
+            case .delete:
+                clearPreservedPropertyDraft(path: path, key: key)
+            case .setSource(let submitted):
                 propertiesSourceError = nil
                 propertiesSourceCommitted &+= 1
-                postAccessibilityAnnouncement("Properties updated.", priority: .medium)
-            } else {
-                postAccessibilityAnnouncement(
-                    "Property \(key) \(action == .delete ? "deleted" : "updated").",
-                    priority: .medium
-                )
+                if clearPropertiesSourceDraftIfCommitted(
+                    path: path, submitted: submitted)
+                {
+                    requestPropertiesSourceCommit(path: path)
+                }
+            }
+
+            if BaseExactIdentity.matches(loadedFilePath, path) {
+                if case .setSource = action {
+                    postAccessibilityAnnouncement(
+                        "Properties updated.", priority: .medium)
+                } else {
+                    postAccessibilityAnnouncement(
+                        "Property \(key) \(action == .delete ? "deleted" : "updated").",
+                        priority: .medium
+                    )
+                }
             }
         case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
+            guard BaseExactIdentity.matches(loadedFilePath, path) else {
+                finishPropertyEditOwnership(generation)
+                return
+            }
             currentPropertyEditConflict = PropertyEditConflict(
                 path: path,
                 key: key,
@@ -9356,6 +15540,10 @@ final class AppState: ObservableObject {
                 priority: .medium
             )
         case .failure(let error):
+            guard BaseExactIdentity.matches(loadedFilePath, path) else {
+                finishPropertyEditOwnership(generation)
+                return
+            }
             if case .setSource = action,
                 case .MalformedFrontmatter(_, let reason) = error
             {
@@ -9374,30 +15562,77 @@ final class AppState: ObservableObject {
                 )
             }
         }
-        isEditingProperty = false
+        finishPropertyEditOwnership(generation)
     }
 
     /// Re-issue the property edit with the new on-disk hash as
     /// `expectedHash` — the user explicitly chose to overwrite the
     /// external change.
+    var propertyEditConflictKeepMineDisabledReason: String? {
+        guard let conflict = currentPropertyEditConflict else { return nil }
+        if isMutatingStructure { return Self.structuralMutationBusyReason }
+        if hasAuthoredPropertyPublicationRecovery(for: conflict.path) {
+            if isSaving { return Self.saveInProgressReason }
+            if let reason = noteAuthoringDisabledReason(
+                for: conflict.path,
+                ignoringStructuralRecoveryReservationToken: nil,
+                ignoringPropertyPublicationUncertainty: true)
+            {
+                return reason
+            }
+            if case .setSource = conflict.action,
+                hasDirtyPreservedPropertyDrafts(for: conflict.path)
+            {
+                return Self.propertyRowsSourceApplyReason
+            }
+            return nil
+        }
+        if case .setSource = conflict.action {
+            return propertiesSourceApplyDisabledReason(for: conflict.path)
+        }
+        return propertyAuthoringDisabledReason(for: conflict.path)
+    }
+
     @discardableResult
     func resolvePropertyEditConflictKeepMine() -> Task<Void, Never>? {
         guard let conflict = currentPropertyEditConflict,
             let session = currentSession,
-            loadedFilePath == conflict.path
+            BaseExactIdentity.matches(loadedFilePath, conflict.path)
         else {
             currentPropertyEditConflict = nil
             return nil
         }
+        guard !isEditingProperty else { return nil }
+        guard !isMutatingStructure else {
+            postMutationAnnouncement(Self.structuralMutationBusyReason)
+            return nil
+        }
+        if let reason = propertyEditConflictKeepMineDisabledReason {
+            postMutationAnnouncement(reason)
+            return nil
+        }
+        guard admitBatchTrashWrite(to: [conflict.path]) else { return nil }
+        let retryConflict = propertyConflictUsingLatestDraft(conflict)
+        let submittedRowDraft: PropertyEditDraft?
+        if case .set = retryConflict.action {
+            submittedRowDraft = preservedPropertyDraft(
+                path: retryConflict.path, key: retryConflict.key)
+        } else {
+            submittedRowDraft = nil
+        }
         currentPropertyEditConflict = nil
-        isEditingProperty = true
+        let generation = beginPropertyEditOwnership(path: retryConflict.path)
         let task: Task<Void, Never> = Task { [weak self] in
             await self?.performPropertyEdit(
                 session: session,
-                path: conflict.path,
-                key: conflict.key,
-                action: conflict.action,
-                expectedHash: conflict.currentContentHash
+                path: retryConflict.path,
+                key: retryConflict.key,
+                action: retryConflict.action,
+                expectedHash: retryConflict.currentContentHash,
+                generation: generation,
+                rejectedConflict: retryConflict,
+                submittedRowDraft: submittedRowDraft,
+                isPublicationRecovery: true
             )
             return
         }
@@ -9405,20 +15640,333 @@ final class AppState: ObservableObject {
         return task
     }
 
+    private func propertyConflictUsingLatestDraft(
+        _ conflict: PropertyEditConflict
+    ) -> PropertyEditConflict {
+        let action: PropertyEditAction
+        switch conflict.action {
+        case .set:
+            if let draft = preservedPropertyDraft(
+                path: conflict.path, key: conflict.key),
+                case .success(let value) = draft.toPropertyValue()
+            {
+                action = .set(value)
+            } else {
+                action = conflict.action
+            }
+        case .delete:
+            action = .delete
+        case .setSource(let submitted):
+            let latest: String?
+            if BaseExactIdentity.matches(propertiesSourceDraftPath, conflict.path) {
+                latest = propertiesSourceDraft
+            } else {
+                latest = parkedPropertiesSourceDrafts[
+                    propertiesSourceDraftKey(conflict.path)]?.draft
+            }
+            action = .setSource(latest ?? submitted)
+        }
+        return PropertyEditConflict(
+            path: conflict.path,
+            key: conflict.key,
+            action: action,
+            currentContentHash: conflict.currentContentHash,
+            expectedContentHash: conflict.expectedContentHash,
+            currentMtimeMs: conflict.currentMtimeMs)
+    }
+
     /// Drop the property edit attempt and reload the file from
     /// disk. The user explicitly chose to let the external write
     /// win for this property.
     @discardableResult
     func resolvePropertyEditConflictReloadFromDisk() -> Task<Void, Never>? {
-        guard let conflict = currentPropertyEditConflict else { return nil }
+        guard let conflict = currentPropertyEditConflict,
+            let session = currentSession,
+            BaseExactIdentity.matches(loadedFilePath, conflict.path)
+        else { return nil }
+        guard !isEditingProperty else { return nil }
+        let publicationRecovery = authoredPropertyPublicationRecovery(
+            path: conflict.path, key: conflict.key)
+        let generation = beginPropertyEditOwnership(path: conflict.path)
         currentPropertyEditConflict = nil
-        // Same path the conflict came from — refresh text + hash +
-        // properties so the panel mirrors disk.
+        // Reload only the property-owned file state. A property conflict must
+        // never replace the independent Markdown body buffer/baseline or clear
+        // its dirty flag.
         let task: Task<Void, Never> = Task { [weak self] in
-            await self?.loadCurrentNote(path: conflict.path)
+            guard let self else { return }
+            let refresh = await self.refreshNoteParts(
+                session: session,
+                path: conflict.path,
+                allowPropertiesOnlyOnBodyMismatch: true)
+            guard self.ownsPropertyEdit(generation, session: session),
+                !Task.isCancelled,
+                BaseExactIdentity.matches(self.loadedFilePath, conflict.path)
+            else { return }
+            switch refresh {
+            case .published, .propertiesOnly:
+                await self.loadCurrentLinks(
+                    path: conflict.path, publishProperties: false)
+                guard self.ownsPropertyEdit(generation, session: session),
+                    !Task.isCancelled,
+                    BaseExactIdentity.matches(
+                        self.loadedFilePath, conflict.path)
+                else { return }
+                if let publicationRecovery {
+                    self.acceptDiskVersion(for: publicationRecovery)
+                } else {
+                    self.clearPropertyPublicationUncertainty(
+                        path: conflict.path, key: conflict.key)
+                    switch conflict.action {
+                    case .setSource:
+                        self.discardPropertiesSourceDraft(for: conflict.path)
+                        self.propertiesSourceError = nil
+                        self.propertiesSourceCommitted &+= 1
+                        self.requestPropertiesSourceCommit(path: conflict.path)
+                    case .set, .delete:
+                        self.requestPropertyDraftReset(
+                            path: conflict.path, key: conflict.key)
+                        self.clearPreservedPropertyDraft(
+                            path: conflict.path, key: conflict.key)
+                    }
+                }
+                if case .propertiesOnly = refresh {
+                    postAccessibilityAnnouncement(
+                        "Properties reloaded. The note body also changed externally; saving it will require conflict resolution.",
+                        priority: .high)
+                }
+            case .changedAgain:
+                self.currentPropertyEditConflict = conflict
+                self.propertyEditError =
+                    "The note changed again while Slate was reloading its properties."
+                postAccessibilityAnnouncement(
+                    self.propertyEditError ?? "The note changed again.",
+                    priority: .high)
+            case .failed(let reason):
+                self.currentPropertyEditConflict = conflict
+                self.propertyEditError = reason
+                postAccessibilityAnnouncement(
+                    "Properties could not be reloaded: \(reason)", priority: .high)
+            case .stale:
+                break
+            }
+            self.finishPropertyEditOwnership(generation)
             return
         }
-        noteLoadTask = task
+        propertyEditTask = task
+        return task
+    }
+
+    /// Retry the authoritative NoteParts publication after native property or
+    /// bulk-rename I/O succeeded but the post-write read could not be safely
+    /// adopted. The visible Properties header keeps this non-destructive retry
+    /// available even after an error alert is dismissed.
+    @discardableResult
+    func retryActivePropertyPublication() -> Task<Void, Never>? {
+        guard !isEditingProperty,
+            let session = currentSession,
+            let path = loadedFilePath,
+            let record = propertyPublicationUncertainties.values.first(where: {
+                BaseExactIdentity.matches($0.path, path)
+            })
+        else { return nil }
+        let generation = beginPropertyEditOwnership(path: path)
+        propertyEditError = nil
+        let task: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            let refresh = await self.refreshNoteParts(
+                session: session,
+                path: path,
+                // Authored single-property recovery retains an action whose
+                // H1 identity must still be verified before offering conflict
+                // resolution. Bulk rename retains no replayable action: Retry
+                // therefore means "adopt the current saved properties" and
+                // must not wedge an unrelated dirty body behind a stale H1.
+                expectedContentHash:
+                    record.action == nil ? nil : record.expectedContentHash,
+                allowPropertiesOnlyOnBodyMismatch: true)
+            guard self.ownsPropertyEdit(generation, session: session),
+                !Task.isCancelled,
+                BaseExactIdentity.matches(self.loadedFilePath, path)
+            else { return }
+            switch refresh {
+            case .published, .propertiesOnly:
+                await self.loadCurrentLinks(
+                    path: path, publishProperties: false)
+                guard self.ownsPropertyEdit(generation, session: session),
+                    !Task.isCancelled,
+                    BaseExactIdentity.matches(self.loadedFilePath, path)
+                else { return }
+                self.clearPropertyPublicationUncertainty(
+                    path: path, key: record.key)
+                if let action = record.action {
+                    switch action {
+                    case .set:
+                        if let submitted = record.submittedRowDraft,
+                            self.clearPreservedPropertyDraftIfCommitted(
+                                path: path,
+                                key: record.key,
+                                submittedDraft: submitted)
+                        {
+                            self.requestPropertyDraftReset(
+                                path: path, key: record.key)
+                        }
+                    case .delete:
+                        self.clearPreservedPropertyDraft(
+                            path: path, key: record.key)
+                    case .setSource(let submitted):
+                        self.propertiesSourceError = nil
+                        self.propertiesSourceCommitted &+= 1
+                        if self.clearPropertiesSourceDraftIfCommitted(
+                            path: path, submitted: submitted)
+                        {
+                            self.requestPropertiesSourceCommit(path: path)
+                        }
+                    }
+                }
+                postAccessibilityAnnouncement(
+                    "Properties reloaded.", priority: .medium)
+            case .changedAgain(let currentContentHash):
+                if let action = record.action {
+                    self.currentPropertyEditConflict = PropertyEditConflict(
+                        path: path,
+                        key: record.key,
+                        action: action,
+                        currentContentHash: currentContentHash,
+                        expectedContentHash: record.expectedContentHash,
+                        currentMtimeMs: 0)
+                    self.propertyEditError =
+                        "The note changed again after the property update. Choose Keep Mine or Reload from Disk."
+                } else {
+                    self.propertyEditError =
+                        "The note changed again after the bulk rename. Reload the note to use its current properties."
+                }
+                postAccessibilityAnnouncement(
+                    self.propertyEditError ?? "The note changed again.",
+                    priority: .high)
+            case .failed(let reason):
+                self.propertyEditError =
+                    "Slate still could not reload the saved property update. \(reason)"
+                postAccessibilityAnnouncement(
+                    self.propertyEditError ?? reason, priority: .high)
+            case .stale:
+                break
+            }
+            self.finishPropertyEditOwnership(generation)
+        }
+        propertyEditTask = task
+        return task
+    }
+
+    /// Reapply the exact retained authored action to the newest readable disk
+    /// version. The read supplies a fresh compare-and-swap hash; if the file
+    /// changes again before native I/O, the ordinary conflict alert preserves
+    /// both versions instead of overwriting blindly.
+    @discardableResult
+    func reapplyActivePropertyPublication() -> Task<Void, Never>? {
+        guard !isEditingProperty,
+            let session = currentSession,
+            let record = activeAuthoredPropertyPublicationRecovery(),
+            let action = record.action,
+            BaseExactIdentity.matches(loadedFilePath, record.path)
+        else { return nil }
+        let generation = beginPropertyEditOwnership(path: record.path)
+        currentPropertyEditConflict = nil
+        propertyEditError = nil
+        let task: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            let outcome: Result<NotePartsBundle, VaultError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    return .success(try session.readNoteParts(path: record.path))
+                } catch let error as VaultError {
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
+                }
+            }.value
+            guard self.ownsPropertyEdit(generation, session: session),
+                !Task.isCancelled,
+                BaseExactIdentity.matches(self.loadedFilePath, record.path)
+            else { return }
+            switch outcome {
+            case .success(let parts):
+                await self.performPropertyEdit(
+                    session: session,
+                    path: record.path,
+                    key: record.key,
+                    action: action,
+                    expectedHash: parts.contentHash,
+                    generation: generation,
+                    submittedRowDraft: record.submittedRowDraft,
+                    isPublicationRecovery: true)
+            case .failure(let error):
+                self.propertyEditError =
+                    "Slate couldn’t read the current note before reapplying the retained property update. \(self.humanReadable(error))"
+                postAccessibilityAnnouncement(
+                    self.propertyEditError ?? "The retained property update could not be reapplied.",
+                    priority: .high)
+                self.finishPropertyEditOwnership(generation)
+            }
+        }
+        propertyEditTask = task
+        return task
+    }
+
+    /// Explicit disk-wins resolution for an authored publication uncertainty.
+    /// Unlike ordinary Discard/Revert, this action first loads a current,
+    /// authoritative frontmatter snapshot and only then releases the retained
+    /// H1 intent.
+    @discardableResult
+    func useCurrentVersionForActivePropertyPublication() -> Task<Void, Never>? {
+        guard !isEditingProperty,
+            let session = currentSession,
+            let record = activeAuthoredPropertyPublicationRecovery(),
+            BaseExactIdentity.matches(loadedFilePath, record.path)
+        else { return nil }
+        let generation = beginPropertyEditOwnership(path: record.path)
+        currentPropertyEditConflict = nil
+        propertyEditError = nil
+        let task: Task<Void, Never> = Task { [weak self] in
+            guard let self else { return }
+            let refresh = await self.refreshNoteParts(
+                session: session,
+                path: record.path,
+                allowPropertiesOnlyOnBodyMismatch: true)
+            guard self.ownsPropertyEdit(generation, session: session),
+                !Task.isCancelled,
+                BaseExactIdentity.matches(self.loadedFilePath, record.path)
+            else { return }
+            switch refresh {
+            case .published, .propertiesOnly:
+                await self.loadCurrentLinks(
+                    path: record.path, publishProperties: false)
+                guard self.ownsPropertyEdit(generation, session: session),
+                    !Task.isCancelled,
+                    BaseExactIdentity.matches(self.loadedFilePath, record.path)
+                else { return }
+                self.acceptDiskVersion(for: record)
+                postAccessibilityAnnouncement(
+                    "Using the current saved properties. The retained update was discarded.",
+                    priority: .medium)
+            case .changedAgain:
+                // No expected hash was supplied, so this outcome is defensive.
+                self.propertyEditError =
+                    "The note changed again while Slate was loading its current properties."
+                postAccessibilityAnnouncement(
+                    self.propertyEditError ?? "The note changed again.",
+                    priority: .high)
+            case .failed(let reason):
+                self.propertyEditError =
+                    "Slate couldn’t load the current properties. The retained update is still available. \(reason)"
+                postAccessibilityAnnouncement(
+                    self.propertyEditError ?? reason, priority: .high)
+            case .stale:
+                break
+            }
+            self.finishPropertyEditOwnership(generation)
+        }
+        propertyEditTask = task
         return task
     }
 
@@ -9456,9 +16004,35 @@ final class AppState: ObservableObject {
         renameCancelToken?.cancel()
     }
 
+    /// Preview is read-only and remains available while Trash reconciliation
+    /// is unresolved. Apply is vault-wide, so it must fail closed until every
+    /// outcome is known.
+    var bulkRenameApplyDisabledReason: String? {
+        if !batchTrashUnknownItems.isEmpty {
+            return Self.batchTrashQuarantineReason
+        }
+        if !recoverablePropertyDraftPaths().isEmpty {
+            return Self.propertyDraftBulkRenameReason
+        }
+        return structuralMutationDisabledReason
+    }
+
     private func runRename(oldKey: String, newKey: String, dryRun: Bool) -> Task<Void, Never>? {
         guard !isRenameInFlight else { return nil }
         guard let session = currentSession else { return nil }
+        var structuralToken: Int?
+        if !dryRun {
+            if let reason = bulkRenameApplyDisabledReason {
+                postMutationAnnouncement(reason)
+                return nil
+            }
+            // First synchronous vault-wide admission. `performRename` repeats
+            // this after its suspension seam so a quarantine arriving between
+            // preview confirmation and native I/O still fails closed.
+            guard admitBatchTrashVaultWideWrite() else { return nil }
+            guard admitStructuralMutationRequest() else { return nil }
+            structuralToken = beginStructuralMutation()
+        }
         renameError = nil
         isRenameInFlight = true
         let cancel = CancelToken()
@@ -9469,7 +16043,8 @@ final class AppState: ObservableObject {
                 oldKey: oldKey,
                 newKey: newKey,
                 dryRun: dryRun,
-                cancel: cancel
+                cancel: cancel,
+                structuralToken: structuralToken
             )
             return
         }
@@ -9482,8 +16057,34 @@ final class AppState: ObservableObject {
         oldKey: String,
         newKey: String,
         dryRun: Bool,
-        cancel: CancelToken
+        cancel: CancelToken,
+        structuralToken: Int?
     ) async {
+        if let structuralToken {
+            await renameApplySecondAdmissionGate?()
+            if let injected = renameApplySecondAdmissionUnknownItemsForTesting?(),
+                !injected.isEmpty
+            {
+                mergeBatchTrashUnknownItems(injected)
+            }
+            guard !Task.isCancelled,
+                ownsStructuralMutation(structuralToken, session: session)
+            else {
+                finishRenameAttempt(structuralToken: structuralToken, cancel: cancel)
+                return
+            }
+            guard admitBatchTrashVaultWideWrite() else {
+                // Keep the preview and both sheet text-field drafts intact.
+                // The exact quarantine announcement comes from admission.
+                finishRenameAttempt(structuralToken: structuralToken, cancel: cancel)
+                return
+            }
+            guard recoverablePropertyDraftPaths().isEmpty else {
+                postMutationAnnouncement(Self.propertyDraftBulkRenameReason)
+                finishRenameAttempt(structuralToken: structuralToken, cancel: cancel)
+                return
+            }
+        }
         let outcome: Result<RenameReport, VaultError> = await Task.detached(priority: .userInitiated) {
             do {
                 let report = try session.renamePropertyAcrossVault(
@@ -9509,29 +16110,111 @@ final class AppState: ObservableObject {
         // announcement against the welcome screen. Mirrors the
         // `loadedFilePath == path` guard in `performPropertyEdit`.
         guard !Task.isCancelled, currentSession === session else {
-            isRenameInFlight = false
+            finishRenameAttempt(structuralToken: structuralToken, cancel: cancel)
             return
+        }
+        if !dryRun, case .success = outcome {
+            await renamePostWritePublishGate?()
+            guard !Task.isCancelled, currentSession === session else {
+                finishRenameAttempt(
+                    structuralToken: structuralToken, cancel: cancel)
+                return
+            }
         }
 
         switch outcome {
         case .success(let report):
             pendingRenameReport = report
-            // Apply may have touched the currently-loaded note's
-            // properties (when the renamed key was in it). Refresh
-            // links + properties so the panel doesn't show stale
-            // rows for the renamed key.
-            if !dryRun, let path = loadedFilePath {
-                await loadCurrentLinks(path: path)
-                // Refresh the disk-tracked hash so subsequent edits
-                // don't trip a stale WriteConflict. `getFileMetadata`
-                // returns `FileMetadata?` and `try?` flattens the
-                // throw, so we get a double-Optional that we unwrap
-                // before reading the hash.
-                let metadata: FileMetadata?? = await Task.detached(priority: .userInitiated) {
-                    try? session.getFileMetadata(path: path)
-                }.value
-                if let outer = metadata, let inner = outer {
-                    currentNoteContentHash = inner.contentHash
+            if !dryRun {
+                // Refresh only affected OPEN Markdown notes. The report is the
+                // bounded changed-path ledger; scanning the vault again would
+                // turn this publication step into unnecessary O(N) work.
+                var openPaths: [String: String] = [:]
+                for tab in workspace.model.allTabs {
+                    guard case .markdown(let path) = tab.item else { continue }
+                    openPaths[BaseExactIdentity.registryKey(
+                        prefix: "bulk-rename-open-note", value: path)] = path
+                }
+                let affectedOpenPaths = report.affected.compactMap {
+                    row -> (path: String, expectedContentHash: String)? in
+                    guard row.applied, let expectedContentHash = row.newContentHash,
+                        let path = openPaths[BaseExactIdentity.registryKey(
+                            prefix: "bulk-rename-open-note", value: row.path)]
+                    else { return nil }
+                    return (path, expectedContentHash)
+                }.sorted { BaseExactIdentity.lessThan($0.path, $1.path) }
+                var refreshFailures: [String] = []
+                var refreshedActivePath = false
+                let renamePublicationKey = "__bulk_property_rename__"
+                for affected in affectedOpenPaths {
+                    let path = affected.path
+                    let refresh = await refreshNoteParts(
+                        session: session,
+                        path: path,
+                        expectedContentHash: affected.expectedContentHash)
+                    guard !Task.isCancelled, currentSession === session,
+                        structuralToken.map({
+                            ownsStructuralMutation($0, session: session)
+                        }) ?? true
+                    else {
+                        finishRenameAttempt(
+                            structuralToken: structuralToken, cancel: cancel)
+                        return
+                    }
+                    switch refresh {
+                    case .published:
+                        refreshedActivePath = refreshedActivePath
+                            || BaseExactIdentity.matches(loadedFilePath, path)
+                    case .changedAgain:
+                        propertyPublicationUncertainties[
+                            propertyPublicationUncertaintyKey(
+                                path: path, key: renamePublicationKey)] =
+                            PropertyPublicationUncertainty(
+                                path: path,
+                                key: renamePublicationKey,
+                                expectedContentHash:
+                                    affected.expectedContentHash,
+                                action: nil,
+                                submittedRowDraft: nil)
+                        refreshFailures.append(
+                            "\(filename(of: path)): The note changed again before Slate could verify the rename.")
+                    case .failed(let reason):
+                        propertyPublicationUncertainties[
+                            propertyPublicationUncertaintyKey(
+                                path: path, key: renamePublicationKey)] =
+                            PropertyPublicationUncertainty(
+                                path: path,
+                                key: renamePublicationKey,
+                                expectedContentHash:
+                                    affected.expectedContentHash,
+                                action: nil,
+                                submittedRowDraft: nil)
+                        refreshFailures.append("\(filename(of: path)): \(reason)")
+                    case .propertiesOnly, .stale:
+                        propertyPublicationUncertainties[
+                            propertyPublicationUncertaintyKey(
+                                path: path, key: renamePublicationKey)] =
+                            PropertyPublicationUncertainty(
+                                path: path,
+                                key: renamePublicationKey,
+                                expectedContentHash:
+                                    affected.expectedContentHash,
+                                action: nil,
+                                submittedRowDraft: nil)
+                        refreshFailures.append(
+                            "\(filename(of: path)): Slate could not safely publish the renamed frontmatter.")
+                    }
+                }
+                if refreshedActivePath, let path = loadedFilePath {
+                    await loadCurrentLinks(path: path, publishProperties: false)
+                }
+                if !refreshFailures.isEmpty {
+                    renameError =
+                        "Rename applied, but some open notes could not be safely reloaded. "
+                        + refreshFailures.joined(separator: " ")
+                    postAccessibilityAnnouncement(
+                        renameError ?? "Some open notes could not be reloaded.",
+                        priority: .high)
                 }
             }
             let summary = renameSummary(report: report, applied: !dryRun)
@@ -9543,8 +16226,23 @@ final class AppState: ObservableObject {
                 priority: .high
             )
         }
+        finishRenameAttempt(structuralToken: structuralToken, cancel: cancel)
+    }
+
+    private func finishRenameAttempt(
+        structuralToken: Int?,
+        cancel: CancelToken
+    ) {
+        if let structuralToken {
+            endStructuralMutation(structuralToken)
+        }
+        // A late cancelled attempt from a closed/replaced vault must not clear
+        // the in-flight flag, cancellation target, or task owned by a newer
+        // request. CancelToken is a reference type and is unique per request.
+        guard renameCancelToken === cancel else { return }
         isRenameInFlight = false
         renameCancelToken = nil
+        renameTask = nil
     }
 
     /// Render a one-line summary of a `RenameReport` for the
@@ -9566,24 +16264,66 @@ final class AppState: ObservableObject {
     /// with the pending navigation if the save succeeds. A
     /// `WriteConflict` short-circuits the navigation so the user
     /// gets the conflict alert in place of the navigation step.
+    var pendingNavigationSaveDisabledReason: String? {
+        guard pendingNavigation != nil, let path = loadedFilePath else { return nil }
+        return noteSaveDisabledReason(for: path)
+    }
+
+    var pendingNavigationDiscardDisabledReason: String? {
+        guard pendingNavigation != nil else { return nil }
+        return inFlightDraftDiscardDisabledReason
+    }
+
     @discardableResult
     func resolvePendingNavigationSave() -> Task<Void, Never>? {
-        guard let pending = pendingNavigation else { return nil }
+        guard let pending = pendingNavigation,
+            let session = currentSession,
+            let noteOwner = noteAuthoringOwner()
+        else { return nil }
+        if let reason = pendingNavigationSaveDisabledReason {
+            postMutationAnnouncement(reason)
+            return nil
+        }
+        cancelPendingNavigationSave()
+        let generation = pendingNavigationSaveGeneration
         let task: Task<Void, Never> = Task { [weak self] in
-            await self?.saveAndPerformNavigation(pending)
+            await self?.saveAndPerformNavigation(
+                pending,
+                session: session,
+                noteOwner: noteOwner,
+                generation: generation)
             return
         }
+        pendingNavigationSaveTask = task
         return task
     }
 
-    private func saveAndPerformNavigation(_ pending: PendingNavigation) async {
-        await saveCurrentNote()?.value
+    private func saveAndPerformNavigation(
+        _ pending: PendingNavigation,
+        session: VaultSession,
+        noteOwner: NoteAuthoringOwner,
+        generation: UInt64
+    ) async {
+        guard ownsPendingNavigationSave(
+            generation,
+            session: session,
+            pending: pending,
+            noteOwner: noteOwner)
+        else { return }
+        guard let save = saveCurrentNote() else { return }
+        await save.value
         // Save can complete in one of three states; only proceed
         // with the navigation when the save genuinely succeeded
         // (hasUnsavedChanges cleared, no conflict, no error).
-        guard !hasUnsavedChanges,
+        guard ownsPendingNavigationSave(
+            generation,
+            session: session,
+            pending: pending,
+            noteOwner: noteOwner),
+            !hasUnsavedChanges,
             currentSaveConflict == nil,
-            saveError == nil
+            saveError == nil,
+            loadedFilePath.map({ !hasDirtyNoteRecovery(for: $0) }) ?? true
         else {
             return
         }
@@ -9594,18 +16334,48 @@ final class AppState: ObservableObject {
     /// continue with the pending navigation.
     func resolvePendingNavigationDiscard() {
         guard let pending = pendingNavigation else { return }
-        hasUnsavedChanges = false
-        // Restore the editor buffer to the baseline so a subsequent
-        // load doesn't have a stale dirty buffer hanging around in
-        // memory (the load will overwrite anyway, but matching
-        // baseline keeps the dirty flag honest in the interim).
-        currentNoteText = savedBaselineText
+        if case .closeVault = pending,
+            let reason = authoredPropertyPublicationRecoveryReason
+        {
+            pendingNavigation = nil
+            pendingVaultSwitchTarget = nil
+            postMutationAnnouncement(reason)
+            return
+        }
+        if let path = loadedFilePath,
+            let reason = draftDiscardDisabledReason(for: path)
+        {
+            postMutationAnnouncement(reason)
+            return
+        }
+        cancelPendingNavigationSave()
+        if let path = loadedFilePath,
+            missingNoteRecoveryDraft(for: path) != nil
+        {
+            discardMissingNoteRecoveryDraft(path: path, announce: false)
+        } else {
+            if let path = loadedFilePath {
+                discardRecoverablePropertyDrafts(for: path)
+            }
+            hasUnsavedChanges = false
+            // Restore the editor buffer to the baseline so a subsequent
+            // load doesn't have a stale dirty buffer hanging around in
+            // memory (the load will overwrite anyway, but matching
+            // baseline keeps the dirty flag honest in the interim).
+            currentNoteText = savedBaselineText
+        }
         applyPendingNavigation(pending)
     }
 
     /// "Save changes?" prompt: Cancel → clear the pending
     /// navigation without saving. The dirty buffer stays.
     func resolvePendingNavigationCancel() {
+        cancelPendingNavigationSave()
+        if case .selectFile(let path) = pendingNavigation,
+            deferredTemplateCursorLanding?.path == path
+        {
+            deferredTemplateCursorLanding = nil
+        }
         pendingNavigation = nil
         // U4-3: cancelling the gate cancels an in-flight vault switch — drop
         // the parked target so no close/open follows and a later plain Close
@@ -9617,6 +16387,7 @@ final class AppState: ObservableObject {
     /// pending state and actually perform the requested
     /// navigation.
     private func applyPendingNavigation(_ pending: PendingNavigation) {
+        cancelPendingNavigationSave()
         pendingNavigation = nil
         switch pending {
         case .closeVault:
@@ -9628,6 +16399,19 @@ final class AppState: ObservableObject {
             // cleared it), so the dirty gate falls through and the
             // load proceeds normally.
             selectedFilePath = path
+            // A template-created target can already have a parked workspace
+            // document for the same path (including a prior failed load). Its
+            // deferred {{cursor}} offset is authoritative only for the bytes
+            // just written, so bypass that cache and require a fresh disk load
+            // before the caret may land.
+            if let path,
+                let session = currentSession,
+                deferredTemplateCursorLanding?.sessionID == ObjectIdentifier(session),
+                deferredTemplateCursorLanding?.path == path
+            {
+                _ = startAuthoritativeTemplateTargetLoad(
+                    session: session, path: path)
+            }
         }
     }
 
@@ -9647,7 +16431,7 @@ final class AppState: ObservableObject {
                 (try? session.getFileMetadata(path: path))?.headings
             }.value
             guard let self else { return }
-            guard self.loadedFilePath == path else { return }
+            guard BaseExactIdentity.matches(self.loadedFilePath, path) else { return }
             // U3-3: metadata offsets are whole-file; the buffer is body.
             self.currentNoteHeadings = Self.rebasedToBody(
                 headings ?? [], prefixBytes: self.bodyByteOffset)
@@ -9659,7 +16443,19 @@ final class AppState: ObservableObject {
     /// "Close Vault" button calls this instead of `closeVault()`
     /// directly so the dirty path can't be bypassed.
     func attemptCloseVault() {
-        if hasUnsavedChanges {
+        if let reason = authoredPropertyPublicationRecoveryReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        if let reason = inFlightDraftDiscardDisabledReason {
+            postMutationAnnouncement(reason)
+            return
+        }
+        supersedePendingTabCloseForVaultTransition()
+        let recoveryPaths = uncommittedNoteDraftPaths()
+        if !recoveryPaths.isEmpty {
+            pendingVaultClose = dirtyVaultClosePaths().count
+        } else if hasUnsavedChanges {
             pendingNavigation = .closeVault
         } else {
             closeVault()
@@ -9747,7 +16543,8 @@ final class AppState: ObservableObject {
     /// announcement explicitly tells the user where to put their
     /// templates.
     @discardableResult
-    func openTemplatePicker() -> Task<Void, Never> {
+    func openTemplatePicker() -> Task<Void, Never>? {
+        guard admitStructuralMutationRequest() else { return nil }
         let task: Task<Void, Never> = Task { [weak self] in
             await self?.performOpenTemplatePicker()
         }
@@ -9801,7 +16598,14 @@ final class AppState: ObservableObject {
     /// On read failure (template deleted between list and select)
     /// cancels the flow rather than blocking on an error sheet.
     @discardableResult
-    func selectTemplate(_ summary: TemplateSummary) -> Task<Void, Never> {
+    func selectTemplate(_ summary: TemplateSummary) -> Task<Void, Never>? {
+        guard admitStructuralMutationRequest() else { return nil }
+        // The picker remains visible while source metadata is read, so a user
+        // can activate another row before the first read lands. Supersede the
+        // prior owner synchronously: only the most recent row may present the
+        // next sheet, and Cancel can then invalidate the whole visible choice.
+        templateSelectionTask?.cancel()
+        templateRetryNoteName = nil
         let task: Task<Void, Never> = Task { [weak self] in
             await self?.performSelectTemplate(summary)
         }
@@ -9811,7 +16615,7 @@ final class AppState: ObservableObject {
 
     private func performSelectTemplate(_ summary: TemplateSummary) async {
         guard let session = currentSession else {
-            cancelTemplateFlow()
+            resetTemplateFlowPresentation()
             return
         }
         let sourceResult: String? = await Task.detached(
@@ -9819,13 +16623,18 @@ final class AppState: ObservableObject {
         ) {
             try? session.readText(path: summary.path)
         }.value
+        if let landingGate = templateSelectionLandingGateForTesting {
+            await landingGate(summary)
+        }
         // #328 red-team P1: vault close mid-read would otherwise
         // resume here, run `cancelTemplateFlow()`/`pendingTemplateFlow
         // = .needsName(...)` against the dead session, and re-present
         // the template flow sheet on the welcome screen.
         guard !Task.isCancelled, currentSession === session else { return }
         guard let source = sourceResult else {
-            cancelTemplateFlow()
+            // This is the selection task's own terminal failure. Reset the
+            // presentation without asking it to cancel its own task handle.
+            resetTemplateFlowPresentation()
             return
         }
         let metadata = extractTemplateMetadata(source: source)
@@ -9845,6 +16654,8 @@ final class AppState: ObservableObject {
         guard case .needsPrompts(let template, _) = pendingTemplateFlow else {
             return
         }
+        guard admitStructuralMutationRequest() else { return }
+        templateRetryNoteName = nil
         pendingTemplateFlow = .needsName(template, values)
     }
 
@@ -9867,6 +16678,11 @@ final class AppState: ObservableObject {
             cancelTemplateFlow()
             return nil
         }
+        // The name field's Return handler remains invokable while another
+        // structural operation owns the gate. Reject before validation can
+        // replace the retained sheet's error state, so every busy submission
+        // announces the same exact reason and leaves the presentation intact.
+        guard admitStructuralMutationRequest() else { return nil }
 
         let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
         if let problem = validateTemplateNoteName(trimmed) {
@@ -9886,6 +16702,10 @@ final class AppState: ObservableObject {
         // for any-case `.md` / `.MD` / `.Md` (#133).
         let normalized = (trimmed as NSString).pathExtension.lowercased() == "md"
             ? trimmed : "\(trimmed).md"
+        guard let recoveryReservation =
+                admitStructuralRecoveryDestination(normalized),
+            admitBatchTrashWrite(to: [normalized])
+        else { return nil }
         // `title` for the rendered template is the file stem of the
         // new note, not the template's own name. Matches how
         // `{{title}}` is documented to behave in §8.2.
@@ -9898,16 +16718,31 @@ final class AppState: ObservableObject {
             promptValues: promptValues
         )
 
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let refresher = structuralBatchRefreshRunner
+        let retryFlow = PendingTemplateFlow.needsName(template, promptValues)
+        // The name sheet's Cancel copy promises that no file is written. Once
+        // admission succeeds, remove that control synchronously before the
+        // render/write task can begin. A real write failure restores this exact
+        // captured flow below so the user can correct the destination and retry.
+        pendingTemplateFlow = .idle
         templateNoteNameError = nil
+        templateRetryNoteName = nil
         let task: Task<Void, Never> = Task { [weak self] in
             await self?.performCreateNoteFromTemplate(
                 session: session,
                 template: template,
                 context: context,
-                relativePath: normalized
+                relativePath: normalized,
+                token: token,
+                refresher: refresher,
+                retryFlow: retryFlow,
+                retryNoteName: trimmed
             )
         }
         templateCreateTask = task
+        pendingStructuralTaskForTesting = task
         return task
     }
 
@@ -9915,7 +16750,11 @@ final class AppState: ObservableObject {
         session: VaultSession,
         template: TemplateSummary,
         context: TemplateContext,
-        relativePath: String
+        relativePath: String,
+        token: Int,
+        refresher: @escaping StructuralBatchRefreshRunner,
+        retryFlow: PendingTemplateFlow,
+        retryNoteName: String
     ) async {
         // Render + save off the main actor so the SQLite mutex and
         // file write don't pin the UI thread. Match the
@@ -9943,22 +16782,26 @@ final class AppState: ObservableObject {
             }
         }.value
 
-        // #328 red-team P1: vault close mid-render-and-save would
-        // otherwise resume here, write `selectedFilePath` to the
-        // dead session, and announce "Created X from Y." on the
-        // welcome screen. The file was already saved to disk
-        // (the detached block ran to completion); the late state
-        // mutation is the only thing we suppress here.
-        guard !Task.isCancelled, currentSession === session else { return }
+        guard ownsStructuralMutation(token, session: session) else { return }
+        defer { endStructuralMutation(token) }
+        guard !Task.isCancelled else { return }
 
         switch outcome {
         case .success(let rendered):
+            await refresher(self)
+            // A vault switch invalidates this token before the refresh can
+            // resume. Do not dismiss, select, announce, or release a newer
+            // vault's structural owner from this stale completion.
+            guard !Task.isCancelled,
+                ownsStructuralMutation(token, session: session)
+            else { return }
             // #871 Codex round 2: template creation writes a file outside the
             // `publishTreeMutation` barrier — clear the structural undo history
             // so a stale inverse can't target the created path.
             clearStructuralUndoStacks()
             pendingTemplateFlow = .idle
             templateNoteNameError = nil
+            templateRetryNoteName = nil
             // #421 (F-H1): .high, not .medium — the create
             // announcement is immediately followed by
             // selectedFilePath changing, whose "Showing <file>."
@@ -9975,44 +16818,123 @@ final class AppState: ObservableObject {
             // note load. After the load resolves, we send the
             // cursor request so `NoteEditorView`'s coordinator can
             // park the caret at `{{cursor}}`.
+            deferredTemplateCursorLanding = nil
             selectedFilePath = relativePath
-            // Refresh the file list so the new note appears in
-            // the sidebar without waiting for the next external
-            // event. Same shape `save_text` doesn't do because
-            // it only changes existing files; create-from-template
-            // adds a new row.
-            await loadFiles()
             if let offset = rendered.cursorByteOffset {
-                let pendingLoad = noteLoadTask
-                Task { @MainActor [weak self] in
-                    if let pendingLoad {
-                        await pendingLoad.value
-                    }
-                    guard let self,
-                        self.selectedFilePath == relativePath
-                    else { return }
-                    // U3-3: {{cursor}} offsets are whole-rendered-file;
-                    // the load above set the body offsets for this note.
-                    self.cursorByteOffsetRequest.send(
-                        self.bodyByte(fromFileByte: Int(offset)))
-                    // Focus follows content (F-H1): the caret park
-                    // alone leaves keyboard focus on the window; the
-                    // coordinator makes the editor first responder
-                    // when it handles this request.
+                // The selection sink can synchronously refuse navigation when
+                // the current editor is dirty. In that case `noteLoadTask`
+                // still belongs to the old note: retain the park separately
+                // and let the created note's eventual successful load deliver
+                // it after Save/Discard resolves the prompt.
+                if pendingNavigation == .selectFile(relativePath) {
+                    deferredTemplateCursorLanding = DeferredTemplateCursorLanding(
+                        sessionID: ObjectIdentifier(session),
+                        path: relativePath,
+                        fileByteOffset: Int(offset))
+                    return
                 }
+                // Require a fresh read of the bytes just created. A same-path
+                // workspace tab may otherwise restore a parked (or failed)
+                // document and make an old body offset look current.
+                guard let pendingLoad = startAuthoritativeTemplateTargetLoad(
+                    session: session, path: relativePath
+                ) else { return }
+                let landingGate = templateCursorLandingGateForTesting
+                await pendingLoad.value
+                if let landingGate {
+                    await landingGate()
+                }
+                // Keep this landing inside the structural owner rather than
+                // spawning an untracked task. A direct vault switch invalidates
+                // the token; a same-session selection change cancels the exact
+                // load captured above. Neither may deliver a stale cursor park.
+                guard !Task.isCancelled,
+                    ownsStructuralMutation(token, session: session),
+                    !pendingLoad.isCancelled,
+                    BaseExactIdentity.matches(selectedFilePath, relativePath),
+                    BaseExactIdentity.matches(loadedFilePath, relativePath)
+                else { return }
+                // U3-3: {{cursor}} offsets are whole-rendered-file;
+                // the load above set the body offsets for this note.
+                cursorByteOffsetRequest.send(bodyByte(fromFileByte: Int(offset)))
+                // Focus follows content (F-H1): the caret park
+                // alone leaves keyboard focus on the window; the
+                // coordinator makes the editor first responder
+                // when it handles this request.
             }
         case .failure(let error):
+            templateRetryNoteName = retryNoteName
+            pendingTemplateFlow = retryFlow
             templateNoteNameError = humanReadable(error)
         }
+    }
+
+    /// Deliver a cursor park retained across the dirty-navigation prompt only
+    /// after the created note's own successful load establishes body offsets.
+    private func deliverDeferredTemplateCursorIfReady(
+        session: VaultSession, path: String
+    ) {
+        guard let deferred = deferredTemplateCursorLanding,
+            deferred.sessionID == ObjectIdentifier(session),
+            currentSession === session,
+            deferred.path == path,
+            BaseExactIdentity.matches(selectedFilePath, path),
+            BaseExactIdentity.matches(loadedFilePath, path)
+        else { return }
+        deferredTemplateCursorLanding = nil
+        cursorByteOffsetRequest.send(bodyByte(fromFileByte: deferred.fileByteOffset))
+    }
+
+    /// Start the template target's disk read even when the workspace has a
+    /// same-path parked document. The returned task is the exact authority the
+    /// cursor landing awaits and is still cancellable by ordinary navigation.
+    @discardableResult
+    private func startAuthoritativeTemplateTargetLoad(
+        session: VaultSession, path: String
+    ) -> Task<Void, Never>? {
+        guard currentSession === session,
+            BaseExactIdentity.matches(selectedFilePath, path)
+        else { return nil }
+        noteLoadTask?.cancel()
+        let task: Task<Void, Never> = Task { [weak self] in
+            await self?.loadCurrentNote(path: path)
+        }
+        noteLoadTask = task
+        return task
+    }
+
+    /// A failed target read is terminal for its retained cursor request. If a
+    /// file later appears at the same path it is a new navigation, not proof
+    /// that the original rendered byte offset is still valid.
+    private func clearDeferredTemplateCursorIfMatching(
+        session: VaultSession, path: String
+    ) {
+        guard deferredTemplateCursorLanding?.sessionID == ObjectIdentifier(session),
+            deferredTemplateCursorLanding?.path == path
+        else { return }
+        deferredTemplateCursorLanding = nil
     }
 
     /// Reset the create-from-template flow back to idle. Called by
     /// every sheet's Cancel button and by the failure paths above.
     /// Idempotent — safe to call from any state.
     func cancelTemplateFlow() {
+        // Cancel/Escape is authoritative over a row selection whose source
+        // read has not landed yet. Nil the public handle too so callers cannot
+        // mistake the cancelled selection for an active transition.
+        templateSelectionTask?.cancel()
+        templateSelectionTask = nil
+        resetTemplateFlowPresentation()
+    }
+
+    /// Presentation-only reset for terminal paths already running inside the
+    /// selection task. Keeping this separate avoids self-cancellation while
+    /// preserving the exact same visible resting state.
+    private func resetTemplateFlowPresentation() {
         pendingTemplateFlow = .idle
         isTemplatePickerOpen = false
         templateNoteNameError = nil
+        templateRetryNoteName = nil
     }
 
     /// Reject the new-note name early so the user sees a useful

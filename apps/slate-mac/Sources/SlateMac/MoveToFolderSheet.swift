@@ -20,28 +20,47 @@ struct MoveToFolderSheet: View {
     @EnvironmentObject private var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
-    /// The item(s) being moved (path + isDirectory). One element for the U2-5
-    /// single-node path, several for a #852 batch. A copy of the pending value
-    /// so the body stays stable even if the published field clears mid-dismiss.
-    private let items: [AppState.TreeSelection]
+    private enum Scope {
+        case single(AppState.PendingMove)
+        case batch(AppState.BatchMove)
+    }
+
+    /// Explicit action origin. A captured batch remains a batch even if core's
+    /// later projection leaves one top-level item.
+    private let scope: Scope
+    /// SwiftUI may recreate this value while one sheet remains presented. The
+    /// store survives those recreations and keys its one selection scan to the
+    /// operation UUID, keeping that work out of both init and `offered`.
+    @StateObject private var destinationLegalityStore = DestinationLegalityStore()
+    private let operationID: UUID
+    private let capturedItems: [AppState.TreeSelection]
     /// The noun phrase the title/hint speak — a single node's name, or "N items".
     private let displayName: String
 
     /// Single-node move (U2-5) — the sheet drives one `moveEntry`.
     init(move: AppState.PendingMove) {
-        self.items = [AppState.TreeSelection(path: move.path, isDirectory: move.isDirectory)]
+        let items = [
+            AppState.TreeSelection(path: move.path, isDirectory: move.isDirectory)
+        ]
+        self.scope = .single(move)
+        self.operationID = move.id
+        self.capturedItems = items
         self.displayName = move.name
     }
 
     /// Batch move (#852) — the sheet drives `batchMove` over the whole
     /// selection, offering only destinations legal for EVERY item.
     init(batch: AppState.BatchMove) {
-        self.items = batch.items
+        self.scope = .batch(batch)
+        self.operationID = batch.id
+        self.capturedItems = batch.items
         self.displayName = batch.displayName
     }
 
-    /// Whether this is a batch (≥2 items) — routes the commit + no-op skipping.
-    private var isBatch: Bool { items.count > 1 }
+    private var isBatch: Bool {
+        if case .batch = scope { return true }
+        return false
+    }
 
     @State private var query: String = ""
     /// All folder paths in the vault (loaded on appear). "" is not in here — the
@@ -72,11 +91,129 @@ struct MoveToFolderSheet: View {
         }
     }
 
+    /// Lifetime-managed, operation-keyed cache. A parent `AppState` update may
+    /// recreate `MoveToFolderSheet`, but SwiftUI retains this object for the
+    /// presented sheet identity. If the pending operation itself changes, its
+    /// UUID admits exactly one new index rather than reusing stale membership.
+    final class DestinationLegalityStore: ObservableObject {
+        private var cachedOperationID: UUID?
+        private var cachedIndex: DestinationLegalityIndex?
+
+        func index(
+            for operationID: UUID,
+            items: [AppState.TreeSelection]
+        ) -> DestinationLegalityIndex {
+            var ignored = 0
+            return index(
+                for: operationID,
+                items: items,
+                selectedItemVisits: &ignored)
+        }
+
+        func index(
+            for operationID: UUID,
+            items: [AppState.TreeSelection],
+            selectedItemVisits: inout Int
+        ) -> DestinationLegalityIndex {
+            if cachedOperationID == operationID, let cachedIndex {
+                return cachedIndex
+            }
+            let built = DestinationLegalityIndex(
+                items, selectedItemVisits: &selectedItemVisits)
+            cachedOperationID = operationID
+            cachedIndex = built
+            return built
+        }
+    }
+
+    /// Pure selection-derived legality seam. It scans the captured selection
+    /// once, indexing selected directories for component-safe ancestor lookup
+    /// and reducing the all-items no-op rule to one common-parent value. Every
+    /// later candidate is therefore bounded by that candidate's path depth.
+    struct DestinationLegalityIndex {
+        private let selectedDirectoryPaths: Set<String>
+        private let commonParent: String?
+        private let selectionIsEmpty: Bool
+
+        init(_ items: [AppState.TreeSelection]) {
+            var ignored = 0
+            self.init(items, selectedItemVisits: &ignored)
+        }
+
+        init(
+            _ items: [AppState.TreeSelection],
+            selectedItemVisits: inout Int
+        ) {
+            let firstParent = items.first.map {
+                AppState.TreeMutation.parentPath(of: $0.path) ?? ""
+            }
+            var everyItemSharesFirstParent = !items.isEmpty
+            var selectedDirectoryPaths = Set<String>()
+            selectedDirectoryPaths.reserveCapacity(items.count)
+
+            for item in items {
+                selectedItemVisits += 1
+                let parent = AppState.TreeMutation.parentPath(of: item.path) ?? ""
+                if parent != firstParent {
+                    everyItemSharesFirstParent = false
+                }
+                if item.isDirectory { selectedDirectoryPaths.insert(item.path) }
+            }
+
+            self.selectedDirectoryPaths = selectedDirectoryPaths
+            self.commonParent = everyItemSharesFirstParent ? firstParent : nil
+            self.selectionIsEmpty = items.isEmpty
+        }
+
+        func isLegalTarget(_ folder: String) -> Bool {
+            var ignoredSelectionComparisons = 0
+            var ignoredComponentVisits = 0
+            return isLegalTarget(
+                folder,
+                selectedItemComparisons: &ignoredSelectionComparisons,
+                componentVisits: &ignoredComponentVisits)
+        }
+
+        func isLegalTarget(
+            _ folder: String,
+            selectedItemComparisons: inout Int,
+            componentVisits: inout Int
+        ) -> Bool {
+            _ = selectedItemComparisons
+            guard !selectionIsEmpty else { return false }
+            if selectedDirectoryCovers(folder, componentVisits: &componentVisits) { return false }
+            if let commonParent, commonParent == folder { return false }
+            return true
+        }
+
+        /// Probe the candidate itself, then each slash-delimited ancestor. A
+        /// `Set<String>` retains Swift's canonical-equivalence semantics from
+        /// the predicate this replaces while remaining case-sensitive. It also
+        /// preserves malformed empty/trailing-slash behavior exactly; real tree
+        /// paths are validated, but the pure seam stays total for tests.
+        private func selectedDirectoryCovers(
+            _ folder: String,
+            componentVisits: inout Int
+        ) -> Bool {
+            var ancestor = folder
+            while true {
+                componentVisits += 1
+                if selectedDirectoryPaths.contains(ancestor) { return true }
+                guard let slash = ancestor.lastIndex(of: "/") else { return false }
+                ancestor = String(ancestor[..<slash])
+            }
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
             Divider()
             searchField
+            if let reason = appState.structuralMutationDisabledReason {
+                Divider()
+                busyNotice(reason)
+            }
             Divider()
             if isLoading {
                 loadingState
@@ -139,6 +276,18 @@ struct MoveToFolderSheet: View {
         .padding(.vertical, 12)
     }
 
+    /// The exact shared structural-operation reason, kept visible while the
+    /// destination actions are disabled. Cancel remains available.
+    private func busyNotice(_ reason: String) -> some View {
+        Text(reason)
+            .font(.callout)
+            .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .accessibilityLabel(reason)
+    }
+
     // MARK: - Results
 
     @ViewBuilder
@@ -192,7 +341,9 @@ struct MoveToFolderSheet: View {
             if hovering { selection = destination }
         }
         .accessibilityLabel(accessibilityLabel(for: destination))
+        .accessibilityHint(appState.structuralMutationDisabledReason ?? "")
         .accessibilityIsSelected(isSelected)
+        .disabled(appState.structuralMutationDisabledReason != nil)
     }
 
     @ViewBuilder
@@ -285,16 +436,10 @@ struct MoveToFolderSheet: View {
     /// directly in `folder` (#852). For a single node this reduces exactly to
     /// the U2-5 rule (not its current parent, not its own subtree).
     private func isLegalTarget(_ folder: String) -> Bool {
-        // Backend-illegal: dropping a folder into itself or its own subtree.
-        for item in items where item.isDirectory {
-            if folder == item.path { return false }
-            if folder.hasPrefix(item.path + "/") { return false }
-        }
-        // Pure no-op: every item is already directly inside `folder`.
-        if items.allSatisfy({ (AppState.TreeMutation.parentPath(of: $0.path) ?? "") == folder }) {
-            return false
-        }
-        return true
+        destinationLegalityStore.index(
+            for: operationID,
+            items: capturedItems
+        ).isLegalTarget(folder)
     }
 
     // MARK: - Commit
@@ -305,11 +450,12 @@ struct MoveToFolderSheet: View {
     }
 
     private func commit(_ destination: Destination) {
+        let admitted: Bool
         switch destination {
         case .root:
-            performMove(to: "")
+            admitted = performMove(to: "")
         case .folder(let target):
-            performMove(to: target)
+            admitted = performMove(to: target)
         case .newFolder:
             // Create a folder at the vault root, then move into it. The create
             // enters inline rename in the tree, but the move should go into the
@@ -317,33 +463,42 @@ struct MoveToFolderSheet: View {
             // and move into it directly (no rename detour), keeping the picker
             // flow atomic from the user's view.
             let name = "New Folder"
-            if isBatch {
-                appState.createFolderThenBatchMove(
-                    newFolderName: name, in: "", items: items)
-            } else if let only = items.first {
-                appState.createFolderThenMove(
-                    newFolderName: name, in: "",
-                    movePath: only.path, isDirectory: only.isDirectory)
+            switch scope {
+            case .batch(let batch):
+                admitted = appState.commitPendingBatchMoveToNewFolder(
+                    id: batch.id, newFolderName: name, in: "")
+            case .single(let move):
+                admitted = appState.commitPendingMoveToNewFolder(
+                    id: move.id, newFolderName: name, in: "")
             }
         }
-        dismissSheet()
+        if admitted { dismiss() }
     }
 
     /// Route the move: a batch through `batchMove` (one announcement), a single
     /// node through `moveEntry` — the #852 vs U2-5 fork.
-    private func performMove(to target: String) {
-        if isBatch {
-            appState.batchMove(items, to: target)
-        } else if let only = items.first {
-            appState.moveEntry(path: only.path, isDirectory: only.isDirectory, to: target)
+    private func performMove(to target: String) -> Bool {
+        switch scope {
+        case .batch(let batch):
+            return appState.commitPendingBatchMove(id: batch.id, to: target)
+        case .single(let move):
+            return appState.commitPendingMove(id: move.id, to: target)
         }
     }
 
     private func dismissSheet() {
         // Clear whichever pending field drove this presentation (#852: the
         // batch sheet reads `pendingBatchMove`, the single reads `pendingMove`).
-        appState.pendingMove = nil
-        appState.pendingBatchMove = nil
+        // The presentation item is frozen in MainSplitView. If AppState already
+        // holds a replacement request, identity-safe cancellation intentionally
+        // returns false; this old sheet must still dismiss so onDismiss can
+        // promote that preserved replacement instead of becoming an inert modal.
+        switch scope {
+        case .single(let move):
+            appState.cancelPendingMove(id: move.id)
+        case .batch(let batch):
+            appState.cancelPendingBatchMove(id: batch.id)
+        }
         dismiss()
     }
 

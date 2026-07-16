@@ -192,8 +192,23 @@ struct ConnectionsPanel: View {
 
     // MARK: Row
 
+    static func creationDisabledReason(
+        forGhost isGhost: Bool, structuralReason: String?
+    ) -> String? {
+        isGhost ? structuralReason : nil
+    }
+
+    static func actionDisabledReason(
+        _ action: GraphRowAction, structuralReason: String?
+    ) -> String? {
+        action == .createNote ? structuralReason : nil
+    }
+
     private func rowLabel(_ row: ConnectionRow) -> some View {
-        Button {
+        let disabledReason = Self.creationDisabledReason(
+            forGhost: row.isGhost,
+            structuralReason: appState.structuralMutationDisabledReason)
+        return Button {
             activate(row)
         } label: {
             VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
@@ -223,7 +238,12 @@ struct ConnectionsPanel: View {
         .buttonStyle(.plain)
         .accessibilityLabel(appState.graphAnnouncer.rowPhrase(row.rowRef))
         .accessibilityHint(
-            row.isGhost ? "Unresolved. Choose Create note to add it." : "Opens the note.")
+            disabledReason
+                ?? (row.isGhost ? "Unresolved. Choose Create note to add it." : "Opens the note."))
+        .help(
+            disabledReason
+                ?? (row.isGhost ? "Create a note for this unresolved link." : "Open the note."))
+        .disabled(disabledReason != nil)
         .contextMenu { rowMenu(row) }
     }
 
@@ -233,7 +253,12 @@ struct ConnectionsPanel: View {
         // projection (P2-5 #561, DoD §P-B parity) — same labels, same
         // order, same ghost/real availability as the Table and Diagram.
         ForEach(GraphRowAction.actions(forGhost: row.isGhost), id: \.self) { action in
+            let disabledReason = Self.actionDisabledReason(
+                action, structuralReason: appState.structuralMutationDisabledReason)
             Button(action.title) { performRowAction(action, row: row) }
+                .disabled(disabledReason != nil)
+                .accessibilityHint(disabledReason ?? action.title)
+                .help(disabledReason ?? action.title)
         }
     }
 

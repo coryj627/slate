@@ -35,6 +35,30 @@ final class ConnectionsPanelTests: XCTestCase {
         XCTAssertEqual(AppState.ghostNotePath("Foo.md"), "Foo.md")
     }
 
+    @MainActor
+    func testBusyReasonAppliesOnlyToGhostCreationControls() {
+        let reason = AppState.structuralMutationBusyReason
+        XCTAssertEqual(
+            ConnectionsPanel.creationDisabledReason(
+                forGhost: true, structuralReason: reason),
+            reason)
+        XCTAssertNil(
+            ConnectionsPanel.creationDisabledReason(
+                forGhost: false, structuralReason: reason))
+        XCTAssertEqual(
+            ConnectionsPanel.actionDisabledReason(
+                .createNote, structuralReason: reason),
+            reason)
+        XCTAssertNil(
+            ConnectionsPanel.actionDisabledReason(
+                .open, structuralReason: reason),
+            "unrelated graph context actions stay available")
+        XCTAssertNil(
+            ConnectionsPanel.actionDisabledReason(
+                .createNote, structuralReason: nil),
+            "idle ghost creation stays available")
+    }
+
     /// Depth-1 in/out split: incoming = edges into the center, outgoing
     /// = edges from it. Ghost target → unresolved row; embed edge → embed
     /// badge; snippets overlaid from the bundle by path.

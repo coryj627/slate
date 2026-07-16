@@ -29,6 +29,120 @@ struct GroupID: Hashable, Codable {
     init(raw: UUID) { self.raw = raw }
 }
 
+/// Component-safe longest-prefix lookup for physical batch path transforms.
+/// Keys use byte-exact identities because `.base` paths must not collapse
+/// canonically-equivalent UTF-8 spellings in Swift dictionaries.
+struct VaultComponentPrefixIndex<Value> {
+    struct Entry {
+        let path: String
+        let includesDescendants: Bool
+        let value: Value
+    }
+
+    struct Match {
+        let entry: Entry
+        /// Components below `entry.path`; empty for an exact match.
+        let relativeSuffix: String
+    }
+
+    private final class Node {
+        var children: [String: Node] = [:]
+        var exactEntry: Entry?
+        var directoryEntry: Entry?
+        var containsEntryInSubtree = false
+    }
+
+    private let root: Node
+
+    init(_ entries: [Entry]) {
+        let root = Node()
+        for entry in entries {
+            let components = Self.components(of: entry.path)
+            var node = root
+            node.containsEntryInSubtree = true
+            for component in components {
+                let key = Self.key(component)
+                if let child = node.children[key] {
+                    node = child
+                } else {
+                    let child = Node()
+                    node.children[key] = child
+                    node = child
+                }
+                node.containsEntryInSubtree = true
+            }
+            if entry.includesDescendants {
+                if node.directoryEntry == nil { node.directoryEntry = entry }
+            } else if node.exactEntry == nil {
+                node.exactEntry = entry
+            }
+        }
+        self.root = root
+    }
+
+    func longestMatch(for candidate: String) -> Match? {
+        var ignored = 0
+        return longestMatch(for: candidate, componentVisits: &ignored)
+    }
+
+    /// Test-visible deterministic work counter: exactly one visit per candidate
+    /// component, regardless of how many indexed roots exist.
+    func longestMatch(for candidate: String, componentVisits: inout Int) -> Match? {
+        let components = Self.components(of: candidate)
+        var node = root
+        var deepestDirectory: (entry: Entry, matchedLength: Int)? =
+            root.directoryEntry.map { ($0, 0) }
+
+        for (offset, component) in components.enumerated() {
+            componentVisits += 1
+            guard let child = node.children[Self.key(component)] else { break }
+            node = child
+            if let directory = node.directoryEntry {
+                deepestDirectory = (directory, offset + 1)
+            }
+            if offset == components.count - 1, let exact = node.exactEntry {
+                return Match(entry: exact, relativeSuffix: "")
+            }
+        }
+        if let deepestDirectory {
+            return Match(
+                entry: deepestDirectory.entry,
+                relativeSuffix: components.dropFirst(deepestDirectory.matchedLength)
+                    .joined(separator: "/"))
+        }
+        return nil
+    }
+
+    /// Whether the candidate is itself an indexed root or contains one below
+    /// it. Destructive directory mutations use this inverse lookup so Trash of
+    /// an ancestor cannot bypass an exact quarantined descendant. Traversal is
+    /// O(candidate components), independent of the number of indexed roots.
+    func containsEntry(atOrBelow candidate: String) -> Bool {
+        var node = root
+        for component in Self.components(of: candidate) {
+            guard let child = node.children[Self.key(component)] else {
+                return false
+            }
+            node = child
+        }
+        return node.containsEntryInSubtree
+    }
+
+    private static func components(of path: String) -> [String] {
+        // Match Rust `Path::components()` for valid vault-relative inputs:
+        // repeated/trailing separators and CurDir (`.`) components are
+        // stripped, while byte-exact normal components remain untouched.
+        // Admission rejects absolute and `..` paths before querying the trie.
+        path.split(separator: "/", omittingEmptySubsequences: true)
+            .filter { $0 != "." }
+            .map(String.init)
+    }
+
+    private static func key(_ component: String) -> String {
+        BaseExactIdentity.registryKey(prefix: "vault-component", value: component)
+    }
+}
+
 // MARK: - Tab content
 
 /// What a tab shows: a markdown note, canvas (Milestone T, #369), or
@@ -54,12 +168,8 @@ enum EditorItem: Hashable, Codable {
     static func == (lhs: EditorItem, rhs: EditorItem) -> Bool {
         switch (lhs, rhs) {
         case (.markdown(let lhs), .markdown(let rhs)),
-            (.canvas(let lhs), .canvas(let rhs)):
-            // Markdown/canvas registries predate Bases and are keyed by native
-            // Swift strings. Keep their canonical-equivalence semantics until
-            // those registries are migrated as one coherent unit.
-            return lhs == rhs
-        case (.base(let lhs), .base(let rhs)):
+            (.canvas(let lhs), .canvas(let rhs)),
+            (.base(let lhs), .base(let rhs)):
             return BaseExactIdentity.matches(lhs, rhs)
         case (.savedQuery(let lhsID, let lhsName),
             .savedQuery(let rhsID, let rhsName)),
@@ -78,10 +188,10 @@ enum EditorItem: Hashable, Codable {
         switch self {
         case .markdown(let path):
             hasher.combine(0)
-            hasher.combine(path)
+            BaseExactIdentity.hash(path, into: &hasher)
         case .canvas(let path):
             hasher.combine(1)
-            hasher.combine(path)
+            BaseExactIdentity.hash(path, into: &hasher)
         case .base(let path):
             hasher.combine(2)
             BaseExactIdentity.hash(path, into: &hasher)
@@ -236,6 +346,13 @@ indirect enum SplitNode: Hashable {
 // MARK: - Model
 
 struct WorkspaceModel: Hashable {
+    struct FileTabRetarget {
+        let tabID: TabID
+        let oldItem: EditorItem
+        let newItem: EditorItem
+        let oldPath: String
+        let newPath: String
+    }
     /// Weights are normalized fractions of the parent axis; no pane may fall
     /// below this fraction (keyboard/drag resize clamps here — a pane can
     /// never be resized to invisibility, which would strand focus).
@@ -396,6 +513,58 @@ struct WorkspaceModel: Hashable {
             }
         }
         return changed
+    }
+
+    /// Transform every file-backed tab in one tree traversal. The closure is
+    /// evaluated once per markdown/canvas/Base tab; identities, order, active
+    /// pointers, group geometry, and non-file tabs are preserved.
+    @discardableResult
+    mutating func retargetFileBackedItems(
+        _ transform: (EditorItem) -> EditorItem?
+    ) -> [FileTabRetarget] {
+        var changed: [FileTabRetarget] = []
+        root = Self.mapAllGroups(root) { group in
+            for index in group.tabs.indices {
+                let oldItem = group.tabs[index].item
+                switch oldItem {
+                case .markdown, .canvas, .base:
+                    break
+                case .savedQuery, .dashboard, .graph:
+                    continue
+                }
+                guard let newItem = transform(oldItem),
+                    !Self.fileBackedItemsMatchExactly(oldItem, newItem)
+                else { continue }
+                switch newItem {
+                case .markdown, .canvas, .base:
+                    break
+                case .savedQuery, .dashboard, .graph:
+                    continue
+                }
+                group.tabs[index].item = newItem
+                changed.append(
+                    FileTabRetarget(
+                        tabID: group.tabs[index].id,
+                        oldItem: oldItem,
+                        newItem: newItem,
+                        oldPath: oldItem.path,
+                        newPath: newItem.path))
+            }
+        }
+        return changed
+    }
+
+    private static func fileBackedItemsMatchExactly(
+        _ lhs: EditorItem, _ rhs: EditorItem
+    ) -> Bool {
+        switch (lhs, rhs) {
+        case (.markdown(let lhsPath), .markdown(let rhsPath)),
+            (.canvas(let lhsPath), .canvas(let rhsPath)),
+            (.base(let lhsPath), .base(let rhsPath)):
+            return BaseExactIdentity.matches(lhsPath, rhsPath)
+        default:
+            return false
+        }
     }
 
     @discardableResult

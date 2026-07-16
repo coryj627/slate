@@ -158,7 +158,8 @@ final class CloseVaultSheetParityTests: XCTestCase {
         // a deliberate choice — review whether the helper actually
         // resets the bool before extending.
         let resetViaHelper: [String: String] = [
-            "isSearchOpen": "closeSearchOverlay()"
+            "isSearchOpen": "closeSearchOverlay()",
+            "isAddPropertySheetOpen": "dismissAddPropertySheet()"
         ]
 
         XCTAssertFalse(

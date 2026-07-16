@@ -472,7 +472,7 @@ final class BaseEmbedTests: XCTestCase {
             idDocument.recoveryAction?.destination,
             .savedQuery(reference: targetID),
             "an exact stable ID must win globally before any user-chosen name")
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openBaseEmbedDestination(try XCTUnwrap(idDocument.recoveryAction?.destination))
         XCTAssertEqual(state.workspace.activeTab?.item, .savedQuery(id: targetID, name: "zz ID target"))
     }
@@ -519,7 +519,7 @@ final class BaseEmbedTests: XCTestCase {
             description: nil,
             queryJson: savedQueryJSON,
             sourceSyntax: .builder)
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         let request = try XCTUnwrap(
             BaseEmbedRequest.codeFence(
                 language: "slate-query",
@@ -758,9 +758,9 @@ final class BaseEmbedTests: XCTestCase {
             key: "status",
             value: .text(value: "host"),
             expectedContentHash: nil)
-        state.refreshVisibleBasesAfterInAppWrite(
+        _ = await state.refreshVisibleBasesAfterInAppWrite(
             session: session,
-            changedPath: "Notes/Other.md")
+            changedPath: "Notes/Other.md")?.value
 
         XCTAssertEqual(document.activeViewName, "Host status")
         XCTAssertEqual(document.quickFilterText, "o")

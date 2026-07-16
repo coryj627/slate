@@ -26,7 +26,10 @@ extension AppState {
 
     /// Open the editor for the selected card (palette / context menu).
     func canvasEditCard() {
-        guard let doc = activeCanvasDocument, let selected = doc.selection.selected else {
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let selected = doc.selection.selected
+        else {
             canvasAnnouncer.announce(.status("Nothing selected."))
             return
         }
@@ -36,6 +39,7 @@ extension AppState {
     /// Open the editor for a specific text card (activation path).
     func canvasEditCard(nodeId: String) {
         guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
             let row = doc.outline.first(where: { $0.nodeId == nodeId })
         else { return }
         guard row.kind == "text" else {
@@ -63,17 +67,23 @@ extension AppState {
     /// WriteConflict: the .canvas changed on disk). On failure the
     /// sheet stays open with the draft so the user can retry/reload
     /// rather than silently losing the edit.
-    func canvasCommitCardEdit(nodeId: String, newText: String) {
-        guard let doc = activeCanvasDocument,
-            let editor = canvasCardEditor, editor.nodeId == nodeId
-        else {
-            canvasCardEditor = nil
-            return
+    @discardableResult
+    func canvasCommitCardEdit(nodeId: String, newText: String) -> Bool {
+        guard let editor = canvasCardEditor, editor.nodeId == nodeId else {
+            return false
+        }
+        guard let doc = activeCanvasDocument else {
+            postMutationAnnouncement(Self.canvasCardEditorUnavailableReason)
+            return false
+        }
+        if let reason = activeCanvasCardEditorDisabledReason {
+            postMutationAnnouncement(reason)
+            return false
         }
         guard newText != editor.initialText else {
             canvasAnnouncer.announce(.status("No changes."))
-            canvasCardEditor = nil
-            return
+            dismissCanvasCardEditor()
+            return true
         }
         let ok = canvasApply(
             CanvasAction(
@@ -82,9 +92,10 @@ extension AppState {
             to: doc)
         // Apply failed (the funnel already surfaced why) — keep the
         // editor open so the draft is not lost.
-        guard ok else { return }
-        canvasCardEditor = nil
+        guard ok else { return false }
+        dismissCanvasCardEditor()
         canvasAnnouncer.announce(.confirmation("Updated \"\(editor.title)\"."))
+        return true
     }
 
     // MARK: Creation, all card kinds (R5)
@@ -123,28 +134,34 @@ extension AppState {
     }
 
     func canvasOpenAddNote() {
-        guard activeCanvasDocument != nil else { return }
+        guard let document = activeCanvasDocument,
+            admitCanvasMutation(for: document)
+        else { return }
         let notes = canvasNotePaths
         guard !notes.isEmpty else {
             canvasAnnouncer.announce(.status("This vault has no notes yet."))
             return
         }
-        canvasPrompt = .addNote(files: notes)
+        presentCanvasPrompt(.addNote(files: notes))
     }
 
     func canvasOpenAddMedia() {
-        guard activeCanvasDocument != nil else { return }
+        guard let document = activeCanvasDocument,
+            admitCanvasMutation(for: document)
+        else { return }
         let media = canvasMediaPaths
         guard !media.isEmpty else {
             canvasAnnouncer.announce(.status("This vault has no media files."))
             return
         }
-        canvasPrompt = .addMedia(files: media)
+        presentCanvasPrompt(.addMedia(files: media))
     }
 
     func canvasOpenAddLink() {
-        guard activeCanvasDocument != nil else { return }
-        canvasPrompt = .addLink
+        guard let document = activeCanvasDocument,
+            admitCanvasMutation(for: document)
+        else { return }
+        presentCanvasPrompt(.addLink)
     }
 
     /// Create a file card (note or media) placed by the #517 engine
@@ -176,7 +193,9 @@ extension AppState {
     private func canvasCreatePlaced(
         content: CanvasNodeContent, kind: String, title: String, actionName: String
     ) {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle
         else { return }
         let id = Self.newCanvasEntityID()
@@ -221,6 +240,7 @@ extension AppState {
             canvasAnnouncer.announce(.status("Nothing selected."))
             return
         }
+        guard admitCanvasMutation(for: doc) else { return }
         guard row.kind == "file" || row.kind == "image" else {
             canvasAnnouncer.announce(.status("Not a file card."))
             return
@@ -231,12 +251,14 @@ extension AppState {
             canvasAnnouncer.announce(.status("This vault has no files to point at."))
             return
         }
-        canvasPrompt = .locate(nodeId: selected, title: row.title, files: candidates)
+        presentCanvasPrompt(
+            .locate(nodeId: selected, title: row.title, files: candidates))
     }
 
     /// Repoint a file card at a new vault path — one action, one undo.
     func canvasLocate(nodeId: String, path: String) {
         guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
             let row = doc.outline.first(where: { $0.nodeId == nodeId })
         else { return }
         let ok = canvasApply(
@@ -254,7 +276,9 @@ extension AppState {
     /// The voice-friendly un-reparent: engine placement adjacent to the
     /// enclosing group's frame (outside it), zero coordinates.
     func canvasRemoveFromGroup() {
-        guard let doc = activeCanvasDocument, let session = currentSession,
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
+            let session = currentSession,
             let handle = doc.handle,
             let selected = doc.selection.selected,
             let row = doc.outline.first(where: { $0.nodeId == selected }),

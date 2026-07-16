@@ -13,6 +13,29 @@ import XCTest
 final class CreateNoteRaceTests: XCTestCase {
     private var tempDirs: [URL] = []
 
+    private actor SuspensionGate {
+        private var entered = false
+        private var entranceWaiters: [CheckedContinuation<Void, Never>] = []
+        private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+        func enter() async {
+            entered = true
+            for waiter in entranceWaiters { waiter.resume() }
+            entranceWaiters = []
+            await withCheckedContinuation { releaseWaiter = $0 }
+        }
+
+        func waitUntilEntered() async {
+            guard !entered else { return }
+            await withCheckedContinuation { entranceWaiters.append($0) }
+        }
+
+        func release() {
+            releaseWaiter?.resume()
+            releaseWaiter = nil
+        }
+    }
+
     func addTempDir(_ dir: URL) {
         tempDirs.append(dir)
     }
@@ -68,6 +91,54 @@ final class CreateNoteRaceTests: XCTestCase {
         )
     }
 
+    func testNewNoteRechecksOwnershipAfterRefreshBeforeLandingInSamePathNewVault()
+        async throws
+    {
+        let (state, vaultA) = try await openVault()
+        let vaultB = FileManager.default.temporaryDirectory
+            .appendingPathComponent("create-race-vault-b-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: vaultB, withIntermediateDirectories: true)
+        tempDirs.append(vaultB)
+        try "# Existing in B\n".write(
+            to: vaultB.appendingPathComponent("Untitled.md"),
+            atomically: true,
+            encoding: .utf8)
+
+        let refresh = SuspensionGate()
+        state.structuralBatchRefreshRunner = { _ in await refresh.enter() }
+
+        let oldCreate = try XCTUnwrap(state.requestCreateNote(in: ""))
+        await refresh.waitUntilEntered()
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(
+                atPath: vaultA.appendingPathComponent("Untitled.md").path),
+            "vault A's native create finishes before the shared refresh")
+        XCTAssertNil(
+            state.lastMutationAnnouncement,
+            "success must not be announced before refresh and ownership revalidation")
+
+        state.openVault(at: vaultB)
+        await state.scanTask?.value
+        state.selectedFilePath = "Untitled.md"
+        await state.noteLoadTask?.value
+        XCTAssertEqual(state.currentNoteText, "# Existing in B\n")
+
+        await refresh.release()
+        await oldCreate.value
+
+        XCTAssertEqual(state.selectedFilePath, "Untitled.md")
+        XCTAssertEqual(state.loadedFilePath, "Untitled.md")
+        XCTAssertEqual(state.currentNoteText, "# Existing in B\n")
+        XCTAssertNil(
+            state.renamingNode,
+            "vault A's stale create must not stage rename UI on vault B's same path")
+        XCTAssertFalse(
+            state.lastMutationAnnouncement?.contains("Created note") == true,
+            "vault A's stale create must not announce success in vault B")
+    }
+
     func testTemplateCreateNeverTruncatesARacedExistingFile() async throws {
         let (state, dir) = try await openVault { dir in
             let templates = dir.appendingPathComponent("Templates")
@@ -102,9 +173,9 @@ final class CreateNoteRaceTests: XCTestCase {
 }
 
 extension CreateNoteRaceTests {
-    /// The New-Canvas flow shares the race shape (#796, round 2): its
-    /// name probe reads the index-visible name, then an external
-    /// create lands before the write. The bytes must survive.
+    /// The New-Canvas flow uses the exclusive write itself as its live
+    /// collision probe. An externally-created first candidate survives and
+    /// the flow advances to the next numbered name.
     @MainActor
     func testNewCanvasNeverTruncatesARacedExistingFile() async throws {
         let (state, dir) = try await openVaultForCanvasRace()
@@ -113,13 +184,17 @@ extension CreateNoteRaceTests {
         try #"{"nodes":[{"id":"keep"}]}"#.write(
             to: raced, atomically: true, encoding: .utf8)
 
-        state.canvasNewCanvasFile()
-        // The create is synchronous on the main actor.
+        try await XCTUnwrap(state.canvasNewCanvasFile()).value
         XCTAssertEqual(
             try String(contentsOf: raced, encoding: .utf8),
             #"{"nodes":[{"id":"keep"}]}"#,
             "the raced canvas bytes survive"
         )
+        XCTAssertEqual(
+            try String(
+                contentsOf: dir.appendingPathComponent("Untitled Canvas 2.canvas"),
+                encoding: .utf8),
+            "{}\n")
     }
 
     private func openVaultForCanvasRace() async throws -> (AppState, URL) {

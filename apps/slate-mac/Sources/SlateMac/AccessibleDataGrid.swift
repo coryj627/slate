@@ -84,7 +84,9 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     struct RowAction {
         let name: String
         let action: (Row) -> Void
+        let isVisible: (Row) -> Bool
         let isEnabled: (Row) -> Bool
+        let disabledReason: (Row) -> String?
 
         init(
             _ name: String,
@@ -92,7 +94,26 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
             action: @escaping (Row) -> Void
         ) {
             self.name = name
+            self.isVisible = isEnabled
             self.isEnabled = isEnabled
+            self.disabledReason = { _ in nil }
+            self.action = action
+        }
+
+        /// Context menus can retain a temporarily unavailable relevant
+        /// action, while AX custom actions (which have no disabled state)
+        /// omit it. `disabledReason` is exposed as menu help/tool-tip.
+        init(
+            _ name: String,
+            isVisible: @escaping (Row) -> Bool,
+            isEnabled: @escaping (Row) -> Bool,
+            disabledReason: @escaping (Row) -> String?,
+            action: @escaping (Row) -> Void
+        ) {
+            self.name = name
+            self.isVisible = isVisible
+            self.isEnabled = isEnabled
+            self.disabledReason = disabledReason
             self.action = action
         }
     }
@@ -614,15 +635,15 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             // actions applicable to THIS row are exposed — an action
             // disabled for the row would otherwise be a silent no-op.
             let rowActions = grid.rowActions.filter { $0.isEnabled(rowValue) }
-            if !rowActions.isEmpty {
-                cell.textField?.setAccessibilityCustomActions(
-                    rowActions.map { rowAction in
-                        NSAccessibilityCustomAction(name: rowAction.name) {
-                            MainActor.assumeIsolated { rowAction.action(rowValue) }
-                            return true
-                        }
-                    })
-            }
+            // Always assign, including `[]`: native cells are reused, and a
+            // ghost's idle Create action must not survive an idle → busy reload.
+            cell.textField?.setAccessibilityCustomActions(
+                rowActions.map { rowAction in
+                    NSAccessibilityCustomAction(name: rowAction.name) {
+                        MainActor.assumeIsolated { rowAction.action(rowValue) }
+                        return true
+                    }
+                })
             return cell
         }
     }
@@ -1071,13 +1092,18 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         guard grid.showsRowContextMenu, displayEntries.indices.contains(rowIndex),
             case .row(let row) = displayEntries[rowIndex]
         else { return nil }
-        let actions = grid.rowActions.filter { $0.isEnabled(row) }
+        let actions = grid.rowActions.filter { $0.isVisible(row) }
         guard !actions.isEmpty else { return nil }
         let menu = NSMenu()
         for action in actions {
             let item = ClosureMenuItem(title: action.name) { [weak self] in
                 guard let self, let current = self.selectedRow(in: table) else { return }
                 action.action(current)
+            }
+            item.isEnabled = action.isEnabled(row)
+            if let reason = action.disabledReason(row) {
+                item.toolTip = reason
+                item.setAccessibilityHelp(reason)
             }
             menu.addItem(item)
         }

@@ -8,6 +8,23 @@ import XCTest
 /// N4-3 (#709): saved-query sidebar state and palette lifecycle.
 @MainActor
 final class BaseQueriesPanelTests: XCTestCase {
+    private final class NativeEventRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var eventsStorage: [BaseRetargetNativeExecutionEvent] = []
+
+        func record(_ event: BaseRetargetNativeExecutionEvent) {
+            lock.lock()
+            eventsStorage.append(event)
+            lock.unlock()
+        }
+
+        var events: [BaseRetargetNativeExecutionEvent] {
+            lock.lock()
+            defer { lock.unlock() }
+            return eventsStorage
+        }
+    }
+
     func testBaseFileListIDsKeepCanonicallyEquivalentPathsDistinct() {
         let composed = BaseFileSummary(
             path: "Queries/é.base", name: "é", viewCount: 1,
@@ -73,7 +90,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             path: "Queries/Complete.base")
         try session.scanInitial(cancel: CancelToken())
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         XCTAssertEqual(state.baseQueries.savedQueries.map(\.name), ["Active projects", "Backlog"])
         XCTAssertEqual(state.baseQueries.baseFiles.map(\.path), ["Queries/Complete.base"])
         XCTAssertEqual(state.baseQueriesAccessibilityValue, "Queries, 3 items, 0 pinned")
@@ -103,7 +120,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                     viewOverride: nil)
             ])
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
 
         XCTAssertEqual(state.baseQueries.dashboards.map(\.id), [dashboardID])
         XCTAssertEqual(state.baseQueries.dashboards.map(\.name), ["Overview"])
@@ -130,7 +147,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             description: nil,
             queryJson: queryJSON(folder: "Backlog"),
             sourceSyntax: .builder)
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
 
         var draft = DashboardEditorDraft(savedQueries: state.baseQueries.savedQueries)
         draft.name = "Team overview"
@@ -405,7 +422,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             queryJson: draft.queryJSON(),
             sourceSyntax: .builder)
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.selectedFilePath = "Projects/Alpha.md"
         state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
         await state.basesDockRefreshTask?.value
@@ -453,7 +470,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             queryJson: draft.queryJSON(),
             sourceSyntax: .builder)
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.selectedFilePath = "Projects/Alpha.md"
         state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
         await state.basesDockRefreshTask?.value
@@ -489,7 +506,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                     viewOverride: nil)
             ])
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openDashboard(id: dashboardID, name: "Overview")
         state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
         await state.basesDockRefreshTask?.value
@@ -526,7 +543,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                     viewOverride: nil)
             ])
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openDashboard(id: dashboardID, name: "Overview")
         let openDocument = try XCTUnwrap(state.activeDashboardDocument)
         XCTAssertFalse(openDocument.sections[0].isMissing)
@@ -572,7 +589,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                     viewOverride: nil),
             ])
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openDashboard(id: dashboardID, name: "Repairable")
         state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
         await state.basesDockRefreshTask?.value
@@ -627,7 +644,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             name: "Duplicate repair",
             sections: [first, second])
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openDashboard(id: dashboardID, name: "Duplicate repair")
         state.deleteSavedQuery(id: missing)
         let staleSnapshot = try XCTUnwrap(state.activeDashboardDocument)
@@ -678,7 +695,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                     headingOverride: "Nonblank default",
                     viewOverride: "Default"),
             ])
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openDashboard(id: dashboardID, name: "Renderer overrides")
         let document = try XCTUnwrap(state.activeDashboardDocument)
 
@@ -723,7 +740,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                     headingOverride: nil,
                     viewOverride: nil)
             ])
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openDashboard(id: dashboardID, name: "Authored renderer")
         let section = try XCTUnwrap(state.activeDashboardDocument?.sections.first)
 
@@ -747,7 +764,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                     headingOverride: nil,
                     viewOverride: nil)
             ])
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openDashboard(id: dashboardID, name: "Overview")
         let initial = try XCTUnwrap(state.activeDashboardDocument?.sections[0].result)
         let rowID = BaseGridRow.id(for: try XCTUnwrap(initial.rows.first))
@@ -801,7 +818,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             queryJson: queryJSON(folder: "Projects"),
             sourceSyntax: .builder)
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         let commandID = SlateCommandID.basesRunSavedQuery(id: id)
         XCTAssertEqual(state.commandRegistry.findById(id: commandID)?.label, "Run query: Active projects")
         XCTAssertEqual(state.commandRegistry.findById(id: commandID)?.section, .bases)
@@ -814,14 +831,14 @@ final class BaseQueriesPanelTests: XCTestCase {
         let dockDocument = try XCTUnwrap(state.basesDockDocument)
 
         try session.renameSavedQuery(id: id, name: "Renamed")
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         XCTAssertEqual(state.commandRegistry.findById(id: commandID)?.label, "Run query: Renamed")
         XCTAssertEqual(state.basesDock.target, .savedQuery(id: id, name: "Renamed"))
         XCTAssertTrue(state.basesDockDocument === dockDocument)
         XCTAssertEqual(dockDocument.source, .savedQuery(id: id, name: "Renamed"))
 
         try session.deleteSavedQuery(id: id)
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         XCTAssertNil(state.commandRegistry.findById(id: commandID))
     }
 
@@ -833,14 +850,14 @@ final class BaseQueriesPanelTests: XCTestCase {
             queryJson: queryJSON(folder: "Projects"),
             sourceSyntax: .builder)
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.editSavedQueryInBuilder(id: id)
         let model = try XCTUnwrap(state.activeBaseQueryBuilder)
         XCTAssertEqual(model.editingSavedQuery?.id, id)
         XCTAssertEqual(model.editingSavedQuery?.name, "Active projects")
 
         model.source = .folder("Backlog")
-        state.basesBuilderUpdateSavedQuery()
+        await state.basesBuilderUpdateSavedQuery()?.value
 
         let saved = try session.getSavedQuery(id: id)
         let draft = try BaseQueryBuilderDraft(queryJSON: saved.queryJson)
@@ -867,7 +884,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                     headingOverride: nil,
                     viewOverride: nil)
             ])
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
 
         let nameRequest = try XCTUnwrap(
             BaseEmbedRequest.codeFence(
@@ -905,11 +922,29 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertEqual(tab.result?.rows.count, 3)
         XCTAssertEqual(dashboard.sections[0].result?.rows.count, 3)
         XCTAssertEqual(dock.result?.rows.count, 3)
+        let tabHandle = try XCTUnwrap(tab.handle)
+        let dockHandle = try XCTUnwrap(dock.handle)
+        let nameEmbedHandle = try XCTUnwrap(nameEmbed.handle)
+        let idEmbedHandle = try XCTUnwrap(idEmbed.handle)
+        let nativeEvents = NativeEventRecorder()
+        state.baseRetargetNativeExecutionObserverForTesting = { nativeEvents.record($0) }
 
         state.editSavedQueryInBuilder(id: id)
         let model = try XCTUnwrap(state.activeBaseQueryBuilder)
         model.source = .folder("Backlog")
-        state.basesBuilderUpdateSavedQuery()
+        let updateTask = try XCTUnwrap(state.basesBuilderUpdateSavedQuery())
+
+        XCTAssertEqual(tab.handle, tabHandle)
+        XCTAssertEqual(dock.handle, dockHandle)
+        XCTAssertEqual(nameEmbed.handle, nameEmbedHandle)
+        XCTAssertEqual(idEmbed.handle, idEmbedHandle)
+        XCTAssertEqual(tab.result?.rows.count, 3)
+        XCTAssertEqual(dashboard.sections[0].result?.rows.count, 3)
+        XCTAssertEqual(dock.result?.rows.count, 3)
+        XCTAssertEqual(nameEmbed.result?.rows.count, 3)
+        XCTAssertEqual(idEmbed.result?.rows.count, 3)
+
+        await updateTask.value
 
         XCTAssertTrue(tab.result?.rows.isEmpty == true)
         XCTAssertTrue(dashboard.sections[0].result?.rows.isEmpty == true)
@@ -918,6 +953,8 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertTrue(nameEmbed.result?.rows.isEmpty == true)
         XCTAssertEqual(idEmbed.state, .ready)
         XCTAssertTrue(idEmbed.result?.rows.isEmpty == true)
+        XCTAssertFalse(nativeEvents.events.isEmpty)
+        XCTAssertFalse(nativeEvents.events.contains(where: \.ranOnMainThread))
     }
 
     func testUpdatingSavedQueryReopensDockedDashboardSection() async throws {
@@ -935,7 +972,7 @@ final class BaseQueriesPanelTests: XCTestCase {
                     headingOverride: nil,
                     viewOverride: nil)
             ])
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
         await state.basesDockRefreshTask?.value
         let dockedDashboard = try XCTUnwrap(state.basesDockDashboardDocument)
@@ -944,7 +981,10 @@ final class BaseQueriesPanelTests: XCTestCase {
         state.editSavedQueryInBuilder(id: id)
         let model = try XCTUnwrap(state.activeBaseQueryBuilder)
         model.source = .folder("Backlog")
-        state.basesBuilderUpdateSavedQuery()
+        let updateTask = try XCTUnwrap(state.basesBuilderUpdateSavedQuery())
+
+        XCTAssertEqual(dockedDashboard.sections[0].result?.rows.count, 3)
+        await updateTask.value
 
         XCTAssertTrue(dockedDashboard.sections[0].result?.rows.isEmpty == true)
     }
@@ -1022,7 +1062,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             queryJson: queryJSON(folder: "Projects"),
             sourceSyntax: .builder)
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openSavedQuery(id: id, name: "Active projects")
         XCTAssertTrue(state.workspace.model.allTabs.contains { tab in
             tab.item == .savedQuery(id: id, name: "Active projects")
@@ -1062,7 +1102,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             queryJson: draft.queryJSON(),
             sourceSyntax: .builder)
 
-        state.refreshBaseQueries()
+        _ = await state.refreshBaseQueries()?.value
         state.openSavedQuery(id: id, name: "Context query")
         let doc = try XCTUnwrap(state.activeBaseDocument)
         guard case .degraded(let message) = doc.state else {

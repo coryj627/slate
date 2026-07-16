@@ -150,10 +150,10 @@ final class ToolbarCustomizationTests: XCTestCase {
     func testSaveStatusAndSaveAccessibilityPreserved() throws {
         let raw = try rawSource("MainSplitView.swift")
         XCTAssertTrue(
-            raw.contains("Modified. Unsaved changes in the editor."),
+            raw.contains("Modified. This note has unsaved changes."),
             "the Modified status label must be preserved verbatim")
         XCTAssertTrue(
-            raw.contains("Saved. Editor matches the on-disk file."),
+            raw.contains("Saved. This note matches the on-disk file."),
             "the Saved status label must be preserved verbatim")
         XCTAssertTrue(
             raw.contains("Save the current note to disk. Command-S."),
@@ -162,8 +162,8 @@ final class ToolbarCustomizationTests: XCTestCase {
         let stripped = try normalizedSource("MainSplitView.swift")
         XCTAssertTrue(
             stripped.contains(
-                "appState.loadedFilePath == nil || appState.isSaving || !appState.hasUnsavedChanges"),
-            "the Save button's disabled condition must be preserved verbatim")
+                "appState.loadedFilePath == nil || appState.isSaving || !appState.activeNoteHasUnsavedChanges || appState.activeNoteSaveDisabledReason != nil"),
+            "Save must be disabled when no note is loaded, no note changes remain, or recovery makes body Save unavailable")
     }
 
     // MARK: - The customization editor is reachable

@@ -36,6 +36,7 @@ extension AppState {
     /// direction; announced per t0 §1.3.
     func canvasConnect(from originId: String, to targetId: String, label: String?) {
         guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
             originId != targetId,
             let origin = doc.scene.nodes.first(where: { $0.nodeId == originId }),
             let target = doc.scene.nodes.first(where: { $0.nodeId == targetId })
@@ -67,6 +68,7 @@ extension AppState {
     /// step (`CanvasPrompt.connectLabel`).
     func canvasOpenConnectPicker() {
         guard let doc = activeCanvasDocument else { return }
+        guard admitCanvasMutation(for: doc) else { return }
         guard doc.selection.selected != nil else {
             canvasAnnouncer.announce(.status("Nothing selected."))
             return
@@ -80,6 +82,7 @@ extension AppState {
     /// with the ordinary movements; Return connects, Esc goes home.
     func canvasEnterConnectMode() {
         guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
             let origin = doc.selection.selected,
             let originRow = doc.outline.first(where: { $0.nodeId == origin })
         else {
@@ -132,7 +135,9 @@ extension AppState {
 
     /// Delete a connection of the selected card (row action + palette).
     func canvasDeleteConnection(edgeId: String) {
-        guard let doc = activeCanvasDocument else { return }
+        guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc)
+        else { return }
         let choice = canvasConnectionChoices().first { $0.edgeId == edgeId }
         let ok = canvasApply(
             CanvasAction(
@@ -150,6 +155,7 @@ extension AppState {
         edgeId: String, label: String?, direction: CanvasConnectionDirectionChoice
     ) {
         guard let doc = activeCanvasDocument,
+            admitCanvasMutation(for: doc),
             let edge = doc.scene.edges.first(where: { $0.edgeId == edgeId })
         else { return }
         let (fromEnd, toEnd): (CanvasEndStyle, CanvasEndStyle)

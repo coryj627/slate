@@ -11,29 +11,35 @@ struct CanvasPromptSheet: View {
     @EnvironmentObject var appState: AppState
     let prompt: CanvasPrompt
 
-    @State private var text: String = ""
     @State private var chosenGroup: String = ""
     @State private var direction: CanvasConnectionDirectionChoice = .toTarget
+    @State private var pendingDiscard = false
+    @AccessibilityFocusState private var draftDialogFocusReturn: DraftFocusTarget?
+
+    private enum DraftFocusTarget: Hashable {
+        case dismiss
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.md) {
             switch prompt {
             case .newGroup:
                 Text("New Group").font(Tokens.Typography.body.weight(.semibold))
-                TextField("Group label", text: $text)
+                TextField("Group label", text: $appState.canvasPromptDraft)
                     .textFieldStyle(.roundedBorder)
+                    .textContentType(.none)
                     .accessibilityLabel("Group label")
                 commitRow("Create") {
-                    appState.canvasNewGroup(label: text)
+                    appState.canvasNewGroup(label: appState.canvasPromptDraft)
                 }
-            case .renameGroup(let current):
+            case .renameGroup:
                 Text("Rename Group").font(Tokens.Typography.body.weight(.semibold))
-                TextField("Group label", text: $text)
+                TextField("Group label", text: $appState.canvasPromptDraft)
                     .textFieldStyle(.roundedBorder)
+                    .textContentType(.none)
                     .accessibilityLabel("Group label")
-                    .onAppear { text = current }
                 commitRow("Rename") {
-                    appState.canvasRenameGroup(to: text)
+                    appState.canvasRenameGroup(to: appState.canvasPromptDraft)
                 }
             case .moveIntoGroup(let groups):
                 Text("Move into Group").font(Tokens.Typography.body.weight(.semibold))
@@ -53,12 +59,18 @@ struct CanvasPromptSheet: View {
             case .connectLabel(let targetId, let targetTitle):
                 Text("Connect to \"\(targetTitle)\"")
                     .font(Tokens.Typography.body.weight(.semibold))
-                TextField("Connection label (optional)", text: $text)
+                TextField(
+                    "Connection label (optional)",
+                    text: $appState.canvasPromptDraft)
                     .textFieldStyle(.roundedBorder)
+                    .textContentType(.none)
                     .accessibilityLabel("Connection label, optional")
                 commitRow("Connect") {
                     if let origin = appState.activeCanvasDocument?.selection.selected {
-                        appState.canvasConnect(from: origin, to: targetId, label: text)
+                        appState.canvasConnect(
+                            from: origin,
+                            to: targetId,
+                            label: appState.canvasPromptDraft)
                     }
                 }
             case .pickConnection(let choices, let toDelete):
@@ -80,13 +92,13 @@ struct CanvasPromptSheet: View {
                         appState.canvasOpenConnectionEditor(edgeId: chosenGroup)
                     }
                 }
-            case .editConnection(let edgeId, let currentLabel):
+            case .editConnection(let edgeId, _):
                 Text("Edit Connection")
                     .font(Tokens.Typography.body.weight(.semibold))
-                TextField("Label", text: $text)
+                TextField("Label", text: $appState.canvasPromptDraft)
                     .textFieldStyle(.roundedBorder)
+                    .textContentType(.none)
                     .accessibilityLabel("Connection label")
-                    .onAppear { text = currentLabel }
                 Picker("Direction", selection: $direction) {
                     ForEach(CanvasConnectionDirectionChoice.allCases, id: \.self) { choice in
                         Text(choice.title).tag(choice)
@@ -96,18 +108,21 @@ struct CanvasPromptSheet: View {
                 .accessibilityLabel("Direction")
                 commitRow("Apply") {
                     appState.canvasEditConnection(
-                        edgeId: edgeId, label: text, direction: direction)
+                        edgeId: edgeId,
+                        label: appState.canvasPromptDraft,
+                        direction: direction)
                 }
             case .marksList:
                 marksListBody
             case .groupMarked:
                 Text("Group Marked Cards")
                     .font(Tokens.Typography.body.weight(.semibold))
-                TextField("Group label", text: $text)
+                TextField("Group label", text: $appState.canvasPromptDraft)
                     .textFieldStyle(.roundedBorder)
+                    .textContentType(.none)
                     .accessibilityLabel("Group label")
                 commitRow("Group") {
-                    appState.canvasGroupMarked(label: text)
+                    appState.canvasGroupMarked(label: appState.canvasPromptDraft)
                 }
             case .addNote(let files):
                 filePickBody(
@@ -124,12 +139,15 @@ struct CanvasPromptSheet: View {
             case .addLink:
                 Text("Add Link Card")
                     .font(Tokens.Typography.body.weight(.semibold))
-                TextField("URL", text: $text, prompt: Text("https://…"))
+                TextField(
+                    "URL",
+                    text: $appState.canvasPromptDraft,
+                    prompt: Text("https://…"))
                     .textFieldStyle(.roundedBorder)
                     .textContentType(.URL)
                     .accessibilityLabel("Link URL")
                 commitRow("Add") {
-                    appState.canvasAddLinkCard(url: text)
+                    appState.canvasAddLinkCard(url: appState.canvasPromptDraft)
                 }
             case .locate(let nodeId, let title, let files):
                 filePickBody(
@@ -152,25 +170,54 @@ struct CanvasPromptSheet: View {
                     ], id: \.0
                 ) { title, direction in
                     Button(title) {
-                        appState.canvasPrompt = nil
-                        appState.canvasCreateConnectedCard(direction: direction)
+                        commitMutation {
+                            appState.canvasCreateConnectedCard(direction: direction)
+                        }
                     }
+                    .disabled(mutationDisabledReason != nil)
+                    .accessibilityHint(
+                        mutationDisabledReason ?? "Create the connected card.")
+                    .help(mutationDisabledReason ?? "Create the connected card.")
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel("Place \(title.lowercased())")
                 }
-                Button("Cancel") { appState.canvasPrompt = nil }
-                    .keyboardShortcut(.cancelAction)
+                dismissButton
             case .convertToNote(let nodeId, _):
+                let disabledReason = appState.structuralMutationDisabledReason
                 Text("Convert Card to Note")
                     .font(Tokens.Typography.body.weight(.semibold))
                 Text("Creates a vault note with the card's text; the card then points at it.")
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
-                TextField("Note path", text: $text)
+                TextField("Note path", text: $appState.canvasPromptDraft)
                     .textFieldStyle(.roundedBorder)
+                    .textContentType(.none)
                     .accessibilityLabel("Note path, ends in .md")
-                commitRow("Convert") {
-                    appState.canvasConvertToNote(nodeId: nodeId, path: text)
+                HStack {
+                    Spacer()
+                    dismissButton
+                    Button("Convert") {
+                        if appState.canvasConvertToNote(
+                            nodeId: nodeId,
+                            path: appState.canvasPromptDraft) != nil
+                        {
+                            appState.dismissCanvasPrompt()
+                        }
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(disabledReason != nil || mutationDisabledReason != nil)
+                    .accessibilityHint(
+                        disabledReason ?? mutationDisabledReason
+                            ?? "Create the note and point this card at it.")
+                    .help(
+                        disabledReason ?? mutationDisabledReason
+                            ?? "Create the note and point this card at it.")
+                }
+                if let disabledReason {
+                    Text(disabledReason)
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                        .accessibilityLabel(disabledReason)
                 }
             case .setColor:
                 Text("Set Color").font(Tokens.Typography.body.weight(.semibold))
@@ -181,26 +228,77 @@ struct CanvasPromptSheet: View {
                         id: \.offset
                     ) { index, name in
                         Button(name.capitalized) {
-                            appState.canvasSetColor(preset: index + 1)
-                            appState.canvasPrompt = nil
+                            commitMutation {
+                                appState.canvasSetColor(preset: index + 1)
+                            }
                         }
+                        .disabled(mutationDisabledReason != nil)
+                        .accessibilityHint(
+                            mutationDisabledReason ?? "Set the selected card’s color.")
+                        .help(mutationDisabledReason ?? "Set the selected card’s color.")
                     }
                 }
                 HStack {
                     Button("Clear Color") {
-                        appState.canvasSetColor(preset: nil)
-                        appState.canvasPrompt = nil
+                        commitMutation { appState.canvasSetColor(preset: nil) }
                     }
+                    .disabled(mutationDisabledReason != nil)
+                    .accessibilityHint(
+                        mutationDisabledReason ?? "Clear the selected card’s color.")
+                    .help(mutationDisabledReason ?? "Clear the selected card’s color.")
                     Spacer()
-                    Button("Cancel") { appState.canvasPrompt = nil }
-                        .keyboardShortcut(.cancelAction)
+                    dismissButton
                 }
+            }
+            if let mutationDisabledReason {
+                Text(mutationDisabledReason)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .textSelection(.enabled)
+                    .accessibilityLabel(mutationDisabledReason)
+            }
+            if let document = appState.activeCanvasRecoveryDocument,
+                let recoveryLabel = appState.canvasRecoveryActionLabel(for: document)
+            {
+                let recoveryDisabledReason = appState.structuralMutationDisabledReason
+                Button(recoveryLabel) {
+                    _ = appState.retryCanvasRecovery(for: document)
+                }
+                .disabled(recoveryDisabledReason != nil)
+                .accessibilityHint(
+                    recoveryDisabledReason
+                        ?? appState.canvasRecoveryActionHint(for: document)
+                        ?? "Try to restore Canvas editing.")
+                .help(
+                    recoveryDisabledReason
+                        ?? appState.canvasRecoveryActionHint(for: document)
+                        ?? "Try to restore Canvas editing")
             }
         }
         .padding(Tokens.Spacing.lg)
         .frame(minWidth: 340)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Canvas: \(title)")
+        .interactiveDismissDisabled(mutationDisabledReason != nil)
+        .confirmationDialog(
+            "Discard this Canvas draft?",
+            isPresented: $pendingDiscard,
+            titleVisibility: .visible
+        ) {
+            Button("Cancel", role: .cancel) {
+                draftDialogFocusReturn = .dismiss
+            }
+            Button("Discard Draft", role: .destructive) {
+                appState.dismissCanvasPrompt()
+            }
+        } message: {
+            Text("Closing discards the input in this sheet. Copy it first if you need to keep it.")
+        }
+        .onChange(of: pendingDiscard) { wasPresented, isPresented in
+            if wasPresented, !isPresented, appState.canvasPrompt != nil {
+                draftDialogFocusReturn = .dismiss
+            }
+        }
     }
 
     private var title: String {
@@ -278,28 +376,34 @@ struct CanvasPromptSheet: View {
         commit: @escaping (String) -> Void
     ) -> some View {
         let filtered =
-            text.isEmpty
+            appState.canvasPromptDraft.isEmpty
             ? files
-            : files.filter { $0.localizedCaseInsensitiveContains(text) }
+            : files.filter {
+                $0.localizedCaseInsensitiveContains(appState.canvasPromptDraft)
+            }
         Text(heading)
             .font(Tokens.Typography.body.weight(.semibold))
         Text(prompt)
             .font(Tokens.Typography.caption)
             .foregroundStyle(Tokens.ColorRole.textSecondary)
-        TextField("Filter", text: $text)
+        TextField("Filter", text: $appState.canvasPromptDraft)
             .textFieldStyle(.roundedBorder)
+            .textContentType(.none)
             .accessibilityLabel("Filter files")
         List(filtered.prefix(200), id: \.self) { path in
             Button {
-                appState.canvasPrompt = nil
-                commit(path)
+                commitMutation { commit(path) }
             } label: {
                 Text(path)
                     .font(Tokens.Typography.body)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
             .buttonStyle(.plain)
+            .disabled(mutationDisabledReason != nil)
             .accessibilityLabel(path)
+            .accessibilityHint(
+                mutationDisabledReason ?? "Choose this file.")
+            .help(mutationDisabledReason ?? "Choose this file.")
         }
         .frame(minHeight: 180, maxHeight: 280)
         .accessibilityLabel("\(heading): \(filtered.count) file\(filtered.count == 1 ? "" : "s")")
@@ -308,8 +412,7 @@ struct CanvasPromptSheet: View {
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
             Spacer()
-            Button("Cancel") { appState.canvasPrompt = nil }
-                .keyboardShortcut(.cancelAction)
+            dismissButton
         }
     }
 
@@ -317,13 +420,41 @@ struct CanvasPromptSheet: View {
     private func commitRow(_ verb: String, action: @escaping () -> Void) -> some View {
         HStack {
             Spacer()
-            Button("Cancel") { appState.canvasPrompt = nil }
-                .keyboardShortcut(.cancelAction)
+            dismissButton
             Button(verb) {
-                action()
-                appState.canvasPrompt = nil
+                commitMutation(action)
             }
             .keyboardShortcut(.defaultAction)
+            .disabled(mutationDisabledReason != nil)
+            .accessibilityHint(
+                mutationDisabledReason ?? "Commit this Canvas change.")
+            .help(mutationDisabledReason ?? "Commit this Canvas change.")
+        }
+    }
+
+    private var mutationDisabledReason: String? {
+        if case .marksList = prompt { return nil }
+        return appState.activeCanvasMutationDisabledReason
+    }
+
+    private func commitMutation(_ action: () -> Void) {
+        guard appState.commitCanvasPromptMutation(action) else { return }
+        appState.dismissCanvasPrompt()
+    }
+
+    private var dismissButton: some View {
+        Button(mutationDisabledReason == nil ? "Cancel" : "Close…") {
+            requestDismiss()
+        }
+        .keyboardShortcut(.cancelAction)
+        .accessibilityFocused($draftDialogFocusReturn, equals: .dismiss)
+    }
+
+    private func requestDismiss() {
+        if mutationDisabledReason != nil {
+            pendingDiscard = true
+        } else {
+            appState.dismissCanvasPrompt()
         }
     }
 }

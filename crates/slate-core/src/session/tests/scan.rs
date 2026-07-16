@@ -97,9 +97,12 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
     )
     .unwrap();
     // Unwind every post-025 migration (their DDL isn't re-runnable),
-    // so the pre-026 fixture can replay 026+ from scratch: 027's
-    // index + column and 028's open_marks table.
+    // so the pre-026 fixture can replay 026+ from scratch.
     conn.execute("DELETE FROM schema_version WHERE version >= 26", [])
+        .unwrap();
+    conn.execute("DROP TABLE structural_batch_inflight_rewrites", [])
+        .unwrap();
+    conn.execute("DROP TABLE structural_batch_inflight", [])
         .unwrap();
     conn.execute("DROP INDEX files_oplog_name_unique", [])
         .unwrap();

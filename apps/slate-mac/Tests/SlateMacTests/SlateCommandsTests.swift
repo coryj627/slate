@@ -631,14 +631,14 @@ final class SlateCommandsTests: XCTestCase {
         XCTAssertTrue(appState.isRightPaneVisible)
     }
 
-    /// Invoking `slate.editor.addProperty` flips
-    /// `isAddPropertySheetOpen`.
+    /// Invoking `slate.editor.addProperty` without an active note must not
+    /// present a hostless sheet that cannot safely own a property draft.
     @MainActor
-    func testInvokingAddPropertyCommandFlipsIsAddPropertySheetOpen() async throws {
+    func testInvokingAddPropertyCommandWithoutNoteDoesNotOpenHostlessSheet() async throws {
         let appState = AppState()
         XCTAssertFalse(appState.isAddPropertySheetOpen)
         try appState.commandRegistry.invokeById(id: SlateCommandID.addProperty)
-        XCTAssertTrue(appState.isAddPropertySheetOpen)
+        XCTAssertFalse(appState.isAddPropertySheetOpen)
     }
 
     /// Invoking `slate.editor.bulkRenameProperties` flips

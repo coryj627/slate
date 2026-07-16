@@ -210,14 +210,14 @@ final class MilestoneQIntegrationTests: XCTestCase {
             "Phase 5: no recents at start"
         )
 
-        // Invoking AddProperty flips the corresponding bool — the
-        // observable side-effect of the menu bridge actually
-        // wiring through to AppState.
+        // The vault was closed in Phase 2, so Add Property must not present a
+        // hostless sheet with no note path to own its draft. The command still
+        // resolves and can be recorded in palette recents below.
         XCTAssertFalse(state.isAddPropertySheetOpen)
         try state.commandRegistry.invokeById(id: SlateCommandID.addProperty)
-        XCTAssertTrue(
+        XCTAssertFalse(
             state.isAddPropertySheetOpen,
-            "Phase 5: registry.invokeById fires the same side-effect as the menu item"
+            "Phase 5: Add Property remains unavailable without an active note"
         )
 
         // Recording the invocation surfaces it in recents + writes
