@@ -103,6 +103,153 @@ pub enum ResolvedLink {
 /// vault resolves to `foo.md`.
 const MD_EXTENSIONS: &[&str] = &["md", "markdown", "mdown", "mkd"];
 
+/// Format an indexed Markdown target as a complete resolver-correct wikilink.
+///
+/// A bare basename is used only when its Markdown stem is globally unique.
+/// Duplicate stems use a vault-relative qualified target; a root-level target
+/// is prefixed with `/` so it cannot fall back to basename resolution. Every
+/// candidate is parsed by the production wikilink parser and resolved through
+/// [`resolve_link`] before it is returned.
+pub fn format_wikilink_for_path(target_path: &str, index: &dyn VaultIndex) -> Option<String> {
+    let paths: Vec<&str> = index.all_paths().collect();
+    let target_stem_path = markdown_stem_path(target_path)?;
+
+    if target_path
+        .chars()
+        .any(|c| matches!(c, ']' | '|' | '#' | '^'))
+    {
+        return None;
+    }
+
+    let target_folded = target_path.to_lowercase();
+    if paths
+        .iter()
+        .filter(|path| path.to_lowercase() == target_folded)
+        .count()
+        != 1
+    {
+        return None;
+    }
+
+    let target_stem = final_component(target_stem_path);
+    if target_stem.is_empty() {
+        return None;
+    }
+    let target_stem_folded = target_stem.to_lowercase();
+    let globally_unique_markdown_stem = paths
+        .iter()
+        .filter_map(|path| markdown_stem_path(path))
+        .filter(|stem_path| final_component(stem_path).to_lowercase() == target_stem_folded)
+        .count()
+        == 1;
+
+    let target_stem_path_folded = target_stem_path.to_lowercase();
+    let markdown_flavor_collision = paths
+        .iter()
+        .filter_map(|path| markdown_stem_path(path))
+        .filter(|stem_path| stem_path.to_lowercase() == target_stem_path_folded)
+        .count()
+        > 1;
+    let retain_extension = target_stem.contains('.') || markdown_flavor_collision;
+    let bare_target = if retain_extension {
+        final_component(target_path)
+    } else {
+        target_stem
+    };
+    let bare_matches = collect_basename_matches(bare_target, index);
+    let globally_unique_basename =
+        globally_unique_markdown_stem && bare_matches.as_slice() == [target_path];
+
+    let mut bodies = Vec::new();
+    if globally_unique_basename {
+        push_candidate_bodies(
+            &mut bodies,
+            target_stem,
+            final_component(target_path),
+            retain_extension,
+        );
+    }
+
+    let qualified_stem = if target_stem_path.contains('/') {
+        target_stem_path.to_string()
+    } else {
+        format!("/{target_stem_path}")
+    };
+    let qualified_full = if target_path.contains('/') {
+        target_path.to_string()
+    } else {
+        format!("/{target_path}")
+    };
+    push_candidate_bodies(
+        &mut bodies,
+        &qualified_stem,
+        &qualified_full,
+        retain_extension,
+    );
+    if target_stem_path.contains('/') {
+        push_candidate_bodies(
+            &mut bodies,
+            &format!("/{target_stem_path}"),
+            &format!("/{target_path}"),
+            retain_extension,
+        );
+    }
+
+    bodies.into_iter().find_map(|body| {
+        let candidate = format!("[[{body}]]");
+        wikilink_round_trips_to(&candidate, target_path, index).then_some(candidate)
+    })
+}
+
+fn push_candidate_bodies(
+    candidates: &mut Vec<String>,
+    without_extension: &str,
+    with_extension: &str,
+    retain_extension: bool,
+) {
+    if !retain_extension {
+        candidates.push(without_extension.to_string());
+    }
+    if !candidates
+        .iter()
+        .any(|candidate| candidate == with_extension)
+    {
+        candidates.push(with_extension.to_string());
+    }
+}
+
+fn wikilink_round_trips_to(candidate: &str, target_path: &str, index: &dyn VaultIndex) -> bool {
+    let links = crate::links::extract_links(candidate);
+    let [link] = links.as_slice() else {
+        return false;
+    };
+    if link.kind != crate::links::LinkKind::Wikilink
+        || link.span_start != 0
+        || link.span_end != candidate.len()
+        || link.display_text.is_some()
+        || link.anchor.is_some()
+        || link.is_embed
+        || link.is_external
+    {
+        return false;
+    }
+
+    matches!(
+        resolve_link(&link.target_raw, None, "", index),
+        ResolvedLink::Resolved { target_path: resolved, anchor: None }
+            if resolved == target_path
+    )
+}
+
+fn markdown_stem_path(path: &str) -> Option<&str> {
+    let dot = path.rfind('.')?;
+    let extension = &path[dot + 1..];
+    MD_EXTENSIONS
+        .iter()
+        .any(|candidate| extension.eq_ignore_ascii_case(candidate))
+        .then_some(&path[..dot])
+}
+
 /// Resolve a single link target against the vault index.
 pub fn resolve_link(
     target_raw: &str,
@@ -347,6 +494,135 @@ mod tests {
             ResolvedLink::Resolved { target_path, .. } => target_path,
             other => panic!("expected Resolved, got {:?}", other),
         }
+    }
+
+    // --- Resolver-correct wikilink formatting (FL-04) ---
+
+    #[test]
+    fn wikilink_formatter_uses_stem_for_globally_unique_markdown_target() {
+        let index = idx(&["Notes/Target.md", "Notes/Other.md"]);
+
+        assert_eq!(
+            format_wikilink_for_path("Notes/Target.md", &index),
+            Some("[[Target]]".into())
+        );
+    }
+
+    #[test]
+    fn wikilink_formatter_qualifies_duplicate_stem_independent_of_source() {
+        let index = idx(&["Notes/Target.md", "Archive/Target.md", "Sources/Index.md"]);
+
+        assert_eq!(
+            format_wikilink_for_path("Notes/Target.md", &index),
+            Some("[[Notes/Target]]".into())
+        );
+    }
+
+    #[test]
+    fn wikilink_formatter_uses_rooted_fallback_for_scheme_like_qualified_path() {
+        let index = idx(&["ab:folder/Target.md", "Other/Target.md"]);
+
+        assert_eq!(
+            format_wikilink_for_path("ab:folder/Target.md", &index),
+            Some("[[/ab:folder/Target]]".into())
+        );
+    }
+
+    #[test]
+    fn wikilink_formatter_uses_rooted_fallback_for_leading_space_qualified_path() {
+        let index = idx(&[" Folder/Target.md", "Other/Target.md"]);
+
+        assert_eq!(
+            format_wikilink_for_path(" Folder/Target.md", &index),
+            Some("[[/ Folder/Target]]".into())
+        );
+    }
+
+    #[test]
+    fn wikilink_formatter_roots_root_level_duplicate() {
+        let index = idx(&["Target.md", "Archive/Target.md"]);
+
+        assert_eq!(
+            format_wikilink_for_path("Target.md", &index),
+            Some("[[/Target]]".into())
+        );
+    }
+
+    #[test]
+    fn wikilink_formatter_qualifies_non_markdown_basename_collision() {
+        let index = idx(&["Target.md", "Archive/Target"]);
+
+        assert_eq!(
+            format_wikilink_for_path("Target.md", &index),
+            Some("[[/Target]]".into())
+        );
+    }
+
+    #[test]
+    fn wikilink_formatter_retains_extension_for_markdown_flavor_collision() {
+        let index = idx(&["Notes/Target.md", "Notes/Target.markdown"]);
+
+        assert_eq!(
+            format_wikilink_for_path("Notes/Target.md", &index),
+            Some("[[Notes/Target.md]]".into())
+        );
+        assert_eq!(
+            format_wikilink_for_path("Notes/Target.markdown", &index),
+            Some("[[Notes/Target.markdown]]".into())
+        );
+    }
+
+    #[test]
+    fn wikilink_formatter_retains_extension_for_multi_dot_stem() {
+        let index = idx(&["Notes/Target.v2.md"]);
+
+        assert_eq!(
+            format_wikilink_for_path("Notes/Target.v2.md", &index),
+            Some("[[Target.v2.md]]".into())
+        );
+    }
+
+    #[test]
+    fn wikilink_formatter_preserves_indexed_case_and_unicode() {
+        let index = idx(&["Research/Überblick.MD"]);
+
+        assert_eq!(
+            format_wikilink_for_path("Research/Überblick.MD", &index),
+            Some("[[Überblick]]".into())
+        );
+    }
+
+    #[test]
+    fn wikilink_formatter_refuses_case_fold_equal_target_paths() {
+        let index = idx(&["Notes/Target.md", "notes/target.MD"]);
+
+        assert_eq!(format_wikilink_for_path("Notes/Target.md", &index), None);
+        assert_eq!(format_wikilink_for_path("notes/target.MD", &index), None);
+    }
+
+    #[test]
+    fn wikilink_formatter_refuses_parser_control_characters() {
+        for path in [
+            "Notes/closing]bracket.md",
+            "Notes/pipe|name.md",
+            "Notes/hash#name.md",
+            "Notes/caret^name.md",
+        ] {
+            let index = idx(&[path]);
+            assert_eq!(
+                format_wikilink_for_path(path, &index),
+                None,
+                "parser-control path should fail closed: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn wikilink_formatter_refuses_missing_and_non_markdown_targets() {
+        let index = idx(&["Notes/Present.md", "Assets/Diagram.png"]);
+
+        assert_eq!(format_wikilink_for_path("Notes/Missing.md", &index), None);
+        assert_eq!(format_wikilink_for_path("Assets/Diagram.png", &index), None);
     }
 
     // --- Folder-qualified ---

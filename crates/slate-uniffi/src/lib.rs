@@ -344,6 +344,12 @@ impl VaultSession {
         Ok(self.inner.get_file_summary(&path)?.map(Into::into))
     }
 
+    /// Return a complete resolver-correct wikilink for a live indexed
+    /// Markdown file, or `None` when the target cannot round-trip safely.
+    pub fn wikilink_for_path(&self, path: String) -> Result<Option<String>, VaultError> {
+        Ok(self.inner.wikilink_for_path(&path)?)
+    }
+
     pub fn list_tags(&self) -> Result<Vec<String>, VaultError> {
         Ok(self.inner.list_tags()?)
     }
@@ -5019,6 +5025,8 @@ pub enum CommandSection {
     Bases,
     /// Graph commands (Milestone P, P1-3 #556).
     Graph,
+    /// File-sidebar actions (Milestone FL, FL-04).
+    Sidebar,
 }
 
 impl From<core::CommandSection> for CommandSection {
@@ -5035,6 +5043,7 @@ impl From<core::CommandSection> for CommandSection {
             core::CommandSection::Canvas => Self::Canvas,
             core::CommandSection::Bases => Self::Bases,
             core::CommandSection::Graph => Self::Graph,
+            core::CommandSection::Sidebar => Self::Sidebar,
         }
     }
 }
@@ -5053,6 +5062,7 @@ impl From<CommandSection> for core::CommandSection {
             CommandSection::Canvas => Self::Canvas,
             CommandSection::Bases => Self::Bases,
             CommandSection::Graph => Self::Graph,
+            CommandSection::Sidebar => Self::Sidebar,
         }
     }
 }
@@ -8159,6 +8169,7 @@ mod tests {
             CommandSection::Canvas,
             CommandSection::Bases,
             CommandSection::Graph,
+            CommandSection::Sidebar,
         ] {
             let core: core::CommandSection = sec.into();
             let back: CommandSection = core.into();
@@ -8208,14 +8219,31 @@ mod tests {
         assert_eq!(core::CommandSection::Canvas as u8, 8);
         assert_eq!(core::CommandSection::Bases as u8, 10);
         assert_eq!(core::CommandSection::Graph as u8, 11);
+        assert_eq!(core::CommandSection::Sidebar as u8, 12);
         // 9 is the Excalidraw reservation: no variant claims it.
         for sec in [
             core::CommandSection::Canvas,
             core::CommandSection::Bases,
             core::CommandSection::Graph,
+            core::CommandSection::Sidebar,
         ] {
             assert_ne!(sec as u8, 9, "discriminant 9 is reserved for Excalidraw");
         }
+    }
+
+    #[test]
+    fn wikilink_for_path_round_trips_through_ffi() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join("Notes")).unwrap();
+        std::fs::write(tmp.path().join("Notes/Target.md"), b"# Target").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        assert_eq!(
+            session.wikilink_for_path("Notes/Target.md".into()).unwrap(),
+            Some("[[Target]]".into())
+        );
     }
 
     #[test]
