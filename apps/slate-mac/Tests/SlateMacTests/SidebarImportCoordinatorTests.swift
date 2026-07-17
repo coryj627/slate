@@ -849,6 +849,56 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     }
   }
 
+  func testWalkerOversizedDescendantIsTypedFailureAndKeepsSafeSiblings() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    let firstBytes = Data([0x41, 0x42])
+    let lastBytes = Data([0x5A])
+    try firstBytes.write(to: root.appendingPathComponent("a-safe.bin"))
+    try Data([0x00, 0x01, 0x02, 0x03]).write(
+      to: root.appendingPathComponent("m-oversized.bin"))
+    try lastBytes.write(to: root.appendingPathComponent("z-safe.bin"))
+    let scope = ScopeProbe()
+
+    let prepared: SidebarImportPreparedSource
+    do {
+      prepared = try SidebarImportSourceWalker(
+        limits: SidebarImportSourceLimits(
+          refuseBytes: 3, totalBytes: 100, maximumEntries: 100, maximumDepth: 8),
+        scopeAccess: scope.access()
+      ).prepare(rootURL: root, vaultURL: vault)
+    } catch {
+      XCTFail("an oversized descendant must not abort safe siblings: \(error)")
+      return
+    }
+
+    XCTAssertEqual(
+      prepared.manifest.entries.map { ($0.relativePath.display, $0.kind) },
+      [
+        ("", .directory),
+        ("a-safe.bin", .regularFile),
+        ("z-safe.bin", .regularFile),
+      ])
+    XCTAssertEqual(prepared.manifest.failures.count, 1)
+    XCTAssertEqual(
+      prepared.manifest.failures.first?.relativePath.display,
+      "m-oversized.bin")
+    XCTAssertEqual(
+      prepared.manifest.failures.first?.reason,
+      .fileTooLarge(limitBytes: 3))
+    let first = try XCTUnwrap(
+      prepared.manifest.entries.first { $0.relativePath.display == "a-safe.bin" })
+    let last = try XCTUnwrap(
+      prepared.manifest.entries.first { $0.relativePath.display == "z-safe.bin" })
+    XCTAssertEqual(try prepared.readBytes(for: first), firstBytes)
+    XCTAssertEqual(try prepared.readBytes(for: last), lastBytes)
+
+    prepared.close()
+    XCTAssertEqual(scope.counts().starts, 1)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
   func testWalkerPerFileAndAdvisoryTotalExactBoundaries() throws {
     let vault = try makeVault()
     let root = tempDirectory.appendingPathComponent("source", isDirectory: true)

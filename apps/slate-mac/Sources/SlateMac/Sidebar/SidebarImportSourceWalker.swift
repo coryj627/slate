@@ -239,6 +239,7 @@ enum SidebarImportSourceFailureReason: Equatable {
   case invalidPath
   case invalidFileName
   case tooDeep
+  case fileTooLarge(limitBytes: Int64)
 }
 
 struct SidebarImportSourceFailure: Equatable {
@@ -1016,11 +1017,17 @@ struct SidebarImportSourceWalker {
           state.reject(components: childComponents, reason: .entryKindChanged)
           continue
         }
-        try state.append(
-          components: childComponents,
-          kind: .regularFile,
-          depth: childDepth,
-          fileBytes: openedMetadata.st_size)
+        do {
+          try state.append(
+            components: childComponents,
+            kind: .regularFile,
+            depth: childDepth,
+            fileBytes: openedMetadata.st_size)
+        } catch SidebarImportSourceWalkerError.fileTooLarge(_, let limitBytes) {
+          state.reject(
+            components: childComponents,
+            reason: .fileTooLarge(limitBytes: limitBytes))
+        }
       default:
         state.reject(components: childComponents, reason: .unsupported)
       }
