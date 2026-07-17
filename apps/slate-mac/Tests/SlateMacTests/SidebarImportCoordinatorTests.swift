@@ -966,7 +966,8 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       },
       1)
     XCTAssertEqual(metrics.snapshot().activeReads, 0)
-    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 1)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
 
     XCTAssertThrowsError(try prepared.readBytes(for: entry)) { error in
       guard case SidebarImportSourceWalkerError.cancelled = error else {
@@ -975,8 +976,69 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       }
     }
     XCTAssertEqual(metrics.snapshot().activeReads, 0)
-    prepared.close()
     XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testPreparedReadCancellationAfterPreadEOFClosesAuthorityWithoutCallerClose() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("empty.bin")
+    try Data().write(to: root)
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let cancellation = SidebarImportSourceCancellationToken()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(sessionRefuseBytes: 1_024),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(didReachBoundary: { boundary in
+        if case .afterRead(_, _, true) = boundary {
+          cancellation.cancel()
+        }
+      }),
+      cancellation: cancellation,
+      metrics: metrics
+    ).prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+
+    XCTAssertThrowsError(try prepared.readBytes(for: entry)) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected cancellation after the EOF syscall, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testWalkerCancellationAfterReaddirEOFReleasesAuthority() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("empty-source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let cancellation = SidebarImportSourceCancellationToken()
+
+    XCTAssertThrowsError(
+      try SidebarImportSourceWalker(
+        limits: SidebarImportSourceLimits(sessionRefuseBytes: 1_024),
+        scopeAccess: scope.access(),
+        hooks: SidebarImportSourceWalkerHooks(didReachBoundary: { boundary in
+          if case .afterDirectoryRead(_, true) = boundary {
+            cancellation.cancel()
+          }
+        }),
+        cancellation: cancellation,
+        metrics: metrics
+      ).prepare(rootURL: root, vaultURL: vault)
+    ) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected cancellation after the EOF syscall, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().starts, 1)
     XCTAssertEqual(scope.counts().stops, 1)
   }
 

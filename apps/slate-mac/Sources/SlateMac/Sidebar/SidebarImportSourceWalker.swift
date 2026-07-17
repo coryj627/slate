@@ -48,10 +48,12 @@ enum SidebarImportSourceBoundary: Equatable, Sendable {
   case beforeRootAdmission
   case beforeRootOpen
   case beforeDirectoryRead(String)
+  case afterDirectoryRead(String, reachedEnd: Bool)
   case beforeInspect(String)
   case beforeOpen(String)
   case beforeRecursion(String)
   case beforeRead(String, offset: Int64)
+  case afterRead(String, offset: Int64, reachedEnd: Bool)
   case afterInterruptedRead(String)
 }
 
@@ -477,6 +479,9 @@ final class SidebarImportPreparedSource {
       let count = buffer.withUnsafeMutableBytes { bytes in
         Darwin.pread(fileFD, bytes.baseAddress, requestCount, offset)
       }
+      let readError = errno
+      try reachBoundary(
+        .afterRead(path, offset: Int64(offset), reachedEnd: count == 0))
       if count > 0 {
         let (newCount, overflow) = Int64(output.count).addingReportingOverflow(Int64(count))
         guard !overflow, newCount <= limits.refuseBytes else {
@@ -490,12 +495,12 @@ final class SidebarImportPreparedSource {
         offset += off_t(count)
       } else if count == 0 {
         return output
-      } else if errno == EINTR {
+      } else if readError == EINTR {
         try reachBoundary(.afterInterruptedRead(path))
       } else {
         throw SidebarImportSourceWalkerError.readFailed(
           path: path,
-          reason: Self.posixReason())
+          reason: Self.posixReason(readError))
       }
     }
   }
@@ -579,6 +584,7 @@ final class SidebarImportPreparedSource {
 
   private func throwIfCancelled() throws {
     if cancellation.isCancelled || Task.isCancelled {
+      close()
       throw SidebarImportSourceWalkerError.cancelled
     }
   }
@@ -827,8 +833,16 @@ struct SidebarImportSourceWalker {
         hooks: hooks,
         cancellation: cancellation)
       errno = 0
-      guard let entry = readdir(directory) else {
-        if errno != 0 {
+      let entry = readdir(directory)
+      let readError = errno
+      try reachBoundary(
+        .afterDirectoryRead(
+          components.joined(separator: "/"),
+          reachedEnd: entry == nil),
+        hooks: hooks,
+        cancellation: cancellation)
+      guard let entry else {
+        if readError != 0 {
           return .unreadable
         }
         break
