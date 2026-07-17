@@ -81,9 +81,9 @@ locked user-facing scope:
    `CommandSection` enum and register every FL command through the current
    registry. One action catalog owns verbs and AppState funnels, but projection
    is surface-specific: concise context menus and VoiceOver rotor actions omit
-   structurally inapplicable verbs; menu bar and palette keep the stable full
-   inventory disabled with an accessible reason when unavailable; temporarily
-   blocked but otherwise relevant context actions may be disabled with a reason.
+   every unavailable verb, including temporary loading, busy, and failed states;
+   menu bar and palette keep the stable full inventory disabled with one
+   deterministic accessible reason when unavailable.
 3. **FL2 is residual work.** Keep the shipped `<stem> copy` Duplicate naming,
    spring-loading, pointer multi-selection, move/rename undo, and non-undoable
    system-Trash behavior. Do not implement parallel versions or imply that Trash
@@ -163,10 +163,10 @@ locked user-facing scope:
   multi-item drag, visible drop feedback, and spring-loading. These links define
   conventions; do not infer or invent measurements.
 - Context menus and VoiceOver rotors stay concise and selection-relevant by
-  omitting structurally inapplicable catalog verbs. The menu bar and command
-  palette remain the stable complete command inventory with accessible disabled
-  reasons. Temporarily blocked, otherwise relevant contextual verbs may stay
-  visible and disabled with their reason.
+  omitting every unavailable catalog verb, including temporary loading, busy,
+  and failed states. The menu bar and command palette remain the stable complete
+  command inventory, disabling unavailable verbs with one deterministic
+  accessible reason.
 - Human-facing UAT covers keyboard-only use, VoiceOver, Full Keyboard Access,
   light/dark, Increase Contrast, Reduce Motion, narrow/wide sidebars, empty/error/
   loading states, 10k-note vaults, and external filesystem changes.
@@ -182,15 +182,16 @@ an issue cannot close while residual acceptance criteria remain.
 | FL-01 | Metadata pipeline, FFI, censuses | #650 #651 #652 | — | FL-00 |
 | FL-02 | Rich rows, settings, preference stores | #653 #654 | — | FL-01 |
 | FL-03 | Selection and one-logical-batch contract | #655 | batch part of #656 | FL-00 |
-| FL-04 | Action/menu/template completeness | #656 | template part of #657 | FL-03 |
-| FL-05 | Multi-item Finder import pipeline | #657 | — | FL-04 |
+| FL-04-A | Action catalog, menus, wikilinks, and warnings (Tasks 1–3) | — | #656 | FL-03 |
+| FL-04-B | Template lifecycle and integration (Task 4) | #656 | template part of #657 | FL-04-A |
+| FL-05 | Multi-item Finder import pipeline | #657 | — | FL-04-B |
 | FL-06 | Sort, grouping, and pins | #658 #659 | — | FL-02 |
 | FL-07 | Shortcuts, recents, and navigation | #660 #661 | — | FL-06 |
 | FL-08 | Filter/listing engine | #662 | — | FL-01 |
 | FL-09 | Filter UI and shared result list | #663 | — | FL-02 FL-08 |
 | FL-10 | Tag tree and batch tag core | #664 | core part of #666 | FL-08 |
 | FL-11 | Tags navigation and batch tag UI | #665 #666 | — | FL-03 FL-07 FL-09 FL-10 |
-| FL-12 | Folder notes | #667 | — | FL-01 FL-04 |
+| FL-12 | Folder notes | #667 | — | FL-01 FL-04-B |
 | FL-13 | Dual-pane container behind internal gate | #668 | — | FL-07 FL-09 FL-11 |
 | FL-14 | Dual-pane list, overrides, public setting | #669 | — | FL-06 FL-13 |
 | FL-15 | Close-out docs, UAT, performance evidence | #670 | — | all prior PRs |
@@ -198,7 +199,8 @@ an issue cannot close while residual acceptance criteria remain.
 Publication is a serial merge train rebased on the latest `origin/main`. Work on
 disjoint backend branches may be prepared concurrently, but no dependent PR is
 published as a stacked PR; each starts from the merged predecessor so CI and
-Codoki review the actual merge result.
+Codoki review the actual merge result. FL-04-B starts from refreshed `main`
+after FL-04-A merges. Finder import/drop remains FL-05, which alone closes #657.
 
 ## Standard Gate for Every PR
 
@@ -407,50 +409,74 @@ claim; vault switch, one refresh/announcement, and #643 click regression.
 
 **Commit:** `feat(sidebar): complete selection and batch operations`
 
-## FL-04 — Action Catalog, Menus, Wikilinks, Warnings, and Templates
+## FL-04-A — Action Catalog, Menus, Wikilinks, and Warnings
 
-**Issues:** Close #656; reference #657.
+**Issues:** `Refs #656`; no issue closes in this prerequisite PR.
 
 **Files:**
 
 - Create `apps/slate-mac/Sources/SlateMac/Sidebar/SidebarActionCatalog.swift`
 - Modify `SlateCommands.swift`, `CommandPaletteModel.swift`, `SlateMacApp.swift`,
-  `FileTreeSidebar.swift`, `AppState.swift`, and template picker flow files
+  `FileTreeSidebar.swift`, and `AppState.swift`
 - Modify `crates/slate-core/src/commands.rs` and `slate-uniffi/src/lib.rs`
-- Extend command registry, file management, sidebar, and template tests
+- Extend command registry, file management, and sidebar tests
 
 **Work:**
 
 - [ ] Append `.sidebar` cross-language command section and update exhaustive
       conversion/order tests.
 - [ ] Define one action catalog with capability, enablement, and reason rules.
-      Menu bar/palette keep the stable full inventory disabled with accessible
-      reasons; concise context menus/rotor omit structurally inapplicable verbs;
-      temporarily blocked relevant context actions may remain disabled. Toolbar
-      and keyboard invoke the same applicable catalog entries. Move-to-Trash is
-      marked non-undoable; labels, help, confirmation, and announcements never
-      promise ⌘Z or app rollback.
+      Menu bar/palette keep the stable full inventory disabled with one
+      deterministic accessible reason; concise context menus/rotor omit every
+      unavailable verb, including temporary loading, busy, and failed states.
+      Toolbar and keyboard invoke the same applicable catalog entries.
+      Move-to-Trash is marked non-undoable; labels, help, confirmation, and
+      announcements never promise ⌘Z or app rollback.
 - [ ] Preserve shipped Duplicate/Reveal behavior; make Copy Path vault-relative;
       add resolver-correct Copy Wikilink and one `Copied.` announcement.
 - [ ] Add live, polite filename warnings for filesystem-invalid and link-breaking
       characters to rename/new-note/new-folder flows without replacing backend
       commit validation.
-- [ ] Reuse the existing template picker/render/name/caret pipeline, injecting
-      only the selected destination folder. Empty Templates disables the action
-      with an accessible reason.
+- [ ] Preserve the shipped root-only Template intent for menu bar, palette,
+      toolbar, and keyboard by freezing an empty/root snapshot; omit Template
+      from context menus and VoiceOver in FL-04-A. Defer template availability,
+      frozen folder destination, picker/render/name/caret ownership, and
+      cancellation to FL-04-B.
 
 **Targeted verification:** command/action parity and unique IDs; surface projection
-matrix (context/rotor structural omission, menu bar/palette stable disabled
-inventory, temporarily blocked contextual reasons); ambiguous/unambiguous
-wikilinks; warning character table; shipped Duplicate suffix; template
-destination/title/prompts/caret; empty Templates on contextual and full-inventory
-surfaces.
+matrix (context/rotor omission for structural and temporary unavailability,
+menu bar/palette stable disabled inventory with identical deterministic reasons);
+root-only Template intent on menu/palette/toolbar/keyboard with context/VoiceOver
+omission; ambiguous/unambiguous wikilinks; warning character table; shipped
+Duplicate suffix.
 
-**Commit:** `feat(sidebar): complete actions and template creation`
+**Commit:** Tasks 1–3 land as separate reviewed commits on FL-04-A; Task 2 uses
+`feat(sidebar): add shared action catalog`.
+
+## FL-04-B — Template Lifecycle and Integration
+
+**Issues:** `Closes #656`; `Refs #657`.
+
+Start from refreshed `main` after FL-04-A merges. Reuse the existing template
+picker/render/name/caret pipeline, injecting only the selected destination
+folder. Empty, loading, busy, and failed Templates states omit the unavailable
+action from context menus and VoiceOver while menu bar and palette retain it
+disabled with the same deterministic accessible reason. The toolbar retains the
+same disabled evaluation, and the keyboard path announces that reason once
+without opening the picker or mutating state.
+
+**Targeted verification:** template destination/title/prompts/caret, async
+ownership and stale-session rejection; available toolbar/keyboard invocation
+with the exact frozen folder destination; and context, VoiceOver, menu bar,
+palette, toolbar, and keyboard projections across available, empty, loading,
+busy, and failed states. Unavailable toolbar/keyboard paths produce no picker or
+mutation side effect, and keyboard announces the shared reason exactly once.
+
+**Commit:** `feat(sidebar): integrate template lifecycle`
 
 ## FL-05 — Bounded Multi-Item Finder Import
 
-**Issues:** Close #657 after FL-04 has delivered and referenced its template work.
+**Issues:** Close #657 after FL-04-B has delivered and referenced its template work.
 
 **Files:**
 
@@ -799,8 +825,9 @@ Milestone FL is complete only when:
   and explicit Codoki safe-to-merge review before merge.
 - No feature exists only in a context menu. Verb identity and action funnels are
   shared, while tests verify the required surface projections: context menu/rotor
-  structural omission and concise ordering, menu bar/palette stable disabled
-  inventory, and keyboard/toolbar access where applicable.
+  omission for structural and temporary unavailability with concise ordering,
+  menu bar/palette stable disabled inventory with identical deterministic reasons,
+  and keyboard/toolbar access where applicable.
 - Metadata scan/save remains O(changed-file), filter <= 50 ms at 10k, tag tree
   <= 25 ms at 10k, root metadata listing <= 10 ms, and scan regression <= 5%.
 - `.slate/sidebar.json` survives corruption/concurrent writers/unknown keys; all

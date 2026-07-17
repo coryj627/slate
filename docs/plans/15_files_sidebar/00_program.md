@@ -26,7 +26,7 @@ Everything here inherits the UI-parity Presentation-Ready DoD (`../08_ui_parity/
 | 12 | Dual-pane | Default remains `tree`. FL7-1 lands the container behind an **internal gate only**; no public Settings or palette toggle appears until FL7-2 supplies the complete list pane and equivalence tests pass. When public, folder, tag, and Untagged shortcut targets are navigation **containers** that drive the list pane. File shortcuts and every Recents row are **leaves**: activation opens through the normal file-open seam, then mirrors the containing folder and file selection into the two panes; leaves never become list containers. Both panes are complete AX trees; no datum or action is dual-pane-only. |
 | 13 | External drops | Finder drag-in = **copy into vault** at the drop folder (never move; never link out). Name collisions get the rename-with-suffix flow. Drops of non-indexable types follow existing attachment rules. |
 | 14 | Templates | Sidebar "New Note from Template…" reuses the existing template picker + `render-template` core path (M-6, PR #645) — no second template engine, no sidebar-private template list. |
-| 15 | Commands & shortcuts | `CommandRegistry`, `SlateCommandID`, and the cross-language `CommandSection` already serve the menu bar, command palette, and utility surfaces. FL appends `.sidebar` to `CommandSection` and registers every FL command through that existing system. One action catalog owns the verbs and AppState funnels, while each surface projects them appropriately: context menus and the VoiceOver rotor omit structurally inapplicable verbs and stay concise; the menu bar and command palette retain the stable full command inventory, disabling unavailable verbs with an accessible reason; a context action that is relevant but temporarily blocked may remain visible and disabled with its reason. Shortcut chords: open-shortcut `⌃1`–`⌃9` scoped to sidebar focus, collapse-all/expand-loaded, and selection back/forward; no chord is the only path. |
+| 15 | Commands & shortcuts | `CommandRegistry`, `SlateCommandID`, and the cross-language `CommandSection` already serve the menu bar, command palette, and utility surfaces. FL appends `.sidebar` to `CommandSection` and registers every FL command through that existing system. One action catalog owns the verbs and AppState funnels, while each surface projects them appropriately: context menus and the VoiceOver rotor stay concise by omitting every unavailable verb, including actions temporarily unavailable because they are loading, busy, or failed; the menu bar and command palette retain the stable full command inventory, disabling each unavailable verb with one deterministic accessible reason. Shortcut chords: open-shortcut `⌃1`–`⌃9` scoped to sidebar focus, collapse-all/expand-loaded, and selection back/forward; no chord is the only path. |
 | 16 | i18n/RTL | Out of FL scope; the l10n program (`../14_l10n.md`) owns string externalization. FL specs must not hardcode user-facing strings in ways that block it (use the existing localization seams where they exist). |
 
 ---
@@ -42,11 +42,11 @@ ownership.
 |------|---------|------|
 | 0 — Contracts | FL-00 | current `origin/main` evidence reconciled |
 | 1 — Metadata and rows | FL-00 → FL-01 → FL-02 | migration 031; shared row/prefs seams |
-| 2 — Operations | FL-00 → FL-03 → FL-04 → FL-05 | residual selection; one logical batch and template destination before import closes #657 |
+| 2 — Operations | FL-00 → FL-03 → FL-04-A → FL-04-B → FL-05 | residual selection; shared action foundation before template destination, then import closes #657 |
 | 3 — Organization | FL-02 → FL-06 → FL-07 | shared rows/prefs before organization and navigation |
 | 4 — Filter | FL-01 → FL-08; FL-02 + FL-08 → FL-09 | scoped listing engine before top-pinned UI |
 | 5 — Tags | FL-08 → FL-10; FL-03 + FL-07 + FL-09 + FL-10 → FL-11 | shared list, navigation, batch, and tag-core seams |
-| 6 — Folder notes | FL-01 + FL-04 → FL-12 | metadata and action funnels |
+| 6 — Folder notes | FL-01 + FL-04-B → FL-12 | metadata and completed action/template funnels |
 | 7 — Dual pane | FL-07 + FL-09 + FL-11 → FL-13; FL-06 + FL-13 → FL-14 | internal container before complete public list mode |
 | 8 — Close-out | all prior PRs → FL-15 | whole-milestone audit and docs |
 
