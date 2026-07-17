@@ -115,6 +115,91 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     }
   }
 
+  private final class BlockingGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let entered = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+    private var shouldBlock = true
+
+    func block() {
+      lock.lock()
+      guard shouldBlock else {
+        lock.unlock()
+        return
+      }
+      shouldBlock = false
+      lock.unlock()
+      entered.signal()
+      release.wait()
+    }
+
+    func waitUntilBlocked(timeout: TimeInterval = 1) -> Bool {
+      entered.wait(timeout: .now() + timeout) == .success
+    }
+
+    func unblock() {
+      release.signal()
+    }
+  }
+
+  private final class ResultBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Result<Value, Error>?
+
+    func store(_ value: Result<Value, Error>) {
+      lock.lock()
+      self.value = value
+      lock.unlock()
+    }
+
+    func load() -> Result<Value, Error>? {
+      lock.lock()
+      defer { lock.unlock() }
+      return value
+    }
+  }
+
+  private final class PostInspectionSwapProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let directoryURL: URL
+    private let fifoURL: URL
+    private var errors: [String] = []
+
+    init(directoryURL: URL, fifoURL: URL) {
+      self.directoryURL = directoryURL
+      self.fifoURL = fifoURL
+    }
+
+    func swap(relativePath: String) {
+      do {
+        switch relativePath {
+        case "directory-swap":
+          try FileManager.default.removeItem(at: directoryURL)
+          try FileManager.default.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: false)
+        case "fifo-swap":
+          try FileManager.default.removeItem(at: fifoURL)
+          guard Darwin.mkfifo(fifoURL.path, 0o600) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+          }
+        default:
+          return
+        }
+      } catch {
+        lock.lock()
+        errors.append(error.localizedDescription)
+        lock.unlock()
+      }
+    }
+
+    func recordedErrors() -> [String] {
+      lock.lock()
+      defer { lock.unlock() }
+      return errors
+    }
+  }
+
   private func makeWalker(scope: ScopeProbe) -> SidebarImportSourceWalker {
     SidebarImportSourceWalker(
       limits: SidebarImportSourceLimits(
@@ -544,5 +629,92 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       try makeWalker(scope: rejectedScope).prepare(rootURL: missing, vaultURL: vault))
     XCTAssertEqual(rejectedScope.counts().starts, 1)
     XCTAssertEqual(rejectedScope.counts().stops, 0)
+  }
+
+  func testPreparedCloseDefersAuthorityUntilLeasedDescendantReadFinishes() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    let bytes = Data([0x00, 0xFF, 0x41, 0x42])
+    try bytes.write(to: root.appendingPathComponent("safe.bin"))
+    let scope = ScopeProbe()
+    let gate = BlockingGate()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didAcquireReadLease: { gate.block() }))
+    let prepared = try walker.prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(
+      prepared.manifest.entries.first { $0.relativePath.display == "safe.bin" })
+    let result = ResultBox<Data>()
+    let readFinished = expectation(description: "leased read finished")
+
+    DispatchQueue.global().async {
+      result.store(Result { try prepared.readBytes(for: entry) })
+      readFinished.fulfill()
+    }
+    XCTAssertTrue(gate.waitUntilBlocked(), "read must own a lease before close")
+
+    prepared.close()
+    XCTAssertEqual(scope.counts().stops, 0, "active read retains scope authority")
+    XCTAssertThrowsError(try prepared.readBytes(for: entry)) { error in
+      guard case SidebarImportSourceWalkerError.preparedSourceClosed = error else {
+        XCTFail("expected preparedSourceClosed, got \(error)")
+        return
+      }
+    }
+
+    gate.unblock()
+    wait(for: [readFinished], timeout: 1)
+    XCTAssertEqual(try XCTUnwrap(result.load()).get(), bytes)
+    XCTAssertEqual(scope.counts().stops, 1)
+    prepared.close()
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testWalkerClassifiesPostInspectionKindSwapsFromOpenedMetadata() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    let directorySwap = root.appendingPathComponent("directory-swap")
+    let fifoSwap = root.appendingPathComponent("fifo-swap")
+    try Data("regular".utf8).write(to: directorySwap)
+    try Data("regular".utf8).write(to: fifoSwap)
+    let probe = PostInspectionSwapProbe(
+      directoryURL: directorySwap,
+      fifoURL: fifoSwap)
+    let scope = ScopeProbe()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didInspectDescendant: { probe.swap(relativePath: $0) }))
+
+    let prepared = try walker.prepare(rootURL: root, vaultURL: vault)
+
+    XCTAssertEqual(probe.recordedErrors(), [])
+    XCTAssertEqual(
+      prepared.manifest.entries.map { ($0.relativePath.display, $0.kind) },
+      [("", .directory)])
+    XCTAssertEqual(
+      prepared.manifest.failures.map { $0.relativePath.display },
+      ["directory-swap", "fifo-swap"])
+    XCTAssertEqual(
+      prepared.manifest.failures.map { $0.reason },
+      [
+        .entryKindChanged,
+        .fifo,
+      ])
+    prepared.close()
+    XCTAssertEqual(scope.counts().stops, 1)
   }
 }
