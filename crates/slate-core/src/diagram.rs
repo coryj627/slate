@@ -362,6 +362,30 @@ fn reset_renderer_poisoned() {
 mod tests {
     use super::*;
 
+    /// Tests that force the process-global poison flag must not overlap with
+    /// successful render tests. Production only moves the flag from false to
+    /// true; the test-only reset seam is what makes parallel test execution a
+    /// potential race.
+    static RENDERER_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct RendererTestGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for RendererTestGuard {
+        fn drop(&mut self) {
+            reset_renderer_poisoned();
+        }
+    }
+
+    fn renderer_test_guard() -> RendererTestGuard {
+        let lock = RENDERER_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        reset_renderer_poisoned();
+        RendererTestGuard { _lock: lock }
+    }
+
     #[test]
     fn extracts_single_mermaid_block() {
         let src = "intro\n\n```mermaid\nflowchart LR\nA --> B\n```\n\nafter";
@@ -483,6 +507,7 @@ mod tests {
 
     #[test]
     fn render_valid_flowchart_yields_ok_status() {
+        let _guard = renderer_test_guard();
         let raw = RawDiagramBlock {
             source: "flowchart LR\nA --> B\n".to_string(),
             dialect: DiagramDialect::Mermaid,
@@ -504,6 +529,7 @@ mod tests {
     /// in the wild reports as UnsupportedDialect.
     #[test]
     fn render_skips_init_directive_when_classifying() {
+        let _guard = renderer_test_guard();
         let raw = RawDiagramBlock {
             source: "%%{ init: { 'theme': 'dark' } }%%\nflowchart LR\nA --> B\n".to_string(),
             dialect: DiagramDialect::Mermaid,
@@ -519,6 +545,7 @@ mod tests {
 
     #[test]
     fn render_skips_comment_lines_when_classifying() {
+        let _guard = renderer_test_guard();
         let raw = RawDiagramBlock {
             source: "%% top-level comment\n%% another\nclassDiagram\nclass Foo\n".to_string(),
             dialect: DiagramDialect::Mermaid,
@@ -539,10 +566,9 @@ mod tests {
     /// of producing opaque PoisonError failures.
     #[test]
     fn poisoned_renderer_short_circuits_with_clear_message() {
-        reset_renderer_poisoned();
+        let _guard = renderer_test_guard();
         RENDERER_POISONED.store(true, Ordering::Relaxed);
         let result = try_render_mermaid("flowchart LR\nA --> B\n");
-        reset_renderer_poisoned();
         match result {
             Err(RenderError::Failed(msg)) => {
                 assert!(
@@ -559,7 +585,7 @@ mod tests {
     /// description even when the renderer is poisoned.
     #[test]
     fn poisoned_renderer_still_produces_structured_description() {
-        reset_renderer_poisoned();
+        let _guard = renderer_test_guard();
         RENDERER_POISONED.store(true, Ordering::Relaxed);
         let raw = RawDiagramBlock {
             source: "flowchart LR\nA --> B\nB --> C\n".to_string(),
@@ -568,7 +594,6 @@ mod tests {
             byte_offset: 0,
         };
         let block = render_diagram(&raw);
-        reset_renderer_poisoned();
         assert!(
             !block.structured_description.is_empty(),
             "AT users must still get a description even when rendering is poisoned"
@@ -586,10 +611,9 @@ mod tests {
     /// than panicking), we detect it and set the poisoned flag.
     #[test]
     fn poison_error_in_library_response_sets_flag() {
-        reset_renderer_poisoned();
+        let _guard = renderer_test_guard();
         assert!(!RENDERER_POISONED.load(Ordering::Relaxed));
         let lower = "mutex poisonerror: poisoned".to_ascii_lowercase();
         assert!(lower.contains("poison"));
-        reset_renderer_poisoned();
     }
 }

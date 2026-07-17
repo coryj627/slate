@@ -16,9 +16,8 @@ import SwiftUI
 ///     available.").
 ///   - Each row's accessibility label is `"<name>. <description>."`
 ///     when the template has a description, otherwise just the name.
-///   - Empty state ("No templates found. Create one in
-///     <vault>/Templates/.") is its own static-text element so the
-///     screen reader hears it on row-list focus instead of silence.
+///   - A user-triggered refresh presents a labelled progress state
+///     immediately while retaining Escape/Cancel in the sheet footer.
 ///
 /// Keyboard:
 ///   - Esc dismisses (binding on the Cancel button, same window-
@@ -33,6 +32,7 @@ struct TemplatePicker: View {
 
     private enum FocusTarget: Hashable {
         case row(String)  // template path
+        case retry
         case cancel
     }
 
@@ -57,12 +57,11 @@ struct TemplatePicker: View {
         .onAppear {
             // Defer focus until the .focused bindings have wired up.
             DispatchQueue.main.async {
-                if let first = appState.availableTemplates.first {
-                    focus = .row(first.path)
-                } else {
-                    focus = .cancel
-                }
+                updateFocus(for: appState.templateAvailability)
             }
+        }
+        .onChange(of: appState.templateAvailability) { _, availability in
+            updateFocus(for: availability)
         }
     }
 
@@ -73,7 +72,10 @@ struct TemplatePicker: View {
             Text("Choose a template")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-            Text("Command-Shift-N. Escape to cancel.")
+            Text(
+                "Create in \(appState.templateCreationDestinationDescription). "
+                    + "Command-Shift-N. Escape to cancel."
+            )
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
@@ -84,11 +86,29 @@ struct TemplatePicker: View {
 
     @ViewBuilder
     private var content: some View {
-        if appState.availableTemplates.isEmpty {
+        if appState.templateAvailability == .loading {
+            loadingState
+        } else if appState.templateAvailability == .failed {
+            failedState
+        } else if appState.availableTemplates.isEmpty {
             emptyState
         } else {
             list
         }
+    }
+
+    private var loadingState: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            ProgressView()
+            Text("Loading templates…")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Loading templates.")
     }
 
     private var emptyState: some View {
@@ -99,17 +119,55 @@ struct TemplatePicker: View {
             Text(emptyStateDetail)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+            retryButton
             Spacer()
         }
         .padding(.horizontal, 16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("No templates found. \(emptyStateDetail)")
+        .accessibilityElement(children: .contain)
     }
 
     private var emptyStateDetail: String {
-        let vaultLabel = appState.currentVaultURL?.lastPathComponent ?? "this vault"
-        return "Create a .md file in \(vaultLabel)/Templates/ to add one."
+        "Create a .md file in this vault’s configured template folder to add one."
+    }
+
+    private var failedState: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Spacer()
+            Text("Couldn’t load templates")
+                .font(.callout.weight(.semibold))
+            Text("Check the configured template folder, then try again.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            retryButton
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+    }
+
+    private var retryButton: some View {
+        Button("Try Again") {
+            appState.retryTemplatePickerLoad()
+        }
+        .focused($focus, equals: .retry)
+        .accessibilityHint("Reloads templates for the same destination.")
+    }
+
+    private func updateFocus(for availability: TemplateAvailability) {
+        switch availability {
+        case .available:
+            if let first = appState.availableTemplates.first {
+                focus = .row(first.path)
+            } else {
+                focus = .cancel
+            }
+        case .empty, .failed:
+            focus = .retry
+        case .loading:
+            focus = .cancel
+        }
     }
 
     private var list: some View {

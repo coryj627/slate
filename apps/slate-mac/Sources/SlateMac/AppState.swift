@@ -248,6 +248,22 @@ enum PendingTemplateFlow: Equatable {
     case needsName(TemplateSummary, [String: String])
 }
 
+/// Side-effect-free state consumed by every Sidebar surface when projecting
+/// the shared Template action. Busy remains the shared structural-mutation
+/// state so it uses the same reason as every other structural action.
+enum TemplateAvailability: Equatable {
+    case loading
+    case available
+    case empty
+    case failed
+}
+
+struct TemplateCreationDestinationOwner: Equatable {
+    let sessionIdentity: ObjectIdentifier
+    let generation: UInt64
+    let path: String
+}
+
 enum NativeDocumentRetargetOwner: Sendable, Equatable {
     case registry(key: String)
     case basesDock
@@ -1429,6 +1445,9 @@ final class AppState: ObservableObject {
         @MainActor @Sendable (AppState) async -> Void
     typealias StructuralRenameRunner =
         @Sendable (VaultSession, String, Bool, String) async throws -> StructuralReport
+    typealias TemplateListRunner = @Sendable (VaultSession, CancelToken) -> Result<
+        [TemplateSummary], VaultError
+    >
 
     var batchMoveRunner: BatchMoveRunner = { session, request in
         try await Task.detached(priority: .userInitiated) {
@@ -1754,14 +1773,19 @@ final class AppState: ObservableObject {
             return .completed(actionID: intent.actionID)
 
         case SlateCommandID.newFromTemplate:
-            guard intent.snapshot.items.isEmpty,
-                intent.snapshot.focusedPath == nil,
-                intent.snapshot.creationParent.isEmpty
-            else {
-                throw sidebarActionFailure(rejected)
+            if isCommandPaletteOpen,
+                templateShortcutWindowOwnsActionLauncher(
+                    templateShortcutKeyWindowProvider())
+            {
+                // The Command Palette is an action-launcher sheet, not a
+                // blocking authoring dialog. Retire it before staging the
+                // template sheet so the two presentations never overlap.
+                isCommandPaletteOpen = false
             }
-            let admitted = sidebarActionDispatchOverrides.openTemplatePicker?("")
-                ?? (openTemplatePicker() != nil)
+            let parent = try canonicalSidebarCreationParent(
+                for: intent.snapshot, rejection: rejected)
+            let admitted = sidebarActionDispatchOverrides.openTemplatePicker?(parent)
+                ?? (openTemplatePicker(in: parent) != nil)
             guard admitted else { throw sidebarActionFailure(rejected) }
             return .completed(actionID: intent.actionID)
 
@@ -2121,6 +2145,17 @@ final class AppState: ObservableObject {
             uniqueKeysWithValues: SidebarActionCatalog.actions.compactMap { action in
             sidebarActionAvailabilityReasonProvider(action.id).map { (action.id, $0) }
             })
+        if reasons[SlateCommandID.newFromTemplate] == nil,
+            let reason = templateAvailabilityDisabledReason
+        {
+            reasons[SlateCommandID.newFromTemplate] = reason
+        }
+        if templateCreationDestinationOwner != nil {
+            reasons[SlateCommandID.newFromTemplate] = Self.templateFlowBusyReason
+        }
+        if let reason = templateShortcutModalDisabledReason {
+            reasons[SlateCommandID.newFromTemplate] = reason
+        }
         if isCopyingSidebarWikilink {
             reasons[SlateCommandID.sidebarCopyWikilink] =
                 Self.sidebarWikilinkCopyPendingReason
@@ -2151,6 +2186,91 @@ final class AppState: ObservableObject {
                 sidebarActionStructuralDisabledReasonOverride
                 ?? structuralMutationDisabledReason,
             actionDisabledReasons: actionDisabledReasons)
+    }
+
+    /// Real key-equivalent routing for catalog-owned Sidebar shortcuts. The
+    /// evaluation is captured once: enabled work dispatches that exact frozen
+    /// intent, while disabled work announces the shared reason exactly once
+    /// without presenting a sheet or starting a mutation.
+    @discardableResult
+    func invokeSidebarKeyboardAction(_ id: String) -> Bool {
+        clearTemplateShortcutDialogNotice()
+        guard let evaluation = sidebarActionProjection(surface: .keyboard)
+            .first(where: { $0.id == id })
+        else { return false }
+        guard let intent = evaluation.intent else {
+            if let reason = evaluation.disabledReason {
+                lastMutationAnnouncement = reason
+                announcer.post(reason, priority: .medium)
+            }
+            return true
+        }
+        do {
+            _ = try dispatchSidebarAction(intent)
+        } catch {
+            let message = error.sidebarActionAnnouncement
+            lastMutationAnnouncement = message
+            announcer.post(message, priority: .medium)
+        }
+        return true
+    }
+
+    /// Consume Shift-Command-N while a non-template dialog owns the app.
+    /// Starting another sheet would hide the template flow beneath the active
+    /// dialog, so give one visible and spoken explanation without dispatching.
+    @discardableResult
+    func rejectTemplateShortcutForActiveDialog() -> Bool {
+        rejectTemplateShortcut(reason: Self.templateDialogBusyReason)
+    }
+
+    /// Other Slate windows are not modal dialogs, so their recovery text must
+    /// direct the user back to the primary vault window rather than asking
+    /// them to cancel a dialog that does not exist.
+    @discardableResult
+    func rejectTemplateShortcutForOtherWindow() -> Bool {
+        rejectTemplateShortcut(reason: Self.templateOtherWindowReason)
+    }
+
+    private func rejectTemplateShortcut(reason: String) -> Bool {
+        templateShortcutDialogNotice = reason
+        announceTemplate(reason)
+        return true
+    }
+
+    func clearTemplateShortcutDialogNotice() {
+        templateShortcutDialogNotice = nil
+    }
+
+    /// The RootView monitor supplies the one window allowed to start a new
+    /// template flow. Keeping this admission rule in AppState means every
+    /// catalog surface, including a stale File-menu intent, revalidates it.
+    func setTemplateShortcutHostWindow(_ window: NSWindow?) {
+        guard templateShortcutHostWindow !== window else { return }
+        templateShortcutHostWindow = window
+        if window != nil {
+            templateShortcutHostWindowWasRegistered = true
+        }
+    }
+
+    /// The Command Palette registers its exact sheet window as the only
+    /// non-host window allowed to originate a template action.
+    func setTemplateShortcutActionLauncherWindow(_ window: NSWindow?) {
+        guard templateShortcutActionLauncherWindow !== window else { return }
+        templateShortcutActionLauncherWindow = window
+        templateShortcutWindowAdmissionDidChange()
+    }
+
+    func templateShortcutWindowOwnsActionLauncher(_ window: NSWindow?) -> Bool {
+        guard let window, let actionLauncher = templateShortcutActionLauncherWindow
+        else { return false }
+        return window === actionLauncher
+    }
+
+    /// Window focus is AppKit state rather than an `@Published` model value.
+    /// Bump a private observation token when AppKit changes the key window so
+    /// SwiftUI refreshes menu enablement before the next pointer invocation.
+    func templateShortcutWindowAdmissionDidChange() {
+        templateShortcutWindowAdmissionVersion &+= 1
     }
 
     nonisolated private static func validateSidebarSelectionItems(
@@ -4761,6 +4881,25 @@ final class AppState: ObservableObject {
     /// re-fetched on every reopen so changes the user made on disk
     /// since last invocation show up.
     @Published private(set) var availableTemplates: [TemplateSummary] = []
+    @Published private(set) var templateAvailability: TemplateAvailability = .empty
+    /// Persistent status for a template shortcut rejected because a different
+    /// dialog or Slate window owns focus. The monitor renders the same text in
+    /// reserved window chrome and posts it through the AX announcement channel.
+    @Published private(set) var templateShortcutDialogNotice: String?
+    @Published private var templateShortcutWindowAdmissionVersion: UInt64 = 0
+    private weak var templateShortcutHostWindow: NSWindow?
+    private var templateShortcutHostWindowWasRegistered = false
+    private weak var templateShortcutActionLauncherWindow: NSWindow?
+    /// Injectable only so shared menu/dispatcher admission can be tested
+    /// without changing the process-wide AppKit key window.
+    var templateShortcutKeyWindowProvider: () -> NSWindow? = {
+        NSApplication.shared.keyWindow
+    }
+    /// Injectable app-modal owner used to distinguish a blocking open panel
+    /// or alert from an ordinary secondary Slate window.
+    var templateShortcutModalWindowProvider: () -> NSWindow? = {
+        NSApplication.shared.modalWindow
+    }
     /// `true` while the `TemplatePicker` sheet should be presented.
     /// SwiftUI binding target; the picker sets this back to `false`
     /// from its close button + Esc keybinding.
@@ -4778,6 +4917,106 @@ final class AppState: ObservableObject {
     /// Exact destination text restored when an admitted render/write fails and
     /// the name sheet is re-presented. Nil for a fresh flow.
     @Published private(set) var templateRetryNoteName: String?
+    /// Canonical creation parent frozen by the shared Sidebar action intent.
+    /// Nil means no template flow owns a destination; the empty string is the
+    /// vault root. The name field remains relative to this destination.
+    @Published private(set) var templateCreationDestinationOwner:
+        TemplateCreationDestinationOwner?
+    private var templateFlowGeneration: UInt64 = 0
+
+    var templateCreationDestination: String? {
+        templateCreationDestinationOwner?.path
+    }
+
+    static let templateAvailabilityLoadingReason =
+        "Wait for Slate to finish loading templates."
+    static let templateAvailabilityEmptyReason =
+        "Add a Markdown file to this vault’s configured template folder to create from a template."
+    static let templateAvailabilityFailedReason =
+        "Slate couldn’t load templates. Check the configured template folder and try again."
+    static let templateDestinationUnavailableReason =
+        "The template destination is no longer available. Cancel and try again."
+    static let templateFlowBusyReason =
+        "Finish or cancel the current template note before starting another."
+    static let templateDialogBusyReason =
+        "Finish or cancel the current dialog before creating from a template."
+    static let templateOtherWindowReason =
+        "Return to the main Slate window before creating from a template."
+
+    private var templateAvailabilityDisabledReason: String? {
+        switch templateAvailability {
+        case .available:
+            return nil
+        case .loading:
+            return Self.templateAvailabilityLoadingReason
+        case .empty:
+            return Self.templateAvailabilityEmptyReason
+        case .failed:
+            return Self.templateAvailabilityFailedReason
+        }
+    }
+
+    /// A new template sheet may start only from Slate's primary host window.
+    /// An attached sheet is admitted solely when the existing template state
+    /// owns it; that flow is then disabled by `templateFlowBusyReason` instead.
+    private var templateShortcutModalDisabledReason: String? {
+        // AppState is also used headlessly by tests and non-UI helpers. Window
+        // admission begins only after RootView proves a real UI host exists.
+        guard templateShortcutHostWindowWasRegistered else { return nil }
+        guard let keyWindow = templateShortcutKeyWindowProvider() else {
+            return Self.templateOtherWindowReason
+        }
+        if templateShortcutModalWindowProvider() === keyWindow {
+            return Self.templateDialogBusyReason
+        }
+        guard let hostWindow = templateShortcutHostWindow else {
+            return Self.templateOtherWindowReason
+        }
+        if keyWindow === hostWindow { return nil }
+        if templateShortcutWindowOwnsActionLauncher(keyWindow) { return nil }
+        if keyWindow.sheetParent === hostWindow,
+            isTemplatePickerOpen || pendingTemplateFlow != .idle
+        {
+            return nil
+        }
+        if keyWindow.sheetParent === hostWindow {
+            return Self.templateDialogBusyReason
+        }
+        return Self.templateOtherWindowReason
+    }
+
+    var templateCreationDestinationDescription: String {
+        guard let destination = templateCreationDestination else {
+            return "the selected folder"
+        }
+        return destination.isEmpty ? "the vault root" : destination
+    }
+
+    private func ownsTemplateCreationDestination(
+        session: VaultSession,
+        generation: UInt64? = nil
+    ) -> Bool {
+        guard let owner = templateCreationDestinationOwner,
+            owner.sessionIdentity == ObjectIdentifier(session),
+            owner.generation == templateFlowGeneration
+        else { return false }
+        return generation == nil || generation == owner.generation
+    }
+
+    /// Narrow test seam for synthetic flow-state tests that bypass the real
+    /// picker. Production establishes ownership only through
+    /// `openTemplatePicker(in:)`.
+    func installTemplateDestinationForTesting(
+        _ path: String,
+        sessionIdentity: ObjectIdentifier? = nil
+    ) {
+        guard let session = currentSession else { return }
+        templateFlowGeneration &+= 1
+        templateCreationDestinationOwner = TemplateCreationDestinationOwner(
+            sessionIdentity: sessionIdentity ?? ObjectIdentifier(session),
+            generation: templateFlowGeneration,
+            path: path)
+    }
 
     /// One-shot channel for "park the editor cursor at byte offset N
     /// of the freshly-loaded note." Used by the create-from-template
@@ -4934,8 +5173,27 @@ final class AppState: ObservableObject {
     /// (`submitTemplateNoteName`). Exposed so tests can await
     /// deterministically on each step of the flow.
     private(set) var templatePickerTask: Task<Void, Never>?
+    private(set) var templateAvailabilityTask: Task<Void, Never>?
     private(set) var templateSelectionTask: Task<Void, Never>?
     private(set) var templateCreateTask: Task<Void, Never>?
+    private var templateAvailabilityGeneration: UInt64 = 0
+    private var templateAvailabilityRefreshGeneration: UInt64 = 0
+    private var templateAvailabilityRefreshPending = false
+    private(set) var templateAvailabilityRefreshTaskForTesting: Task<Void, Never>?
+    var templateListRunner: TemplateListRunner = { session, cancel in
+        do {
+            return .success(try session.listTemplates(cancel: cancel))
+        } catch let error as VaultError {
+            return .failure(error)
+        } catch {
+            return .failure(.Io(message: error.localizedDescription))
+        }
+    }
+    /// Deterministic cancellation seam before detached template enumeration.
+    /// Nil in production; tests suspend here to cancel a generation before it
+    /// dispatches any filesystem work.
+    var templateAvailabilityDispatchGateForTesting: ((UInt64) async -> Void)?
+    var templateAvailabilityLandingGateForTesting: ((UInt64) async -> Void)?
     /// Deterministic C4 race seam after template source I/O and before the
     /// selection task is allowed to present its next sheet.
     var templateSelectionLandingGateForTesting: ((TemplateSummary) async -> Void)?
@@ -6503,7 +6761,7 @@ final class AppState: ObservableObject {
             // per-vault `searchRecents` load below then reflects B.
             closeSearchOverlay()
             searchQuery = ""
-            deferredTemplateCursorLanding = nil
+            resetTemplateLifecycleForVaultTransition()
             invalidateNoteAuthoringOwnership()
             currentSession = session
             currentVaultURL = url
@@ -6638,6 +6896,7 @@ final class AppState: ObservableObject {
                 guard !Task.isCancelled else { return }
                 await self?.loadSyncDiagnostics()
             }
+            refreshTemplateAvailability()
             // Milestone L #281: read `.slate/prefs.json` so the
             // Settings panel + style picker reflect the persisted
             // configuration. If the file has a configured
@@ -7355,23 +7614,10 @@ final class AppState: ObservableObject {
         propertyEditError = nil
         currentPropertyEditConflict = nil
         resetVaultScopedPropertyRecovery()
-        // Template picker: cancel any in-flight picker / select /
-        // create task so they can't write back into the old
-        // session's state, then drop the flow + listed templates
-        // so a re-open against a new vault doesn't show the prior
-        // vault's templates or a half-completed flow.
-        isTemplatePickerOpen = false
-        templatePickerTask?.cancel()
-        templatePickerTask = nil
-        templateSelectionTask?.cancel()
-        templateSelectionTask = nil
-        templateCreateTask?.cancel()
-        templateCreateTask = nil
-        deferredTemplateCursorLanding = nil
-        pendingTemplateFlow = .idle
-        templateNoteNameError = nil
-        templateRetryNoteName = nil
-        availableTemplates = []
+        // Template listing, presentation, destination, creation, and deferred
+        // caret ownership are all vault-scoped and share one teardown path
+        // with direct A→B replacement.
+        resetTemplateLifecycleForVaultTransition()
         // Release native document handles before clearing `currentSession`;
         // the release helpers need the session that created those handles.
         releaseAllCanvasDocuments()
@@ -17395,49 +17641,205 @@ final class AppState: ObservableObject {
 
     // MARK: - Templates (Milestone H)
 
-    /// Re-fetch templates and open the picker sheet. Always
-    /// succeeds: an empty `Templates/` folder, a non-existent one,
-    /// or a `listTemplates` failure all surface as "no templates"
-    /// rather than an error path — the picker is meant to be benign
-    /// on a vault with no templates configured.
-    ///
-    /// Announces the result count through the polite live region
-    /// so VoiceOver users know whether the picker has content
-    /// before they start arrow-navigating. The empty-state
-    /// announcement explicitly tells the user where to put their
-    /// templates.
+    /// Re-fetch templates and open the picker only when the result is
+    /// available. Empty and failed results remain distinct disabled states;
+    /// neither presents an empty picker or collapses an I/O error to empty.
     @discardableResult
     func openTemplatePicker() -> Task<Void, Never>? {
-        guard admitStructuralMutationRequest() else { return nil }
-        let task: Task<Void, Never> = Task { [weak self] in
-            await self?.performOpenTemplatePicker()
-        }
-        templatePickerTask = task
-        return task
+        openTemplatePicker(in: "")
     }
 
-    private func performOpenTemplatePicker() async {
-        guard let session = currentSession else {
-            availableTemplates = []
-            isTemplatePickerOpen = true
-            announceTemplate(
-                "Template picker opened. No vault loaded; cannot list templates."
-            )
+    /// Open the existing picker while retaining the canonical parent captured
+    /// by the action evaluation. The destination is established only after the
+    /// structural admission succeeds, so a rejected invocation has no state
+    /// or presentation side effects.
+    @discardableResult
+    func openTemplatePicker(in destination: String) -> Task<Void, Never>? {
+        guard let session = currentSession,
+            admitStructuralMutationRequest()
+        else { return nil }
+        templateSelectionTask?.cancel()
+        templateSelectionTask = nil
+        templateFlowGeneration &+= 1
+        templateCreationDestinationOwner = TemplateCreationDestinationOwner(
+            sessionIdentity: ObjectIdentifier(session),
+            generation: templateFlowGeneration,
+            path: destination)
+        return startTemplateAvailabilityLoad(presentPicker: true)
+    }
+
+    /// Refresh the AppState-owned availability snapshot without presenting UI.
+    /// Projection reads only the published result and therefore performs no
+    /// filesystem or FFI I/O.
+    @discardableResult
+    func refreshTemplateAvailability() -> Task<Void, Never>? {
+        guard templateCreationDestinationOwner == nil,
+            pendingTemplateFlow == .idle,
+            !isTemplatePickerOpen
+        else { return templateAvailabilityTask }
+        return startTemplateAvailabilityLoad(presentPicker: false)
+    }
+
+    /// Narrow recovery helper retained for callers that only need to retry an
+    /// unavailable projection. Foreground and file-event recovery use the
+    /// debounced scheduler below so cached `.available` state is revalidated.
+    @discardableResult
+    func refreshUnavailableTemplateAvailability() -> Task<Void, Never>? {
+        guard templateAvailability == .empty || templateAvailability == .failed
+        else { return nil }
+        return refreshTemplateAvailability()
+    }
+
+    /// Retry a visible empty/failed picker without changing its frozen
+    /// destination. The same sheet returns to loading immediately, keeping
+    /// Cancel and Escape reachable throughout the new enumeration.
+    @discardableResult
+    func retryTemplatePickerLoad() -> Task<Void, Never>? {
+        guard let session = currentSession,
+            isTemplatePickerOpen,
+            ownsTemplateCreationDestination(session: session),
+            templateAvailability == .empty || templateAvailability == .failed
+        else { return nil }
+        return startTemplateAvailabilityLoad(presentPicker: true)
+    }
+
+    /// Debounced passive refresh used by vault events, scan completion, and
+    /// foreground activation. It intentionally refreshes cached `.available`
+    /// state too: templates can be created, deleted, or renamed while the
+    /// vault remains open. Projection remains a pure read of published state.
+    func scheduleTemplateAvailabilityRefresh() {
+        guard let session = currentSession else { return }
+        scheduleTemplateAvailabilityRefresh(for: session)
+    }
+
+    /// Structural file events do not expose the configured templates folder,
+    /// so conservatively refresh for Markdown create/delete/rename events.
+    /// The 75 ms coalescer turns mutation bursts into one enumeration.
+    func handleTemplateAvailabilityFileChange(
+        _ event: FileChangeEvent,
+        from session: VaultSession
+    ) {
+        guard currentSession === session else { return }
+        let paths: [String]
+        switch event.kind {
+        case .created, .deleted:
+            paths = [event.path]
+        case .renamed:
+            paths = [event.path, event.previousPath].compactMap { $0 }
+        case .modified:
             return
         }
-        let summaries: [TemplateSummary] = await Task.detached(
-            priority: .userInitiated
-        ) {
-            (try? session.listTemplates()) ?? []
-        }.value
-        // #328 red-team P1: vault may have been closed mid-list.
-        // Without the guard we'd re-present the picker against the
-        // welcome screen and announce "Template picker opened."
-        // even though closeVault just zeroed everything.
-        guard !Task.isCancelled, currentSession === session else { return }
-        availableTemplates = summaries
-        isTemplatePickerOpen = true
-        announceTemplate(templatePickerOpenAnnouncement(summaries.count))
+        guard paths.contains(where: { ($0 as NSString).pathExtension.lowercased() == "md" })
+        else { return }
+        scheduleTemplateAvailabilityRefresh(for: session)
+    }
+
+    private func scheduleTemplateAvailabilityRefresh(for session: VaultSession) {
+        guard currentSession === session else { return }
+        templateAvailabilityRefreshPending = true
+        guard templateAvailabilityRefreshTaskForTesting == nil else { return }
+        let generation = templateAvailabilityRefreshGeneration
+        templateAvailabilityRefreshTaskForTesting = Task { @MainActor [weak self, weak session] in
+            do {
+                try await Task.sleep(for: .milliseconds(75))
+            } catch {
+                return
+            }
+            guard let self, let session, !Task.isCancelled,
+                self.currentSession === session,
+                self.templateAvailabilityRefreshGeneration == generation
+            else { return }
+            self.templateAvailabilityRefreshTaskForTesting = nil
+            self.drainPendingTemplateAvailabilityRefreshIfIdle()
+        }
+    }
+
+    private func drainPendingTemplateAvailabilityRefreshIfIdle() {
+        guard templateAvailabilityRefreshPending,
+            templateCreationDestinationOwner == nil,
+            pendingTemplateFlow == .idle,
+            !isTemplatePickerOpen
+        else { return }
+        templateAvailabilityRefreshPending = false
+        _ = refreshTemplateAvailability()
+    }
+
+    private func startTemplateAvailabilityLoad(
+        presentPicker: Bool
+    ) -> Task<Void, Never>? {
+        guard let session = currentSession else {
+            templateAvailability = .empty
+            availableTemplates = []
+            return nil
+        }
+        templateAvailabilityTask?.cancel()
+        templateAvailabilityGeneration &+= 1
+        let generation = templateAvailabilityGeneration
+        let runner = templateListRunner
+        let dispatchGate = templateAvailabilityDispatchGateForTesting
+        let landingGate = templateAvailabilityLandingGateForTesting
+        let cancel = CancelToken()
+        templateAvailability = .loading
+        isTemplatePickerOpen = presentPicker
+
+        let task: Task<Void, Never> = Task { [weak self] in
+            await withTaskCancellationHandler {
+                if let dispatchGate {
+                    await dispatchGate(generation)
+                }
+                guard !Task.isCancelled, !cancel.isCancelled() else { return }
+                let result = await Task.detached(priority: .userInitiated) {
+                    guard !cancel.isCancelled() else {
+                        return Result<[TemplateSummary], VaultError>.failure(.Cancelled)
+                    }
+                    return runner(session, cancel)
+                }.value
+                if let landingGate {
+                    await landingGate(generation)
+                }
+                guard let self, !Task.isCancelled, !cancel.isCancelled(),
+                    self.currentSession === session,
+                    self.templateAvailabilityGeneration == generation
+                else { return }
+
+                self.templateAvailabilityTask = nil
+                if presentPicker {
+                    self.templatePickerTask = nil
+                }
+                switch result {
+                case .success(let summaries):
+                    self.availableTemplates = summaries
+                    if summaries.isEmpty {
+                        self.templateAvailability = .empty
+                        if presentPicker {
+                            self.announceTemplate(Self.templateAvailabilityEmptyReason)
+                        }
+                    } else {
+                        self.templateAvailability = .available
+                        if presentPicker {
+                            self.announceTemplate(
+                                self.templatePickerOpenAnnouncement(summaries.count))
+                        }
+                    }
+                case .failure(let error):
+                    guard case .Cancelled = error else {
+                        self.availableTemplates = []
+                        self.templateAvailability = .failed
+                        if presentPicker {
+                            self.announceTemplate(Self.templateAvailabilityFailedReason)
+                        }
+                        return
+                    }
+                }
+            } onCancel: {
+                cancel.cancel()
+            }
+        }
+        templateAvailabilityTask = task
+        if presentPicker {
+            templatePickerTask = task
+        }
+        return task
     }
 
     /// Compose the open-picker announcement. Pulled out so the
@@ -17446,9 +17848,8 @@ final class AppState: ObservableObject {
     private func templatePickerOpenAnnouncement(_ count: Int) -> String {
         switch count {
         case 0:
-            let vaultLabel = currentVaultURL?.lastPathComponent ?? "this vault"
             return "Template picker opened. No templates found. "
-                + "Create one in \(vaultLabel)/Templates/."
+                + "Add a Markdown file to the configured template folder."
         case 1:
             return "Template picker opened. 1 template available."
         default:
@@ -17463,7 +17864,14 @@ final class AppState: ObservableObject {
     /// cancels the flow rather than blocking on an error sheet.
     @discardableResult
     func selectTemplate(_ summary: TemplateSummary) -> Task<Void, Never>? {
+        guard let session = currentSession,
+            ownsTemplateCreationDestination(session: session)
+        else {
+            resetTemplateFlowPresentation()
+            return nil
+        }
         guard admitStructuralMutationRequest() else { return nil }
+        let flowGeneration = templateFlowGeneration
         // The picker remains visible while source metadata is read, so a user
         // can activate another row before the first read lands. Supersede the
         // prior owner synchronously: only the most recent row may present the
@@ -17471,13 +17879,17 @@ final class AppState: ObservableObject {
         templateSelectionTask?.cancel()
         templateRetryNoteName = nil
         let task: Task<Void, Never> = Task { [weak self] in
-            await self?.performSelectTemplate(summary)
+            await self?.performSelectTemplate(
+                summary, flowGeneration: flowGeneration)
         }
         templateSelectionTask = task
         return task
     }
 
-    private func performSelectTemplate(_ summary: TemplateSummary) async {
+    private func performSelectTemplate(
+        _ summary: TemplateSummary,
+        flowGeneration: UInt64
+    ) async {
         guard let session = currentSession else {
             resetTemplateFlowPresentation()
             return
@@ -17494,7 +17906,10 @@ final class AppState: ObservableObject {
         // resume here, run `cancelTemplateFlow()`/`pendingTemplateFlow
         // = .needsName(...)` against the dead session, and re-present
         // the template flow sheet on the welcome screen.
-        guard !Task.isCancelled, currentSession === session else { return }
+        guard !Task.isCancelled, currentSession === session,
+            ownsTemplateCreationDestination(
+                session: session, generation: flowGeneration)
+        else { return }
         guard let source = sourceResult else {
             // This is the selection task's own terminal failure. Reset the
             // presentation without asking it to cancel its own task handle.
@@ -17516,6 +17931,12 @@ final class AppState: ObservableObject {
     /// (e.g. a late callback from a sheet that already dismissed).
     func submitTemplatePrompts(_ values: [String: String]) {
         guard case .needsPrompts(let template, _) = pendingTemplateFlow else {
+            return
+        }
+        guard let session = currentSession,
+            ownsTemplateCreationDestination(session: session)
+        else {
+            resetTemplateFlowPresentation()
             return
         }
         guard admitStructuralMutationRequest() else { return }
@@ -17547,6 +17968,12 @@ final class AppState: ObservableObject {
         // replace the retained sheet's error state, so every busy submission
         // announces the same exact reason and leaves the presentation intact.
         guard admitStructuralMutationRequest() else { return nil }
+        guard ownsTemplateCreationDestination(session: session),
+            let destination = templateCreationDestination
+        else {
+            templateNoteNameError = Self.templateDestinationUnavailableReason
+            return nil
+        }
 
         let trimmed = relativePath.trimmingCharacters(in: .whitespacesAndNewlines)
         if let problem = validateTemplateNoteName(trimmed) {
@@ -17566,9 +17993,12 @@ final class AppState: ObservableObject {
         // for any-case `.md` / `.MD` / `.Md` (#133).
         let normalized = (trimmed as NSString).pathExtension.lowercased() == "md"
             ? trimmed : "\(trimmed).md"
+        let creationPath = destination.isEmpty
+            ? normalized
+            : "\(destination)/\(normalized)"
         guard let recoveryReservation =
-                admitStructuralRecoveryDestination(normalized),
-            admitBatchTrashWrite(to: [normalized])
+                admitStructuralRecoveryDestination(creationPath),
+            admitBatchTrashWrite(to: [creationPath])
         else { return nil }
         // `title` for the rendered template is the file stem of the
         // new note, not the template's own name. Matches how
@@ -17598,7 +18028,7 @@ final class AppState: ObservableObject {
                 session: session,
                 template: template,
                 context: context,
-                relativePath: normalized,
+                relativePath: creationPath,
                 token: token,
                 refresher: refresher,
                 retryFlow: retryFlow,
@@ -17666,6 +18096,13 @@ final class AppState: ObservableObject {
             pendingTemplateFlow = .idle
             templateNoteNameError = nil
             templateRetryNoteName = nil
+            // The authoritative write has succeeded and `relativePath` now
+            // carries the destination through selection/caret work. Release
+            // the presentation-only destination before any cursor-path early
+            // return so dirty navigation or a failed target load cannot retain
+            // stale ownership.
+            templateCreationDestinationOwner = nil
+            drainPendingTemplateAvailabilityRefreshIfIdle()
             // #421 (F-H1): .high, not .medium — the create
             // announcement is immediately followed by
             // selectedFilePath changing, whose "Showing <file>."
@@ -17783,12 +18220,50 @@ final class AppState: ObservableObject {
     /// every sheet's Cancel button and by the failure paths above.
     /// Idempotent — safe to call from any state.
     func cancelTemplateFlow() {
+        templateFlowGeneration &+= 1
+        if templatePickerTask != nil {
+            templateAvailabilityGeneration &+= 1
+            templatePickerTask?.cancel()
+            templatePickerTask = nil
+            templateAvailabilityTask?.cancel()
+            templateAvailabilityTask = nil
+            templateAvailability = availableTemplates.isEmpty ? .empty : .available
+        }
         // Cancel/Escape is authoritative over a row selection whose source
         // read has not landed yet. Nil the public handle too so callers cannot
         // mistake the cancelled selection for an active transition.
         templateSelectionTask?.cancel()
         templateSelectionTask = nil
         resetTemplateFlowPresentation()
+    }
+
+    /// Tear down every vault-owned piece of the template lifecycle. Bumping
+    /// the generation is the publication barrier for detached list work;
+    /// session identity remains the independent cross-vault barrier.
+    private func resetTemplateLifecycleForVaultTransition() {
+        templateAvailabilityGeneration &+= 1
+        templateAvailabilityRefreshGeneration &+= 1
+        templateFlowGeneration &+= 1
+        clearTemplateShortcutDialogNotice()
+        templateAvailabilityRefreshTaskForTesting?.cancel()
+        templateAvailabilityRefreshTaskForTesting = nil
+        templateAvailabilityRefreshPending = false
+        templateAvailabilityTask?.cancel()
+        templateAvailabilityTask = nil
+        templatePickerTask?.cancel()
+        templatePickerTask = nil
+        templateSelectionTask?.cancel()
+        templateSelectionTask = nil
+        templateCreateTask?.cancel()
+        templateCreateTask = nil
+        deferredTemplateCursorLanding = nil
+        pendingTemplateFlow = .idle
+        isTemplatePickerOpen = false
+        templateNoteNameError = nil
+        templateRetryNoteName = nil
+        templateCreationDestinationOwner = nil
+        availableTemplates = []
+        templateAvailability = .empty
     }
 
     /// Presentation-only reset for terminal paths already running inside the
@@ -17799,6 +18274,8 @@ final class AppState: ObservableObject {
         isTemplatePickerOpen = false
         templateNoteNameError = nil
         templateRetryNoteName = nil
+        templateCreationDestinationOwner = nil
+        drainPendingTemplateAvailabilityRefreshIfIdle()
     }
 
     /// Reject the new-note name early so the user sees a useful
@@ -17877,10 +18354,10 @@ final class AppState: ObservableObject {
     /// template events are user-driven and never rapid-fire.
     private func announceTemplate(
         _ message: String,
-        priority: NSAccessibilityPriorityLevel = .medium
+        priority: AnnouncementPriority = .medium
     ) {
         templateAnnouncementLastMessage = message
-        postAccessibilityAnnouncement(message, priority: priority)
+        announcer.post(message, priority: priority)
     }
 
     // MARK: - Private

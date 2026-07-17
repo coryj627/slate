@@ -86,7 +86,10 @@ private struct PromptStep: View {
             Text("Fill in template details")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-            Text(template.name)
+            Text(
+                "\(template.name) · Create in "
+                    + appState.templateCreationDestinationDescription
+            )
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -161,12 +164,21 @@ private struct NameStep: View {
                 Text("New note name")
                     .font(.callout)
                     .accessibilityHidden(true)
+                Text(
+                    "Name relative to "
+                        + appState.templateCreationDestinationDescription + "."
+                )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
                 TextField("Note name", text: $noteName)
                     .textFieldStyle(.roundedBorder)
                     .focused($nameFocused)
-                    .accessibilityLabel("New note name")
+                    .accessibilityLabel(
+                        "New note name. Name relative to "
+                            + appState.templateCreationDestinationDescription)
                     .accessibilityHint(
-                        "Vault-relative path. .md extension added automatically."
+                        ".md extension added automatically."
                     )
                     .onSubmit {
                         submit()
@@ -203,7 +215,10 @@ private struct NameStep: View {
             Text("Name the new note")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-            Text("from \(template.name)")
+            Text(
+                "from \(template.name) · Create in "
+                    + appState.templateCreationDestinationDescription
+            )
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }

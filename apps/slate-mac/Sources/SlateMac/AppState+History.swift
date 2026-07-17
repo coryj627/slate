@@ -739,17 +739,20 @@ extension AppState {
                 Task { @MainActor [weak self, weak session] in
                     guard let self, let session else { return }
                     self.handleSidebarFileChange(event, from: session)
+                    self.handleTemplateAvailabilityFileChange(event, from: session)
                     self.refreshConnectionsIfGraphChanged()
                     self.refreshGraphTableIfGraphChanged()
                     self.refreshGraphDiagramIfGraphChanged()
                 }
             },
-            onIndexPhaseHook: { [weak self] phase, _ in
+            onIndexPhaseHook: { [weak self, weak session] phase, _ in
                 guard phase == .scanFinished else { return }
-                Task { @MainActor [weak self] in
-                    self?.refreshConnectionsIfGraphChanged()
-                    self?.refreshGraphTableIfGraphChanged()
-                    self?.refreshGraphDiagramIfGraphChanged()
+                Task { @MainActor [weak self, weak session] in
+                    guard let self, let session, self.currentSession === session else { return }
+                    self.scheduleTemplateAvailabilityRefresh()
+                    self.refreshConnectionsIfGraphChanged()
+                    self.refreshGraphTableIfGraphChanged()
+                    self.refreshGraphDiagramIfGraphChanged()
                 }
             })
         vaultEventAdapter = adapter

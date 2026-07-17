@@ -5491,10 +5491,9 @@ impl VaultSession {
     ///
     /// Returns `Ok(Vec::new())` — never an error — for any of:
     ///
-    /// - `templates_dir` is `None` (the vault has no templates folder
-    ///   configured, e.g. a freshly-opened vault that never had a
-    ///   `Templates/` directory).
-    /// - `templates_dir` points at a path that no longer exists or
+    /// - neither a configured directory nor the default `Templates/`
+    ///   directory currently exists.
+    /// - the selected directory points at a path that no longer exists or
     ///   isn't a directory (vault changed under us between opens).
     ///
     /// Only `.md` files are returned. `.DS_Store`, `.gitkeep`, README
@@ -5506,10 +5505,18 @@ impl VaultSession {
     /// the V1 tester scope (`Templates/` folders contain a handful of
     /// files), this is fine; if vaults ever ship hundreds of templates
     /// we'd want a description column in the index.
-    pub fn list_templates(&self) -> Result<Vec<crate::TemplateSummary>, VaultError> {
-        let Some(dir) = self.config.templates_dir.as_deref() else {
-            return Ok(Vec::new());
-        };
+    pub fn list_templates(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<Vec<crate::TemplateSummary>, VaultError> {
+        if cancel.is_cancelled() {
+            return Err(VaultError::Cancelled);
+        }
+        // Keep the open session responsive to a user creating the conventional
+        // default directory after the vault was opened. `SessionConfig` stays
+        // immutable; this read-only fallback does not override an explicitly
+        // configured live directory.
+        let dir = self.config.templates_dir.as_deref().unwrap_or("Templates");
 
         let entries = match self.provider.list_dir(dir) {
             Ok(entries) => entries,
@@ -5527,6 +5534,9 @@ impl VaultSession {
         let limit = self.config.large_file_refuse_bytes;
         let mut out: Vec<crate::TemplateSummary> = Vec::new();
         for entry in entries {
+            if cancel.is_cancelled() {
+                return Err(VaultError::Cancelled);
+            }
             if !matches!(
                 entry.kind,
                 crate::EntryKind::File | crate::EntryKind::Symlink
@@ -5555,6 +5565,9 @@ impl VaultSession {
                 Err(VaultError::Io(_)) => continue,
                 Err(e) => return Err(e),
             };
+            if cancel.is_cancelled() {
+                return Err(VaultError::Cancelled);
+            }
             if (bytes.len() as u64) > limit {
                 // Skip oversized files rather than aborting the picker.
                 continue;
@@ -5575,6 +5588,9 @@ impl VaultSession {
             });
         }
 
+        if cancel.is_cancelled() {
+            return Err(VaultError::Cancelled);
+        }
         out.sort_by(|a, b| {
             a.name
                 .to_lowercase()

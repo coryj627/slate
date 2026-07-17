@@ -54,9 +54,6 @@ struct SidebarSelectionSnapshot: Equatable {
 
 enum SidebarActionCapability: Equatable {
     case oneOrMoreFiles
-    /// The action belongs to the open vault, not the current row selection.
-    /// Its intent is always canonicalized to an empty/root snapshot.
-    case vaultRoot
     case zeroOrOneItem
     case exactlyOneItem
     case oneOrMoreItems
@@ -247,7 +244,7 @@ enum SidebarActionCatalog {
             blocksDuringStructuralMutation: true, undo: .historyBarrier),
         action(
             SlateCommandID.newFromTemplate, "New Note from Template…", .newFromTemplate,
-            .vaultRoot, "Choose a template for a new note.",
+            .zeroOrOneItem, "Choose a template for a new note.",
             blocksDuringStructuralMutation: true, undo: .historyBarrier),
         action(
             SlateCommandID.renameEntry, "Rename…", .rename, .exactlyOneItem,
@@ -327,21 +324,11 @@ enum SidebarActionCatalog {
             ?? actionDisabledReasons[id]
             ?? (definition.blocksDuringStructuralMutation
                 ? structuralMutationDisabledReason : nil)
-        let intentSnapshot: SidebarSelectionSnapshot
-        if definition.capability == .vaultRoot {
-            intentSnapshot = SidebarSelectionSnapshot(
-                sessionIdentity: snapshot.sessionIdentity,
-                items: [],
-                focusedPath: nil,
-                creationParent: "")
-        } else {
-            intentSnapshot = snapshot
-        }
         return SidebarActionEvaluation(
             definition: definition,
             disabledReason: disabledReason,
             intent: disabledReason == nil
-                ? SidebarActionInvocationIntent(actionID: id, snapshot: intentSnapshot)
+                ? SidebarActionInvocationIntent(actionID: id, snapshot: snapshot)
                 : nil)
     }
 
@@ -379,8 +366,8 @@ enum SidebarActionCatalog {
 
     /// Contextual surfaces stay target-specific and concise. Capability still
     /// performs the final availability check below; this allowlist owns only
-    /// which relevant verbs belong on each HIG surface. Template remains a
-    /// deliberate FL04-A omission until it has a contextual destination.
+    /// which relevant verbs belong on each HIG surface. Template is contextual
+    /// only for a single selected folder, whose path is its exact destination.
     private static func contextualDefinitions(
         surface: SidebarActionSurface,
         snapshot: SidebarSelectionSnapshot?
@@ -393,6 +380,7 @@ enum SidebarActionCatalog {
                 ids = [
                     SlateCommandID.newNote,
                     SlateCommandID.newFolder,
+                    SlateCommandID.newFromTemplate,
                     SlateCommandID.renameEntry,
                     SlateCommandID.moveTo,
                     SlateCommandID.revealInFinder,
@@ -439,8 +427,6 @@ enum SidebarActionCatalog {
             guard items.allSatisfy({ !$0.isDirectory }) else {
                 return "Open is available only for files."
             }
-        case .vaultRoot:
-            break
         case .zeroOrOneItem:
             guard items.count <= 1 else {
                 return "Select no more than one item to choose a creation location."

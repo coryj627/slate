@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import AppKit
 import XCTest
 
 @testable import SlateMac
@@ -464,8 +465,13 @@ final class SidebarActionInvocationTests: XCTestCase {
             "neither creation funnel sees a forged non-canonical parent")
     }
 
-    func test04TemplateIsSelectionIndependentAndAlwaysTargetsCanonicalRoot() throws {
+    func test04TemplateUsesExactCanonicalFrozenCreationParent() async throws {
         let state = try openVault(named: "template", folders: ["Folder"])
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        XCTAssertEqual(state.templateAvailability, .available)
         var parents: [String] = []
         state.sidebarActionDispatchOverrides.openTemplatePicker = {
             parents.append($0)
@@ -489,8 +495,594 @@ final class SidebarActionInvocationTests: XCTestCase {
             try state.dispatchSidebarAction(id: SlateCommandID.newFromTemplate),
             .completed(actionID: SlateCommandID.newFromTemplate))
         XCTAssertEqual(
-            parents, ["", "", ""],
-            "root, selected-row, and ID invocations all target the vault root")
+            parents, ["", "Folder", "Folder"],
+            "root, selected-row, and ID invocations preserve their canonical frozen parent")
+    }
+
+    func test04aUnavailableTemplateKeyboardInvocationAnnouncesEachSharedReasonOnceWithoutPresentation()
+        async throws
+    {
+        let announcer = RecordingAnnouncer()
+        let state = try openVault(named: "template-keyboard-unavailable", announcer: announcer)
+        XCTAssertEqual(state.templateAvailability, .loading)
+
+        XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
+
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .empty)
+        XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
+
+        state.templateListRunner = { _, _ in .failure(.Io(message: "no access")) }
+        await state.refreshTemplateAvailability()?.value
+        XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
+
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        state.sidebarActionStructuralDisabledReasonOverride =
+            AppState.structuralMutationBusyReason
+        XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
+
+        XCTAssertEqual(
+            announcer.posts.map(\.message),
+            [
+                AppState.templateAvailabilityLoadingReason,
+                AppState.templateAvailabilityEmptyReason,
+                AppState.templateAvailabilityFailedReason,
+                AppState.structuralMutationBusyReason,
+            ])
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        XCTAssertNil(state.templatePickerTask)
+        XCTAssertNil(state.templateCreationDestination)
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+        let markdownFiles = try FileManager.default.subpathsOfDirectory(
+            atPath: try XCTUnwrap(state.currentVaultURL).path
+        ).filter { ($0 as NSString).pathExtension.lowercased() == "md" }
+        XCTAssertTrue(markdownFiles.isEmpty)
+    }
+
+    func test04a2CachedAvailableRelistEmptyAndFailureStayVisibleAndAnnounceOnce()
+        async throws
+    {
+        let announcer = RecordingAnnouncer()
+        let state = try openVault(named: "template-relist-announcements", announcer: announcer)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        XCTAssertEqual(state.templateAvailability, .available)
+
+        state.templateListRunner = { _, _ in .success([]) }
+        let emptyRelist = state.openTemplatePicker()
+        XCTAssertNotNil(emptyRelist)
+        await emptyRelist?.value
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .empty)
+        XCTAssertEqual(
+            state.templateAnnouncementLastMessage,
+            AppState.templateAvailabilityEmptyReason)
+        XCTAssertTrue(
+            state.isTemplatePickerOpen,
+            "the empty result must remain visible with setup guidance")
+        XCTAssertEqual(state.templateCreationDestination, "")
+
+        state.cancelTemplateFlow()
+
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        state.templateListRunner = { _, _ in .failure(.Io(message: "no access")) }
+        let failedRelist = state.openTemplatePicker()
+        XCTAssertNotNil(failedRelist)
+        await failedRelist?.value
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .failed)
+        XCTAssertEqual(
+            state.templateAnnouncementLastMessage,
+            AppState.templateAvailabilityFailedReason)
+        XCTAssertTrue(
+            state.isTemplatePickerOpen,
+            "the failed result must remain visible with Retry")
+        XCTAssertEqual(state.templateCreationDestination, "")
+
+        XCTAssertEqual(
+            announcer.posts.map(\.message),
+            [
+                AppState.templateAvailabilityEmptyReason,
+                AppState.templateAvailabilityFailedReason,
+            ],
+            "each user-triggered relist terminal state must announce its shared reason once")
+    }
+
+    func test04bAvailableTemplateKeyboardInvocationDispatchesFrozenDestinationOnce()
+        async throws
+    {
+        let state = try openVault(
+            named: "template-keyboard-available", folders: ["Projects"])
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        let folder = try snapshot(
+            on: state,
+            [item("Projects", directory: true)],
+            focusedPath: "Projects",
+            creationParent: "Projects")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(folder))
+        var destinations: [String] = []
+        state.sidebarActionDispatchOverrides.openTemplatePicker = {
+            destinations.append($0)
+            return true
+        }
+
+        XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
+
+        XCTAssertEqual(destinations, ["Projects"])
+    }
+
+    func test04bAvailableTemplateToolbarInvocationDispatchesFrozenDestinationOnce()
+        async throws
+    {
+        let state = try openVault(
+            named: "template-toolbar-available", folders: ["Projects", "Other"])
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        let projects = try snapshot(
+            on: state,
+            [item("Projects", directory: true)],
+            focusedPath: "Projects",
+            creationParent: "Projects")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(projects))
+        let toolbarEvaluation = try XCTUnwrap(
+            state.sidebarActionProjection(surface: .toolbar).first {
+                $0.id == SlateCommandID.newFromTemplate
+            })
+        let frozenIntent = try XCTUnwrap(toolbarEvaluation.intent)
+
+        let other = try snapshot(
+            on: state,
+            [item("Other", directory: true)],
+            focusedPath: "Other",
+            creationParent: "Other")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(other))
+        var destinations: [String] = []
+        state.sidebarActionDispatchOverrides.openTemplatePicker = {
+            destinations.append($0)
+            return true
+        }
+
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(frozenIntent),
+            .completed(actionID: SlateCommandID.newFromTemplate))
+        XCTAssertEqual(destinations, ["Projects"])
+    }
+
+    func test04b2TemplateKeyboardCannotRestartOrRetargetAnActiveFlow() async throws {
+        let announcer = RecordingAnnouncer()
+        let state = try openVault(
+            named: "template-keyboard-active-flow",
+            folders: ["Projects", "Other"],
+            announcer: announcer)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        let projects = try snapshot(
+            on: state,
+            [item("Projects", directory: true)],
+            focusedPath: "Projects",
+            creationParent: "Projects")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(projects))
+        XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
+        XCTAssertEqual(state.templateCreationDestination, "Projects")
+
+        let other = try snapshot(
+            on: state,
+            [item("Other", directory: true)],
+            focusedPath: "Other",
+            creationParent: "Other")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(other))
+        XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
+
+        XCTAssertEqual(state.templateCreationDestination, "Projects")
+        XCTAssertEqual(announcer.posts.map(\.message), [AppState.templateFlowBusyReason])
+        state.cancelTemplateFlow()
+    }
+
+    func test04b3SharedAdmissionRejectsMenuAndFrozenIntentFromAnotherWindow()
+        async throws
+    {
+        let state = try openVault(
+            named: "template-shared-modal-admission", folders: ["Projects"])
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        let projects = try snapshot(
+            on: state,
+            [item("Projects", directory: true)],
+            focusedPath: "Projects",
+            creationParent: "Projects")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(projects))
+
+        let host = NSWindow()
+        let other = NSWindow()
+        state.setTemplateShortcutHostWindow(host)
+        state.templateShortcutKeyWindowProvider = { host }
+        let admitted = try XCTUnwrap(
+            state.sidebarActionProjection(surface: .menuBar).first {
+                $0.id == SlateCommandID.newFromTemplate
+            })
+        let frozenIntent = try XCTUnwrap(admitted.intent)
+
+        var destinations: [String] = []
+        state.sidebarActionDispatchOverrides.openTemplatePicker = {
+            destinations.append($0)
+            return true
+        }
+        state.templateShortcutKeyWindowProvider = { other }
+
+        let blocked = try XCTUnwrap(
+            state.sidebarActionProjection(surface: .menuBar).first {
+                $0.id == SlateCommandID.newFromTemplate
+            })
+        XCTAssertNil(blocked.intent)
+        XCTAssertEqual(blocked.disabledReason, AppState.templateOtherWindowReason)
+        assertRejected(expectedMessage: AppState.templateOtherWindowReason) {
+            try state.dispatchSidebarAction(frozenIntent)
+        }
+        XCTAssertTrue(
+            destinations.isEmpty,
+            "a stale enabled File-menu evaluation must not reach the template funnel")
+
+        state.templateShortcutModalWindowProvider = { other }
+        let appModal = try XCTUnwrap(
+            state.sidebarActionProjection(surface: .menuBar).first {
+                $0.id == SlateCommandID.newFromTemplate
+            })
+        XCTAssertNil(appModal.intent)
+        XCTAssertEqual(appModal.disabledReason, AppState.templateDialogBusyReason)
+        assertRejected(expectedMessage: AppState.templateDialogBusyReason) {
+            try state.dispatchSidebarAction(frozenIntent)
+        }
+        XCTAssertTrue(destinations.isEmpty)
+        state.templateShortcutModalWindowProvider = { nil }
+
+        state.setTemplateShortcutHostWindow(nil)
+        let hostless = try XCTUnwrap(
+            state.sidebarActionProjection(surface: .menuBar).first {
+                $0.id == SlateCommandID.newFromTemplate
+            })
+        XCTAssertNil(hostless.intent)
+        XCTAssertEqual(hostless.disabledReason, AppState.templateOtherWindowReason)
+        assertRejected(expectedMessage: AppState.templateOtherWindowReason) {
+            try state.dispatchSidebarAction(frozenIntent)
+        }
+        XCTAssertTrue(
+            destinations.isEmpty,
+            "Settings must not stage a hidden flow after the main host closes")
+
+        state.templateShortcutKeyWindowProvider = { nil }
+        let noKeyWindow = try XCTUnwrap(
+            state.sidebarActionProjection(surface: .menuBar).first {
+                $0.id == SlateCommandID.newFromTemplate
+            })
+        XCTAssertNil(noKeyWindow.intent)
+        XCTAssertEqual(
+            noKeyWindow.disabledReason,
+            AppState.templateOtherWindowReason,
+            "once a UI host existed, a missing key window must fail closed")
+        assertRejected(expectedMessage: AppState.templateOtherWindowReason) {
+            try state.dispatchSidebarAction(frozenIntent)
+        }
+        XCTAssertTrue(destinations.isEmpty)
+
+        state.setTemplateShortcutHostWindow(host)
+        state.templateShortcutKeyWindowProvider = { host }
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(frozenIntent),
+            .completed(actionID: SlateCommandID.newFromTemplate))
+        XCTAssertEqual(destinations, ["Projects"])
+    }
+
+    func test04b4RegisteredCommandPaletteWindowCanLaunchAndDismissesBeforeTemplateFlow()
+        async throws
+    {
+        let state = try openVault(
+            named: "template-command-palette-admission", folders: ["Projects"])
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        let projects = try snapshot(
+            on: state,
+            [item("Projects", directory: true)],
+            focusedPath: "Projects",
+            creationParent: "Projects")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(projects))
+
+        let host = NSWindow()
+        let palette = NSWindow()
+        state.setTemplateShortcutHostWindow(host)
+        state.setTemplateShortcutActionLauncherWindow(palette)
+        state.templateShortcutKeyWindowProvider = { palette }
+        state.isCommandPaletteOpen = true
+
+        let evaluation = try XCTUnwrap(
+            state.sidebarActionProjection(surface: .commandPalette).first {
+                $0.id == SlateCommandID.newFromTemplate
+            })
+        let intent = try XCTUnwrap(
+            evaluation.intent,
+            "the palette's registered sheet must keep its Template action available")
+        var destinations: [String] = []
+        state.sidebarActionDispatchOverrides.openTemplatePicker = {
+            destinations.append($0)
+            return true
+        }
+
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(intent),
+            .completed(actionID: SlateCommandID.newFromTemplate))
+        XCTAssertFalse(
+            state.isCommandPaletteOpen,
+            "the action-launcher sheet must dismiss before the template sheet stages")
+        XCTAssertEqual(destinations, ["Projects"])
+
+        state.setTemplateShortcutActionLauncherWindow(nil)
+        XCTAssertFalse(state.templateShortcutWindowOwnsActionLauncher(palette))
+    }
+
+    func test04cTemplateShortcutRemainsVisibleInMenuAndRoutesThroughOneEventMonitor()
+        throws
+    {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent("Sources/SlateMac/SlateMacApp.swift"),
+            encoding: .utf8)
+        let paletteSource = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/SlateMac/CommandPaletteView.swift"),
+            encoding: .utf8)
+        let shortcutFunction = try XCTUnwrap(
+            source.range(of: "private static func sidebarMenuKeyboardShortcut"))
+        let renderer = try XCTUnwrap(
+            source.range(of: "private func sidebarFileMenuActions"))
+        let menuShortcutBody = source[shortcutFunction.lowerBound..<renderer.lowerBound]
+        XCTAssertTrue(
+            menuShortcutBody.contains("SlateCommandID.newFromTemplate"),
+            "the disabled File-menu item must still advertise Shift-Command-N")
+        XCTAssertEqual(
+            source.components(
+                separatedBy: "KeyboardShortcut(\"n\", modifiers: [.command, .shift])"
+            ).count - 1,
+            1,
+            "the File menu must advertise exactly one Shift-Command-N key equivalent")
+        XCTAssertTrue(source.contains("SidebarTemplateShortcutMonitor"))
+        XCTAssertTrue(source.contains("NSApplication.didBecomeActiveNotification"))
+        XCTAssertFalse(
+            source.contains(".keyboardShortcut(\n                \"n\", modifiers: [.command, .shift])"),
+            "a second hidden SwiftUI shortcut owner would double-dispatch")
+        XCTAssertTrue(
+            source.contains(
+                "appState.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate)"))
+        XCTAssertTrue(source.contains("presentDialogNotice"))
+        XCTAssertTrue(source.contains("slate.template-shortcut-dialog-notice"))
+        XCTAssertTrue(source.contains("NSTitlebarAccessoryViewController"))
+        XCTAssertTrue(source.contains("controller.layoutAttribute = .bottom"))
+        XCTAssertFalse(
+            source.contains("contentView.addSubview(notice"),
+            "persistent feedback must reserve layout instead of covering dialog controls")
+        XCTAssertTrue(source.contains("rejectBlockedWindow"))
+        XCTAssertTrue(paletteSource.contains("CommandPaletteWindowReader"))
+        XCTAssertTrue(
+            paletteSource.contains("setTemplateShortcutActionLauncherWindow"))
+    }
+
+    func test04dTemplateSheetsExposeVisibleAndSpokenDestinationContext() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let picker = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/SlateMac/TemplatePicker.swift"),
+            encoding: .utf8)
+        let prompts = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/SlateMac/TemplatePromptSheet.swift"),
+            encoding: .utf8)
+        XCTAssertTrue(picker.contains("templateCreationDestinationDescription"))
+        XCTAssertGreaterThanOrEqual(
+            prompts.components(separatedBy: "templateCreationDestinationDescription").count - 1,
+            2,
+            "both prompt and name steps must preserve destination context")
+        XCTAssertTrue(prompts.contains("Name relative to"))
+    }
+
+    func test04eTemplateShortcutMonitorOwnsAttachedSheetAndAnnouncesBusyOnce()
+        async throws
+    {
+        let announcer = RecordingAnnouncer()
+        let state = try openVault(
+            named: "template-sheet-shortcut", folders: ["Projects"], announcer: announcer)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        state.installTemplateDestinationForTesting("Projects")
+
+        let host = NSWindow()
+        let other = NSWindow()
+        let sheet = NSWindow()
+        host.beginSheet(sheet, completionHandler: nil)
+        defer { host.endSheet(sheet) }
+        var rejectedWindowCount = 0
+        var rejectedReasons: [String] = []
+        let common: (
+            NSWindow?, NSWindow?, NSWindow?
+        ) -> Bool = { eventWindow, keyWindow, modalWindow in
+            SidebarTemplateShortcutRouting.route(
+                applicationIsActive: true,
+                hostWindow: host,
+                hostAttachedSheet: sheet,
+                modalWindow: modalWindow,
+                attachedSheetOwnsTemplateAction: true,
+                eventWindow: eventWindow,
+                keyWindow: keyWindow,
+                hasMarkedText: false,
+                isRepeat: false,
+                charactersIgnoringModifiers: "n",
+                modifierFlags: [.command, .shift],
+                rejectBlockedWindow: { context in
+                    rejectedWindowCount += 1
+                    rejectedReasons.append(context.reason)
+                    return true
+                },
+                invoke: {
+                    state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate)
+                })
+        }
+
+        XCTAssertTrue(
+            common(other, other, nil),
+            "an exact chord in another Slate window must be consumed before menu fallback")
+        XCTAssertEqual(rejectedWindowCount, 1)
+        XCTAssertEqual(rejectedReasons, [AppState.templateOtherWindowReason])
+        XCTAssertTrue(
+            common(other, other, other),
+            "an app-modal panel must be consumed with dialog recovery")
+        XCTAssertEqual(rejectedWindowCount, 2)
+        XCTAssertEqual(
+            rejectedReasons,
+            [AppState.templateOtherWindowReason, AppState.templateDialogBusyReason])
+        XCTAssertFalse(
+            common(host, other, nil), "a non-key Slate window must receive its event")
+        XCTAssertTrue(
+            common(sheet, sheet, nil),
+            "the host window's attached sheet must route and consume the owned chord")
+        XCTAssertEqual(state.templateCreationDestination, "Projects")
+        XCTAssertEqual(announcer.posts.map(\.message), [AppState.templateFlowBusyReason])
+        XCTAssertEqual(rejectedWindowCount, 2)
+        XCTAssertNil(state.templatePickerTask)
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+    }
+
+    func test04e1UnrelatedAttachedSheetConsumesShortcutWithoutStartingTemplateFlow()
+        async throws
+    {
+        let announcer = RecordingAnnouncer()
+        let state = try openVault(
+            named: "template-unrelated-sheet", announcer: announcer)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        XCTAssertEqual(state.templateAvailability, .available)
+
+        let host = NSWindow()
+        let sheet = NSWindow()
+        host.beginSheet(sheet, completionHandler: nil)
+        defer { host.endSheet(sheet) }
+
+        let handled = SidebarTemplateShortcutRouting.route(
+            applicationIsActive: true,
+            hostWindow: host,
+            hostAttachedSheet: sheet,
+            modalWindow: nil,
+            attachedSheetOwnsTemplateAction: false,
+            eventWindow: sheet,
+            keyWindow: sheet,
+            hasMarkedText: false,
+            isRepeat: false,
+            charactersIgnoringModifiers: "n",
+            modifierFlags: [.command, .shift],
+            rejectBlockedWindow: { context in
+                XCTAssertEqual(context.reason, AppState.templateDialogBusyReason)
+                return state.rejectTemplateShortcutForActiveDialog()
+            },
+            invoke: {
+                XCTFail("an unrelated sheet must not dispatch the template action")
+                return true
+            })
+
+        XCTAssertTrue(handled, "the chord must be consumed before the File menu sees it")
+        XCTAssertEqual(
+            announcer.posts.map(\.message),
+            [AppState.templateDialogBusyReason])
+        XCTAssertEqual(
+            state.templateShortcutDialogNotice,
+            AppState.templateDialogBusyReason)
+        XCTAssertNil(state.templateCreationDestination)
+        XCTAssertNil(state.templatePickerTask)
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+    }
+
+    func test04e2TemplatePickerRendersVisibleFailureAndRetryGuidance() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/SlateMac/TemplatePicker.swift"),
+            encoding: .utf8)
+
+        let emptyStart = try XCTUnwrap(
+            source.range(of: "private var emptyState: some View"))
+        let failedStart = try XCTUnwrap(
+            source.range(of: "private var failedState: some View"))
+        let retryStart = try XCTUnwrap(
+            source.range(of: "private var retryButton: some View"))
+        let focusStart = try XCTUnwrap(
+            source.range(of: "private func updateFocus"))
+        let emptyBody = source[emptyStart.lowerBound..<failedStart.lowerBound]
+        let failedBody = source[failedStart.lowerBound..<retryStart.lowerBound]
+        let retryBody = source[retryStart.lowerBound..<focusStart.lowerBound]
+
+        XCTAssertTrue(source.contains("templateAvailability == .failed"))
+        XCTAssertTrue(source.contains("Couldn’t load templates"))
+        for (name, stateBody) in [
+            ("empty", emptyBody),
+            ("failed", failedBody),
+        ] {
+            XCTAssertTrue(
+                stateBody.contains("retryButton"),
+                "the \(name) state must retain the shared Retry control")
+            XCTAssertTrue(
+                stateBody.contains(".accessibilityElement(children: .contain)"),
+                "the \(name) state must expose Retry as a distinct AX child")
+            XCTAssertFalse(
+                stateBody.contains(".accessibilityElement(children: .combine)"),
+                "the \(name) state must not swallow Retry into static guidance")
+        }
+        XCTAssertTrue(retryBody.contains("Button(\"Try Again\")"))
+        XCTAssertTrue(retryBody.contains("appState.retryTemplatePickerLoad()"))
+        XCTAssertTrue(retryBody.contains(".focused($focus, equals: .retry)"))
+        XCTAssertTrue(
+            retryBody.contains(
+                ".accessibilityHint(\"Reloads templates for the same destination.\")"))
+    }
+
+    func test04e3FolderVoiceOverHintDoesNotPromiseAnOmittedTemplateAction() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: packageRoot.appendingPathComponent(
+                "Sources/SlateMac/FileTreeSidebar.swift"),
+            encoding: .utf8)
+
+        XCTAssertFalse(
+            source.contains("template actions are in the context menu"),
+            "a folder hint must not promise Template when the shared projection omits it")
     }
 
     func test05RenameUsesExactCapturedPathKindAndRejectsFalseAdmission() throws {

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import AppKit
 import SwiftUI
 
 /// Entry point for the Slate Mac app.
@@ -846,10 +847,262 @@ struct RootView: View {
     @EnvironmentObject private var appState: AppState
 
     var body: some View {
-        if appState.isVaultOpen {
-            MainSplitView()
-        } else {
-            WelcomeView()
+        Group {
+            if appState.isVaultOpen {
+                MainSplitView()
+            } else {
+                WelcomeView()
+            }
         }
+        .background {
+            SidebarTemplateShortcutMonitor(
+                attachedSheetOwnsTemplateAction: { sheet in
+                    appState.isTemplatePickerOpen
+                        || appState.pendingTemplateFlow != .idle
+                        || appState.templateShortcutWindowOwnsActionLauncher(sheet)
+                },
+                hostWindowChanged: {
+                    appState.setTemplateShortcutHostWindow($0)
+                },
+                rejectBlockedWindow: { context in
+                    switch context {
+                    case .attachedDialog:
+                        return appState.rejectTemplateShortcutForActiveDialog()
+                    case .otherWindow:
+                        return appState.rejectTemplateShortcutForOtherWindow()
+                    }
+                },
+                clearBlockedNotice: {
+                    appState.clearTemplateShortcutDialogNotice()
+                },
+                invoke: {
+                    appState.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate)
+                })
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSApplication.didBecomeActiveNotification)
+        ) { _ in
+            appState.scheduleTemplateAvailabilityRefresh()
+        }
+        .onReceive(
+            NotificationCenter.default.publisher(
+                for: NSWindow.didBecomeKeyNotification)
+        ) { _ in
+            appState.templateShortcutWindowAdmissionDidChange()
+        }
+    }
+}
+
+/// The File menu keeps the visible ⇧⌘N key equivalent even while disabled.
+/// A local key-down monitor runs before menu dispatch, consumes that one chord,
+/// and routes it through the catalog's `.keyboard` projection. Consuming the
+/// event prevents the enabled menu item from dispatching a second time.
+private struct SidebarTemplateShortcutMonitor: NSViewRepresentable {
+    let attachedSheetOwnsTemplateAction: (NSWindow?) -> Bool
+    let hostWindowChanged: (NSWindow?) -> Void
+    let rejectBlockedWindow: (SidebarTemplateShortcutRouting.BlockContext) -> Bool
+    let clearBlockedNotice: () -> Void
+    let invoke: () -> Bool
+
+    func makeNSView(context: Context) -> MonitorView {
+        let view = MonitorView()
+        view.attachedSheetOwnsTemplateAction = attachedSheetOwnsTemplateAction
+        view.hostWindowChanged = hostWindowChanged
+        view.rejectBlockedWindow = rejectBlockedWindow
+        view.clearBlockedNotice = clearBlockedNotice
+        view.invoke = invoke
+        return view
+    }
+
+    func updateNSView(_ view: MonitorView, context: Context) {
+        view.attachedSheetOwnsTemplateAction = attachedSheetOwnsTemplateAction
+        view.hostWindowChanged = hostWindowChanged
+        view.rejectBlockedWindow = rejectBlockedWindow
+        view.clearBlockedNotice = clearBlockedNotice
+        view.invoke = invoke
+    }
+
+    static func dismantleNSView(_ view: MonitorView, coordinator: ()) {
+        view.hostWindowChanged(nil)
+        view.stopMonitoring()
+    }
+
+    final class MonitorView: NSView {
+        var attachedSheetOwnsTemplateAction: (NSWindow?) -> Bool = { _ in false }
+        var hostWindowChanged: (NSWindow?) -> Void = { _ in }
+        var rejectBlockedWindow: (SidebarTemplateShortcutRouting.BlockContext) -> Bool = {
+            _ in true
+        }
+        var clearBlockedNotice: () -> Void = {}
+        var invoke: () -> Bool = { false }
+        private var monitor: Any?
+
+        override var intrinsicContentSize: NSSize { .zero }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            hostWindowChanged(window)
+            window == nil ? stopMonitoring() : startMonitoringIfNeeded()
+        }
+
+        func stopMonitoring() {
+            guard let monitor else { return }
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+
+        private func startMonitoringIfNeeded() {
+            guard monitor == nil else { return }
+            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+                [weak self] event in
+                guard let self else { return event }
+                let attachedSheet = self.window?.attachedSheet
+                if attachedSheet == nil {
+                    self.clearBlockedNotice()
+                }
+                let eventWindow = event.window
+                let hasMarkedText = (eventWindow?.firstResponder as? NSTextView)?
+                    .hasMarkedText() == true
+                let handled = SidebarTemplateShortcutRouting.route(
+                    applicationIsActive: NSApp.isActive,
+                    hostWindow: self.window,
+                    hostAttachedSheet: attachedSheet,
+                    modalWindow: NSApplication.shared.modalWindow,
+                    attachedSheetOwnsTemplateAction:
+                        self.attachedSheetOwnsTemplateAction(attachedSheet),
+                    eventWindow: eventWindow,
+                    keyWindow: NSApp.keyWindow,
+                    hasMarkedText: hasMarkedText,
+                    isRepeat: event.isARepeat,
+                    charactersIgnoringModifiers: event.charactersIgnoringModifiers,
+                    modifierFlags: event.modifierFlags,
+                    rejectBlockedWindow: { context in
+                        if let eventWindow {
+                            self.presentDialogNotice(
+                                context.reason,
+                                in: eventWindow)
+                        }
+                        return self.rejectBlockedWindow(context)
+                    },
+                    invoke: self.invoke)
+                return handled ? nil : event
+            }
+        }
+
+        /// Put feedback in reserved window chrome. A content overlay can hide
+        /// a focused field or dialog control; a titlebar accessory adds its
+        /// own layout row and remains until the owning window is dismissed.
+        private func presentDialogNotice(_ message: String, in window: NSWindow) {
+            let identifier = NSUserInterfaceItemIdentifier(
+                "slate.template-shortcut-dialog-notice")
+            window.titlebarAccessoryViewControllers.removeAll {
+                $0.view.identifier == identifier
+            }
+
+            let notice = DialogNoticeView()
+            notice.identifier = identifier
+            notice.frame = NSRect(
+                x: 0, y: 0, width: max(window.frame.width, 320), height: 40)
+            notice.autoresizingMask = [.width]
+            notice.material = .headerView
+            notice.blendingMode = .withinWindow
+            notice.state = .active
+
+            let label = NSTextField(wrappingLabelWithString: message)
+            label.alignment = .center
+            label.font = .systemFont(ofSize: NSFont.systemFontSize)
+            label.maximumNumberOfLines = 2
+            label.translatesAutoresizingMaskIntoConstraints = false
+            notice.addSubview(label)
+
+            NSLayoutConstraint.activate([
+                label.leadingAnchor.constraint(equalTo: notice.leadingAnchor, constant: 12),
+                label.trailingAnchor.constraint(equalTo: notice.trailingAnchor, constant: -12),
+                label.centerYAnchor.constraint(equalTo: notice.centerYAnchor),
+            ])
+            label.setAccessibilityLabel(message)
+
+            let controller = NSTitlebarAccessoryViewController()
+            controller.layoutAttribute = .bottom
+            controller.view = notice
+            window.addTitlebarAccessoryViewController(controller)
+        }
+
+        /// The status must remain perceivable without intercepting controls in
+        /// the dialog it explains.
+        private final class DialogNoticeView: NSVisualEffectView {
+            override func hitTest(_ point: NSPoint) -> NSView? { nil }
+        }
+
+        deinit {
+            if let monitor {
+                NSEvent.removeMonitor(monitor)
+            }
+        }
+    }
+}
+
+/// Pure routing decision kept separate from monitor lifetime so wrong-window,
+/// non-key-window, marked-text, repeat, and modifier behavior are testable.
+@MainActor
+enum SidebarTemplateShortcutRouting {
+    enum BlockContext {
+        case attachedDialog
+        case otherWindow
+
+        @MainActor var reason: String {
+            switch self {
+            case .attachedDialog:
+                return AppState.templateDialogBusyReason
+            case .otherWindow:
+                return AppState.templateOtherWindowReason
+            }
+        }
+    }
+
+    static func route(
+        applicationIsActive: Bool,
+        hostWindow: NSWindow?,
+        hostAttachedSheet: NSWindow?,
+        modalWindow: NSWindow?,
+        attachedSheetOwnsTemplateAction: Bool,
+        eventWindow: NSWindow?,
+        keyWindow: NSWindow?,
+        hasMarkedText: Bool,
+        isRepeat: Bool,
+        charactersIgnoringModifiers: String?,
+        modifierFlags: NSEvent.ModifierFlags,
+        rejectBlockedWindow: (BlockContext) -> Bool,
+        invoke: () -> Bool
+    ) -> Bool {
+        guard applicationIsActive,
+            let eventWindow,
+            keyWindow === eventWindow,
+            !hasMarkedText
+        else { return false }
+
+        let allowedNoise: NSEvent.ModifierFlags = [.capsLock, .function, .numericPad]
+        let modifiers = modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting(allowedNoise)
+        guard modifiers == [.command, .shift],
+            charactersIgnoringModifiers?.lowercased() == "n"
+        else { return false }
+        // Repeats are consumed but never invoked or allowed to fall through to
+        // the File-menu key equivalent.
+        if isRepeat { return true }
+        let eventBelongsToHost = eventWindow === hostWindow
+            || eventWindow === hostAttachedSheet
+        if !eventBelongsToHost {
+            return rejectBlockedWindow(
+                eventWindow === modalWindow ? .attachedDialog : .otherWindow)
+        }
+        if eventWindow === hostAttachedSheet, !attachedSheetOwnsTemplateAction {
+            return rejectBlockedWindow(.attachedDialog)
+        }
+        return invoke()
     }
 }

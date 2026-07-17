@@ -210,17 +210,16 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         XCTAssertEqual(menu.map(\.id), catalogIDs)
         XCTAssertEqual(
             menu.filter { $0.disabledReason == nil }.map(\.id),
-            [
-                SlateCommandID.newFromTemplate, SlateCommandID.moveTo,
-                SlateCommandID.deleteEntry,
-            ],
-            "the root-only Template command stays independent of sidebar selection")
+            [SlateCommandID.moveTo, SlateCommandID.deleteEntry],
+            "multi-selection rejects every single-destination creation action")
 
         let expectedDisabledReasons: [String: String] = [
             SlateCommandID.sidebarOpen: "Open is available only for files.",
             SlateCommandID.newNote:
                 "Select no more than one item to choose a creation location.",
             SlateCommandID.newFolder:
+                "Select no more than one item to choose a creation location.",
+            SlateCommandID.newFromTemplate:
                 "Select no more than one item to choose a creation location.",
             SlateCommandID.renameEntry: "Select exactly one file or folder to rename.",
             SlateCommandID.duplicateEntry: "Select exactly one file to duplicate.",
@@ -234,7 +233,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 evaluation.disabledReason.map { (evaluation.id, $0) }
             }),
             expectedDisabledReasons,
-            "the other eight mixed-selection actions expose deterministic capability reasons")
+            "the other nine mixed-selection actions expose deterministic capability reasons")
     }
 
     func testContextAndVoiceOverOmitEveryUnavailableAction() {
@@ -403,6 +402,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 folder.evaluations.map(\.id),
                 [
                     SlateCommandID.newNote, SlateCommandID.newFolder,
+                    SlateCommandID.newFromTemplate,
                     SlateCommandID.renameEntry, SlateCommandID.moveTo,
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
                     SlateCommandID.deleteEntry,
@@ -417,16 +417,21 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             "the pure row projection must not publish or mutate tree selection")
     }
 
-    func testTemplateIsExplicitRootOnlyRegardlessOfLiveSelection() throws {
-        let single = snapshot(
+    func testTemplateUsesCanonicalRootFolderOrFileParentAndRejectsMultiSelection() throws {
+        let root = snapshot([])
+        let file = snapshot(
             [item("Folder/Note.md")],
             focusedPath: "Folder/Note.md",
             creationParent: "Folder")
+        let folder = snapshot(
+            [item("Other", directory: true)],
+            focusedPath: "Other",
+            creationParent: "Other")
         let mixed = snapshot(
             [item("Folder/Note.md"), item("Other", directory: true)],
             focusedPath: "Other",
             creationParent: "Other")
-        for selection in [single, mixed] {
+        for selection in [root, file, folder] {
             for surface in [
                 SidebarActionSurface.menuBar, .commandPalette, .toolbar, .keyboard,
             ] {
@@ -435,16 +440,31 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                         .first { $0.id == SlateCommandID.newFromTemplate })
                 XCTAssertNil(evaluation.disabledReason)
                 let intent = try XCTUnwrap(evaluation.intent)
-                XCTAssertEqual(intent.snapshot.items, [])
-                XCTAssertNil(intent.snapshot.focusedPath)
-                XCTAssertEqual(intent.snapshot.creationParent, "")
-                XCTAssertEqual(intent.snapshot.sessionIdentity, selection.sessionIdentity)
+                XCTAssertEqual(intent.snapshot, selection)
             }
+        }
+        for surface in [
+            SidebarActionSurface.menuBar, .commandPalette, .toolbar, .keyboard,
+        ] {
+            let evaluation = try XCTUnwrap(
+                SidebarActionCatalog.project(surface: surface, snapshot: mixed)
+                    .first { $0.id == SlateCommandID.newFromTemplate })
+            XCTAssertEqual(
+                evaluation.disabledReason,
+                "Select no more than one item to choose a creation location.")
+            XCTAssertNil(evaluation.intent)
         }
         for surface in [SidebarActionSurface.contextMenu, .voiceOver] {
             XCTAssertFalse(
-                SidebarActionCatalog.project(surface: surface, snapshot: single)
+                SidebarActionCatalog.project(surface: surface, snapshot: file)
                     .contains { $0.id == SlateCommandID.newFromTemplate })
+            XCTAssertFalse(
+                SidebarActionCatalog.project(surface: surface, snapshot: mixed)
+                    .contains { $0.id == SlateCommandID.newFromTemplate })
+            let folderEvaluation = try XCTUnwrap(
+                SidebarActionCatalog.project(surface: surface, snapshot: folder)
+                    .first { $0.id == SlateCommandID.newFromTemplate })
+            XCTAssertEqual(folderEvaluation.intent?.snapshot, folder)
         }
     }
 
@@ -479,18 +499,24 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         }
     }
 
-    func testMixedSelectionPreservesRootTemplateIntentThroughLiveRegistry() throws {
+    func testSingleFolderSelectionPreservesTemplateDestinationThroughLiveRegistry()
+        async throws
+    {
         let state = try openVault(
-            named: "mixed-template",
+            named: "folder-template",
             files: ["Note.md"],
             folders: ["Folder"])
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
         let owner = ObjectIdentifier(try XCTUnwrap(state.currentSession))
-        let mixed = SidebarSelectionSnapshot(
+        let folder = SidebarSelectionSnapshot(
             sessionIdentity: owner,
-            items: [item("Note.md"), item("Folder", directory: true)],
+            items: [item("Folder", directory: true)],
             focusedPath: "Folder",
             creationParent: "Folder")
-        XCTAssertTrue(state.publishSidebarSelectionSnapshot(mixed))
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(folder))
 
         var pickerParents: [String] = []
         state.sidebarActionDispatchOverrides.openTemplatePicker = { parent in
@@ -500,8 +526,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         XCTAssertNoThrow(
             try state.commandRegistry.invokeById(id: SlateCommandID.newFromTemplate))
         XCTAssertEqual(
-            pickerParents, [""],
-            "the shipped Template command must remain rooted and selection-independent")
+            pickerParents, ["Folder"],
+            "the shipped Template command must preserve the frozen folder destination")
         XCTAssertNil(state.templatePickerTask)
         XCTAssertFalse(state.isTemplatePickerOpen)
     }
@@ -526,6 +552,10 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             named: "projection-reasons",
             files: ["Note.md"],
             folders: ["Folder"])
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
         let owner = ObjectIdentifier(try XCTUnwrap(state.currentSession))
         let markdown = SidebarSelectionSnapshot(
             sessionIdentity: owner,
@@ -544,10 +574,10 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             try evaluation(SlateCommandID.duplicateEntry, in: capability).disabledReason,
             "Select exactly one file to duplicate.")
         let template = try evaluation(SlateCommandID.newFromTemplate, in: capability)
-        XCTAssertNil(template.disabledReason)
-        XCTAssertEqual(template.intent?.snapshot.items, [])
-        XCTAssertNil(template.intent?.snapshot.focusedPath)
-        XCTAssertEqual(template.intent?.snapshot.creationParent, "")
+        XCTAssertEqual(
+            template.disabledReason,
+            "Select no more than one item to choose a creation location.")
+        XCTAssertNil(template.intent)
 
         XCTAssertTrue(state.publishSidebarSelectionSnapshot(markdown))
         let busy = "Another file operation is still running."
@@ -952,6 +982,11 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             structuralAnchor: ".accessibilityActions", in: fileRegion)
         let fileContextRegion = try pairedBlockBody(
             structuralAnchor: ".contextMenu {", in: fileRegion)
+        let folderContext = normalized(folderContextRegion.structural)
+        XCTAssertGreaterThanOrEqual(
+            occurrences(of: "SlateCommandID.newFromTemplate", in: folderContext),
+            2,
+            "the live folder New submenu must both detect and render Template")
         let actionOwners: [(String, SourceRegion)] = [
             ("catalog renderer", rendererRegion),
             ("folder VoiceOver", folderVoiceOverRegion),
@@ -1154,7 +1189,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             (
                 "folder", folderStructure,
                 [
-                    "SlateCommandID.newNote, SlateCommandID.newFolder",
+                    "SlateCommandID.newNote, SlateCommandID.newFolder, SlateCommandID.newFromTemplate",
                     "SlateCommandID.renameEntry, SlateCommandID.moveTo",
                     "SlateCommandID.revealInFinder, SlateCommandID.copyPath",
                     "SlateCommandID.deleteEntry",
