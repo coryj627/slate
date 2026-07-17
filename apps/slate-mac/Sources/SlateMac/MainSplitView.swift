@@ -1060,22 +1060,26 @@ struct MainSplitView: View {
                 )
             }
             ToolbarItem(id: "template", placement: .secondaryAction) {
-                Button {
-                    appState.openTemplatePicker()
-                } label: {
-                    SlateSymbol.newFromTemplate.label()
+                let evaluation = appState.sidebarActionProjection(surface: .toolbar)
+                    .first { $0.id == SlateCommandID.newFromTemplate }
+                if let evaluation {
+                    Button {
+                        guard let intent = evaluation.intent else { return }
+                        do {
+                            _ = try appState.dispatchSidebarAction(intent)
+                        } catch {
+                            appState.postMutationAnnouncement(
+                                error.sidebarActionAnnouncement)
+                        }
+                    } label: {
+                        SlateSymbol.newFromTemplate.label()
+                    }
+                    // ⇧⌘N remains File-menu-owned. The toolbar is the
+                    // click/AX home for the same frozen catalog evaluation.
+                    .disabled(evaluation.disabledReason != nil)
+                    .accessibilityHint(evaluation.disabledReason ?? evaluation.definition.accessibilityHint)
+                    .help(evaluation.disabledReason ?? evaluation.definition.accessibilityHint)
                 }
-                // ⇧⌘N lives on File ▸ New from Template… (#422 — see
-                // the Save button above). Click/AX-activate only.
-                .disabled(appState.isMutatingStructure)
-                .accessibilityHint(
-                    appState.structuralMutationDisabledReason
-                        ?? "Opens the template picker. Command-Shift-N. Escape closes."
-                )
-                .help(
-                    appState.structuralMutationDisabledReason
-                        ?? "Opens the template picker. Command-Shift-N. Escape closes."
-                )
             }
             ToolbarItem(id: "tasksReview", placement: .secondaryAction) {
                 Button {

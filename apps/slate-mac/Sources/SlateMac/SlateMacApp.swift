@@ -15,6 +15,49 @@ import SwiftUI
 struct SlateMacApp: App {
     @StateObject private var appState = AppState()
 
+    /// File owns familiar macOS grouping without changing the catalog's stable
+    /// Open-first order used by the command palette and registry.
+    enum SidebarFileMenuActionGroup: CaseIterable {
+        case creation
+        case open
+        case management
+        case inspection
+        case destructive
+
+        var actionIDs: [String] {
+            switch self {
+            case .creation:
+                return [
+                    SlateCommandID.newNote, SlateCommandID.newFolder,
+                    SlateCommandID.newFromTemplate,
+                ]
+            case .open:
+                return [SlateCommandID.sidebarOpen]
+            case .management:
+                return [
+                    SlateCommandID.renameEntry, SlateCommandID.moveTo,
+                    SlateCommandID.duplicateEntry,
+                ]
+            case .inspection:
+                return [
+                    SlateCommandID.revealInFinder, SlateCommandID.copyPath,
+                    SlateCommandID.sidebarCopyWikilink,
+                ]
+            case .destructive:
+                return [SlateCommandID.deleteEntry]
+            }
+        }
+    }
+
+    static func sidebarFileMenuEvaluations(
+        for group: SidebarFileMenuActionGroup,
+        from evaluations: [SidebarActionEvaluation]
+    ) -> [SidebarActionEvaluation] {
+        group.actionIDs.compactMap { id in
+            evaluations.first(where: { $0.id == id })
+        }
+    }
+
     init() {
         // Install the slate-core diagnostics sink once at startup (#507).
         // slate-core routes its non-fatal warnings through the Rust `log`
@@ -66,8 +109,16 @@ struct SlateMacApp: App {
             ToolbarCommands()
 
             CommandGroup(replacing: .newItem) {
-                let structuralDisabledReason = appState.structuralMutationDisabledReason
                 let noteSaveDisabledReason = appState.activeNoteSaveDisabledReason
+                let sidebarEvaluations = appState.sidebarActionProjection(
+                    surface: .menuBar)
+
+                // File starts with New-family commands, in the familiar macOS
+                // order, while every item still owns its live catalog state.
+                sidebarFileMenuActions(.creation, evaluations: sidebarEvaluations)
+
+                Divider()
+
                 // ⇧⌘O (#863; was ⌘O): opening a vault is app-level and
                 // rare — bare ⌘O now belongs to Quick Open below, the
                 // Obsidian-parity quick-switcher chord. The welcome
@@ -97,65 +148,15 @@ struct SlateMacApp: App {
                 }
                 .disabled(appState.recentVaults.isEmpty)
 
-                Divider()
+                sidebarFileMenuActions(.open, evaluations: sidebarEvaluations)
 
-                // File-management commands (U2-5, #463). Act on the file tree's
-                // selected node; disabled without a vault (rename/move also
-                // without a selection) so the chords aren't silent no-ops. ⌘⌫
-                // (delete) is deliberately NOT here — it's tree-focused-only,
-                // delivered by the tree's own key handling (spec §U2-5).
-                Button("New Note") {
-                    appState.newNoteCommand()
+                // Quick switcher (#495). ⌘O fuzzy-opens a note by name. With
+                // no vault it falls through to the vault picker, so the chord
+                // remains useful on the welcome screen.
+                Button("Quick Open…") {
+                    appState.openQuickSwitcher()
                 }
-                .keyboardShortcut("n", modifiers: [.command])
-                .disabled(
-                    !appState.isVaultOpen || structuralDisabledReason != nil)
-                .accessibilityHint(
-                    structuralDisabledReason
-                        ?? "Create an untitled note in the selected folder.")
-                .help(
-                    structuralDisabledReason
-                        ?? "Create an untitled note in the selected folder.")
-
-                // ⇧⌘N migrated from the toolbar button's registration
-                // (the #422 dead-zone: a toolbar keyboardShortcut is
-                // unreachable with sidebar focus — the ⌘F lesson). The
-                // toolbar button remains as the click/AX affordance;
-                // the menu item is the single chord owner. Label
-                // matches the palette registration (menu↔palette
-                // naming parity).
-                Button("New from Template…") {
-                    appState.openTemplatePicker()
-                }
-                .keyboardShortcut("n", modifiers: [.command, .shift])
-                .disabled(
-                    !appState.isVaultOpen || structuralDisabledReason != nil)
-                .accessibilityHint(
-                    structuralDisabledReason
-                        ?? "Open the template picker to create a new note.")
-                .help(
-                    structuralDisabledReason
-                        ?? "Open the template picker to create a new note.")
-
-                // No ellipsis (menus.md): creation is immediate
-                // (inline rename follows) — the New Note flow.
-                Button("New Folder") {
-                    appState.newFolderCommand()
-                }
-                .disabled(
-                    !appState.isVaultOpen || structuralDisabledReason != nil)
-                .accessibilityHint(
-                    structuralDisabledReason
-                        ?? "Create a folder in the selected folder.")
-                .help(
-                    structuralDisabledReason
-                        ?? "Create a folder in the selected folder.")
-
-                if let structuralDisabledReason {
-                    Text(structuralDisabledReason)
-                        .accessibilityLabel(structuralDisabledReason)
-                        .help(structuralDisabledReason)
-                }
+                .keyboardShortcut("o", modifiers: [.command])
 
                 Divider()
 
@@ -180,67 +181,17 @@ struct SlateMacApp: App {
                 .help(
                     noteSaveDisabledReason ?? "Save the current note to disk")
 
-                Button("Rename…") {
-                    appState.renameSelectedCommand()
-                }
-                .keyboardShortcut("r", modifiers: [.command, .option])
-                .disabled(
-                    !appState.isVaultOpen
-                        || appState.treeSelectedNode == nil
-                        || structuralDisabledReason != nil)
-                .accessibilityHint(
-                    structuralDisabledReason ?? "Rename the selected item.")
-                .help(
-                    structuralDisabledReason ?? "Rename the selected item.")
+                Divider()
 
-                Button("Move To…") {
-                    appState.moveSelectedCommand()
-                }
-                .keyboardShortcut("m", modifiers: [.command, .shift])
-                .disabled(
-                    !appState.isVaultOpen
-                        || appState.treeSelectedNode == nil
-                        || structuralDisabledReason != nil)
-                .accessibilityHint(
-                    structuralDisabledReason
-                        ?? "Move the selected item to another folder.")
-                .help(
-                    structuralDisabledReason
-                        ?? "Move the selected item to another folder.")
+                sidebarFileMenuActions(.management, evaluations: sidebarEvaluations)
 
-                // Inspection pair — the primary-UI home the context-menu
-                // rule requires (context-menus.md: context items must
-                // also exist in the main interface). Selection-scoped
-                // like Rename/Move To.
-                Button("Reveal in Finder") {
-                    appState.revealSelectedInFinderCommand()
-                }
-                .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
+                Divider()
 
-                Button("Copy Path") {
-                    appState.copySelectedPathCommand()
-                }
-                .disabled(!appState.isVaultOpen || appState.treeSelectedNode == nil)
+                sidebarFileMenuActions(.inspection, evaluations: sidebarEvaluations)
 
-                // Duplicate (#853): file-only (folders are out of the
-                // issue's scope), selection-scoped like the pair above.
-                // No chord — ⌘D belongs to nothing here yet and the
-                // #863 chord map stays untouched. The palette row and
-                // the tree context menu are the other two homes
-                // (context-menus.md redundancy rule).
-                Button("Duplicate") {
-                    appState.duplicateSelectedCommand()
-                }
-                .disabled(
-                    !appState.isVaultOpen
-                        || appState.treeSelectedNode == nil
-                        || appState.treeSelectedNode?.isDirectory == true
-                        || structuralDisabledReason != nil
-                )
-                .accessibilityHint(
-                    structuralDisabledReason ?? "Duplicate the selected file.")
-                .help(
-                    structuralDisabledReason ?? "Duplicate the selected file.")
+                Divider()
+
+                sidebarFileMenuActions(.destructive, evaluations: sidebarEvaluations)
 
                 Divider()
 
@@ -250,19 +201,6 @@ struct SlateMacApp: App {
                 // inside a vault; Close Window remains reachable at ⌘⇧W.
                 // Disabled (not hidden) without a vault so the shortcuts
                 // aren't silent no-ops on the welcome screen.
-                // Quick switcher (#495). ⌘O fuzzy-opens a note by name —
-                // Obsidian's default quick-switcher chord AND the HIG-truer
-                // File ▸ Open (#863 superseded #495's ⌘T choice; Obsidian
-                // itself keeps ⌘T for the tab family). Enabled ALWAYS: with
-                // no vault, `openQuickSwitcher()` falls through to the
-                // vault picker (the requestCommandPalette welcome-guard
-                // pattern, upgraded from an announcement), so ⌘O is never
-                // dead on the welcome screen.
-                Button("Quick Open…") {
-                    appState.openQuickSwitcher()
-                }
-                .keyboardShortcut("o", modifiers: [.command])
-
                 // ⌘T (#863): returned to the tab family as Duplicate Tab —
                 // Slate's "new tab" verb, since a tab always hosts an item
                 // (u1_spec §U1-2: there is no empty-tab page; if one ever
@@ -841,6 +779,62 @@ struct SlateMacApp: App {
         Settings {
             SettingsView()
                 .environmentObject(appState)
+        }
+    }
+
+    /// File-menu-owned key equivalents for the four established Sidebar
+    /// chords. Every other catalog action deliberately returns nil so the menu
+    /// is the single, deterministic shortcut owner.
+    private static func sidebarMenuKeyboardShortcut(
+        for id: String
+    ) -> KeyboardShortcut? {
+        switch id {
+        case SlateCommandID.newNote:
+            return KeyboardShortcut("n", modifiers: [.command])
+        case SlateCommandID.newFromTemplate:
+            return KeyboardShortcut("n", modifiers: [.command, .shift])
+        case SlateCommandID.renameEntry:
+            return KeyboardShortcut("r", modifiers: [.command, .option])
+        case SlateCommandID.moveTo:
+            return KeyboardShortcut("m", modifiers: [.command, .shift])
+        default:
+            return nil
+        }
+    }
+
+    /// One renderer preserves the shared labels, disabled reasons, frozen
+    /// dispatch, destructive role, and four established shortcuts in every
+    /// File-owned catalog group.
+    @ViewBuilder
+    private func sidebarFileMenuActions(
+        _ group: SidebarFileMenuActionGroup,
+        evaluations: [SidebarActionEvaluation]
+    ) -> some View {
+        ForEach(
+            Self.sidebarFileMenuEvaluations(for: group, from: evaluations),
+            id: \.id
+        ) { evaluation in
+            Button(
+                evaluation.definition.label,
+                role: evaluation.definition.isDestructive ? .destructive : nil
+            ) {
+                guard let intent = evaluation.intent else { return }
+                do {
+                    _ = try appState.dispatchSidebarAction(intent)
+                } catch {
+                    appState.postMutationAnnouncement(
+                        error.sidebarActionAnnouncement)
+                }
+            }
+            .disabled(evaluation.disabledReason != nil)
+            .accessibilityHint(
+                evaluation.disabledReason
+                    ?? evaluation.definition.accessibilityHint)
+            .help(
+                evaluation.disabledReason
+                    ?? evaluation.definition.accessibilityHint)
+            .keyboardShortcut(
+                Self.sidebarMenuKeyboardShortcut(for: evaluation.id))
         }
     }
 }

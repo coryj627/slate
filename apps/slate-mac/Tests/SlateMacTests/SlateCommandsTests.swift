@@ -502,6 +502,8 @@ final class SlateCommandsTests: XCTestCase {
 
     /// `keyboardShortcut("X", modifiers: ...)` /
     /// `keyboardShortcut(KeyEquivalent("X"), modifiers: ...)` —
+    /// and the equivalent `KeyboardShortcut("X", modifiers: ...)`
+    /// value returned by a shared dynamic menu helper —
     /// `X` is one of:
     /// - an escaped backslash `\\` (the source text for a `\` key)
     /// - an escaped quote `\"` (the source text for a `"` key)
@@ -525,7 +527,7 @@ final class SlateCommandsTests: XCTestCase {
     private static let quotedKeyRegex: NSRegularExpression = {
         // swiftlint:disable:next force_try
         try! NSRegularExpression(
-            pattern: #"keyboardShortcut\(\s*(?:KeyEquivalent\(\s*)?"((?:\\\\|\\\"|[^"\\]))"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
+            pattern: #"(?:keyboardShortcut|KeyboardShortcut)\(\s*(?:KeyEquivalent\(\s*)?"((?:\\\\|\\\"|[^"\\]))"\s*\)?\s*,\s*modifiers:\s*(\[[^\]]+\]|\.command|\.shift|\.option|\.control|\.function)"#
         )
     }()
 
@@ -947,6 +949,23 @@ final class SlateCommandsTests: XCTestCase {
         XCTAssertEqual(
             SlateCommandsTests.extractChords(from: text),
             ["⌘A", "⇧⌘B", "⌘,"]
+        )
+    }
+
+    /// The shared Sidebar File-menu renderer binds a dynamic helper once per
+    /// catalog row, so its four literal homes are `KeyboardShortcut` values
+    /// returned by that helper rather than four modifier calls. The drift
+    /// scraper must still recognize those menu-bar-reachable chords.
+    func testExtractChordsFindsDynamicKeyboardShortcutConstructors() {
+        let text = """
+            return KeyboardShortcut("n", modifiers: [.command])
+            return KeyboardShortcut("n", modifiers: [.command, .shift])
+            return KeyboardShortcut("r", modifiers: [.command, .option])
+            return KeyboardShortcut("m", modifiers: [.command, .shift])
+            """
+        XCTAssertEqual(
+            SlateCommandsTests.extractChords(from: text),
+            ["⌘N", "⇧⌘N", "⌥⌘R", "⇧⌘M"]
         )
     }
 

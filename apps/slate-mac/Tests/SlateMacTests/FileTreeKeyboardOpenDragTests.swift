@@ -130,7 +130,7 @@ final class FileTreeKeyboardOpenDragTests: XCTestCase {
         RunLoop.main.run(until: Date(timeIntervalSinceNow: interval))
     }
 
-    func testOpenSelectionProjectsOnlyVisibleFilesInFlattenedOrder() {
+    func testOpenSelectionRejectsMixedVisibleFilesAndFolders() {
         let a = fileRow("a.md")
         let hidden = fileRow("hidden.md")
         let folder: FileTreeSidebar.RowID = .node(.dir(99))
@@ -152,7 +152,8 @@ final class FileTreeKeyboardOpenDragTests: XCTestCase {
 
         XCTAssertEqual(
             FileTreeSidebar.openSelectedPaths(from: model, visibleRows: visibleRows),
-            ["a.md", "b.md"])
+            [],
+            "mixed selections must not silently open only their file subset")
     }
 
     func testOpenSelectionKeepsVisibleOrderButOpensFocusedSelectedFileLast() throws {

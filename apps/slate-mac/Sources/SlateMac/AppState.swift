@@ -430,6 +430,12 @@ enum BaseQueryBuilderPreviewExecutionOutcome: Sendable {
     case cancelled
 }
 
+private struct SidebarActionValidationError: LocalizedError {
+    let reason: String
+
+    var errorDescription: String? { reason }
+}
+
 /// Top-level app state.
 ///
 /// Owns the currently-open `VaultSession` (or none, on the welcome
@@ -1186,7 +1192,7 @@ final class AppState: ObservableObject {
     /// MainSplitView's batch-attention result. A second alert is retained in a
     /// typed deferred slot and can only advance after the active UUID resolves.
     enum BatchAlertPresentation: Equatable, Identifiable {
-        case open(FileTreeSidebar.OpenSelectionRequest)
+        case open(SidebarOpenSelectionRequest)
         case result(BatchStructuralResult)
 
         var id: UUID {
@@ -1201,23 +1207,70 @@ final class AppState: ObservableObject {
     @Published private(set) var deferredBatchAlertPresentation: BatchAlertPresentation?
 
     @discardableResult
-    func enqueueOpenSelection(_ request: FileTreeSidebar.OpenSelectionRequest) -> Bool {
+    func enqueueOpenSelection(_ request: SidebarOpenSelectionRequest) -> Bool {
         guard isCurrentOpenSelection(request) else { return false }
         enqueueBatchAlert(.open(request))
         return true
     }
 
-    func confirmOpenSelection(id: UUID) -> [String] {
+    /// Continue one staged multi-open inside AppState. The exact frozen intent,
+    /// current catalog availability, navigation gate, and every filesystem item
+    /// are revalidated before the alert clears or any tab opens.
+    @discardableResult
+    func confirmOpenSelection(id: UUID) -> SidebarOpenConfirmationOutcome {
         guard case .open(let request)? = activeBatchAlertPresentation,
             request.id == id
-        else { return [] }
-        let paths = FileTreeSidebar.resolvedOpenPaths(
-            request,
-            confirmed: true,
-            currentSessionIdentity: currentSession.map(ObjectIdentifier.init))
+        else { return .ignored }
+
+        let validationFailure: String?
+        do {
+            let definition = try validateSidebarActionIntent(request.intent)
+            guard definition.id == SlateCommandID.sidebarOpen else {
+                throw SidebarActionValidationError(
+                    reason: Self.sidebarSelectionChangedReason)
+            }
+            if let preflight = sidebarActionDispatchOverrides.openPreflight {
+                guard preflight(request.batch) else {
+                    throw SidebarActionValidationError(
+                        reason: "\(definition.label) could not start.")
+                }
+            } else if let reason = propertyEditNavigationDisabledReason {
+                throw SidebarActionValidationError(reason: reason)
+            }
+            validationFailure = nil
+        } catch let error as SidebarActionValidationError {
+            validationFailure = error.reason
+        } catch {
+            validationFailure = error.localizedDescription
+        }
+
+        if let validationFailure {
+            return rejectOpenSelectionConfirmation(validationFailure)
+        }
+
+        let executionPaths = request.batch.executionPaths
+        for path in executionPaths {
+            if let openPath = sidebarActionDispatchOverrides.openPath {
+                guard openPath(path, .newTab) else {
+                    return rejectOpenSelectionConfirmation("Open could not start.")
+                }
+            } else {
+                openFile(path, target: .newTab)
+            }
+        }
+
         activeBatchAlertPresentation = nil
         promoteDeferredBatchAlert()
-        return paths
+        return .opened(executionPaths)
+    }
+
+    private func rejectOpenSelectionConfirmation(
+        _ reason: String
+    ) -> SidebarOpenConfirmationOutcome {
+        activeBatchAlertPresentation = nil
+        promoteDeferredBatchAlert()
+        announcer.post(reason, priority: .medium)
+        return .rejected(reason)
     }
 
     @discardableResult
@@ -1309,7 +1362,7 @@ final class AppState: ObservableObject {
     }
 
     private func isCurrentOpenSelection(
-        _ request: FileTreeSidebar.OpenSelectionRequest
+        _ request: SidebarOpenSelectionRequest
     ) -> Bool {
         guard let session = currentSession else { return false }
         return request.sessionIdentity == ObjectIdentifier(session)
@@ -1386,6 +1439,406 @@ final class AppState: ObservableObject {
                 ? try session.renameFolder(path: path, newName: newName)
                 : try session.renameFile(path: path, newName: newName)
         }.value
+    }
+
+    /// Session-tagged, visible-order sidebar selection. This is published by
+    /// the semantic selection model synchronously at the mutation edge; action
+    /// surfaces never infer a batch from the native List's single focus row.
+    @Published private(set) var sidebarSelectionSnapshot: SidebarSelectionSnapshot?
+
+    /// Narrow, optional leaf seams for dispatcher tests. Nil always means the
+    /// production path below, which calls the existing AppState funnel or the
+    /// one unavoidable external boundary directly.
+    struct SidebarActionDispatchOverrides {
+        var openPreflight: ((SidebarOpenSelectionBatch) -> Bool)?
+        var openPath: ((String, OpenTarget) -> Bool)?
+        var createNote: ((String) -> Bool)?
+        var createFolder: ((String) -> Bool)?
+        var openTemplatePicker: ((String) -> Bool)?
+        var rename: ((TreeSelection) -> Bool)?
+        var moveSingle: ((TreeSelection) -> Bool)?
+        var moveBatch: (([TreeSelection], String?) -> Bool)?
+        var duplicate: ((String) -> Bool)?
+        var reveal: ((URL, String) -> Bool)?
+        var wikilink: ((VaultSession, String) throws -> String?)?
+        var trashSingle: ((TreeSelection) -> Bool)?
+        var trashBatch: (([TreeSelection], String?) -> Bool)?
+    }
+
+    var sidebarActionDispatchOverrides = SidebarActionDispatchOverrides()
+
+    /// Deterministic structural-reason seam. Nil preserves the live structural
+    /// writer gate; tests can inject one exact current reason without starting
+    /// unrelated asynchronous work.
+    var sidebarActionStructuralDisabledReasonOverride: String?
+
+    /// Task 4 installs template loading/failed availability here. Keeping the
+    /// resolver AppState-owned lets render projection and activation query the
+    /// same current state without filesystem I/O.
+    var sidebarActionAvailabilityReasonProvider: (String) -> String? = { _ in nil }
+
+    static let sidebarSelectionChangedReason =
+        "The sidebar selection changed. Select the items again and retry."
+    static let sidebarSelectionStaleReason =
+        "That Sidebar action belongs to a vault that is no longer open."
+
+    /// Accept a tree-owned snapshot only while the exact captured native
+    /// session is current. A late publisher from a replaced tree is ignored;
+    /// it is never re-stamped with the replacement session identity.
+    @discardableResult
+    func publishSidebarSelectionSnapshot(_ snapshot: SidebarSelectionSnapshot) -> Bool {
+        guard let session = currentSession,
+            ObjectIdentifier(session) == snapshot.sessionIdentity
+        else { return false }
+        sidebarSelectionSnapshot = snapshot
+        let focusedItem = snapshot.focusedPath.flatMap { focusedPath in
+            snapshot.items.first(where: { $0.path == focusedPath })
+        }
+        treeSelectedNode = focusedItem.map {
+            TreeSelection(path: $0.path, isDirectory: $0.isDirectory)
+        }
+        return true
+    }
+
+    /// Revalidate a frozen invocation against the owning session and the live
+    /// filesystem before any multi-item action performs its first side effect.
+    /// Every path component is checked with lstat semantics, so both live and
+    /// dangling symlinks fail closed and an intermediate link cannot escape the
+    /// vault root.
+    @discardableResult
+    func validateSidebarActionIntent(
+        _ intent: SidebarActionCatalog.InvocationIntent
+    ) throws -> SidebarActionDefinition {
+        guard let session = currentSession, let vaultURL = currentVaultURL,
+            ObjectIdentifier(session) == intent.snapshot.sessionIdentity
+        else {
+            throw SidebarActionValidationError(reason: Self.sidebarSelectionStaleReason)
+        }
+        guard let evaluation = SidebarActionCatalog.evaluation(
+            for: intent.actionID,
+            snapshot: intent.snapshot,
+            structuralMutationDisabledReason:
+                sidebarActionStructuralDisabledReasonOverride
+                ?? structuralMutationDisabledReason,
+            actionDisabledReasons: sidebarActionDisabledReasons)
+        else {
+            throw SidebarActionValidationError(reason: Self.sidebarSelectionChangedReason)
+        }
+        guard let acceptedIntent = evaluation.intent,
+            acceptedIntent == intent
+        else {
+            throw SidebarActionValidationError(
+                reason: evaluation.disabledReason ?? Self.sidebarSelectionChangedReason)
+        }
+
+        for item in intent.snapshot.items {
+            try validateSidebarSelectionItem(
+                item, vaultURL: vaultURL)
+        }
+        return evaluation.definition
+    }
+
+    /// Capture the current sidebar state exactly once, then route through the
+    /// same frozen-intent executor used by every other action surface.
+    func dispatchSidebarAction(id: String) throws -> SidebarActionDispatchResult {
+        guard let evaluation = sidebarActionProjection(surface: .commandPalette)
+            .first(where: { $0.id == id })
+        else {
+            throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
+        }
+        guard let frozenIntent = evaluation.intent else {
+            throw sidebarActionFailure(
+                evaluation.disabledReason ?? Self.sidebarSelectionChangedReason)
+        }
+        return try dispatchSidebarAction(frozenIntent)
+    }
+
+    /// The one sidebar action executor. Validation finishes for the complete
+    /// frozen selection before this switch reaches any AppState funnel or
+    /// external boundary. Synchronous failures are returned to the caller;
+    /// Task 3 owns Copy side effects and announcements.
+    func dispatchSidebarAction(
+        _ intent: SidebarActionInvocationIntent
+    ) throws -> SidebarActionDispatchResult {
+        let definition: SidebarActionDefinition
+        do {
+            definition = try validateSidebarActionIntent(intent)
+        } catch let error as SidebarActionValidationError {
+            throw sidebarActionFailure(error.reason)
+        } catch {
+            throw sidebarActionFailure(error.localizedDescription)
+        }
+
+        let rejected = "\(definition.label) could not start."
+        switch intent.actionID {
+        case SlateCommandID.sidebarOpen:
+            let batch = SidebarOpenSelectionBatch(
+                paths: intent.snapshot.items.map(\.path),
+                focusedPath: intent.snapshot.focusedPath)
+            if let preflight = sidebarActionDispatchOverrides.openPreflight {
+                guard preflight(batch) else { throw sidebarActionFailure(rejected) }
+            } else if let reason = propertyEditNavigationDisabledReason {
+                throw sidebarActionFailure(reason)
+            }
+
+            if batch.paths.count >= 10 {
+                let request = SidebarOpenSelectionRequest(intent: intent)
+                guard enqueueOpenSelection(request) else {
+                    throw sidebarActionFailure(rejected)
+                }
+                return .openConfirmation(request)
+            }
+
+            let executionPaths = batch.executionPaths
+            let openTarget: OpenTarget = executionPaths.count == 1
+                ? .currentTab : .newTab
+            for path in executionPaths {
+                if let openPath = sidebarActionDispatchOverrides.openPath {
+                    guard openPath(path, openTarget) else {
+                        throw sidebarActionFailure(rejected)
+                    }
+                } else {
+                    openFile(path, target: openTarget)
+                }
+            }
+            return .opened(executionPaths)
+
+        case SlateCommandID.newNote:
+            let parent = try canonicalSidebarCreationParent(
+                for: intent.snapshot, rejection: rejected)
+            let admitted: Bool
+            if let createNote = sidebarActionDispatchOverrides.createNote {
+                admitted = createNote(parent)
+            } else if let task = requestCreateNote(in: parent) {
+                pendingStructuralTaskForTesting = task
+                admitted = true
+            } else {
+                admitted = false
+            }
+            guard admitted else { throw sidebarActionFailure(rejected) }
+            return .completed(actionID: intent.actionID)
+
+        case SlateCommandID.newFolder:
+            let parent = try canonicalSidebarCreationParent(
+                for: intent.snapshot, rejection: rejected)
+            let admitted = sidebarActionDispatchOverrides.createFolder?(parent)
+                ?? requestCreateFolder(in: parent)
+            guard admitted else { throw sidebarActionFailure(rejected) }
+            return .completed(actionID: intent.actionID)
+
+        case SlateCommandID.newFromTemplate:
+            guard intent.snapshot.items.isEmpty,
+                intent.snapshot.focusedPath == nil,
+                intent.snapshot.creationParent.isEmpty
+            else {
+                throw sidebarActionFailure(rejected)
+            }
+            let admitted = sidebarActionDispatchOverrides.openTemplatePicker?("")
+                ?? (openTemplatePicker() != nil)
+            guard admitted else { throw sidebarActionFailure(rejected) }
+            return .completed(actionID: intent.actionID)
+
+        case SlateCommandID.renameEntry:
+            let item = intent.snapshot.items[0]
+            let selection = TreeSelection(
+                path: item.path, isDirectory: item.isDirectory)
+            let admitted = sidebarActionDispatchOverrides.rename?(selection)
+                ?? requestRename(
+                    path: selection.path, isDirectory: selection.isDirectory)
+            guard admitted else { throw sidebarActionFailure(rejected) }
+            return .completed(actionID: intent.actionID)
+
+        case SlateCommandID.moveTo:
+            let selections = intent.snapshot.items.map {
+                TreeSelection(path: $0.path, isDirectory: $0.isDirectory)
+            }
+            let admitted: Bool
+            if selections.count == 1, let selection = selections.first {
+                admitted = sidebarActionDispatchOverrides.moveSingle?(selection)
+                    ?? requestPendingMove(
+                        path: selection.path, isDirectory: selection.isDirectory)
+            } else {
+                admitted = sidebarActionDispatchOverrides.moveBatch?(
+                    selections, intent.snapshot.focusedPath)
+                    ?? requestBatchMove(
+                        selections,
+                        preferredFocusPath: intent.snapshot.focusedPath)
+            }
+            guard admitted else { throw sidebarActionFailure(rejected) }
+            return .completed(actionID: intent.actionID)
+
+        case SlateCommandID.duplicateEntry:
+            let path = intent.snapshot.items[0].path
+            let admitted: Bool
+            if let duplicate = sidebarActionDispatchOverrides.duplicate {
+                admitted = duplicate(path)
+            } else if let task = requestDuplicateEntry(path: path) {
+                pendingStructuralTaskForTesting = task
+                admitted = true
+            } else {
+                admitted = false
+            }
+            guard admitted else { throw sidebarActionFailure(rejected) }
+            return .completed(actionID: intent.actionID)
+
+        case SlateCommandID.revealInFinder:
+            guard let vaultURL = currentVaultURL else {
+                throw sidebarActionFailure(rejected)
+            }
+            let path = intent.snapshot.items[0].path
+            let admitted: Bool
+            if let reveal = sidebarActionDispatchOverrides.reveal {
+                admitted = reveal(vaultURL, path)
+            } else {
+                NSWorkspace.shared.activateFileViewerSelecting([
+                    vaultURL.appendingPathComponent(path)
+                ])
+                admitted = true
+            }
+            guard admitted else { throw sidebarActionFailure(rejected) }
+            return .completed(actionID: intent.actionID)
+
+        case SlateCommandID.copyPath:
+            return .copyPrepared(.path(intent.snapshot.items[0].path))
+
+        case SlateCommandID.sidebarCopyWikilink:
+            guard let session = currentSession else {
+                throw sidebarActionFailure(rejected)
+            }
+            let path = intent.snapshot.items[0].path
+            let value: String?
+            do {
+                if let wikilink = sidebarActionDispatchOverrides.wikilink {
+                    value = try wikilink(session, path)
+                } else {
+                    value = try session.wikilinkForPath(path: path)
+                }
+            } catch {
+                throw sidebarActionFailure(error.localizedDescription)
+            }
+            guard let value else { throw sidebarActionFailure(rejected) }
+            return .copyPrepared(.wikilink(value))
+
+        case SlateCommandID.deleteEntry:
+            let selections = intent.snapshot.items.map {
+                TreeSelection(path: $0.path, isDirectory: $0.isDirectory)
+            }
+            let admitted: Bool
+            if selections.count == 1, let selection = selections.first {
+                admitted = sidebarActionDispatchOverrides.trashSingle?(selection)
+                    ?? requestDeleteEntry(
+                        path: selection.path, isDirectory: selection.isDirectory)
+            } else {
+                admitted = sidebarActionDispatchOverrides.trashBatch?(
+                    selections, intent.snapshot.focusedPath)
+                    ?? requestBatchDelete(
+                        selections,
+                        preferredFocusPath: intent.snapshot.focusedPath)
+            }
+            guard admitted else { throw sidebarActionFailure(rejected) }
+            return .completed(actionID: intent.actionID)
+
+        default:
+            throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
+        }
+    }
+
+    private func canonicalSidebarCreationParent(
+        for snapshot: SidebarSelectionSnapshot,
+        rejection: String
+    ) throws -> String {
+        guard snapshot.items.count <= 1 else {
+            throw sidebarActionFailure(rejection)
+        }
+        guard let item = snapshot.items.first else {
+            guard snapshot.focusedPath == nil, snapshot.creationParent.isEmpty else {
+                throw sidebarActionFailure(rejection)
+            }
+            return ""
+        }
+        guard snapshot.focusedPath == item.path else {
+            throw sidebarActionFailure(rejection)
+        }
+        let expected = item.isDirectory
+            ? item.path
+            : (TreeMutation.parentPath(of: item.path) ?? "")
+        guard snapshot.creationParent == expected else {
+            throw sidebarActionFailure(rejection)
+        }
+        return expected
+    }
+
+    private func sidebarActionFailure(_ reason: String) -> CommandError {
+        .ActionFailed(message: reason)
+    }
+
+    var sidebarActionDisabledReasons: [String: String] {
+        Dictionary(uniqueKeysWithValues: SidebarActionCatalog.actions.compactMap { action in
+            sidebarActionAvailabilityReasonProvider(action.id).map { (action.id, $0) }
+        })
+    }
+
+    /// One synchronous, side-effect-free projection feeds every Sidebar
+    /// action surface. The catalog owns capability and ordering; AppState adds
+    /// only current state that the pure catalog cannot own.
+    func sidebarActionProjection(
+        surface: SidebarActionSurface
+    ) -> [SidebarActionEvaluation] {
+        let capturedSnapshot = sidebarSelectionSnapshot
+        var actionDisabledReasons = sidebarActionDisabledReasons
+        if let propertyEditNavigationDisabledReason {
+            actionDisabledReasons[SlateCommandID.sidebarOpen] =
+                propertyEditNavigationDisabledReason
+        }
+        return SidebarActionCatalog.project(
+            surface: surface,
+            snapshot: capturedSnapshot,
+            structuralMutationDisabledReason:
+                sidebarActionStructuralDisabledReasonOverride
+                ?? structuralMutationDisabledReason,
+            actionDisabledReasons: actionDisabledReasons)
+    }
+
+    private func validateSidebarSelectionItem(
+        _ item: SidebarSelectionItem,
+        vaultURL: URL
+    ) throws {
+        let normalized: String
+        switch Self.normalizeBatchTrashAdmissionPath(item.path) {
+        case .normalized(let path):
+            normalized = path
+        case .invalid:
+            throw SidebarActionValidationError(reason: Self.sidebarSelectionChangedReason)
+        }
+        guard !normalized.isEmpty, normalized == item.path else {
+            throw SidebarActionValidationError(reason: Self.sidebarSelectionChangedReason)
+        }
+
+        let components = normalized.split(separator: "/", omittingEmptySubsequences: false)
+        var candidate = vaultURL
+        for (index, component) in components.enumerated() {
+            candidate.appendPathComponent(String(component), isDirectory: false)
+            guard let attributes = try? FileManager.default.attributesOfItem(
+                atPath: candidate.path),
+                let type = attributes[.type] as? FileAttributeType,
+                type != .typeSymbolicLink
+            else {
+                throw SidebarActionValidationError(reason: Self.sidebarSelectionChangedReason)
+            }
+            let isLast = index == components.index(before: components.endIndex)
+            if !isLast, type != .typeDirectory {
+                throw SidebarActionValidationError(reason: Self.sidebarSelectionChangedReason)
+            }
+            if isLast {
+                let typeMatches = item.isDirectory
+                    ? type == .typeDirectory
+                    : type == .typeRegular
+                guard typeMatches else {
+                    throw SidebarActionValidationError(
+                        reason: Self.sidebarSelectionChangedReason)
+                }
+            }
+        }
     }
 
     /// The tree's currently-selected node (file OR folder), mirrored from
@@ -5655,6 +6108,11 @@ final class AppState: ObservableObject {
             invalidateNoteAuthoringOwnership()
             currentSession = session
             currentVaultURL = url
+            sidebarSelectionSnapshot = SidebarSelectionSnapshot(
+                sessionIdentity: ObjectIdentifier(session),
+                items: [],
+                focusedPath: nil,
+                creationParent: "")
             lastError = nil
             loadSidebarVaultPreferences(at: url)
             // Load this vault's file-recents (#495) now that the store's
@@ -5815,12 +6273,14 @@ final class AppState: ObservableObject {
             sidebarVaultPrefsNotice = nil
             currentSession = nil
             currentVaultURL = nil
+            sidebarSelectionSnapshot = nil
             lastError = humanReadable(error)
         } catch {
             sidebarVaultPrefsStore = nil
             sidebarVaultPrefsNotice = nil
             currentSession = nil
             currentVaultURL = nil
+            sidebarSelectionSnapshot = nil
             lastError = error.localizedDescription
         }
     }
@@ -6521,6 +6981,7 @@ final class AppState: ObservableObject {
         // the live session.
         unregisterVaultEventListener()
         currentSession = nil
+        sidebarSelectionSnapshot = nil
         currentVaultURL = nil
         sidebarVaultPrefsStore = nil
         sidebarVaultPrefsNotice = nil
@@ -11861,12 +12322,15 @@ final class AppState: ObservableObject {
     /// `deleteEntry`. `knownChildCount` lets the tree pass its node's cached
     /// immediate count; callers without one (the selection-scoped command)
     /// leave it nil and a shallow FileManager enumerate fills in.
-    func requestDeleteEntry(path: String, isDirectory: Bool, knownChildCount: Int? = nil) {
-        guard let session = currentSession else { return }
-        guard admitStructuralMutationRequest() else { return }
+    @discardableResult
+    func requestDeleteEntry(
+        path: String, isDirectory: Bool, knownChildCount: Int? = nil
+    ) -> Bool {
+        guard let session = currentSession else { return false }
+        guard admitStructuralMutationRequest() else { return false }
         guard admitBatchTrashMutation(
             of: [StructuralBatchItem(path: path, isDirectory: isDirectory)])
-        else { return }
+        else { return false }
         if isDirectory {
             // A cached count of ZERO is treated as unknown: the tree's
             // itemCount can be stale (folder filled externally since the
@@ -11881,10 +12345,14 @@ final class AppState: ObservableObject {
                     sessionIdentity: ObjectIdentifier(session),
                     path: path,
                     itemCount: count)
-                return
+                return true
             }
         }
-        pendingStructuralTaskForTesting = deleteEntry(path: path, isDirectory: isDirectory)
+        guard let task = deleteEntry(path: path, isDirectory: isDirectory) else {
+            return false
+        }
+        pendingStructuralTaskForTesting = task
+        return true
     }
 
     /// Alert "Move to Trash" — run the staged folder delete through the
@@ -11989,9 +12457,8 @@ final class AppState: ObservableObject {
         // A single item routes through the single funnel so it gets the exact
         // #860 single-folder confirmation copy (and its own announcement).
         if items.count == 1, let only = items.first {
-            requestDeleteEntry(
+            return requestDeleteEntry(
                 path: only.path, isDirectory: only.isDirectory)
-            return true
         }
         guard let vaultURL = currentVaultURL else { return false }
         let capturedItems = items
@@ -13530,9 +13997,10 @@ final class AppState: ObservableObject {
     /// Create a new folder in an EXPLICIT parent (the context-menu path, which
     /// targets the right-clicked folder rather than the current selection), then
     /// drop into inline rename of the new folder.
-    func newFolderInContext(parent: String) {
-        guard let session = currentSession else { return }
-        guard admitStructuralMutationRequest() else { return }
+    @discardableResult
+    func newFolderInContext(parent: String) -> Bool {
+        guard let session = currentSession else { return false }
+        guard admitStructuralMutationRequest() else { return false }
         let name = uniqueUntitledFolderName(in: parent)
         let path = Self.joinVaultPath(parent, name)
         guard
@@ -13544,11 +14012,20 @@ final class AppState: ObservableObject {
                     self.installRenameForCreatedEntry(
                         path: path, isDirectory: true, session: session)
                 })
-        else { return }
+        else { return false }
         // Retain the admitted CREATE itself. Its explicit result callback owns
         // the dependent rename stage; no outer Task can make a busy reject or
         // failed create look accepted.
         pendingStructuralTaskForTesting = task
+        return true
+    }
+
+    /// Dispatcher-facing New Folder admission. The existing contextual funnel
+    /// remains the one implementation so placeholder naming, task retention,
+    /// and exact-session rename staging cannot drift between surfaces.
+    @discardableResult
+    func requestCreateFolder(in parent: String) -> Bool {
+        newFolderInContext(parent: parent)
     }
 
     /// ⌘⌥R — rename the selected node. Enters inline-rename mode (the tree row

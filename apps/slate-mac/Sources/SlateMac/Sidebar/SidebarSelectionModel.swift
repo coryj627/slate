@@ -12,6 +12,22 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
         let identity: Identity
         let path: String
         let isDirectory: Bool
+        /// Indexed file metadata captured from the live tree. Directories are
+        /// always false. Callers that only exercise selection geometry may
+        /// omit it; production tree rows always pass the `FileSummary` value.
+        let isMarkdown: Bool
+
+        init(
+            identity: Identity,
+            path: String,
+            isDirectory: Bool,
+            isMarkdown: Bool = false
+        ) {
+            self.identity = identity
+            self.path = path
+            self.isDirectory = isDirectory
+            self.isMarkdown = isDirectory ? false : isMarkdown
+        }
     }
 
     struct KnownMove: Equatable {

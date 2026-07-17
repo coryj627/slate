@@ -17,6 +17,11 @@ import Foundation
 /// matches the corresponding `CommandSection` so a reader can map
 /// an id to its palette grouping at a glance.
 enum SlateCommandID {
+    // Sidebar action IDs introduced by FL04-A. Historical `slate.file.*`
+    // identifiers below remain stable and are projected into `.sidebar`.
+    static let sidebarOpen = "slate.sidebar.open"
+    static let sidebarCopyWikilink = "slate.sidebar.copyWikilink"
+
     // File
     static let newFromTemplate = "slate.file.newFromTemplate"
     // File management (U2-5, #463). Act on the tree's selected node.
@@ -363,15 +368,17 @@ enum SlateCommandID {
     /// a matching `Command` in the registry — future menu additions
     /// without a registration here fail the test loudly.
     static let all: [String] = [
-        newFromTemplate,
+        sidebarOpen,
         newNote,
         newFolder,
+        newFromTemplate,
         renameEntry,
         moveTo,
-        deleteEntry,
+        duplicateEntry,
         revealInFinder,
         copyPath,
-        duplicateEntry,
+        sidebarCopyWikilink,
+        deleteEntry,
         printNote,
         jumpToBibliography,
         quickOpen,
@@ -553,6 +560,37 @@ final class MenuCommandAction: CommandAction, @unchecked Sendable {
     }
 }
 
+/// Register the exact shared Sidebar catalog once. The injected stable-ID
+/// executor keeps this owner independently testable while production routes
+/// every entry through AppState's live projection and frozen dispatcher.
+@MainActor
+func registerSidebarCommands(
+    into registry: CommandRegistry,
+    invokeID: @escaping @MainActor (String) throws -> Void
+) {
+    for definition in SidebarActionCatalog.actions {
+        let hotkey: String?
+        switch definition.id {
+        case SlateCommandID.newNote: hotkey = "⌘N"
+        case SlateCommandID.newFromTemplate: hotkey = "⇧⌘N"
+        case SlateCommandID.renameEntry: hotkey = "⌥⌘R"
+        case SlateCommandID.moveTo: hotkey = "⇧⌘M"
+        default: hotkey = nil
+        }
+        let replaced = registry.register(
+            command: Command(
+                id: definition.id,
+                label: definition.label,
+                accessibilityHint: definition.accessibilityHint,
+                hotkeyHint: hotkey,
+                section: .sidebar),
+            action: MenuCommandAction {
+                try invokeID(definition.id)
+            })
+        assert(!replaced, "duplicate Sidebar command id: \(definition.id)")
+    }
+}
+
 /// Wire every existing menu item exposed by `MainSplitView`,
 /// `SlateMacApp`, and `PropertiesPanel` into the `CommandRegistry`
 /// so the palette mirrors the menus. Called once from
@@ -620,15 +658,10 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         }
     }
 
-    // ----- File -----
-
-    registerStructural(
-        SlateCommandID.newFromTemplate,
-        label: "New from Template…",
-        section: .file,
-        hotkey: "⇧⌘N",
-        hint: "Open the template picker to create a new note."
-    ) { appState in appState.openTemplatePicker() }
+    registerSidebarCommands(into: registry) { [weak appState] id in
+        guard let appState else { return }
+        _ = try appState.dispatchSidebarAction(id: id)
+    }
 
     // ----- Canvas (Milestone T, #369) -----
 
@@ -1243,80 +1276,6 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
         section: .bases,
         hint: "Remove the selected condition row from the open query builder."
     ) { [weak appState] in appState?.basesBuilderRemoveCondition() }
-
-    // ----- File management (U2-5, #463) -----
-
-    registerStructural(
-        SlateCommandID.newNote,
-        label: "New Note",
-        section: .file,
-        hotkey: "⌘N",
-        hint: "Create an untitled note in the selected folder, then rename it."
-    ) { $0.newNoteCommand() }
-
-    registerStructural(
-        SlateCommandID.newFolder,
-        // No ellipsis (menus.md): the folder is created IMMEDIATELY
-        // ("Untitled Folder" + inline rename) — same flow as the
-        // ellipsis-free New Note; nothing gathers input first.
-        label: "New Folder",
-        section: .file,
-        // No global shortcut (spec §U2-5) — context menu + palette only.
-        hint: "Create a new folder in the selected folder, then rename it."
-    ) { $0.newFolderCommand() }
-
-    registerStructural(
-        SlateCommandID.renameEntry,
-        label: "Rename…",
-        section: .file,
-        hotkey: "⌥⌘R",
-        hint: "Rename the selected file or folder in place."
-    ) { $0.renameSelectedCommand() }
-
-    registerStructural(
-        SlateCommandID.moveTo,
-        // "Move To…" — the-menu-bar.md's canonical item spelling
-        // (title-style: the last word is always capitalized).
-        label: "Move To…",
-        section: .file,
-        hotkey: "⇧⌘M",
-        hint: "Move the selected file or folder to another folder."
-    ) { $0.moveSelectedCommand() }
-
-    registerStructural(
-        SlateCommandID.deleteEntry,
-        label: "Move to Trash",
-        section: .file,
-        // No hotkeyHint: ⌘⌫ is tree-focused-only (spec §U2-5), delivered by the
-        // file tree's own key handling — not a menu-bar chord. Registering a
-        // hotkeyHint here would make it a drift-check orphan (no menu binding)
-        // AND collide with PropertyEditorRow's sheet-scoped ⌘⌫ in
-        // `deliberatelyUnregisteredChords`. The palette row invokes on Return.
-        hint: "Move the selected file or folder to the Trash."
-    ) { $0.deleteSelectedCommand() }
-
-    register(
-        SlateCommandID.revealInFinder,
-        label: "Reveal in Finder",
-        section: .file,
-        // No chord — inspection action; context menu + File menu + palette.
-        hint: "Show the selected file or folder in Finder."
-    ) { [weak appState] in appState?.revealSelectedInFinderCommand() }
-
-    register(
-        SlateCommandID.copyPath,
-        label: "Copy Path",
-        section: .file,
-        hint: "Copy the selected item's full filesystem path."
-    ) { [weak appState] in appState?.copySelectedPathCommand() }
-
-    registerStructural(
-        SlateCommandID.duplicateEntry,
-        label: "Duplicate",
-        section: .file,
-        // No chord (#853) — menu + palette + context menu only.
-        hint: "Duplicate the selected file as a copy next to it."
-    ) { $0.duplicateSelectedCommand() }
 
     register(
         SlateCommandID.printNote,
