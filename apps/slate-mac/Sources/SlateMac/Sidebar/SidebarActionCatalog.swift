@@ -4,7 +4,7 @@
 import Foundation
 
 /// One live row captured from the sidebar's visible-order selection.
-struct SidebarSelectionItem: Equatable, Hashable {
+struct SidebarSelectionItem: Equatable, Hashable, Sendable {
     let path: String
     let isDirectory: Bool
     let isMarkdown: Bool
@@ -54,6 +54,9 @@ struct SidebarSelectionSnapshot: Equatable {
 
 enum SidebarActionCapability: Equatable {
     case oneOrMoreFiles
+    /// The action belongs to the open vault, not the current row selection.
+    /// Its intent is always canonicalized to an empty/root snapshot.
+    case vaultRoot
     case zeroOrOneItem
     case exactlyOneItem
     case oneOrMoreItems
@@ -189,6 +192,8 @@ struct SidebarOpenSelectionRequest: Equatable, Identifiable {
 /// they never receive paths to execute independently.
 enum SidebarOpenConfirmationOutcome: Equatable {
     case opened([String])
+    /// A large confirmed batch is being validated away from the main actor.
+    case validationPending
     case rejected(String)
     case ignored
 }
@@ -203,6 +208,10 @@ enum SidebarOpenSelectionDisposition: Equatable {
 /// completed all of their effects inside AppState.
 enum SidebarActionDispatchResult: Equatable {
     case completed(actionID: String)
+    /// Copy Wikilink is formatting away from the main actor.
+    case copyPending(actionID: String)
+    /// Complete filesystem admission is running away from the main actor.
+    case validationPending(actionID: String)
     case opened([String])
     case openConfirmation(SidebarOpenSelectionRequest)
 }
@@ -231,27 +240,27 @@ enum SidebarActionCatalog {
         action(
             SlateCommandID.newNote, "New Note", .newNote, .zeroOrOneItem,
             "Create an untitled note in the selected location, then rename it.",
-            mutation: true, undo: .historyBarrier),
+            blocksDuringStructuralMutation: true, undo: .historyBarrier),
         action(
             SlateCommandID.newFolder, "New Folder", .newFolder, .zeroOrOneItem,
             "Create a new folder in the selected location, then rename it.",
-            mutation: true, undo: .historyBarrier),
+            blocksDuringStructuralMutation: true, undo: .historyBarrier),
         action(
             SlateCommandID.newFromTemplate, "New Note from Template…", .newFromTemplate,
-            .zeroOrOneItem, "Choose a template for a new note.",
-            mutation: true, undo: .historyBarrier),
+            .vaultRoot, "Choose a template for a new note.",
+            blocksDuringStructuralMutation: true, undo: .historyBarrier),
         action(
             SlateCommandID.renameEntry, "Rename…", .rename, .exactlyOneItem,
             "Rename the selected file or folder in place.",
-            mutation: true, undo: .slateUndo),
+            blocksDuringStructuralMutation: true, undo: .slateUndo),
         action(
             SlateCommandID.moveTo, "Move To…", .moveTo, .oneOrMoreItems,
             "Move the selected files or folders to another folder.",
-            mutation: true, undo: .slateUndo),
+            blocksDuringStructuralMutation: true, undo: .slateUndo),
         action(
             SlateCommandID.duplicateEntry, "Duplicate", .duplicate, .exactlyOneFile,
             "Duplicate the selected file as a copy next to it.",
-            mutation: true, undo: .historyBarrier),
+            blocksDuringStructuralMutation: true, undo: .historyBarrier),
         action(
             SlateCommandID.revealInFinder, "Reveal in Finder", .revealInFinder,
             .exactlyOneItem, "Show the selected file or folder in Finder."),
@@ -260,11 +269,13 @@ enum SidebarActionCatalog {
             "Copy the selected item's path."),
         action(
             SlateCommandID.sidebarCopyWikilink, "Copy Wikilink", .copyWikilink,
-            .exactlyOneMarkdownFile, "Copy a wikilink to the selected Markdown file."),
+            .exactlyOneMarkdownFile, "Copy a wikilink to the selected Markdown file.",
+            blocksDuringStructuralMutation: true),
         action(
             SlateCommandID.deleteEntry, "Move to Trash", .trash, .oneOrMoreItems,
             "Move the selected files or folders to the Trash.",
-            mutation: true, destructive: true, undo: .notUndoable),
+            blocksDuringStructuralMutation: true,
+            destructive: true, undo: .notUndoable),
     ]
 
     private static func action(
@@ -273,7 +284,7 @@ enum SidebarActionCatalog {
         _ symbol: SlateSymbol,
         _ capability: SidebarActionCapability,
         _ hint: String,
-        mutation: Bool = false,
+        blocksDuringStructuralMutation: Bool = false,
         destructive: Bool = false,
         undo: SidebarActionUndoBehavior = .noChange
     ) -> SidebarActionDefinition {
@@ -284,7 +295,7 @@ enum SidebarActionCatalog {
             section: .sidebar,
             capability: capability,
             accessibilityHint: hint,
-            blocksDuringStructuralMutation: mutation,
+            blocksDuringStructuralMutation: blocksDuringStructuralMutation,
             isDestructive: destructive,
             undoBehavior: undo)
     }
@@ -316,11 +327,21 @@ enum SidebarActionCatalog {
             ?? actionDisabledReasons[id]
             ?? (definition.blocksDuringStructuralMutation
                 ? structuralMutationDisabledReason : nil)
+        let intentSnapshot: SidebarSelectionSnapshot
+        if definition.capability == .vaultRoot {
+            intentSnapshot = SidebarSelectionSnapshot(
+                sessionIdentity: snapshot.sessionIdentity,
+                items: [],
+                focusedPath: nil,
+                creationParent: "")
+        } else {
+            intentSnapshot = snapshot
+        }
         return SidebarActionEvaluation(
             definition: definition,
             disabledReason: disabledReason,
             intent: disabledReason == nil
-                ? SidebarActionInvocationIntent(actionID: id, snapshot: snapshot)
+                ? SidebarActionInvocationIntent(actionID: id, snapshot: intentSnapshot)
                 : nil)
     }
 
@@ -344,33 +365,12 @@ enum SidebarActionCatalog {
         }
 
         let evaluations: [SidebarActionEvaluation] = definitions.compactMap {
-            definition -> SidebarActionEvaluation? in
-            guard let projected = evaluation(
+            definition in
+            evaluation(
                 for: definition.id,
                 snapshot: snapshot,
                 structuralMutationDisabledReason: structuralMutationDisabledReason,
                 actionDisabledReasons: actionDisabledReasons)
-            else { return nil }
-
-            guard definition.id == SlateCommandID.newFromTemplate,
-                projected.disabledReason == nil,
-                let snapshot
-            else { return projected }
-
-            // FL04-A preserves the shipped explicit-root picker. First admit
-            // the live selection above; only then freeze the accepted intent
-            // to root so a mixed selection cannot bypass capability checks.
-            let rootSnapshot = SidebarSelectionSnapshot(
-                sessionIdentity: snapshot.sessionIdentity,
-                items: [],
-                focusedPath: nil,
-                creationParent: "")
-            return SidebarActionEvaluation(
-                definition: definition,
-                disabledReason: nil,
-                intent: SidebarActionInvocationIntent(
-                    actionID: definition.id,
-                    snapshot: rootSnapshot))
         }
         return surface.retainsUnavailableActions
             ? evaluations
@@ -439,6 +439,8 @@ enum SidebarActionCatalog {
             guard items.allSatisfy({ !$0.isDirectory }) else {
                 return "Open is available only for files."
             }
+        case .vaultRoot:
+            break
         case .zeroOrOneItem:
             guard items.count <= 1 else {
                 return "Select no more than one item to choose a creation location."

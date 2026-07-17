@@ -4711,12 +4711,13 @@ struct FileTreeSidebar: View {
 
     // MARK: - Progress strips
 
-    /// A compact, transient indicator for the single structural writer. The
-    /// shared reason is both the visible label and the accessible name. AppState
-    /// already announces admission/completion, so this view stays deliberately
-    /// non-live and never posts a second assertive announcement.
+    /// A compact, sidebar-local indicator for ordinary structural work. Large
+    /// selection validation has an always-mounted window-level counterpart, so
+    /// suppress that one state here to avoid duplicate progress presentations.
     @ViewBuilder private var structuralMutationProgress: some View {
-        if let reason = appState.structuralMutationDisabledReason {
+        if !appState.isValidatingSidebarAction,
+           let reason = appState.structuralMutationDisabledReason
+        {
             HStack(spacing: Tokens.Spacing.sm) {
                 ProgressView()
                     .controlSize(.small)

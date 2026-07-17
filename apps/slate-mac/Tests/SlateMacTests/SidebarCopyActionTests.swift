@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import Foundation
 import XCTest
 
 @testable import SlateMac
@@ -41,6 +42,62 @@ final class SidebarCopyActionTests: XCTestCase {
             guard setStringSucceeds else { return false }
             self.value = value
             return true
+        }
+    }
+
+    /// Parks the detached formatter without capturing mutable test locals in
+    /// its `@Sendable` closure. `NSCondition` owns both the entered signal and
+    /// release state, so the supersession race is deterministic and warning-free.
+    private final class BlockingWikilinkFormatter: @unchecked Sendable {
+        private let condition = NSCondition()
+        private var didEnter = false
+        private var isReleased = false
+        private var callCountStorage = 0
+        private let result: String?
+
+        init(result: String?) {
+            self.result = result
+        }
+
+        func format() -> String? {
+            condition.lock()
+            didEnter = true
+            callCountStorage += 1
+            condition.broadcast()
+            while !isReleased {
+                condition.wait()
+            }
+            condition.unlock()
+            return result
+        }
+
+        func waitUntilEntered() async -> Bool {
+            await Task.detached { [self] in
+                waitUntilEnteredBlocking()
+            }.value
+        }
+
+        private func waitUntilEnteredBlocking() -> Bool {
+            condition.lock()
+            defer { condition.unlock() }
+            let deadline = Date().addingTimeInterval(10)
+            while !didEnter {
+                guard condition.wait(until: deadline) else { return false }
+            }
+            return true
+        }
+
+        func release() {
+            condition.lock()
+            isReleased = true
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        var callCount: Int {
+            condition.lock()
+            defer { condition.unlock() }
+            return callCountStorage
         }
     }
 
@@ -167,7 +224,7 @@ final class SidebarCopyActionTests: XCTestCase {
         }
     }
 
-    func testCopyWikilinkUsesLiveFFIForUniqueAndQualifiedTargets() throws {
+    func testCopyWikilinkUsesLiveFFIForUniqueAndQualifiedTargets() async throws {
         let pasteboard = RecordingPasteboard()
         let announcer = RecordingAnnouncer()
         let state = try openVault(
@@ -185,21 +242,35 @@ final class SidebarCopyActionTests: XCTestCase {
         XCTAssertEqual(
             try state.dispatchSidebarAction(
                 intent(SlateCommandID.sidebarCopyWikilink, snapshot: unique)),
-            .completed(actionID: SlateCommandID.sidebarCopyWikilink))
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        let uniqueTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        await uniqueTask.value
 
         let qualified = try snapshot(on: state, item("Notes/Target.md"))
         XCTAssertEqual(
             try state.dispatchSidebarAction(
                 intent(SlateCommandID.sidebarCopyWikilink, snapshot: qualified)),
-            .completed(actionID: SlateCommandID.sidebarCopyWikilink))
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        let qualifiedTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        await qualifiedTask.value
 
         XCTAssertEqual(pasteboard.clearCount, 2)
         XCTAssertEqual(pasteboard.setValues, ["[[Unique]]", "[[Notes/Target]]"])
         XCTAssertEqual(pasteboard.value, "[[Notes/Target]]")
+        let posts = copiedPosts(after: baseline, in: announcer)
         XCTAssertEqual(
-            copiedPosts(after: baseline, in: announcer).map(\.message),
+            posts.map(\.message),
             ["Copied.", "Copied."],
             "each successful user invocation owns exactly one announcement")
+        XCTAssertTrue(
+            posts.allSatisfy {
+                if case .medium = $0.priority { return true }
+                return false
+            },
+            "successful async copies use polite medium-priority announcements")
+        XCTAssertNil(state.sidebarActionBackgroundFailure)
     }
 
     func testMissingStaleAndNonMarkdownTargetsFailBeforePasteboardOrAnnouncement() throws {
@@ -277,7 +348,7 @@ final class SidebarCopyActionTests: XCTestCase {
         XCTAssertEqual(copiedPosts(after: baseline, in: announcer).map(\.message), [])
     }
 
-    func testFormatterNilAndThrowUseOneDeterministicAccessibleFailure() throws {
+    func testFormatterNilAndThrowUseOneDeterministicAccessibleFailure() async throws {
         let pasteboard = RecordingPasteboard(value: "unchanged")
         let announcer = RecordingAnnouncer()
         let state = try openVault(
@@ -287,28 +358,44 @@ final class SidebarCopyActionTests: XCTestCase {
             announcer: announcer)
         let baseline = announcer.posts.count
 
+        let failure = "Could not create a wikilink for this file."
         let refused = try snapshot(on: state, item("Bad#Name.md"))
-        assertActionFailure("Could not create a wikilink for this file.") {
+        XCTAssertEqual(
             try state.dispatchSidebarAction(
-                intent(SlateCommandID.sidebarCopyWikilink, snapshot: refused))
-        }
+                intent(SlateCommandID.sidebarCopyWikilink, snapshot: refused)),
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        let refusedTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        await refusedTask.value
+        XCTAssertEqual(state.sidebarActionBackgroundFailure, failure)
 
         let sessionFailure = try snapshot(on: state, item("Good.md"))
         state.sidebarActionDispatchOverrides.wikilink = { _, _ in
             throw FormatterFailure.unavailable
         }
-        assertActionFailure("Could not create a wikilink for this file.") {
+        XCTAssertEqual(
             try state.dispatchSidebarAction(
-                intent(SlateCommandID.sidebarCopyWikilink, snapshot: sessionFailure))
-        }
+                intent(SlateCommandID.sidebarCopyWikilink, snapshot: sessionFailure)),
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        let thrownTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        await thrownTask.value
 
         XCTAssertEqual(pasteboard.clearCount, 0)
         XCTAssertEqual(pasteboard.setValues, [])
         XCTAssertEqual(pasteboard.value, "unchanged")
-        XCTAssertEqual(copiedPosts(after: baseline, in: announcer).map(\.message), [])
+        XCTAssertEqual(state.sidebarActionBackgroundFailure, failure)
+        let posts = copiedPosts(after: baseline, in: announcer)
+        XCTAssertEqual(posts.map(\.message), [failure, failure])
+        XCTAssertTrue(
+            posts.allSatisfy {
+                if case .medium = $0.priority { return true }
+                return false
+            },
+            "each detached formatter failure is announced exactly once")
     }
 
-    func testPasteboardFailureIsFailClosedForBothCopyActions() throws {
+    func testPasteboardFailureIsFailClosedForBothCopyActions() async throws {
         let pasteboard = RecordingPasteboard(value: "old value")
         pasteboard.setStringSucceeds = false
         let announcer = RecordingAnnouncer()
@@ -326,15 +413,86 @@ final class SidebarCopyActionTests: XCTestCase {
         }
         XCTAssertNil(pasteboard.value)
 
-        assertActionFailure("Could not copy to the clipboard.") {
+        XCTAssertEqual(
             try state.dispatchSidebarAction(
-                intent(SlateCommandID.sidebarCopyWikilink, snapshot: selection))
-        }
+                intent(SlateCommandID.sidebarCopyWikilink, snapshot: selection)),
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        let wikilinkTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        await wikilinkTask.value
 
         XCTAssertEqual(pasteboard.clearCount, 2)
         XCTAssertEqual(pasteboard.setValues, ["A.md", "[[A]]"])
         XCTAssertNil(pasteboard.value)
-        XCTAssertEqual(copiedPosts(after: baseline, in: announcer).map(\.message), [])
+        let failure = "Could not copy to the clipboard."
+        XCTAssertEqual(state.sidebarActionBackgroundFailure, failure)
+        let posts = copiedPosts(after: baseline, in: announcer)
+        XCTAssertEqual(posts.map(\.message), [failure])
+        guard let priority = posts.first?.priority else {
+            return XCTFail("async pasteboard failure must be announced once")
+        }
+        guard case .medium = priority else {
+            return XCTFail("async pasteboard failure must use medium priority")
+        }
+    }
+
+    func testCopyPathSupersedesBlockedWikilinkEvenWhenCopyPathPasteboardFails()
+        async throws
+    {
+        let pasteboard = RecordingPasteboard(value: "old value")
+        let announcer = RecordingAnnouncer()
+        let state = try openVault(
+            named: "copy-supersession",
+            files: ["A.md"],
+            pasteboard: pasteboard,
+            announcer: announcer)
+        let selection = try snapshot(on: state, item("A.md"))
+        let gate = BlockingWikilinkFormatter(result: "[[A]]")
+        state.sidebarActionDispatchOverrides.wikilink = { _, _ in
+            gate.format()
+        }
+        let baseline = announcer.posts.count
+
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.sidebarCopyWikilink, snapshot: selection)),
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        let wikilinkTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        defer { gate.release() }
+        let formatterEntered = await gate.waitUntilEntered()
+        XCTAssertTrue(formatterEntered, "the detached Wikilink formatter must start")
+        XCTAssertEqual(gate.callCount, 1)
+        XCTAssertEqual(pasteboard.clearCount, 0)
+        XCTAssertEqual(pasteboard.setValues, [])
+
+        pasteboard.setStringSucceeds = false
+        assertActionFailure("Could not copy to the clipboard.") {
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.copyPath, snapshot: selection))
+        }
+        XCTAssertNil(state.pendingSidebarWikilinkCopyTaskForTesting)
+        XCTAssertFalse(state.isCopyingSidebarWikilink)
+        let clearCountAfterCopyPath = pasteboard.clearCount
+        let valuesAfterCopyPath = pasteboard.setValues
+        let postsAfterCopyPath = copiedPosts(after: baseline, in: announcer)
+
+        gate.release()
+        await wikilinkTask.value
+
+        XCTAssertEqual(pasteboard.clearCount, clearCountAfterCopyPath)
+        XCTAssertEqual(pasteboard.setValues, valuesAfterCopyPath)
+        XCTAssertEqual(pasteboard.clearCount, 1)
+        XCTAssertEqual(pasteboard.setValues, ["A.md"])
+        XCTAssertNil(pasteboard.value)
+        XCTAssertEqual(
+            copiedPosts(after: baseline, in: announcer).map(\.message),
+            postsAfterCopyPath.map(\.message))
+        XCTAssertFalse(
+            copiedPosts(after: baseline, in: announcer)
+                .contains(where: { $0.message == "Copied." }),
+            "superseded Wikilink A must not announce success after Copy Path B")
+        XCTAssertNil(state.sidebarActionBackgroundFailure)
     }
 
     func testEveryExposingSurfaceSharesCopyIDsAndFrozenInvocationIdentity() throws {

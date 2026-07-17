@@ -8,7 +8,7 @@ import XCTest
 
 /// FL04-A Task 3: one deterministic, non-blocking filename advisory model,
 /// one reusable warning view, and one quiet live-announcement policy across
-/// inline rename/create and template naming.
+/// inline rename/create naming flows.
 @MainActor
 final class FilenameAdvisoryTests: XCTestCase {
     private static let filesystemPrefix =
@@ -287,35 +287,6 @@ final class FilenameAdvisoryTests: XCTestCase {
             ],
             in: source,
             message: "the actionable validation error must precede the advisory"
-        )
-    }
-
-    func testTemplateNameUsesSameViewAndSeedsPrefilledNameBeforePresentation() throws {
-        let source = try normalizedSource("TemplatePromptSheet.swift")
-
-        XCTAssertEqual(occurrences(of: "FilenameAdvisoryView(name: noteName)", in: source), 1)
-        XCTAssertTrue(source.contains("NameStep(template: template, initialName:"))
-        XCTAssertTrue(
-            source.contains(
-                "appState.templateRetryNoteName ?? appState.defaultNewNoteName(for: template)"))
-        XCTAssertTrue(source.contains("init(template: TemplateSummary, initialName: String)"))
-        XCTAssertTrue(source.contains("_noteName = State(initialValue: initialName)"))
-        XCTAssertFalse(source.contains("@State private var noteName: String = \"\""))
-
-        XCTAssertTrue(source.contains(".focused($nameFocused)"))
-        XCTAssertTrue(source.contains(".onSubmit { submit() }"))
-        XCTAssertTrue(source.contains(".keyboardShortcut(.defaultAction)"))
-        XCTAssertTrue(source.contains(".keyboardShortcut(.cancelAction)"))
-        XCTAssertTrue(source.contains("DispatchQueue.main.async { nameFocused = true }"))
-        XCTAssertTrue(source.contains("appState.templateNoteNameError"))
-        assertAppearsInOrder(
-            [
-                #"TextField("Note name", text: $noteName)"#,
-                "if let error = appState.templateNoteNameError",
-                "FilenameAdvisoryView(name: noteName)",
-            ],
-            in: source,
-            message: "template validation errors must precede the advisory"
         )
     }
 

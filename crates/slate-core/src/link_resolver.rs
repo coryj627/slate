@@ -114,13 +114,6 @@ pub fn format_wikilink_for_path(target_path: &str, index: &dyn VaultIndex) -> Op
     let paths: Vec<&str> = index.all_paths().collect();
     let target_stem_path = markdown_stem_path(target_path)?;
 
-    if target_path
-        .chars()
-        .any(|c| matches!(c, ']' | '|' | '#' | '^'))
-    {
-        return None;
-    }
-
     let target_folded = target_path.to_lowercase();
     if paths
         .iter()
@@ -133,6 +126,12 @@ pub fn format_wikilink_for_path(target_path: &str, index: &dyn VaultIndex) -> Op
 
     let target_stem = final_component(target_stem_path);
     if target_stem.is_empty() {
+        return None;
+    }
+    if target_stem
+        .chars()
+        .any(|c| matches!(c, ']' | '|' | '#' | '^'))
+    {
         return None;
     }
     let target_stem_folded = target_stem.to_lowercase();
@@ -613,6 +612,26 @@ mod tests {
                 format_wikilink_for_path(path, &index),
                 None,
                 "parser-control path should fail closed: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn wikilink_formatter_allows_parser_control_characters_only_in_parent_directories() {
+        let cases = [
+            ("Folder#Name/HashTarget.md", "[[HashTarget]]"),
+            ("Folder^Name/CaretTarget.md", "[[CaretTarget]]"),
+            ("Folder|Name/PipeTarget.md", "[[PipeTarget]]"),
+            ("Folder]Name/BracketTarget.md", "[[BracketTarget]]"),
+        ];
+        let paths: Vec<&str> = cases.iter().map(|(path, _)| *path).collect();
+        let index = idx(&paths);
+
+        for (path, expected) in cases {
+            assert_eq!(
+                format_wikilink_for_path(path, &index),
+                Some(expected.into()),
+                "a safe globally unique bare target must not inherit parent punctuation: {path}"
             );
         }
     }

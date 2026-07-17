@@ -1019,11 +1019,11 @@ final class StructuralCreationGateTests: XCTestCase {
 
         let seed = try sourceSegment(
             file: "TemplatePromptSheet.swift",
-            from: "case .needsName(let template, _):",
-            to: ".environmentObject(appState)")
+            from: "if !didSeed {",
+            to: "didSeed = true")
         XCTAssertTrue(
             seed.contains(
-                "initialName: appState.templateRetryNoteName ?? appState.defaultNewNoteName"),
+                "noteName = appState.templateRetryNoteName ?? appState.defaultNewNoteName"),
             "the re-presented field must consume the retained destination")
     }
 

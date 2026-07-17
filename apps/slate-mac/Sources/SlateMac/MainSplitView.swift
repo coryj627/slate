@@ -192,7 +192,7 @@ struct MainSplitView: View {
         // rendering mode is ours to pin.
         .slateSymbolSurface(.toolbar)
         .safeAreaInset(edge: .top, spacing: 0) {
-            batchTrashQuarantineRecovery
+            windowStructuralStatusSurface
         }
         .overlay(alignment: .top) {
             if appState.isSearchOpen {
@@ -223,6 +223,84 @@ struct MainSplitView: View {
         //    user can think about it. Per issue #64: "accidental
         //    Return doesn't lose data" — Cancel as the cancel-role
         //    means the platform routes keyboard dismissal here.
+    }
+
+    /// Always-mounted status and recovery for structural actions. Sidebar
+    /// actions can originate in the File menu or command palette while the
+    /// Files sidebar is hidden, so their feedback belongs to the window shell.
+    @ViewBuilder private var windowStructuralStatusSurface: some View {
+        VStack(spacing: 0) {
+            sidebarActionBackgroundProgress
+            sidebarActionBackgroundFailure
+            batchTrashQuarantineRecovery
+        }
+    }
+
+    /// Window-level progress for sidebar work that continues after a menu or
+    /// palette invocation returns. Ordinary save and mutation progress stays
+    /// scoped to Files. AppState owns any polite announcement.
+    @ViewBuilder private var sidebarActionBackgroundProgress: some View {
+        if let reason = appState.sidebarActionBackgroundProgressReason {
+            HStack(spacing: Tokens.Spacing.sm) {
+                ProgressView()
+                    .controlSize(.small)
+                    .accessibilityHidden(true)
+                Text(reason)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, Tokens.Spacing.md)
+            .padding(.vertical, Tokens.Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.ColorRole.surfaceSecondary)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Tokens.ColorRole.separator)
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(reason)
+            .help(reason)
+        }
+    }
+
+    /// Persistent, non-modal recovery after background sidebar work fails.
+    /// This preserves the exact reason visually without moving focus.
+    @ViewBuilder private var sidebarActionBackgroundFailure: some View {
+        if let reason = appState.sidebarActionBackgroundFailure {
+            HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.sm) {
+                SlateSymbol.warning.decorative
+                    .foregroundStyle(Tokens.ColorRole.warningText)
+                Text(reason)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.warningText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(nil)
+                Spacer(minLength: 0)
+                Button("Dismiss") {
+                    appState.dismissSidebarActionBackgroundFailure()
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .accessibilityHint(
+                    "Hides this message. Invoke the action again to retry.")
+            }
+            .padding(.horizontal, Tokens.Spacing.md)
+            .padding(.vertical, Tokens.Spacing.xs)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Tokens.ColorRole.surfaceSecondary)
+            .overlay(alignment: .bottom) {
+                Rectangle()
+                    .fill(Tokens.ColorRole.separator)
+                    .frame(height: 1)
+                    .accessibilityHidden(true)
+            }
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel("Sidebar action stopped. \(reason)")
+        }
     }
 
     /// Always-mounted recovery for an outcome-unknown Trash operation. The

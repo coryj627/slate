@@ -100,13 +100,22 @@ final class SidebarActionCatalogTests: XCTestCase {
             ])
         XCTAssertEqual(
             ids(files),
-            [SlateCommandID.sidebarOpen, SlateCommandID.moveTo, SlateCommandID.deleteEntry])
+            [
+                SlateCommandID.sidebarOpen, SlateCommandID.newFromTemplate,
+                SlateCommandID.moveTo, SlateCommandID.deleteEntry,
+            ])
         XCTAssertEqual(
             ids(mixed),
-            [SlateCommandID.moveTo, SlateCommandID.deleteEntry])
+            [
+                SlateCommandID.newFromTemplate, SlateCommandID.moveTo,
+                SlateCommandID.deleteEntry,
+            ])
         XCTAssertEqual(
             ids(folders),
-            [SlateCommandID.moveTo, SlateCommandID.deleteEntry])
+            [
+                SlateCommandID.newFromTemplate, SlateCommandID.moveTo,
+                SlateCommandID.deleteEntry,
+            ])
     }
 
     func testDisabledReasonPrecedenceIsVaultThenCapabilityThenTemporaryState() throws {
@@ -142,26 +151,37 @@ final class SidebarActionCatalogTests: XCTestCase {
                 structuralMutationDisabledReason: busy))
         XCTAssertNil(inspection.disabledReason, "inspection remains available during a mutation")
         XCTAssertEqual(inspection.intent?.snapshot, file)
+
+        let contendedInspection = try XCTUnwrap(
+            SidebarActionCatalog.evaluation(
+                for: SlateCommandID.sidebarCopyWikilink,
+                snapshot: file,
+                structuralMutationDisabledReason: busy))
+        XCTAssertEqual(
+            contendedInspection.disabledReason,
+            busy,
+            "Copy Wikilink must not synchronously wait on the native writer lock")
+        XCTAssertNil(contendedInspection.intent)
     }
 
     func testEveryMutationHasHonestUndoAndHistoryMetadata() throws {
-        let mutating = SidebarActionCatalog.actions.filter(\.blocksDuringStructuralMutation)
+        let blocked = SidebarActionCatalog.actions.filter(\.blocksDuringStructuralMutation)
         XCTAssertEqual(
-            mutating.map(\.id),
+            blocked.map(\.id),
             [
                 SlateCommandID.newNote, SlateCommandID.newFolder,
                 SlateCommandID.newFromTemplate, SlateCommandID.renameEntry,
                 SlateCommandID.moveTo, SlateCommandID.duplicateEntry,
-                SlateCommandID.deleteEntry,
+                SlateCommandID.sidebarCopyWikilink, SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
-            mutating.map(\.undoBehavior),
+            blocked.map(\.undoBehavior),
             [
                 .historyBarrier, .historyBarrier, .historyBarrier,
-                .slateUndo, .slateUndo, .historyBarrier, .notUndoable,
+                .slateUndo, .slateUndo, .historyBarrier, .noChange, .notUndoable,
             ],
-            "only Rename and Move enter Slate undo; creation/duplicate clear history")
-        XCTAssertEqual(mutating.filter(\.isDestructive).map(\.id), [SlateCommandID.deleteEntry])
+            "blocking during native writes does not make Copy Wikilink a mutation")
+        XCTAssertEqual(blocked.filter(\.isDestructive).map(\.id), [SlateCommandID.deleteEntry])
 
         let trash = try XCTUnwrap(
             SidebarActionCatalog.actions.first { $0.id == SlateCommandID.deleteEntry })

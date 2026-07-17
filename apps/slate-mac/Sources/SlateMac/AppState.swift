@@ -3,6 +3,7 @@
 
 import AppKit
 import Combine
+import Darwin
 import Foundation
 import SwiftUI
 
@@ -1222,9 +1223,14 @@ final class AppState: ObservableObject {
             request.id == id
         else { return .ignored }
 
-        let validationFailure: String?
+        let offloadsFilesystemValidation =
+            Self.sidebarActionValidationRequiresOffload(
+                request.intent.snapshot.items)
+        let definition: SidebarActionDefinition
         do {
-            let definition = try validateSidebarActionIntent(request.intent)
+            definition = try validateSidebarActionIntent(
+                request.intent,
+                validateFilesystem: !offloadsFilesystemValidation)
             guard definition.id == SlateCommandID.sidebarOpen else {
                 throw SidebarActionValidationError(
                     reason: Self.sidebarSelectionChangedReason)
@@ -1237,15 +1243,50 @@ final class AppState: ObservableObject {
             } else if let reason = propertyEditNavigationDisabledReason {
                 throw SidebarActionValidationError(reason: reason)
             }
-            validationFailure = nil
         } catch let error as SidebarActionValidationError {
-            validationFailure = error.reason
+            return rejectOpenSelectionConfirmation(error.reason)
         } catch {
-            validationFailure = error.localizedDescription
+            return rejectOpenSelectionConfirmation(error.localizedDescription)
         }
 
-        if let validationFailure {
-            return rejectOpenSelectionConfirmation(validationFailure)
+        if offloadsFilesystemValidation {
+            activeBatchAlertPresentation = nil
+            promoteDeferredBatchAlert()
+            beginSidebarActionValidation(
+                request.intent,
+                definition: definition
+            ) { state in
+                if let preflight = state.sidebarActionDispatchOverrides.openPreflight {
+                    guard preflight(request.batch) else {
+                        throw SidebarActionValidationError(
+                            reason: "\(definition.label) could not start.")
+                    }
+                } else if let reason = state.propertyEditNavigationDisabledReason {
+                    throw SidebarActionValidationError(reason: reason)
+                }
+
+                let executionPaths = request.batch.executionPaths
+                for (index, path) in executionPaths.enumerated() {
+                    if index > 0, index.isMultiple(of: 32) {
+                        await Task.yield()
+                        guard let session = state.currentSession,
+                            ObjectIdentifier(session) == request.sessionIdentity
+                        else { return }
+                        if let reason = state.propertyEditNavigationDisabledReason {
+                            throw SidebarActionValidationError(reason: reason)
+                        }
+                    }
+                    if let openPath = state.sidebarActionDispatchOverrides.openPath {
+                        guard openPath(path, .newTab) else {
+                            throw SidebarActionValidationError(
+                                reason: "Open could not start.")
+                        }
+                    } else {
+                        state.openFile(path, target: .newTab)
+                    }
+                }
+            }
+            return .validationPending
         }
 
         let executionPaths = request.batch.executionPaths
@@ -1446,6 +1487,51 @@ final class AppState: ObservableObject {
     /// surfaces never infer a batch from the native List's single focus row.
     @Published private(set) var sidebarSelectionSnapshot: SidebarSelectionSnapshot?
 
+    /// Full lstat admission is cheap for ordinary selections but can exceed an
+    /// interaction frame for thousands of rows. At this boundary, the frozen
+    /// walk moves off the main actor before any action funnel can run.
+    static let sidebarActionValidationComponentBudget = 1_000
+    static let sidebarActionValidationPendingReason =
+        "Wait for Slate to finish checking the selected items."
+    static let sidebarWikilinkCopyPendingReason =
+        "Wait for Slate to finish creating the wikilink."
+
+    private static func sidebarActionValidationRequiresOffload(
+        _ items: [SidebarSelectionItem]
+    ) -> Bool {
+        var componentWork = 0
+        for item in items {
+            componentWork += item.path.split(
+                separator: "/",
+                omittingEmptySubsequences: false
+            ).count
+            if componentWork >= sidebarActionValidationComponentBudget {
+                return true
+            }
+        }
+        return false
+    }
+
+    @Published private(set) var isValidatingSidebarAction = false
+    @Published private(set) var sidebarActionBackgroundFailure: String?
+    private var sidebarActionValidationToken = 0
+    private(set) var pendingSidebarActionValidationTaskForTesting: Task<Void, Never>?
+    private(set) var sidebarActionValidationRanOnMainThreadForTesting: Bool?
+
+    @Published private(set) var isCopyingSidebarWikilink = false
+    private var sidebarWikilinkCopyToken = 0
+    private(set) var pendingSidebarWikilinkCopyTaskForTesting: Task<Void, Never>?
+
+    var sidebarActionBackgroundProgressReason: String? {
+        if isValidatingSidebarAction {
+            return Self.sidebarActionValidationPendingReason
+        }
+        if isCopyingSidebarWikilink {
+            return Self.sidebarWikilinkCopyPendingReason
+        }
+        return nil
+    }
+
     /// Narrow, optional leaf seams for dispatcher tests. Nil always means the
     /// production path below, which calls the existing AppState funnel or the
     /// one unavoidable external boundary directly.
@@ -1460,7 +1546,7 @@ final class AppState: ObservableObject {
         var moveBatch: (([TreeSelection], String?) -> Bool)?
         var duplicate: ((String) -> Bool)?
         var reveal: ((URL, String) -> Bool)?
-        var wikilink: ((VaultSession, String) throws -> String?)?
+        var wikilink: (@Sendable (VaultSession, String) throws -> String?)?
         var trashSingle: ((TreeSelection) -> Bool)?
         var trashBatch: (([TreeSelection], String?) -> Bool)?
     }
@@ -1477,7 +1563,7 @@ final class AppState: ObservableObject {
     /// same current state without filesystem I/O.
     var sidebarActionAvailabilityReasonProvider: (String) -> String? = { _ in nil }
 
-    static let sidebarSelectionChangedReason =
+    nonisolated static let sidebarSelectionChangedReason =
         "The sidebar selection changed. Select the items again and retry."
     static let sidebarSelectionStaleReason =
         "That Sidebar action belongs to a vault that is no longer open."
@@ -1510,20 +1596,29 @@ final class AppState: ObservableObject {
     /// vault root.
     @discardableResult
     func validateSidebarActionIntent(
-        _ intent: SidebarActionCatalog.InvocationIntent
+        _ intent: SidebarActionCatalog.InvocationIntent,
+        validateFilesystem: Bool = true,
+        ignoringOwnedSidebarValidation: Bool = false
     ) throws -> SidebarActionDefinition {
         guard let session = currentSession, let vaultURL = currentVaultURL,
             ObjectIdentifier(session) == intent.snapshot.sessionIdentity
         else {
             throw SidebarActionValidationError(reason: Self.sidebarSelectionStaleReason)
         }
+        var currentActionDisabledReasons = sidebarActionDisabledReasons
+        if isValidatingSidebarAction, !ignoringOwnedSidebarValidation {
+            currentActionDisabledReasons[SlateCommandID.sidebarOpen] =
+                Self.sidebarActionValidationPendingReason
+        }
         guard let evaluation = SidebarActionCatalog.evaluation(
             for: intent.actionID,
             snapshot: intent.snapshot,
             structuralMutationDisabledReason:
                 sidebarActionStructuralDisabledReasonOverride
-                ?? structuralMutationDisabledReason,
-            actionDisabledReasons: sidebarActionDisabledReasons)
+                ?? (ignoringOwnedSidebarValidation
+                    ? sidebarValidationIndependentStructuralMutationDisabledReason
+                    : structuralMutationDisabledReason),
+            actionDisabledReasons: currentActionDisabledReasons)
         else {
             throw SidebarActionValidationError(reason: Self.sidebarSelectionChangedReason)
         }
@@ -1534,9 +1629,10 @@ final class AppState: ObservableObject {
                 reason: evaluation.disabledReason ?? Self.sidebarSelectionChangedReason)
         }
 
-        for item in intent.snapshot.items {
-            try validateSidebarSelectionItem(
-                item, vaultURL: vaultURL)
+        if validateFilesystem {
+            try Self.validateSidebarSelectionItems(
+                intent.snapshot.items,
+                vaultURL: vaultURL)
         }
         return evaluation.definition
     }
@@ -1561,15 +1657,42 @@ final class AppState: ObservableObject {
     /// external boundary. Synchronous failures are returned to the caller;
     /// Task 3 owns Copy side effects and announcements.
     func dispatchSidebarAction(
-        _ intent: SidebarActionInvocationIntent
+        _ intent: SidebarActionInvocationIntent,
+        filesystemAlreadyValidated: Bool = false
     ) throws -> SidebarActionDispatchResult {
+        let itemCount = intent.snapshot.items.count
+        let stagesOpenConfirmation =
+            intent.actionID == SlateCommandID.sidebarOpen && itemCount >= 10
+        let offloadsLargeStructuralValidation =
+            !filesystemAlreadyValidated
+            && Self.sidebarActionValidationRequiresOffload(
+                intent.snapshot.items)
+            && (intent.actionID == SlateCommandID.moveTo
+                || intent.actionID == SlateCommandID.deleteEntry)
         let definition: SidebarActionDefinition
         do {
-            definition = try validateSidebarActionIntent(intent)
+            definition = try validateSidebarActionIntent(
+                intent,
+                validateFilesystem:
+                    filesystemAlreadyValidated
+                    || stagesOpenConfirmation
+                    || offloadsLargeStructuralValidation
+                    ? false : true)
         } catch let error as SidebarActionValidationError {
             throw sidebarActionFailure(error.reason)
         } catch {
             throw sidebarActionFailure(error.localizedDescription)
+        }
+
+        // A newly admitted invocation is the user's retry path. Clear an older
+        // detached-validation warning only after this intent itself passes live
+        // session/catalog admission, so a stale click cannot erase recovery.
+        sidebarActionBackgroundFailure = nil
+
+        if offloadsLargeStructuralValidation {
+            return startSidebarActionValidation(
+                intent,
+                definition: definition)
         }
 
         let rejected = "\(definition.label) could not start."
@@ -1702,6 +1825,7 @@ final class AppState: ObservableObject {
             return .completed(actionID: intent.actionID)
 
         case SlateCommandID.copyPath:
+            invalidateSidebarWikilinkCopy()
             return try completeSidebarCopy(
                 intent.snapshot.items[0].path,
                 actionID: intent.actionID)
@@ -1710,21 +1834,7 @@ final class AppState: ObservableObject {
             guard let session = currentSession else {
                 throw sidebarActionFailure(rejected)
             }
-            let path = intent.snapshot.items[0].path
-            let value: String?
-            do {
-                if let wikilink = sidebarActionDispatchOverrides.wikilink {
-                    value = try wikilink(session, path)
-                } else {
-                    value = try session.wikilinkForPath(path: path)
-                }
-            } catch {
-                throw sidebarActionFailure(Self.sidebarWikilinkFailureReason)
-            }
-            guard let value else {
-                throw sidebarActionFailure(Self.sidebarWikilinkFailureReason)
-            }
-            return try completeSidebarCopy(value, actionID: intent.actionID)
+            return startSidebarWikilinkCopy(intent, session: session)
 
         case SlateCommandID.deleteEntry:
             let selections = intent.snapshot.items.map {
@@ -1748,6 +1858,198 @@ final class AppState: ObservableObject {
         default:
             throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
         }
+    }
+
+    private func startSidebarActionValidation(
+        _ intent: SidebarActionInvocationIntent,
+        definition: SidebarActionDefinition
+    ) -> SidebarActionDispatchResult {
+        beginSidebarActionValidation(
+            intent,
+            definition: definition
+        ) { state in
+            _ = try state.dispatchSidebarAction(
+                intent,
+                filesystemAlreadyValidated: true)
+        }
+        return .validationPending(actionID: intent.actionID)
+    }
+
+    /// Run the complete frozen filesystem walk without occupying the main
+    /// actor. Landing first rechecks exact session ownership and the live
+    /// catalog reason, then releases the validation gate and enters the action
+    /// continuation in the same MainActor turn—there is no admission gap.
+    @discardableResult
+    private func beginSidebarActionValidation(
+        _ intent: SidebarActionInvocationIntent,
+        definition: SidebarActionDefinition,
+        onValidated: @escaping @MainActor (AppState) async throws -> Void
+    ) -> Task<Void, Never> {
+        precondition(
+            !isValidatingSidebarAction,
+            "a second sidebar validator must be rejected by live admission")
+        sidebarActionValidationToken &+= 1
+        let token = sidebarActionValidationToken
+        isValidatingSidebarAction = true
+        sidebarActionBackgroundFailure = nil
+        sidebarActionValidationRanOnMainThreadForTesting = nil
+
+        let items = intent.snapshot.items
+        let vaultURL = currentVaultURL
+        let sessionIdentity = intent.snapshot.sessionIdentity
+        let task = Task { @MainActor [weak self] in
+            guard let vaultURL else { return }
+            let validation = await Task.detached(priority: .userInitiated) {
+                let ranOnMainThread = pthread_main_np() != 0
+                do {
+                    try Self.validateSidebarSelectionItems(
+                        items,
+                        vaultURL: vaultURL)
+                    return (reason: Optional<String>.none, ranOnMainThread: ranOnMainThread)
+                } catch {
+                    return (
+                        reason: Optional(error.localizedDescription),
+                        ranOnMainThread: ranOnMainThread)
+                }
+            }.value
+
+            guard let self, self.sidebarActionValidationToken == token else { return }
+            self.sidebarActionValidationRanOnMainThreadForTesting =
+                validation.ranOnMainThread
+            guard let session = self.currentSession,
+                ObjectIdentifier(session) == sessionIdentity
+            else {
+                self.finishSidebarActionValidation(token: token)
+                return
+            }
+            if let reason = validation.reason {
+                self.finishSidebarActionValidation(token: token)
+                self.surfaceSidebarActionBackgroundFailure(reason)
+                return
+            }
+
+            do {
+                _ = try self.validateSidebarActionIntent(
+                    intent,
+                    validateFilesystem: false,
+                    ignoringOwnedSidebarValidation: true)
+                self.finishSidebarActionValidation(token: token)
+                try await onValidated(self)
+            } catch {
+                self.finishSidebarActionValidation(token: token)
+                self.surfaceSidebarActionBackgroundFailure(
+                    error.sidebarActionAnnouncement)
+            }
+        }
+        pendingSidebarActionValidationTaskForTesting = task
+
+        let actionName = definition.label.replacingOccurrences(of: "…", with: "")
+        announcer.post(
+            "Checking \(items.count.formatted()) selected items before \(actionName).",
+            priority: .medium)
+        return task
+    }
+
+    private func finishSidebarActionValidation(token: Int) {
+        guard sidebarActionValidationToken == token else { return }
+        isValidatingSidebarAction = false
+        pendingSidebarActionValidationTaskForTesting = nil
+    }
+
+    private func cancelSidebarActionValidation() {
+        sidebarActionValidationToken &+= 1
+        pendingSidebarActionValidationTaskForTesting?.cancel()
+        pendingSidebarActionValidationTaskForTesting = nil
+        isValidatingSidebarAction = false
+        sidebarActionBackgroundFailure = nil
+        sidebarActionValidationRanOnMainThreadForTesting = nil
+    }
+
+    private func surfaceSidebarActionBackgroundFailure(_ reason: String) {
+        sidebarActionBackgroundFailure = reason
+        announcer.post(reason, priority: .medium)
+    }
+
+    func dismissSidebarActionBackgroundFailure() {
+        sidebarActionBackgroundFailure = nil
+    }
+
+    private enum SidebarWikilinkFormatOutcome: Sendable {
+        case formatted(String)
+        case failed
+    }
+
+    private func startSidebarWikilinkCopy(
+        _ intent: SidebarActionInvocationIntent,
+        session: VaultSession
+    ) -> SidebarActionDispatchResult {
+        precondition(
+            !isCopyingSidebarWikilink,
+            "a second wikilink copy must be rejected by live admission")
+        sidebarWikilinkCopyToken &+= 1
+        let token = sidebarWikilinkCopyToken
+        let sessionIdentity = intent.snapshot.sessionIdentity
+        let path = intent.snapshot.items[0].path
+        let formatter = sidebarActionDispatchOverrides.wikilink
+        isCopyingSidebarWikilink = true
+
+        let task = Task { @MainActor [weak self] in
+            let outcome = await Task.detached(priority: .userInitiated) {
+                do {
+                    let value: String?
+                    if let formatter {
+                        value = try formatter(session, path)
+                    } else {
+                        value = try session.wikilinkForPath(path: path)
+                    }
+                    guard let value else {
+                        return SidebarWikilinkFormatOutcome.failed
+                    }
+                    return SidebarWikilinkFormatOutcome.formatted(value)
+                } catch {
+                    return SidebarWikilinkFormatOutcome.failed
+                }
+            }.value
+
+            guard let self, self.sidebarWikilinkCopyToken == token else { return }
+            guard let currentSession = self.currentSession,
+                ObjectIdentifier(currentSession) == sessionIdentity
+            else {
+                self.finishSidebarWikilinkCopy(token: token)
+                return
+            }
+
+            self.finishSidebarWikilinkCopy(token: token)
+            do {
+                _ = try self.validateSidebarActionIntent(intent)
+                guard case .formatted(let value) = outcome else {
+                    self.surfaceSidebarActionBackgroundFailure(
+                        Self.sidebarWikilinkFailureReason)
+                    return
+                }
+                _ = try self.completeSidebarCopy(
+                    value,
+                    actionID: intent.actionID)
+            } catch {
+                self.surfaceSidebarActionBackgroundFailure(
+                    error.sidebarActionAnnouncement)
+            }
+        }
+        pendingSidebarWikilinkCopyTaskForTesting = task
+        return .copyPending(actionID: intent.actionID)
+    }
+
+    private func finishSidebarWikilinkCopy(token: Int) {
+        guard sidebarWikilinkCopyToken == token else { return }
+        isCopyingSidebarWikilink = false
+        pendingSidebarWikilinkCopyTaskForTesting = nil
+    }
+
+    private func invalidateSidebarWikilinkCopy() {
+        sidebarWikilinkCopyToken &+= 1
+        pendingSidebarWikilinkCopyTaskForTesting?.cancel()
+        pendingSidebarWikilinkCopyTaskForTesting = nil
+        isCopyingSidebarWikilink = false
     }
 
     private func completeSidebarCopy(
@@ -1792,9 +2094,15 @@ final class AppState: ObservableObject {
     }
 
     var sidebarActionDisabledReasons: [String: String] {
-        Dictionary(uniqueKeysWithValues: SidebarActionCatalog.actions.compactMap { action in
+        var reasons = Dictionary(
+            uniqueKeysWithValues: SidebarActionCatalog.actions.compactMap { action in
             sidebarActionAvailabilityReasonProvider(action.id).map { (action.id, $0) }
-        })
+            })
+        if isCopyingSidebarWikilink {
+            reasons[SlateCommandID.sidebarCopyWikilink] =
+                Self.sidebarWikilinkCopyPendingReason
+        }
+        return reasons
     }
 
     /// One synchronous, side-effect-free projection feeds every Sidebar
@@ -1809,6 +2117,10 @@ final class AppState: ObservableObject {
             actionDisabledReasons[SlateCommandID.sidebarOpen] =
                 propertyEditNavigationDisabledReason
         }
+        if isValidatingSidebarAction {
+            actionDisabledReasons[SlateCommandID.sidebarOpen] =
+                Self.sidebarActionValidationPendingReason
+        }
         return SidebarActionCatalog.project(
             surface: surface,
             snapshot: capturedSnapshot,
@@ -1818,17 +2130,35 @@ final class AppState: ObservableObject {
             actionDisabledReasons: actionDisabledReasons)
     }
 
-    private func validateSidebarSelectionItem(
+    nonisolated private static func validateSidebarSelectionItems(
+        _ items: [SidebarSelectionItem],
+        vaultURL: URL
+    ) throws {
+        for item in items {
+            try validateSidebarSelectionItem(item, vaultURL: vaultURL)
+        }
+    }
+
+    nonisolated private static func validateSidebarSelectionItem(
         _ item: SidebarSelectionItem,
         vaultURL: URL
     ) throws {
-        let normalized: String
-        switch Self.normalizeBatchTrashAdmissionPath(item.path) {
-        case .normalized(let path):
-            normalized = path
-        case .invalid:
+        guard !item.path.hasPrefix("/") else {
             throw SidebarActionValidationError(reason: Self.sidebarSelectionChangedReason)
         }
+        var normalizedComponents: [Substring] = []
+        for component in item.path.split(
+            separator: "/",
+            omittingEmptySubsequences: true
+        ) {
+            if component == "." { continue }
+            guard component != ".." else {
+                throw SidebarActionValidationError(
+                    reason: Self.sidebarSelectionChangedReason)
+            }
+            normalizedComponents.append(component)
+        }
+        let normalized = normalizedComponents.joined(separator: "/")
         guard !normalized.isEmpty, normalized == item.path else {
             throw SidebarActionValidationError(reason: Self.sidebarSelectionChangedReason)
         }
@@ -6104,6 +6434,8 @@ final class AppState: ObservableObject {
             cancelVaultCloseSaveAll()
             cancelSaveOwnership()
             cancelPropertyEditOwnership()
+            cancelSidebarActionValidation()
+            invalidateSidebarWikilinkCopy()
             dismissAddPropertySheet()
             currentPropertyEditConflict = nil
             propertyEditError = nil
@@ -6976,6 +7308,8 @@ final class AppState: ObservableObject {
         // `.alert(...)` in MainSplitView; without the reset the
         // conflict dialog survives onto the welcome screen.
         cancelPropertyEditOwnership()
+        cancelSidebarActionValidation()
+        invalidateSidebarWikilinkCopy()
         propertyEditError = nil
         currentPropertyEditConflict = nil
         resetVaultScopedPropertyRecovery()
@@ -10561,13 +10895,20 @@ final class AppState: ObservableObject {
     static let propertyEditInProgressReason =
         "Wait for the current property update to finish."
 
-    var structuralMutationDisabledReason: String? {
+    private var sidebarValidationIndependentStructuralMutationDisabledReason: String? {
         if isSaving { return Self.saveInProgressReason }
         if isEditingProperty { return Self.propertyEditInProgressReason }
         if !propertyPublicationUncertainties.isEmpty {
             return Self.propertyPublicationUncertainReason
         }
         return isMutatingStructure ? Self.structuralMutationBusyReason : nil
+    }
+
+    var structuralMutationDisabledReason: String? {
+        if isValidatingSidebarAction {
+            return Self.sidebarActionValidationPendingReason
+        }
+        return sidebarValidationIndependentStructuralMutationDisabledReason
     }
 
     /// Shared synchronous admission policy for every user-facing, non-drag

@@ -10,6 +10,33 @@ final class SidebarActionInvocationTests: XCTestCase {
     private var root: URL!
     private enum ProbeError: Error { case formatterFailed }
 
+    private final class LockedValue<Value>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: Value
+
+        init(_ value: Value) {
+            storage = value
+        }
+
+        func set(_ value: Value) {
+            lock.lock()
+            storage = value
+            lock.unlock()
+        }
+
+        func mutate(_ body: (inout Value) -> Void) {
+            lock.lock()
+            body(&storage)
+            lock.unlock()
+        }
+
+        var value: Value {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
     private final class RecordingAnnouncer: AnnouncementPosting, @unchecked Sendable {
         private(set) var posts: [(message: String, priority: AnnouncementPriority)] = []
 
@@ -98,6 +125,28 @@ final class SidebarActionInvocationTests: XCTestCase {
             path: path,
             isDirectory: directory,
             isMarkdown: !directory && markdown)
+    }
+
+    private func createValidationFiles(
+        count: Int,
+        in state: AppState,
+        parent: String = "A/B"
+    ) throws -> [String] {
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        let parentURL = vault.appendingPathComponent(parent, isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: parentURL,
+            withIntermediateDirectories: true)
+        return try (0..<count).map { index in
+            let path = "\(parent)/Note-\(index).md"
+            guard FileManager.default.createFile(
+                atPath: vault.appendingPathComponent(path).path,
+                contents: Data())
+            else {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            return path
+        }
     }
 
     private func intent(
@@ -415,7 +464,7 @@ final class SidebarActionInvocationTests: XCTestCase {
             "neither creation funnel sees a forged non-canonical parent")
     }
 
-    func test04TemplateAcceptsOnlyCanonicalRootAndIDOverloadCapturesRoot() throws {
+    func test04TemplateIsSelectionIndependentAndAlwaysTargetsCanonicalRoot() throws {
         let state = try openVault(named: "template", folders: ["Folder"])
         var parents: [String] = []
         state.sidebarActionDispatchOverrides.openTemplatePicker = {
@@ -431,14 +480,17 @@ final class SidebarActionInvocationTests: XCTestCase {
         let nonRoot = try snapshot(
             on: state, [item("Folder", directory: true)], focusedPath: "Folder",
             creationParent: "Folder")
-        assertRejected {
-            try state.dispatchSidebarAction(intent(SlateCommandID.newFromTemplate, snapshot: nonRoot))
-        }
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.newFromTemplate, snapshot: nonRoot)),
+            .completed(actionID: SlateCommandID.newFromTemplate))
         XCTAssertTrue(state.publishSidebarSelectionSnapshot(nonRoot))
         XCTAssertEqual(
             try state.dispatchSidebarAction(id: SlateCommandID.newFromTemplate),
             .completed(actionID: SlateCommandID.newFromTemplate))
-        XCTAssertEqual(parents, ["", ""], "direct canonical and ID overload both target root")
+        XCTAssertEqual(
+            parents, ["", "", ""],
+            "root, selected-row, and ID invocations all target the vault root")
     }
 
     func test05RenameUsesExactCapturedPathKindAndRejectsFalseAdmission() throws {
@@ -571,15 +623,17 @@ final class SidebarActionInvocationTests: XCTestCase {
         }
     }
 
-    func test10WikilinkRenderIsPureAndInvocationFormatsExactlyOnce() throws {
+    func test10WikilinkRenderIsPureAndInvocationFormatsExactlyOnce() async throws {
         let pasteboard = RecordingPasteboard()
         let state = try openVault(
             named: "wikilink", files: ["A.md"], sidebarPasteboard: pasteboard)
         let currentSession = try XCTUnwrap(state.currentSession)
         let selection = try snapshot(on: state, [item("A.md")], focusedPath: "A.md")
-        var requests: [(sessionIdentity: ObjectIdentifier, path: String)] = []
+        let requests = LockedValue<
+            [(sessionIdentity: ObjectIdentifier, path: String)]
+        >([])
         state.sidebarActionDispatchOverrides.wikilink = { session, path in
-            requests.append((ObjectIdentifier(session), path))
+            requests.mutate { $0.append((ObjectIdentifier(session), path)) }
             return "[[Exact A]]"
         }
 
@@ -589,20 +643,33 @@ final class SidebarActionInvocationTests: XCTestCase {
         ] {
             _ = SidebarActionCatalog.project(surface: surface, snapshot: selection)
         }
-        XCTAssertEqual(requests.count, 0, "render projection never invokes the formatter")
+        XCTAssertEqual(
+            requests.value.count, 0,
+            "render projection never invokes the formatter")
         XCTAssertEqual(
             try state.dispatchSidebarAction(
                 intent(SlateCommandID.sidebarCopyWikilink, snapshot: selection)),
-            .completed(actionID: SlateCommandID.sidebarCopyWikilink))
-        XCTAssertEqual(requests.count, 1, "invocation formats exactly once")
-        XCTAssertEqual(requests.first?.sessionIdentity, ObjectIdentifier(currentSession))
-        XCTAssertEqual(requests.first?.sessionIdentity, selection.sessionIdentity)
-        XCTAssertEqual(requests.first?.path, "A.md")
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        let copyTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        await copyTask.value
+
+        let capturedRequests = requests.value
+        XCTAssertEqual(capturedRequests.count, 1, "invocation formats exactly once")
+        XCTAssertEqual(
+            capturedRequests.first?.sessionIdentity,
+            ObjectIdentifier(currentSession))
+        XCTAssertEqual(
+            capturedRequests.first?.sessionIdentity,
+            selection.sessionIdentity)
+        XCTAssertEqual(capturedRequests.first?.path, "A.md")
         XCTAssertEqual(pasteboard.clearCount, 1)
         XCTAssertEqual(pasteboard.values, ["[[Exact A]]"])
     }
 
-    func test11WikilinkNilAndThrowRejectAfterExactlyOneCallWithoutPreparedCopy() throws {
+    func test11WikilinkNilAndThrowSurfaceOneBackgroundFailureWithoutPreparedCopy()
+        async throws
+    {
         let announcer = RecordingAnnouncer()
         let pasteboard = RecordingPasteboard()
         let state = try openVault(
@@ -612,36 +679,175 @@ final class SidebarActionInvocationTests: XCTestCase {
         let sessionIdentity = ObjectIdentifier(try XCTUnwrap(state.currentSession))
         let wikilinkIntent = try intent(
             SlateCommandID.sidebarCopyWikilink, snapshot: selection)
-        var requests: [(ObjectIdentifier, String)] = []
+        let requests = LockedValue<[(ObjectIdentifier, String)]>([])
         let announcementBaseline = announcer.posts.count
         state.sidebarActionDispatchOverrides.wikilink = { session, path in
-            requests.append((ObjectIdentifier(session), path))
+            requests.mutate { $0.append((ObjectIdentifier(session), path)) }
             return nil
         }
-        assertRejected(expectedMessage: AppState.sidebarWikilinkFailureReason) {
-            try state.dispatchSidebarAction(wikilinkIntent)
-        }
-        XCTAssertEqual(requests.count, 1)
-        XCTAssertEqual(requests.first?.0, sessionIdentity)
-        XCTAssertEqual(requests.first?.1, "A.md")
-        XCTAssertEqual(announcer.posts.count, announcementBaseline)
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(wikilinkIntent),
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        let refusedTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        await refusedTask.value
+        XCTAssertEqual(requests.value.count, 1)
+        XCTAssertEqual(requests.value.first?.0, sessionIdentity)
+        XCTAssertEqual(requests.value.first?.1, "A.md")
+        XCTAssertEqual(
+            state.sidebarActionBackgroundFailure,
+            AppState.sidebarWikilinkFailureReason)
+        XCTAssertEqual(
+            announcer.posts.dropFirst(announcementBaseline).map(\.message),
+            [AppState.sidebarWikilinkFailureReason])
 
-        requests = []
+        requests.set([])
         state.sidebarActionDispatchOverrides.wikilink = { session, path in
-            requests.append((ObjectIdentifier(session), path))
+            requests.mutate { $0.append((ObjectIdentifier(session), path)) }
             throw ProbeError.formatterFailed
         }
-        assertRejected(expectedMessage: AppState.sidebarWikilinkFailureReason) {
-            try state.dispatchSidebarAction(wikilinkIntent)
-        }
-        XCTAssertEqual(requests.count, 1)
-        XCTAssertEqual(requests.first?.0, sessionIdentity)
-        XCTAssertEqual(requests.first?.1, "A.md")
         XCTAssertEqual(
-            announcer.posts.count, announcementBaseline,
-            "synchronous formatter rejection is returned to its caller without announcing")
+            try state.dispatchSidebarAction(wikilinkIntent),
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        XCTAssertNil(
+            state.sidebarActionBackgroundFailure,
+            "an admitted retry clears the previous persistent failure")
+        let throwingTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        await throwingTask.value
+        XCTAssertEqual(requests.value.count, 1)
+        XCTAssertEqual(requests.value.first?.0, sessionIdentity)
+        XCTAssertEqual(requests.value.first?.1, "A.md")
+        XCTAssertEqual(
+            state.sidebarActionBackgroundFailure,
+            AppState.sidebarWikilinkFailureReason)
+        XCTAssertEqual(
+            announcer.posts.dropFirst(announcementBaseline).map(\.message),
+            [
+                AppState.sidebarWikilinkFailureReason,
+                AppState.sidebarWikilinkFailureReason,
+            ])
         XCTAssertEqual(pasteboard.clearCount, 0)
         XCTAssertEqual(pasteboard.values, [])
+    }
+
+    func test11bBusyStructuralWriterRejectsBeforeWikilinkFormatterEntry() throws {
+        let state = try openVault(named: "wikilink-busy", files: ["A.md"])
+        let selection = try snapshot(on: state, [item("A.md")], focusedPath: "A.md")
+        let wikilinkIntent = try intent(
+            SlateCommandID.sidebarCopyWikilink, snapshot: selection)
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(selection))
+        let busy = "Another file operation is still running."
+        let formatterCalls = LockedValue(0)
+        state.sidebarActionStructuralDisabledReasonOverride = busy
+        state.sidebarActionDispatchOverrides.wikilink = { _, _ in
+            formatterCalls.mutate { $0 += 1 }
+            return "[[A]]"
+        }
+
+        assertRejected(expectedMessage: busy) {
+            try state.dispatchSidebarAction(wikilinkIntent)
+        }
+        XCTAssertEqual(
+            formatterCalls.value, 0,
+            "busy admission must prevent any synchronous native mutex wait")
+
+        XCTAssertFalse(
+            state.sidebarActionProjection(surface: .contextMenu)
+                .contains { $0.id == SlateCommandID.sidebarCopyWikilink })
+        XCTAssertFalse(
+            state.sidebarActionProjection(surface: .voiceOver)
+                .contains { $0.id == SlateCommandID.sidebarCopyWikilink })
+        for surface in [SidebarActionSurface.menuBar, .commandPalette] {
+            let evaluation = try XCTUnwrap(
+                state.sidebarActionProjection(surface: surface)
+                    .first { $0.id == SlateCommandID.sidebarCopyWikilink })
+            XCTAssertEqual(evaluation.disabledReason, busy)
+            XCTAssertNil(evaluation.intent)
+        }
+    }
+
+    func test11cWikilinkFormattingRunsOffMainAndVaultSwitchCancelsStaleCopy()
+        async throws
+    {
+        let announcer = RecordingAnnouncer()
+        let pasteboard = RecordingPasteboard()
+        let state = try openVault(
+            named: "wikilink-off-main", files: ["A.md"], announcer: announcer,
+            sidebarPasteboard: pasteboard)
+        let selection = try snapshot(on: state, [item("A.md")], focusedPath: "A.md")
+        let wikilinkIntent = try intent(
+            SlateCommandID.sidebarCopyWikilink, snapshot: selection)
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(selection))
+        let formatterEntered = expectation(description: "formatter entered")
+        let mainActorProbed = expectation(description: "main actor stayed responsive")
+        let releaseFormatter = DispatchSemaphore(value: 0)
+        let formatterRanOnMainThread = LockedValue(false)
+        state.sidebarActionDispatchOverrides.wikilink = { _, _ in
+            formatterRanOnMainThread.set(Thread.isMainThread)
+            formatterEntered.fulfill()
+            _ = releaseFormatter.wait(timeout: .now() + 10)
+            return "[[A]]"
+        }
+        let announcementBaseline = announcer.posts.count
+
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(wikilinkIntent),
+            .copyPending(actionID: SlateCommandID.sidebarCopyWikilink))
+        XCTAssertTrue(state.isCopyingSidebarWikilink)
+        XCTAssertEqual(
+            state.sidebarActionBackgroundProgressReason,
+            AppState.sidebarWikilinkCopyPendingReason)
+        for surface in [SidebarActionSurface.menuBar, .commandPalette] {
+            let evaluation = try XCTUnwrap(
+                state.sidebarActionProjection(surface: surface)
+                    .first { $0.id == SlateCommandID.sidebarCopyWikilink })
+            XCTAssertEqual(
+                evaluation.disabledReason,
+                AppState.sidebarWikilinkCopyPendingReason)
+            XCTAssertNil(evaluation.intent)
+        }
+        for surface in [SidebarActionSurface.contextMenu, .voiceOver] {
+            XCTAssertFalse(
+                state.sidebarActionProjection(surface: surface)
+                    .contains { $0.id == SlateCommandID.sidebarCopyWikilink })
+        }
+        XCTAssertEqual(
+            announcer.posts.count, announcementBaseline,
+            "visible non-live progress must not add a second announcement")
+        let copyTask = try XCTUnwrap(
+            state.pendingSidebarWikilinkCopyTaskForTesting)
+        await fulfillment(of: [formatterEntered], timeout: 10)
+        Task { @MainActor in mainActorProbed.fulfill() }
+        await fulfillment(of: [mainActorProbed], timeout: 2)
+
+        let replacementVault = root.appendingPathComponent("wikilink-replacement")
+        try FileManager.default.createDirectory(
+            at: replacementVault, withIntermediateDirectories: true)
+        state.openVault(at: replacementVault)
+        XCTAssertFalse(
+            state.isCopyingSidebarWikilink,
+            "the replacement vault must not inherit the old pending state")
+        XCTAssertNil(state.sidebarActionBackgroundProgressReason)
+        for surface in [SidebarActionSurface.menuBar, .commandPalette] {
+            let evaluation = try XCTUnwrap(
+                state.sidebarActionProjection(surface: surface)
+                    .first { $0.id == SlateCommandID.sidebarCopyWikilink })
+            XCTAssertNotEqual(
+                evaluation.disabledReason,
+                AppState.sidebarWikilinkCopyPendingReason)
+        }
+        releaseFormatter.signal()
+        await copyTask.value
+
+        XCTAssertFalse(formatterRanOnMainThread.value)
+        XCTAssertFalse(state.isCopyingSidebarWikilink)
+        XCTAssertEqual(pasteboard.clearCount, 0)
+        XCTAssertEqual(pasteboard.values, [])
+        XCTAssertFalse(
+            announcer.posts.dropFirst(announcementBaseline)
+                .contains { $0.message == "Copied." },
+            "a formatter owned by the previous vault cannot mutate or announce")
     }
 
     func test12TrashUsesExactSingleFileFolderOrOrderedBatchAndRejectsFalse() throws {
@@ -783,6 +989,220 @@ final class SidebarActionInvocationTests: XCTestCase {
             "a rejected late item leaves earlier valid captures untouched")
     }
 
+    func test13aTenThousandItemMovePreflightReturnsWithinInteractionBudgetAndRunsOffMain()
+        async throws
+    {
+        let announcer = RecordingAnnouncer()
+        let state = try openVault(
+            named: "responsive-batch",
+            files: ["Seed.md"],
+            announcer: announcer)
+        let paths = try createValidationFiles(count: 10_000, in: state)
+        let selection = try snapshot(
+            on: state,
+            paths.map { item($0) },
+            focusedPath: paths.last,
+            creationParent: "A/B")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(selection))
+        let openIntent = try intent(SlateCommandID.sidebarOpen, snapshot: selection)
+        guard case .openConfirmation(let openRequest) =
+            try state.dispatchSidebarAction(openIntent)
+        else {
+            return XCTFail("the competing large Open must be staged first")
+        }
+        let moveIntent = try intent(SlateCommandID.moveTo, snapshot: selection)
+        var effects = 0
+        state.sidebarActionDispatchOverrides.moveBatch = { items, focusedPath in
+            effects += 1
+            XCTAssertEqual(items.count, 10_000)
+            XCTAssertEqual(focusedPath, paths.last)
+            return true
+        }
+
+        let clock = ContinuousClock()
+        let started = clock.now
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(moveIntent),
+            .validationPending(actionID: SlateCommandID.moveTo))
+        let dispatchDuration = started.duration(to: clock.now)
+
+        XCTAssertLessThan(
+            dispatchDuration,
+            .milliseconds(100),
+            "a 10k selection must hand filesystem work off before the interaction budget")
+        XCTAssertEqual(effects, 0, "the full walk finishes before any action funnel effect")
+        XCTAssertTrue(state.isValidatingSidebarAction)
+        XCTAssertEqual(
+            state.structuralMutationDisabledReason,
+            AppState.sidebarActionValidationPendingReason)
+        XCTAssertEqual(
+            state.sidebarActionProjection(surface: .menuBar)
+                .first { $0.id == SlateCommandID.sidebarOpen }?.disabledReason,
+            AppState.sidebarActionValidationPendingReason)
+        for surface in [SidebarActionSurface.contextMenu, .voiceOver] {
+            let ids = Set(state.sidebarActionProjection(surface: surface).map(\.id))
+            XCTAssertFalse(ids.contains(SlateCommandID.sidebarOpen))
+            XCTAssertFalse(ids.contains(SlateCommandID.moveTo))
+        }
+
+        let validationTask = try XCTUnwrap(
+            state.pendingSidebarActionValidationTaskForTesting)
+        XCTAssertEqual(
+            state.confirmOpenSelection(id: openRequest.id),
+            .rejected(AppState.sidebarActionValidationPendingReason),
+            "a second validator must reject without superseding the accepted Move")
+        XCTAssertTrue(state.isValidatingSidebarAction)
+        XCTAssertEqual(effects, 0)
+        await validationTask.value
+
+        XCTAssertEqual(effects, 1)
+        XCTAssertFalse(state.isValidatingSidebarAction)
+        XCTAssertEqual(state.sidebarActionValidationRanOnMainThreadForTesting, false)
+        XCTAssertNil(state.sidebarActionBackgroundFailure)
+        XCTAssertEqual(
+            announcer.posts.filter { $0.message.hasPrefix("Checking 10,000") }.count,
+            1,
+            "one accepted validator owns one polite progress announcement")
+    }
+
+    func test13aaDeepSelectionBelowItemThresholdStillOffloadsByComponentWork()
+        async throws
+    {
+        let state = try openVault(named: "responsive-deep", files: ["Seed.md"])
+        let parent = (0..<100).map { "D\($0)" }.joined(separator: "/")
+        let paths = try createValidationFiles(count: 255, in: state, parent: parent)
+        let selection = try snapshot(
+            on: state,
+            paths.map { item($0) },
+            focusedPath: paths.last,
+            creationParent: parent)
+        var effects = 0
+        state.sidebarActionDispatchOverrides.moveBatch = { _, _ in
+            effects += 1
+            return true
+        }
+
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.moveTo, snapshot: selection)),
+            .validationPending(actionID: SlateCommandID.moveTo))
+        XCTAssertEqual(effects, 0)
+        let validationTask = try XCTUnwrap(
+            state.pendingSidebarActionValidationTaskForTesting)
+        await validationTask.value
+        XCTAssertEqual(effects, 1)
+        XCTAssertEqual(state.sidebarActionValidationRanOnMainThreadForTesting, false)
+    }
+
+    func test13abVisibleValidationFailurePersistsUntilAnAdmittedRetryBegins()
+        async throws
+    {
+        let announcer = RecordingAnnouncer()
+        let state = try openVault(
+            named: "responsive-retry",
+            files: ["Seed.md"],
+            announcer: announcer)
+        let parent = (0..<100).map { "D\($0)" }.joined(separator: "/")
+        let paths = try createValidationFiles(count: 10, in: state, parent: parent)
+        let selection = try snapshot(
+            on: state,
+            paths.map { item($0) },
+            focusedPath: paths.last,
+            creationParent: parent)
+        try FileManager.default.removeItem(
+            at: try XCTUnwrap(state.currentVaultURL)
+                .appendingPathComponent(paths.last!))
+        var effects = 0
+        state.sidebarActionDispatchOverrides.moveBatch = { _, _ in
+            effects += 1
+            return true
+        }
+
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.moveTo, snapshot: selection)),
+            .validationPending(actionID: SlateCommandID.moveTo))
+        let failedTask = try XCTUnwrap(
+            state.pendingSidebarActionValidationTaskForTesting)
+        await failedTask.value
+
+        XCTAssertEqual(effects, 0)
+        XCTAssertEqual(
+            state.sidebarActionBackgroundFailure,
+            AppState.sidebarSelectionChangedReason)
+        XCTAssertEqual(announcer.posts.last?.message, AppState.sidebarSelectionChangedReason)
+
+        let valid = try snapshot(on: state, [item("Seed.md")], focusedPath: "Seed.md")
+        state.sidebarActionDispatchOverrides.moveSingle = { _ in true }
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.moveTo, snapshot: valid)),
+            .completed(actionID: SlateCommandID.moveTo))
+        XCTAssertNil(
+            state.sidebarActionBackgroundFailure,
+            "an admitted retry clears the persistent warning before its new sheet/funnel")
+    }
+
+    func test13bLargeOpenStagesImmediatelyThenValidatesOnceOffMainBeforeOpening()
+        async throws
+    {
+        let state = try openVault(named: "responsive-open", files: ["Seed.md"])
+        let paths = try createValidationFiles(count: 512, in: state)
+        let selection = try snapshot(
+            on: state,
+            paths.map { item($0) },
+            focusedPath: paths[17],
+            creationParent: "A/B")
+        let openIntent = try intent(SlateCommandID.sidebarOpen, snapshot: selection)
+        var preflights = 0
+        var opened: [String] = []
+        state.sidebarActionDispatchOverrides.openPreflight = { _ in
+            preflights += 1
+            return true
+        }
+        state.sidebarActionDispatchOverrides.openPath = { path, target in
+            XCTAssertEqual(target, .newTab)
+            opened.append(path)
+            return true
+        }
+
+        let clock = ContinuousClock()
+        let stagingStarted = clock.now
+        guard case .openConfirmation(let request) =
+            try state.dispatchSidebarAction(openIntent)
+        else {
+            return XCTFail("10+ Open must stage confirmation without a filesystem walk")
+        }
+        XCTAssertLessThan(
+            stagingStarted.duration(to: clock.now),
+            .milliseconds(100))
+        XCTAssertEqual(preflights, 1)
+        XCTAssertEqual(opened, [])
+        XCTAssertNil(state.pendingSidebarActionValidationTaskForTesting)
+
+        let confirmationStarted = clock.now
+        XCTAssertEqual(
+            state.confirmOpenSelection(id: request.id),
+            .validationPending)
+        XCTAssertLessThan(
+            confirmationStarted.duration(to: clock.now),
+            .milliseconds(100))
+        XCTAssertEqual(opened, [], "confirmation must not report or perform an early open")
+        XCTAssertNil(
+            state.activeBatchAlertPresentation,
+            "confirmed work owns a background continuation, not a stale alert")
+
+        let validationTask = try XCTUnwrap(
+            state.pendingSidebarActionValidationTaskForTesting)
+        await validationTask.value
+
+        let expected = paths.filter { $0 != paths[17] } + [paths[17]]
+        XCTAssertEqual(opened, expected)
+        XCTAssertEqual(preflights, 3, "staging, confirmation, and post-await admission each run once")
+        XCTAssertEqual(state.sidebarActionValidationRanOnMainThreadForTesting, false)
+        XCTAssertFalse(state.isValidatingSidebarAction)
+    }
+
     func test14StructuralAndActionSpecificReasonsRejectBeforeStaging() throws {
         let announcer = RecordingAnnouncer()
         let state = try openVault(
@@ -852,9 +1272,6 @@ final class SidebarActionInvocationTests: XCTestCase {
             }),
             ("reveal", SlateCommandID.revealInFinder, file, {
                 state.sidebarActionDispatchOverrides.reveal = { _, _ in false }
-            }),
-            ("wikilink", SlateCommandID.sidebarCopyWikilink, file, {
-                state.sidebarActionDispatchOverrides.wikilink = { _, _ in nil }
             }),
             ("single trash", SlateCommandID.deleteEntry, file, {
                 state.sidebarActionDispatchOverrides.trashSingle = { _ in false }
@@ -948,7 +1365,7 @@ final class SidebarActionInvocationTests: XCTestCase {
         }
         for realFunnel in [
             "openFile", "enqueueOpenSelection", "activateFileViewerSelecting",
-            "wikilinkForPath",
+            "startSidebarWikilinkCopy",
             "requestCreateNote", "requestCreateFolder", "openTemplatePicker",
             "requestRename", "requestPendingMove", "requestBatchMove",
             "requestDuplicateEntry", "requestDeleteEntry", "requestBatchDelete",
@@ -958,10 +1375,23 @@ final class SidebarActionInvocationTests: XCTestCase {
                 "default dispatcher path must call the real \(realFunnel) funnel")
         }
 
+        let wikilinkCopy = try functionBody(
+            named: "startSidebarWikilinkCopy",
+            signatureFragment: "SidebarActionInvocationIntent",
+            in: appState)
+        for required in [
+            "Task.detached", "wikilinkForPath", "validateSidebarActionIntent",
+            "completeSidebarCopy",
+        ] {
+            XCTAssertTrue(
+                wikilinkCopy.contains(required),
+                "async Wikilink copy must retain \(required)")
+        }
+
         XCTAssertEqual(
-            appState.components(separatedBy: "SidebarActionInvocationIntent").count - 1,
-            1,
-            "the intent overload is the one executor; no parallel intent runner is allowed")
+            appState.components(separatedBy: "func dispatchSidebarAction(").count - 1,
+            2,
+            "only the ID capture overload and one frozen-intent executor are allowed")
         let overrides = try typeBody(named: "SidebarActionDispatchOverrides", in: appState)
         for leafSeam in [
             "openPreflight", "openPath", "createNote", "createFolder",

@@ -210,16 +210,17 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         XCTAssertEqual(menu.map(\.id), catalogIDs)
         XCTAssertEqual(
             menu.filter { $0.disabledReason == nil }.map(\.id),
-            [SlateCommandID.moveTo, SlateCommandID.deleteEntry],
-            "mixed selections enable only Move To and Move to Trash")
+            [
+                SlateCommandID.newFromTemplate, SlateCommandID.moveTo,
+                SlateCommandID.deleteEntry,
+            ],
+            "the root-only Template command stays independent of sidebar selection")
 
         let expectedDisabledReasons: [String: String] = [
             SlateCommandID.sidebarOpen: "Open is available only for files.",
             SlateCommandID.newNote:
                 "Select no more than one item to choose a creation location.",
             SlateCommandID.newFolder:
-                "Select no more than one item to choose a creation location.",
-            SlateCommandID.newFromTemplate:
                 "Select no more than one item to choose a creation location.",
             SlateCommandID.renameEntry: "Select exactly one file or folder to rename.",
             SlateCommandID.duplicateEntry: "Select exactly one file to duplicate.",
@@ -233,7 +234,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 evaluation.disabledReason.map { (evaluation.id, $0) }
             }),
             expectedDisabledReasons,
-            "the other nine mixed-selection actions expose deterministic capability reasons")
+            "the other eight mixed-selection actions expose deterministic capability reasons")
     }
 
     func testContextAndVoiceOverOmitEveryUnavailableAction() {
@@ -293,7 +294,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 structurallyBusy.map(\.id),
                 contextualOpen + [
                     SlateCommandID.revealInFinder,
-                    SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
+                    SlateCommandID.copyPath,
                 ],
                 "busy contextual surfaces omit every structurally blocked action")
             XCTAssertEqual(
@@ -416,22 +417,29 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             "the pure row projection must not publish or mutate tree selection")
     }
 
-    func testTemplateIsExplicitRootOnlyAfterLiveCapabilityAdmission() throws {
+    func testTemplateIsExplicitRootOnlyRegardlessOfLiveSelection() throws {
         let single = snapshot(
             [item("Folder/Note.md")],
             focusedPath: "Folder/Note.md",
             creationParent: "Folder")
-        for surface in [
-            SidebarActionSurface.menuBar, .commandPalette, .toolbar, .keyboard,
-        ] {
-            let evaluation = try XCTUnwrap(
-                SidebarActionCatalog.project(surface: surface, snapshot: single)
-                    .first { $0.id == SlateCommandID.newFromTemplate })
-            let intent = try XCTUnwrap(evaluation.intent)
-            XCTAssertEqual(intent.snapshot.items, [])
-            XCTAssertNil(intent.snapshot.focusedPath)
-            XCTAssertEqual(intent.snapshot.creationParent, "")
-            XCTAssertEqual(intent.snapshot.sessionIdentity, single.sessionIdentity)
+        let mixed = snapshot(
+            [item("Folder/Note.md"), item("Other", directory: true)],
+            focusedPath: "Other",
+            creationParent: "Other")
+        for selection in [single, mixed] {
+            for surface in [
+                SidebarActionSurface.menuBar, .commandPalette, .toolbar, .keyboard,
+            ] {
+                let evaluation = try XCTUnwrap(
+                    SidebarActionCatalog.project(surface: surface, snapshot: selection)
+                        .first { $0.id == SlateCommandID.newFromTemplate })
+                XCTAssertNil(evaluation.disabledReason)
+                let intent = try XCTUnwrap(evaluation.intent)
+                XCTAssertEqual(intent.snapshot.items, [])
+                XCTAssertNil(intent.snapshot.focusedPath)
+                XCTAssertEqual(intent.snapshot.creationParent, "")
+                XCTAssertEqual(intent.snapshot.sessionIdentity, selection.sessionIdentity)
+            }
         }
         for surface in [SidebarActionSurface.contextMenu, .voiceOver] {
             XCTAssertFalse(
@@ -471,7 +479,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         }
     }
 
-    func testMixedSelectionRejectsTemplateThroughLiveRegistryBeforePicker() async throws {
+    func testMixedSelectionPreservesRootTemplateIntentThroughLiveRegistry() throws {
         let state = try openVault(
             named: "mixed-template",
             files: ["Note.md"],
@@ -484,29 +492,18 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             creationParent: "Folder")
         XCTAssertTrue(state.publishSidebarSelectionSnapshot(mixed))
 
-        var pickerCalls = 0
-        state.sidebarActionDispatchOverrides.openTemplatePicker = { _ in
-            pickerCalls += 1
+        var pickerParents: [String] = []
+        state.sidebarActionDispatchOverrides.openTemplatePicker = { parent in
+            pickerParents.append(parent)
             return true
         }
-        XCTAssertThrowsError(
-            try state.commandRegistry.invokeById(id: SlateCommandID.newFromTemplate)
-        ) { error in
-            guard case CommandError.ActionFailed(message: let message) = error else {
-                return XCTFail("expected ActionFailed, got \(error)")
-            }
-            XCTAssertEqual(
-                message,
-                "Select no more than one item to choose a creation location.")
-        }
+        XCTAssertNoThrow(
+            try state.commandRegistry.invokeById(id: SlateCommandID.newFromTemplate))
         XCTAssertEqual(
-            pickerCalls, 0,
-            "live capability admission happens before root-freezing or picker dispatch")
-        let leakedTask = state.templatePickerTask
+            pickerParents, [""],
+            "the shipped Template command must remain rooted and selection-independent")
         XCTAssertNil(state.templatePickerTask)
         XCTAssertFalse(state.isTemplatePickerOpen)
-        leakedTask?.cancel()
-        await leakedTask?.value
     }
 
     func testAppStateProjectionAndPaletteResolverMergeEveryCurrentReason() async throws {
@@ -546,9 +543,11 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         XCTAssertEqual(
             try evaluation(SlateCommandID.duplicateEntry, in: capability).disabledReason,
             "Select exactly one file to duplicate.")
-        XCTAssertEqual(
-            try evaluation(SlateCommandID.newFromTemplate, in: capability).disabledReason,
-            "Select no more than one item to choose a creation location.")
+        let template = try evaluation(SlateCommandID.newFromTemplate, in: capability)
+        XCTAssertNil(template.disabledReason)
+        XCTAssertEqual(template.intent?.snapshot.items, [])
+        XCTAssertNil(template.intent?.snapshot.focusedPath)
+        XCTAssertEqual(template.intent?.snapshot.creationParent, "")
 
         XCTAssertTrue(state.publishSidebarSelectionSnapshot(markdown))
         let busy = "Another file operation is still running."
@@ -560,6 +559,12 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         XCTAssertNil(
             try evaluation(SlateCommandID.copyPath, in: structural).disabledReason,
             "inspection actions remain available during structural mutation")
+        XCTAssertEqual(
+            try evaluation(
+                SlateCommandID.sidebarCopyWikilink, in: structural
+            ).disabledReason,
+            busy,
+            "the synchronous native formatter must not contend with a structural writer")
 
         state.sidebarActionStructuralDisabledReasonOverride = nil
         let loading = "Wikilinks are still loading."
@@ -588,15 +593,17 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 SlateCommandID.sidebarOpen, in: propertyEditingMenu
             ).disabledReason,
             AppState.propertyEditInProgressReason)
-        for id in [
-            SlateCommandID.revealInFinder,
-            SlateCommandID.copyPath,
-            SlateCommandID.sidebarCopyWikilink,
-        ] {
+        for id in [SlateCommandID.revealInFinder, SlateCommandID.copyPath] {
             XCTAssertNil(
                 try evaluation(id, in: propertyEditingMenu).disabledReason,
-                "the Open-only navigation gate must not disable inspection action \(id)")
+                "non-native inspection remains available during property edits: \(id)")
         }
+        XCTAssertEqual(
+            try evaluation(
+                SlateCommandID.sidebarCopyWikilink, in: propertyEditingMenu
+            ).disabledReason,
+            AppState.propertyEditInProgressReason,
+            "Copy Wikilink must not synchronously contend on the native session lock")
 
         let reasonCases: [(String, [SidebarActionEvaluation], String)] = [
             (SlateCommandID.renameEntry, noVaultMenu, SidebarActionCatalog.noVaultReason),

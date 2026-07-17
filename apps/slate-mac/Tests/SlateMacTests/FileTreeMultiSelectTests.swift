@@ -916,10 +916,11 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertTrue(palette.contains(".accessibilityHint(disabledReason"))
     }
 
-    func testC1BusySidebarOmitsStructuralRotorsAndShowsCompactProgressByInspection()
+    func testC1BusySidebarOmitsStructuralRotorsAndShowsScopedProgressByInspection()
         throws
     {
         let source = try Self.rawSource("FileTreeSidebar.swift")
+        let splitSource = try Self.rawSource("MainSplitView.swift")
         let normalizedSource = try Self.normalizedSidebarSource()
 
         func body(_ source: String, from start: String, to end: String) throws -> String {
@@ -1013,12 +1014,31 @@ final class FileTreeMultiSelectTests: XCTestCase {
             try body(source, from: "var body: some View {", to: ".navigationTitle(\"Files\")"))
         XCTAssertTrue(
             sidebarBody.contains("progressBar structuralMutationProgress"),
-            "the transient mutation strip belongs immediately below scan progress")
+            "ordinary structural progress remains immediately below scan progress")
+
+        let sidebarProgress = compact(
+            try body(
+                source,
+                from: "private var structuralMutationProgress",
+                to: "private var batchTrashQuarantineRecovery"))
+        XCTAssertTrue(sidebarProgress.contains("!appState.isValidatingSidebarAction"))
+        XCTAssertTrue(sidebarProgress.contains("appState.structuralMutationDisabledReason"))
+
+        let splitCore = compact(
+            try body(
+                splitSource,
+                from: "private var splitViewCore: some View",
+                to: "private var windowStructuralStatusSurface"))
+        XCTAssertTrue(
+            splitCore.contains(".safeAreaInset(edge: .top, spacing: 0) { windowStructuralStatusSurface }"),
+            "selection-validation progress belongs to the always-mounted window shell")
 
         let progress = compact(
             try body(
-                source, from: "private var structuralMutationProgress", to: "private var progressBar"))
-        XCTAssertTrue(progress.contains("appState.structuralMutationDisabledReason"))
+                splitSource,
+                from: "private var sidebarActionBackgroundProgress",
+                to: "private var sidebarActionBackgroundFailure"))
+        XCTAssertTrue(progress.contains("appState.sidebarActionBackgroundProgressReason"))
         XCTAssertTrue(progress.contains("ProgressView()"))
         XCTAssertTrue(progress.contains(".controlSize(.small)"))
         XCTAssertTrue(progress.contains(".accessibilityLabel(reason)"))
