@@ -762,7 +762,12 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     intakeBox.store(intake)
 
     let result = await intake.load()
-    for _ in 0..<20 where first.progressBox.load() != nil {
+    for _ in 0..<1_000 {
+      if first.progressCancellations() == 1,
+        first.progressBox.load() == nil
+      {
+        break
+      }
       await Task.yield()
     }
 
@@ -1535,6 +1540,173 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     XCTAssertEqual(metrics.snapshot().totalReadOperations, 1)
     XCTAssertEqual(metrics.snapshot().activeReads, 0)
     XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testRootOpenDescriptorAdoptionKeepsCancellationWaitingUntilCleanup() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source.bin")
+    try Data([0x41]).write(to: root)
+    let cancellation = SidebarImportSourceCancellationToken()
+    let metrics = SidebarImportSourceMetrics()
+    let scope = ScopeProbe()
+    let adoptionGate = BlockingGate()
+    let result = ResultBox<SidebarImportPreparedSource>()
+    let workerFinished = expectation(description: "paused root-open worker finished")
+    let cancelReturned = ValueBox<Bool>()
+    let cancelFinished = expectation(description: "descriptor-draining cancel returned")
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(sessionRefuseBytes: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didOpenDescriptorBeforeAdoption: { path in
+          if path == "/" {
+            adoptionGate.block()
+          }
+        }),
+      cancellation: cancellation,
+      metrics: metrics)
+
+    DispatchQueue.global().async {
+      result.store(Result { try walker.prepare(rootURL: root, vaultURL: vault) })
+      workerFinished.fulfill()
+    }
+    XCTAssertTrue(adoptionGate.waitUntilBlocked())
+
+    DispatchQueue.global().async {
+      cancellation.cancel()
+      cancelReturned.store(true)
+      cancelFinished.fulfill()
+    }
+
+    XCTAssertFalse(
+      waitForScheduler(timeout: 0.1) { cancelReturned.load() == true },
+      "cancellation must wait until the successful descriptor is adopted or closed")
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+
+    adoptionGate.unblock()
+    wait(for: [cancelFinished, workerFinished], timeout: 1)
+
+    XCTAssertEqual(cancelReturned.load(), true)
+    XCTAssertThrowsError(try XCTUnwrap(result.load()).get()) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected cancellation after descriptor cleanup, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testPreparedNestedOpenAdoptionWaitsForCleanupAndClosesSource() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    let nested = root.appendingPathComponent("nested", isDirectory: true)
+    try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+    try Data([0x41]).write(to: nested.appendingPathComponent("file.bin"))
+    let cancellation = SidebarImportSourceCancellationToken()
+    let metrics = SidebarImportSourceMetrics()
+    let scope = ScopeProbe()
+    let adoptionGate = BlockingGate()
+    let gateIsArmed = ValueBox<Bool>()
+    gateIsArmed.store(false)
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(sessionRefuseBytes: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didOpenDescriptorBeforeAdoption: { path in
+          if gateIsArmed.load() == true, path == "nested/file.bin" {
+            adoptionGate.block()
+          }
+        }),
+      cancellation: cancellation,
+      metrics: metrics)
+    let prepared = try walker.prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(
+      prepared.manifest.entries.first {
+        $0.relativePath.display == "nested/file.bin"
+      })
+    gateIsArmed.store(true)
+    let result = ResultBox<Data>()
+    let workerFinished = expectation(description: "paused prepared read finished")
+    let cancelReturned = ValueBox<Bool>()
+    let cancelFinished = expectation(description: "prepared-open cancel returned")
+
+    DispatchQueue.global().async {
+      result.store(Result { try prepared.readBytes(for: entry) })
+      workerFinished.fulfill()
+    }
+    XCTAssertTrue(adoptionGate.waitUntilBlocked())
+
+    DispatchQueue.global().async {
+      cancellation.cancel()
+      cancelReturned.store(true)
+      cancelFinished.fulfill()
+    }
+
+    XCTAssertFalse(
+      waitForScheduler(timeout: 0.1) { cancelReturned.load() == true },
+      "cancellation must wait for prepared-read descriptor handoff")
+    XCTAssertEqual(metrics.snapshot().activeReads, 1)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 2)
+
+    adoptionGate.unblock()
+    wait(for: [cancelFinished, workerFinished], timeout: 1)
+
+    XCTAssertEqual(cancelReturned.load(), true)
+    XCTAssertThrowsError(try XCTUnwrap(result.load()).get()) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected prepared-source cancellation, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+    prepared.close()
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testPreparedCancelBeforeOpenLeaseClosesSourceAuthority() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    let nested = root.appendingPathComponent("nested", isDirectory: true)
+    try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+    try Data([0x41]).write(to: nested.appendingPathComponent("file.bin"))
+    let cancellation = SidebarImportSourceCancellationToken()
+    let metrics = SidebarImportSourceMetrics()
+    let scope = ScopeProbe()
+    let cancellationIsArmed = ValueBox<Bool>()
+    cancellationIsArmed.store(false)
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(sessionRefuseBytes: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(didReachBoundary: { boundary in
+        if cancellationIsArmed.load() == true,
+          boundary == .beforeOpen("nested/file.bin")
+        {
+          cancellation.cancel()
+        }
+      }),
+      cancellation: cancellation,
+      metrics: metrics)
+    let prepared = try walker.prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(
+      prepared.manifest.entries.first {
+        $0.relativePath.display == "nested/file.bin"
+      })
+    cancellationIsArmed.store(true)
+
+    XCTAssertThrowsError(try prepared.readBytes(for: entry)) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected cancellation before open lease, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+    prepared.close()
     XCTAssertEqual(scope.counts().stops, 1)
   }
 

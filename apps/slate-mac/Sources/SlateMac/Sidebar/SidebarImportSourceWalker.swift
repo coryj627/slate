@@ -27,7 +27,11 @@ struct SidebarImportSecurityScopeAccess {
 
 struct SidebarImportSourceWalkerHooks {
   let didAcquireReadLease: @Sendable () -> Void
+  /// Runs inside an operation lease; never call blocking cancellation inline.
   let didAcquireOperationLease: @Sendable (SidebarImportSourceBoundary) -> Void
+  /// Runs inside a winning descriptor-operation lease. Implementations must
+  /// request cancellation from another execution context, never inline.
+  let didOpenDescriptorBeforeAdoption: @Sendable (String) -> Void
   let didInspectDescendant: @Sendable (String) -> Void
   let didReachBoundary: @Sendable (SidebarImportSourceBoundary) -> Void
   let injectedDirectoryRecords: @Sendable (String) -> [[UInt8]]
@@ -37,12 +41,14 @@ struct SidebarImportSourceWalkerHooks {
     didAcquireOperationLease: @escaping @Sendable (SidebarImportSourceBoundary) -> Void = {
       _ in
     },
+    didOpenDescriptorBeforeAdoption: @escaping @Sendable (String) -> Void = { _ in },
     didInspectDescendant: @escaping @Sendable (String) -> Void = { _ in },
     didReachBoundary: @escaping @Sendable (SidebarImportSourceBoundary) -> Void = { _ in },
     injectedDirectoryRecords: @escaping @Sendable (String) -> [[UInt8]] = { _ in [] }
   ) {
     self.didAcquireReadLease = didAcquireReadLease
     self.didAcquireOperationLease = didAcquireOperationLease
+    self.didOpenDescriptorBeforeAdoption = didOpenDescriptorBeforeAdoption
     self.didInspectDescendant = didInspectDescendant
     self.didReachBoundary = didReachBoundary
     self.injectedDirectoryRecords = injectedDirectoryRecords
@@ -435,6 +441,44 @@ enum SidebarImportSourceWalkerError: Error {
   case cancelled
 }
 
+private typealias SidebarImportOpenResult = (descriptor: Int32, error: Int32)
+
+private func performSidebarImportOpen(
+  at boundary: SidebarImportSourceBoundary,
+  adoptionPath: String,
+  didReachBoundary: @Sendable (SidebarImportSourceBoundary) -> Void,
+  didAcquireOperationLease: @Sendable (SidebarImportSourceBoundary) -> Void,
+  didOpenDescriptorBeforeAdoption: @Sendable (String) -> Void,
+  cancellation: SidebarImportSourceCancellationToken,
+  metrics: SidebarImportSourceMetrics,
+  checkCancellation: () throws -> Void,
+  open: () -> SidebarImportOpenResult,
+  adopt: (Int32) -> Void
+) throws -> Int32? {
+  didReachBoundary(boundary)
+  guard let operationLease = cancellation.beginOperation() else {
+    try checkCancellation()
+    throw SidebarImportSourceWalkerError.cancelled
+  }
+  didAcquireOperationLease(boundary)
+  defer { operationLease.release() }
+
+  let result = open()
+  guard result.descriptor >= 0 else { return result.error }
+
+  didOpenDescriptorBeforeAdoption(adoptionPath)
+  metrics.descriptorOpened()
+  do {
+    try checkCancellation()
+  } catch {
+    Darwin.close(result.descriptor)
+    metrics.descriptorClosed()
+    throw error
+  }
+  adopt(result.descriptor)
+  return nil
+}
+
 private final class SidebarImportPreparedSourceReadAuthority: @unchecked Sendable {
   let descriptor: Int32
 
@@ -468,6 +512,7 @@ final class SidebarImportPreparedSource {
   private let scopeWasStarted: Bool
   private let didAcquireReadLease: @Sendable () -> Void
   private let didAcquireOperationLease: @Sendable (SidebarImportSourceBoundary) -> Void
+  private let didOpenDescriptorBeforeAdoption: @Sendable (String) -> Void
   private let didReachBoundary: @Sendable (SidebarImportSourceBoundary) -> Void
   private let cancellation: SidebarImportSourceCancellationToken
   private let metrics: SidebarImportSourceMetrics
@@ -484,6 +529,7 @@ final class SidebarImportPreparedSource {
     scopeWasStarted: Bool,
     didAcquireReadLease: @escaping @Sendable () -> Void,
     didAcquireOperationLease: @escaping @Sendable (SidebarImportSourceBoundary) -> Void,
+    didOpenDescriptorBeforeAdoption: @escaping @Sendable (String) -> Void,
     didReachBoundary: @escaping @Sendable (SidebarImportSourceBoundary) -> Void,
     cancellation: SidebarImportSourceCancellationToken,
     metrics: SidebarImportSourceMetrics,
@@ -496,6 +542,7 @@ final class SidebarImportPreparedSource {
     self.scopeWasStarted = scopeWasStarted
     self.didAcquireReadLease = didAcquireReadLease
     self.didAcquireOperationLease = didAcquireOperationLease
+    self.didOpenDescriptorBeforeAdoption = didOpenDescriptorBeforeAdoption
     self.didReachBoundary = didReachBoundary
     self.cancellation = cancellation
     self.metrics = metrics
@@ -533,56 +580,73 @@ final class SidebarImportPreparedSource {
     }
 
     for component in components.dropLast() {
-      let openResult = try performOperation(
-        at: .beforeOpen(entry.relativePath.display)
-      ) {
-        let descriptor = component.withCString { name in
-          openat(
-            directoryFD,
-            name,
-            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-          )
-        }
-        return (descriptor: descriptor, error: errno)
-      }
-      let nextFD = openResult.descriptor
-      guard nextFD >= 0 else {
+      let parentFD = directoryFD
+      let openError = try performSidebarImportOpen(
+        at: .beforeOpen(entry.relativePath.display),
+        adoptionPath: entry.relativePath.display,
+        didReachBoundary: didReachBoundary,
+        didAcquireOperationLease: didAcquireOperationLease,
+        didOpenDescriptorBeforeAdoption: didOpenDescriptorBeforeAdoption,
+        cancellation: cancellation,
+        metrics: metrics,
+        checkCancellation: { try throwIfCancelled() },
+        open: {
+          let descriptor = component.withCString { name in
+            openat(
+              parentFD,
+              name,
+              O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+          }
+          return (descriptor: descriptor, error: errno)
+        },
+        adopt: { descriptor in
+          if ownsDirectoryFD {
+            Darwin.close(directoryFD)
+            metrics.descriptorClosed()
+          }
+          directoryFD = descriptor
+          ownsDirectoryFD = true
+        })
+      if let openError {
         throw SidebarImportSourceWalkerError.openFailed(
           path: entry.relativePath.display,
-          reason: Self.posixReason(openResult.error))
+          reason: Self.posixReason(openError))
       }
-      metrics.descriptorOpened()
-      if ownsDirectoryFD {
-        Darwin.close(directoryFD)
-        metrics.descriptorClosed()
-      }
-      directoryFD = nextFD
-      ownsDirectoryFD = true
       try throwIfCancelled()
     }
 
-    let openResult = try performOperation(
-      at: .beforeOpen(entry.relativePath.display)
-    ) {
-      let descriptor = fileName.withCString { name in
-        openat(
-          directoryFD,
-          name,
-          O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
-        )
+    var fileFD: Int32 = -1
+    defer {
+      if fileFD >= 0 {
+        Darwin.close(fileFD)
+        metrics.descriptorClosed()
       }
-      return (descriptor: descriptor, error: errno)
     }
-    let fileFD = openResult.descriptor
-    guard fileFD >= 0 else {
+    let openError = try performSidebarImportOpen(
+      at: .beforeOpen(entry.relativePath.display),
+      adoptionPath: entry.relativePath.display,
+      didReachBoundary: didReachBoundary,
+      didAcquireOperationLease: didAcquireOperationLease,
+      didOpenDescriptorBeforeAdoption: didOpenDescriptorBeforeAdoption,
+      cancellation: cancellation,
+      metrics: metrics,
+      checkCancellation: { try throwIfCancelled() },
+      open: {
+        let descriptor = fileName.withCString { name in
+          openat(
+            directoryFD,
+            name,
+            O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+          )
+        }
+        return (descriptor: descriptor, error: errno)
+      },
+      adopt: { fileFD = $0 })
+    if let openError {
       throw SidebarImportSourceWalkerError.openFailed(
         path: entry.relativePath.display,
-        reason: Self.posixReason(openResult.error))
-    }
-    metrics.descriptorOpened()
-    defer {
-      Darwin.close(fileFD)
-      metrics.descriptorClosed()
+        reason: Self.posixReason(openError))
     }
     try throwIfCancelled()
 
@@ -649,57 +713,74 @@ final class SidebarImportPreparedSource {
 
       for component in components.dropLast() {
         try scheduler.checkCancellation()
-        let openResult = try performOperation(
-          at: .beforeOpen(entry.relativePath.display)
-        ) {
-          let descriptor = component.withCString { name in
-            openat(
-              directoryFD,
-              name,
-              O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-            )
-          }
-          return (descriptor: descriptor, error: errno)
-        }
-        let nextFD = openResult.descriptor
-        guard nextFD >= 0 else {
+        let parentFD = directoryFD
+        let openError = try performSidebarImportOpen(
+          at: .beforeOpen(entry.relativePath.display),
+          adoptionPath: entry.relativePath.display,
+          didReachBoundary: didReachBoundary,
+          didAcquireOperationLease: didAcquireOperationLease,
+          didOpenDescriptorBeforeAdoption: didOpenDescriptorBeforeAdoption,
+          cancellation: cancellation,
+          metrics: metrics,
+          checkCancellation: { try throwIfCancelled() },
+          open: {
+            let descriptor = component.withCString { name in
+              openat(
+                parentFD,
+                name,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+              )
+            }
+            return (descriptor: descriptor, error: errno)
+          },
+          adopt: { descriptor in
+            if ownsDirectoryFD {
+              Darwin.close(directoryFD)
+              metrics.descriptorClosed()
+            }
+            directoryFD = descriptor
+            ownsDirectoryFD = true
+          })
+        if let openError {
           throw SidebarImportSourceWalkerError.openFailed(
             path: entry.relativePath.display,
-            reason: Self.posixReason(openResult.error))
+            reason: Self.posixReason(openError))
         }
-        metrics.descriptorOpened()
-        if ownsDirectoryFD {
-          Darwin.close(directoryFD)
-          metrics.descriptorClosed()
-        }
-        directoryFD = nextFD
-        ownsDirectoryFD = true
         try throwIfCancelled()
       }
 
       try scheduler.checkCancellation()
-      let openResult = try performOperation(
-        at: .beforeOpen(entry.relativePath.display)
-      ) {
-        let descriptor = fileName.withCString { name in
-          openat(
-            directoryFD,
-            name,
-            O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
-          )
+      var fileFD: Int32 = -1
+      defer {
+        if fileFD >= 0 {
+          Darwin.close(fileFD)
+          metrics.descriptorClosed()
         }
-        return (descriptor: descriptor, error: errno)
       }
-      let fileFD = openResult.descriptor
-      guard fileFD >= 0 else {
+      let openError = try performSidebarImportOpen(
+        at: .beforeOpen(entry.relativePath.display),
+        adoptionPath: entry.relativePath.display,
+        didReachBoundary: didReachBoundary,
+        didAcquireOperationLease: didAcquireOperationLease,
+        didOpenDescriptorBeforeAdoption: didOpenDescriptorBeforeAdoption,
+        cancellation: cancellation,
+        metrics: metrics,
+        checkCancellation: { try throwIfCancelled() },
+        open: {
+          let descriptor = fileName.withCString { name in
+            openat(
+              directoryFD,
+              name,
+              O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+            )
+          }
+          return (descriptor: descriptor, error: errno)
+        },
+        adopt: { fileFD = $0 })
+      if let openError {
         throw SidebarImportSourceWalkerError.openFailed(
           path: entry.relativePath.display,
-          reason: Self.posixReason(openResult.error))
-      }
-      metrics.descriptorOpened()
-      defer {
-        Darwin.close(fileFD)
-        metrics.descriptorClosed()
+          reason: Self.posixReason(openError))
       }
       try scheduler.checkCancellation()
       try throwIfCancelled()
@@ -1025,24 +1106,31 @@ struct SidebarImportSourceWalker {
       }
     }
 
-    let filesystemRootOpen = try Self.performOperation(
-      at: .beforeRootOpen,
-      hooks: hooks,
-      cancellation: cancellation
-    ) {
-      let descriptor = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-      return (descriptor: descriptor, error: errno)
+    var filesystemRootFD: Int32 = -1
+    defer {
+      if filesystemRootFD >= 0 {
+        Darwin.close(filesystemRootFD)
+        metrics.descriptorClosed()
+      }
     }
-    let filesystemRootFD = filesystemRootOpen.descriptor
-    guard filesystemRootFD >= 0 else {
+    let filesystemRootError = try performSidebarImportOpen(
+      at: .beforeRootOpen,
+      adoptionPath: "/",
+      didReachBoundary: hooks.didReachBoundary,
+      didAcquireOperationLease: hooks.didAcquireOperationLease,
+      didOpenDescriptorBeforeAdoption: hooks.didOpenDescriptorBeforeAdoption,
+      cancellation: cancellation,
+      metrics: metrics,
+      checkCancellation: { try Self.throwIfCancelled(cancellation) },
+      open: {
+        let descriptor = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        return (descriptor: descriptor, error: errno)
+      },
+      adopt: { filesystemRootFD = $0 })
+    if let filesystemRootError {
       throw SidebarImportSourceWalkerError.openFailed(
         path: "/",
-        reason: Self.posixReason(filesystemRootOpen.error))
-    }
-    metrics.descriptorOpened()
-    defer {
-      Darwin.close(filesystemRootFD)
-      metrics.descriptorClosed()
+        reason: Self.posixReason(filesystemRootError))
     }
     try Self.throwIfCancelled(cancellation)
 
@@ -1135,6 +1223,7 @@ struct SidebarImportSourceWalker {
       scopeWasStarted: scopeWasStarted,
       didAcquireReadLease: hooks.didAcquireReadLease,
       didAcquireOperationLease: hooks.didAcquireOperationLease,
+      didOpenDescriptorBeforeAdoption: hooks.didOpenDescriptorBeforeAdoption,
       didReachBoundary: hooks.didReachBoundary,
       cancellation: cancellation,
       metrics: metrics,
@@ -1333,64 +1422,62 @@ struct SidebarImportSourceWalker {
 
       switch metadata.st_mode & S_IFMT {
       case S_IFDIR:
-        let openResult = try performOperation(
-          at: .beforeOpen(childPath),
-          hooks: hooks,
-          cancellation: cancellation
-        ) {
-          let descriptor = withRawName(rawName) { component in
-            openat(
-              parentFD,
-              component,
-              O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-            )
+        var childFD: Int32 = -1
+        var ownsChildFD = false
+        defer {
+          if ownsChildFD {
+            Darwin.close(childFD)
+            metrics.descriptorClosed()
           }
-          return (descriptor: descriptor, error: errno)
         }
-        let childFD = openResult.descriptor
-        guard childFD >= 0 else {
+        let openError = try performSidebarImportOpen(
+          at: .beforeOpen(childPath),
+          adoptionPath: childPath,
+          didReachBoundary: hooks.didReachBoundary,
+          didAcquireOperationLease: hooks.didAcquireOperationLease,
+          didOpenDescriptorBeforeAdoption: hooks.didOpenDescriptorBeforeAdoption,
+          cancellation: cancellation,
+          metrics: metrics,
+          checkCancellation: { try throwIfCancelled(cancellation) },
+          open: {
+            let descriptor = withRawName(rawName) { component in
+              openat(
+                parentFD,
+                component,
+                O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+              )
+            }
+            return (descriptor: descriptor, error: errno)
+          },
+          adopt: { descriptor in
+            childFD = descriptor
+            ownsChildFD = true
+          })
+        if openError != nil {
           state.reject(
             components: childComponents,
             reason: rejectionReasonAfterOpenFailure(parentFD: parentFD, name: name))
           continue
         }
-        metrics.descriptorOpened()
-        do {
-          try throwIfCancelled(cancellation)
-        } catch {
-          Darwin.close(childFD)
-          metrics.descriptorClosed()
-          throw error
-        }
+        try throwIfCancelled(cancellation)
         var openedMetadata = stat()
         guard fstat(childFD, &openedMetadata) == 0 else {
-          Darwin.close(childFD)
-          metrics.descriptorClosed()
           state.reject(components: childComponents, reason: .unreadable)
           continue
         }
         if let reason = rejectionReason(for: openedMetadata) {
-          Darwin.close(childFD)
-          metrics.descriptorClosed()
           state.reject(components: childComponents, reason: reason)
           continue
         }
         guard openedMetadata.st_mode & S_IFMT == S_IFDIR else {
-          Darwin.close(childFD)
-          metrics.descriptorClosed()
           state.reject(components: childComponents, reason: .entryKindChanged)
           continue
         }
-        do {
-          try reachBoundary(
-            .beforeRecursion(childPath),
-            hooks: hooks,
-            cancellation: cancellation)
-        } catch {
-          Darwin.close(childFD)
-          metrics.descriptorClosed()
-          throw error
-        }
+        try reachBoundary(
+          .beforeRecursion(childPath),
+          hooks: hooks,
+          cancellation: cancellation)
+        ownsChildFD = false
         if let reason = try walkOwnedDirectory(
           childFD,
           components: childComponents,
@@ -1404,39 +1491,49 @@ struct SidebarImportSourceWalker {
           state.reject(components: childComponents, reason: reason)
         }
       case S_IFREG:
-        let openResult = try performOperation(
-          at: .beforeOpen(childPath),
-          hooks: hooks,
-          cancellation: cancellation
-        ) {
-          let descriptor = withRawName(rawName) { component in
-            openat(
-              parentFD,
-              component,
-              O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
-            )
+        var childFD: Int32 = -1
+        var ownsChildFD = false
+        defer {
+          if ownsChildFD {
+            Darwin.close(childFD)
+            metrics.descriptorClosed()
           }
-          return (descriptor: descriptor, error: errno)
         }
-        let childFD = openResult.descriptor
-        guard childFD >= 0 else {
+        let openError = try performSidebarImportOpen(
+          at: .beforeOpen(childPath),
+          adoptionPath: childPath,
+          didReachBoundary: hooks.didReachBoundary,
+          didAcquireOperationLease: hooks.didAcquireOperationLease,
+          didOpenDescriptorBeforeAdoption: hooks.didOpenDescriptorBeforeAdoption,
+          cancellation: cancellation,
+          metrics: metrics,
+          checkCancellation: { try throwIfCancelled(cancellation) },
+          open: {
+            let descriptor = withRawName(rawName) { component in
+              openat(
+                parentFD,
+                component,
+                O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+              )
+            }
+            return (descriptor: descriptor, error: errno)
+          },
+          adopt: { descriptor in
+            childFD = descriptor
+            ownsChildFD = true
+          })
+        if openError != nil {
           state.reject(
             components: childComponents,
             reason: rejectionReasonAfterOpenFailure(parentFD: parentFD, name: name))
           continue
         }
-        metrics.descriptorOpened()
-        do {
-          try throwIfCancelled(cancellation)
-        } catch {
-          Darwin.close(childFD)
-          metrics.descriptorClosed()
-          throw error
-        }
+        try throwIfCancelled(cancellation)
         var openedMetadata = stat()
         let inspectOpenedResult = fstat(childFD, &openedMetadata)
         Darwin.close(childFD)
         metrics.descriptorClosed()
+        ownsChildFD = false
         guard inspectOpenedResult == 0 else {
           state.reject(components: childComponents, reason: .unreadable)
           continue
@@ -1543,18 +1640,28 @@ struct SidebarImportSourceWalker {
           metadata.st_mode & S_IFMT == S_IFDIR
           ? O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
           : O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
-        let openResult = try performOperation(
+        let parentFD = currentFD
+        let openError = try performSidebarImportOpen(
           at: .beforeOpen(requestedPath),
-          hooks: hooks,
-          cancellation: cancellation
-        ) {
-          let descriptor = component.withCString { name in
-            openat(currentFD, name, flags)
-          }
-          return (descriptor: descriptor, error: errno)
-        }
-        let nextFD = openResult.descriptor
-        guard nextFD >= 0 else {
+          adoptionPath: requestedPath,
+          didReachBoundary: hooks.didReachBoundary,
+          didAcquireOperationLease: hooks.didAcquireOperationLease,
+          didOpenDescriptorBeforeAdoption: hooks.didOpenDescriptorBeforeAdoption,
+          cancellation: cancellation,
+          metrics: metrics,
+          checkCancellation: { try throwIfCancelled(cancellation) },
+          open: {
+            let descriptor = component.withCString { name in
+              openat(parentFD, name, flags)
+            }
+            return (descriptor: descriptor, error: errno)
+          },
+          adopt: { descriptor in
+            Darwin.close(currentFD)
+            metrics.descriptorClosed()
+            currentFD = descriptor
+          })
+        if openError != nil {
           let reason = rejectionReasonAfterOpenFailure(
             parentFD: currentFD,
             name: component)
@@ -1562,10 +1669,6 @@ struct SidebarImportSourceWalker {
             path: requestedPath,
             reason: reason)
         }
-        metrics.descriptorOpened()
-        Darwin.close(currentFD)
-        metrics.descriptorClosed()
-        currentFD = nextFD
         try throwIfCancelled(cancellation)
 
         var openedMetadata = stat()
@@ -1613,26 +1716,32 @@ struct SidebarImportSourceWalker {
     var currentFD = initialFD
     do {
       for component in components {
-        let openResult = try performOperation(
+        let parentFD = currentFD
+        let openError = try performSidebarImportOpen(
           at: .beforeOpen(url.path),
-          hooks: hooks,
-          cancellation: cancellation
-        ) {
-          let descriptor = component.withCString { name in
-            openat(currentFD, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
-          }
-          return (descriptor: descriptor, error: errno)
-        }
-        let nextFD = openResult.descriptor
-        guard nextFD >= 0 else {
+          adoptionPath: url.path,
+          didReachBoundary: hooks.didReachBoundary,
+          didAcquireOperationLease: hooks.didAcquireOperationLease,
+          didOpenDescriptorBeforeAdoption: hooks.didOpenDescriptorBeforeAdoption,
+          cancellation: cancellation,
+          metrics: metrics,
+          checkCancellation: { try throwIfCancelled(cancellation) },
+          open: {
+            let descriptor = component.withCString { name in
+              openat(parentFD, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+            }
+            return (descriptor: descriptor, error: errno)
+          },
+          adopt: { descriptor in
+            Darwin.close(currentFD)
+            metrics.descriptorClosed()
+            currentFD = descriptor
+          })
+        if let openError {
           throw SidebarImportSourceWalkerError.openFailed(
             path: url.path,
-            reason: posixReason(openResult.error))
+            reason: posixReason(openError))
         }
-        metrics.descriptorOpened()
-        Darwin.close(currentFD)
-        metrics.descriptorClosed()
-        currentFD = nextFD
         try throwIfCancelled(cancellation)
       }
       return currentFD
@@ -1689,50 +1798,51 @@ struct SidebarImportSourceWalker {
         return true
       }
 
-      let openResult = try performOperation(
-        at: .beforeOpen("vault ancestor"),
-        hooks: hooks,
-        cancellation: cancellation
-      ) {
-        let descriptor = "..".withCString { name in
-          openat(
-            currentFD,
-            name,
-            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
-          )
+      var parentFD: Int32 = -1
+      var ownsParentFD = false
+      defer {
+        if ownsParentFD {
+          Darwin.close(parentFD)
+          metrics.descriptorClosed()
         }
-        return (descriptor: descriptor, error: errno)
       }
-      let parentFD = openResult.descriptor
-      guard parentFD >= 0 else {
+      let openError = try performSidebarImportOpen(
+        at: .beforeOpen("vault ancestor"),
+        adoptionPath: "vault ancestor",
+        didReachBoundary: hooks.didReachBoundary,
+        didAcquireOperationLease: hooks.didAcquireOperationLease,
+        didOpenDescriptorBeforeAdoption: hooks.didOpenDescriptorBeforeAdoption,
+        cancellation: cancellation,
+        metrics: metrics,
+        checkCancellation: { try throwIfCancelled(cancellation) },
+        open: {
+          let descriptor = "..".withCString { name in
+            openat(
+              currentFD,
+              name,
+              O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+            )
+          }
+          return (descriptor: descriptor, error: errno)
+        },
+        adopt: { descriptor in
+          parentFD = descriptor
+          ownsParentFD = true
+        })
+      if let openError {
         throw SidebarImportSourceWalkerError.openFailed(
           path: "vault ancestor",
-          reason: posixReason(openResult.error))
+          reason: posixReason(openError))
       }
-      metrics.descriptorOpened()
-      do {
-        try throwIfCancelled(cancellation)
-      } catch {
-        Darwin.close(parentFD)
-        metrics.descriptorClosed()
-        throw error
-      }
-      let parentIdentity: FileIdentity
-      do {
-        parentIdentity = try identity(of: parentFD, path: "vault ancestor")
-      } catch {
-        Darwin.close(parentFD)
-        metrics.descriptorClosed()
-        throw error
-      }
+      try throwIfCancelled(cancellation)
+      let parentIdentity = try identity(of: parentFD, path: "vault ancestor")
       if parentIdentity == currentIdentity {
-        Darwin.close(parentFD)
-        metrics.descriptorClosed()
         return false
       }
       Darwin.close(currentFD)
       metrics.descriptorClosed()
       currentFD = parentFD
+      ownsParentFD = false
     }
   }
 
