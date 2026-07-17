@@ -142,6 +142,54 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     }
   }
 
+  private final class TwoReadGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let entered = DispatchSemaphore(value: 0)
+    private let release = DispatchSemaphore(value: 0)
+    private var entrants = 0
+
+    func block() {
+      lock.lock()
+      entrants += 1
+      lock.unlock()
+      entered.signal()
+      release.wait()
+    }
+
+    func waitForBoth(timeout: TimeInterval = 1) -> Bool {
+      entered.wait(timeout: .now() + timeout) == .success
+        && entered.wait(timeout: .now() + timeout) == .success
+    }
+
+    func unblockBoth() {
+      release.signal()
+      release.signal()
+    }
+  }
+
+  private final class BoundaryProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [SidebarImportSourceBoundary] = []
+
+    func record(_ boundary: SidebarImportSourceBoundary) {
+      lock.lock()
+      storage.append(boundary)
+      lock.unlock()
+    }
+
+    func count(where predicate: (SidebarImportSourceBoundary) -> Bool) -> Int {
+      lock.lock()
+      defer { lock.unlock() }
+      return storage.filter(predicate).count
+    }
+
+    func values() -> [SidebarImportSourceBoundary] {
+      lock.lock()
+      defer { lock.unlock() }
+      return storage
+    }
+  }
+
   private final class ResultBox<Value>: @unchecked Sendable {
     private let lock = NSLock()
     private var value: Result<Value, Error>?
@@ -186,6 +234,44 @@ final class SidebarImportCoordinatorTests: XCTestCase {
         default:
           return
         }
+      } catch {
+        lock.lock()
+        errors.append(error.localizedDescription)
+        lock.unlock()
+      }
+    }
+
+    func recordedErrors() -> [String] {
+      lock.lock()
+      defer { lock.unlock() }
+      return errors
+    }
+  }
+
+  private final class OneShotGrowthProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let fileURL: URL
+    private var didGrow = false
+    private var errors: [String] = []
+
+    init(fileURL: URL) {
+      self.fileURL = fileURL
+    }
+
+    func growOnFirstRead(offset: Int64) {
+      guard offset == 0 else { return }
+      lock.lock()
+      guard !didGrow else {
+        lock.unlock()
+        return
+      }
+      didGrow = true
+      lock.unlock()
+      do {
+        let handle = try FileHandle(forWritingTo: fileURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data([0xFF]))
+        try handle.close()
       } catch {
         lock.lock()
         errors.append(error.localizedDescription)
@@ -385,6 +471,574 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     prepared.close()
     XCTAssertEqual(scope.counts().starts, 1)
     XCTAssertEqual(scope.counts().stops, 1, "close is balanced and idempotent")
+  }
+
+  func testWalkerEntryBudgetChargesRootAndRejectedDirectoryRecords() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try Data("hidden".utf8).write(to: root.appendingPathComponent(".hidden"))
+    let scope = ScopeProbe()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 3,
+        maximumDepth: 8),
+      scopeAccess: scope.access())
+
+    XCTAssertThrowsError(try walker.prepare(rootURL: root, vaultURL: vault)) { error in
+      guard case let SidebarImportSourceWalkerError.tooManyEntries(limit) = error else {
+        XCTFail("expected terminal entry exhaustion, got \(error)")
+        return
+      }
+      XCTAssertEqual(limit, 3)
+    }
+    XCTAssertEqual(scope.counts().starts, 1)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testSourceLimitsUseProductionDefaultsAndClampBridgeCap() {
+    let belowBridge = SidebarImportSourceLimits(sessionRefuseBytes: 123)
+    XCTAssertEqual(belowBridge.refuseBytes, 123)
+    XCTAssertEqual(belowBridge.totalBytes, 1_073_741_824)
+    XCTAssertEqual(belowBridge.maximumEntries, 10_000)
+    XCTAssertEqual(belowBridge.maximumDepth, 64)
+
+    let aboveBridge = SidebarImportSourceLimits(sessionRefuseBytes: UInt64.max)
+    XCTAssertEqual(aboveBridge.refuseBytes, Int64(Int32.max) - 4)
+  }
+
+  func testWalkerRejectsInvalidInjectedLimits() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source.bin")
+    try Data([0x01]).write(to: root)
+
+    for limits in [
+      SidebarImportSourceLimits(
+        refuseBytes: -1, totalBytes: 1, maximumEntries: 1, maximumDepth: 0),
+      SidebarImportSourceLimits(
+        refuseBytes: 1, totalBytes: -1, maximumEntries: 1, maximumDepth: 0),
+      SidebarImportSourceLimits(
+        refuseBytes: 1, totalBytes: 1, maximumEntries: 0, maximumDepth: 0),
+      SidebarImportSourceLimits(
+        refuseBytes: 1, totalBytes: 1, maximumEntries: 1, maximumDepth: -1),
+    ] {
+      let scope = ScopeProbe()
+      XCTAssertThrowsError(
+        try SidebarImportSourceWalker(limits: limits, scopeAccess: scope.access())
+          .prepare(rootURL: root, vaultURL: vault)
+      ) { error in
+        guard case SidebarImportSourceWalkerError.invalidLimits = error else {
+          XCTFail("expected invalidLimits, got \(error)")
+          return
+        }
+      }
+      XCTAssertEqual(scope.counts().starts, 0)
+      XCTAssertEqual(scope.counts().stops, 0)
+    }
+  }
+
+  func testWalkerPerFileAndAdvisoryTotalExactBoundaries() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try Data([0x01, 0x02]).write(to: root.appendingPathComponent("a.bin"))
+    try Data([0x03, 0x04, 0x05]).write(to: root.appendingPathComponent("b.bin"))
+    let exactScope = ScopeProbe()
+    let exact = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 3, totalBytes: 5, maximumEntries: 100, maximumDepth: 8),
+      scopeAccess: exactScope.access()
+    ).prepare(rootURL: root, vaultURL: vault)
+    XCTAssertEqual(exact.manifest.entries.count, 3)
+    exact.close()
+
+    let totalScope = ScopeProbe()
+    XCTAssertThrowsError(
+      try SidebarImportSourceWalker(
+        limits: SidebarImportSourceLimits(
+          refuseBytes: 3, totalBytes: 4, maximumEntries: 100, maximumDepth: 8),
+        scopeAccess: totalScope.access()
+      ).prepare(rootURL: root, vaultURL: vault)
+    ) { error in
+      guard case SidebarImportSourceWalkerError.totalTooLarge(limitBytes: 4) = error else {
+        XCTFail("expected totalTooLarge, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(totalScope.counts().stops, 1)
+
+    let oversized = tempDirectory.appendingPathComponent("oversized.bin")
+    try Data([0x00, 0x01, 0x02, 0x03]).write(to: oversized)
+    let fileScope = ScopeProbe()
+    XCTAssertThrowsError(
+      try SidebarImportSourceWalker(
+        limits: SidebarImportSourceLimits(
+          refuseBytes: 3, totalBytes: 100, maximumEntries: 100, maximumDepth: 8),
+        scopeAccess: fileScope.access()
+      ).prepare(rootURL: oversized, vaultURL: vault)
+    ) { error in
+      guard case SidebarImportSourceWalkerError.fileTooLarge(_, limitBytes: 3) = error else {
+        XCTFail("expected fileTooLarge, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(fileScope.counts().stops, 1)
+  }
+
+  func testWalkerGrowthProbeReadsAtMostCapPlusOneWithoutAdvertisedReserve() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("growing.bin")
+    let cap = 128 * 1_024
+    try Data(repeating: 0x41, count: cap).write(to: root)
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let growth = OneShotGrowthProbe(fileURL: root)
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: Int64(cap),
+        totalBytes: Int64(cap),
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didReachBoundary: { boundary in
+          if case let .beforeRead(_, offset) = boundary {
+            growth.growOnFirstRead(offset: offset)
+          }
+        }),
+      metrics: metrics)
+
+    let prepared = try walker.prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+    XCTAssertThrowsError(try prepared.readBytes(for: entry)) { error in
+      guard case SidebarImportSourceWalkerError.fileTooLarge(_, limitBytes: Int64(cap)) = error
+      else {
+        XCTFail("expected grown-file rejection, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(growth.recordedErrors(), [])
+    let snapshot = metrics.snapshot()
+    XCTAssertEqual(snapshot.totalReadRequestBytes, Int64(cap + 1))
+    XCTAssertLessThanOrEqual(snapshot.maximumReservedCapacity, 64 * 1_024)
+    prepared.close()
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testWalkerEntryBudgetExactBoundaryKeepsRejectedFailure() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try Data("hidden".utf8).write(to: root.appendingPathComponent(".hidden"))
+    let scope = ScopeProbe()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024, totalBytes: 4_096, maximumEntries: 4, maximumDepth: 8),
+      scopeAccess: scope.access()
+    ).prepare(rootURL: root, vaultURL: vault)
+
+    XCTAssertEqual(prepared.manifest.entries.count, 1)
+    XCTAssertEqual(prepared.manifest.failures.map(\.reason), [.hidden])
+    prepared.close()
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testWalkerRejectedEntryStressTerminalizesWithoutDescriptorGrowth() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    for index in 0..<10_005 {
+      let path = root.appendingPathComponent(String(format: ".rejected-%05d", index))
+      XCTAssertTrue(FileManager.default.createFile(atPath: path.path, contents: Data()))
+    }
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    XCTAssertThrowsError(
+      try SidebarImportSourceWalker(
+        limits: SidebarImportSourceLimits(sessionRefuseBytes: 1_024),
+        scopeAccess: scope.access(),
+        metrics: metrics
+      ).prepare(rootURL: root, vaultURL: vault)
+    ) { error in
+      guard case SidebarImportSourceWalkerError.tooManyEntries(limit: 10_000) = error else {
+        XCTFail("expected default entry-cap exhaustion, got \(error)")
+        return
+      }
+    }
+    let snapshot = metrics.snapshot()
+    XCTAssertEqual(snapshot.currentOwnedDescriptors, 0)
+    XCTAssertLessThanOrEqual(snapshot.highWaterOwnedDescriptors, 8)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testRawNameComparatorIsInvariantAndUsesRawBytesForTies() {
+    let fixtures: [[UInt8]] = [
+      Array("a".utf8),
+      Array("A".utf8),
+      Array("ı".utf8),
+      Array("İ".utf8),
+      Array("i".utf8),
+      Array("I".utf8),
+      Array("é".utf8),
+      Array("e\u{301}".utf8),
+    ]
+    let expected = ["A", "a", "e\u{301}", "I", "i", "İ", "é", "ı"]
+      .map { Array($0.utf8) }
+
+    for _ in 0..<20 {
+      XCTAssertEqual(
+        fixtures.sorted(by: SidebarImportSourceNameOrdering.precedes),
+        expected)
+    }
+    XCTAssertTrue(
+      SidebarImportSourceNameOrdering.precedes(Array("A".utf8), Array("a".utf8)),
+      "equal folded keys must be broken by original raw bytes")
+
+    let source = try? String(
+      contentsOf: URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/SlateMac/Sidebar/SidebarImportSourceWalker.swift"),
+      encoding: .utf8)
+    XCTAssertFalse(source?.contains("Locale.current") ?? true)
+    XCTAssertFalse(source?.contains("localizedCompare") ?? true)
+  }
+
+  func testWalkerInvalidUTF8NameIsTypedFailureAndKeepsSafeSibling() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try Data([0x42]).write(to: root.appendingPathComponent("safe.bin"))
+    let scope = ScopeProbe()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        injectedDirectoryRecords: { path in path.isEmpty ? [[0xFF]] : [] })
+    ).prepare(rootURL: root, vaultURL: vault)
+
+    XCTAssertEqual(
+      prepared.manifest.entries.map { ($0.relativePath.display, $0.kind) },
+      [
+        ("", .directory),
+        ("safe.bin", .regularFile),
+      ])
+    XCTAssertEqual(prepared.manifest.failures.count, 1)
+    XCTAssertEqual(prepared.manifest.failures.first?.reason, .invalidFileName)
+    prepared.close()
+  }
+
+  func testWalkerDepth64SucceedsAndDepth65FailsWithoutOpenWhileSiblingRemains() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try Data([0x41]).write(to: root.appendingPathComponent("safe.bin"))
+    var parent = root
+    var components: [String] = []
+    for depth in 1...65 {
+      let component = String(format: "d%02d", depth)
+      components.append(component)
+      parent = parent.appendingPathComponent(component, isDirectory: true)
+      try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+    }
+    let rejectedPath = components.joined(separator: "/")
+    let acceptedPath = components.dropLast().joined(separator: "/")
+    let probe = BoundaryProbe()
+    let scope = ScopeProbe()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 1_000,
+        maximumDepth: 64),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didReachBoundary: { probe.record($0) })
+    ).prepare(rootURL: root, vaultURL: vault)
+
+    XCTAssertTrue(
+      prepared.manifest.entries.contains { $0.relativePath.display == acceptedPath })
+    XCTAssertTrue(
+      prepared.manifest.entries.contains { $0.relativePath.display == "safe.bin" })
+    XCTAssertEqual(
+      prepared.manifest.failures.first { $0.relativePath.display == rejectedPath }?.reason,
+      .tooDeep)
+    XCTAssertEqual(
+      probe.count {
+        if case .beforeOpen(rejectedPath) = $0 { return true }
+        return false
+      },
+      0,
+      "depth 65 must be rejected before opening the component")
+    prepared.close()
+  }
+
+  func testWalkerLargeFlatManifestKeepsDescriptorsBounded() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    for index in 0..<300 {
+      let path = root.appendingPathComponent(String(format: "file-%03d.bin", index))
+      XCTAssertTrue(FileManager.default.createFile(atPath: path.path, contents: Data([0x41])))
+    }
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 1_000,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      metrics: metrics
+    ).prepare(rootURL: root, vaultURL: vault)
+
+    XCTAssertEqual(prepared.manifest.entries.count, 301)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 1)
+    XCTAssertLessThanOrEqual(metrics.snapshot().highWaterOwnedDescriptors, 8)
+    let last = try XCTUnwrap(prepared.manifest.entries.last)
+    XCTAssertEqual(try prepared.readBytes(for: last), Data([0x41]))
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 1)
+    XCTAssertEqual(metrics.snapshot().highWaterActiveReads, 1)
+    prepared.close()
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+  }
+
+  func testWalkerCancellationBeforePrepareNeverStartsScope() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source.bin")
+    try Data([0x41]).write(to: root)
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let cancellation = SidebarImportSourceCancellationToken()
+    cancellation.cancel()
+    let probe = BoundaryProbe()
+
+    XCTAssertThrowsError(
+      try SidebarImportSourceWalker(
+        limits: SidebarImportSourceLimits(sessionRefuseBytes: 1_024),
+        scopeAccess: scope.access(),
+        hooks: SidebarImportSourceWalkerHooks(
+          didReachBoundary: { probe.record($0) }),
+        cancellation: cancellation,
+        metrics: metrics
+      ).prepare(rootURL: root, vaultURL: vault)
+    ) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected typed cancellation, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(probe.values(), [.beforeRootAdmission])
+    XCTAssertEqual(scope.counts().starts, 0)
+    XCTAssertEqual(scope.counts().stops, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+  }
+
+  func testWalkerCancellationMidReaddirClosesDescriptorsAndScope() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    for index in 0..<20 {
+      try Data([UInt8(index)]).write(
+        to: root.appendingPathComponent(String(format: "file-%02d", index)))
+    }
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let cancellation = SidebarImportSourceCancellationToken()
+    let probe = BoundaryProbe()
+    let hooks = SidebarImportSourceWalkerHooks(didReachBoundary: { boundary in
+      probe.record(boundary)
+      if case .beforeDirectoryRead = boundary,
+        probe.count(where: {
+          if case .beforeDirectoryRead = $0 { return true }
+          return false
+        }) == 4
+      {
+        cancellation.cancel()
+      }
+    })
+
+    XCTAssertThrowsError(
+      try SidebarImportSourceWalker(
+        limits: SidebarImportSourceLimits(sessionRefuseBytes: 1_024),
+        scopeAccess: scope.access(),
+        hooks: hooks,
+        cancellation: cancellation,
+        metrics: metrics
+      ).prepare(rootURL: root, vaultURL: vault)
+    ) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected typed cancellation, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(scope.counts().stops, 1)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+  }
+
+  func testWalkerCancellationBeforeRecursionEntersNoLaterBoundary() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    let child = root.appendingPathComponent("child", isDirectory: true)
+    try FileManager.default.createDirectory(at: child, withIntermediateDirectories: true)
+    try Data([0x41]).write(to: child.appendingPathComponent("nested.bin"))
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let cancellation = SidebarImportSourceCancellationToken()
+    let probe = BoundaryProbe()
+    let hooks = SidebarImportSourceWalkerHooks(didReachBoundary: { boundary in
+      probe.record(boundary)
+      if case .beforeRecursion("child") = boundary {
+        cancellation.cancel()
+      }
+    })
+
+    XCTAssertThrowsError(
+      try SidebarImportSourceWalker(
+        limits: SidebarImportSourceLimits(sessionRefuseBytes: 1_024),
+        scopeAccess: scope.access(),
+        hooks: hooks,
+        cancellation: cancellation,
+        metrics: metrics
+      ).prepare(rootURL: root, vaultURL: vault)
+    ) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected typed cancellation, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(
+      probe.count {
+        if case .beforeDirectoryRead("child") = $0 { return true }
+        return false
+      },
+      0)
+    XCTAssertEqual(scope.counts().stops, 1)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+  }
+
+  func testWalkerCancellationBeforeAndMidReadReleasesLeases() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source.bin")
+    try Data(repeating: 0x41, count: 128 * 1_024).write(to: root)
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let cancellation = SidebarImportSourceCancellationToken()
+    let probe = BoundaryProbe()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 256 * 1_024,
+        totalBytes: 256 * 1_024,
+        maximumEntries: 10,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(didReachBoundary: { boundary in
+        probe.record(boundary)
+        if case let .beforeRead(_, offset) = boundary, offset > 0 {
+          cancellation.cancel()
+        }
+      }),
+      cancellation: cancellation,
+      metrics: metrics
+    ).prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+
+    XCTAssertThrowsError(try prepared.readBytes(for: entry)) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected typed cancellation, got \(error)")
+        return
+      }
+    }
+    XCTAssertGreaterThan(
+      probe.count {
+        if case .beforeRead = $0 { return true }
+        return false
+      },
+      1)
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 1)
+
+    XCTAssertThrowsError(try prepared.readBytes(for: entry)) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected cancellation before a new lease, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    prepared.close()
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testPreparedCloseAndCancellationDrainTwoReadLeasesOnce() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source.bin")
+    let bytes = Data(repeating: 0x41, count: 4_096)
+    try bytes.write(to: root)
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let cancellation = SidebarImportSourceCancellationToken()
+    let gate = TwoReadGate()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(sessionRefuseBytes: 8_192),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(didAcquireReadLease: { gate.block() }),
+      cancellation: cancellation,
+      metrics: metrics
+    ).prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+    let first = ResultBox<Data>()
+    let second = ResultBox<Data>()
+    let finished = expectation(description: "both leased reads finish")
+    finished.expectedFulfillmentCount = 2
+
+    DispatchQueue.global().async {
+      first.store(Result { try prepared.readBytes(for: entry) })
+      finished.fulfill()
+    }
+    DispatchQueue.global().async {
+      second.store(Result { try prepared.readBytes(for: entry) })
+      finished.fulfill()
+    }
+    XCTAssertTrue(gate.waitForBoth())
+    XCTAssertEqual(metrics.snapshot().activeReads, 2)
+    XCTAssertEqual(metrics.snapshot().highWaterActiveReads, 2)
+
+    prepared.close()
+    XCTAssertEqual(scope.counts().stops, 0)
+    XCTAssertThrowsError(try prepared.readBytes(for: entry)) { error in
+      guard case SidebarImportSourceWalkerError.preparedSourceClosed = error else {
+        XCTFail("expected immediate close admission failure, got \(error)")
+        return
+      }
+    }
+    cancellation.cancel()
+    gate.unblockBoth()
+    wait(for: [finished], timeout: 2)
+
+    for result in [first.load(), second.load()] {
+      XCTAssertThrowsError(try XCTUnwrap(result).get()) { error in
+        guard case SidebarImportSourceWalkerError.cancelled = error else {
+          XCTFail("expected leased-read cancellation, got \(error)")
+          return
+        }
+      }
+    }
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+    prepared.close()
+    XCTAssertEqual(scope.counts().stops, 1)
   }
 
   func testWalkerPreparesRegularFileRootAndPreservesBinaryBytes() throws {

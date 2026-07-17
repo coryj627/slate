@@ -28,21 +28,178 @@ struct SidebarImportSecurityScopeAccess {
 struct SidebarImportSourceWalkerHooks {
   let didAcquireReadLease: @Sendable () -> Void
   let didInspectDescendant: @Sendable (String) -> Void
+  let didReachBoundary: @Sendable (SidebarImportSourceBoundary) -> Void
+  let injectedDirectoryRecords: @Sendable (String) -> [[UInt8]]
 
   init(
     didAcquireReadLease: @escaping @Sendable () -> Void = {},
-    didInspectDescendant: @escaping @Sendable (String) -> Void = { _ in }
+    didInspectDescendant: @escaping @Sendable (String) -> Void = { _ in },
+    didReachBoundary: @escaping @Sendable (SidebarImportSourceBoundary) -> Void = { _ in },
+    injectedDirectoryRecords: @escaping @Sendable (String) -> [[UInt8]] = { _ in [] }
   ) {
     self.didAcquireReadLease = didAcquireReadLease
     self.didInspectDescendant = didInspectDescendant
+    self.didReachBoundary = didReachBoundary
+    self.injectedDirectoryRecords = injectedDirectoryRecords
+  }
+}
+
+enum SidebarImportSourceBoundary: Equatable, Sendable {
+  case beforeRootAdmission
+  case beforeRootOpen
+  case beforeDirectoryRead(String)
+  case beforeInspect(String)
+  case beforeOpen(String)
+  case beforeRecursion(String)
+  case beforeRead(String, offset: Int64)
+  case afterInterruptedRead(String)
+}
+
+final class SidebarImportSourceCancellationToken: @unchecked Sendable {
+  private let lock = NSLock()
+  private var cancelled = false
+
+  func cancel() {
+    lock.lock()
+    cancelled = true
+    lock.unlock()
+  }
+
+  var isCancelled: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return cancelled
+  }
+}
+
+struct SidebarImportSourceMetricsSnapshot: Equatable, Sendable {
+  let currentOwnedDescriptors: Int
+  let highWaterOwnedDescriptors: Int
+  let activeReads: Int
+  let highWaterActiveReads: Int
+  let totalReadRequestBytes: Int64
+  let maximumReservedCapacity: Int
+}
+
+final class SidebarImportSourceMetrics: @unchecked Sendable {
+  private let lock = NSLock()
+  private var currentOwnedDescriptors = 0
+  private var highWaterOwnedDescriptors = 0
+  private var activeReads = 0
+  private var highWaterActiveReads = 0
+  private var totalReadRequestBytes: Int64 = 0
+  private var maximumReservedCapacity = 0
+
+  fileprivate func descriptorOpened() {
+    lock.lock()
+    currentOwnedDescriptors += 1
+    highWaterOwnedDescriptors = max(highWaterOwnedDescriptors, currentOwnedDescriptors)
+    lock.unlock()
+  }
+
+  fileprivate func descriptorClosed() {
+    lock.lock()
+    precondition(currentOwnedDescriptors > 0)
+    currentOwnedDescriptors -= 1
+    lock.unlock()
+  }
+
+  fileprivate func readStarted() {
+    lock.lock()
+    activeReads += 1
+    highWaterActiveReads = max(highWaterActiveReads, activeReads)
+    lock.unlock()
+  }
+
+  fileprivate func readFinished() {
+    lock.lock()
+    precondition(activeReads > 0)
+    activeReads -= 1
+    lock.unlock()
+  }
+
+  fileprivate func recordReadRequest(offset: Int64, count: Int) {
+    lock.lock()
+    let (end, overflow) = offset.addingReportingOverflow(Int64(count))
+    if !overflow {
+      totalReadRequestBytes = max(totalReadRequestBytes, end)
+    }
+    lock.unlock()
+  }
+
+  fileprivate func recordReservedCapacity(_ capacity: Int) {
+    lock.lock()
+    maximumReservedCapacity = max(maximumReservedCapacity, capacity)
+    lock.unlock()
+  }
+
+  func snapshot() -> SidebarImportSourceMetricsSnapshot {
+    lock.lock()
+    defer { lock.unlock() }
+    return SidebarImportSourceMetricsSnapshot(
+      currentOwnedDescriptors: currentOwnedDescriptors,
+      highWaterOwnedDescriptors: highWaterOwnedDescriptors,
+      activeReads: activeReads,
+      highWaterActiveReads: highWaterActiveReads,
+      totalReadRequestBytes: totalReadRequestBytes,
+      maximumReservedCapacity: maximumReservedCapacity)
+  }
+}
+
+enum SidebarImportSourceNameOrdering {
+  private static let invariantLocale = Locale(identifier: "en_US_POSIX")
+
+  static func precedes(_ left: [UInt8], _ right: [UInt8]) -> Bool {
+    let leftKey = primaryKey(left)
+    let rightKey = primaryKey(right)
+    if leftKey != rightKey {
+      return leftKey.lexicographicallyPrecedes(rightKey)
+    }
+    return left.lexicographicallyPrecedes(right)
+  }
+
+  fileprivate static func primaryKey(_ rawName: [UInt8]) -> [UInt8] {
+    Array(
+      String(decoding: rawName, as: UTF8.self)
+        .folding(options: .caseInsensitive, locale: invariantLocale)
+        .utf8)
   }
 }
 
 struct SidebarImportSourceLimits {
+  static let bridgeRefuseBytes = Int64(Int32.max) - 4
+  static let productionTotalBytes: Int64 = 1_073_741_824
+  static let productionMaximumEntries = 10_000
+  static let productionMaximumDepth = 64
+
   let refuseBytes: Int64
   let totalBytes: Int64
   let maximumEntries: Int
   let maximumDepth: Int
+
+  init(
+    refuseBytes: Int64,
+    totalBytes: Int64,
+    maximumEntries: Int,
+    maximumDepth: Int
+  ) {
+    self.refuseBytes = min(refuseBytes, Self.bridgeRefuseBytes)
+    self.totalBytes = totalBytes
+    self.maximumEntries = maximumEntries
+    self.maximumDepth = maximumDepth
+  }
+
+  init(
+    sessionRefuseBytes: UInt64,
+    totalBytes: Int64 = productionTotalBytes,
+    maximumEntries: Int = productionMaximumEntries,
+    maximumDepth: Int = productionMaximumDepth
+  ) {
+    refuseBytes = Int64(min(sessionRefuseBytes, UInt64(Self.bridgeRefuseBytes)))
+    self.totalBytes = totalBytes
+    self.maximumEntries = maximumEntries
+    self.maximumDepth = maximumDepth
+  }
 }
 
 enum SidebarImportSourceEntryKind: Equatable {
@@ -78,6 +235,8 @@ enum SidebarImportSourceFailureReason: Equatable {
   case notDirectory
   case unsupported
   case invalidPath
+  case invalidFileName
+  case tooDeep
 }
 
 struct SidebarImportSourceFailure: Equatable {
@@ -150,7 +309,6 @@ enum SidebarImportSourceWalkerError: Error {
   case openFailed(path: String, reason: String)
   case inspectFailed(path: String, reason: String)
   case unsupportedEntry(path: String)
-  case invalidFileName
   case tooManyEntries(limit: Int)
   case tooDeep(path: String, limit: Int)
   case fileTooLarge(path: String, limitBytes: Int64)
@@ -158,6 +316,7 @@ enum SidebarImportSourceWalkerError: Error {
   case preparedSourceClosed
   case notARegularFile(path: String)
   case readFailed(path: String, reason: String)
+  case cancelled
 }
 
 final class SidebarImportPreparedSource {
@@ -168,6 +327,9 @@ final class SidebarImportPreparedSource {
   private let scopeAccess: SidebarImportSecurityScopeAccess
   private let scopeWasStarted: Bool
   private let didAcquireReadLease: @Sendable () -> Void
+  private let didReachBoundary: @Sendable (SidebarImportSourceBoundary) -> Void
+  private let cancellation: SidebarImportSourceCancellationToken
+  private let metrics: SidebarImportSourceMetrics
   private let lock = NSLock()
   private var rootFD: Int32
   private var isClosed = false
@@ -180,6 +342,9 @@ final class SidebarImportPreparedSource {
     scopeAccess: SidebarImportSecurityScopeAccess,
     scopeWasStarted: Bool,
     didAcquireReadLease: @escaping @Sendable () -> Void,
+    didReachBoundary: @escaping @Sendable (SidebarImportSourceBoundary) -> Void,
+    cancellation: SidebarImportSourceCancellationToken,
+    metrics: SidebarImportSourceMetrics,
     manifest: SidebarImportSourceManifest
   ) {
     self.rootURL = rootURL
@@ -188,6 +353,9 @@ final class SidebarImportPreparedSource {
     self.scopeAccess = scopeAccess
     self.scopeWasStarted = scopeWasStarted
     self.didAcquireReadLease = didAcquireReadLease
+    self.didReachBoundary = didReachBoundary
+    self.cancellation = cancellation
+    self.metrics = metrics
     self.manifest = manifest
   }
 
@@ -196,6 +364,7 @@ final class SidebarImportPreparedSource {
   }
 
   func readBytes(for entry: SidebarImportSourceEntry) throws -> Data {
+    try throwIfCancelled()
     guard entry.kind == .regularFile else {
       throw SidebarImportSourceWalkerError.notARegularFile(
         path: entry.relativePath.display)
@@ -204,6 +373,7 @@ final class SidebarImportPreparedSource {
     let pinnedRoot = try beginRead()
     defer {
       Darwin.close(pinnedRoot)
+      metrics.descriptorClosed()
       finishRead()
     }
 
@@ -218,10 +388,12 @@ final class SidebarImportPreparedSource {
     defer {
       if ownsDirectoryFD {
         Darwin.close(directoryFD)
+        metrics.descriptorClosed()
       }
     }
 
     for component in components.dropLast() {
+      try reachBoundary(.beforeOpen(entry.relativePath.display))
       let nextFD = component.withCString { name in
         openat(
           directoryFD,
@@ -234,13 +406,16 @@ final class SidebarImportPreparedSource {
           path: entry.relativePath.display,
           reason: Self.posixReason())
       }
+      metrics.descriptorOpened()
       if ownsDirectoryFD {
         Darwin.close(directoryFD)
+        metrics.descriptorClosed()
       }
       directoryFD = nextFD
       ownsDirectoryFD = true
     }
 
+    try reachBoundary(.beforeOpen(entry.relativePath.display))
     let fileFD = fileName.withCString { name in
       openat(
         directoryFD,
@@ -253,7 +428,12 @@ final class SidebarImportPreparedSource {
         path: entry.relativePath.display,
         reason: Self.posixReason())
     }
-    defer { Darwin.close(fileFD) }
+    metrics.descriptorOpened()
+    defer {
+      Darwin.close(fileFD)
+      metrics.descriptorClosed()
+    }
+    try throwIfCancelled()
 
     return try readBytes(from: fileFD, path: entry.relativePath.display)
   }
@@ -276,17 +456,30 @@ final class SidebarImportPreparedSource {
     }
 
     var output = Data()
-    if size <= Int.max {
-      output.reserveCapacity(Int(size))
+    let reserve = min(Int(size), 64 * 1_024)
+    if reserve > 0 {
+      output.reserveCapacity(reserve)
     }
+    metrics.recordReservedCapacity(reserve)
     var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
     var offset: off_t = 0
+    let probeLimit = limits.refuseBytes + 1
     while true {
+      try reachBoundary(.beforeRead(path, offset: Int64(offset)))
+      let remaining = probeLimit - Int64(output.count)
+      guard remaining > 0 else {
+        throw SidebarImportSourceWalkerError.fileTooLarge(
+          path: path,
+          limitBytes: limits.refuseBytes)
+      }
+      let requestCount = min(buffer.count, Int(remaining))
+      metrics.recordReadRequest(offset: Int64(offset), count: requestCount)
       let count = buffer.withUnsafeMutableBytes { bytes in
-        Darwin.pread(fileFD, bytes.baseAddress, bytes.count, offset)
+        Darwin.pread(fileFD, bytes.baseAddress, requestCount, offset)
       }
       if count > 0 {
-        guard Int64(output.count) + Int64(count) <= limits.refuseBytes else {
+        let (newCount, overflow) = Int64(output.count).addingReportingOverflow(Int64(count))
+        guard !overflow, newCount <= limits.refuseBytes else {
           throw SidebarImportSourceWalkerError.fileTooLarge(
             path: path,
             limitBytes: limits.refuseBytes)
@@ -297,7 +490,9 @@ final class SidebarImportPreparedSource {
         offset += off_t(count)
       } else if count == 0 {
         return output
-      } else if errno != EINTR {
+      } else if errno == EINTR {
+        try reachBoundary(.afterInterruptedRead(path))
+      } else {
         throw SidebarImportSourceWalkerError.readFailed(
           path: path,
           reason: Self.posixReason())
@@ -315,6 +510,7 @@ final class SidebarImportPreparedSource {
   }
 
   private func beginRead() throws -> Int32 {
+    try throwIfCancelled()
     lock.lock()
     guard !isClosed, rootFD >= 0 else {
       lock.unlock()
@@ -328,10 +524,20 @@ final class SidebarImportPreparedSource {
         reason: Self.posixReason())
     }
     activeReads += 1
+    metrics.descriptorOpened()
+    metrics.readStarted()
     lock.unlock()
 
     _ = fcntl(descriptor, F_SETFD, FD_CLOEXEC)
     didAcquireReadLease()
+    do {
+      try throwIfCancelled()
+    } catch {
+      Darwin.close(descriptor)
+      metrics.descriptorClosed()
+      finishRead()
+      throw error
+    }
     return descriptor
   }
 
@@ -339,6 +545,7 @@ final class SidebarImportPreparedSource {
     lock.lock()
     precondition(activeReads > 0)
     activeReads -= 1
+    metrics.readFinished()
     let authority = takeAuthorityIfUnusedLocked()
     lock.unlock()
 
@@ -355,6 +562,7 @@ final class SidebarImportPreparedSource {
   private func releaseAuthority(_ authority: (descriptor: Int32, stopScope: Bool)?) {
     guard let authority else { return }
     Darwin.close(authority.descriptor)
+    metrics.descriptorClosed()
     if authority.stopScope {
       scopeAccess.stop(rootURL)
     }
@@ -363,21 +571,39 @@ final class SidebarImportPreparedSource {
   private static func posixReason(_ code: Int32 = errno) -> String {
     String(cString: strerror(code))
   }
+
+  private func reachBoundary(_ boundary: SidebarImportSourceBoundary) throws {
+    didReachBoundary(boundary)
+    try throwIfCancelled()
+  }
+
+  private func throwIfCancelled() throws {
+    if cancellation.isCancelled || Task.isCancelled {
+      throw SidebarImportSourceWalkerError.cancelled
+    }
+  }
 }
 
 struct SidebarImportSourceWalker {
   let limits: SidebarImportSourceLimits
   let scopeAccess: SidebarImportSecurityScopeAccess
   let hooks: SidebarImportSourceWalkerHooks
+  let cancellation: SidebarImportSourceCancellationToken
+  let metrics: SidebarImportSourceMetrics
 
   init(
     limits: SidebarImportSourceLimits,
     scopeAccess: SidebarImportSecurityScopeAccess,
-    hooks: SidebarImportSourceWalkerHooks = SidebarImportSourceWalkerHooks()
+    hooks: SidebarImportSourceWalkerHooks = SidebarImportSourceWalkerHooks(),
+    cancellation: SidebarImportSourceCancellationToken =
+      SidebarImportSourceCancellationToken(),
+    metrics: SidebarImportSourceMetrics = SidebarImportSourceMetrics()
   ) {
     self.limits = limits
     self.scopeAccess = scopeAccess
     self.hooks = hooks
+    self.cancellation = cancellation
+    self.metrics = metrics
   }
 
   func prepare(rootURL: URL, vaultURL: URL) throws -> SidebarImportPreparedSource {
@@ -389,6 +615,10 @@ struct SidebarImportSourceWalker {
       throw SidebarImportSourceWalkerError.invalidLimits
     }
 
+    try reachBoundary(.beforeRootAdmission)
+    var state = WalkState(limits: limits)
+    try state.chargeEncounteredEntry()
+
     let scopeWasStarted = scopeAccess.start(rootURL)
     var transferredScope = false
     defer {
@@ -397,21 +627,31 @@ struct SidebarImportSourceWalker {
       }
     }
 
+    try reachBoundary(.beforeRootOpen)
+
     let filesystemRootFD = open("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard filesystemRootFD >= 0 else {
       throw SidebarImportSourceWalkerError.openFailed(
         path: "/",
         reason: Self.posixReason())
     }
-    defer { Darwin.close(filesystemRootFD) }
+    metrics.descriptorOpened()
+    defer {
+      Darwin.close(filesystemRootFD)
+      metrics.descriptorClosed()
+    }
 
     let rootFD = try Self.openSourceRoot(
       rootURL,
-      from: filesystemRootFD)
+      from: filesystemRootFD,
+      hooks: hooks,
+      cancellation: cancellation,
+      metrics: metrics)
     var transferredRoot = false
     defer {
       if !transferredRoot {
         Darwin.close(rootFD)
+        metrics.descriptorClosed()
       }
     }
 
@@ -422,7 +662,6 @@ struct SidebarImportSourceWalker {
         reason: Self.posixReason())
     }
 
-    var state = WalkState(limits: limits)
     switch rootMetadata.st_mode & S_IFMT {
     case S_IFREG:
       try state.append(
@@ -433,9 +672,19 @@ struct SidebarImportSourceWalker {
     case S_IFDIR:
       let vaultFD = try Self.openTrustedDirectory(
         vaultURL,
-        from: filesystemRootFD)
-      defer { Darwin.close(vaultFD) }
-      if try Self.directory(rootFD, contains: vaultFD) {
+        from: filesystemRootFD,
+        cancellation: cancellation,
+        metrics: metrics)
+      defer {
+        Darwin.close(vaultFD)
+        metrics.descriptorClosed()
+      }
+      if try Self.directory(
+        rootFD,
+        contains: vaultFD,
+        cancellation: cancellation,
+        metrics: metrics)
+      {
         throw SidebarImportSourceWalkerError.sourceContainsVault(path: rootURL.path)
       }
       try state.append(
@@ -449,13 +698,16 @@ struct SidebarImportSourceWalker {
           path: rootURL.path,
           reason: Self.posixReason())
       }
+      metrics.descriptorOpened()
       _ = fcntl(traversalFD, F_SETFD, FD_CLOEXEC)
       if let reason = try Self.walkOwnedDirectory(
         traversalFD,
         components: [],
         depth: 0,
         includeSelf: false,
-        didInspectDescendant: hooks.didInspectDescendant,
+        hooks: hooks,
+        cancellation: cancellation,
+        metrics: metrics,
         state: &state)
       {
         throw SidebarImportSourceWalkerError.rejectedRoot(
@@ -475,6 +727,9 @@ struct SidebarImportSourceWalker {
       scopeAccess: scopeAccess,
       scopeWasStarted: scopeWasStarted,
       didAcquireReadLease: hooks.didAcquireReadLease,
+      didReachBoundary: hooks.didReachBoundary,
+      cancellation: cancellation,
+      metrics: metrics,
       manifest: SidebarImportSourceManifest(
         entries: state.entries,
         failures: state.failures))
@@ -483,11 +738,27 @@ struct SidebarImportSourceWalker {
     return prepared
   }
 
+  private func reachBoundary(_ boundary: SidebarImportSourceBoundary) throws {
+    hooks.didReachBoundary(boundary)
+    if cancellation.isCancelled || Task.isCancelled {
+      throw SidebarImportSourceWalkerError.cancelled
+    }
+  }
+
   private struct WalkState {
     let limits: SidebarImportSourceLimits
     var entries: [SidebarImportSourceEntry] = []
     var failures: [SidebarImportSourceFailure] = []
     var totalBytes: Int64 = 0
+    var encounteredEntries = 0
+
+    mutating func chargeEncounteredEntry() throws {
+      guard encounteredEntries < limits.maximumEntries else {
+        throw SidebarImportSourceWalkerError.tooManyEntries(
+          limit: limits.maximumEntries)
+      }
+      encounteredEntries += 1
+    }
 
     mutating func append(
       components: [String],
@@ -500,10 +771,6 @@ struct SidebarImportSourceWalker {
         throw SidebarImportSourceWalkerError.tooDeep(
           path: display,
           limit: limits.maximumDepth)
-      }
-      guard entries.count < limits.maximumEntries else {
-        throw SidebarImportSourceWalkerError.tooManyEntries(
-          limit: limits.maximumEntries)
       }
       guard fileBytes >= 0, fileBytes <= limits.refuseBytes else {
         throw SidebarImportSourceWalkerError.fileTooLarge(
@@ -538,36 +805,49 @@ struct SidebarImportSourceWalker {
     components: [String],
     depth: Int,
     includeSelf: Bool,
-    didInspectDescendant: @Sendable (String) -> Void,
+    hooks: SidebarImportSourceWalkerHooks,
+    cancellation: SidebarImportSourceCancellationToken,
+    metrics: SidebarImportSourceMetrics,
     state: inout WalkState
   ) throws -> SidebarImportSourceFailureReason? {
     guard let directory = fdopendir(directoryFD) else {
       Darwin.close(directoryFD)
+      metrics.descriptorClosed()
       return .unreadable
     }
-    defer { closedir(directory) }
+    defer {
+      closedir(directory)
+      metrics.descriptorClosed()
+    }
 
-    var names: [String] = []
-    errno = 0
-    while let entry = readdir(directory) {
+    var names: [CapturedDirectoryName] = []
+    while true {
+      try reachBoundary(
+        .beforeDirectoryRead(components.joined(separator: "/")),
+        hooks: hooks,
+        cancellation: cancellation)
+      errno = 0
+      guard let entry = readdir(directory) else {
+        if errno != 0 {
+          return .unreadable
+        }
+        break
+      }
+      try state.chargeEncounteredEntry()
       let length = Int(entry.pointee.d_namlen)
-      let name = withUnsafePointer(to: &entry.pointee.d_name) { pointer -> String? in
+      let rawName = withUnsafePointer(to: &entry.pointee.d_name) { pointer -> [UInt8] in
         pointer.withMemoryRebound(to: UInt8.self, capacity: length) { bytes in
-          String(
-            bytes: UnsafeBufferPointer(start: bytes, count: length),
-            encoding: .utf8)
+          Array(UnsafeBufferPointer(start: bytes, count: length))
         }
       }
-      guard let name else {
-        throw SidebarImportSourceWalkerError.invalidFileName
+      if rawName != [46], rawName != [46, 46]
+      {
+        names.append(CapturedDirectoryName(rawName: rawName))
       }
-      if name != ".", name != ".." {
-        names.append(name)
-      }
-      errno = 0
     }
-    if errno != 0 {
-      return .unreadable
+    for rawName in hooks.injectedDirectoryRecords(components.joined(separator: "/")) {
+      try state.chargeEncounteredEntry()
+      names.append(CapturedDirectoryName(rawName: rawName))
     }
 
     if includeSelf {
@@ -579,19 +859,41 @@ struct SidebarImportSourceWalker {
     }
 
     names.sort { left, right in
-      left.utf8.lexicographicallyPrecedes(right.utf8)
+      if left.primaryKey != right.primaryKey {
+        return left.primaryKey.lexicographicallyPrecedes(right.primaryKey)
+      }
+      return left.rawName.lexicographicallyPrecedes(right.rawName)
     }
 
     let parentFD = dirfd(directory)
-    for name in names {
+    for capturedName in names {
+      let rawName = capturedName.rawName
+      let decodedName = String(bytes: rawName, encoding: .utf8)
+      let displayName = decodedName ?? String(decoding: rawName, as: UTF8.self)
+      let failureComponents = components + [displayName]
+      guard let name = decodedName else {
+        state.reject(components: failureComponents, reason: .invalidFileName)
+        continue
+      }
       let childComponents = components + [name]
       if name.hasPrefix(".") {
         state.reject(components: childComponents, reason: .hidden)
         continue
       }
 
+      let childDepth = depth + 1
+      if childDepth > state.limits.maximumDepth {
+        state.reject(components: childComponents, reason: .tooDeep)
+        continue
+      }
+
+      let childPath = childComponents.joined(separator: "/")
+      try reachBoundary(
+        .beforeInspect(childPath),
+        hooks: hooks,
+        cancellation: cancellation)
       var metadata = stat()
-      let inspectResult = name.withCString { component in
+      let inspectResult = withRawName(rawName) { component in
         fstatat(parentFD, component, &metadata, AT_SYMLINK_NOFOLLOW)
       }
       guard inspectResult == 0 else {
@@ -602,12 +904,15 @@ struct SidebarImportSourceWalker {
         state.reject(components: childComponents, reason: reason)
         continue
       }
-      didInspectDescendant(childComponents.joined(separator: "/"))
+      hooks.didInspectDescendant(childPath)
 
-      let childDepth = depth + 1
       switch metadata.st_mode & S_IFMT {
       case S_IFDIR:
-        let childFD = name.withCString { component in
+        try reachBoundary(
+          .beforeOpen(childPath),
+          hooks: hooks,
+          cancellation: cancellation)
+        let childFD = withRawName(rawName) { component in
           openat(
             parentFD,
             component,
@@ -620,34 +925,54 @@ struct SidebarImportSourceWalker {
             reason: rejectionReasonAfterOpenFailure(parentFD: parentFD, name: name))
           continue
         }
+        metrics.descriptorOpened()
         var openedMetadata = stat()
         guard fstat(childFD, &openedMetadata) == 0 else {
           Darwin.close(childFD)
+          metrics.descriptorClosed()
           state.reject(components: childComponents, reason: .unreadable)
           continue
         }
         if let reason = rejectionReason(for: openedMetadata) {
           Darwin.close(childFD)
+          metrics.descriptorClosed()
           state.reject(components: childComponents, reason: reason)
           continue
         }
         guard openedMetadata.st_mode & S_IFMT == S_IFDIR else {
           Darwin.close(childFD)
+          metrics.descriptorClosed()
           state.reject(components: childComponents, reason: .entryKindChanged)
           continue
+        }
+        do {
+          try reachBoundary(
+            .beforeRecursion(childPath),
+            hooks: hooks,
+            cancellation: cancellation)
+        } catch {
+          Darwin.close(childFD)
+          metrics.descriptorClosed()
+          throw error
         }
         if let reason = try walkOwnedDirectory(
           childFD,
           components: childComponents,
           depth: childDepth,
           includeSelf: true,
-          didInspectDescendant: didInspectDescendant,
+          hooks: hooks,
+          cancellation: cancellation,
+          metrics: metrics,
           state: &state)
         {
           state.reject(components: childComponents, reason: reason)
         }
       case S_IFREG:
-        let childFD = name.withCString { component in
+        try reachBoundary(
+          .beforeOpen(childPath),
+          hooks: hooks,
+          cancellation: cancellation)
+        let childFD = withRawName(rawName) { component in
           openat(
             parentFD,
             component,
@@ -660,9 +985,11 @@ struct SidebarImportSourceWalker {
             reason: rejectionReasonAfterOpenFailure(parentFD: parentFD, name: name))
           continue
         }
+        metrics.descriptorOpened()
         var openedMetadata = stat()
         let inspectOpenedResult = fstat(childFD, &openedMetadata)
         Darwin.close(childFD)
+        metrics.descriptorClosed()
         guard inspectOpenedResult == 0 else {
           state.reject(components: childComponents, reason: .unreadable)
           continue
@@ -687,6 +1014,16 @@ struct SidebarImportSourceWalker {
     return nil
   }
 
+  private struct CapturedDirectoryName {
+    let rawName: [UInt8]
+    let primaryKey: [UInt8]
+
+    init(rawName: [UInt8]) {
+      self.rawName = rawName
+      primaryKey = SidebarImportSourceNameOrdering.primaryKey(rawName)
+    }
+  }
+
   private struct FileIdentity: Equatable {
     let device: dev_t
     let inode: ino_t
@@ -694,7 +1031,10 @@ struct SidebarImportSourceWalker {
 
   private static func openSourceRoot(
     _ rootURL: URL,
-    from filesystemRootFD: Int32
+    from filesystemRootFD: Int32,
+    hooks: SidebarImportSourceWalkerHooks,
+    cancellation: SidebarImportSourceCancellationToken,
+    metrics: SidebarImportSourceMetrics
   ) throws -> Int32 {
     let requestedPath = rootURL.path
     let components = try absoluteComponents(of: rootURL)
@@ -704,11 +1044,16 @@ struct SidebarImportSourceWalker {
         path: requestedPath,
         reason: posixReason())
     }
+    metrics.descriptorOpened()
     _ = fcntl(initialFD, F_SETFD, FD_CLOEXEC)
 
     var currentFD = initialFD
     do {
       for (index, component) in components.enumerated() {
+        try reachBoundary(
+          .beforeInspect(requestedPath),
+          hooks: hooks,
+          cancellation: cancellation)
         if component.hasPrefix(".") {
           throw SidebarImportSourceWalkerError.rejectedRoot(
             path: requestedPath,
@@ -745,6 +1090,10 @@ struct SidebarImportSourceWalker {
           metadata.st_mode & S_IFMT == S_IFDIR
           ? O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
           : O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+        try reachBoundary(
+          .beforeOpen(requestedPath),
+          hooks: hooks,
+          cancellation: cancellation)
         let nextFD = component.withCString { name in
           openat(currentFD, name, flags)
         }
@@ -756,7 +1105,9 @@ struct SidebarImportSourceWalker {
             path: requestedPath,
             reason: reason)
         }
+        metrics.descriptorOpened()
         Darwin.close(currentFD)
+        metrics.descriptorClosed()
         currentFD = nextFD
 
         var openedMetadata = stat()
@@ -779,13 +1130,16 @@ struct SidebarImportSourceWalker {
       return currentFD
     } catch {
       Darwin.close(currentFD)
+      metrics.descriptorClosed()
       throw error
     }
   }
 
   private static func openTrustedDirectory(
     _ url: URL,
-    from filesystemRootFD: Int32
+    from filesystemRootFD: Int32,
+    cancellation: SidebarImportSourceCancellationToken,
+    metrics: SidebarImportSourceMetrics
   ) throws -> Int32 {
     let components = try absoluteComponents(of: url)
     let initialFD = dup(filesystemRootFD)
@@ -794,11 +1148,13 @@ struct SidebarImportSourceWalker {
         path: url.path,
         reason: posixReason())
     }
+    metrics.descriptorOpened()
     _ = fcntl(initialFD, F_SETFD, FD_CLOEXEC)
 
     var currentFD = initialFD
     do {
       for component in components {
+        try throwIfCancelled(cancellation)
         let nextFD = component.withCString { name in
           openat(currentFD, name, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         }
@@ -807,12 +1163,15 @@ struct SidebarImportSourceWalker {
             path: url.path,
             reason: posixReason())
         }
+        metrics.descriptorOpened()
         Darwin.close(currentFD)
+        metrics.descriptorClosed()
         currentFD = nextFD
       }
       return currentFD
     } catch {
       Darwin.close(currentFD)
+      metrics.descriptorClosed()
       throw error
     }
   }
@@ -837,7 +1196,9 @@ struct SidebarImportSourceWalker {
 
   private static func directory(
     _ sourceFD: Int32,
-    contains vaultFD: Int32
+    contains vaultFD: Int32,
+    cancellation: SidebarImportSourceCancellationToken,
+    metrics: SidebarImportSourceMetrics
   ) throws -> Bool {
     let sourceIdentity = try identity(of: sourceFD, path: "source root")
     var currentFD = dup(vaultFD)
@@ -846,10 +1207,15 @@ struct SidebarImportSourceWalker {
         path: "vault",
         reason: posixReason())
     }
+    metrics.descriptorOpened()
     _ = fcntl(currentFD, F_SETFD, FD_CLOEXEC)
-    defer { Darwin.close(currentFD) }
+    defer {
+      Darwin.close(currentFD)
+      metrics.descriptorClosed()
+    }
 
     while true {
+      try throwIfCancelled(cancellation)
       let currentIdentity = try identity(of: currentFD, path: "vault")
       if currentIdentity == sourceIdentity {
         return true
@@ -867,18 +1233,22 @@ struct SidebarImportSourceWalker {
           path: "vault ancestor",
           reason: posixReason())
       }
+      metrics.descriptorOpened()
       let parentIdentity: FileIdentity
       do {
         parentIdentity = try identity(of: parentFD, path: "vault ancestor")
       } catch {
         Darwin.close(parentFD)
+        metrics.descriptorClosed()
         throw error
       }
       if parentIdentity == currentIdentity {
         Darwin.close(parentFD)
+        metrics.descriptorClosed()
         return false
       }
       Darwin.close(currentFD)
+      metrics.descriptorClosed()
       currentFD = parentFD
     }
   }
@@ -933,6 +1303,33 @@ struct SidebarImportSourceWalker {
 
   private static func hasAnyPermission(_ mode: mode_t, _ permissions: mode_t) -> Bool {
     mode & permissions != 0
+  }
+
+  private static func withRawName<Result>(
+    _ rawName: [UInt8],
+    _ body: (UnsafePointer<CChar>) -> Result
+  ) -> Result {
+    var terminated = rawName + [0]
+    return terminated.withUnsafeMutableBytes { bytes in
+      body(bytes.bindMemory(to: CChar.self).baseAddress!)
+    }
+  }
+
+  private static func reachBoundary(
+    _ boundary: SidebarImportSourceBoundary,
+    hooks: SidebarImportSourceWalkerHooks,
+    cancellation: SidebarImportSourceCancellationToken
+  ) throws {
+    hooks.didReachBoundary(boundary)
+    try throwIfCancelled(cancellation)
+  }
+
+  private static func throwIfCancelled(
+    _ cancellation: SidebarImportSourceCancellationToken
+  ) throws {
+    if cancellation.isCancelled || Task.isCancelled {
+      throw SidebarImportSourceWalkerError.cancelled
+    }
   }
 
   private static func posixReason(_ code: Int32 = errno) -> String {
