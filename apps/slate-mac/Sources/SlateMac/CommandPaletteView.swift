@@ -110,6 +110,8 @@ struct CommandPaletteView: View {
             else { return }
             let disabledReason = Self.disabledReason(
                 for: command,
+                sidebarActionProjection:
+                    appState.sidebarActionProjection(surface: .commandPalette),
                 structuralMutationDisabledReason: appState.structuralMutationDisabledReason,
                 canvasMutationDisabledReason: appState.activeCanvasMutationDisabledReason,
                 noteAuthoringDisabledReason: appState.activeNoteAuthoringDisabledReason,
@@ -237,6 +239,8 @@ struct CommandPaletteView: View {
         let isSelected = command.id == model.selectedID
         let disabledReason = Self.disabledReason(
             for: command,
+            sidebarActionProjection:
+                appState.sidebarActionProjection(surface: .commandPalette),
             structuralMutationDisabledReason: appState.structuralMutationDisabledReason,
             canvasMutationDisabledReason: appState.activeCanvasMutationDisabledReason,
             noteAuthoringDisabledReason: appState.activeNoteAuthoringDisabledReason,
@@ -320,6 +324,7 @@ struct CommandPaletteView: View {
     /// announcement, and Return routing so those surfaces cannot disagree.
     static func disabledReason(
         for command: Command,
+        sidebarActionProjection: [SidebarActionEvaluation] = [],
         structuralMutationDisabledReason: String?,
         canvasMutationDisabledReason: String? = nil,
         noteAuthoringDisabledReason: String? = nil,
@@ -327,6 +332,11 @@ struct CommandPaletteView: View {
         baseDefinitionEditingDisabledReason: String? = nil,
         baseRefreshDisabledReason: String? = nil
     ) -> String? {
+        if let evaluation = sidebarActionProjection.first(where: {
+            $0.id == command.id
+        }) {
+            return evaluation.disabledReason
+        }
         if SlateCommandID.structuralMutationCommands.contains(command.id),
             let structuralMutationDisabledReason
         {
@@ -609,6 +619,8 @@ struct CommandPaletteView: View {
     private func invoke(_ command: Command) {
         let disabledReason = Self.disabledReason(
             for: command,
+            sidebarActionProjection:
+                appState.sidebarActionProjection(surface: .commandPalette),
             structuralMutationDisabledReason: appState.structuralMutationDisabledReason,
             canvasMutationDisabledReason: appState.activeCanvasMutationDisabledReason,
             noteAuthoringDisabledReason: appState.activeNoteAuthoringDisabledReason,

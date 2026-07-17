@@ -11,6 +11,88 @@ use super::common::*;
 use super::*;
 
 #[test]
+fn wikilink_for_path_uses_live_index_snapshot() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("Notes/Target.md", b"# Target").unwrap();
+        p.write_file("Archive/Target.md", b"# Archived target")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    assert_eq!(
+        session.wikilink_for_path("Notes/Target.md").unwrap(),
+        Some("[[Notes/Target]]".into())
+    );
+}
+
+#[test]
+fn wikilink_for_path_allows_safe_bare_targets_under_punctuated_parents() {
+    let cases = [
+        ("Folder#Name/HashTarget.md", "[[HashTarget]]"),
+        ("Folder^Name/CaretTarget.md", "[[CaretTarget]]"),
+        ("Folder|Name/PipeTarget.md", "[[PipeTarget]]"),
+        ("Folder]Name/BracketTarget.md", "[[BracketTarget]]"),
+    ];
+    let (_tmp, session) = make_vault(|provider| {
+        for (path, _) in cases {
+            provider.write_file(path, b"# Target").unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    for (path, expected) in cases {
+        assert_eq!(
+            session.wikilink_for_path(path).unwrap(),
+            Some(expected.into()),
+            "the session boundary must preserve a safe bare candidate for {path}"
+        );
+    }
+}
+
+#[test]
+fn wikilink_for_path_refuses_missing_and_non_markdown_targets() {
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("Notes/Target.md", b"# Target").unwrap();
+        p.write_file("Assets/Diagram.png", b"not markdown").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    assert_eq!(session.wikilink_for_path("Notes/Missing.md").unwrap(), None);
+    assert_eq!(
+        session.wikilink_for_path("Assets/Diagram.png").unwrap(),
+        None
+    );
+}
+
+#[test]
+fn wikilink_for_path_refuses_stale_index_target() {
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("Notes/Target.md", b"# Target").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    std::fs::remove_file(tmp.path().join("Notes/Target.md")).unwrap();
+
+    assert_eq!(session.wikilink_for_path("Notes/Target.md").unwrap(), None);
+}
+
+#[cfg(unix)]
+#[test]
+fn wikilink_for_path_refuses_stale_row_replaced_by_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("Notes/Target.md", b"# Target").unwrap();
+        p.write_file("Notes/Backing.md", b"# Backing").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    std::fs::remove_file(tmp.path().join("Notes/Target.md")).unwrap();
+    symlink("Backing.md", tmp.path().join("Notes/Target.md")).unwrap();
+
+    assert_eq!(session.wikilink_for_path("Notes/Target.md").unwrap(), None);
+}
+
+#[test]
 fn outgoing_links_returns_mixed_kinds_in_document_order() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file(

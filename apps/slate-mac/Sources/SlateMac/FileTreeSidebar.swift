@@ -4,6 +4,22 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// User-facing message for a shared Sidebar dispatch failure. UniFFI's typed
+/// command error carries the actionable reason; unrelated errors retain their
+/// localized description. Keeping this as a property lets every renderer make
+/// exactly one announcement call without hiding dispatch behind another
+/// executor.
+extension Error {
+    var sidebarActionAnnouncement: String {
+        guard let commandError = self as? CommandError,
+            case let .ActionFailed(message) = commandError
+        else {
+            return localizedDescription
+        }
+        return message
+    }
+}
+
 /// A node in the file tree: either a directory or a Markdown file.
 ///
 /// Directories are keyed by `dirs.id` (the stable, rescan-surviving id U2-1
@@ -74,6 +90,13 @@ struct TreeNode: Identifiable, Equatable {
 
     var isDirectory: Bool {
         if case .directory = kind { return true }
+        return false
+    }
+
+    /// Indexed metadata owned by the live file-row state. Path extensions are
+    /// intentionally not consulted; the backend summary is authoritative.
+    @MainActor var isMarkdown: Bool {
+        if case let .file(state) = kind { return state.summary.isMarkdown }
         return false
     }
 
@@ -199,6 +222,10 @@ final class FileTreeViewModel: ObservableObject {
     /// The session the tree reads from. Swapped by `bind(to:)` when the vault
     /// changes; nil clears the tree.
     private var session: VaultSession?
+    /// Exact identity captured when the tree binds. Selection publication uses
+    /// this token rather than consulting AppState later, so a stale tree can
+    /// never stamp rows with a replacement vault's session.
+    private(set) var sessionIdentity: ObjectIdentifier?
 
     /// Level fetcher: `parentPath` → one level's listing. Production routes to
     /// `session.listDirChildren`; tests inject a spy to assert *which* levels
@@ -263,6 +290,7 @@ final class FileTreeViewModel: ObservableObject {
         restoringExpandedDirPaths: [String] = []
     ) {
         self.session = nil
+        sessionIdentity = nil
         self.fetcher = fetcher
         clearMaterializedLevels()
         expanded = []
@@ -310,6 +338,7 @@ final class FileTreeViewModel: ObservableObject {
     /// and cost nothing; the persistence cap bounds any accumulation.
     func bind(to session: VaultSession?, restoringExpandedDirPaths: [String] = []) {
         self.session = session
+        sessionIdentity = session.map(ObjectIdentifier.init)
         clearMaterializedLevels()
         expanded = []
         pendingExpandedPaths = Set(restoringExpandedDirPaths)
@@ -972,6 +1001,10 @@ struct FileTreeSidebar: View {
     /// A destination level can briefly disappear while a batch Move refetches.
     /// Keep one restoration intent; a newer user focus edge supersedes it.
     @State private var pendingBatchFocus: PendingBatchFocus?
+    /// Single create/rename/move focus waits for its refetched row; Delete owns
+    /// a complete pre-invalidation fallback row and therefore does not depend
+    /// on a cache that the mutation is about to drop.
+    @State private var pendingPostMutationFocus: PendingPostMutationFocus?
     /// Keyboard focus on the file tree — gates the #418 selection announcements
     /// to list-driven changes only.
     @FocusState private var fileTreeFocused: Bool
@@ -1037,6 +1070,190 @@ struct FileTreeSidebar: View {
     typealias SelectionRow = SelectionModel.VisibleRow
     typealias SelectionClick = SelectionModel.PointerClick
     typealias SelectionOutcome = SelectionModel.PointerOutcome
+
+    /// The only semantic-selection write seam. The mutation and the immutable
+    /// AppState snapshot publish happen synchronously as one main-actor edge.
+    static func mutateSelectionAndPublish(
+        model: inout SelectionModel,
+        capturedSessionIdentity: ObjectIdentifier?,
+        visibleRows: [SelectionRow],
+        appState: AppState,
+        mutation: (inout SelectionModel) -> Void
+    ) {
+        mutation(&model)
+        guard let capturedSessionIdentity else { return }
+        let snapshot = SidebarSelectionSnapshot.capture(
+            sessionIdentity: capturedSessionIdentity,
+            model: model,
+            visibleRows: visibleRows)
+        _ = appState.publishSidebarSelectionSnapshot(snapshot)
+    }
+
+    private func mutateSelectionAndPublish(
+        visibleRows: [SelectionRow]? = nil,
+        _ mutation: (inout SelectionModel) -> Void
+    ) {
+        Self.mutateSelectionAndPublish(
+            model: &selectionModel,
+            capturedSessionIdentity: tree.sessionIdentity,
+            visibleRows: visibleRows ?? visibleSelectionRows,
+            appState: appState,
+            mutation: mutation)
+    }
+
+    /// Pure target capture for both contextual surfaces. A row already in the
+    /// published selection retains that complete frozen batch; right-clicking
+    /// or invoking VoiceOver on any other row creates a one-row snapshot
+    /// without changing the tree's visible or semantic selection.
+    static func sidebarRowActionProjection(
+        surface: SidebarActionSurface,
+        row: SidebarSelectionItem,
+        publishedSnapshot: SidebarSelectionSnapshot,
+        structuralMutationDisabledReason: String?,
+        actionDisabledReasons: [String: String]
+    ) -> (
+        targetSnapshot: SidebarSelectionSnapshot,
+        evaluations: [SidebarActionEvaluation],
+        openEvaluation: SidebarActionEvaluation?
+    ) {
+        let targetSnapshot: SidebarSelectionSnapshot
+        if publishedSnapshot.items.contains(where: {
+            $0.path == row.path && $0.isDirectory == row.isDirectory
+        }) {
+            targetSnapshot = publishedSnapshot
+        } else {
+            let parent = (row.path as NSString).deletingLastPathComponent
+            targetSnapshot = SidebarSelectionSnapshot(
+                sessionIdentity: publishedSnapshot.sessionIdentity,
+                items: [row],
+                focusedPath: row.path,
+                creationParent: row.isDirectory
+                    ? row.path
+                    : (parent == "." ? "" : parent))
+        }
+        let evaluations = SidebarActionCatalog.project(
+            surface: surface,
+            snapshot: targetSnapshot,
+            structuralMutationDisabledReason: structuralMutationDisabledReason,
+            actionDisabledReasons: actionDisabledReasons)
+        let openEvaluation = SidebarActionCatalog.evaluation(
+            for: SlateCommandID.sidebarOpen,
+            snapshot: targetSnapshot,
+            structuralMutationDisabledReason: structuralMutationDisabledReason,
+            actionDisabledReasons: actionDisabledReasons)
+        return (
+            targetSnapshot: targetSnapshot,
+            evaluations: evaluations,
+            openEvaluation: openEvaluation)
+    }
+
+    enum ReturnOpenDisposition: Equatable {
+        case folderDisclosure
+        case openSelection
+    }
+
+    /// Bare Return is an Open command only when the frozen semantic selection
+    /// contains a file. Folder-only or empty captures fall through to the
+    /// focused folder's existing disclosure toggle; mixed captures still try
+    /// Open so the exact capability rejection is announced and consumed.
+    static func returnOpenDisposition(
+        for snapshot: SidebarSelectionSnapshot?
+    ) -> ReturnOpenDisposition {
+        snapshot?.items.contains(where: { !$0.isDirectory }) == true
+            ? .openSelection : .folderDisclosure
+    }
+
+    struct FileRowOpenAccessibilityPresentation: Equatable {
+        let intent: SidebarActionInvocationIntent?
+        let hint: String
+        let exposesButtonTrait: Bool
+        let exposesDefaultAction: Bool
+    }
+
+    /// Describe the exact frozen Open target. A file row can represent the
+    /// complete selected batch, so singular copy is truthful only for one item.
+    static func fileRowAvailableOpenHint(
+        targetCount: Int,
+        idleGuidance: String,
+        structuralDisabledReason: String?
+    ) -> String {
+        let primaryAction = targetCount == 1
+            ? "Opens the note."
+            : "Opens the selected files."
+        return rowAccessibilityHint(
+            primaryAction: primaryAction,
+            idleHint: "\(primaryAction) \(idleGuidance)",
+            structuralDisabledReason: structuralDisabledReason)
+    }
+
+    /// One retained Open evaluation owns the file row's role, default action,
+    /// and hint. Unavailable Open never advertises an affirmative action; its
+    /// exact current reason becomes the complete hint.
+    static func fileRowOpenAccessibilityPresentation(
+        openEvaluation: SidebarActionEvaluation?,
+        availableHint: String,
+        unavailableHint: String
+    ) -> FileRowOpenAccessibilityPresentation {
+        guard let intent = openEvaluation?.intent else {
+            let reason = openEvaluation?.disabledReason
+                ?? AppState.sidebarSelectionChangedReason
+            return FileRowOpenAccessibilityPresentation(
+                intent: nil,
+                hint: unavailableHint.isEmpty
+                    ? reason : "\(reason) \(unavailableHint)",
+                exposesButtonTrait: false,
+                exposesDefaultAction: false)
+        }
+        return FileRowOpenAccessibilityPresentation(
+            intent: intent,
+            hint: availableHint,
+            exposesButtonTrait: true,
+            exposesDefaultAction: true)
+    }
+
+    /// The modifiers themselves are conditional: a blocked Open cannot leave
+    /// behind a dead default action or a misleading button role in VoiceOver.
+    private struct FileRowOpenAccessibilityModifier: ViewModifier {
+        let presentation: FileRowOpenAccessibilityPresentation
+        let dispatch: (SidebarActionInvocationIntent) -> Void
+
+        @ViewBuilder
+        func body(content: Content) -> some View {
+            if presentation.exposesButtonTrait,
+                presentation.exposesDefaultAction,
+                let openIntent = presentation.intent
+            {
+                content
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityAction(.default) {
+                        dispatch(openIntent)
+                    }
+            } else {
+                content
+            }
+        }
+    }
+
+    /// Keyboard-only adapter over the same frozen projection used by menus and
+    /// accessibility surfaces. The caller owns revalidation errors so each
+    /// event path can announce once and decide whether to consume the key.
+    @discardableResult
+    static func invokeSidebarKeyboardAction(
+        id: String,
+        projection: [SidebarActionEvaluation],
+        dispatch: (SidebarActionInvocationIntent) throws -> Void
+    ) throws -> Bool {
+        guard let evaluation = projection.first(where: { $0.id == id }) else {
+            return false
+        }
+        guard let intent = evaluation.intent else {
+            throw CommandError.ActionFailed(
+                message: evaluation.disabledReason
+                    ?? AppState.sidebarSelectionChangedReason)
+        }
+        try dispatch(intent)
+        return true
+    }
 
     enum SelectionKeyAction: Equatable {
         case extend(SelectionModel.ArrowDirection)
@@ -1210,61 +1427,22 @@ struct FileTreeSidebar: View {
         openSelectionBatch(from: model, visibleRows: visibleRows).paths
     }
 
-    struct OpenSelectionBatch: Equatable {
-        let paths: [String]
-        let focusedPath: String?
-
-        /// Keep the captured selection in flattened visible order, but open the
-        /// focused file last so the user's keyboard locus remains the active tab.
-        var executionPaths: [String] {
-            guard let focusedPath,
-                let focusedIndex = paths.firstIndex(of: focusedPath)
-            else { return paths }
-
-            var result = paths
-            result.remove(at: focusedIndex)
-            result.append(focusedPath)
-            return result
-        }
-    }
+    typealias OpenSelectionBatch = SidebarOpenSelectionBatch
 
     static func openSelectionBatch(
         from model: SelectionModel,
         visibleRows: [SelectionRow]
     ) -> OpenSelectionBatch {
         let rows = model.selectedVisibleRows(in: visibleRows)
-            .filter { !$0.isDirectory }
+        guard rows.allSatisfy({ !$0.isDirectory }) else {
+            return OpenSelectionBatch(paths: [], focusedPath: nil)
+        }
         let focusedPath = rows.first { $0.identity == model.focused }?.path
         return OpenSelectionBatch(paths: rows.map(\.path), focusedPath: focusedPath)
     }
 
-    struct OpenSelectionRequest: Equatable, Identifiable {
-        let id: UUID
-        let sessionIdentity: ObjectIdentifier
-        let batch: OpenSelectionBatch
-
-        init(
-            id: UUID = UUID(),
-            sessionIdentity: ObjectIdentifier,
-            batch: OpenSelectionBatch
-        ) {
-            self.id = id
-            self.sessionIdentity = sessionIdentity
-            self.batch = batch
-        }
-
-        var paths: [String] { batch.paths }
-        var focusedPath: String? { batch.focusedPath }
-
-        var title: String { "Open \(paths.count) Files?" }
-        var message: String { "This will open each selected file in a tab." }
-    }
-
-    enum OpenSelectionDisposition: Equatable {
-        case none
-        case direct(OpenSelectionBatch)
-        case confirm(OpenSelectionRequest)
-    }
+    typealias OpenSelectionRequest = SidebarOpenSelectionRequest
+    typealias OpenSelectionDisposition = SidebarOpenSelectionDisposition
 
     static func openSelectionDisposition(
         batch: OpenSelectionBatch,
@@ -1515,7 +1693,9 @@ struct FileTreeSidebar: View {
             selected: selection,
             selectionPathSnapshots: snapshot)
         return model.selectedVisibleRows(in: visibleOrder.map {
-            SelectionRow(identity: $0.rowID, path: $0.path, isDirectory: $0.isDirectory)
+            SelectionRow(
+                identity: $0.rowID, path: $0.path,
+                isDirectory: $0.isDirectory, isMarkdown: false)
         }).map {
             AppState.TreeSelection(path: $0.path, isDirectory: $0.isDirectory)
         }
@@ -1536,7 +1716,9 @@ struct FileTreeSidebar: View {
             selected: selection,
             selectionPathSnapshots: snapshot)
         return model.topLevelOperationRows(in: visibleOrder.map {
-            SelectionRow(identity: $0.rowID, path: $0.path, isDirectory: $0.isDirectory)
+            SelectionRow(
+                identity: $0.rowID, path: $0.path,
+                isDirectory: $0.isDirectory, isMarkdown: false)
         }).map {
             AppState.TreeSelection(path: $0.path, isDirectory: $0.isDirectory)
         }
@@ -1573,9 +1755,68 @@ struct FileTreeSidebar: View {
         let shouldRevealMovedAncestry: Bool
     }
 
+    struct PendingPostMutationFocus: Equatable {
+        let targetPath: String?
+        let capturedDeleteRow: SelectionRow?
+        let suppressOpen: Bool
+        /// True after the immutable Delete fallback has already been installed
+        /// and published while its invalidated level is unavailable. Later
+        /// loading/error edges must guard that snapshot, not publish it again.
+        let installedDeleteFallback: Bool
+        /// Ownership prevents a late tree edge from carrying a fallback across
+        /// either a newer structural landing or a replaced vault session.
+        let ownerSessionIdentity: ObjectIdentifier?
+        let ownerMutationToken: Int?
+
+        init(
+            targetPath: String?,
+            capturedDeleteRow: SelectionRow?,
+            suppressOpen: Bool,
+            installedDeleteFallback: Bool = false,
+            ownerSessionIdentity: ObjectIdentifier? = nil,
+            ownerMutationToken: Int? = nil
+        ) {
+            self.targetPath = targetPath
+            self.capturedDeleteRow = capturedDeleteRow
+            self.suppressOpen = suppressOpen
+            self.installedDeleteFallback = installedDeleteFallback
+            self.ownerSessionIdentity = ownerSessionIdentity
+            self.ownerMutationToken = ownerMutationToken
+        }
+    }
+
+    enum PendingPostMutationRestoreOutcome: Equatable {
+        case wait
+        case installed(SelectionRow)
+        case clearedGuard
+        case cancelAndReconcile
+    }
+
+    static func postMutationFocusRow(
+        for pending: PendingPostMutationFocus,
+        visibleRows: [SelectionRow]
+    ) -> SelectionRow? {
+        if let capturedDeleteRow = pending.capturedDeleteRow {
+            return capturedDeleteRow
+        }
+        guard let targetPath = pending.targetPath else { return nil }
+        return visibleRows.first(where: { $0.path == targetPath })
+    }
+
     struct PendingBatchFocus: Equatable {
         let plan: BatchMoveFocusPlan
         let expectedFocusedPath: String?
+        let deferredModel: SelectionModel?
+
+        init(
+            plan: BatchMoveFocusPlan,
+            expectedFocusedPath: String?,
+            deferredModel: SelectionModel? = nil
+        ) {
+            self.plan = plan
+            self.expectedFocusedPath = expectedFocusedPath
+            self.deferredModel = deferredModel
+        }
     }
 
     enum PendingBatchFocusDisposition: Equatable {
@@ -1593,6 +1834,262 @@ struct FileTreeSidebar: View {
             return .cancel
         }
         return targetIsMaterialized ? .restore : .wait
+    }
+
+    static func deferredBatchSelectionModel(
+        from model: SelectionModel,
+        using index: SelectionModel.KnownMoveIndex,
+        componentVisits: inout Int
+    ) -> SelectionModel {
+        var result = model
+        result.remapKnownMoves(
+            using: index,
+            identityForRemappedPath: remappedSelectionIdentity,
+            componentVisits: &componentVisits)
+        return result
+    }
+
+    /// Production selection transition for a batch move. An unavailable final
+    /// row returns a fully prepared pending value without assigning `model` or
+    /// publishing an AppState snapshot. A materialized row installs remap +
+    /// final focus through one publication edge.
+    static func applyOrDeferBatchMoveSelection(
+        plan: BatchMoveFocusPlan?,
+        moveIndex: SelectionModel.KnownMoveIndex?,
+        targetRow: SelectionRow?,
+        expectedFocusedPath: String?,
+        model: inout SelectionModel,
+        capturedSessionIdentity: ObjectIdentifier?,
+        visibleRows: [SelectionRow],
+        appState: AppState,
+        componentVisits: inout Int
+    ) -> PendingBatchFocus? {
+        let deferredModel: SelectionModel
+        if let moveIndex {
+            deferredModel = deferredBatchSelectionModel(
+                from: model,
+                using: moveIndex,
+                componentVisits: &componentVisits)
+        } else {
+            deferredModel = model
+        }
+        if let plan, plan.path != nil, targetRow == nil {
+            return PendingBatchFocus(
+                plan: plan,
+                expectedFocusedPath: expectedFocusedPath,
+                deferredModel: deferredModel)
+        }
+        mutateSelectionAndPublish(
+            model: &model,
+            capturedSessionIdentity: capturedSessionIdentity,
+            visibleRows: visibleRows,
+            appState: appState
+        ) {
+            $0 = deferredModel
+            if let targetRow {
+                $0.focusAfterStructuralMutation(targetRow)
+            }
+        }
+        return nil
+    }
+
+    /// Install a previously deferred batch move after its final focus row has
+    /// materialized. The complete remap and final focus publish exactly once.
+    @discardableResult
+    static func installPendingBatchFocus(
+        _ pending: PendingBatchFocus,
+        targetRow: SelectionRow,
+        model: inout SelectionModel,
+        capturedSessionIdentity: ObjectIdentifier?,
+        visibleRows: [SelectionRow],
+        appState: AppState
+    ) -> Bool {
+        mutateSelectionAndPublish(
+            model: &model,
+            capturedSessionIdentity: capturedSessionIdentity,
+            visibleRows: visibleRows,
+            appState: appState
+        ) {
+            if let deferredModel = pending.deferredModel {
+                $0 = deferredModel
+            }
+            $0.focusAfterStructuralMutation(targetRow)
+        }
+        return true
+    }
+
+    /// Install a create/rename/move destination or a Delete fallback through
+    /// the same production publication seam used by the SwiftUI restore path.
+    /// A captured Delete row is appended only for this immutable publication
+    /// when its invalidated child level is temporarily unavailable.
+    static func installPendingPostMutationFocus(
+        _ pending: PendingPostMutationFocus,
+        model: inout SelectionModel,
+        capturedSessionIdentity: ObjectIdentifier?,
+        visibleRows: [SelectionRow],
+        appState: AppState
+    ) -> SelectionRow? {
+        guard let targetRow = postMutationFocusRow(
+            for: pending,
+            visibleRows: visibleRows)
+        else { return nil }
+        var publicationRows = visibleRows
+        if !publicationRows.contains(targetRow) {
+            publicationRows.append(targetRow)
+        }
+        mutateSelectionAndPublish(
+            model: &model,
+            capturedSessionIdentity: capturedSessionIdentity,
+            visibleRows: publicationRows,
+            appState: appState
+        ) {
+            $0.focusAfterStructuralMutation(targetRow)
+        }
+        return targetRow
+    }
+
+    /// Retain only the already-published Delete fallback whose exact row is
+    /// still missing from the invalidated level. Create/rename/move completes
+    /// immediately once installed, as does a Delete whose fallback never left
+    /// the visible tree (for example, the parent folder).
+    static func pendingPostMutationFocusAfterInstall(
+        _ pending: PendingPostMutationFocus,
+        installedRow: SelectionRow,
+        visibleRows: [SelectionRow]
+    ) -> PendingPostMutationFocus? {
+        guard pending.capturedDeleteRow == installedRow,
+            !visibleRows.contains(installedRow)
+        else { return nil }
+        return PendingPostMutationFocus(
+            targetPath: pending.targetPath,
+            capturedDeleteRow: pending.capturedDeleteRow,
+            suppressOpen: pending.suppressOpen,
+            installedDeleteFallback: true,
+            ownerSessionIdentity: pending.ownerSessionIdentity,
+            ownerMutationToken: pending.ownerMutationToken)
+    }
+
+    /// Production transition for `.onChange(of: tree.visibleRows)`. An already
+    /// published Delete fallback owns loading/error edges without mutating the
+    /// model or AppState. Its exact rematerialization only clears the guard. A
+    /// not-yet-installed create/rename/move uses the normal one-shot installer.
+    static func restorePendingPostMutationSelection(
+        pending: inout PendingPostMutationFocus?,
+        model: inout SelectionModel,
+        capturedSessionIdentity: ObjectIdentifier?,
+        visibleRows: [SelectionRow],
+        appState: AppState,
+        currentSessionIdentity: ObjectIdentifier? = nil,
+        currentMutationToken: Int? = nil,
+        resolveCurrentRow: (RowID) -> SelectionRow?
+    ) -> PendingPostMutationRestoreOutcome {
+        guard let current = pending else { return .cancelAndReconcile }
+        if let ownerSessionIdentity = current.ownerSessionIdentity,
+            currentSessionIdentity != ownerSessionIdentity
+        {
+            pending = nil
+            return .cancelAndReconcile
+        }
+        if let ownerMutationToken = current.ownerMutationToken,
+            currentMutationToken != ownerMutationToken
+        {
+            pending = nil
+            return .cancelAndReconcile
+        }
+        if current.installedDeleteFallback {
+            guard let fallback = current.capturedDeleteRow else {
+                pending = nil
+                return .cancelAndReconcile
+            }
+            // A real user focus/selection edge supersedes this old structural
+            // landing. Do not let a failed-refetch guard suppress unrelated
+            // reconciliation after the semantic model has moved on.
+            guard model.focused == fallback.identity,
+                model.isSelected(fallback.identity, currentPath: fallback.path)
+            else {
+                pending = nil
+                return .cancelAndReconcile
+            }
+            if visibleRows.contains(fallback) {
+                pending = nil
+                return .clearedGuard
+            }
+            // The old captured row has been replaced at the same path (new dir
+            // id or refreshed metadata). It is not the immutable row we
+            // published, so release to reconciliation rather than letting the
+            // stale selection remain command-authoritative.
+            if visibleRows.contains(where: { $0.path == fallback.path }) {
+                pending = nil
+                return .cancelAndReconcile
+            }
+            // The identity exists but is not the exact visible fallback: the
+            // user may have collapsed its ancestor, or a stable dir id may now
+            // resolve to another path. Release to generic reconciliation now;
+            // waiting is reserved for a genuinely unmaterialized refetch.
+            if resolveCurrentRow(fallback.identity) != nil {
+                pending = nil
+                return .cancelAndReconcile
+            }
+            return .wait
+        }
+        guard let installedRow = installPendingPostMutationFocus(
+            current,
+            model: &model,
+            capturedSessionIdentity: capturedSessionIdentity,
+            visibleRows: visibleRows,
+            appState: appState)
+        else { return .wait }
+        pending = pendingPostMutationFocusAfterInstall(
+            current,
+            installedRow: installedRow,
+            visibleRows: visibleRows)
+        return .installed(installedRow)
+    }
+
+    static func cancelPendingPostMutationFocus(
+        _ pending: inout PendingPostMutationFocus?
+    ) {
+        pending = nil
+    }
+
+    /// Publish the legacy single-item command mirror without erasing an
+    /// installed Delete fallback solely because its invalidated row cannot yet
+    /// be resolved. The pending guard already proved session, mutation, and
+    /// semantic ownership; every non-guard/cancel path uses the caller's normal
+    /// fail-closed resolution result.
+    static func publishGuardAwareTreeSelectionMirror(
+        pending: PendingPostMutationFocus?,
+        model: SelectionModel,
+        currentSessionIdentity: ObjectIdentifier?,
+        currentMutationToken: Int?,
+        resolvedSelection: AppState.TreeSelection?,
+        appState: AppState
+    ) {
+        let guardedFallback: AppState.TreeSelection? = {
+            guard let pending,
+                pending.installedDeleteFallback,
+                let fallback = pending.capturedDeleteRow,
+                model.focused == fallback.identity,
+                model.isSelected(fallback.identity, currentPath: fallback.path)
+            else { return nil }
+            if let ownerSessionIdentity = pending.ownerSessionIdentity,
+                currentSessionIdentity != ownerSessionIdentity
+            {
+                return nil
+            }
+            if let ownerMutationToken = pending.ownerMutationToken,
+                currentMutationToken != ownerMutationToken
+            {
+                return nil
+            }
+            return AppState.TreeSelection(
+                path: fallback.path,
+                isDirectory: fallback.isDirectory)
+        }()
+        let mirrored = guardedFallback ?? resolvedSelection
+        if appState.treeSelectedNode != mirrored {
+            appState.treeSelectedNode = mirrored
+        }
     }
 
     /// The user's live keyboard locus wins at landing. A captured submission
@@ -1731,6 +2228,7 @@ struct FileTreeSidebar: View {
             didAnnounceCount = false
             typeSelectBuffer = ""  // #850: a prefix never spans vaults
             pendingBatchFocus = nil
+            Self.cancelPendingPostMutationFocus(&pendingPostMutationFocus)
             tree.bind(
                 to: appState.currentSession,
                 restoringExpandedDirPaths: appState.treeExpandedDirPaths)
@@ -2015,10 +2513,18 @@ struct FileTreeSidebar: View {
                     key: press.key,
                     modifiers: press.modifiers,
                     fileTreeFocused: fileTreeFocused,
-                    isRenaming: appState.renamingNode != nil),
-                handleSelectionKeyAction(action, proxy: proxy)
+                    isRenaming: appState.renamingNode != nil)
             {
-                return .handled
+                switch Self.returnOpenDisposition(
+                    for: appState.sidebarSelectionSnapshot)
+                {
+                case .openSelection:
+                    if handleSelectionKeyAction(action, proxy: proxy) {
+                        return .handled
+                    }
+                case .folderDisclosure:
+                    break
+                }
             }
             guard press.modifiers.subtracting(.capsLock).isEmpty,
                 let node = selectedTreeNode, node.isDirectory
@@ -2038,9 +2544,19 @@ struct FileTreeSidebar: View {
                     fileTreeFocused: fileTreeFocused,
                     isRenaming: appState.renamingNode != nil),
                 Self.typeSelectModifiersAllowed(press.modifiers),
-                let node = selectedTreeNode
+                selectedTreeNode != nil
             else { return .ignored }
-            beginRename(node)
+            let projection = appState.sidebarActionProjection(surface: .keyboard)
+            do {
+                _ = try Self.invokeSidebarKeyboardAction(
+                    id: SlateCommandID.renameEntry,
+                    projection: projection,
+                    dispatch: { intent in
+                        _ = try appState.dispatchSidebarAction(intent)
+                    })
+            } catch {
+                appState.postMutationAnnouncement(error.sidebarActionAnnouncement)
+            }
             return .handled
         }
         // Type-select (#850): printable characters accumulate into a prefix
@@ -2116,8 +2632,13 @@ struct FileTreeSidebar: View {
         // already remapped its snapshots in `handleTreeMutation`, so its entries
         // resolve to a matching path and survive this reconcile untouched.
         .onChange(of: tree.visibleRows) { _, _ in
+            if restorePendingBatchFocus(proxy: proxy)
+                || restorePendingPostMutationFocus(proxy: proxy)
+            {
+                mirrorTreeSelectionToAppState(listSelection)
+                return
+            }
             reconcileSelectionAfterTreeChange()
-            restorePendingBatchFocus(proxy: proxy)
             // Re-sync the single-item command mirror against the refreshed paths
             // (a folder rename keeps its dir id → the focus `listSelection` never
             // changed → `.onChange(of: listSelection)` never fired → the mirror
@@ -2130,7 +2651,8 @@ struct FileTreeSidebar: View {
         // Reveal resolve a vault-A node against vault B's root); the
         // view-side highlight resets with it.
         .onChange(of: appState.currentVaultURL) { _, _ in
-            selectionModel.reveal(nil)
+            Self.cancelPendingPostMutationFocus(&pendingPostMutationFocus)
+            mutateSelectionAndPublish { $0.reveal(nil) }
             listSelection = nil
         }
         .alert(
@@ -2139,7 +2661,7 @@ struct FileTreeSidebar: View {
             presenting: activeOpenSelection
         ) { request in
             Button("Open") {
-                openCapturedPaths(appState.confirmOpenSelection(id: request.id))
+                _ = appState.confirmOpenSelection(id: request.id)
                 fileTreeFocused = true
             }
             .keyboardShortcut(.defaultAction)
@@ -2163,6 +2685,10 @@ struct FileTreeSidebar: View {
             // don't re-open or collapse here.
             if suppressOpenForSelectionChange {
                 suppressOpenForSelectionChange = false
+                // A post-Delete carrier uses this same early-return branch to
+                // preserve the missing-file tab. Consume its companion flag so
+                // it cannot suppress a later genuine selection.
+                suppressOpenForPostMutationFocus = false
                 mirrorTreeSelectionToAppState(selectionModel.focused)
                 announceFocusedFileSelection(
                     selectionModel.focused,
@@ -2172,7 +2698,9 @@ struct FileTreeSidebar: View {
             // #852: any OTHER focus change (keyboard arrow, type-select,
             // programmatic open, plain click) is SINGLE — collapse any lingering
             // batch set to this one row so batch state never outlives it.
-            selectionModel.reveal(newSelection.flatMap { selectionRow(for: $0) })
+            mutateSelectionAndPublish {
+                $0.reveal(newSelection.flatMap { selectionRow(for: $0) })
+            }
             // Mirror the selection (file OR folder) to AppState so the file-
             // management commands know their target. Placeholders clear it.
             mirrorTreeSelectionToAppState(selectionModel.focused)
@@ -2194,8 +2722,8 @@ struct FileTreeSidebar: View {
                 appState.openFile(path, target: .newTab)
                 if case let .node(.file(selected)) = listSelection,
                     selected != appState.selectedFilePath {
-                    selectionAnnouncementGate.arm()
-                    listSelection = appState.selectedFilePath.map { .node(.file(path: $0)) }
+                    revertCommandClickSelection(
+                        to: appState.selectedFilePath.map { .node(.file(path: $0)) })
                 }
                 return
             }
@@ -2226,7 +2754,9 @@ struct FileTreeSidebar: View {
             // ⌘⌫ trash rows the user can't see selected). This handler only fires
             // when `selectedFilePath` actually changes (a real open), so it never
             // clobbers an in-progress ⌘/⇧ multi-select (those suppress the open).
-            selectionModel.reveal(outcome.listSelection.flatMap { selectionRow(for: $0) })
+            mutateSelectionAndPublish {
+                $0.reveal(outcome.listSelection.flatMap { selectionRow(for: $0) })
+            }
             if outcome.shouldMirrorListSelection {
                 if outcome.shouldSuppressAnnouncement {
                     selectionAnnouncementGate.arm()
@@ -2268,7 +2798,8 @@ struct FileTreeSidebar: View {
             SelectionRow(
                 identity: .node($0.nodeID),
                 path: $0.path,
-                isDirectory: $0.isDirectory)
+                isDirectory: $0.isDirectory,
+                isMarkdown: $0.isMarkdown)
         }
     }
 
@@ -2285,7 +2816,7 @@ struct FileTreeSidebar: View {
             visibleRows: visibleSelectionRows)
         guard outcome.handled else { return false }
 
-        selectionModel = outcome.model
+        mutateSelectionAndPublish { $0 = outcome.model }
         if outcome.shouldMirrorListSelection {
             suppressOpenForSelectionChange = true
             selectionAnnouncementGate.arm()
@@ -2306,19 +2837,18 @@ struct FileTreeSidebar: View {
 
     @discardableResult
     private func requestOpenSelected() -> Bool {
-        let batch = Self.openSelectionBatch(
-            from: selectionModel,
-            visibleRows: visibleSelectionRows)
-        let identity = appState.currentSession.map(ObjectIdentifier.init)
-        switch Self.openSelectionDisposition(batch: batch, sessionIdentity: identity) {
-        case .none:
-            return false
-        case let .direct(capturedBatch):
-            openCapturedPaths(capturedBatch.executionPaths)
-        case let .confirm(request):
-            return appState.enqueueOpenSelection(request)
+        let projection = appState.sidebarActionProjection(surface: .keyboard)
+        do {
+            return try Self.invokeSidebarKeyboardAction(
+                id: SlateCommandID.sidebarOpen,
+                projection: projection,
+                dispatch: { intent in
+                    _ = try appState.dispatchSidebarAction(intent)
+                })
+        } catch {
+            appState.postMutationAnnouncement(error.sidebarActionAnnouncement)
+            return true
         }
-        return true
     }
 
     private var activeOpenSelection: OpenSelectionRequest? {
@@ -2333,12 +2863,6 @@ struct FileTreeSidebar: View {
             get: { activeOpenSelection != nil },
             set: { _ in }
         )
-    }
-
-    private func openCapturedPaths(_ paths: [String]) {
-        for path in paths {
-            appState.openFile(path, target: .newTab)
-        }
     }
 
     /// The selected rows currently VISIBLE + path-valid, PRE-dedup — "what the
@@ -2371,17 +2895,35 @@ struct FileTreeSidebar: View {
         guard case let .node(nodeID) = rowID else { return nil }
         switch nodeID {
         case let .file(path):
-            return SelectionRow(identity: rowID, path: path, isDirectory: false)
+            guard let node = tree.node(for: nodeID) else { return nil }
+            return SelectionRow(
+                identity: rowID, path: path, isDirectory: false,
+                isMarkdown: node.isMarkdown)
         case .dir:
             guard let node = tree.node(for: nodeID) else { return nil }
-            return SelectionRow(identity: rowID, path: node.path, isDirectory: true)
+            return SelectionRow(
+                identity: rowID, path: node.path, isDirectory: true,
+                isMarkdown: false)
         }
     }
 
     /// Keep the native List carrier synchronized after the pure model has
     /// unconditionally normalized a programmatic selection.
     private func mirrorProgrammaticSelection(_ rowID: RowID?) {
-        selectionModel.reveal(rowID.flatMap { selectionRow(for: $0) })
+        mutateSelectionAndPublish {
+            $0.reveal(rowID.flatMap { selectionRow(for: $0) })
+        }
+        listSelection = selectionModel.focused
+    }
+
+    /// A Command-click opened a background tab, so return focus to the active
+    /// document. Update the semantic model and AppState snapshot before the
+    /// native List carrier, including when the carrier assignment is same-value.
+    private func revertCommandClickSelection(to rowID: RowID?) {
+        selectionAnnouncementGate.arm()
+        mutateSelectionAndPublish {
+            $0.reveal(rowID.flatMap { selectionRow(for: $0) })
+        }
         listSelection = selectionModel.focused
     }
 
@@ -2409,9 +2951,11 @@ struct FileTreeSidebar: View {
     private func reconcileSelectionAfterTreeChange() {
         // The value model reconciles the independent anchor first, then selected
         // snapshots, and finally focus. Nil resolution remains transient.
-        selectionModel.reconcile(
-            visibleRows: visibleSelectionRows,
-            resolveCurrentPath: { resolvedPath(of: $0) })
+        mutateSelectionAndPublish {
+            $0.reconcile(
+                visibleRows: visibleSelectionRows,
+                resolveCurrentPath: { resolvedPath(of: $0) })
+        }
         if listSelection != selectionModel.focused {
             suppressOpenForSelectionChange = true
             listSelection = selectionModel.focused
@@ -2430,9 +2974,11 @@ struct FileTreeSidebar: View {
         // still need remapping under a moved folder, so don't early-return on an
         // empty selection when an anchor is present.
         guard !selectionModel.selected.isEmpty || selectionModel.rangeAnchor != nil else { return }
-        selectionModel.remapKnownMoves(
-            [SelectionModel.KnownMove(oldPath: oldPath, newPath: newPath)],
-            identityForRemappedPath: Self.remappedSelectionIdentity)
+        mutateSelectionAndPublish {
+            $0.remapKnownMoves(
+                [SelectionModel.KnownMove(oldPath: oldPath, newPath: newPath)],
+                identityForRemappedPath: Self.remappedSelectionIdentity)
+        }
         // A FILE rename/move re-keys the focus RowID (path-keyed) — reflect it,
         // suppressing the open so re-anchoring can't re-open. A folder keeps its
         // id, so this is a no-op (handled by applyPostMutationFocus + the mirror).
@@ -2476,10 +3022,12 @@ struct FileTreeSidebar: View {
         // so re-clicking the already-open file stays a no-op — no double-open.)
         guard let selectedRow = selectionRow(for: row) else { return }
         let sameFocus = (selectionModel.focused == row)
-        selectionModel.applyPointerClick(
-            .plain,
-            row: selectedRow,
-            visibleRows: visibleSelectionRows)
+        mutateSelectionAndPublish {
+            $0.applyPointerClick(
+                .plain,
+                row: selectedRow,
+                visibleRows: visibleSelectionRows)
+        }
         listSelection = selectionModel.focused
         if sameFocus, case let .node(.file(path)) = row,
             !BaseExactIdentity.matches(appState.selectedFilePath, path)
@@ -2495,19 +3043,17 @@ struct FileTreeSidebar: View {
     /// batch actions the issue arms, so it acts on the Set — Reveal / Copy Path /
     /// Rename stay single-item (they read the focus mirror).
     private func requestDeleteFromKeyboard() {
-        if hasMultiSelection {
-            appState.requestBatchDelete(
-                selectedNodesForBatch,
-                preferredFocusPath: preferredBatchFocusPath)
-            return
+        let projection = appState.sidebarActionProjection(surface: .keyboard)
+        do {
+            _ = try Self.invokeSidebarKeyboardAction(
+                id: SlateCommandID.deleteEntry,
+                projection: projection,
+                dispatch: { intent in
+                    _ = try appState.dispatchSidebarAction(intent)
+                })
+        } catch {
+            appState.postMutationAnnouncement(error.sidebarActionAnnouncement)
         }
-        guard let node = selectedTreeNode else { return }
-        // #860: the request funnel stages a confirmation for a non-empty folder;
-        // files + empty folders keep the direct path. The node's cached count
-        // rides along so no filesystem probe is needed.
-        appState.requestDeleteEntry(
-            path: node.path, isDirectory: node.isDirectory,
-            knownChildCount: node.isDirectory ? node.itemCount : nil)
     }
 
     /// A ⌘/⇧ multi-select tap: fold it through the pure model, update the set +
@@ -2518,10 +3064,12 @@ struct FileTreeSidebar: View {
     /// behavior.
     private func applyMultiSelectClick(_ clicked: RowID, click: SelectionClick) {
         guard let clickedRow = selectionRow(for: clicked) else { return }
-        selectionModel.applyPointerClick(
-            click,
-            row: clickedRow,
-            visibleRows: visibleSelectionRows)
+        mutateSelectionAndPublish {
+            $0.applyPointerClick(
+                click,
+                row: clickedRow,
+                visibleRows: visibleSelectionRows)
+        }
         // Suppress the onChange-driven open for every modifier transition.
         // #852 red-team: ONLY arm the one-shot when the focus assignment will
         // ACTUALLY fire `.onChange`. A same-value assignment (e.g. ⌘-removing
@@ -2563,15 +3111,20 @@ struct FileTreeSidebar: View {
         // FAIL-CLOSED (#852, Codex round-4 finding 1): resolve through
         // `pathValidatedNode` so a reused dir id never mirrors an UNRELATED
         // folder to AppState's single-item command target (Reveal / Copy Path /
-        // ⌘⇧M Move read `treeSelectedNode`).
-        guard let selection, let node = pathValidatedNode(for: selection) else {
-            if appState.treeSelectedNode != nil { appState.treeSelectedNode = nil }
-            return
+        // ⌘⇧M Move read `treeSelectedNode`). The sole exception is an installed,
+        // ownership-checked Delete fallback whose level is still refetching.
+        let resolvedSelection = selection.flatMap { selection in
+            pathValidatedNode(for: selection).map {
+                AppState.TreeSelection(path: $0.path, isDirectory: $0.isDirectory)
+            }
         }
-        let mirrored = AppState.TreeSelection(path: node.path, isDirectory: node.isDirectory)
-        if appState.treeSelectedNode != mirrored {
-            appState.treeSelectedNode = mirrored
-        }
+        Self.publishGuardAwareTreeSelectionMirror(
+            pending: pendingPostMutationFocus,
+            model: selectionModel,
+            currentSessionIdentity: appState.currentSession.map(ObjectIdentifier.init),
+            currentMutationToken: appState.treeMutation?.token,
+            resolvedSelection: resolvedSelection,
+            appState: appState)
     }
 
     /// Refresh the tree after a structural mutation (U2-5) and move the
@@ -2583,6 +3136,7 @@ struct FileTreeSidebar: View {
         // A newer structural landing supersedes any focus still waiting on the
         // previous mutation's destination refetch.
         pendingBatchFocus = nil
+        Self.cancelPendingPostMutationFocus(&pendingPostMutationFocus)
         let preMutationRows = visibleSelectionRows
         let liveFocusPath = selectionModel.focused.flatMap { identity -> String? in
             guard let snapshot = selectionModel.selectionPathSnapshots[identity],
@@ -2620,10 +3174,11 @@ struct FileTreeSidebar: View {
         }
         // For a DELETE, the focus target (next sibling / prev / parent) must be
         // read from the tree BEFORE the level is dropped — capture it first.
-        var preInvalidationDeleteTarget: NodeID?
+        var preInvalidationDeleteTarget: SelectionRow?
         if case let .delete(path, parent, _) = mutation.kind {
             preInvalidationDeleteTarget = tree.deleteFocusTarget(
-                deletedPath: path, parentPath: parent)
+                deletedPath: path, parentPath: parent
+            ).flatMap { selectionRow(for: .node($0)) }
         }
         // Invalidate each dirtied level. A move dirties two (source +
         // destination); everything else dirties one. `nil` = the root level.
@@ -2675,26 +3230,28 @@ struct FileTreeSidebar: View {
         case let .rename(oldPath, newPath), let .move(oldPath, newPath, _, _):
             remapSelectionForKnownMove(oldPath: oldPath, newPath: newPath)
         case .batchMove:
-            if let batchMoveIndex {
-                selectionModel.remapKnownMoves(
-                    using: batchMoveIndex,
-                    identityForRemappedPath: Self.remappedSelectionIdentity,
-                    componentVisits: &componentVisits)
-            }
+            // Remap + final focus publish as one atomic snapshot below.
+            break
         case .batchTrash:
             if let batchRemovalIndex {
-                selectionModel.removeKnownItems(
-                    using: batchRemovalIndex,
-                    preferredFocusPath: mutation.preferredFocusPath,
-                    visibleRows: preMutationRows,
-                    componentVisits: &componentVisits)
+                mutateSelectionAndPublish(visibleRows: preMutationRows) {
+                    $0.removeKnownItems(
+                        using: batchRemovalIndex,
+                        preferredFocusPath: mutation.preferredFocusPath,
+                        visibleRows: preMutationRows,
+                        componentVisits: &componentVisits)
+                }
             }
         case .delete, .createFolder, .createNote, .batchReconcile:
             break
         }
         switch mutation.kind {
         case .batchMove:
-            applyBatchMoveFocus(batchMoveFocus, proxy: proxy)
+            applyBatchMoveFocus(
+                batchMoveFocus,
+                moveIndex: batchMoveIndex,
+                componentVisits: &componentVisits,
+                proxy: proxy)
         case .batchTrash:
             applyBatchSelectionFocus(proxy: proxy)
         case .batchReconcile:
@@ -2712,22 +3269,34 @@ struct FileTreeSidebar: View {
 
     private func applyBatchMoveFocus(
         _ plan: BatchMoveFocusPlan?,
+        moveIndex: SelectionModel.KnownMoveIndex?,
+        componentVisits: inout Int,
         proxy: ScrollViewProxy
     ) {
-        guard let plan, let path = plan.path else { return }
-        if plan.shouldRevealMovedAncestry {
-            tree.ensureAncestorsExpanded(forPath: path)
+        let expectedFocusedPath = currentFocusedSnapshotPath
+        let targetRow: SelectionRow?
+        if let plan, let path = plan.path {
+            if plan.shouldRevealMovedAncestry {
+                tree.ensureAncestorsExpanded(forPath: path)
+            }
+            targetRow = tree.focusTarget(forPath: path).flatMap {
+                selectionRow(for: .node($0))
+            }
+        } else {
+            targetRow = nil
         }
-        guard let target = tree.focusTarget(forPath: path) else {
-            pendingBatchFocus = PendingBatchFocus(
-                plan: plan,
-                expectedFocusedPath: currentFocusedSnapshotPath)
-            applyBatchSelectionFocus(proxy: proxy)
+        pendingBatchFocus = Self.applyOrDeferBatchMoveSelection(
+            plan: plan,
+            moveIndex: moveIndex,
+            targetRow: targetRow,
+            expectedFocusedPath: expectedFocusedPath,
+            model: &selectionModel,
+            capturedSessionIdentity: tree.sessionIdentity,
+            visibleRows: visibleSelectionRows,
+            appState: appState,
+            componentVisits: &componentVisits)
+        if pendingBatchFocus != nil {
             return
-        }
-        pendingBatchFocus = nil
-        if let row = selectionRow(for: .node(target)) {
-            selectionModel.focusAfterStructuralMutation(row)
         }
         applyBatchSelectionFocus(proxy: proxy)
     }
@@ -2738,10 +3307,11 @@ struct FileTreeSidebar: View {
         }
     }
 
-    private func restorePendingBatchFocus(proxy: ScrollViewProxy) {
+    @discardableResult
+    private func restorePendingBatchFocus(proxy: ScrollViewProxy) -> Bool {
         guard let pending = pendingBatchFocus,
             let path = pending.plan.path
-        else { return }
+        else { return false }
         if pending.plan.shouldRevealMovedAncestry {
             tree.ensureAncestorsExpanded(forPath: path)
         }
@@ -2752,16 +3322,24 @@ struct FileTreeSidebar: View {
             targetIsMaterialized: target != nil
         ) {
         case .wait:
-            return
+            return true
         case .cancel:
             pendingBatchFocus = nil
+            return false
         case .restore:
             pendingBatchFocus = nil
             guard let target,
                 let row = selectionRow(for: .node(target))
-            else { return }
-            selectionModel.focusAfterStructuralMutation(row)
+            else { return true }
+            Self.installPendingBatchFocus(
+                pending,
+                targetRow: row,
+                model: &selectionModel,
+                capturedSessionIdentity: tree.sessionIdentity,
+                visibleRows: visibleSelectionRows,
+                appState: appState)
             applyBatchSelectionFocus(proxy: proxy)
+            return true
         }
     }
 
@@ -2788,39 +3366,103 @@ struct FileTreeSidebar: View {
     ///   - delete → next sibling, else previous, else parent (never window-root).
     /// VoiceOver focus follows list selection (verified in the runbook pass).
     private func applyPostMutationFocus(
-        _ mutation: AppState.TreeMutation, deleteTarget: NodeID?, proxy: ScrollViewProxy
+        _ mutation: AppState.TreeMutation,
+        deleteTarget: SelectionRow?,
+        proxy: ScrollViewProxy
     ) {
-        let target: NodeID?
+        let pending: PendingPostMutationFocus?
         switch mutation.kind {
         case let .createFolder(path), let .createNote(path):
-            target = tree.focusTarget(forPath: path)
+            pending = PendingPostMutationFocus(
+                targetPath: path,
+                capturedDeleteRow: nil,
+                suppressOpen: false,
+                ownerSessionIdentity: tree.sessionIdentity,
+                ownerMutationToken: mutation.token)
         case let .rename(_, newPath):
-            target = tree.focusTarget(forPath: newPath)
+            pending = PendingPostMutationFocus(
+                targetPath: newPath,
+                capturedDeleteRow: nil,
+                suppressOpen: false,
+                ownerSessionIdentity: tree.sessionIdentity,
+                ownerMutationToken: mutation.token)
         case let .move(_, newPath, _, _):
             // Reveal the moved node's new home, then resolve it.
             tree.ensureAncestorsExpanded(forPath: newPath)
-            target = tree.focusTarget(forPath: newPath)
+            pending = PendingPostMutationFocus(
+                targetPath: newPath,
+                capturedDeleteRow: nil,
+                suppressOpen: false,
+                ownerSessionIdentity: tree.sessionIdentity,
+                ownerMutationToken: mutation.token)
         case .delete:
-            target = deleteTarget
-            // After a delete the tab flips to the missing-file error state
-            // (U2-5); moving the tree highlight to the sibling must NOT open it
-            // (that would replace the error tab the user just created by
-            // deleting). Suppress the open for this one selection change.
-            suppressOpenForPostMutationFocus = true
+            pending = deleteTarget.map {
+                PendingPostMutationFocus(
+                    targetPath: nil,
+                    capturedDeleteRow: $0,
+                    suppressOpen: true,
+                    ownerSessionIdentity: tree.sessionIdentity,
+                    ownerMutationToken: mutation.token)
+            }
         case .batchMove, .batchTrash, .batchReconcile:
-            target = nil
+            pending = nil
         }
-        guard let target else {
+        guard let pending else {
+            pendingPostMutationFocus = nil
             suppressOpenForPostMutationFocus = false
             return
         }
-        // Re-anchor the highlight (VO focus follows it). #448 discipline: this
-        // runs inside `.onChange`, a post-update mutation point — not the list's
-        // update pass. For create-note / rename / move the file is already the
-        // active note (created-open, or retargeted), so re-selecting it is a
-        // no-op open; for delete the open is suppressed above.
-        if listSelection != .node(target) {
-            listSelection = .node(target)
+        if !applyPendingPostMutationFocus(pending, proxy: proxy) {
+            pendingPostMutationFocus = pending
+        }
+    }
+
+    /// Finish a create/rename/move only once its destination row is materialized.
+    /// Delete is different: its deterministic fallback row was captured before
+    /// invalidation, so a failed child refetch cannot erase the focus target.
+    @discardableResult
+    private func applyPendingPostMutationFocus(
+        _ pending: PendingPostMutationFocus,
+        proxy: ScrollViewProxy
+    ) -> Bool {
+        let visibleRows = visibleSelectionRows
+        guard let targetRow = Self.installPendingPostMutationFocus(
+            pending,
+            model: &selectionModel,
+            capturedSessionIdentity: tree.sessionIdentity,
+            visibleRows: visibleRows,
+            appState: appState)
+        else { return false }
+
+        pendingPostMutationFocus = Self.pendingPostMutationFocusAfterInstall(
+            pending,
+            installedRow: targetRow,
+            visibleRows: visibleRows)
+        applyPostMutationSelectionCarrier(
+            targetRow,
+            suppressOpen: pending.suppressOpen,
+            proxy: proxy)
+        return true
+    }
+
+    /// Update only the native List carrier after the semantic model and
+    /// AppState snapshot were installed. The one-shot general suppression makes
+    /// the carrier callback mirror/announce and return without a second publish.
+    private func applyPostMutationSelectionCarrier(
+        _ targetRow: SelectionRow,
+        suppressOpen: Bool,
+        proxy: ScrollViewProxy
+    ) {
+        // After a delete the tab flips to the missing-file error state (U2-5);
+        // moving the tree highlight to the sibling must NOT open it. Other
+        // structural changes already opened/retargeted the active item. Arm the
+        // general semantic-carrier suppression before assigning the native List
+        // binding so its callback cannot publish the same selection a second
+        // time. The callback clears both one-shot flags before returning.
+        suppressOpenForPostMutationFocus = suppressOpen
+        if listSelection != targetRow.identity {
+            suppressOpenForSelectionChange = true
+            listSelection = targetRow.identity
         } else {
             // Selection didn't change (already there) → the open-suppression
             // flag would leak to the next real selection. Clear it now.
@@ -2829,7 +3471,37 @@ struct FileTreeSidebar: View {
         // Scroll it into view. Reduce Motion is respected by SwiftUI's implicit
         // handling; `scrollTo` itself is instantaneous here (no explicit
         // animation), matching the outline pane's behavior.
-        proxy.scrollTo(RowID.node(target), anchor: .center)
+        proxy.scrollTo(targetRow.identity, anchor: .center)
+    }
+
+    /// A child-level invalidation may publish a loading/error row before the
+    /// final destination. Treat the pending focus as owning reconciliation until
+    /// the target materializes; a newer structural mutation clears it up-front.
+    @discardableResult
+    private func restorePendingPostMutationFocus(proxy: ScrollViewProxy) -> Bool {
+        guard let pending = pendingPostMutationFocus else { return false }
+        let suppressOpen = pending.suppressOpen
+        let outcome = Self.restorePendingPostMutationSelection(
+            pending: &pendingPostMutationFocus,
+            model: &selectionModel,
+            capturedSessionIdentity: tree.sessionIdentity,
+            visibleRows: visibleSelectionRows,
+            appState: appState,
+            currentSessionIdentity: appState.currentSession.map(ObjectIdentifier.init),
+            currentMutationToken: appState.treeMutation?.token,
+            resolveCurrentRow: { selectionRow(for: $0) })
+        switch outcome {
+        case .installed(let installedRow):
+            applyPostMutationSelectionCarrier(
+                installedRow,
+                suppressOpen: suppressOpen,
+                proxy: proxy)
+            return true
+        case .wait, .clearedGuard:
+            return true
+        case .cancelAndReconcile:
+            return false
+        }
     }
 
     /// The `NodeID` of the directory at `parentPath` (nil ⇒ the root level's
@@ -2935,6 +3607,52 @@ struct FileTreeSidebar: View {
         }
     }
 
+    private func sidebarSelectionItem(for node: TreeNode) -> SidebarSelectionItem {
+        SidebarSelectionItem(
+            path: node.path,
+            isDirectory: node.isDirectory,
+            isMarkdown: node.isMarkdown)
+    }
+
+    /// Contextual projections target a row-specific snapshot, so they cannot
+    /// reuse AppState's published-selection projection wholesale. Merge the
+    /// same action-specific reasons here, including Open's property-edit gate,
+    /// without performing any render-time I/O.
+    private var sidebarRowActionDisabledReasons: [String: String] {
+        var reasons = appState.sidebarActionDisabledReasons
+        if let propertyEditReason = appState.propertyEditNavigationDisabledReason {
+            reasons[SlateCommandID.sidebarOpen] = propertyEditReason
+        }
+        return reasons
+    }
+
+    /// The only context-menu/VoiceOver catalog renderer. Its projection has
+    /// already omitted unavailable actions, so every emitted button owns one
+    /// frozen intent and announces an activation-time rejection exactly once.
+    @ViewBuilder
+    private func sidebarCatalogActions(
+        _ evaluations: [SidebarActionEvaluation],
+        actionIDs: [String]? = nil
+    ) -> some View {
+        let orderedEvaluations = actionIDs?.compactMap { id in
+            evaluations.first(where: { $0.id == id })
+        } ?? evaluations
+        ForEach(orderedEvaluations, id: \.id) { evaluation in
+            Button(
+                role: evaluation.definition.isDestructive ? .destructive : nil
+            ) {
+                guard let intent = evaluation.intent else { return }
+                do {
+                    _ = try appState.dispatchSidebarAction(intent)
+                } catch {
+                    appState.postMutationAnnouncement(error.sidebarActionAnnouncement)
+                }
+            } label: {
+                evaluation.definition.symbol.label(evaluation.definition.label)
+            }
+        }
+    }
+
     /// A folder row: disclosure chevron + folder glyph + name. Disclosure state
     /// and item count live in the AX value (macOS VoiceOver doesn't voice
     /// custom row traits — #420 lesson — so state is baked into label/value).
@@ -3028,39 +3746,16 @@ struct FileTreeSidebar: View {
             .accessibilityAction(named: Text(isExpanded ? "Collapse" : "Expand")) {
                 tree.toggle(node)
             }
-            // U2-5 + #852: active multi rows expose only the two honest batch
-            // operations. Single-only Rename/New Note actions are omitted. A
-            // busy writer omits every structural action from the rotor instead
-            // of advertising controls that cannot run; disclosure stays above.
             .accessibilityActions {
-                if !appState.isMutatingStructure {
-                    if isInMultiSelection(node) {
-                        Button("Move To…") {
-                            appState.requestBatchMove(
-                                selectedNodesForBatch,
-                                preferredFocusPath: preferredBatchFocusPath)
-                        }
-                        Button("Move to Trash", role: .destructive) {
-                            appState.requestBatchDelete(
-                                selectedNodesForBatch,
-                                preferredFocusPath: preferredBatchFocusPath)
-                        }
-                    } else {
-                        Button("New Note in Folder") {
-                            appState.requestCreateNote(in: node.path)
-                        }
-                        Button("Rename") { beginRename(node) }
-                        Button("Move To…") {
-                            appState.requestPendingMove(
-                                path: node.path, isDirectory: node.isDirectory)
-                        }
-                        Button("Move to Trash", role: .destructive) {
-                            // #860: staged confirmation for a non-empty folder.
-                            appState.requestDeleteEntry(
-                                path: node.path, isDirectory: true,
-                                knownChildCount: node.itemCount)
-                        }
-                    }
+                if let publishedSnapshot = appState.sidebarSelectionSnapshot {
+                    let projection = Self.sidebarRowActionProjection(
+                        surface: .voiceOver,
+                        row: sidebarSelectionItem(for: node),
+                        publishedSnapshot: publishedSnapshot,
+                        structuralMutationDisabledReason:
+                            appState.structuralMutationDisabledReason,
+                        actionDisabledReasons: sidebarRowActionDisabledReasons)
+                    sidebarCatalogActions(projection.evaluations)
                 }
             }
             // Complex-gesture disclosure (WCAG 3.3.2): the row carries a
@@ -3072,13 +3767,74 @@ struct FileTreeSidebar: View {
                     idleHint: "Expands or collapses. Drag to move the folder; drop items on it to move them inside. Rename, move, delete, and new-note actions are in the context menu.",
                     structuralDisabledReason: disabledReason))
             .help(disabledReason ?? node.path)
-            // #852: batch actions when this folder is part of a ≥2-row
-            // multi-selection; the single-item management menu otherwise.
             .contextMenu {
-                if isInMultiSelection(node) {
-                    batchManagementMenu(for: node)
-                } else {
-                    fileManagementMenu(for: node)
+                if let publishedSnapshot = appState.sidebarSelectionSnapshot {
+                    let projection = Self.sidebarRowActionProjection(
+                        surface: .contextMenu,
+                        row: sidebarSelectionItem(for: node),
+                        publishedSnapshot: publishedSnapshot,
+                        structuralMutationDisabledReason:
+                            appState.structuralMutationDisabledReason,
+                        actionDisabledReasons: sidebarRowActionDisabledReasons)
+                    if projection.targetSnapshot.items.count == 1,
+                        projection.targetSnapshot.items.first?.isDirectory == true
+                    {
+                        let creationIDs = [
+                            SlateCommandID.newNote, SlateCommandID.newFolder,
+                        ]
+                        let managementIDs = [
+                            SlateCommandID.renameEntry, SlateCommandID.moveTo,
+                        ]
+                        let inspectionIDs = [
+                            SlateCommandID.revealInFinder, SlateCommandID.copyPath,
+                        ]
+                        let trashIDs = [SlateCommandID.deleteEntry]
+                        let availableIDs = Set(projection.evaluations.map(\.id))
+                        let hasCreation = creationIDs.contains(where: availableIDs.contains)
+                        let hasManagement = managementIDs.contains(where: availableIDs.contains)
+                        let hasInspection = inspectionIDs.contains(where: availableIDs.contains)
+                        let hasTrash = trashIDs.contains(where: availableIDs.contains)
+
+                        if hasCreation {
+                            Menu {
+                                sidebarCatalogActions(
+                                    projection.evaluations,
+                                    actionIDs: [
+                                        SlateCommandID.newNote, SlateCommandID.newFolder
+                                    ])
+                            } label: {
+                                SlateSymbol.newNote.label("New")
+                            }
+                        }
+                        if hasManagement {
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [
+                                    SlateCommandID.renameEntry, SlateCommandID.moveTo
+                                ])
+                        }
+                        if (hasCreation || hasManagement) && hasInspection {
+                            Divider()
+                        }
+                        if hasInspection {
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [
+                                    SlateCommandID.revealInFinder,
+                                    SlateCommandID.copyPath,
+                                ])
+                        }
+                        if (hasCreation || hasManagement || hasInspection) && hasTrash {
+                            Divider()
+                        }
+                        if hasTrash {
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [SlateCommandID.deleteEntry])
+                        }
+                    } else {
+                        sidebarCatalogActions(projection.evaluations)
+                    }
                 }
             }
             // Drop target: dropping a file/folder onto this folder moves it
@@ -3105,6 +3861,27 @@ struct FileTreeSidebar: View {
         } else if case let .file(fileState) = node.kind {
             let selected = isRowSelected(.node(node.nodeID), currentPath: node.path)
             let disabledReason = appState.structuralMutationDisabledReason
+            let voiceOverProjection = appState.sidebarSelectionSnapshot.map {
+                Self.sidebarRowActionProjection(
+                    surface: .voiceOver,
+                    row: sidebarSelectionItem(for: node),
+                    publishedSnapshot: $0,
+                    structuralMutationDisabledReason:
+                        appState.structuralMutationDisabledReason,
+                    actionDisabledReasons: sidebarRowActionDisabledReasons)
+            }
+            let openPresentation = Self.fileRowOpenAccessibilityPresentation(
+                openEvaluation: voiceOverProjection?.openEvaluation,
+                availableHint: Self.fileRowAvailableOpenHint(
+                    targetCount: voiceOverProjection?.targetSnapshot.items.count ?? 1,
+                    idleGuidance: voiceOverProjection?.targetSnapshot.items.count == 1
+                        ? "Drag to move it into a folder. Open-in-new-tab, split, rename, duplicate, move, and delete actions are in the context menu."
+                        : "Drag to move the selected files into a folder. Other available actions are in the context menu.",
+                    structuralDisabledReason: disabledReason),
+                unavailableHint:
+                    voiceOverProjection?.targetSnapshot.items.count == 1
+                        ? "Drag to move it into a folder. Other available actions are in the context menu."
+                        : "Drag to move the selected items into a folder. Other available actions are in the context menu.")
             let activate = {
                 fileTreeFocused = true
                 applyPlainSelection(.node(node.nodeID))
@@ -3161,79 +3938,119 @@ struct FileTreeSidebar: View {
                         .accessibilityHidden(true)
                 }
             }
-            .accessibilityAddTraits(.isButton)
             // #852 (Codex finding 1): every batch member carries the selected
             // trait so VoiceOver announces it — not just the keyboard-focus row.
             .accessibilityAddTraits(
                 isRowSelected(.node(node.nodeID), currentPath: node.path) ? .isSelected : [])
-            .accessibilityAction(.default) {
-                activate()
-            }
-            .accessibilityHint(
-                Self.rowAccessibilityHint(
-                    primaryAction: "Opens the note.",
-                    idleHint: "Opens the note. Drag to move it into a folder. Open-in-new-tab, split, rename, duplicate, move, and delete actions are in the context menu.",
-                    structuralDisabledReason: disabledReason))
+            .modifier(
+                FileRowOpenAccessibilityModifier(
+                    presentation: openPresentation,
+                    dispatch: { openIntent in
+                        do {
+                            _ = try appState.dispatchSidebarAction(openIntent)
+                        } catch {
+                            appState.postMutationAnnouncement(
+                                error.sidebarActionAnnouncement)
+                        }
+                    }))
+            .accessibilityHint(openPresentation.hint)
             .help(disabledReason ?? node.path)
-            // Named VoiceOver actions preserve the complete batch + focus
-            // origin. A multi row exposes only Move/Trash; the misleading
-            // single Rename/Duplicate actions are absent.
             .accessibilityActions {
-                if !appState.isMutatingStructure {
-                    if isInMultiSelection(node) {
-                        Button("Move To…") {
-                            appState.requestBatchMove(
-                                selectedNodesForBatch,
-                                preferredFocusPath: preferredBatchFocusPath)
-                        }
-                        Button("Move to Trash", role: .destructive) {
-                            appState.requestBatchDelete(
-                                selectedNodesForBatch,
-                                preferredFocusPath: preferredBatchFocusPath)
-                        }
-                    } else {
-                        Button("Rename") { beginRename(node) }
-                        Button("Move To…") {
-                            appState.requestPendingMove(
-                                path: node.path, isDirectory: node.isDirectory)
-                        }
-                        Button("Duplicate") {
-                            appState.requestDuplicateEntry(path: node.path)
-                        }
-                        Button("Move to Trash", role: .destructive) {
-                            // #860 funnel — a file never stages, but every surface
-                            // routes through the single entry point.
-                            appState.requestDeleteEntry(
-                                path: node.path, isDirectory: false)
-                        }
-                    }
+                if let voiceOverProjection {
+                    sidebarCatalogActions(voiceOverProjection.evaluations)
                 }
             }
             .contextMenu {
-                // #852: right-clicking a row that's part of a ≥2-row multi-
-                // selection arms the BATCH actions over the whole set; the
-                // single-item open-in trio + management menu are meaningless for
-                // a batch. Right-clicking any OTHER row keeps the single menu
-                // (our selection is tap-driven, so a right-click never changes
-                // it — the gate is "is THIS row in the multi-selection").
-                if isInMultiSelection(node) {
-                    batchManagementMenu(for: node)
-                } else {
-                    // U1-5 (#457): open-in targets. The context menu is the
-                    // keyboard-discoverable path (VoiceOver actions rotor) and,
-                    // since #852 took ⌘-click for multi-select, the primary
-                    // way to open a note in a new tab from the pointer.
-                    Button("Open") {
-                        appState.openFile(node.path, target: .currentTab)
+                if let publishedSnapshot = appState.sidebarSelectionSnapshot {
+                    let projection = Self.sidebarRowActionProjection(
+                        surface: .contextMenu,
+                        row: sidebarSelectionItem(for: node),
+                        publishedSnapshot: publishedSnapshot,
+                        structuralMutationDisabledReason:
+                            appState.structuralMutationDisabledReason,
+                        actionDisabledReasons: sidebarRowActionDisabledReasons)
+                    if projection.targetSnapshot.items.count == 1,
+                        projection.targetSnapshot.items.first?.isDirectory == false
+                    {
+                        let managementIDs = [
+                            SlateCommandID.renameEntry,
+                            SlateCommandID.moveTo,
+                            SlateCommandID.duplicateEntry,
+                        ]
+                        let revealIDs = [SlateCommandID.revealInFinder]
+                        let copyIDs = [
+                            SlateCommandID.copyPath,
+                            SlateCommandID.sidebarCopyWikilink,
+                        ]
+                        let trashIDs = [SlateCommandID.deleteEntry]
+                        let availableIDs = Set(projection.evaluations.map(\.id))
+                        let hasCatalogOpen = availableIDs.contains(
+                            SlateCommandID.sidebarOpen)
+                        let hasManagement = managementIDs.contains(
+                            where: availableIDs.contains)
+                        let hasReveal = revealIDs.contains(where: availableIDs.contains)
+                        let hasCopy = copyIDs.contains(where: availableIDs.contains)
+                        let hasTrash = trashIDs.contains(where: availableIDs.contains)
+
+                        if hasCatalogOpen {
+                            Menu {
+                                sidebarCatalogActions(
+                                    projection.evaluations,
+                                    actionIDs: [SlateCommandID.sidebarOpen])
+                                Divider()
+                                Button {
+                                    appState.openFile(node.path, target: .newTab)
+                                } label: {
+                                    SlateSymbol.newTab.label("Open in New Tab")
+                                }
+                                Button {
+                                    appState.openFile(
+                                        node.path, target: .newSplit(.horizontal))
+                                } label: {
+                                    SlateSymbol.splitRight.label("Open in Split")
+                                }
+                            } label: {
+                                SlateSymbol.open.label("Open")
+                            }
+                        }
+                        if hasManagement {
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [
+                                    SlateCommandID.renameEntry,
+                                    SlateCommandID.moveTo,
+                                    SlateCommandID.duplicateEntry,
+                                ])
+                        }
+                        if hasReveal || hasCopy {
+                            Divider()
+                        }
+                        if hasReveal {
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [SlateCommandID.revealInFinder])
+                        }
+                        if hasCopy {
+                            Menu {
+                                sidebarCatalogActions(
+                                    projection.evaluations,
+                                    actionIDs: [
+                                        SlateCommandID.copyPath,
+                                        SlateCommandID.sidebarCopyWikilink,
+                                    ])
+                            } label: {
+                                SlateSymbol.copyPath.label("Copy")
+                            }
+                        }
+                        if hasTrash {
+                            Divider()
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [SlateCommandID.deleteEntry])
+                        }
+                    } else {
+                        sidebarCatalogActions(projection.evaluations)
                     }
-                    Button("Open in New Tab") {
-                        appState.openFile(node.path, target: .newTab)
-                    }
-                    Button("Open in Split") {
-                        appState.openFile(node.path, target: .newSplit(.horizontal))
-                    }
-                    Divider()
-                    fileManagementMenu(for: node)
                 }
             }
         }
@@ -3264,7 +4081,7 @@ struct FileTreeSidebar: View {
         _ node: TreeNode, rename: AppState.RenamingNode
     ) -> some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-            HStack(spacing: Tokens.Spacing.xs) {
+            HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.xs) {
                 indent(for: node.depth)
                 if node.isDirectory {
                     SlateSymbol.folder.decorative.foregroundStyle(Tokens.ColorRole.textSecondary)
@@ -3280,164 +4097,7 @@ struct FileTreeSidebar: View {
                         appState.cancelPendingRename(id: rename.id)
                     })
             }
-            if let error = appState.structuralRenameError {
-                Text(error)
-                    .font(Tokens.Typography.caption)
-                    .foregroundStyle(Tokens.ColorRole.destructiveText)
-                    // WCAG 1.4.4: wrap, don't clip.
-                    .lineLimit(3)
-                    .padding(.leading, Self.indentWidth(for: node.depth))
-                    .accessibilityLabel("Rename error. \(error)")
-            }
         }
-    }
-
-    // MARK: - Context menu (U2-5)
-
-    /// The shared file-management actions for a node's context menu: New Note /
-    /// New Folder (into a folder, or the node's parent for a file), Rename, Move
-    /// to…, Move to Trash. Each routes through the AppState wrapper. SlateSymbol
-    /// labels per the u2_spec table.
-    @ViewBuilder
-    private func fileManagementMenu(for node: TreeNode) -> some View {
-        let creationParent = node.isDirectory ? node.path : (AppState.TreeMutation.parentPath(of: node.path) ?? "")
-        let disabledReason = appState.structuralMutationDisabledReason
-        if let disabledReason {
-            Text(disabledReason)
-                .foregroundStyle(Tokens.ColorRole.textSecondary)
-                .accessibilityLabel(disabledReason)
-                .help(disabledReason)
-        }
-        // ONE management group (context-menus.md: "max ~3 separator
-        // groups" — with the file rows' open-in trio above, a divider
-        // here would push the menu to 4–5 groups as it briefly did).
-        // Order: create → organize → inspect; Trash stands alone below.
-        Button {
-            appState.requestCreateNote(in: creationParent)
-        } label: {
-            SlateSymbol.newNote.label("New Note")
-        }
-        .disabled(disabledReason != nil)
-        .accessibilityHint(disabledReason ?? "Create a note here.")
-        .help(disabledReason ?? "Create a note here.")
-        Button {
-            appState.newFolderInContext(parent: creationParent)
-        } label: {
-            SlateSymbol.newFolder.label("New Folder")
-        }
-        .disabled(disabledReason != nil)
-        .accessibilityHint(disabledReason ?? "Create a folder here.")
-        .help(disabledReason ?? "Create a folder here.")
-        Button {
-            beginRename(node)
-        } label: {
-            SlateSymbol.rename.label("Rename")
-        }
-        .disabled(disabledReason != nil)
-        .accessibilityHint(disabledReason ?? "Rename this item.")
-        .help(disabledReason ?? "Rename this item.")
-        Button {
-            appState.requestPendingMove(path: node.path, isDirectory: node.isDirectory)
-        } label: {
-            SlateSymbol.moveTo.label("Move To…")
-        }
-        .disabled(disabledReason != nil)
-        .accessibilityHint(disabledReason ?? "Move this item to another folder.")
-        .help(disabledReason ?? "Move this item to another folder.")
-        // Finder-staple inspection actions. Plain Buttons like the
-        // open-in trio: inspection actions carry no SlateSymbol role
-        // (the u2_spec table maps symbols to MUTATION verbs only).
-        // Menu-bar + palette homes exist (context-menus.md redundancy
-        // rule) — these act on the CLICKED node, those on the selection.
-        Button("Reveal in Finder") {
-            if let url = absoluteURL(for: node) {
-                NSWorkspace.shared.activateFileViewerSelecting([url])
-            }
-        }
-        Button("Copy Path") {
-            // Same announcing funnel as the menu/palette command —
-            // identical feedback from every surface (red-team F7).
-            appState.copyAbsolutePath(vaultRelative: node.path)
-        }
-        // #853: Duplicate, files only (folders are out of the issue's
-        // scope). Plain Button like the inspection pair — the u2_spec
-        // symbol table maps SlateSymbol roles to the original mutation
-        // verbs; menu-bar + palette homes exist per the context-menus.md
-        // redundancy rule (this one acts on the CLICKED node, those on
-        // the selection).
-        if !node.isDirectory {
-            Button("Duplicate") {
-                appState.requestDuplicateEntry(path: node.path)
-            }
-            .disabled(disabledReason != nil)
-            .accessibilityHint(disabledReason ?? "Duplicate this file.")
-            .help(disabledReason ?? "Duplicate this file.")
-        }
-        Divider()
-        Button(role: .destructive) {
-            // #860: non-empty folders stage a confirmation; files and
-            // empty folders keep the direct path. The clicked node's
-            // cached immediate count rides along.
-            appState.requestDeleteEntry(
-                path: node.path, isDirectory: node.isDirectory,
-                knownChildCount: node.isDirectory ? node.itemCount : nil)
-        } label: {
-            SlateSymbol.trash.label("Move to Trash")
-        }
-        .disabled(disabledReason != nil)
-        .accessibilityHint(disabledReason ?? "Move this item to the Trash.")
-        .help(disabledReason ?? "Move this item to the Trash.")
-    }
-
-    /// True when `node` is one of the rows in an active ≥2-row multi-selection —
-    /// the gate that swaps the single-item context menu for the batch one (#852).
-    private func isInMultiSelection(_ node: TreeNode) -> Bool {
-        hasMultiSelection && selectionModel.selected.contains(.node(node.nodeID))
-    }
-
-    /// The batch context menu (#852): Move N items to… / Move N items to Trash,
-    /// acting on the complete path-validated multi-selection.
-    /// Move routes through `pendingBatchMove` → the batch `MoveToFolderSheet`;
-    /// Trash through `requestBatchDelete` (its own #860-style confirmation when
-    /// the batch holds a non-empty folder). Both funnel to the per-item
-    /// `moveEntry`/`deleteEntry` path with ONE summary announcement.
-    @ViewBuilder
-    private func batchManagementMenu(for node: TreeNode) -> some View {
-        let items = selectedNodesForBatch
-        let count = items.count
-        let noun = count == 1 ? "Item" : "Items"
-        let disabledReason = appState.structuralMutationDisabledReason
-        if let disabledReason {
-            Text(disabledReason)
-                .foregroundStyle(Tokens.ColorRole.textSecondary)
-                .accessibilityLabel(disabledReason)
-                .help(disabledReason)
-        }
-        Button {
-            appState.requestBatchMove(
-                items, preferredFocusPath: preferredBatchFocusPath)
-        } label: {
-            SlateSymbol.moveTo.label("Move \(count) \(noun) to…")
-        }
-        .disabled(disabledReason != nil)
-        .accessibilityHint(disabledReason ?? "Move the selected items to another folder.")
-        .help(disabledReason ?? "Move the selected items to another folder.")
-        Divider()
-        Button(role: .destructive) {
-            appState.requestBatchDelete(
-                items, preferredFocusPath: preferredBatchFocusPath)
-        } label: {
-            SlateSymbol.trash.label("Move \(count) \(noun) to Trash")
-        }
-        .disabled(disabledReason != nil)
-        .accessibilityHint(disabledReason ?? "Move the selected items to the Trash.")
-        .help(disabledReason ?? "Move the selected items to the Trash.")
-    }
-
-    /// Absolute filesystem URL for a tree node (vault root + relative
-    /// path). Backs the Reveal in Finder / Copy Path context actions.
-    private func absoluteURL(for node: TreeNode) -> URL? {
-        appState.currentVaultURL?.appendingPathComponent(node.path)
     }
 
     // MARK: - Drag & drop (U2-5)
@@ -3644,7 +4304,8 @@ struct FileTreeSidebar: View {
         let origin = SelectionRow(
             identity: .node(node.nodeID),
             path: node.path,
-            isDirectory: node.isDirectory)
+            isDirectory: node.isDirectory,
+            isMarkdown: node.isMarkdown)
         guard var descriptor = Self.makeRowDragDescriptor(
             origin: origin,
             from: selectionModel,
@@ -3666,7 +4327,8 @@ struct FileTreeSidebar: View {
         let origin = SelectionRow(
             identity: .node(node.nodeID),
             path: node.path,
-            isDirectory: node.isDirectory)
+            isDirectory: node.isDirectory,
+            isMarkdown: node.isMarkdown)
         let count = Self.dragPreviewCount(
             for: origin,
             from: selectionModel,
@@ -4049,12 +4711,13 @@ struct FileTreeSidebar: View {
 
     // MARK: - Progress strips
 
-    /// A compact, transient indicator for the single structural writer. The
-    /// shared reason is both the visible label and the accessible name. AppState
-    /// already announces admission/completion, so this view stays deliberately
-    /// non-live and never posts a second assertive announcement.
+    /// A compact, sidebar-local indicator for ordinary structural work. Large
+    /// selection validation has an always-mounted window-level counterpart, so
+    /// suppress that one state here to avoid duplicate progress presentations.
     @ViewBuilder private var structuralMutationProgress: some View {
-        if let reason = appState.structuralMutationDisabledReason {
+        if !appState.isValidatingSidebarAction,
+           let reason = appState.structuralMutationDisabledReason
+        {
             HStack(spacing: Tokens.Spacing.sm) {
                 ProgressView()
                     .controlSize(.small)
@@ -4398,6 +5061,9 @@ struct FileTreeSidebar: View {
         let target = rows[index].nodeID
         let moved = listSelection != .node(target)
         if moved {
+            if let row = selectionRow(for: .node(target)) {
+                mutateSelectionAndPublish { $0.reveal(row) }
+            }
             listSelection = .node(target)
         }
         // Reveal + MATERIALIZE the landing (red-team probe: without the
@@ -4437,6 +5103,9 @@ struct FileTreeSidebar: View {
         case let .collapse(id):
             if let node = tree.node(for: id) { tree.collapse(node) }
         case let .select(id):
+            if let row = selectionRow(for: .node(id)) {
+                mutateSelectionAndPublish { $0.reveal(row) }
+            }
             listSelection = .node(id)
         case .none:
             break
@@ -4511,34 +5180,55 @@ private struct RenameField: View {
     let onCommit: (String) -> Void
     let onCancel: () -> Void
 
-    @State private var text: String = ""
-    @State private var didSeed = false
+    @State private var text: String
     @FocusState private var focused: Bool
 
+    init(
+        initialName: String,
+        isDirectory: Bool,
+        error: String?,
+        onCommit: @escaping (String) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.initialName = initialName
+        self.isDirectory = isDirectory
+        self.error = error
+        self.onCommit = onCommit
+        self.onCancel = onCancel
+        _text = State(initialValue: initialName)
+    }
+
     var body: some View {
-        TextField("Name", text: $text)
-            .textFieldStyle(.roundedBorder)
-            .font(Tokens.Typography.body)
-            .focused($focused)
-            .accessibilityLabel(isDirectory ? "Folder name" : "File name")
-            .accessibilityHint("Type a new name. Return renames; Escape cancels.")
-            .onSubmit { onCommit(text) }
-            .onExitCommand { onCancel() }
-            .onChange(of: focused) { _, isFocused in
-                // Commit on focus loss (click-away) — but not on the initial
-                // pre-focus render, and not while an error keeps us focused.
-                if !isFocused && didSeed && error == nil {
-                    onCommit(text)
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+            TextField("Name", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .font(Tokens.Typography.body)
+                .focused($focused)
+                .accessibilityLabel(isDirectory ? "Folder name" : "File name")
+                .accessibilityHint("Type a new name. Return renames; Escape cancels.")
+                .onSubmit { onCommit(text) }
+                .onExitCommand { onCancel() }
+                .onChange(of: focused) { _, isFocused in
+                    // Commit on focus loss (click-away), unless a validation
+                    // error deliberately keeps the edit active for correction.
+                    if !isFocused && error == nil {
+                        onCommit(text)
+                    }
                 }
-            }
-            .onAppear {
-                if !didSeed {
-                    text = initialName
-                    didSeed = true
+                .onAppear {
+                    focused = true
+                    selectBaseName()
                 }
-                focused = true
-                selectBaseName()
+            if let error = error {
+                Text(error)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.destructiveText)
+                    // WCAG 1.4.4: wrap, don't clip.
+                    .lineLimit(3)
+                    .accessibilityLabel("Rename error. \(error)")
             }
+            FilenameAdvisoryView(name: text)
+        }
     }
 
     /// Select the editable portion of the name: the whole thing for a folder,

@@ -559,6 +559,19 @@ final class CommandPaletteViewTests: XCTestCase {
         XCTAssertEqual(sections[1].commands.map(\.id), ["test.editor.save"])
     }
 
+    @MainActor
+    func testSectionsPlaceSidebarImmediatelyAfterGraph() async {
+        let model = CommandPaletteModel()
+        model.loadCommands([
+            Command(id: "test.sidebar", label: "Sidebar", accessibilityHint: nil, hotkeyHint: nil, section: .sidebar),
+            Command(id: "test.canvas", label: "Canvas", accessibilityHint: nil, hotkeyHint: nil, section: .canvas),
+            Command(id: "test.graph", label: "Graph", accessibilityHint: nil, hotkeyHint: nil, section: .graph),
+            Command(id: "test.bases", label: "Bases", accessibilityHint: nil, hotkeyHint: nil, section: .bases),
+        ])
+
+        XCTAssertEqual(model.sections.map(\.title), ["Canvas", "Bases", "Graph", "Sidebar"])
+    }
+
     /// Empty query, recents present → Recent section appears at
     /// top; commands shown in Recent are EXCLUDED from their
     /// native section so the flat displayOrder doesn't duplicate.
@@ -729,6 +742,7 @@ final class CommandPaletteViewTests: XCTestCase {
         XCTAssertEqual(CommandPaletteModel.title(for: .canvas), "Canvas")
         XCTAssertEqual(CommandPaletteModel.title(for: .bases), "Bases")
         XCTAssertEqual(CommandPaletteModel.title(for: .graph), "Graph")
+        XCTAssertEqual(CommandPaletteModel.title(for: .sidebar), "Sidebar")
     }
 
     // MARK: - Invoke (#315)

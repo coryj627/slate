@@ -284,7 +284,12 @@ final class BatchTrashQuarantineCensusTests: XCTestCase {
         XCTAssertTrue(
             splitCore.contains(".safeAreaInset(edge: .top"),
             "recovery must be mounted in the always-visible window shell")
-        XCTAssertTrue(splitCore.contains("batchTrashQuarantineRecovery"))
+        XCTAssertTrue(splitCore.contains("windowStructuralStatusSurface"))
+        let surface = try XCTUnwrap(
+            functionBody(
+                declaration: "private var windowStructuralStatusSurface",
+                in: split))
+        XCTAssertTrue(surface.contains("batchTrashQuarantineRecovery"))
 
         let recovery = try XCTUnwrap(
             functionBody(
@@ -296,5 +301,78 @@ final class BatchTrashQuarantineCensusTests: XCTestCase {
         XCTAssertTrue(
             recovery.contains(".accessibilityHint("))
         XCTAssertTrue(recovery.contains("AppState.BatchTrashCopy.checkAgainHint"))
+    }
+
+    func testSidebarActionValidationStatusIsWindowLevelAndNotDuplicatedInSidebar() throws {
+        let split = try source("MainSplitView.swift")
+        let splitCore = try XCTUnwrap(
+            functionBody(declaration: "private var splitViewCore", in: split))
+        XCTAssertTrue(
+            splitCore.contains(".safeAreaInset(edge: .top"),
+            "sidebar actions can originate outside the Files sidebar")
+        XCTAssertTrue(
+            splitCore.contains("windowStructuralStatusSurface"),
+            "validation status must remain visible when the Files sidebar is hidden")
+
+        let surface = try XCTUnwrap(
+            functionBody(
+                declaration: "private var windowStructuralStatusSurface",
+                in: split))
+        XCTAssertTrue(surface.contains("sidebarActionBackgroundProgress"))
+        XCTAssertTrue(surface.contains("sidebarActionBackgroundFailure"))
+        XCTAssertTrue(
+            surface.contains("batchTrashQuarantineRecovery"),
+            "the existing outcome-unknown Trash recovery remains in the window surface")
+
+        let progress = try XCTUnwrap(
+            functionBody(
+                declaration: "private var sidebarActionBackgroundProgress",
+                in: split))
+        XCTAssertTrue(progress.contains("appState.sidebarActionBackgroundProgressReason"))
+        XCTAssertTrue(progress.contains("ProgressView()"))
+        XCTAssertTrue(progress.contains(".accessibilityHidden(true)"))
+        XCTAssertTrue(progress.contains("Text(reason)"))
+        XCTAssertTrue(progress.contains(".fixedSize(horizontal: false, vertical: true)"))
+        XCTAssertTrue(progress.contains(".accessibilityLabel(reason)"))
+        XCTAssertFalse(
+            progress.contains("postAccessibilityAnnouncement"),
+            "AppState owns the single polite progress announcement")
+
+        let failure = try XCTUnwrap(
+            functionBody(
+                declaration: "private var sidebarActionBackgroundFailure",
+                in: split))
+        XCTAssertTrue(failure.contains("appState.sidebarActionBackgroundFailure"))
+        XCTAssertTrue(failure.contains("SlateSymbol.warning.decorative"))
+        XCTAssertTrue(failure.contains("Text(reason)"))
+        XCTAssertTrue(failure.contains(".fixedSize(horizontal: false, vertical: true)"))
+        XCTAssertTrue(failure.contains(".lineLimit(nil)"))
+        XCTAssertTrue(failure.contains("Button("))
+        XCTAssertTrue(split.contains("Button(\"Dismiss\")"))
+        XCTAssertTrue(failure.contains("dismissSidebarActionBackgroundFailure()"))
+        XCTAssertTrue(failure.contains(".accessibilityHint("))
+        XCTAssertTrue(
+            split.contains(
+                "Hides this message. Invoke the action again to retry."),
+            "the shared failure recovery hint must remain accurate for copy and selection failures")
+        XCTAssertFalse(failure.contains("accessibilityFocused"))
+        XCTAssertFalse(failure.contains("postAccessibilityAnnouncement"))
+
+        let sidebar = try source("FileTreeSidebar.swift")
+        XCTAssertTrue(
+            sidebar.contains("structuralMutationProgress"),
+            "ordinary structural progress remains scoped to the Files sidebar")
+        let sidebarProgress = try XCTUnwrap(
+            functionBody(
+                declaration: "private var structuralMutationProgress",
+                in: sidebar))
+        XCTAssertTrue(
+            sidebarProgress.contains("!appState.isValidatingSidebarAction"),
+            "selection validation must not duplicate the window-level progress")
+        XCTAssertTrue(
+            sidebarProgress.contains("appState.structuralMutationDisabledReason"))
+        XCTAssertFalse(
+            sidebar.contains("sidebarActionBackgroundFailure"),
+            "window-level failure recovery must not also render inside the Files sidebar")
     }
 }

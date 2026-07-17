@@ -46,6 +46,9 @@ final class SlateSymbolTests: XCTestCase {
         // (folder.badge.plus / square.and.pencil / trash since v1;
         // arrow.turn.down.right since v1), so they're on the macOS 15 floor.
         "folder.badge.plus", "square.and.pencil", "arrow.turn.down.right", "trash",
+        // FL04-A shared sidebar actions. These familiar document, Finder,
+        // clipboard, and link metaphors all predate the macOS 15 floor.
+        "doc", "doc.on.doc", "doc.on.clipboard", "link",
         // Milestone T (#369): canvas tab glyph. rectangle.3.group is
         // SF Symbols 2 (macOS 11), comfortably on the macOS 15 floor.
         "rectangle.3.group",
@@ -155,6 +158,11 @@ final class SlateSymbolTests: XCTestCase {
             .taskComplete: "checkmark.square",
             .taskIncomplete: "square",
             .pin: "pin",
+            .open: "doc",
+            .duplicate: "doc.on.doc",
+            .revealInFinder: "folder",
+            .copyPath: "doc.on.clipboard",
+            .copyWikilink: "link",
         ]
         for (symbol, name) in expected {
             XCTAssertEqual(

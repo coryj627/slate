@@ -4426,6 +4426,35 @@ impl VaultSession {
         get_file_summary_impl(&conn, path)
     }
 
+    /// Return a resolver-correct complete wikilink for one live indexed
+    /// Markdown file. Missing, non-Markdown, and stale index rows fail closed.
+    pub fn wikilink_for_path(&self, path: &str) -> Result<Option<String>, VaultError> {
+        validate_save_path(path)?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        let is_markdown = conn
+            .query_row(
+                "SELECT is_markdown FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get::<_, bool>(0),
+            )
+            .optional()?;
+        if is_markdown != Some(true)
+            || !matches!(
+                self.provider.mutation_path_kind(path),
+                Ok(Some(EntryKind::File))
+            )
+        {
+            return Ok(None);
+        }
+
+        let mut stmt = conn.prepare("SELECT path FROM files ORDER BY id ASC")?;
+        let paths = stmt
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let index = crate::InMemoryVaultIndex::new(paths);
+        Ok(crate::format_wikilink_for_path(path, &index))
+    }
+
     /// Return the distinct normalized tag inventory from the tag index.
     pub fn list_tags(&self) -> Result<Vec<String>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");

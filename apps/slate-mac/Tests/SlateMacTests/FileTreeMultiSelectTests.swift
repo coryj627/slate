@@ -817,21 +817,40 @@ final class FileTreeMultiSelectTests: XCTestCase {
             return busyReport
         }
         state.structuralBatchRefreshRunner = { _ in }
-        state.treeSelectedNode = AppState.TreeSelection(
-            path: "a.md", isDirectory: false)
-
-        let busyTask = try XCTUnwrap(
-            state.batchMove([sel("busy.md")], to: "dest", preferredFocusPath: nil))
-        await gate.waitForEntrants(1)
+        let session = try XCTUnwrap(state.currentSession)
+        let snapshot = SidebarSelectionSnapshot(
+            sessionIdentity: ObjectIdentifier(session),
+            items: [
+                SidebarSelectionItem(
+                    path: "a.md", isDirectory: false, isMarkdown: true)
+            ],
+            focusedPath: "a.md",
+            creationParent: "")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(snapshot))
 
         let structuralCommandIDs = [
             SlateCommandID.newNote,
             SlateCommandID.newFolder,
+            SlateCommandID.newFromTemplate,
             SlateCommandID.renameEntry,
             SlateCommandID.moveTo,
             SlateCommandID.deleteEntry,
             SlateCommandID.duplicateEntry,
         ]
+        for id in structuralCommandIDs {
+            let evaluation = try XCTUnwrap(
+                state.sidebarActionProjection(surface: .commandPalette)
+                    .first(where: { $0.id == id }))
+            XCTAssertNil(
+                evaluation.disabledReason,
+                "\(id) must pass capability admission before the busy reason is introduced")
+            XCTAssertNotNil(evaluation.intent)
+        }
+
+        let busyTask = try XCTUnwrap(
+            state.batchMove([sel("busy.md")], to: "dest", preferredFocusPath: nil))
+        await gate.waitForEntrants(1)
+
         for id in structuralCommandIDs {
             XCTAssertThrowsError(try state.commandRegistry.invokeById(id: id), id) { error in
                 guard case let CommandError.ActionFailed(message) = error else {
@@ -858,50 +877,53 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let menu = try Self.rawSource("SlateMacApp.swift")
         let commands = try Self.rawSource("SlateCommands.swift")
         let palette = try Self.rawSource("CommandPaletteView.swift")
-
-        XCTAssertFalse(
-            sidebar.contains("appState.createNote(in:"),
-            "empty-state, rotor, and context New Note must use the announcing request funnel")
-        XCTAssertFalse(
-            sidebar.contains("appState.duplicateEntry(path:"),
-            "rotor and context Duplicate must use the announcing request funnel")
-        XCTAssertTrue(sidebar.contains("appState.requestCreateNote(in:"))
-        XCTAssertTrue(sidebar.contains("appState.requestDuplicateEntry(path:"))
+        let compactMenu = menu.filter { !$0.isWhitespace }
 
         XCTAssertTrue(
-            appState.contains("func requestCreateNote(in parent: String)"),
-            "New Note needs a synchronous admission-aware request API")
+            appState.contains("func sidebarActionProjection("),
+            "AppState must own the one live admission projection")
         XCTAssertTrue(
-            appState.contains("func requestDuplicateEntry(path: String)"),
-            "Duplicate needs a synchronous admission-aware request API")
+            appState.contains("func dispatchSidebarAction("),
+            "all Sidebar surfaces must converge on one frozen-intent dispatcher")
         XCTAssertTrue(
-            appState.contains("pendingStructuralTaskForTesting = requestCreateNote"),
-            "the command wrapper must not call silent createNote directly")
+            sidebar.contains("static func sidebarRowActionProjection("),
+            "context menus and VoiceOver need one row-aware snapshot capture")
         XCTAssertTrue(
-            appState.contains("pendingStructuralTaskForTesting = requestDuplicateEntry"),
-            "the command wrapper must not call silent duplicateEntry directly")
+            sidebar.contains("private func sidebarCatalogActions("))
+        XCTAssertTrue(sidebar.contains("appState.dispatchSidebarAction(intent)"))
+        XCTAssertFalse(sidebar.contains("fileManagementMenu("))
+        XCTAssertFalse(sidebar.contains("batchManagementMenu("))
 
         XCTAssertTrue(
-            menu.contains("structuralMutationDisabledReason"),
-            "File menu must disable structural controls and expose the shared reason")
-        XCTAssertTrue(menu.contains(".accessibilityHint("))
-        XCTAssertTrue(menu.contains(".help("))
+            compactMenu.contains("appState.sidebarActionProjection(surface:.menuBar)"),
+            "File menu must render the shared ordered projection")
+        XCTAssertTrue(compactMenu.contains(".disabled(evaluation.disabledReason!=nil)"))
         XCTAssertTrue(
-            commands.contains("registerStructural("),
-            "all registry structural commands need one throwing busy preflight")
+            compactMenu.contains(
+                ".accessibilityHint(evaluation.disabledReason??evaluation.definition.accessibilityHint)"))
         XCTAssertTrue(
-            palette.contains("structuralMutationDisabledReason"),
-            "palette rows must visibly and accessibly project the shared reason")
-        XCTAssertTrue(palette.contains(".disabled("))
-        XCTAssertTrue(palette.contains(".accessibilityHint("))
+            compactMenu.contains(
+                ".help(evaluation.disabledReason??evaluation.definition.accessibilityHint)"))
+        XCTAssertTrue(
+            commands.contains("registerSidebarCommands(into: registry)"),
+            "the registry must register the catalog once")
+        XCTAssertTrue(commands.contains("appState.dispatchSidebarAction(id: id)"))
+        XCTAssertTrue(
+            palette.contains("appState.sidebarActionProjection(surface: .commandPalette)"),
+            "palette availability must come from the same projection")
+        XCTAssertTrue(palette.contains("return evaluation.disabledReason"))
+        XCTAssertTrue(palette.contains(".disabled(disabledReason != nil)"))
+        XCTAssertTrue(palette.contains(".accessibilityHint(disabledReason"))
     }
 
-    func testC1BusySidebarOmitsStructuralRotorsAndShowsCompactProgressByInspection()
+    func testC1BusySidebarOmitsStructuralRotorsAndShowsScopedProgressByInspection()
         throws
     {
         let source = try Self.rawSource("FileTreeSidebar.swift")
+        let splitSource = try Self.rawSource("MainSplitView.swift")
+        let normalizedSource = try Self.normalizedSidebarSource()
 
-        func body(from start: String, to end: String) throws -> String {
+        func body(_ source: String, from start: String, to end: String) throws -> String {
             let startRange = try XCTUnwrap(source.range(of: start), start)
             let tail = source[startRange.lowerBound...]
             let endRange = try XCTUnwrap(tail.range(of: end), end)
@@ -912,16 +934,56 @@ final class FileTreeMultiSelectTests: XCTestCase {
             value.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
         }
 
-        let folder = compact(try body(from: "private func folderRow(", to: "private func fileRow("))
-        let file = compact(try body(from: "private func fileRow(", to: "// MARK: - Inline rename"))
+        let folder = compact(
+            try body(source, from: "private func folderRow(", to: "private func fileRow("))
+        let file = compact(
+            try body(source, from: "private func fileRow(", to: "// MARK: - Inline rename"))
+        let normalizedFolder = try body(
+            normalizedSource,
+            from: "private func folderRow(_ node: TreeNode)",
+            to: "private func fileRow(_ node: TreeNode)")
+        let normalizedFile = try body(
+            normalizedSource,
+            from: "private func fileRow(_ node: TreeNode)",
+            to: "private func renameOwner(for node: TreeNode)")
+        XCTAssertTrue(
+            normalizedFolder.contains(
+                ".accessibilityActions { if let publishedSnapshot = appState.sidebarSelectionSnapshot"),
+            "the folder rotor must capture the live selection when it renders")
+        XCTAssertTrue(
+            normalizedFolder.contains("Self.sidebarRowActionProjection( surface: .voiceOver"))
+        XCTAssertTrue(
+            normalizedFolder.contains("actionDisabledReasons: sidebarRowActionDisabledReasons"))
+        XCTAssertTrue(
+            normalizedFolder.contains("sidebarCatalogActions(projection.evaluations)"))
+
+        XCTAssertTrue(
+            normalizedFile.contains(
+                "let voiceOverProjection = appState.sidebarSelectionSnapshot.map { Self.sidebarRowActionProjection( surface: .voiceOver"),
+            "the file row must retain one Open-aware projection for its role, hint, default action, and rotor")
+        XCTAssertTrue(
+            normalizedFile.contains("actionDisabledReasons: sidebarRowActionDisabledReasons"))
+        XCTAssertTrue(
+            normalizedFile.contains(
+                ".accessibilityActions { if let voiceOverProjection { sidebarCatalogActions(voiceOverProjection.evaluations)"),
+            "the file rotor must consume the same retained projection")
+
+        for row in [normalizedFolder, normalizedFile] {
+            XCTAssertFalse(
+                row.contains("if isInMultiSelection(node)"),
+                "the catalog, not a view-local busy/single/batch branch, owns omission")
+            XCTAssertFalse(row.contains("appState.requestBatchMove("))
+            XCTAssertFalse(row.contains("appState.requestPendingMove("))
+            XCTAssertFalse(row.contains("appState.requestBatchDelete("))
+        }
+        XCTAssertTrue(
+            folder.contains("Self.rowAccessibilityHint("),
+            "busy folders must compose disclosure with the scoped reason")
+        XCTAssertTrue(
+            file.contains("Self.fileRowOpenAccessibilityPresentation("),
+            "file-row hint and role must follow the retained Open evaluation")
+        XCTAssertTrue(file.contains(".accessibilityHint(openPresentation.hint)"))
         for row in [folder, file] {
-            XCTAssertTrue(
-                row.contains(
-                    ".accessibilityActions { if !appState.isMutatingStructure { if isInMultiSelection(node)"),
-                "busy rows must omit every structural custom action from the rotor")
-            XCTAssertTrue(
-                row.contains("Self.rowAccessibilityHint("),
-                "busy rows must compose their still-available primary action with the scoped reason")
             XCTAssertTrue(
                 row.contains(".help(disabledReason ?? node.path)"),
                 "busy rows expose the exact shared reason as pointer help")
@@ -936,21 +998,47 @@ final class FileTreeMultiSelectTests: XCTestCase {
             "busy folder help must retain its enabled disclosure action")
         XCTAssertTrue(
             file.contains(
-                "primaryAction: \"Opens the note.\""),
-            "busy file help must retain its enabled open action")
+                "Self.fileRowAvailableOpenHint("),
+            "busy file help must retain the count-aware enabled Open action")
+        XCTAssertTrue(
+            source.contains("let primaryAction = targetCount == 1")
+                && source.contains("\"Opens the note.\"")
+                && source.contains("\"Opens the selected files.\""),
+            "the shared busy hint must describe the frozen single or batch target")
         XCTAssertTrue(
             folder.contains(
                 ".accessibilityAction(named: Text(isExpanded ? \"Collapse\" : \"Expand\"))"),
             "folder disclosure remains available while structural mutation is busy")
 
-        let sidebarBody = compact(try body(from: "var body: some View {", to: ".navigationTitle(\"Files\")"))
+        let sidebarBody = compact(
+            try body(source, from: "var body: some View {", to: ".navigationTitle(\"Files\")"))
         XCTAssertTrue(
             sidebarBody.contains("progressBar structuralMutationProgress"),
-            "the transient mutation strip belongs immediately below scan progress")
+            "ordinary structural progress remains immediately below scan progress")
+
+        let sidebarProgress = compact(
+            try body(
+                source,
+                from: "private var structuralMutationProgress",
+                to: "private var batchTrashQuarantineRecovery"))
+        XCTAssertTrue(sidebarProgress.contains("!appState.isValidatingSidebarAction"))
+        XCTAssertTrue(sidebarProgress.contains("appState.structuralMutationDisabledReason"))
+
+        let splitCore = compact(
+            try body(
+                splitSource,
+                from: "private var splitViewCore: some View",
+                to: "private var windowStructuralStatusSurface"))
+        XCTAssertTrue(
+            splitCore.contains(".safeAreaInset(edge: .top, spacing: 0) { windowStructuralStatusSurface }"),
+            "selection-validation progress belongs to the always-mounted window shell")
 
         let progress = compact(
-            try body(from: "private var structuralMutationProgress", to: "private var progressBar"))
-        XCTAssertTrue(progress.contains("appState.structuralMutationDisabledReason"))
+            try body(
+                splitSource,
+                from: "private var sidebarActionBackgroundProgress",
+                to: "private var sidebarActionBackgroundFailure"))
+        XCTAssertTrue(progress.contains("appState.sidebarActionBackgroundProgressReason"))
         XCTAssertTrue(progress.contains("ProgressView()"))
         XCTAssertTrue(progress.contains(".controlSize(.small)"))
         XCTAssertTrue(progress.contains(".accessibilityLabel(reason)"))
@@ -961,7 +1049,52 @@ final class FileTreeMultiSelectTests: XCTestCase {
     }
 
     func testC1VoiceOverMovePreservesSingleAndBatchOriginByInspection() throws {
-        let source = try Self.rawSource("FileTreeSidebar.swift")
+        let owner = NSObject()
+        let first = SidebarSelectionItem(
+            path: "a.md", isDirectory: false, isMarkdown: true)
+        let folder = SidebarSelectionItem(
+            path: "folder", isDirectory: true, isMarkdown: false)
+        let published = SidebarSelectionSnapshot(
+            sessionIdentity: ObjectIdentifier(owner),
+            items: [first, folder],
+            focusedPath: folder.path,
+            creationParent: folder.path)
+
+        let batch = FileTreeSidebar.sidebarRowActionProjection(
+            surface: .voiceOver,
+            row: first,
+            publishedSnapshot: published,
+            structuralMutationDisabledReason: nil,
+            actionDisabledReasons: [:])
+        XCTAssertEqual(batch.targetSnapshot, published)
+        XCTAssertEqual(
+            batch.evaluations.map(\.id),
+            [SlateCommandID.moveTo, SlateCommandID.deleteEntry],
+            "a row inside a mixed selection retains only the batch-capable catalog actions")
+        XCTAssertEqual(
+            batch.evaluations.first(where: { $0.id == SlateCommandID.moveTo })?
+                .intent?.snapshot,
+            published,
+            "VoiceOver Move must freeze the complete visible-order batch and its focus origin")
+
+        let outside = SidebarSelectionItem(
+            path: "nested/outside.md", isDirectory: false, isMarkdown: true)
+        let single = FileTreeSidebar.sidebarRowActionProjection(
+            surface: .voiceOver,
+            row: outside,
+            publishedSnapshot: published,
+            structuralMutationDisabledReason: nil,
+            actionDisabledReasons: [:])
+        XCTAssertEqual(single.targetSnapshot.items, [outside])
+        XCTAssertEqual(single.targetSnapshot.focusedPath, outside.path)
+        XCTAssertEqual(single.targetSnapshot.creationParent, "nested")
+        XCTAssertEqual(
+            single.evaluations.first(where: { $0.id == SlateCommandID.moveTo })?
+                .intent?.snapshot,
+            single.targetSnapshot,
+            "VoiceOver on an outside row must freeze that row rather than the unrelated batch")
+
+        let source = try Self.normalizedSidebarSource()
 
         func body(from start: String, to end: String) throws -> String {
             let startRange = try XCTUnwrap(source.range(of: start), start)
@@ -970,56 +1103,42 @@ final class FileTreeMultiSelectTests: XCTestCase {
             return String(tail[..<endRange.lowerBound])
         }
 
-        func assertVoiceOverOrigins(
-            _ rowBody: String,
-            file: StaticString = #filePath,
-            line: UInt = #line
+        func assertVoiceOverOwner(
+            _ rowBody: String, file: StaticString = #filePath, line: UInt = #line
         ) {
-            let compact = rowBody.split(whereSeparator: { $0.isWhitespace })
-                .joined(separator: " ")
             XCTAssertTrue(
                 rowBody.contains(".accessibilityActions"),
-                "management actions need a conditional VoiceOver catalog",
+                "management actions need a VoiceOver catalog owner",
                 file: file, line: line)
             XCTAssertTrue(
-                rowBody.contains("if isInMultiSelection(node)"),
-                "the active multi-set must select the batch catalog",
+                rowBody.contains("Self.sidebarRowActionProjection( surface: .voiceOver"),
+                "the shared row projection must choose the frozen single or batch target",
                 file: file, line: line)
             XCTAssertTrue(
-                rowBody.contains("appState.requestBatchMove("),
-                "batch Move must capture every visible selected item",
+                rowBody.contains("row: sidebarSelectionItem(for: node)"),
+                "the acted-on row must be supplied explicitly",
                 file: file, line: line)
             XCTAssertTrue(
-                rowBody.contains("preferredFocusPath: preferredBatchFocusPath"),
-                "batch Move must retain its focus origin",
+                rowBody.contains("publishedSnapshot: publishedSnapshot"),
+                "the semantic selection snapshot must be the only batch source",
                 file: file, line: line)
             XCTAssertTrue(
-                compact.contains("appState.requestPendingMove(")
-                    && compact.contains(
-                        "path: node.path, isDirectory: node.isDirectory)"),
-                "single Move must retain the acted-on row",
+                rowBody.contains("sidebarCatalogActions(projection.evaluations)"),
+                "the shared renderer must own all emitted management actions",
                 file: file, line: line)
-
-            guard
-                let branchStart = rowBody.range(of: "if isInMultiSelection(node)"),
-                let branchEnd = rowBody[branchStart.upperBound...].range(of: "} else {")
-            else {
-                return XCTFail("missing batch/single VoiceOver branch", file: file, line: line)
-            }
-            let batchBranch = String(rowBody[branchStart.upperBound..<branchEnd.lowerBound])
-            XCTAssertFalse(batchBranch.contains("beginRename(node)"), file: file, line: line)
-            XCTAssertFalse(batchBranch.contains("requestCreateNote"), file: file, line: line)
-            XCTAssertFalse(batchBranch.contains("requestDuplicateEntry"), file: file, line: line)
+            XCTAssertFalse(rowBody.contains("appState.requestBatchMove("), file: file, line: line)
+            XCTAssertFalse(rowBody.contains("appState.requestPendingMove("), file: file, line: line)
+            XCTAssertFalse(rowBody.contains("beginRename(node)"), file: file, line: line)
         }
 
-        let folder = try body(
+        let folderOwner = try body(
             from: "private func folderRow(_ node: TreeNode)",
             to: "private func fileRow(_ node: TreeNode)")
-        let file = try body(
+        let fileOwner = try body(
             from: "private func fileRow(_ node: TreeNode)",
             to: "private func renameOwner(for node: TreeNode)")
-        assertVoiceOverOrigins(folder)
-        assertVoiceOverOrigins(file)
+        assertVoiceOverOwner(folderOwner)
+        assertVoiceOverOwner(fileOwner)
     }
 
     func testStaleAsyncRenameCompletionCannotClearNewVaultRenameAtSamePath()
@@ -1074,15 +1193,40 @@ final class FileTreeMultiSelectTests: XCTestCase {
 
         XCTAssertEqual(
             sidebar.components(separatedBy: "beginRename(node)").count - 1,
-            4,
-            "F2, both VoiceOver Rename actions, and the context menu share one local funnel")
+            0,
+            "F2, VoiceOver, and context menus must not bypass the shared catalog dispatcher")
         XCTAssertEqual(
             sidebar.components(
                 separatedBy:
                     "appState.requestRename(path: node.path, isDirectory: node.isDirectory)"
             ).count - 1,
             1,
-            "the local funnel stages only through AppState")
+            "the retained compatibility helper stages only through AppState")
+        let f2Owner = try body(
+            sidebar,
+            from: ".onKeyPress(keys: [Self.f2Key])",
+            to: ".onKeyPress(characters: Self.typeSelectCharacters")
+        XCTAssertTrue(f2Owner.contains("appState.sidebarActionProjection(surface: .keyboard)"))
+        XCTAssertTrue(f2Owner.contains("id: SlateCommandID.renameEntry"))
+        XCTAssertTrue(f2Owner.contains("appState.dispatchSidebarAction(intent)"))
+        XCTAssertTrue(
+            sidebar.contains("Self.sidebarRowActionProjection( surface: .voiceOver"),
+            "VoiceOver Rename availability comes from the same capability catalog")
+        XCTAssertTrue(
+            sidebar.contains("Self.sidebarRowActionProjection( surface: .contextMenu"),
+            "context-menu Rename availability comes from the same capability catalog")
+        XCTAssertEqual(
+            sidebar.components(
+                separatedBy: "sidebarCatalogActions(projection.evaluations)"
+            ).count - 1,
+            3,
+            "both context menus and the folder rotor render through the shared owner")
+        XCTAssertEqual(
+            sidebar.components(
+                separatedBy: "sidebarCatalogActions(voiceOverProjection.evaluations)"
+            ).count - 1,
+            1,
+            "the file rotor reuses its retained Open-aware projection")
         XCTAssertFalse(
             sidebar.contains("appState.renamingNode ="),
             "the view cannot create, clear, or replace rename ownership directly")
@@ -1306,7 +1450,13 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let sheet = try Self.normalizedSource("MoveToFolderSheet.swift")
         let sidebar = try Self.normalizedSidebarSource()
 
-        XCTAssertTrue(sidebar.contains("appState.requestPendingMove("))
+        XCTAssertTrue(
+            sidebar.contains("Self.sidebarRowActionProjection("),
+            "row-owned Move captures its exact single or batch target through the catalog")
+        XCTAssertTrue(sidebar.contains("sidebarCatalogActions(projection.evaluations)"))
+        XCTAssertTrue(sidebar.contains("appState.dispatchSidebarAction(intent)"))
+        XCTAssertFalse(sidebar.contains("appState.requestPendingMove("))
+        XCTAssertFalse(sidebar.contains("appState.requestBatchMove("))
         XCTAssertFalse(sidebar.contains("appState.pendingMove ="))
         XCTAssertTrue(
             main.contains(
@@ -1982,7 +2132,9 @@ final class FileTreeMultiSelectTests: XCTestCase {
         }
         XCTAssertEqual(deferred, state.batchStructuralResult)
 
-        let paths = state.confirmOpenSelection(id: open.id)
+        guard case .opened(let paths) = state.confirmOpenSelection(id: open.id) else {
+            return XCTFail("the current frozen Open request must execute")
+        }
         XCTAssertEqual(paths.last, "note-3.md")
         guard case .result(let promoted)? = state.activeBatchAlertPresentation else {
             return XCTFail("dismissal must promote the deferred result exactly once")
@@ -2055,7 +2207,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertNil(state.activeBatchAlertPresentation)
         XCTAssertNil(state.deferredBatchAlertPresentation)
         XCTAssertNil(state.batchStructuralResult)
-        XCTAssertEqual(state.confirmOpenSelection(id: open.id), [])
+        XCTAssertEqual(state.confirmOpenSelection(id: open.id), .ignored)
     }
 
     func testBatchMoveLandingKeepsUnrelatedLiveFocusChangedWhileRunnerSuspended()
@@ -2937,13 +3089,35 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertTrue(state.batchStructuralResult?.requiresAttention ?? false)
     }
 
-    /// #852 red-team: the batch menu pluralizes on the (deduped) top-level count
-    /// so a folder+descendant selection never reads "Move 1 Items to…".
+    /// FL04-A replaces count-derived batch grammar with stable catalog labels;
+    /// the exact frozen intent, rather than a label-local count, identifies the
+    /// complete acted-on selection.
     func testBatchMenuPluralizesCountByInspection() throws {
-        let src = try Self.normalizedSidebarSource()
-        XCTAssertTrue(
-            src.contains("let noun = count == 1 ?"),
-            "the batch menu chooses Item vs Items on the actual count")
+        let owner = NSObject()
+        let snapshot = SidebarSelectionSnapshot(
+            sessionIdentity: ObjectIdentifier(owner),
+            items: [
+                SidebarSelectionItem(
+                    path: "a.md", isDirectory: false, isMarkdown: true),
+                SidebarSelectionItem(
+                    path: "folder", isDirectory: true, isMarkdown: false),
+            ],
+            focusedPath: "folder",
+            creationParent: "folder")
+        let evaluations = SidebarActionCatalog.project(
+            surface: .contextMenu, snapshot: snapshot)
+        let move = try XCTUnwrap(
+            evaluations.first(where: { $0.id == SlateCommandID.moveTo }))
+        let trash = try XCTUnwrap(
+            evaluations.first(where: { $0.id == SlateCommandID.deleteEntry }))
+
+        XCTAssertEqual(move.label, "Move To…")
+        XCTAssertEqual(trash.label, "Move to Trash")
+        XCTAssertEqual(move.intent?.snapshot, snapshot)
+        XCTAssertEqual(trash.intent?.snapshot, snapshot)
+        XCTAssertFalse(
+            evaluations.contains(where: { $0.label.contains("2") }),
+            "stable catalog labels cannot drift into contradictory item-count grammar")
     }
 
     // MARK: - requestBatchDelete confirmation gate (#860 at batch scope)
@@ -3367,31 +3541,78 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertTrue(
             src.contains(
                 "if suppressOpenForSelectionChange { suppressOpenForSelectionChange = false "
+                    + "suppressOpenForPostMutationFocus = false "
                     + "mirrorTreeSelectionToAppState(selectionModel.focused) "
                     + "announceFocusedFileSelection( selectionModel.focused, "
                     + "suppressed: announcementIsSuppressed) return }"),
-            "the onChange path consumes suppression, speaks the focused row, and returns before open")
+            "the onChange path clears both one-shots, speaks focus, and returns before open")
         XCTAssertFalse(
             src.contains(
                 "if count == 1, case let .node(.file(path)) = selectionModel.focused {"),
             "a modifier transition never opens, even when it collapses to one row")
     }
 
-    /// The batch context menu is armed only when the right-clicked row is part
-    /// of a ≥2-row selection; both row menus branch on `isInMultiSelection`.
+    /// A context-menu row inside the published selection keeps the complete
+    /// batch; a row outside it gets a one-row frozen target. The shared catalog
+    /// then derives the applicable action set without a view-local branch.
     func testContextMenuBranchesToBatchByInspection() throws {
+        let owner = NSObject()
+        let first = SidebarSelectionItem(
+            path: "a.md", isDirectory: false, isMarkdown: true)
+        let folder = SidebarSelectionItem(
+            path: "folder", isDirectory: true, isMarkdown: false)
+        let published = SidebarSelectionSnapshot(
+            sessionIdentity: ObjectIdentifier(owner),
+            items: [first, folder],
+            focusedPath: first.path,
+            creationParent: "")
+        let inside = FileTreeSidebar.sidebarRowActionProjection(
+            surface: .contextMenu,
+            row: folder,
+            publishedSnapshot: published,
+            structuralMutationDisabledReason: nil,
+            actionDisabledReasons: [:])
+        XCTAssertEqual(inside.targetSnapshot, published)
+        XCTAssertEqual(
+            inside.evaluations.map(\.id),
+            [SlateCommandID.moveTo, SlateCommandID.deleteEntry])
+
+        let outside = SidebarSelectionItem(
+            path: "other.md", isDirectory: false, isMarkdown: true)
+        let single = FileTreeSidebar.sidebarRowActionProjection(
+            surface: .contextMenu,
+            row: outside,
+            publishedSnapshot: published,
+            structuralMutationDisabledReason: nil,
+            actionDisabledReasons: [:])
+        XCTAssertEqual(single.targetSnapshot.items, [outside])
+        XCTAssertEqual(single.targetSnapshot.focusedPath, outside.path)
+
         let src = try Self.normalizedSidebarSource()
+        func body(from start: String, to end: String) throws -> String {
+            let startRange = try XCTUnwrap(src.range(of: start), start)
+            let tail = src[startRange.lowerBound...]
+            let endRange = try XCTUnwrap(tail.range(of: end), end)
+            return String(tail[..<endRange.lowerBound])
+        }
+        let folderOwner = try body(
+            from: "private func folderRow(_ node: TreeNode)",
+            to: "private func fileRow(_ node: TreeNode)")
+        let fileOwner = try body(
+            from: "private func fileRow(_ node: TreeNode)",
+            to: "private func renameOwner(for node: TreeNode)")
+        for owner in [folderOwner, fileOwner] {
+            XCTAssertTrue(owner.contains(".contextMenu"))
+            XCTAssertTrue(owner.contains("surface: .contextMenu"))
+            XCTAssertTrue(owner.contains("row: sidebarSelectionItem(for: node)"))
+            XCTAssertTrue(owner.contains("sidebarCatalogActions(projection.evaluations)"))
+            XCTAssertFalse(owner.contains("batchManagementMenu("))
+            XCTAssertFalse(owner.contains("appState.requestBatchMove("))
+            XCTAssertFalse(owner.contains("appState.requestBatchDelete("))
+        }
         XCTAssertTrue(
-            src.contains("if isInMultiSelection(node) { batchManagementMenu(for: node) }"),
-            "both row context menus swap to the batch menu for a multi-selected row")
-        XCTAssertTrue(
-            src.contains(
-                "appState.requestBatchMove( items, preferredFocusPath: preferredBatchFocusPath)"),
-            "batch Move stages through the UUID/session-aware AppState request")
-        XCTAssertTrue(
-            src.contains(
-                "appState.requestBatchDelete( items, preferredFocusPath: preferredBatchFocusPath)"),
-            "batch Trash routes through requestBatchDelete")
+            fileOwner.contains("if projection.targetSnapshot.items.count == 1"),
+            "single-file placement actions must not leak into a batch context menu")
     }
 
     /// The ⌘⌫ chord routes the WHOLE multi-selection to the batch delete funnel
@@ -3399,14 +3620,41 @@ final class FileTreeMultiSelectTests: XCTestCase {
     /// focus. Both delete handlers call the shared helper.
     func testKeyboardDeleteRoutesToBatchWhenMultiSelectedByInspection() throws {
         let src = try Self.normalizedSidebarSource()
-        XCTAssertTrue(
-            src.contains("requestDeleteFromKeyboard()"),
-            "both ⌘⌫ handlers route through the shared delete helper")
-        XCTAssertTrue(
-            src.contains(
-                "if hasMultiSelection { appState.requestBatchDelete( selectedNodesForBatch, "
-                    + "preferredFocusPath: preferredBatchFocusPath) return }"),
-            "the keyboard delete helper routes the whole selection to the batch funnel")
+        XCTAssertEqual(
+            src.components(separatedBy: "requestDeleteFromKeyboard()").count - 1,
+            3,
+            "both ⌘⌫ handlers plus the shared helper must remain wired")
+        let start = try XCTUnwrap(
+            src.range(of: "private func requestDeleteFromKeyboard()"))
+        let tail = src[start.lowerBound...]
+        let end = try XCTUnwrap(
+            tail.range(of: "private func applyMultiSelectClick("))
+        let helper = String(tail[..<end.lowerBound])
+        XCTAssertTrue(helper.contains("appState.sidebarActionProjection(surface: .keyboard)"))
+        XCTAssertTrue(helper.contains("id: SlateCommandID.deleteEntry"))
+        XCTAssertTrue(helper.contains("appState.dispatchSidebarAction(intent)"))
+        XCTAssertTrue(helper.contains("appState.postMutationAnnouncement("))
+        XCTAssertFalse(helper.contains("appState.requestBatchDelete("))
+        XCTAssertFalse(helper.contains("appState.requestDeleteEntry("))
+
+        let owner = NSObject()
+        let snapshot = SidebarSelectionSnapshot(
+            sessionIdentity: ObjectIdentifier(owner),
+            items: [
+                SidebarSelectionItem(
+                    path: "a.md", isDirectory: false, isMarkdown: true),
+                SidebarSelectionItem(
+                    path: "folder", isDirectory: true, isMarkdown: false),
+            ],
+            focusedPath: "folder",
+            creationParent: "folder")
+        let delete = try XCTUnwrap(
+            SidebarActionCatalog.project(surface: .keyboard, snapshot: snapshot)
+                .first(where: { $0.id == SlateCommandID.deleteEntry }))
+        XCTAssertEqual(
+            delete.intent?.snapshot,
+            snapshot,
+            "keyboard Trash must freeze the complete selection and preferred focus")
     }
 
     /// The batch Move-to-folder sheet and the batch-delete confirmation are
@@ -3664,13 +3912,27 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let src = try Self.normalizedSidebarSource()
         XCTAssertTrue(
             src.contains(
-                ".onChange(of: tree.visibleRows) { _, _ in reconcileSelectionAfterTreeChange() "
-                    + "restorePendingBatchFocus(proxy: proxy) "
+                ".onChange(of: tree.visibleRows) { _, _ in "
+                    + "if restorePendingBatchFocus(proxy: proxy) "
+                    + "|| restorePendingPostMutationFocus(proxy: proxy) { "
+                    + "mirrorTreeSelectionToAppState(listSelection) return } "
+                    + "reconcileSelectionAfterTreeChange() "
                     + "mirrorTreeSelectionToAppState(listSelection) }"),
-            "reconcile, one-shot batch focus, and mirror re-sync run after the refetch lands")
+            "pending focus owns transient edges; otherwise reconcile then mirror")
         XCTAssertTrue(
-            src.contains("guard let selection, let node = pathValidatedNode(for: selection) else {"),
-            "the AppState mirror is fail-closed too (never mirrors a reused id)")
+            src.contains(
+                "let resolvedSelection = selection.flatMap { selection in "
+                    + "pathValidatedNode(for: selection).map { "
+                    + "AppState.TreeSelection(path: $0.path, isDirectory: $0.isDirectory) } }"),
+            "the AppState mirror still resolves reused identities fail-closed")
+        XCTAssertTrue(
+            src.contains(
+                "Self.publishGuardAwareTreeSelectionMirror( "
+                    + "pending: pendingPostMutationFocus, model: selectionModel, "
+                    + "currentSessionIdentity: appState.currentSession.map(ObjectIdentifier.init), "
+                    + "currentMutationToken: appState.treeMutation?.token, "
+                    + "resolvedSelection: resolvedSelection, appState: appState)"),
+            "only the session-and-mutation-owned Delete fallback may replace the nil resolution")
     }
 
     /// #852 Codex round-4 finding 2 (source wiring): a KNOWN in-app rename/move
@@ -3695,17 +3957,28 @@ final class FileTreeMultiSelectTests: XCTestCase {
             1,
             "exactly one indexed batch transition removes all trashed expansions")
         XCTAssertEqual(
-            src.components(
-                separatedBy: "selectionModel.remapKnownMoves( using: batchMoveIndex"
+            src.components(separatedBy:
+                "result.remapKnownMoves( using: index, "
+                    + "identityForRemappedPath: remappedSelectionIdentity, "
+                    + "componentVisits: &componentVisits"
             ).count - 1,
             1,
-            "exactly one indexed batch transition remaps the semantic selection")
+            "exactly one indexed kernel prepares the remapped semantic selection")
+        XCTAssertTrue(
+            src.contains(
+                "applyBatchMoveFocus( batchMoveFocus, moveIndex: batchMoveIndex, "
+                    + "componentVisits: &componentVisits, proxy: proxy)"),
+            "production carries the one batch index into atomic remap-plus-final-focus publication")
         XCTAssertEqual(
             src.components(
-                separatedBy: "selectionModel.removeKnownItems( using: batchRemovalIndex"
+                separatedBy:
+                    "mutateSelectionAndPublish(visibleRows: preMutationRows) { "
+                    + "$0.removeKnownItems( using: batchRemovalIndex, "
+                    + "preferredFocusPath: mutation.preferredFocusPath, "
+                    + "visibleRows: preMutationRows, componentVisits: &componentVisits) }"
             ).count - 1,
             1,
-            "exactly one indexed batch transition removes trashed semantic selection members")
+            "one indexed Trash transition atomically publishes surviving semantic selection")
         XCTAssertTrue(
             src.contains("restorePendingBatchFocus(proxy: proxy)"),
             "an unmaterialized destination gets one landing restoration attempt")

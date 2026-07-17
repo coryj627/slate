@@ -115,7 +115,9 @@ pub use frontmatter::{
     frontmatter_range, split_note, validate_frontmatter_source,
 };
 pub use history_prefs::HistoryPrefs;
-pub use link_resolver::{InMemoryVaultIndex, ResolvedLink, VaultIndex, resolve_link};
+pub use link_resolver::{
+    InMemoryVaultIndex, ResolvedLink, VaultIndex, format_wikilink_for_path, resolve_link,
+};
 pub use links::{LinkAnchor, LinkKind, ParsedLink, extract_links};
 pub use links_db::{Backlink, OutgoingLink, UnresolvedLink};
 pub use oplog::{

@@ -57,6 +57,9 @@ pub enum CommandSection {
     /// deeper/shallower. Registry + palette + menu paths only; P1
     /// registers zero new chords.
     Graph = 11,
+    /// File-sidebar actions (Milestone FL, FL-04). Discriminant 9 remains
+    /// reserved for Excalidraw; new sections append after Graph.
+    Sidebar = 12,
 }
 
 /// Metadata for a registered command. The action itself lives in
@@ -280,6 +283,26 @@ mod tests {
             accessibility_hint: None,
             hotkey_hint: None,
             section,
+        }
+    }
+
+    #[test]
+    fn command_section_discriminants_preserve_reserved_nine() {
+        assert_eq!(CommandSection::Canvas as u8, 8);
+        assert_eq!(CommandSection::Bases as u8, 10);
+        assert_eq!(CommandSection::Graph as u8, 11);
+        assert_eq!(CommandSection::Sidebar as u8, 12);
+
+        for section in [
+            CommandSection::Canvas,
+            CommandSection::Bases,
+            CommandSection::Graph,
+            CommandSection::Sidebar,
+        ] {
+            assert_ne!(
+                section as u8, 9,
+                "discriminant 9 is reserved for Excalidraw"
+            );
         }
     }
 

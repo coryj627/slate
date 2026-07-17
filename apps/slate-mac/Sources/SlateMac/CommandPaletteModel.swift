@@ -131,7 +131,9 @@ final class CommandPaletteModel: ObservableObject {
                     result.append(PaletteSection(
                         title: Self.title(for: sec),
                         kind: sec,
-                        commands: cmds
+                        commands: sec == .sidebar
+                            ? Self.sidebarCatalogOrder(cmds)
+                            : cmds
                     ))
                 }
             }
@@ -163,9 +165,21 @@ final class CommandPaletteModel: ObservableObject {
     /// stays explicit here so a Rust-side reorder doesn't silently
     /// change the palette layout.
     private nonisolated static let sectionOrder: [CommandSection] = [
-        .file, .navigation, .view, .vault, .editor, .canvas, .bases, .graph, .tasks, .settings,
-        .plugins,
+        .file, .navigation, .view, .vault, .editor, .canvas, .bases, .graph, .sidebar, .tasks,
+        .settings, .plugins,
     ]
+
+    /// Rust's registry list is deterministic by section and stable ID, which
+    /// is correct for legacy sections but would alphabetize the Sidebar's
+    /// intentionally task-oriented catalog. Restore that one section's shared
+    /// action order while leaving any future non-catalog Sidebar commands in
+    /// their original deterministic registry order at the end.
+    private static func sidebarCatalogOrder(_ commands: [Command]) -> [Command] {
+        let byID = Dictionary(uniqueKeysWithValues: commands.map { ($0.id, $0) })
+        let catalogIDs = Set(SidebarActionCatalog.actions.map(\.id))
+        return SidebarActionCatalog.actions.compactMap { byID[$0.id] }
+            + commands.filter { !catalogIDs.contains($0.id) }
+    }
 
     /// Human-readable header for a section. Plain en-US strings
     /// in V1; localisation lands in V2 per #264.
@@ -182,6 +196,7 @@ final class CommandPaletteModel: ObservableObject {
         case .canvas: return "Canvas"
         case .bases: return "Bases"
         case .graph: return "Graph"
+        case .sidebar: return "Sidebar"
         }
     }
 

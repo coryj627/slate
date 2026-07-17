@@ -53,6 +53,39 @@ final class FileManagementCommandsTests: XCTestCase {
         FileManager.default.fileExists(atPath: vault.appendingPathComponent(rel).path)
     }
 
+    /// Publish the same session-tagged semantic selection that the live tree
+    /// owns. Registry commands intentionally no longer infer an action target
+    /// from the legacy single-focus mirror alone.
+    private func publishSidebarSelection(
+        _ state: AppState,
+        path: String? = nil,
+        isDirectory: Bool = false
+    ) throws {
+        let session = try XCTUnwrap(state.currentSession)
+        let item = path.map {
+            SidebarSelectionItem(
+                path: $0,
+                isDirectory: isDirectory,
+                isMarkdown: !isDirectory
+                    && ($0 as NSString).pathExtension
+                        .caseInsensitiveCompare("md") == .orderedSame)
+        }
+        let creationParent: String
+        if let path {
+            let parent = (path as NSString).deletingLastPathComponent
+            creationParent = isDirectory ? path : (parent == "." ? "" : parent)
+        } else {
+            creationParent = ""
+        }
+        XCTAssertTrue(
+            state.publishSidebarSelectionSnapshot(
+                SidebarSelectionSnapshot(
+                    sessionIdentity: ObjectIdentifier(session),
+                    items: item.map { [$0] } ?? [],
+                    focusedPath: path,
+                    creationParent: creationParent)))
+    }
+
     // MARK: - Create
 
     func testCreateFolderCreatesDirectoryAndFiresTreeMutation() async throws {
@@ -561,6 +594,7 @@ final class FileManagementCommandsTests: XCTestCase {
     /// a note, then move it into the folder — the DoD's drag-free path.
     func testKeyboardOnlyCreateAndMoveThroughRegistry() async throws {
         let (state, vault) = try await makeVault(files: ["seed.md"])
+        try publishSidebarSelection(state)
 
         // New Folder (context/palette command) → creates + enters rename.
         try state.commandRegistry.invokeById(id: SlateCommandID.newFolder)
@@ -568,7 +602,8 @@ final class FileManagementCommandsTests: XCTestCase {
         XCTAssertTrue(fileExists(vault, "Untitled Folder"))
 
         // Select the folder, then New Note into it.
-        state.treeSelectedNode = AppState.TreeSelection(path: "Untitled Folder", isDirectory: true)
+        try publishSidebarSelection(
+            state, path: "Untitled Folder", isDirectory: true)
         try state.commandRegistry.invokeById(id: SlateCommandID.newNote)
         await state.pendingStructuralTaskForTesting?.value
         await state.noteLoadTask?.value
@@ -577,7 +612,7 @@ final class FileManagementCommandsTests: XCTestCase {
 
     func testRenameCommandEntersRenameModeForSelection() async throws {
         let (state, _) = try await makeVault(files: ["a.md"])
-        state.treeSelectedNode = AppState.TreeSelection(path: "a.md", isDirectory: false)
+        try publishSidebarSelection(state, path: "a.md")
         try state.commandRegistry.invokeById(id: SlateCommandID.renameEntry)
         XCTAssertEqual(state.renamingNode?.path, "a.md")
         XCTAssertEqual(state.renamingNode?.isDirectory, false)
@@ -588,28 +623,53 @@ final class FileManagementCommandsTests: XCTestCase {
 
     func testMoveCommandOpensSheetForSelection() async throws {
         let (state, _) = try await makeVault(files: ["a.md"])
-        state.treeSelectedNode = AppState.TreeSelection(path: "a.md", isDirectory: false)
+        try publishSidebarSelection(state, path: "a.md")
         try state.commandRegistry.invokeById(id: SlateCommandID.moveTo)
         XCTAssertEqual(state.pendingMove?.path, "a.md")
     }
 
     func testDeleteCommandDeletesSelection() async throws {
         let (state, vault) = try await makeVault(files: ["a.md", "b.md"])
-        state.treeSelectedNode = AppState.TreeSelection(path: "a.md", isDirectory: false)
+        try publishSidebarSelection(state, path: "a.md")
         try state.commandRegistry.invokeById(id: SlateCommandID.deleteEntry)
         await state.pendingStructuralTaskForTesting?.value
         XCTAssertFalse(fileExists(vault, "a.md"))
     }
 
-    func testCommandsNoOpWithoutSelection() async throws {
-        let (state, _) = try await makeVault(files: ["a.md"])
-        state.treeSelectedNode = nil
-        // Rename / move / delete need a target — must not crash or act.
-        try state.commandRegistry.invokeById(id: SlateCommandID.renameEntry)
-        try state.commandRegistry.invokeById(id: SlateCommandID.moveTo)
-        try state.commandRegistry.invokeById(id: SlateCommandID.deleteEntry)
+    func testCommandsRejectWithoutSelection() async throws {
+        let (state, vault) = try await makeVault(files: ["a.md"])
+        try publishSidebarSelection(state)
+
+        let rejections = [
+            (
+                SlateCommandID.renameEntry,
+                "Select exactly one file or folder to rename."
+            ),
+            (
+                SlateCommandID.moveTo,
+                "Select one or more files or folders to move."
+            ),
+            (
+                SlateCommandID.deleteEntry,
+                "Select one or more files or folders to move to the Trash."
+            ),
+        ]
+        for (id, expectedReason) in rejections {
+            XCTAssertThrowsError(try state.commandRegistry.invokeById(id: id), id) { error in
+                guard case let CommandError.ActionFailed(message) = error else {
+                    return XCTFail("\(id) returned \(error), not ActionFailed")
+                }
+                XCTAssertEqual(message, expectedReason, id)
+            }
+        }
+
+        XCTAssertTrue(fileExists(vault, "a.md"), "rejected commands have no filesystem effect")
         XCTAssertNil(state.renamingNode)
         XCTAssertNil(state.pendingMove)
+        XCTAssertNil(state.pendingBatchMove)
+        XCTAssertNil(state.pendingFolderDelete)
+        XCTAssertNil(state.pendingBatchDelete)
+        XCTAssertNil(state.pendingStructuralTaskForTesting)
     }
 
     // MARK: - creationParentPath
@@ -833,14 +893,22 @@ final class FileManagementCommandsTests: XCTestCase {
 
     func testDuplicateCommandActsOnSelectionAndIgnoresFolders() async throws {
         let (state, vault) = try await makeVault(files: ["proj/a.md", "b.md"])
-        // A folder selection must no-op (folders are out of #853's scope).
-        state.treeSelectedNode = AppState.TreeSelection(path: "proj", isDirectory: true)
-        try state.commandRegistry.invokeById(id: SlateCommandID.duplicateEntry)
+        // A folder selection is rejected with the catalog's exact capability
+        // reason (folders are out of #853's scope) and produces no side effect.
+        try publishSidebarSelection(state, path: "proj", isDirectory: true)
+        XCTAssertThrowsError(
+            try state.commandRegistry.invokeById(id: SlateCommandID.duplicateEntry)
+        ) { error in
+            guard case let CommandError.ActionFailed(message) = error else {
+                return XCTFail("folder Duplicate returned \(error), not ActionFailed")
+            }
+            XCTAssertEqual(message, "Select exactly one file to duplicate.")
+        }
         await state.pendingStructuralTaskForTesting?.value
         XCTAssertFalse(fileExists(vault, "proj copy"), "no folder duplicate")
 
         // A file selection duplicates through the registry.
-        state.treeSelectedNode = AppState.TreeSelection(path: "b.md", isDirectory: false)
+        try publishSidebarSelection(state, path: "b.md")
         try state.commandRegistry.invokeById(id: SlateCommandID.duplicateEntry)
         await state.pendingStructuralTaskForTesting?.value
         XCTAssertTrue(fileExists(vault, "b copy.md"))
@@ -936,7 +1004,7 @@ final class FileManagementCommandsTests: XCTestCase {
     /// same staging funnel (#860 covers every surface, not just the tree).
     func testDeleteCommandStagesForNonEmptyFolderSelection() async throws {
         let (state, vault) = try await makeVault(files: ["proj/a.md"])
-        state.treeSelectedNode = AppState.TreeSelection(path: "proj", isDirectory: true)
+        try publishSidebarSelection(state, path: "proj", isDirectory: true)
         try state.commandRegistry.invokeById(id: SlateCommandID.deleteEntry)
         let pending = try XCTUnwrap(
             state.pendingFolderDelete, "palette/menu path stages too")

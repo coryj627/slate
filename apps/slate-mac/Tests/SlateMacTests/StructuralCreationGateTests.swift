@@ -1085,9 +1085,9 @@ final class StructuralCreationGateTests: XCTestCase {
     func testLiveTemplateAndHistoryControlsProjectTheSharedBusyReason() throws {
         let menu = try sourceSegment(
             file: "SlateMacApp.swift",
-            from: "Button(\"New from Template…\")",
-            to: "// No ellipsis")
-        XCTAssertTrue(menu.contains("structuralDisabledReason"))
+            from: "private func sidebarFileMenuActions(",
+            to: "/// Top-level router:")
+        XCTAssertTrue(menu.contains("evaluation.disabledReason"))
         XCTAssertTrue(menu.contains(".disabled("))
         XCTAssertTrue(menu.contains(".accessibilityHint("))
         XCTAssertTrue(menu.contains(".help("))
@@ -1096,8 +1096,8 @@ final class StructuralCreationGateTests: XCTestCase {
             file: "MainSplitView.swift",
             from: "ToolbarItem(id: \"template\"",
             to: "ToolbarItem(id: \"tasksReview\"")
-        XCTAssertTrue(toolbar.contains("isMutatingStructure"))
-        XCTAssertTrue(toolbar.contains("structuralMutationDisabledReason"))
+        XCTAssertTrue(toolbar.contains("sidebarActionProjection(surface: .toolbar)"))
+        XCTAssertTrue(toolbar.contains("evaluation.disabledReason"))
         XCTAssertTrue(toolbar.contains(".accessibilityHint("))
         XCTAssertTrue(toolbar.contains(".help("))
 
