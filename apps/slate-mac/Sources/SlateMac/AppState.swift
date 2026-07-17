@@ -1517,6 +1517,7 @@ final class AppState: ObservableObject {
     private var sidebarActionValidationToken = 0
     private(set) var pendingSidebarActionValidationTaskForTesting: Task<Void, Never>?
     private(set) var sidebarActionValidationRanOnMainThreadForTesting: Bool?
+    var sidebarActionValidationItemProbeForTesting: (@Sendable (Int) -> Void)?
 
     @Published private(set) var isCopyingSidebarWikilink = false
     private var sidebarWikilinkCopyToken = 0
@@ -1897,25 +1898,47 @@ final class AppState: ObservableObject {
         let items = intent.snapshot.items
         let vaultURL = currentVaultURL
         let sessionIdentity = intent.snapshot.sessionIdentity
+        let itemProbe = sidebarActionValidationItemProbeForTesting
         let task = Task { @MainActor [weak self] in
             guard let vaultURL else { return }
-            let validation = await Task.detached(priority: .userInitiated) {
+            let detachedValidation = Task.detached(priority: .userInitiated) {
+                () -> (reason: String?, ranOnMainThread: Bool, cancelled: Bool) in
                 let ranOnMainThread = pthread_main_np() != 0
                 do {
                     try Self.validateSidebarSelectionItems(
                         items,
-                        vaultURL: vaultURL)
-                    return (reason: Optional<String>.none, ranOnMainThread: ranOnMainThread)
+                        vaultURL: vaultURL,
+                        checkCancellation: true,
+                        itemProbe: itemProbe)
+                    return (
+                        reason: nil,
+                        ranOnMainThread: ranOnMainThread,
+                        cancelled: false)
+                } catch is CancellationError {
+                    return (
+                        reason: nil,
+                        ranOnMainThread: ranOnMainThread,
+                        cancelled: true)
                 } catch {
                     return (
-                        reason: Optional(error.localizedDescription),
-                        ranOnMainThread: ranOnMainThread)
+                        reason: error.localizedDescription,
+                        ranOnMainThread: ranOnMainThread,
+                        cancelled: false)
                 }
-            }.value
+            }
+            let validation = await withTaskCancellationHandler {
+                await detachedValidation.value
+            } onCancel: {
+                detachedValidation.cancel()
+            }
 
             guard let self, self.sidebarActionValidationToken == token else { return }
             self.sidebarActionValidationRanOnMainThreadForTesting =
                 validation.ranOnMainThread
+            if validation.cancelled {
+                self.finishSidebarActionValidation(token: token)
+                return
+            }
             guard let session = self.currentSession,
                 ObjectIdentifier(session) == sessionIdentity
             else {
@@ -2132,16 +2155,29 @@ final class AppState: ObservableObject {
 
     nonisolated private static func validateSidebarSelectionItems(
         _ items: [SidebarSelectionItem],
-        vaultURL: URL
+        vaultURL: URL,
+        checkCancellation: Bool = false,
+        itemProbe: (@Sendable (Int) -> Void)? = nil
     ) throws {
-        for item in items {
-            try validateSidebarSelectionItem(item, vaultURL: vaultURL)
+        for (index, item) in items.enumerated() {
+            if checkCancellation {
+                try Task.checkCancellation()
+            }
+            itemProbe?(index)
+            if checkCancellation {
+                try Task.checkCancellation()
+            }
+            try validateSidebarSelectionItem(
+                item,
+                vaultURL: vaultURL,
+                checkCancellation: checkCancellation)
         }
     }
 
     nonisolated private static func validateSidebarSelectionItem(
         _ item: SidebarSelectionItem,
-        vaultURL: URL
+        vaultURL: URL,
+        checkCancellation: Bool = false
     ) throws {
         guard !item.path.hasPrefix("/") else {
             throw SidebarActionValidationError(reason: Self.sidebarSelectionChangedReason)
@@ -2151,6 +2187,9 @@ final class AppState: ObservableObject {
             separator: "/",
             omittingEmptySubsequences: true
         ) {
+            if checkCancellation {
+                try Task.checkCancellation()
+            }
             if component == "." { continue }
             guard component != ".." else {
                 throw SidebarActionValidationError(
@@ -2166,6 +2205,9 @@ final class AppState: ObservableObject {
         let components = normalized.split(separator: "/", omittingEmptySubsequences: false)
         var candidate = vaultURL
         for (index, component) in components.enumerated() {
+            if checkCancellation {
+                try Task.checkCancellation()
+            }
             candidate.appendPathComponent(String(component), isDirectory: false)
             guard let attributes = try? FileManager.default.attributesOfItem(
                 atPath: candidate.path),

@@ -1143,6 +1143,72 @@ final class SidebarActionInvocationTests: XCTestCase {
             "an admitted retry clears the persistent warning before its new sheet/funnel")
     }
 
+    func test13acVaultSwitchCancelsDetachedFilesystemValidationWork()
+        async throws
+    {
+        let announcer = RecordingAnnouncer()
+        let state = try openVault(
+            named: "validation-cancellation",
+            files: ["Seed.md"],
+            announcer: announcer)
+        let parent = (0..<100).map { "D\($0)" }.joined(separator: "/")
+        let paths = try createValidationFiles(count: 10, in: state, parent: parent)
+        let selection = try snapshot(
+            on: state,
+            paths.map { item($0) },
+            focusedPath: paths.last,
+            creationParent: parent)
+        let probeStarted = expectation(description: "detached validator started")
+        let observedCancellation = LockedValue(false)
+        let probeCalls = LockedValue(0)
+        state.sidebarActionValidationItemProbeForTesting = { index in
+            probeCalls.mutate { $0 += 1 }
+            guard index == 0 else { return }
+            probeStarted.fulfill()
+            let deadline = Date().addingTimeInterval(2)
+            while !Task.isCancelled, Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.001)
+            }
+            observedCancellation.set(Task.isCancelled)
+        }
+        var effects = 0
+        state.sidebarActionDispatchOverrides.moveBatch = { _, _ in
+            effects += 1
+            return true
+        }
+
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.moveTo, snapshot: selection)),
+            .validationPending(actionID: SlateCommandID.moveTo))
+        let validationTask = try XCTUnwrap(
+            state.pendingSidebarActionValidationTaskForTesting)
+        await fulfillment(of: [probeStarted], timeout: 10)
+
+        let replacementVault = root.appendingPathComponent("validation-replacement")
+        try FileManager.default.createDirectory(
+            at: replacementVault,
+            withIntermediateDirectories: true)
+        state.openVault(at: replacementVault)
+        await validationTask.value
+
+        XCTAssertTrue(
+            observedCancellation.value,
+            "vault replacement must cancel the detached filesystem walk itself")
+        XCTAssertEqual(
+            probeCalls.value, 1,
+            "cancellation must stop before the validator advances to another item")
+        XCTAssertEqual(effects, 0)
+        XCTAssertFalse(state.isValidatingSidebarAction)
+        XCTAssertNil(state.pendingSidebarActionValidationTaskForTesting)
+        XCTAssertNil(state.sidebarActionBackgroundFailure)
+        XCTAssertFalse(
+            announcer.posts.contains {
+                $0.message == AppState.sidebarSelectionChangedReason
+            },
+            "lifecycle cancellation stays silent")
+    }
+
     func test13bLargeOpenStagesImmediatelyThenValidatesOnceOffMainBeforeOpening()
         async throws
     {
