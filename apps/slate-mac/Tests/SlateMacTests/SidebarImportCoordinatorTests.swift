@@ -53,10 +53,14 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     }
 
     func complete(with url: URL) {
+      complete(data: url.dataRepresentation, error: nil)
+    }
+
+    func complete(data: Data?, error: Error?) {
       lock.lock()
       let callback = completion
       lock.unlock()
-      callback?(url.dataRepresentation, nil)
+      callback?(data, error)
     }
 
     func loadsStarted() -> Int {
@@ -80,6 +84,103 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       lock.lock()
       defer { lock.unlock() }
       return value
+    }
+  }
+
+  private final class WeakProgressBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private weak var value: Progress?
+
+    func store(_ value: Progress) {
+      lock.lock()
+      self.value = value
+      lock.unlock()
+    }
+
+    func load() -> Progress? {
+      lock.lock()
+      defer { lock.unlock() }
+      return value
+    }
+  }
+
+  private final class EphemeralProgressProvider:
+    SidebarImportProviderLoading, @unchecked Sendable
+  {
+    typealias ProviderCompletion = @Sendable (Data?, Error?) -> Void
+
+    private let lock = NSLock()
+    private var completion: ProviderCompletion?
+    private var loadCount = 0
+    private var progressCancellationCount = 0
+    private let onStart: @Sendable (ProviderCompletion) -> Void
+    let registeredTypeIdentifiers = [SidebarImportProviderIntake.fileURLTypeIdentifier]
+    let progressBox = WeakProgressBox()
+
+    init(
+      onStart: @escaping @Sendable (ProviderCompletion) -> Void = { _ in }
+    ) {
+      self.onStart = onStart
+    }
+
+    func hasItemConformingToTypeIdentifier(_ typeIdentifier: String) -> Bool {
+      registeredTypeIdentifiers.contains(typeIdentifier)
+    }
+
+    func loadDataRepresentation(
+      forTypeIdentifier typeIdentifier: String,
+      completionHandler: @escaping @Sendable (Data?, Error?) -> Void
+    ) -> Progress {
+      lock.lock()
+      loadCount += 1
+      completion = completionHandler
+      lock.unlock()
+      let progress = Progress(totalUnitCount: 1)
+      progress.cancellationHandler = { [weak self] in
+        self?.lock.lock()
+        self?.progressCancellationCount += 1
+        self?.lock.unlock()
+      }
+      progressBox.store(progress)
+      onStart(completionHandler)
+      return progress
+    }
+
+    func complete(with url: URL) {
+      lock.lock()
+      let callback = completion
+      lock.unlock()
+      callback?(url.dataRepresentation, nil)
+    }
+
+    func loadsStarted() -> Int {
+      lock.lock()
+      defer { lock.unlock() }
+      return loadCount
+    }
+
+    func progressCancellations() -> Int {
+      lock.lock()
+      defer { lock.unlock() }
+      return progressCancellationCount
+    }
+  }
+
+  private final class IntakeBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: SidebarImportProviderIntake?
+
+    func store(_ value: SidebarImportProviderIntake) {
+      lock.lock()
+      self.value = value
+      lock.unlock()
+    }
+
+    func cancel() {
+      lock.lock()
+      let value = value
+      lock.unlock()
+      value?.cancel()
     }
   }
 
@@ -358,34 +459,58 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     }
   }
 
-  func testPublicProviderIntakeLoadsOnceAndPreservesProviderOrder() async {
+  func testPublicProviderIntakeLoadsOncePreservesOriginalOrderAndAliasURL() async throws {
+    let unsupportedFirst = ProviderStub(registeredTypeIdentifiers: ["public.text"])
     let first = ProviderStub()
+    let unsupportedMiddle = ProviderStub(registeredTypeIdentifiers: ["public.image"])
     let second = ProviderStub()
-    let intake = SidebarImportProviderIntake(providers: [first, second])
-    let firstURL = URL(fileURLWithPath: "/tmp/first.md")
+    let third = ProviderStub()
+    let intake = SidebarImportProviderIntake(
+      providers: [unsupportedFirst, first, unsupportedMiddle, second, third])
+    let realContainer = tempDirectory.appendingPathComponent("real-container", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: realContainer, withIntermediateDirectories: false)
+    let aliasContainer = tempDirectory.appendingPathComponent("alias-container", isDirectory: true)
+    try FileManager.default.createSymbolicLink(
+      at: aliasContainer, withDestinationURL: realContainer)
+    let firstURL = aliasContainer.appendingPathComponent("first.md")
     let secondURL = URL(fileURLWithPath: "/tmp/second.md")
+    let thirdURL = URL(fileURLWithPath: "/tmp/third.md")
 
     let resultTask = Task { await intake.load() }
-    while first.loadCount == 0 || second.loadCount == 0 {
+    while first.loadsStarted() == 0 || second.loadsStarted() == 0
+      || third.loadsStarted() == 0
+    {
       await Task.yield()
     }
-    second.complete(with: secondURL)
+    third.complete(with: thirdURL)
     first.complete(with: firstURL)
+    second.complete(with: secondURL)
 
     let result = await resultTask.value
     XCTAssertEqual(
       result,
       [
-        SidebarImportProviderSlot(providerIndex: 0, outcome: .url(firstURL)),
-        SidebarImportProviderSlot(providerIndex: 1, outcome: .url(secondURL)),
+        SidebarImportProviderSlot(providerIndex: 1, outcome: .url(firstURL)),
+        SidebarImportProviderSlot(providerIndex: 3, outcome: .url(secondURL)),
+        SidebarImportProviderSlot(providerIndex: 4, outcome: .url(thirdURL)),
       ])
-    XCTAssertEqual(first.loadCount, 1)
-    XCTAssertEqual(second.loadCount, 1)
+    guard case let .url(decodedAlias) = result[0].outcome else {
+      return XCTFail("expected the alias-spelled file URL")
+    }
+    XCTAssertEqual(decodedAlias.absoluteString, firstURL.absoluteString)
+    XCTAssertEqual(unsupportedFirst.loadsStarted(), 0)
+    XCTAssertEqual(unsupportedMiddle.loadsStarted(), 0)
+    XCTAssertEqual(first.loadsStarted(), 1)
+    XCTAssertEqual(second.loadsStarted(), 1)
+    XCTAssertEqual(third.loadsStarted(), 1)
   }
 
   func testPublicProviderCancellationTerminalizesNeverCallbackAndIgnoresLateCallbacks() async {
-    let provider = ProviderStub()
-    let intake = SidebarImportProviderIntake(providers: [provider])
+    let succeeded = ProviderStub()
+    let failed = ProviderStub()
+    let pending = ProviderStub()
+    let intake = SidebarImportProviderIntake(providers: [succeeded, failed, pending])
     let returned = expectation(description: "aggregate returned without provider callback")
     returned.expectedFulfillmentCount = 1
     let slots = SlotBox()
@@ -393,42 +518,227 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       slots.store(await intake.load())
       returned.fulfill()
     }
-    while provider.loadsStarted() == 0 {
+    while succeeded.loadsStarted() == 0 || failed.loadsStarted() == 0
+      || pending.loadsStarted() == 0
+    {
       await Task.yield()
     }
 
+    let completedURL = URL(fileURLWithPath: "/tmp/completed.md")
+    succeeded.complete(with: completedURL)
+    failed.complete(
+      data: nil,
+      error: NSError(
+        domain: "SidebarImportCoordinatorTests",
+        code: 2,
+        userInfo: [NSLocalizedDescriptionKey: "finished failure"]))
+    intake.cancel()
     intake.cancel()
     await fulfillment(of: [returned], timeout: 0.2)
-    provider.complete(with: URL(fileURLWithPath: "/tmp/late.md"))
-    provider.complete(with: URL(fileURLWithPath: "/tmp/duplicate.md"))
+    pending.complete(with: URL(fileURLWithPath: "/tmp/late.md"))
+    pending.complete(with: URL(fileURLWithPath: "/tmp/duplicate.md"))
     await Task.yield()
 
     XCTAssertEqual(
       slots.load(),
-      [SidebarImportProviderSlot(providerIndex: 0, outcome: .failure(.cancelled))])
-    XCTAssertTrue(provider.progress.isCancelled)
-    XCTAssertEqual(provider.loadsStarted(), 1)
+      [
+        SidebarImportProviderSlot(providerIndex: 0, outcome: .url(completedURL)),
+        SidebarImportProviderSlot(
+          providerIndex: 1,
+          outcome: .failure(.loadFailed("finished failure"))),
+        SidebarImportProviderSlot(providerIndex: 2, outcome: .failure(.cancelled)),
+      ])
+    XCTAssertFalse(succeeded.progress.isCancelled)
+    XCTAssertFalse(failed.progress.isCancelled)
+    XCTAssertTrue(pending.progress.isCancelled)
   }
 
-  func testPublicProviderIntakeSkipsUnsupportedProvidersAndKeepsOriginalIndices() async {
+  func testPublicProviderIntakeEmptyAndUnsupportedOnlyCompleteWithoutLoads() async {
     let unsupported = ProviderStub(registeredTypeIdentifiers: ["public.text"])
-    let supported = ProviderStub()
-    let intake = SidebarImportProviderIntake(providers: [unsupported, supported])
-    let supportedURL = URL(fileURLWithPath: "/tmp/supported.md")
 
+    let empty = await SidebarImportProviderIntake(providers: []).load()
+    let unsupportedOnly = await SidebarImportProviderIntake(
+      providers: [unsupported]
+    ).load()
+    XCTAssertEqual(empty, [])
+    XCTAssertEqual(unsupportedOnly, [])
+    XCTAssertEqual(unsupported.loadsStarted(), 0)
+  }
+
+  func testPublicProviderOutcomesUseTypedFailurePrecedence() async {
+    let providers = (0..<6).map { _ in ProviderStub() }
+    let intake = SidebarImportProviderIntake(providers: providers)
     let resultTask = Task { await intake.load() }
-    while supported.loadsStarted() == 0 {
+    while providers.contains(where: { $0.loadsStarted() == 0 }) {
       await Task.yield()
     }
-    supported.complete(with: supportedURL)
-    unsupported.complete(with: URL(fileURLWithPath: "/tmp/unsupported.md"))
+
+    let validURL = URL(fileURLWithPath: "/tmp/valid.md")
+    providers[0].complete(with: validURL)
+    providers[1].complete(
+      data: URL(fileURLWithPath: "/tmp/ignored.md").dataRepresentation,
+      error: NSError(
+        domain: "SidebarImportCoordinatorTests",
+        code: 1,
+        userInfo: [NSLocalizedDescriptionKey: "provider failed"]))
+    providers[2].complete(
+      data: nil,
+      error: NSError(
+        domain: "SidebarImportCoordinatorTests",
+        code: 2,
+        userInfo: [NSLocalizedDescriptionKey: "nil provider failed"]))
+    providers[3].complete(data: nil, error: nil)
+    providers[4].complete(data: Data("not a URL".utf8), error: nil)
+    providers[5].complete(
+      data: URL(string: "https://example.com/not-a-file")?.dataRepresentation,
+      error: nil)
 
     let result = await resultTask.value
     XCTAssertEqual(
       result,
-      [SidebarImportProviderSlot(providerIndex: 1, outcome: .url(supportedURL))])
-    XCTAssertEqual(unsupported.loadsStarted(), 0)
-    XCTAssertEqual(supported.loadsStarted(), 1)
+      [
+        SidebarImportProviderSlot(providerIndex: 0, outcome: .url(validURL)),
+        SidebarImportProviderSlot(
+          providerIndex: 1,
+          outcome: .failure(.loadFailed("provider failed"))),
+        SidebarImportProviderSlot(
+          providerIndex: 2,
+          outcome: .failure(.loadFailed("nil provider failed"))),
+        SidebarImportProviderSlot(providerIndex: 3, outcome: .failure(.missingData)),
+        SidebarImportProviderSlot(providerIndex: 4, outcome: .failure(.invalidFileURL)),
+        SidebarImportProviderSlot(providerIndex: 5, outcome: .failure(.invalidFileURL)),
+      ])
+  }
+
+  func testPublicProviderCancellationBeforeLoadAndPrecancelledTaskStartZeroLoads() async {
+    let explicitProvider = ProviderStub()
+    let explicit = SidebarImportProviderIntake(providers: [explicitProvider])
+    explicit.cancel()
+    let explicitResult = await explicit.load()
+    XCTAssertEqual(
+      explicitResult,
+      [SidebarImportProviderSlot(providerIndex: 0, outcome: .failure(.cancelled))])
+    XCTAssertEqual(explicitProvider.loadsStarted(), 0)
+
+    let taskProvider = ProviderStub()
+    let taskIntake = SidebarImportProviderIntake(providers: [taskProvider])
+    let task = Task {
+      while !Task.isCancelled { await Task.yield() }
+      return await taskIntake.load()
+    }
+    task.cancel()
+    let taskResult = await task.value
+    XCTAssertEqual(
+      taskResult,
+      [SidebarImportProviderSlot(providerIndex: 0, outcome: .failure(.cancelled))])
+    XCTAssertEqual(taskProvider.loadsStarted(), 0)
+  }
+
+  func testPublicProviderProgressIsRetainedOnlyUntilItsSlotTerminates() async {
+    let completedProvider = EphemeralProgressProvider()
+    let completedIntake = SidebarImportProviderIntake(providers: [completedProvider])
+    let completedResultTask = Task { await completedIntake.load() }
+    while completedProvider.loadsStarted() == 0 {
+      await Task.yield()
+    }
+    while completedProvider.progressBox.load() == nil {
+      await Task.yield()
+    }
+
+    XCTAssertNotNil(
+      completedProvider.progressBox.load(),
+      "the intake must retain outstanding provider progress")
+    completedProvider.complete(with: URL(fileURLWithPath: "/tmp/retained.md"))
+    _ = await completedResultTask.value
+    for _ in 0..<20 where completedProvider.progressBox.load() != nil {
+      await Task.yield()
+    }
+
+    XCTAssertNil(
+      completedProvider.progressBox.load(),
+      "terminal slots must release their retained progress")
+
+    let cancelledProvider = EphemeralProgressProvider()
+    let cancelledIntake = SidebarImportProviderIntake(providers: [cancelledProvider])
+    let cancelledResultTask = Task { await cancelledIntake.load() }
+    while cancelledProvider.loadsStarted() == 0 {
+      await Task.yield()
+    }
+    while cancelledProvider.progressBox.load() == nil {
+      await Task.yield()
+    }
+
+    cancelledIntake.cancel()
+    let cancelledResult = await cancelledResultTask.value
+    for _ in 0..<20 where cancelledProvider.progressBox.load() != nil {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(
+      cancelledResult,
+      [SidebarImportProviderSlot(providerIndex: 0, outcome: .failure(.cancelled))])
+    XCTAssertEqual(cancelledProvider.progressCancellations(), 1)
+    XCTAssertNil(
+      cancelledProvider.progressBox.load(),
+      "cancelled slots must release their retained progress")
+  }
+
+  func testPublicProviderSynchronousDuplicateCallbackResumesOnceAndReleasesProgress() async {
+    let firstURL = URL(fileURLWithPath: "/tmp/synchronous.md")
+    let intakeBox = IntakeBox()
+    let provider = EphemeralProgressProvider(onStart: { completion in
+      completion(firstURL.dataRepresentation, nil)
+      intakeBox.cancel()
+      completion(URL(fileURLWithPath: "/tmp/duplicate.md").dataRepresentation, nil)
+    })
+    let intake = SidebarImportProviderIntake(providers: [provider])
+    intakeBox.store(intake)
+
+    let result = await intake.load()
+    for _ in 0..<20 where provider.progressBox.load() != nil {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(
+      result,
+      [SidebarImportProviderSlot(providerIndex: 0, outcome: .url(firstURL))])
+    XCTAssertEqual(provider.loadsStarted(), 1)
+    XCTAssertEqual(provider.progressCancellations(), 0)
+    XCTAssertNil(
+      provider.progressBox.load(),
+      "a Progress returned after a synchronous terminal callback must not be retained")
+  }
+
+  func testPublicProviderCancellationDuringFirstStartStopsLaterLoadsAndCancelsReturnedProgress()
+    async
+  {
+    let intakeBox = IntakeBox()
+    let lateURL = URL(fileURLWithPath: "/tmp/cancel-lost-race.md")
+    let first = EphemeralProgressProvider(onStart: { completion in
+      intakeBox.cancel()
+      completion(lateURL.dataRepresentation, nil)
+    })
+    let later = ProviderStub()
+    let intake = SidebarImportProviderIntake(providers: [first, later])
+    intakeBox.store(intake)
+
+    let result = await intake.load()
+    for _ in 0..<20 where first.progressBox.load() != nil {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(
+      result,
+      [
+        SidebarImportProviderSlot(providerIndex: 0, outcome: .failure(.cancelled)),
+        SidebarImportProviderSlot(providerIndex: 1, outcome: .failure(.cancelled)),
+      ])
+    XCTAssertEqual(first.loadsStarted(), 1)
+    XCTAssertEqual(first.progressCancellations(), 1)
+    XCTAssertEqual(later.loadsStarted(), 0)
+    XCTAssertNil(
+      first.progressBox.load(),
+      "the just-returned cancelled Progress must be released")
   }
 
   func testWalkerBuildsRegularAndEmptyTreeManifestAndReadsBinaryBytes() throws {

@@ -95,8 +95,11 @@ final class SidebarImportProviderIntake: @unchecked Sendable {
               error: error)
           }
           lock.lock()
-          retainedProgress[slotIndex] = progress
-          let cancelProgress = isCancelled && slots[slotIndex] != nil
+          let slotIsTerminal = slots[slotIndex] != nil
+          if !slotIsTerminal {
+            retainedProgress[slotIndex] = progress
+          }
+          let cancelProgress = isCancelled && slotIsTerminal
           lock.unlock()
           if cancelProgress {
             progress.cancel()
@@ -122,6 +125,7 @@ final class SidebarImportProviderIntake: @unchecked Sendable {
       if let progress = retainedProgress[slotIndex] {
         progressToCancel.append(progress)
       }
+      retainedProgress[slotIndex] = nil
       slots[slotIndex] = SidebarImportProviderSlot(
         providerIndex: providers[slotIndex].index,
         outcome: .failure(.cancelled))
@@ -147,13 +151,13 @@ final class SidebarImportProviderIntake: @unchecked Sendable {
     error: Error?
   ) {
     let outcome: SidebarImportProviderOutcome
-    if let data,
+    if let error {
+      outcome = .failure(.loadFailed(error.localizedDescription))
+    } else if let data,
       let url = URL(dataRepresentation: data, relativeTo: nil),
       url.isFileURL
     {
       outcome = .url(url)
-    } else if let error {
-      outcome = .failure(.loadFailed(error.localizedDescription))
     } else if data == nil {
       outcome = .failure(.missingData)
     } else {
@@ -167,6 +171,7 @@ final class SidebarImportProviderIntake: @unchecked Sendable {
       slots[slotIndex] = SidebarImportProviderSlot(
         providerIndex: providerIndex,
         outcome: outcome)
+      retainedProgress[slotIndex] = nil
     }
     if !didFinish, slots.allSatisfy({ $0 != nil }), let continuation {
       didFinish = true

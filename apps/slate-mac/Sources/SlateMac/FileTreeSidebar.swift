@@ -4122,6 +4122,19 @@ struct FileTreeSidebar: View {
         case none
     }
 
+    private final class DropProviderCallbackGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var didClaim = false
+
+        func claim() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !didClaim else { return false }
+            didClaim = true
+            return true
+        }
+    }
+
     static func preferredDropProvider(
         in providers: [NSItemProvider]
     ) -> PreferredDropProvider {
@@ -4183,20 +4196,22 @@ struct FileTreeSidebar: View {
             onAdmitted()
             switch admitted {
             case let .privatePayload(itemProvider):
+                let callbackGate = DropProviderCallbackGate()
                 itemProvider.loadDataRepresentation(
                     forTypeIdentifier: Self.nodeUTType
-                ) { data, _ in
+                ) { data, error in
+                    guard callbackGate.claim() else { return }
                     Task { @MainActor in
                         guard appState.currentSession === capturedSession else {
                             onStaleSession()
                             return
                         }
-                        guard let data,
-                            let payload = Self.consumeRegisteredDragPayload(
+                        guard let data else { return }
+                        let payload = Self.consumeRegisteredDragPayload(
                                 data,
                                 currentVaultURL: appState.currentVaultURL,
                                 currentSession: capturedSession)
-                        else { return }
+                        guard error == nil, let payload else { return }
                         onPrivate(payload.items, payload.preferredFocusPath)
                     }
                 }
