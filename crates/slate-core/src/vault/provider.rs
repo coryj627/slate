@@ -109,6 +109,23 @@ pub trait VaultProvider: Send + Sync {
     /// guarantees the directory exists afterwards.
     fn create_dir(&self, relative: &str) -> Result<(), VaultError>;
 
+    /// Create a directory only when its final path component is absent.
+    ///
+    /// The compatibility default is a weaker check-then-create for host
+    /// providers without an atomic primitive. It can lose a race to an
+    /// external creator and merge the directory created in that window, and
+    /// it inherits `create_dir`'s parent-creation behavior. Filesystem-backed
+    /// providers must override this with an atomic final-component create that
+    /// never merges an existing directory.
+    fn create_dir_if_absent(&self, relative: &str) -> Result<(), VaultError> {
+        if self.mutation_path_exists(relative)? {
+            return Err(VaultError::DestinationExists {
+                path: relative.to_string(),
+            });
+        }
+        self.create_dir(relative)
+    }
+
     /// Cheap metadata: size, mtime, kind.
     fn stat(&self, relative: &str) -> Result<FileStat, VaultError>;
 

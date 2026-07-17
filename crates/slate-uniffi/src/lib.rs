@@ -364,6 +364,12 @@ impl VaultSession {
         Ok(self.inner.create_folder(&path)?.into())
     }
 
+    /// Create one import destination directory without merging an occupant or
+    /// adding a standalone structural-history entry.
+    pub fn create_folder_exclusive(&self, path: String) -> Result<(), VaultError> {
+        Ok(self.inner.create_folder_exclusive(&path)?)
+    }
+
     pub fn rename_folder(
         &self,
         path: String,
@@ -7063,6 +7069,19 @@ impl VaultSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn create_folder_exclusive_ffi_wrapper_creates_the_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+
+        session
+            .create_folder_exclusive("imported".into())
+            .expect("exclusive folder create");
+
+        assert!(tmp.path().join("imported").is_dir());
+    }
 
     #[test]
     fn parse_frontmatter_properties_uses_authoritative_source_bytes() {

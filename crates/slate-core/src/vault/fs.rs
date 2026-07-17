@@ -367,6 +367,19 @@ impl VaultProvider for FsVaultProvider {
         std::fs::create_dir_all(&path).map_err(VaultError::from)
     }
 
+    fn create_dir_if_absent(&self, relative: &str) -> Result<(), VaultError> {
+        let path = self.resolve_for_mutation(relative)?;
+        match std::fs::create_dir(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                Err(VaultError::DestinationExists {
+                    path: relative.to_string(),
+                })
+            }
+            Err(error) => Err(VaultError::Io(error)),
+        }
+    }
+
     fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
         let from_path = self.resolve_for_mutation(from)?;
         let to_path = self.resolve_for_mutation(to)?;
@@ -847,6 +860,110 @@ mod tests {
         p.write_file("a/b/c/d.md", b"deep").unwrap();
         let bytes = p.read_file("a/b/c/d.md").unwrap();
         assert_eq!(bytes, b"deep");
+    }
+
+    #[test]
+    fn create_dir_if_absent_creates_only_an_unoccupied_final_component() {
+        let (tmp, p) = vault();
+        std::fs::create_dir(tmp.path().join("parent")).unwrap();
+
+        p.create_dir_if_absent("parent/fresh").unwrap();
+
+        assert!(tmp.path().join("parent/fresh").is_dir());
+    }
+
+    #[test]
+    fn create_dir_if_absent_maps_an_existing_directory_to_destination_exists() {
+        let (tmp, p) = vault();
+        std::fs::create_dir(tmp.path().join("occupied")).unwrap();
+
+        let error = p.create_dir_if_absent("occupied").unwrap_err();
+
+        assert!(
+            matches!(error, VaultError::DestinationExists { ref path } if path == "occupied"),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn create_dir_if_absent_maps_an_existing_file_to_destination_exists() {
+        let (tmp, p) = vault();
+        std::fs::write(tmp.path().join("occupied"), b"external bytes").unwrap();
+
+        let error = p.create_dir_if_absent("occupied").unwrap_err();
+
+        assert!(
+            matches!(error, VaultError::DestinationExists { ref path } if path == "occupied"),
+            "{error:?}"
+        );
+        assert_eq!(
+            std::fs::read(tmp.path().join("occupied")).unwrap(),
+            b"external bytes"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_if_absent_maps_a_dangling_symlink_to_destination_exists() {
+        let (tmp, p) = vault();
+        std::os::unix::fs::symlink(
+            tmp.path().join("missing-target"),
+            tmp.path().join("occupied"),
+        )
+        .unwrap();
+
+        let error = p.create_dir_if_absent("occupied").unwrap_err();
+
+        assert!(
+            matches!(error, VaultError::DestinationExists { ref path } if path == "occupied"),
+            "{error:?}"
+        );
+        assert!(tmp.path().join("occupied").symlink_metadata().is_ok());
+    }
+
+    #[test]
+    fn create_dir_if_absent_does_not_create_missing_parents() {
+        let (tmp, p) = vault();
+
+        let error = p.create_dir_if_absent("missing/fresh").unwrap_err();
+
+        assert!(
+            matches!(error, VaultError::Io(ref error) if error.kind() == io::ErrorKind::NotFound),
+            "{error:?}"
+        );
+        assert!(!tmp.path().join("missing").exists());
+    }
+
+    #[test]
+    fn create_dir_if_absent_has_exactly_one_winner_between_racing_creators() {
+        let (tmp, provider) = vault();
+        let provider = Arc::new(provider);
+        let barrier = Arc::new(std::sync::Barrier::new(3));
+        let mut creators = Vec::new();
+        for _ in 0..2 {
+            let provider = Arc::clone(&provider);
+            let barrier = Arc::clone(&barrier);
+            creators.push(std::thread::spawn(move || {
+                barrier.wait();
+                provider.create_dir_if_absent("winner")
+            }));
+        }
+        barrier.wait();
+
+        let results: Vec<_> = creators
+            .into_iter()
+            .map(|creator| creator.join().expect("creator thread"))
+            .collect();
+
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            results
+                .iter()
+                .filter(|result| matches!(result, Err(VaultError::DestinationExists { .. })))
+                .count(),
+            1
+        );
+        assert!(tmp.path().join("winner").is_dir());
     }
 
     #[test]
