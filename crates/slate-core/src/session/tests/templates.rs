@@ -10,6 +10,113 @@
 use super::common::*;
 use super::*;
 
+#[derive(Default)]
+struct TemplateReadGateState {
+    entered: bool,
+    released: bool,
+    paths: Vec<String>,
+}
+
+struct BlockingTemplateReadProvider {
+    inner: FsVaultProvider,
+    list_dir_calls: std::sync::atomic::AtomicUsize,
+    gate: std::sync::Arc<(std::sync::Mutex<TemplateReadGateState>, std::sync::Condvar)>,
+}
+
+impl BlockingTemplateReadProvider {
+    fn new(inner: FsVaultProvider) -> Self {
+        Self {
+            inner,
+            list_dir_calls: std::sync::atomic::AtomicUsize::new(0),
+            gate: std::sync::Arc::new((
+                std::sync::Mutex::new(TemplateReadGateState::default()),
+                std::sync::Condvar::new(),
+            )),
+        }
+    }
+
+    fn wait_until_first_read(&self) {
+        let (lock, wake) = &*self.gate;
+        let mut state = lock.lock().unwrap();
+        while !state.entered {
+            state = wake.wait(state).unwrap();
+        }
+    }
+
+    fn release(&self) {
+        let (lock, wake) = &*self.gate;
+        lock.lock().unwrap().released = true;
+        wake.notify_all();
+    }
+
+    fn paths(&self) -> Vec<String> {
+        self.gate.0.lock().unwrap().paths.clone()
+    }
+
+    fn list_dir_calls(&self) -> usize {
+        self.list_dir_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+impl crate::VaultProvider for BlockingTemplateReadProvider {
+    fn list_dir(&self, relative: &str) -> Result<Vec<crate::DirEntry>, VaultError> {
+        self.list_dir_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.list_dir(relative)
+    }
+
+    fn read_file(&self, relative: &str) -> Result<Vec<u8>, VaultError> {
+        self.inner.read_file(relative)
+    }
+
+    fn read_in_vault_with_cap(
+        &self,
+        relative: &str,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        let (lock, wake) = &*self.gate;
+        let mut state = lock.lock().unwrap();
+        state.paths.push(relative.to_owned());
+        if state.paths.len() == 1 {
+            state.entered = true;
+            wake.notify_all();
+            while !state.released {
+                state = wake.wait(state).unwrap();
+            }
+        }
+        drop(state);
+        self.inner.read_in_vault_with_cap(relative, max_bytes)
+    }
+
+    fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
+        self.inner.write_file(relative, contents)
+    }
+
+    fn delete(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.delete(relative)
+    }
+
+    fn rename(&self, from: &str, to: &str) -> Result<(), VaultError> {
+        self.inner.rename(from, to)
+    }
+
+    fn create_dir(&self, relative: &str) -> Result<(), VaultError> {
+        self.inner.create_dir(relative)
+    }
+
+    fn stat(&self, relative: &str) -> Result<crate::FileStat, VaultError> {
+        self.inner.stat(relative)
+    }
+
+    fn watch(
+        &self,
+        sink: std::sync::Arc<dyn crate::FileEventSink>,
+    ) -> Result<Option<crate::WatchHandle>, VaultError> {
+        self.inner.watch(sink)
+    }
+}
+
 fn make_templates_vault(setup: impl FnOnce(&std::path::Path)) -> (tempfile::TempDir, VaultSession) {
     let tmp = tempfile::tempdir().unwrap();
     setup(tmp.path());
@@ -93,7 +200,76 @@ fn templates_dir_stays_none_when_no_templates_folder() {
 #[test]
 fn list_templates_returns_empty_when_templates_dir_is_none() {
     let (_tmp, session) = make_vault(|_| {});
-    assert_eq!(session.list_templates().unwrap(), Vec::new());
+    assert_eq!(
+        session.list_templates(&CancelToken::new()).unwrap(),
+        Vec::new()
+    );
+}
+
+#[test]
+fn list_templates_detects_default_directory_created_after_open() {
+    let (tmp, session) = make_vault(|_| {});
+    assert_eq!(session.config.templates_dir, None);
+    let templates = tmp.path().join("Templates");
+    std::fs::create_dir(&templates).unwrap();
+    std::fs::write(templates.join("Later.md"), b"# Later").unwrap();
+
+    let listed = session.list_templates(&CancelToken::new()).unwrap();
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].path, "Templates/Later.md");
+}
+
+#[test]
+fn list_templates_cancels_between_entry_reads() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = FsVaultProvider::new(tmp.path().to_path_buf());
+    inner.create_dir("Templates").unwrap();
+    for name in ["Alpha.md", "Beta.md", "Gamma.md"] {
+        inner
+            .write_file(&format!("Templates/{name}"), name.as_bytes())
+            .unwrap();
+    }
+    let provider = std::sync::Arc::new(BlockingTemplateReadProvider::new(inner));
+    let mut config = SessionConfig::new(tmp.path().join(".slate"));
+    config.templates_dir = Some("Templates".to_owned());
+    let session = VaultSession::open(provider.clone(), config).unwrap();
+    let cancel = CancelToken::new();
+
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| session.list_templates(&cancel));
+        provider.wait_until_first_read();
+        cancel.cancel();
+        provider.release();
+        let result = worker.join().unwrap();
+        assert!(matches!(result, Err(VaultError::Cancelled)));
+    });
+
+    assert_eq!(
+        provider.paths().len(),
+        1,
+        "cancellation after entry one must prevent every later template read"
+    );
+}
+
+#[test]
+fn list_templates_pre_cancel_performs_no_directory_io() {
+    let tmp = tempfile::tempdir().unwrap();
+    let inner = FsVaultProvider::new(tmp.path().to_path_buf());
+    inner.create_dir("Templates").unwrap();
+    let provider = std::sync::Arc::new(BlockingTemplateReadProvider::new(inner));
+    let mut config = SessionConfig::new(tmp.path().join(".slate"));
+    config.templates_dir = Some("Templates".to_owned());
+    let session = VaultSession::open(provider.clone(), config).unwrap();
+    let calls_before = provider.list_dir_calls();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+
+    let result = session.list_templates(&cancel);
+
+    assert!(matches!(result, Err(VaultError::Cancelled)));
+    assert_eq!(provider.list_dir_calls(), calls_before);
+    assert!(provider.paths().is_empty());
 }
 
 #[test]
@@ -106,7 +282,7 @@ fn list_templates_returns_alphabetical_md_files() {
         std::fs::write(dir.join("Middle.md"), b"# M").unwrap();
     });
     let names: Vec<String> = session
-        .list_templates()
+        .list_templates(&CancelToken::new())
         .unwrap()
         .into_iter()
         .map(|t| t.name)
@@ -127,7 +303,7 @@ fn list_templates_filters_out_non_markdown_files() {
         std::fs::create_dir(dir.join("subdir")).unwrap();
     });
     let names: Vec<String> = session
-        .list_templates()
+        .list_templates(&CancelToken::new())
         .unwrap()
         .into_iter()
         .map(|t| t.name)
@@ -146,7 +322,11 @@ fn list_templates_uses_frontmatter_description_first() {
         )
         .unwrap();
     });
-    let summary = session.list_templates().unwrap().pop().unwrap();
+    let summary = session
+        .list_templates(&CancelToken::new())
+        .unwrap()
+        .pop()
+        .unwrap();
     assert_eq!(summary.path, "Templates/Daily.md");
     assert_eq!(summary.name, "Daily");
     assert_eq!(summary.description.as_deref(), Some("My daily note layout"));
@@ -163,7 +343,11 @@ fn list_templates_falls_back_to_first_nonblank_line_for_description() {
         )
         .unwrap();
     });
-    let summary = session.list_templates().unwrap().pop().unwrap();
+    let summary = session
+        .list_templates(&CancelToken::new())
+        .unwrap()
+        .pop()
+        .unwrap();
     assert_eq!(summary.description.as_deref(), Some("Quick scratch note"));
 }
 
@@ -178,7 +362,10 @@ fn list_templates_returns_empty_when_dir_disappeared_after_open() {
     // degrade to "no templates" rather than surface a NotFound error
     // to the picker.
     std::fs::remove_dir_all(tmp.path().join("Templates")).unwrap();
-    assert_eq!(session.list_templates().unwrap(), Vec::new());
+    assert_eq!(
+        session.list_templates(&CancelToken::new()).unwrap(),
+        Vec::new()
+    );
 }
 
 #[test]
@@ -276,7 +463,7 @@ fn list_templates_drops_symlinks_pointing_outside_the_vault() {
     let templates_dir = vault_tmp.path().join("Templates");
     std::os::unix::fs::symlink(&secret, templates_dir.join("Pwn.md")).unwrap();
 
-    let templates = session.list_templates().unwrap();
+    let templates = session.list_templates(&CancelToken::new()).unwrap();
     let names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
     // Only the legitimate template surfaces; the escaping symlink
     // is silently dropped.
@@ -300,7 +487,7 @@ fn list_templates_follows_symlinks_pointing_inside_the_vault() {
     let target = vault_tmp.path().join("shared/Daily.md");
     std::os::unix::fs::symlink(&target, templates_dir.join("Daily.md")).unwrap();
 
-    let templates = session.list_templates().unwrap();
+    let templates = session.list_templates(&CancelToken::new()).unwrap();
     let mut names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
     names.sort();
     // Both surface — the in-vault symlink is treated as a normal
@@ -383,7 +570,7 @@ fn list_templates_skips_broken_symlinks_without_error() {
     std::os::unix::fs::symlink(&broken_target, vault_tmp.path().join("Templates/Broken.md"))
         .unwrap();
 
-    let templates = session.list_templates().unwrap();
+    let templates = session.list_templates(&CancelToken::new()).unwrap();
     let names: Vec<&str> = templates.iter().map(|t| t.name.as_str()).collect();
     assert_eq!(names, vec!["Real"]);
 }

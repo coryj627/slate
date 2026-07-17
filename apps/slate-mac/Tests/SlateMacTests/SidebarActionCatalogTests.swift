@@ -101,20 +101,18 @@ final class SidebarActionCatalogTests: XCTestCase {
         XCTAssertEqual(
             ids(files),
             [
-                SlateCommandID.sidebarOpen, SlateCommandID.newFromTemplate,
-                SlateCommandID.moveTo, SlateCommandID.deleteEntry,
+                SlateCommandID.sidebarOpen, SlateCommandID.moveTo,
+                SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
             ids(mixed),
             [
-                SlateCommandID.newFromTemplate, SlateCommandID.moveTo,
-                SlateCommandID.deleteEntry,
+                SlateCommandID.moveTo, SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
             ids(folders),
             [
-                SlateCommandID.newFromTemplate, SlateCommandID.moveTo,
-                SlateCommandID.deleteEntry,
+                SlateCommandID.moveTo, SlateCommandID.deleteEntry,
             ])
     }
 
@@ -192,8 +190,11 @@ final class SidebarActionCatalogTests: XCTestCase {
         XCTAssertFalse(trash.accessibilityHint.localizedCaseInsensitiveContains("rollback"))
     }
 
-    func testSurfaceProjectionUsesExactMembershipAndExplicitRootTemplateIntent() {
-        let markdown = snapshot([item("Note.md")], focusedPath: "Note.md")
+    func testSurfaceProjectionUsesExactMembershipAndFrozenTemplateDestination() {
+        let markdown = snapshot(
+            [item("Folder/Note.md")],
+            focusedPath: "Folder/Note.md",
+            creationParent: "Folder")
         for surface in [SidebarActionSurface.menuBar, .commandPalette] {
             XCTAssertEqual(
                 SidebarActionCatalog.project(surface: surface, snapshot: markdown).map(\.id),
@@ -234,9 +235,7 @@ final class SidebarActionCatalogTests: XCTestCase {
         ] {
             let intent = SidebarActionCatalog.project(surface: surface, snapshot: markdown)
                 .first { $0.id == SlateCommandID.newFromTemplate }?.intent
-            XCTAssertEqual(intent?.snapshot.items, [])
-            XCTAssertEqual(intent?.snapshot.focusedPath, nil)
-            XCTAssertEqual(intent?.snapshot.creationParent, "")
+            XCTAssertEqual(intent?.snapshot, markdown)
         }
     }
 
@@ -278,7 +277,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 folder,
                 [
                     SlateCommandID.newNote, SlateCommandID.newFolder,
-                    SlateCommandID.renameEntry, SlateCommandID.moveTo,
+                    SlateCommandID.newFromTemplate, SlateCommandID.renameEntry,
+                    SlateCommandID.moveTo,
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
                     SlateCommandID.deleteEntry,
                 ]
@@ -306,7 +306,10 @@ final class SidebarActionCatalogTests: XCTestCase {
                 expected.filter { $0 != SlateCommandID.sidebarOpen },
                 "VoiceOver is the same concise matrix minus default-owned Open")
         }
-        XCTAssertTrue(contextCases.allSatisfy { !$0.1.contains(SlateCommandID.newFromTemplate) })
+        XCTAssertEqual(
+            contextCases.filter { $0.1.contains(SlateCommandID.newFromTemplate) }.count,
+            1,
+            "Template is concise and contextual: a single folder row only")
     }
 
     func testUnavailableProjectionKeepsFullInventoryOnlyForMenuAndPalette() {
@@ -335,20 +338,29 @@ final class SidebarActionCatalogTests: XCTestCase {
             XCTAssertEqual(
                 projected.map(\.id),
                 [SlateCommandID.revealInFinder, SlateCommandID.copyPath],
-                "context and VoiceOver omit structural, temporary, and pre-Task-4 template unavailability")
+                "context and VoiceOver omit structural and temporary unavailability")
             XCTAssertTrue(projected.allSatisfy { $0.disabledReason == nil })
         }
     }
 
-    func testFL04ATemplateBoundaryHasNoContextualAvailabilityEscapeHatch() throws {
-        let packageRoot = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-        let source = try String(
-            contentsOf: packageRoot.appendingPathComponent(
-                "Sources/SlateMac/Sidebar/SidebarActionCatalog.swift"),
-            encoding: .utf8)
-        XCTAssertFalse(source.contains("contextualTemplateAvailable"))
+    func testTemplateCapabilityRejectsAmbiguousMultiSelection() throws {
+        let template = try XCTUnwrap(
+            SidebarActionCatalog.actions.first {
+                $0.id == SlateCommandID.newFromTemplate
+            })
+        XCTAssertEqual(template.capability, .zeroOrOneItem)
+
+        let selection = snapshot(
+            [item("A.md"), item("Folder", directory: true)],
+            focusedPath: "Folder",
+            creationParent: "Folder")
+        let evaluation = try XCTUnwrap(
+            SidebarActionCatalog.evaluation(
+                for: SlateCommandID.newFromTemplate,
+                snapshot: selection))
+        XCTAssertEqual(
+            evaluation.disabledReason,
+            "Select no more than one item to choose a creation location.")
+        XCTAssertNil(evaluation.intent)
     }
 }

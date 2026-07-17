@@ -132,6 +132,7 @@ final class CloseVaultSheetParityTests: XCTestCase {
         )
         XCTAssertNil(state.templateSelectionTask)
         XCTAssertNil(state.templateCreateTask)
+        XCTAssertNil(state.templateAvailabilityRefreshTaskForTesting)
     }
 
     // MARK: - Structural drift test
@@ -151,6 +152,9 @@ final class CloseVaultSheetParityTests: XCTestCase {
         let appStatePath = try locateAppStateSwift()
         let source = try String(contentsOf: appStatePath, encoding: .utf8)
         let closeVaultBody = try extractCloseVaultBody(source)
+        let templateResetBody = try extractFunctionBody(
+            signature: "private func resetTemplateLifecycleForVaultTransition()",
+            from: source)
         let declared = try declaredSheetBools(source)
 
         // Helper-method allow-list: bool name → helper-call substring
@@ -159,8 +163,29 @@ final class CloseVaultSheetParityTests: XCTestCase {
         // resets the bool before extending.
         let resetViaHelper: [String: String] = [
             "isSearchOpen": "closeSearchOverlay()",
-            "isAddPropertySheetOpen": "dismissAddPropertySheet()"
+            "isAddPropertySheetOpen": "dismissAddPropertySheet()",
+            "isTemplatePickerOpen": "resetTemplateLifecycleForVaultTransition()",
         ]
+
+        XCTAssertTrue(
+            templateResetBody.contains("isTemplatePickerOpen = false"),
+            "the template vault-transition helper must dismiss its sheet")
+        for handle in [
+            "templateAvailabilityTask",
+            "templateAvailabilityRefreshTaskForTesting",
+            "templatePickerTask",
+            "templateSelectionTask",
+            "templateCreateTask",
+        ] {
+            XCTAssertTrue(
+                templateResetBody.contains("\(handle)?.cancel()"),
+                "the template vault-transition helper must cancel \(handle)")
+            XCTAssertTrue(
+                templateResetBody.contains("\(handle) = nil"),
+                "the template vault-transition helper must nil \(handle)")
+        }
+        XCTAssertTrue(templateResetBody.contains("templateAvailabilityRefreshPending = false"))
+        XCTAssertTrue(templateResetBody.contains("templateAvailabilityRefreshGeneration &+= 1"))
 
         XCTAssertFalse(
             declared.isEmpty,
@@ -287,17 +312,21 @@ final class CloseVaultSheetParityTests: XCTestCase {
     /// caller, which only `contains`-checks code substrings like
     /// `isFooOpen = false` / `closeSearchOverlay()`.
     private func extractCloseVaultBody(_ rawSource: String) throws -> String {
+        try extractFunctionBody(signature: "func closeVault()", from: rawSource)
+    }
+
+    private func extractFunctionBody(signature: String, from rawSource: String) throws
+        -> String
+    {
         let source = SwiftSourceStripping.strippingCommentsAndStrings(rawSource)
-        // Find the signature. `closeVault()` is non-async + takes no
-        // args, so the signature is stable.
-        guard let sigRange = source.range(of: "func closeVault()") else {
-            XCTFail("closeVault() signature not found — extractor needs a refresh")
+        guard let sigRange = source.range(of: signature) else {
+            XCTFail("\(signature) signature not found — extractor needs a refresh")
             return ""
         }
         // Walk forward to the first `{` after the signature.
         guard let openBrace = source.range(of: "{", range: sigRange.upperBound..<source.endIndex)
         else {
-            XCTFail("opening brace for closeVault() not found")
+            XCTFail("opening brace for \(signature) not found")
             return ""
         }
         var depth = 1
@@ -314,7 +343,7 @@ final class CloseVaultSheetParityTests: XCTestCase {
             }
             cursor = source.index(after: cursor)
         }
-        XCTFail("closing brace for closeVault() not found — source likely truncated")
+        XCTFail("closing brace for \(signature) not found — source likely truncated")
         return ""
     }
 

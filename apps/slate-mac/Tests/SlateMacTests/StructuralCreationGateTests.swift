@@ -234,6 +234,7 @@ final class StructuralCreationGateTests: XCTestCase {
             "dest/keep.md": "# keep\n",
             summary.path: "# {{title}}\n",
         ])
+        state.installTemplateDestinationForTesting("")
         state.pendingTemplateFlow = .needsName(summary, [:])
         let blocker = try await blockingMove(on: state)
         let capture = mutationMessages(from: state)
@@ -269,6 +270,7 @@ final class StructuralCreationGateTests: XCTestCase {
             "dest/keep.md": "# keep\n",
             summary.path: "# {{title}}\n",
         ])
+        state.installTemplateDestinationForTesting("")
         state.pendingTemplateFlow = .needsName(summary, [:])
         state.templateNoteNameError = "Keep the existing validation state."
         let blocker = try await blockingMove(on: state)
@@ -284,6 +286,42 @@ final class StructuralCreationGateTests: XCTestCase {
 
         await blocker.gate.release()
         await blocker.task.value
+    }
+
+    func testTemplateCommitRequiresExactCurrentSessionDestinationOwnerBeforeWrite()
+        async throws
+    {
+        let summary = TemplateSummary(
+            path: "Templates/Seed.md", name: "Seed", description: nil)
+        let (state, vault) = try await makeVault(files: [
+            summary.path: "# {{title}}\n",
+        ])
+        state.pendingTemplateFlow = .needsName(summary, [:])
+
+        XCTAssertNil(state.submitTemplateNoteName("must-not-write.md"))
+        XCTAssertEqual(
+            state.templateNoteNameError,
+            AppState.templateDestinationUnavailableReason)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: vault.appendingPathComponent("must-not-write.md").path))
+
+        let staleRoot = vault.deletingLastPathComponent()
+            .appendingPathComponent("stale-template-owner")
+        try FileManager.default.createDirectory(
+            at: staleRoot, withIntermediateDirectories: true)
+        let staleSession = try VaultSession.openFilesystem(rootPath: staleRoot.path)
+        state.installTemplateDestinationForTesting(
+            "", sessionIdentity: ObjectIdentifier(staleSession))
+        state.templateNoteNameError = nil
+
+        XCTAssertNil(state.submitTemplateNoteName("still-must-not-write.md"))
+        XCTAssertEqual(
+            state.templateNoteNameError,
+            AppState.templateDestinationUnavailableReason)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: vault.appendingPathComponent("still-must-not-write.md").path))
     }
 
     func testBusyBatchRejectsRestoreAsBeforeWriteRetainsPromptAndRetrySucceeds() async throws {
@@ -610,6 +648,7 @@ final class StructuralCreationGateTests: XCTestCase {
 
         try await XCTUnwrap(state.canvasNewCanvasFile()).value
 
+        state.installTemplateDestinationForTesting("")
         state.pendingTemplateFlow = .needsName(summary, [:])
         try await XCTUnwrap(state.submitTemplateNoteName("templated.md")).value
 
@@ -723,6 +762,7 @@ final class StructuralCreationGateTests: XCTestCase {
         ])
         let landing = SuspensionGate()
         state.templateCursorLandingGateForTesting = { await landing.enter() }
+        state.installTemplateDestinationForTesting("")
         state.pendingTemplateFlow = .needsName(summary, [:])
 
         let oldCreate = try XCTUnwrap(state.submitTemplateNoteName("Daily.md"))
@@ -758,6 +798,7 @@ final class StructuralCreationGateTests: XCTestCase {
         state.selectedFilePath = "dirty.md"
         await state.noteLoadTask?.value
         state.updateEditorText("# Unsaved edit\n")
+        state.installTemplateDestinationForTesting("")
         state.pendingTemplateFlow = .needsName(summary, [:])
 
         let create = try XCTUnwrap(state.submitTemplateNoteName("Daily.md"))
@@ -791,6 +832,7 @@ final class StructuralCreationGateTests: XCTestCase {
         state.selectedFilePath = "dirty.md"
         await state.noteLoadTask?.value
         state.updateEditorText("# Unsaved edit\n")
+        state.installTemplateDestinationForTesting("")
         state.pendingTemplateFlow = .needsName(summary, [:])
 
         let create = try XCTUnwrap(state.submitTemplateNoteName("Daily.md"))
@@ -829,6 +871,7 @@ final class StructuralCreationGateTests: XCTestCase {
         state.selectedFilePath = "dirty.md"
         await state.noteLoadTask?.value
         state.updateEditorText("# Unsaved edit\n")
+        state.installTemplateDestinationForTesting("")
         state.pendingTemplateFlow = .needsName(summary, [:])
 
         let create = try XCTUnwrap(state.submitTemplateNoteName("Daily.md"))
@@ -857,6 +900,7 @@ final class StructuralCreationGateTests: XCTestCase {
             summary.path: "{{prompt:topic|Topic}}\n"
         ])
         let landing = SuspensionGate()
+        state.installTemplateDestinationForTesting("")
         state.isTemplatePickerOpen = true
         state.templateSelectionLandingGateForTesting = { _ in await landing.enter() }
 
@@ -890,6 +934,7 @@ final class StructuralCreationGateTests: XCTestCase {
         ])
         let firstLanding = SuspensionGate()
         let secondLanding = SuspensionGate()
+        state.installTemplateDestinationForTesting("")
         state.isTemplatePickerOpen = true
         state.templateSelectionLandingGateForTesting = { summary in
             if summary.path == first.path {
@@ -928,6 +973,7 @@ final class StructuralCreationGateTests: XCTestCase {
         ])
         let firstLanding = SuspensionGate()
         let secondLanding = SuspensionGate()
+        state.installTemplateDestinationForTesting("")
         state.isTemplatePickerOpen = true
         state.templateSelectionLandingGateForTesting = { summary in
             if summary.path == first.path {
@@ -964,6 +1010,7 @@ final class StructuralCreationGateTests: XCTestCase {
         ])
         let refresh = SuspensionGate()
         state.structuralBatchRefreshRunner = { _ in await refresh.enter() }
+        state.installTemplateDestinationForTesting("")
         state.pendingTemplateFlow = .needsName(summary, ["topic": "Retained"])
 
         let create = try XCTUnwrap(state.submitTemplateNoteName("created.md"))
@@ -1001,8 +1048,9 @@ final class StructuralCreationGateTests: XCTestCase {
         let promptValues = ["topic": "Retained answer"]
         let (state, _) = try await makeVault(files: [
             summary.path: "# {{title}}\n",
-            "existing.md": "# Existing\n",
+            "Projects/existing.md": "# Existing\n",
         ])
+        state.installTemplateDestinationForTesting("Projects")
         state.pendingTemplateFlow = .needsName(summary, promptValues)
 
         let create = try XCTUnwrap(state.submitTemplateNoteName("existing.md"))
@@ -1014,6 +1062,7 @@ final class StructuralCreationGateTests: XCTestCase {
             .needsName(summary, promptValues),
             "failure must restore the exact template and prompt values")
         XCTAssertEqual(state.templateRetryNoteName, "existing.md")
+        XCTAssertEqual(state.templateCreationDestination, "Projects")
         XCTAssertNotNil(state.templateNoteNameError)
         XCTAssertFalse(state.isMutatingStructure)
 
@@ -1030,7 +1079,10 @@ final class StructuralCreationGateTests: XCTestCase {
     func testBusyRegistryRejectsTemplateAndCanvasCommandsWithExactReason() async throws {
         let (state, vault) = try await makeVault(files: [
             "blocker.md": "# blocker\n", "dest/keep.md": "# keep\n",
+            "Templates/Seed.md": "# Seed\n",
         ])
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .available)
         let blocker = try await blockingMove(on: state)
         let ids = [SlateCommandID.newFromTemplate, SlateCommandID.newCanvas]
 
@@ -1062,6 +1114,7 @@ final class StructuralCreationGateTests: XCTestCase {
         ])
         state.selectedFilePath = "note.md"
         let prompts = [TemplatePrompt(key: "topic", label: "Topic")]
+        state.installTemplateDestinationForTesting("")
         state.pendingTemplateFlow = .needsPrompts(summary, prompts)
         let blocker = try await blockingMove(on: state)
         let capture = mutationMessages(from: state)

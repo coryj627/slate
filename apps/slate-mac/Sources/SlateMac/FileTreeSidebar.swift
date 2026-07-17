@@ -3764,7 +3764,7 @@ struct FileTreeSidebar: View {
             .accessibilityHint(
                 Self.rowAccessibilityHint(
                     primaryAction: "Expands or collapses.",
-                    idleHint: "Expands or collapses. Drag to move the folder; drop items on it to move them inside. Rename, move, delete, and new-note actions are in the context menu.",
+                    idleHint: "Expands or collapses. Drag to move the folder; drop items on it to move them inside. Other available actions are in the context menu.",
                     structuralDisabledReason: disabledReason))
             .help(disabledReason ?? node.path)
             .contextMenu {
@@ -3781,6 +3781,7 @@ struct FileTreeSidebar: View {
                     {
                         let creationIDs = [
                             SlateCommandID.newNote, SlateCommandID.newFolder,
+                            SlateCommandID.newFromTemplate,
                         ]
                         let managementIDs = [
                             SlateCommandID.renameEntry, SlateCommandID.moveTo,
@@ -3800,7 +3801,8 @@ struct FileTreeSidebar: View {
                                 sidebarCatalogActions(
                                     projection.evaluations,
                                     actionIDs: [
-                                        SlateCommandID.newNote, SlateCommandID.newFolder
+                                        SlateCommandID.newNote, SlateCommandID.newFolder,
+                                        SlateCommandID.newFromTemplate,
                                     ])
                             } label: {
                                 SlateSymbol.newNote.label("New")

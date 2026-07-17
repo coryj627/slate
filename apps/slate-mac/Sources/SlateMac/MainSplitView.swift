@@ -763,7 +763,7 @@ struct MainSplitView: View {
         .onChange(of: appState.pendingBatchMove) { _, pending in
             synchronizeBatchMovePresentation(pending)
         }
-        .sheet(isPresented: $appState.isTemplatePickerOpen) {
+        .sheet(isPresented: templatePickerSheetPresented) {
             TemplatePicker()
                 .environmentObject(appState)
         }
@@ -945,6 +945,20 @@ struct MainSplitView: View {
     private var templateFlowSheetPresented: Binding<Bool> {
         Binding(
             get: { appState.pendingTemplateFlow != .idle },
+            set: { presented in
+                if !presented {
+                    appState.cancelTemplateFlow()
+                }
+            }
+        )
+    }
+
+    /// System/external dismissal is cancellation too. Routing the false edge
+    /// through AppState clears the frozen destination and invalidates any
+    /// suspended list/read completion instead of only flipping presentation.
+    private var templatePickerSheetPresented: Binding<Bool> {
+        Binding(
+            get: { appState.isTemplatePickerOpen },
             set: { presented in
                 if !presented {
                     appState.cancelTemplateFlow()

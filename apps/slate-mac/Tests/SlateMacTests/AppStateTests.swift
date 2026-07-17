@@ -12,6 +12,42 @@ import XCTest
 /// path goes through the Rust core and is exercised by other tests.
 @MainActor
 final class AppStateTests: XCTestCase {
+    private final class LockedCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = 0
+
+        func increment() {
+            lock.lock()
+            storage += 1
+            lock.unlock()
+        }
+
+        var value: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
+    private actor TestGate {
+        private var entered = false
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func wait() async {
+            entered = true
+            await withCheckedContinuation { continuation = $0 }
+        }
+
+        func waitUntilEntered() async {
+            while !entered { await Task.yield() }
+        }
+
+        func open() {
+            continuation?.resume()
+            continuation = nil
+        }
+    }
+
     private var tempDir: URL!
     private var storeFile: URL!
 
@@ -2755,17 +2791,521 @@ final class AppStateTests: XCTestCase {
         )
     }
 
-    func testOpenTemplatePickerAnnouncesEmptyState() async throws {
-        let (state, vault) = try await makeTemplatesVault(templates: [])
+    func testTemplateAvailabilityDistinguishesLoadingAvailableEmptyFailedAndRetry()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("template-availability")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([summary]) }
 
+        state.openVault(at: vault)
+        XCTAssertEqual(state.templateAvailability, .loading)
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .available)
+        XCTAssertEqual(state.availableTemplates, [summary])
+
+        state.templateListRunner = { _, _ in .success([]) }
+        let emptyTask = state.refreshTemplateAvailability()
+        XCTAssertEqual(state.templateAvailability, .loading)
+        await emptyTask?.value
+        XCTAssertEqual(state.templateAvailability, .empty)
+        XCTAssertTrue(state.availableTemplates.isEmpty)
+
+        state.templateListRunner = { _, _ in
+            .failure(.Io(message: "templates unreadable"))
+        }
+        await state.refreshTemplateAvailability()?.value
+        XCTAssertEqual(state.templateAvailability, .failed)
+        XCTAssertTrue(state.availableTemplates.isEmpty)
+
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshUnavailableTemplateAvailability()?.value
+        XCTAssertEqual(state.templateAvailability, .available)
+        XCTAssertEqual(state.availableTemplates, [summary])
+    }
+
+    func testUserTriggeredTemplateRelistPresentsCancellableLoadingImmediately()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("template-visible-loading")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([summary]) }
+        state.openVault(at: vault)
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .available)
+
+        let gate = TestGate()
+        state.templateAvailabilityLandingGateForTesting = { _ in await gate.wait() }
+        let relist = state.openTemplatePicker(in: "Projects")
+        await gate.waitUntilEntered()
+
+        XCTAssertEqual(state.templateAvailability, .loading)
+        XCTAssertTrue(
+            state.isTemplatePickerOpen,
+            "a user-triggered relist must expose its loading state and Escape/Cancel affordance")
+        XCTAssertEqual(state.templateCreationDestination, "Projects")
+
+        state.cancelTemplateFlow()
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        XCTAssertNil(state.templateCreationDestination)
+        XCTAssertNil(state.templatePickerTask)
+        await gate.open()
+        await relist?.value
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+    }
+
+    func testCancelledTemplateRelistBeforeDispatchNeverInvokesRunnerOrPublishes()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("template-pre-dispatch-cancel")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.templateAvailabilityTask?.value
+        await state.scanTask?.value
+        await state.templateAvailabilityRefreshTaskForTesting?.value
+        await state.templateAvailabilityTask?.value
+
+        let gate = TestGate()
+        let invocations = LockedCounter()
+        state.templateAvailabilityDispatchGateForTesting = { _ in await gate.wait() }
+        state.templateListRunner = { _, _ in
+            invocations.increment()
+            return .success([TemplateSummary(
+                path: "Templates/Late.md", name: "Late", description: nil)])
+        }
+
+        let relist = state.openTemplatePicker()
+        await gate.waitUntilEntered()
+        state.cancelTemplateFlow()
+        await gate.open()
+        await relist?.value
+
+        XCTAssertEqual(invocations.value, 0)
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        XCTAssertTrue(state.availableTemplates.isEmpty)
+        XCTAssertEqual(state.templateAvailability, .empty)
+        XCTAssertNil(state.templateCreationDestination)
+    }
+
+    func testVaultCloseCancelsDispatchedTemplateEnumerationToken() async throws {
+        let vault = tempDir.appendingPathComponent("template-running-cancel")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.templateAvailabilityTask?.value
+        await state.scanTask?.value
+        await state.templateAvailabilityRefreshTaskForTesting?.value
+        await state.templateAvailabilityTask?.value
+
+        let started = LockedCounter()
+        let observedCancellation = LockedCounter()
+        state.templateListRunner = { _, cancel in
+            started.increment()
+            let deadline = Date().addingTimeInterval(2)
+            while !cancel.isCancelled(), Date() < deadline {
+                Thread.sleep(forTimeInterval: 0.001)
+            }
+            if cancel.isCancelled() {
+                observedCancellation.increment()
+                return .failure(.Cancelled)
+            }
+            return .failure(.Io(message: "cancellation token was not signalled"))
+        }
+
+        let relist = state.openTemplatePicker()
+        while started.value == 0 { await Task.yield() }
+        XCTAssertTrue(state.closeVault())
+        await relist?.value
+
+        XCTAssertEqual(observedCancellation.value, 1)
+        XCTAssertNil(state.currentSession)
+        XCTAssertNil(state.templateAvailabilityTask)
+        XCTAssertNil(state.templatePickerTask)
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        XCTAssertEqual(state.templateAvailability, .empty)
+    }
+
+    func testTemplateStructuralRefreshCoalescesBurstAndDefersWhileFlowOwnsDestination()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("template-refresh-burst")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([summary]) }
+        state.openVault(at: vault)
+        await state.templateAvailabilityTask?.value
+        await state.scanTask?.value
+        await state.templateAvailabilityRefreshTaskForTesting?.value
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .available)
+        let session = try XCTUnwrap(state.currentSession)
+
+        let invocations = LockedCounter()
+        state.templateListRunner = { _, _ in
+            invocations.increment()
+            return .success([])
+        }
+        state.installTemplateDestinationForTesting("Projects")
+        for event in [
+            FileChangeEvent(kind: .created, path: "Blueprints/A.md", previousPath: nil),
+            FileChangeEvent(
+                kind: .renamed,
+                path: "Blueprints/B.txt",
+                previousPath: "Blueprints/B.md"),
+            FileChangeEvent(kind: .deleted, path: "Blueprints/C.md", previousPath: nil),
+        ] {
+            state.handleTemplateAvailabilityFileChange(event, from: session)
+        }
+        await state.templateAvailabilityRefreshTaskForTesting?.value
+
+        XCTAssertEqual(invocations.value, 0, "a live template flow retains refresh work")
+        XCTAssertEqual(state.templateAvailability, .available)
+        state.cancelTemplateFlow()
+        await state.templateAvailabilityTask?.value
+
+        XCTAssertEqual(invocations.value, 1, "the retained burst drains once when idle")
+        XCTAssertEqual(state.templateAvailability, .empty)
+    }
+
+    func testSuccessfulTemplateCreationDrainsDeferredStructuralRefresh() async throws {
+        let (state, vault) = try await makeTemplatesVault(templates: [
+            ("Meeting.md", "# {{title}}\n"),
+        ])
         state.openTemplatePicker()
         await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+        guard case .needsName = state.pendingTemplateFlow else {
+            return XCTFail("expected the template flow to own its frozen destination")
+        }
+
+        let invocations = LockedCounter()
+        state.templateListRunner = { _, _ in
+            invocations.increment()
+            return .success([summary])
+        }
+        let session = try XCTUnwrap(state.currentSession)
+        state.handleTemplateAvailabilityFileChange(
+            FileChangeEvent(
+                kind: .created,
+                path: "Blueprints/Late.md",
+                previousPath: nil),
+            from: session)
+        await state.templateAvailabilityRefreshTaskForTesting?.value
+        XCTAssertEqual(invocations.value, 0, "the active template flow retains refresh work")
+
+        state.submitTemplateNoteName("created.md")
+        await state.templateCreateTask?.value
+        await state.templateAvailabilityTask?.value
+
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: vault.appendingPathComponent("created.md").path))
+        XCTAssertEqual(
+            invocations.value,
+            1,
+            "successful creation must drain the retained structural refresh once")
+    }
+
+    func testForegroundTemplateRefreshRevalidatesCachedAvailableState() async throws {
+        let vault = tempDir.appendingPathComponent("template-foreground-refresh")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([summary]) }
+        state.openVault(at: vault)
+        await state.templateAvailabilityTask?.value
+        await state.scanTask?.value
+        await state.templateAvailabilityRefreshTaskForTesting?.value
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .available)
+
+        state.templateListRunner = { _, _ in .success([]) }
+        state.scheduleTemplateAvailabilityRefresh()
+        await state.templateAvailabilityRefreshTaskForTesting?.value
+        await state.templateAvailabilityTask?.value
+
+        XCTAssertEqual(state.templateAvailability, .empty)
+        XCTAssertTrue(state.availableTemplates.isEmpty)
+    }
+
+    func testCustomTemplateDirectoryCreateAndDeleteRefreshAvailabilityWhileActive()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("template-custom-live-refresh")
+        let customDirectory = vault.appendingPathComponent("Blueprints")
+        try FileManager.default.createDirectory(
+            at: customDirectory, withIntermediateDirectories: true)
+        try #"{"templates":{"directory":"Blueprints"}}"#.write(
+            to: vault.appendingPathComponent("slate.json"),
+            atomically: true,
+            encoding: .utf8)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .empty)
+        XCTAssertFalse(
+            AppState.templateAvailabilityEmptyReason.contains("Templates"),
+            "recovery copy must not send custom-directory vaults to the wrong folder")
+        XCTAssertFalse(
+            AppState.templateAvailabilityFailedReason.contains("Templates"),
+            "failure copy must remain truthful for a configured template directory")
+
+        let templateURL = customDirectory.appendingPathComponent("Meeting.md")
+        try "# Meeting".write(to: templateURL, atomically: true, encoding: .utf8)
+        let session = try XCTUnwrap(state.currentSession)
+        state.vaultEventAdapter?.onFileChange(event: FileChangeEvent(
+            kind: .created,
+            path: "Blueprints/Meeting.md",
+            previousPath: nil))
+        for _ in 0..<100 where state.templateAvailabilityRefreshTaskForTesting == nil {
+            await Task.yield()
+        }
+        await state.templateAvailabilityRefreshTaskForTesting?.value
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.templateAvailability, .available)
+        XCTAssertEqual(state.availableTemplates.map(\.path), ["Blueprints/Meeting.md"])
+
+        try FileManager.default.removeItem(at: templateURL)
+        state.vaultEventAdapter?.onFileChange(event: FileChangeEvent(
+            kind: .deleted,
+            path: "Blueprints/Meeting.md",
+            previousPath: nil))
+        for _ in 0..<100 where state.templateAvailabilityRefreshTaskForTesting == nil {
+            await Task.yield()
+        }
+        await state.templateAvailabilityRefreshTaskForTesting?.value
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(
+            state.templateAvailability, .empty,
+            "deleting the last template must invalidate a cached available projection")
+        XCTAssertTrue(state.availableTemplates.isEmpty)
+        XCTAssertTrue(state.currentSession === session)
+    }
+
+    func testTemplateAvailabilityGenerationAndVaultLifecycleRejectStalePublication()
+        async throws
+    {
+        let vaultA = tempDir.appendingPathComponent("templates-a")
+        let vaultB = tempDir.appendingPathComponent("templates-b")
+        try FileManager.default.createDirectory(at: vaultA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: vaultB, withIntermediateDirectories: true)
+        let oldSummary = TemplateSummary(
+            path: "Templates/Old.md", name: "Old", description: nil)
+        let newSummary = TemplateSummary(
+            path: "Templates/New.md", name: "New", description: nil)
+        let gate = TestGate()
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([oldSummary]) }
+        state.templateAvailabilityLandingGateForTesting = { _ in await gate.wait() }
+
+        state.openVault(at: vaultA)
+        let staleTask = state.templateAvailabilityTask
+        await gate.waitUntilEntered()
+        state.templateAvailabilityLandingGateForTesting = nil
+        state.templateListRunner = { _, _ in .success([newSummary]) }
+        state.openVault(at: vaultB)
+        await state.templateAvailabilityTask?.value
+        XCTAssertEqual(state.availableTemplates, [newSummary])
+        XCTAssertEqual(state.templateAvailability, .available)
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        XCTAssertNil(state.templateCreationDestination)
+
+        await gate.open()
+        await staleTask?.value
+        XCTAssertEqual(
+            state.availableTemplates, [newSummary],
+            "the cancelled vault-A generation must not overwrite vault B")
+
+        XCTAssertTrue(state.closeVault())
+        XCTAssertEqual(state.templateAvailability, .empty)
+        XCTAssertTrue(state.availableTemplates.isEmpty)
+        XCTAssertNil(state.templateAvailabilityTask)
+        XCTAssertNil(state.templatePickerTask)
+        XCTAssertNil(state.templateSelectionTask)
+        XCTAssertNil(state.templateCreateTask)
+        XCTAssertNil(state.templateCreationDestination)
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+    }
+
+    func testTemplateAvailabilitySameSessionNewerGenerationWins() async throws {
+        let vault = tempDir.appendingPathComponent("templates-same-session-race")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let oldSummary = TemplateSummary(
+            path: "Templates/Old.md", name: "Old", description: nil)
+        let newSummary = TemplateSummary(
+            path: "Templates/New.md", name: "New", description: nil)
+        let firstLoadGate = TestGate()
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([oldSummary]) }
+        state.templateAvailabilityLandingGateForTesting = { _ in await firstLoadGate.wait() }
+
+        state.openVault(at: vault)
+        let staleTask = state.templateAvailabilityTask
+        let session = try XCTUnwrap(state.currentSession)
+        await firstLoadGate.waitUntilEntered()
+
+        state.templateAvailabilityLandingGateForTesting = nil
+        state.templateListRunner = { _, _ in .success([newSummary]) }
+        let winningTask = state.refreshTemplateAvailability()
+        XCTAssertTrue(state.currentSession === session, "the race must stay in one vault session")
+        await winningTask?.value
+        XCTAssertEqual(state.availableTemplates, [newSummary])
+        XCTAssertEqual(state.templateAvailability, .available)
+
+        await firstLoadGate.open()
+        await staleTask?.value
+        XCTAssertTrue(state.currentSession === session)
+        XCTAssertEqual(
+            state.availableTemplates, [newSummary],
+            "an older generation in the same session must not overwrite the winner")
+        XCTAssertEqual(state.templateAvailability, .available)
+    }
+
+    func testTemplateAvailabilityProjectsSharedReasonsAndContextMembership() async throws {
+        let vault = tempDir.appendingPathComponent("template-projection")
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Projects"),
+            withIntermediateDirectories: true)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([summary]) }
+        state.openVault(at: vault)
+        await state.templateAvailabilityTask?.value
+        let snapshot = SidebarSelectionSnapshot(
+            sessionIdentity: ObjectIdentifier(try XCTUnwrap(state.currentSession)),
+            items: [SidebarSelectionItem(
+                path: "Projects", isDirectory: true, isMarkdown: false)],
+            focusedPath: "Projects",
+            creationParent: "Projects")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(snapshot))
+
+        for surface in [SidebarActionSurface.contextMenu, .voiceOver] {
+            XCTAssertTrue(
+                state.sidebarActionProjection(surface: surface).contains {
+                    $0.id == SlateCommandID.newFromTemplate
+                })
+        }
+
+        let stableSurfaces: [SidebarActionSurface] = [
+            .menuBar, .commandPalette, .toolbar, .keyboard,
+        ]
+        func assertUnavailable(_ reason: String, file: StaticString = #filePath, line: UInt = #line) {
+            for surface in stableSurfaces {
+                let action = state.sidebarActionProjection(surface: surface).first {
+                    $0.id == SlateCommandID.newFromTemplate
+                }
+                XCTAssertEqual(action?.disabledReason, reason, file: file, line: line)
+                XCTAssertNil(action?.intent, file: file, line: line)
+            }
+            for surface in [SidebarActionSurface.contextMenu, .voiceOver] {
+                XCTAssertFalse(
+                    state.sidebarActionProjection(surface: surface).contains {
+                        $0.id == SlateCommandID.newFromTemplate
+                    }, file: file, line: line)
+            }
+        }
+
+        state.templateListRunner = { _, _ in .success([]) }
+        let loadingTask = state.refreshTemplateAvailability()
+        assertUnavailable(AppState.templateAvailabilityLoadingReason)
+        await loadingTask?.value
+        assertUnavailable(AppState.templateAvailabilityEmptyReason)
+
+        state.templateListRunner = { _, _ in .failure(.Io(message: "no access")) }
+        await state.refreshTemplateAvailability()?.value
+        assertUnavailable(AppState.templateAvailabilityFailedReason)
+
+        state.templateListRunner = { _, _ in .success([summary]) }
+        await state.refreshTemplateAvailability()?.value
+        state.sidebarActionStructuralDisabledReasonOverride = "Another file operation is running."
+        assertUnavailable("Another file operation is running.")
+    }
+
+    func testOpenTemplatePickerEmptyResultStaysVisibleAndAnnouncesRecovery() async throws {
+        let (state, _) = try await makeTemplatesVault(templates: [])
+
+        let picker = state.openTemplatePicker()
+        await picker?.value
+        await state.templateAvailabilityTask?.value
 
         XCTAssertTrue(state.isTemplatePickerOpen)
+        XCTAssertEqual(state.templateAvailability, .empty)
         XCTAssertTrue(state.availableTemplates.isEmpty)
-        let expected = "Template picker opened. No templates found. "
-            + "Create one in \(vault.lastPathComponent)/Templates/."
-        XCTAssertEqual(state.templateAnnouncementLastMessage, expected)
+        XCTAssertEqual(state.templateCreationDestination, "")
+        XCTAssertEqual(
+            state.templateAnnouncementLastMessage,
+            AppState.templateAvailabilityEmptyReason)
+    }
+
+    func testFailedTemplatePickerRetryStaysVisibleAndLoadsTemplates() async throws {
+        let vault = tempDir.appendingPathComponent("template-visible-retry")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.templateAvailabilityTask?.value
+
+        state.templateListRunner = { _, _ in
+            .failure(.Io(message: "templates unavailable"))
+        }
+        await state.openTemplatePicker(in: "Projects")?.value
+        XCTAssertTrue(state.isTemplatePickerOpen)
+        XCTAssertEqual(state.templateAvailability, .failed)
+        XCTAssertEqual(state.templateCreationDestination, "Projects")
+
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        state.templateListRunner = { _, _ in .success([summary]) }
+        let retry = state.retryTemplatePickerLoad()
+        XCTAssertEqual(state.templateAvailability, .loading)
+        XCTAssertTrue(state.isTemplatePickerOpen)
+        await retry?.value
+
+        XCTAssertEqual(state.templateAvailability, .available)
+        XCTAssertEqual(state.availableTemplates, [summary])
+        XCTAssertTrue(state.isTemplatePickerOpen)
+        XCTAssertEqual(state.templateCreationDestination, "Projects")
+    }
+
+    func testCancelSuspendedTemplateListClearsDestinationAndRejectsLatePicker()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("template-list-cancel")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([summary]) }
+        state.openVault(at: vault)
+        await state.templateAvailabilityTask?.value
+        let gate = TestGate()
+        state.templateAvailabilityLandingGateForTesting = { _ in await gate.wait() }
+
+        let suspended = state.openTemplatePicker(in: "Projects")
+        await gate.waitUntilEntered()
+        XCTAssertEqual(state.templateCreationDestination, "Projects")
+        state.cancelTemplateFlow()
+
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        XCTAssertNil(state.templateCreationDestination)
+        XCTAssertNil(state.templatePickerTask)
+        XCTAssertEqual(state.pendingTemplateFlow, .idle)
+        await gate.open()
+        await suspended?.value
+        XCTAssertFalse(state.isTemplatePickerOpen)
+        XCTAssertNil(state.templateCreationDestination)
     }
 
     func testSelectTemplateWithPromptsRoutesToNeedsPrompts() async throws {
@@ -2853,6 +3393,64 @@ final class AppStateTests: XCTestCase {
         // substitution in the rendered body: "# scratch-1\n\n" = 13
         // bytes, so the offset is 13.
         XCTAssertEqual(captured(), [13])
+    }
+
+    func testTemplateSidebarInvocationCarriesFolderDestinationThroughEntireFlow() async throws {
+        let body = "# {{title}}\n\nTopic: {{prompt:Topic}}\n\n{{cursor}}\n"
+        let (state, vault) = try await makeTemplatesVault(templates: [
+            ("Meeting.md", body),
+        ])
+        try FileManager.default.createDirectory(
+            at: vault.appendingPathComponent("Projects"),
+            withIntermediateDirectories: true
+        )
+        let snapshot = SidebarSelectionSnapshot(
+            sessionIdentity: ObjectIdentifier(try XCTUnwrap(state.currentSession)),
+            items: [
+                SidebarSelectionItem(
+                    path: "Projects",
+                    isDirectory: true,
+                    isMarkdown: false)
+            ],
+            focusedPath: "Projects",
+            creationParent: "Projects"
+        )
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(snapshot))
+        let (sub, captured) = collectCursorOffsets(from: state)
+        defer { sub.cancel() }
+
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(id: SlateCommandID.newFromTemplate),
+            .completed(actionID: SlateCommandID.newFromTemplate)
+        )
+        await state.templatePickerTask?.value
+        let summary = try XCTUnwrap(state.availableTemplates.first)
+        state.selectTemplate(summary)
+        await state.templateSelectionTask?.value
+        state.submitTemplatePrompts(["topic": "Launch"])
+        let retargeted = SidebarSelectionSnapshot(
+            sessionIdentity: ObjectIdentifier(try XCTUnwrap(state.currentSession)),
+            items: [],
+            focusedPath: nil,
+            creationParent: "")
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(retargeted))
+        state.submitTemplateNoteName("kickoff.md")
+        await state.templateCreateTask?.value
+
+        let created = vault.appendingPathComponent("Projects/kickoff.md")
+        XCTAssertEqual(
+            try String(contentsOf: created, encoding: .utf8),
+            "# kickoff\n\nTopic: Launch\n\n\n"
+        )
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: vault.appendingPathComponent("kickoff.md").path),
+            "the destination-relative name must not fall back to the vault root"
+        )
+        XCTAssertEqual(state.selectedFilePath, "Projects/kickoff.md")
+        await state.noteLoadTask?.value
+        await Task.yield()
+        XCTAssertEqual(captured(), [26])
     }
 
     func testCreateFromPromptedTemplateStuffsPromptsIntoRightSlots() async throws {

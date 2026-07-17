@@ -100,6 +100,8 @@ final class SidebarMetadataRefreshTests: XCTestCase {
     defer { state.closeVault() }
     state.openVault(at: vault)
     await state.scanTask?.value
+    await state.templateAvailabilityRefreshTaskForTesting?.value
+    await state.templateAvailabilityTask?.value
     let session = try XCTUnwrap(state.currentSession)
     let refreshed = summary(
       displayName: "Fresh title",

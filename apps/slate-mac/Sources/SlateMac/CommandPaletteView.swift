@@ -75,6 +75,13 @@ struct CommandPaletteView: View {
         }
         .frame(minWidth: 560, idealWidth: 560, minHeight: 360, idealHeight: 360)
         .background(Color(nsColor: .controlBackgroundColor))
+        .background {
+            CommandPaletteWindowReader {
+                appState.setTemplateShortcutActionLauncherWindow($0)
+            }
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+        }
         .onExitCommand { dismiss() }
         .onAppear {
             searchFocused = true
@@ -686,6 +693,51 @@ struct CommandPaletteView: View {
         .padding(.horizontal, 24)
         .accessibilityElement(children: .combine)
         .accessibilityLabel("No command matches \(model.query). Try fewer letters or a different word.")
+    }
+}
+
+/// Registers the palette's exact AppKit sheet window. AppState uses identity,
+/// not a presentation Bool, so a stale/competing sheet can never inherit the
+/// palette's permission to launch another action surface.
+private struct CommandPaletteWindowReader: NSViewRepresentable {
+    let windowChanged: (NSWindow?) -> Void
+
+    func makeNSView(context: Context) -> WindowReaderView {
+        let view = WindowReaderView()
+        view.windowChanged = windowChanged
+        return view
+    }
+
+    func updateNSView(_ view: WindowReaderView, context: Context) {
+        view.windowChanged = windowChanged
+    }
+
+    static func dismantleNSView(_ view: WindowReaderView, coordinator: ()) {
+        view.stop()
+    }
+
+    final class WindowReaderView: NSView {
+        var windowChanged: (NSWindow?) -> Void = { _ in }
+        private var isActive = true
+        override var intrinsicContentSize: NSSize { .zero }
+
+        func stop() {
+            isActive = false
+            windowChanged(nil)
+        }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard isActive else { return }
+            let currentWindow = window
+            // Publish after SwiftUI finishes mounting this representable; a
+            // synchronous object change during view installation is illegal.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isActive, self.window === currentWindow
+                else { return }
+                self.windowChanged(currentWindow)
+            }
+        }
     }
 }
 

@@ -857,14 +857,17 @@ impl VaultSession {
     /// Enumerate templates under the vault's templates folder
     /// (defaults to `Templates/`, configurable via `SessionConfig`).
     ///
-    /// Returns an empty list — never an error — when the vault has no
-    /// templates folder configured, or when the folder vanished after
-    /// session open. Only `.md` files are included; results are sorted
+    /// Returns an empty list when the selected templates folder is absent or
+    /// vanished after session open. Returns `Cancelled` when the supplied token
+    /// is signalled. Only `.md` files are included; results are sorted
     /// alphabetically by name (case-insensitive).
-    pub fn list_templates(&self) -> Result<Vec<TemplateSummary>, VaultError> {
+    pub fn list_templates(
+        &self,
+        cancel: Arc<CancelToken>,
+    ) -> Result<Vec<TemplateSummary>, VaultError> {
         Ok(self
             .inner
-            .list_templates()?
+            .list_templates(&cancel.inner)?
             .into_iter()
             .map(TemplateSummary::from)
             .collect())
@@ -8605,7 +8608,16 @@ mod tests {
         let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
             .expect("open vault");
 
-        let templates = session.list_templates().expect("list_templates");
+        let cancelled = CancelToken::new();
+        cancelled.cancel();
+        assert!(matches!(
+            session.list_templates(cancelled),
+            Err(VaultError::Cancelled)
+        ));
+
+        let templates = session
+            .list_templates(CancelToken::new())
+            .expect("list_templates");
         assert_eq!(templates.len(), 2);
         assert_eq!(templates[0].path, "Templates/Daily.md");
         assert_eq!(templates[0].name, "Daily");
