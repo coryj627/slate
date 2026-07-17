@@ -10,6 +10,10 @@ import XCTest
 final class SidebarImportCoordinatorTests: XCTestCase {
   private var tempDirectory: URL!
 
+  private enum CreatorTestError: Error {
+    case postPublishIndexFailure
+  }
+
   override func setUpWithError() throws {
     tempDirectory = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
       .appendingPathComponent("sidebar-import-\(UUID().uuidString)", isDirectory: true)
@@ -19,6 +23,1624 @@ final class SidebarImportCoordinatorTests: XCTestCase {
 
   override func tearDownWithError() throws {
     try? FileManager.default.removeItem(at: tempDirectory)
+  }
+
+  func testPreparedSourceExposesRootSignalTraversalOrdinalsAndEncounteredCount() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("ordered-root", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try Data([0x01]).write(to: root.appendingPathComponent("safe.bin"))
+    try Data([0x02]).write(to: root.appendingPathComponent(".hidden.bin"))
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let prepared = try makeWalker(scope: scope, cancellation: signal)
+      .prepare(rootURL: root, vaultURL: vault)
+    defer { prepared.close() }
+
+    XCTAssertEqual(prepared.sourceRootName, "ordered-root")
+    XCTAssertTrue(prepared.usesSignal(signal))
+    XCTAssertFalse(prepared.usesSignal(SidebarImportEngineSignal()))
+    XCTAssertEqual(prepared.manifest.encounteredEntryCount, 5)
+
+    let traversal =
+      prepared.manifest.entries.map {
+        ($0.traversalOrdinal, $0.relativePath.display)
+      }
+      + prepared.manifest.failures.map {
+        ($0.traversalOrdinal, $0.relativePath.display)
+      }
+    XCTAssertEqual(
+      traversal.sorted { $0.0 < $1.0 }.map(\.1),
+      ["", ".hidden.bin", "safe.bin"])
+    XCTAssertEqual(
+      traversal.sorted { $0.0 < $1.0 }.map(\.0),
+      [0, 1, 2])
+  }
+
+  func testDestinationNamingUsesNativeCaseKeyAndSuffixesBeforeFileExtension() {
+    XCTAssertEqual(
+      SidebarImportDestinationNaming.reservationKey("Foo.md"),
+      SidebarImportDestinationNaming.reservationKey("foo.md"))
+    XCTAssertEqual(
+      SidebarImportDestinationNaming.candidateName(
+        originalName: "archive.tar.gz",
+        kind: .regularFile,
+        sequence: 1),
+      "archive.tar.gz")
+    XCTAssertEqual(
+      SidebarImportDestinationNaming.candidateName(
+        originalName: "archive.tar.gz",
+        kind: .regularFile,
+        sequence: 2),
+      "archive.tar 2.gz")
+    XCTAssertEqual(
+      SidebarImportDestinationNaming.candidateName(
+        originalName: "Folder",
+        kind: .directory,
+        sequence: 3),
+      "Folder 3")
+  }
+
+  func testReportPresentationCapsFailuresAndDerivesUnknownAndCancellationState() {
+    let hidden = SidebarImportFailure(
+      identity: SidebarImportEntryIdentity(
+        providerIndex: 0,
+        sourceRootName: "first",
+        relativePath: ".hidden",
+        kind: .rejected),
+      reason: .source(.hidden))
+    let unknown = SidebarImportFailure(
+      identity: SidebarImportEntryIdentity(
+        providerIndex: 1,
+        sourceRootName: "second",
+        relativePath: "uncertain.bin",
+        kind: .regularFile),
+      reason: .physicalOutcomeUnknown(
+        candidatePath: "Imports/uncertain.bin",
+        underlying: "index commit failed"))
+    let cancelled = SidebarImportFailure(
+      identity: SidebarImportEntryIdentity(
+        providerIndex: 2,
+        sourceRootName: "third",
+        relativePath: "later.bin",
+        kind: .regularFile),
+      reason: .cancelled)
+    let report = SidebarImportReport(
+      failures: [hidden, unknown, cancelled],
+      wasCancelled: true)
+
+    XCTAssertTrue(report.requiresRescan)
+    XCTAssertEqual(report.cancelledEntries, [cancelled.identity])
+    XCTAssertEqual(report.cancelledEntryCount, 1)
+    XCTAssertEqual(
+      report.failurePresentation(limit: 2),
+      SidebarImportFailurePresentation(
+        failures: [hidden, unknown],
+        omittedCount: 1))
+    XCTAssertEqual(report.failures, [hidden, unknown, cancelled])
+  }
+
+  func testProductionDestinationCreatorsCreateFolderAndPreserveRawBytes() throws {
+    let vault = try makeVault()
+    let session = try VaultSession.openFilesystem(rootPath: vault.path)
+    let creators = SidebarImportDestinationCreators.production(session: session)
+    let bytes = Data([0xFF, 0x00, 0xC0, 0x80])
+
+    try creators.createDirectory(path: "Imported")
+    try creators.createFile(path: "Imported/raw.bin", bytes: bytes)
+
+    XCTAssertTrue(
+      FileManager.default.fileExists(
+        atPath: vault.appendingPathComponent("Imported", isDirectory: true).path))
+    XCTAssertEqual(
+      try Data(contentsOf: vault.appendingPathComponent("Imported/raw.bin")),
+      bytes)
+    XCTAssertThrowsError(
+      try creators.createFile(path: "Imported/raw.bin", bytes: Data([0x01]))) { error in
+        guard case VaultError.DestinationExists = error else {
+          return XCTFail("expected DestinationExists, got \(error)")
+        }
+      }
+  }
+
+  func testCoordinatorCopiesBinaryFileAndDirectoryTreeWithVerifiedReport() async throws {
+    let vault = try makeVault()
+    try FileManager.default.createDirectory(
+      at: vault.appendingPathComponent("Imports", isDirectory: true),
+      withIntermediateDirectories: false)
+    let binarySource = tempDirectory.appendingPathComponent("raw.bin")
+    let binaryBytes = Data([0xFF, 0xFE, 0x00, 0x80])
+    try binaryBytes.write(to: binarySource)
+    let treeSource = tempDirectory.appendingPathComponent("Bundle", isDirectory: true)
+    let emptySource = treeSource.appendingPathComponent("empty", isDirectory: true)
+    let nestedSource = treeSource.appendingPathComponent("nested", isDirectory: true)
+    try FileManager.default.createDirectory(at: emptySource, withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: nestedSource, withIntermediateDirectories: true)
+    let nestedBytes = Data([0x01, 0x02, 0x03])
+    try nestedBytes.write(to: nestedSource.appendingPathComponent("child.dat"))
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      cancellation: signal,
+      metrics: metrics)
+    let binaryPrepared = try walker.prepare(rootURL: binarySource, vaultURL: vault)
+    let treePrepared = try walker.prepare(rootURL: treeSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let session = try VaultSession.openFilesystem(rootPath: vault.path)
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: .production(session: session))
+
+    let report = try await coordinator.copy(
+      roots: [
+        SidebarImportExternalRoot(providerIndex: 3, preparedSource: binaryPrepared),
+        SidebarImportExternalRoot(providerIndex: 7, preparedSource: treePrepared),
+      ],
+      into: "Imports",
+      reservingMoveBasenames: [])
+
+    XCTAssertEqual(
+      try Data(contentsOf: vault.appendingPathComponent("Imports/raw.bin")),
+      binaryBytes)
+    XCTAssertEqual(
+      try Data(contentsOf: vault.appendingPathComponent("Imports/Bundle/nested/child.dat")),
+      nestedBytes)
+    var isDirectory: ObjCBool = false
+    XCTAssertTrue(
+      FileManager.default.fileExists(
+        atPath: vault.appendingPathComponent("Imports/Bundle/empty").path,
+        isDirectory: &isDirectory))
+    XCTAssertTrue(isDirectory.boolValue)
+    XCTAssertEqual(try Data(contentsOf: binarySource), binaryBytes)
+    XCTAssertEqual(
+      report.verifiedTopLevelDestinations,
+      [
+        SidebarImportTopLevelDestination(
+          providerIndex: 3,
+          path: "Imports/raw.bin",
+          kind: .regularFile),
+        SidebarImportTopLevelDestination(
+          providerIndex: 7,
+          path: "Imports/Bundle",
+          kind: .directory),
+      ])
+    XCTAssertEqual(report.successfulFileCount, 2)
+    XCTAssertEqual(report.successfulFolderCount, 3)
+    XCTAssertEqual(report.bytesCopied, UInt64(binaryBytes.count + nestedBytes.count))
+    XCTAssertEqual(report.failures, [])
+    XCTAssertFalse(report.wasCancelled)
+    XCTAssertFalse(report.requiresRescan)
+    XCTAssertEqual(
+      report.progressSnapshots,
+      [
+        SidebarImportProgressSnapshot(completedTopLevel: 0, totalTopLevel: 2),
+        SidebarImportProgressSnapshot(completedTopLevel: 1, totalTopLevel: 2),
+        SidebarImportProgressSnapshot(completedTopLevel: 2, totalTopLevel: 2),
+      ])
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 7)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().starts, 2)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCoordinatorAllocatesMoveReservedAndCollidingFileNamesInProviderOrder()
+    async throws
+  {
+    let vault = try makeVault()
+    let imports = vault.appendingPathComponent("Imports", isDirectory: true)
+    try FileManager.default.createDirectory(at: imports, withIntermediateDirectories: false)
+    try Data([0xEE]).write(to: imports.appendingPathComponent("race.md"))
+
+    let sources = tempDirectory.appendingPathComponent("file-sources", isDirectory: true)
+    try FileManager.default.createDirectory(at: sources, withIntermediateDirectories: false)
+    let namesAndBytes: [(String, String, UInt8)] = [
+      ("move", "Move.md", 0x01),
+      ("first", "dupe.md", 0x02),
+      ("second", "dupe.md", 0x03),
+      ("race", "race.md", 0x04),
+    ]
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      cancellation: signal)
+    var roots: [SidebarImportExternalRoot] = []
+    for (providerIndex, value) in namesAndBytes.enumerated() {
+      let parent = sources.appendingPathComponent(value.0, isDirectory: true)
+      try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: false)
+      let source = parent.appendingPathComponent(value.1)
+      try Data([value.2]).write(to: source)
+      roots.append(
+        SidebarImportExternalRoot(
+          providerIndex: providerIndex,
+          preparedSource: try walker.prepare(rootURL: source, vaultURL: vault)))
+    }
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let session = try VaultSession.openFilesystem(rootPath: vault.path)
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: .production(session: session))
+
+    let report = try await coordinator.copy(
+      roots: roots,
+      into: "Imports",
+      reservingMoveBasenames: ["move.md", "MOVE.md"])
+
+    XCTAssertEqual(
+      report.verifiedTopLevelDestinations.map(\.path),
+      [
+        "Imports/Move 2.md",
+        "Imports/dupe.md",
+        "Imports/dupe 2.md",
+        "Imports/race 2.md",
+      ])
+    XCTAssertEqual(try Data(contentsOf: imports.appendingPathComponent("Move 2.md")), Data([0x01]))
+    XCTAssertEqual(try Data(contentsOf: imports.appendingPathComponent("dupe.md")), Data([0x02]))
+    XCTAssertEqual(try Data(contentsOf: imports.appendingPathComponent("dupe 2.md")), Data([0x03]))
+    XCTAssertEqual(try Data(contentsOf: imports.appendingPathComponent("race 2.md")), Data([0x04]))
+    XCTAssertEqual(try Data(contentsOf: imports.appendingPathComponent("race.md")), Data([0xEE]))
+    XCTAssertEqual(report.successfulFileCount, 4)
+    XCTAssertEqual(report.bytesCopied, 4)
+    XCTAssertEqual(report.failures, [])
+    XCTAssertFalse(report.requiresRescan)
+  }
+
+  func testCoordinatorRetriesDestinationExistsWithTheSameReadyRead() async throws {
+    let vault = try makeVault()
+    let source = tempDirectory.appendingPathComponent("retry.bin")
+    try Data([0xA1, 0xB2]).write(to: source)
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let readBoundaries = BoundaryProbe()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didReachBoundary: { readBoundaries.record($0) }),
+      cancellation: signal,
+      metrics: metrics)
+    let prepared = try walker.prepare(rootURL: source, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in
+          creatorCalls.append(path)
+          if path == "retry.bin" {
+            throw VaultError.DestinationExists(path: path)
+          }
+        },
+        createDirectory: { _ in XCTFail("file root must not create a directory") }))
+
+    let report = try await coordinator.copy(
+      roots: [SidebarImportExternalRoot(providerIndex: 0, preparedSource: prepared)],
+      into: "",
+      reservingMoveBasenames: [])
+
+    XCTAssertEqual(creatorCalls.values(), ["retry.bin", "retry 2.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.path), ["retry 2.bin"])
+    XCTAssertEqual(report.successfulFileCount, 1)
+    XCTAssertEqual(report.bytesCopied, 2)
+    XCTAssertEqual(report.failures, [])
+    XCTAssertEqual(metrics.snapshot().totalReadOperations, 2)
+    XCTAssertEqual(
+      readBoundaries.count {
+        if case .beforeRead("", offset: 0) = $0 { return true }
+        return false
+      },
+      1)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 2)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().highWaterActivePermits, 1)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testCoordinatorCapacityFailureIsPerEntryAndLaterRootStillSucceeds() async throws {
+    let vault = try makeVault()
+    let tooLargeSource = tempDirectory.appendingPathComponent("a-too-large.bin")
+    let fittingSource = tempDirectory.appendingPathComponent("b-fits.bin")
+    try Data([0x01, 0x02]).write(to: tooLargeSource)
+    try Data([0x03]).write(to: fittingSource)
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = makeWalker(scope: scope, cancellation: signal)
+    let tooLargePrepared = try walker.prepare(rootURL: tooLargeSource, vaultURL: vault)
+    let fittingPrepared = try walker.prepare(rootURL: fittingSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 1,
+      normalResidentLimitBytes: 4,
+      cancellation: signal)
+    let creatorCalls = StringRecorder()
+    let resolvedAdmissions = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { _ in XCTFail("file roots must not create directories") }),
+      hooks: SidebarImportCoordinatorHooks(
+        didResolveReadAdmission: {
+          resolvedAdmissions.append($0.sourceRootName)
+        }))
+
+    let report = try await coordinator.copy(
+      roots: [
+        SidebarImportExternalRoot(providerIndex: 0, preparedSource: tooLargePrepared),
+        SidebarImportExternalRoot(providerIndex: 1, preparedSource: fittingPrepared),
+      ],
+      into: "",
+      reservingMoveBasenames: [])
+
+    XCTAssertEqual(creatorCalls.values(), ["b-fits.bin"])
+    XCTAssertEqual(resolvedAdmissions.values(), ["a-too-large.bin", "b-fits.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.path), ["b-fits.bin"])
+    XCTAssertEqual(report.successfulFileCount, 1)
+    XCTAssertEqual(report.bytesCopied, 1)
+    XCTAssertEqual(report.failures.count, 1)
+    XCTAssertEqual(report.failures.first?.identity.sourceRootName, "a-too-large.bin")
+    XCTAssertEqual(report.failures.first?.reason, .capacityExceeded)
+    XCTAssertFalse(report.wasCancelled)
+    XCTAssertFalse(report.requiresRescan)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 1)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCoordinatorReadFailureKeepsProviderTreeOrderAndLaterSiblingSucceeds()
+    async throws
+  {
+    let vault = try makeVault()
+    let source = tempDirectory.appendingPathComponent("ReadRoot", isDirectory: true)
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+    let failedSource = source.appendingPathComponent("a-failed.bin")
+    try Data([0x00]).write(to: source.appendingPathComponent(".hidden.bin"))
+    try Data([0x01]).write(to: failedSource)
+    try Data([0x02]).write(to: source.appendingPathComponent("b-good.bin"))
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 16,
+        totalBytes: 32,
+        maximumEntries: 8,
+        maximumDepth: 2),
+      scopeAccess: scope.access(),
+      cancellation: signal,
+      metrics: metrics)
+    let prepared = try walker.prepare(rootURL: source, vaultURL: vault)
+    try FileManager.default.removeItem(at: failedSource)
+    try FileManager.default.createDirectory(at: failedSource, withIntermediateDirectories: false)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 32,
+      normalResidentLimitBytes: 8,
+      cancellation: signal)
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { path in creatorCalls.append(path) }))
+
+    let report = try await coordinator.copy(
+      roots: [SidebarImportExternalRoot(providerIndex: 4, preparedSource: prepared)],
+      into: "",
+      reservingMoveBasenames: [])
+
+    XCTAssertEqual(creatorCalls.values(), ["ReadRoot", "ReadRoot/b-good.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.path), ["ReadRoot"])
+    XCTAssertEqual(report.successfulFolderCount, 1)
+    XCTAssertEqual(report.successfulFileCount, 1)
+    XCTAssertEqual(report.bytesCopied, 1)
+    XCTAssertEqual(
+      report.failures.map(\.identity.relativePath),
+      [".hidden.bin", "a-failed.bin"])
+    XCTAssertEqual(report.failures.first?.reason, .source(.hidden))
+    guard case .readFailed(let underlying) = report.failures.last?.reason else {
+      return XCTFail("expected typed read failure")
+    }
+    XCTAssertTrue(underlying.contains("notARegularFile"))
+    XCTAssertFalse(report.wasCancelled)
+    XCTAssertFalse(report.requiresRescan)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 1)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testCoordinatorPrecancelledTaskStartsNoAdmissionReadOrCreateAndClosesSource()
+    async throws
+  {
+    let vault = try makeVault()
+    let source = tempDirectory.appendingPathComponent("pre-cancelled.bin")
+    try Data([0x01]).write(to: source)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 16,
+        totalBytes: 16,
+        maximumEntries: 4,
+        maximumDepth: 1),
+      scopeAccess: scope.access(),
+      cancellation: signal,
+      metrics: metrics)
+    let prepared = try walker.prepare(rootURL: source, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 16,
+      normalResidentLimitBytes: 8,
+      cancellation: signal)
+    let admissionCalls = StringRecorder()
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { path in creatorCalls.append(path) }),
+      hooks: SidebarImportCoordinatorHooks(
+        willAttemptReadAdmission: {
+          admissionCalls.append($0.sourceRootName)
+        }))
+
+    let report = try await Task {
+      withUnsafeCurrentTask { $0?.cancel() }
+      return try await coordinator.copy(
+        roots: [SidebarImportExternalRoot(providerIndex: 6, preparedSource: prepared)],
+        into: "",
+        reservingMoveBasenames: [])
+    }.value
+
+    XCTAssertEqual(admissionCalls.values(), [])
+    XCTAssertEqual(creatorCalls.values(), [])
+    XCTAssertEqual(report.cancelledEntries.map(\.sourceRootName), ["pre-cancelled.bin"])
+    XCTAssertTrue(report.wasCancelled)
+    XCTAssertEqual(report.successfulFileCount, 0)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(metrics.snapshot().totalReadOperations, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testCoordinatorRetainsOversizedExclusivePermitUntilCreatorReturns()
+    async throws
+  {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("a-oversized.bin")
+    let secondSource = tempDirectory.appendingPathComponent("b-normal.bin")
+    try Data([0x01, 0x02]).write(to: firstSource)
+    try Data([0x03]).write(to: secondSource)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = makeWalker(scope: scope, cancellation: signal)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 32,
+      normalResidentLimitBytes: 1,
+      cancellation: signal)
+    let creatorGate = BlockingGate()
+    let creatorCalls = StringRecorder()
+    let resolvedAdmissions = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in
+          creatorCalls.append(path)
+          creatorGate.block()
+        },
+        createDirectory: { _ in XCTFail("file roots must not create directories") }),
+      hooks: SidebarImportCoordinatorHooks(
+        didResolveReadAdmission: {
+          resolvedAdmissions.append($0.sourceRootName)
+        }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [
+          SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+          SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+        ],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(creatorGate.waitUntilBlocked())
+    XCTAssertTrue(
+      waitForScheduler { scheduler.snapshot().waitingRequests == 1 },
+      "normal admission must remain blocked through the oversized creator call")
+    let heldSnapshot = scheduler.snapshot()
+    XCTAssertTrue(heldSnapshot.hasExclusivePermit)
+    XCTAssertEqual(heldSnapshot.oversizedResidentBytes, 2)
+    XCTAssertEqual(heldSnapshot.activeReadyPermits, 1)
+    XCTAssertEqual(resolvedAdmissions.values(), ["a-oversized.bin"])
+    creatorGate.unblock()
+    let report = try await copyTask.value
+
+    XCTAssertEqual(creatorCalls.values(), ["a-oversized.bin", "b-normal.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.path), [
+      "a-oversized.bin", "b-normal.bin",
+    ])
+    XCTAssertEqual(report.successfulFileCount, 2)
+    XCTAssertEqual(report.bytesCopied, 3)
+    XCTAssertEqual(report.failures, [])
+    XCTAssertEqual(resolvedAdmissions.values(), ["a-oversized.bin", "b-normal.bin"])
+    let finalSnapshot = scheduler.snapshot()
+    XCTAssertEqual(finalSnapshot.highWaterOversizedResidentBytes, 2)
+    XCTAssertEqual(finalSnapshot.committedBytes, 3)
+    XCTAssertEqual(finalSnapshot.tentativeBytes, 0)
+    XCTAssertFalse(finalSnapshot.hasExclusivePermit)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testUnreadReservedReadDeinitDiscardsAdmissionWithoutOpeningSource() throws {
+    let vault = try makeVault()
+    let source = tempDirectory.appendingPathComponent("reserved-unread.bin")
+    try Data([0x01]).write(to: source)
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 16,
+        totalBytes: 16,
+        maximumEntries: 4,
+        maximumDepth: 1),
+      scopeAccess: scope.access(),
+      cancellation: signal,
+      metrics: metrics)
+    let prepared = try walker.prepare(rootURL: source, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 16,
+      normalResidentLimitBytes: 8,
+      cancellation: signal)
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+
+    var reservedRead: SidebarImportReservedRead? = try prepared.reserveRead(
+      for: entry,
+      scheduler: scheduler)
+    XCTAssertNotNil(reservedRead)
+    XCTAssertEqual(scheduler.snapshot().activeNormalPermits, 1)
+    XCTAssertEqual(scheduler.snapshot().normalPlannedBytes, 1)
+    XCTAssertEqual(metrics.snapshot().totalReadOperations, 0)
+
+    reservedRead = nil
+
+    XCTAssertEqual(scheduler.snapshot().activeNormalPermits, 0)
+    XCTAssertEqual(scheduler.snapshot().normalPlannedBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(metrics.snapshot().totalReadOperations, 0)
+    prepared.close()
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testCoordinatorNeverMergesDirectoriesAndUsesActualParentNamespaces() async throws {
+    let vault = try makeVault()
+    let imports = vault.appendingPathComponent("Imports", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: imports.appendingPathComponent("Package", isDirectory: true),
+      withIntermediateDirectories: true)
+    try Data([0xEE]).write(
+      to: imports.appendingPathComponent("Package/existing.bin"))
+
+    let sourceParents = tempDirectory.appendingPathComponent("tree-sources", isDirectory: true)
+    try FileManager.default.createDirectory(at: sourceParents, withIntermediateDirectories: false)
+    let firstPackage = sourceParents.appendingPathComponent("first/Package", isDirectory: true)
+    let secondPackage = sourceParents.appendingPathComponent("second/Package", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: firstPackage.appendingPathComponent("A", isDirectory: true),
+      withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(
+      at: firstPackage.appendingPathComponent("B", isDirectory: true),
+      withIntermediateDirectories: true)
+    try FileManager.default.createDirectory(at: secondPackage, withIntermediateDirectories: true)
+    try Data([0x0A]).write(to: firstPackage.appendingPathComponent("A/same.txt"))
+    try Data([0x0B]).write(to: firstPackage.appendingPathComponent("B/same.txt"))
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      cancellation: signal)
+    let roots = [
+      SidebarImportExternalRoot(
+        providerIndex: 0,
+        preparedSource: try walker.prepare(rootURL: firstPackage, vaultURL: vault)),
+      SidebarImportExternalRoot(
+        providerIndex: 1,
+        preparedSource: try walker.prepare(rootURL: secondPackage, vaultURL: vault)),
+    ]
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let session = try VaultSession.openFilesystem(rootPath: vault.path)
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: .production(session: session))
+
+    let report = try await coordinator.copy(
+      roots: roots,
+      into: "Imports",
+      reservingMoveBasenames: [])
+
+    XCTAssertEqual(
+      report.verifiedTopLevelDestinations.map(\.path),
+      ["Imports/Package 2", "Imports/Package 3"])
+    XCTAssertEqual(
+      try Data(contentsOf: imports.appendingPathComponent("Package 2/A/same.txt")),
+      Data([0x0A]))
+    XCTAssertEqual(
+      try Data(contentsOf: imports.appendingPathComponent("Package 2/B/same.txt")),
+      Data([0x0B]))
+    XCTAssertEqual(
+      try Data(contentsOf: imports.appendingPathComponent("Package/existing.bin")),
+      Data([0xEE]))
+    XCTAssertEqual(report.successfulFolderCount, 4)
+    XCTAssertEqual(report.successfulFileCount, 2)
+    XCTAssertEqual(report.failures, [])
+  }
+
+  func testCoordinatorAllowsTwoReadsButPublishesInTreeOrder() async throws {
+    let vault = try makeVault()
+    let source = tempDirectory.appendingPathComponent("files", isDirectory: true)
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: false)
+    try Data([0x0A]).write(to: source.appendingPathComponent("a.bin"))
+    try Data([0x0B]).write(to: source.appendingPathComponent("b.bin"))
+    try Data([0x0C]).write(to: source.appendingPathComponent("c.bin"))
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let readGate = OrderedReadGate()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didReachBoundary: { readGate.reach($0) }),
+      cancellation: signal,
+      metrics: metrics)
+    let prepared = try walker.prepare(rootURL: source, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorOrder = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorOrder.append(path) },
+        createDirectory: { path in creatorOrder.append(path) }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [SidebarImportExternalRoot(providerIndex: 0, preparedSource: prepared)],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(readGate.waitForA())
+    let overlapped = readGate.waitForB(timeout: 0.25)
+    if overlapped {
+      readGate.unblockB()
+      XCTAssertTrue(
+        waitForScheduler { readGate.completionOrder().first == "b.bin" })
+      readGate.unblockA()
+    } else {
+      readGate.unblockA()
+      XCTAssertTrue(readGate.waitForB())
+      readGate.unblockB()
+    }
+    let report = try await copyTask.value
+
+    XCTAssertTrue(overlapped, "the first two reads should be in flight together")
+    XCTAssertEqual(Array(readGate.completionOrder().prefix(2)), ["b.bin", "a.bin"])
+    XCTAssertEqual(
+      creatorOrder.values(),
+      ["files", "files/a.bin", "files/b.bin", "files/c.bin"])
+    XCTAssertEqual(metrics.snapshot().highWaterActiveReads, 2)
+    XCTAssertEqual(scheduler.snapshot().highWaterActivePermits, 2)
+    XCTAssertEqual(scheduler.snapshot().activeReadyPermits, 0)
+    XCTAssertEqual(report.successfulFileCount, 3)
+    XCTAssertEqual(report.successfulFolderCount, 1)
+    XCTAssertEqual(report.bytesCopied, 3)
+  }
+
+  func testCoordinatorAllowsTwoRootReadsButPublishesInProviderOrder() async throws {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("provider-first.bin")
+    let secondSource = tempDirectory.appendingPathComponent("provider-second.bin")
+    try Data([0x01]).write(to: firstSource)
+    try Data([0x02]).write(to: secondSource)
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let readGate = TwoReadGate()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didReachBoundary: { boundary in
+          if case .beforeRead("", offset: 0) = boundary {
+            readGate.block()
+          }
+        }),
+      cancellation: signal,
+      metrics: metrics)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorOrder = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorOrder.append(path) },
+        createDirectory: { _ in XCTFail("file roots must not create directories") }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [
+          SidebarImportExternalRoot(providerIndex: 7, preparedSource: firstPrepared),
+          SidebarImportExternalRoot(providerIndex: 3, preparedSource: secondPrepared),
+        ],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    let overlapped = readGate.waitForBoth(timeout: 0.25)
+    readGate.unblockBoth()
+    let report = try await copyTask.value
+
+    XCTAssertTrue(overlapped, "root reads should share the two-read window")
+    XCTAssertEqual(creatorOrder.values(), ["provider-first.bin", "provider-second.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.providerIndex), [7, 3])
+    XCTAssertEqual(metrics.snapshot().highWaterActiveReads, 2)
+    XCTAssertEqual(scheduler.snapshot().highWaterActivePermits, 2)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCoordinatorOrdersOversizedThenNormalAdmissionWhenLaterTaskArrivesFirst()
+    async throws
+  {
+    try await assertCoordinatorOrdersReadAdmissionWhenLaterTaskArrivesFirst(
+      firstByteCount: 2,
+      secondByteCount: 1,
+      normalResidentLimitBytes: 1)
+  }
+
+  func testCoordinatorOrdersNormalThenOversizedAdmissionWhenLaterTaskArrivesFirst()
+    async throws
+  {
+    try await assertCoordinatorOrdersReadAdmissionWhenLaterTaskArrivesFirst(
+      firstByteCount: 1,
+      secondByteCount: 2,
+      normalResidentLimitBytes: 1)
+  }
+
+  func testCoordinatorOrdersNormalAdmissionWhenCombinedPlanExceedsResidentLimit()
+    async throws
+  {
+    try await assertCoordinatorOrdersReadAdmissionWhenLaterTaskArrivesFirst(
+      firstByteCount: 2,
+      secondByteCount: 2,
+      normalResidentLimitBytes: 3)
+  }
+
+  func testCoordinatorCancellationBeforeCreatorLeaseMakesNoCreatorCall() async throws {
+    let vault = try makeVault()
+    let source = tempDirectory.appendingPathComponent("cancel-before.bin")
+    try Data([0x01]).write(to: source)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let prepared = try makeWalker(scope: scope, cancellation: signal)
+      .prepare(rootURL: source, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let beforeLease = BlockingGate()
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { path in creatorCalls.append(path) }),
+      hooks: SidebarImportCoordinatorHooks(
+        willAttemptCreate: { _, _ in beforeLease.block() }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [SidebarImportExternalRoot(providerIndex: 8, preparedSource: prepared)],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(beforeLease.waitUntilBlocked())
+    coordinator.cancel()
+    beforeLease.unblock()
+    let report = try await copyTask.value
+
+    XCTAssertEqual(creatorCalls.values(), [])
+    XCTAssertTrue(report.wasCancelled)
+    XCTAssertEqual(report.cancelledEntryCount, 1)
+    XCTAssertEqual(report.cancelledEntries.first?.providerIndex, 8)
+    XCTAssertEqual(report.cancelledEntries.first?.sourceRootName, "cancel-before.bin")
+    XCTAssertEqual(report.successfulFileCount, 0)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scope.counts().starts, 1)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testCoordinatorEnteredCreatorWinsAndCancellationWaitsThenStopsLaterWork()
+    async throws
+  {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("first.bin")
+    let secondSource = tempDirectory.appendingPathComponent("second.bin")
+    let thirdSource = tempDirectory.appendingPathComponent("third.bin")
+    try Data([0x01]).write(to: firstSource)
+    try Data([0x02]).write(to: secondSource)
+    try Data([0x03]).write(to: thirdSource)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      cancellation: signal)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let thirdPrepared = try walker.prepare(rootURL: thirdSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorGate = BlockingGate()
+    let creatorCalls = StringRecorder()
+    let admissionCalls = StringRecorder()
+    let cancelReturned = ValueBox<Bool>()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in
+          creatorCalls.append(path)
+          creatorGate.block()
+        },
+        createDirectory: { path in creatorCalls.append(path) }),
+      hooks: SidebarImportCoordinatorHooks(
+        willAttemptReadAdmission: {
+          admissionCalls.append($0.sourceRootName)
+        }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [
+          SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+          SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+          SidebarImportExternalRoot(providerIndex: 2, preparedSource: thirdPrepared),
+        ],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(creatorGate.waitUntilBlocked())
+    let cancelTask = Task.detached {
+      coordinator.cancel()
+      cancelReturned.store(true)
+    }
+    usleep(50_000)
+    XCTAssertNil(cancelReturned.load(), "cancel must wait for an entered creator")
+    creatorGate.unblock()
+    await cancelTask.value
+    let report = try await copyTask.value
+
+    XCTAssertEqual(creatorCalls.values(), ["first.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.path), ["first.bin"])
+    XCTAssertEqual(report.successfulFileCount, 1)
+    XCTAssertEqual(report.bytesCopied, 1)
+    XCTAssertTrue(report.wasCancelled)
+    XCTAssertEqual(report.cancelledEntryCount, 2)
+    XCTAssertEqual(
+      report.cancelledEntries.map(\.sourceRootName),
+      ["second.bin", "third.bin"])
+    XCTAssertEqual(admissionCalls.values().sorted(), ["first.bin", "second.bin"])
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 1)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scope.counts().starts, 3)
+    XCTAssertEqual(scope.counts().stops, 3)
+  }
+
+  func testCoordinatorUnknownDirectoryBlocksDescendantsAndContinuesIndependentSibling()
+    async throws
+  {
+    let vault = try makeVault()
+    let source = tempDirectory.appendingPathComponent("Root", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: source.appendingPathComponent("a-unknown", isDirectory: true),
+      withIntermediateDirectories: true)
+    try Data([0x01]).write(to: source.appendingPathComponent(".hidden.bin"))
+    try Data([0x02]).write(to: source.appendingPathComponent("a-unknown/child.bin"))
+    try Data([0x03]).write(to: source.appendingPathComponent("z-good.bin"))
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let prepared = try makeWalker(scope: scope, cancellation: signal)
+      .prepare(rootURL: source, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { path in
+          creatorCalls.append(path)
+          if path == "Root/a-unknown" {
+            throw CreatorTestError.postPublishIndexFailure
+          }
+        }))
+
+    let report = try await coordinator.copy(
+      roots: [SidebarImportExternalRoot(providerIndex: 5, preparedSource: prepared)],
+      into: "",
+      reservingMoveBasenames: [])
+
+    XCTAssertEqual(
+      creatorCalls.values(),
+      ["Root", "Root/a-unknown", "Root/z-good.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.path), ["Root"])
+    XCTAssertEqual(report.successfulFolderCount, 1)
+    XCTAssertEqual(report.successfulFileCount, 1)
+    XCTAssertEqual(report.bytesCopied, 1)
+    XCTAssertTrue(report.requiresRescan)
+    XCTAssertEqual(report.unknownCandidates.map(\.candidatePath), ["Root/a-unknown"])
+    XCTAssertEqual(
+      report.failures.map(\.identity.relativePath),
+      [".hidden.bin", "a-unknown", "a-unknown/child.bin"])
+    XCTAssertEqual(report.failures.first?.reason, .source(.hidden))
+    XCTAssertEqual(
+      report.failures.dropFirst().first?.reason,
+      .physicalOutcomeUnknown(
+        candidatePath: "Root/a-unknown",
+        underlying: "postPublishIndexFailure"))
+    XCTAssertEqual(
+      report.failures.last?.reason,
+      .blockedByUnknownAncestor(candidatePath: "Root/a-unknown"))
+    XCTAssertFalse(report.wasCancelled)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 1)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testCoordinatorTaskCancellationDuringReadUsesSharedSignalAndCleansUp()
+    async throws
+  {
+    let vault = try makeVault()
+    let source = tempDirectory.appendingPathComponent("cancel-read.bin")
+    try Data(repeating: 0xAB, count: 128).write(to: source)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let readGate = BlockingGate()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didReachBoundary: { boundary in
+          if case .beforeRead("", offset: 0) = boundary {
+            readGate.block()
+          }
+        }),
+      cancellation: signal)
+    let prepared = try walker.prepare(rootURL: source, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { path in creatorCalls.append(path) }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [SidebarImportExternalRoot(providerIndex: 2, preparedSource: prepared)],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(readGate.waitUntilBlocked())
+    copyTask.cancel()
+    readGate.unblock()
+    let report = try await copyTask.value
+
+    XCTAssertEqual(creatorCalls.values(), [])
+    XCTAssertTrue(report.wasCancelled)
+    XCTAssertEqual(report.cancelledEntryCount, 1)
+    XCTAssertEqual(report.cancelledEntries.first?.sourceRootName, "cancel-read.bin")
+    XCTAssertEqual(report.successfulFileCount, 0)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().activeReadingPermits, 0)
+    XCTAssertEqual(scheduler.snapshot().activeReadyPermits, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testCoordinatorCancellationWakesLaterOrderedAdmissionAndCleansAllOwnership()
+    async throws
+  {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("waiting-first.bin")
+    let secondSource = tempDirectory.appendingPathComponent("waiting-second.bin")
+    try Data([0x01, 0x02]).write(to: firstSource)
+    try Data([0x03]).write(to: secondSource)
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let firstReadGate = BlockingGate()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 16,
+        totalBytes: 32,
+        maximumEntries: 8,
+        maximumDepth: 2),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didReachBoundary: { boundary in
+          if case .beforeRead("", offset: 0) = boundary {
+            firstReadGate.block()
+          }
+        }),
+      cancellation: signal,
+      metrics: metrics)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 32,
+      normalResidentLimitBytes: 1,
+      cancellation: signal)
+    let creatorCalls = StringRecorder()
+    let resolvedAdmissions = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { _ in XCTFail("file roots must not create directories") }),
+      hooks: SidebarImportCoordinatorHooks(
+        didResolveReadAdmission: {
+          resolvedAdmissions.append($0.sourceRootName)
+        }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [
+          SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+          SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+        ],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(firstReadGate.waitUntilBlocked())
+    XCTAssertTrue(
+      waitForScheduler { scheduler.snapshot().waitingRequests == 1 },
+      "later ordered admission should be waiting behind the oversized permit")
+    copyTask.cancel()
+    firstReadGate.unblock()
+    let report = try await copyTask.value
+
+    XCTAssertEqual(creatorCalls.values(), [])
+    XCTAssertEqual(resolvedAdmissions.values(), ["waiting-first.bin"])
+    XCTAssertEqual(
+      report.cancelledEntries.map(\.sourceRootName),
+      ["waiting-first.bin", "waiting-second.bin"])
+    XCTAssertTrue(report.wasCancelled)
+    let snapshot = scheduler.snapshot()
+    XCTAssertEqual(snapshot.committedBytes, 0)
+    XCTAssertEqual(snapshot.tentativeBytes, 0)
+    XCTAssertEqual(snapshot.waitingRequests, 0)
+    XCTAssertEqual(snapshot.activeNormalPermits, 0)
+    XCTAssertFalse(snapshot.hasExclusivePermit)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCoordinatorCancellationWhileLaterTicketWaitsForAdmissionTurnCleansAllOwnership()
+    async throws
+  {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("ticket-first.bin")
+    let secondSource = tempDirectory.appendingPathComponent("ticket-second.bin")
+    try Data([0x01]).write(to: firstSource)
+    try Data([0x02]).write(to: secondSource)
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let installGate = BlockingGate()
+    let waitProbe = AdmissionWaitProbe()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 16,
+        totalBytes: 32,
+        maximumEntries: 8,
+        maximumDepth: 2),
+      scopeAccess: scope.access(),
+      cancellation: signal,
+      metrics: metrics)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 32,
+      normalResidentLimitBytes: 8,
+      cancellation: signal,
+      hooks: SidebarImportByteSchedulerHooks(
+        willAttemptPermitInstall: { installGate.block() }))
+    let creatorCalls = StringRecorder()
+    let resolvedAdmissions = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { _ in XCTFail("file roots must not create directories") }),
+      hooks: SidebarImportCoordinatorHooks(
+        didWaitForReadAdmission: { waitProbe.record($0) },
+        didResolveReadAdmission: {
+          resolvedAdmissions.append($0.sourceRootName)
+        }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [
+          SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+          SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+        ],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(installGate.waitUntilBlocked())
+    XCTAssertTrue(waitProbe.waitUntilRecorded())
+    XCTAssertEqual(waitProbe.names(), ["ticket-second.bin"])
+    copyTask.cancel()
+    installGate.unblock()
+    let report = try await copyTask.value
+
+    XCTAssertEqual(creatorCalls.values(), [])
+    XCTAssertEqual(resolvedAdmissions.values(), [])
+    XCTAssertEqual(
+      report.cancelledEntries.map(\.sourceRootName),
+      ["ticket-first.bin", "ticket-second.bin"])
+    XCTAssertTrue(report.wasCancelled)
+    let snapshot = scheduler.snapshot()
+    XCTAssertEqual(snapshot.committedBytes, 0)
+    XCTAssertEqual(snapshot.tentativeBytes, 0)
+    XCTAssertEqual(snapshot.waitingRequests, 0)
+    XCTAssertEqual(snapshot.activeNormalPermits, 0)
+    XCTAssertFalse(snapshot.hasExclusivePermit)
+    XCTAssertEqual(metrics.snapshot().totalReadOperations, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCoordinatorUnknownFileIsExcludedReservedAndIndependentSiblingSucceeds()
+    async throws
+  {
+    let vault = try makeVault()
+    let firstParent = tempDirectory.appendingPathComponent("unknown-file-first", isDirectory: true)
+    let secondParent = tempDirectory.appendingPathComponent("unknown-file-second", isDirectory: true)
+    try FileManager.default.createDirectory(at: firstParent, withIntermediateDirectories: false)
+    try FileManager.default.createDirectory(at: secondParent, withIntermediateDirectories: false)
+    let firstSource = firstParent.appendingPathComponent("same.bin")
+    let secondSource = secondParent.appendingPathComponent("same.bin")
+    try Data([0x01]).write(to: firstSource)
+    try Data([0x02]).write(to: secondSource)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = makeWalker(scope: scope, cancellation: signal)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in
+          creatorCalls.append(path)
+          if path == "same.bin" {
+            throw CreatorTestError.postPublishIndexFailure
+          }
+        },
+        createDirectory: { path in creatorCalls.append(path) }))
+
+    let report = try await coordinator.copy(
+      roots: [
+        SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+        SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+      ],
+      into: "",
+      reservingMoveBasenames: [])
+
+    XCTAssertEqual(creatorCalls.values(), ["same.bin", "same 2.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.path), ["same 2.bin"])
+    XCTAssertEqual(report.successfulFileCount, 1)
+    XCTAssertEqual(report.bytesCopied, 1)
+    XCTAssertEqual(report.unknownCandidates.map(\.candidatePath), ["same.bin"])
+    XCTAssertEqual(
+      report.failures.map(\.reason),
+      [
+        .physicalOutcomeUnknown(
+          candidatePath: "same.bin",
+          underlying: "postPublishIndexFailure")
+      ])
+    XCTAssertTrue(report.requiresRescan)
+    XCTAssertFalse(report.wasCancelled)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 1)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCopyTaskCancellationReturnsPromptlyWhileEnteredCreatorFinishes() async throws {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("task-first.bin")
+    let secondSource = tempDirectory.appendingPathComponent("task-second.bin")
+    try Data([0x01]).write(to: firstSource)
+    try Data([0x02]).write(to: secondSource)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = makeWalker(scope: scope, cancellation: signal)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorGate = BlockingGate()
+    let creatorCalls = StringRecorder()
+    let cancellationReturned = ValueBox<Bool>()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in
+          creatorCalls.append(path)
+          creatorGate.block()
+        },
+        createDirectory: { path in creatorCalls.append(path) }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [
+          SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+          SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+        ],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(creatorGate.waitUntilBlocked())
+    let cancelCaller = Task.detached {
+      copyTask.cancel()
+      cancellationReturned.store(true)
+    }
+    let returnedPromptly = waitForScheduler(timeout: 0.25) {
+      cancellationReturned.load() == true
+    }
+    creatorGate.unblock()
+    await cancelCaller.value
+    let report = try await copyTask.value
+
+    XCTAssertTrue(
+      returnedPromptly,
+      "Task.cancel() must not wait on the entered filesystem creator")
+    XCTAssertEqual(creatorCalls.values(), ["task-first.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.path), ["task-first.bin"])
+    XCTAssertEqual(report.successfulFileCount, 1)
+    XCTAssertEqual(report.cancelledEntries.map(\.sourceRootName), ["task-second.bin"])
+    XCTAssertTrue(report.wasCancelled)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 1)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCoordinatorEnteredUnknownSurvivesCancellationAndStopsLaterWork()
+    async throws
+  {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("unknown-during-cancel.bin")
+    let secondSource = tempDirectory.appendingPathComponent("later-after-unknown.bin")
+    try Data([0x01]).write(to: firstSource)
+    try Data([0x02]).write(to: secondSource)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = makeWalker(scope: scope, cancellation: signal)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorGate = BlockingGate()
+    let creatorCalls = StringRecorder()
+    let cancelReturned = ValueBox<Bool>()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in
+          creatorCalls.append(path)
+          creatorGate.block()
+          throw CreatorTestError.postPublishIndexFailure
+        },
+        createDirectory: { _ in XCTFail("file roots must not create directories") }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [
+          SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+          SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+        ],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(creatorGate.waitUntilBlocked())
+    let cancelTask = Task.detached {
+      coordinator.cancel()
+      cancelReturned.store(true)
+    }
+    usleep(50_000)
+    XCTAssertNil(cancelReturned.load(), "explicit cancel must fence the entered creator")
+    creatorGate.unblock()
+    await cancelTask.value
+    let report = try await copyTask.value
+
+    XCTAssertEqual(creatorCalls.values(), ["unknown-during-cancel.bin"])
+    XCTAssertEqual(report.verifiedTopLevelDestinations, [])
+    XCTAssertEqual(report.successfulFileCount, 0)
+    XCTAssertEqual(report.bytesCopied, 0)
+    XCTAssertEqual(report.failures.map(\.identity.sourceRootName), [
+      "unknown-during-cancel.bin", "later-after-unknown.bin",
+    ])
+    XCTAssertEqual(
+      report.failures.first?.reason,
+      .physicalOutcomeUnknown(
+        candidatePath: "unknown-during-cancel.bin",
+        underlying: "postPublishIndexFailure"))
+    XCTAssertEqual(report.failures.last?.reason, .cancelled)
+    XCTAssertEqual(report.unknownCandidates.map(\.candidatePath), [
+      "unknown-during-cancel.bin"
+    ])
+    XCTAssertTrue(report.requiresRescan)
+    XCTAssertTrue(report.wasCancelled)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCoordinatorDestinationExistsObservedAfterCancellationIsCancelledNotUnknown()
+    async throws
+  {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("collision-during-cancel.bin")
+    let secondSource = tempDirectory.appendingPathComponent("later-after-collision.bin")
+    try Data([0x01]).write(to: firstSource)
+    try Data([0x02]).write(to: secondSource)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = makeWalker(scope: scope, cancellation: signal)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let creatorGate = BlockingGate()
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in
+          creatorCalls.append(path)
+          creatorGate.block()
+          throw VaultError.DestinationExists(path: path)
+        },
+        createDirectory: { _ in XCTFail("file roots must not create directories") }))
+
+    let copyTask = Task {
+      try await coordinator.copy(
+        roots: [
+          SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+          SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+        ],
+        into: "",
+        reservingMoveBasenames: [])
+    }
+    XCTAssertTrue(creatorGate.waitUntilBlocked())
+    let cancelTask = Task.detached { coordinator.cancel() }
+    creatorGate.unblock()
+    await cancelTask.value
+    let report = try await copyTask.value
+
+    XCTAssertEqual(creatorCalls.values(), ["collision-during-cancel.bin"])
+    XCTAssertEqual(report.cancelledEntries.map(\.sourceRootName), [
+      "collision-during-cancel.bin", "later-after-collision.bin",
+    ])
+    XCTAssertTrue(report.wasCancelled)
+    XCTAssertFalse(report.requiresRescan)
+    XCTAssertEqual(report.unknownCandidates, [])
+    XCTAssertEqual(report.successfulFileCount, 0)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCoordinatorMismatchedSignalClosesEveryPreparedSourceBeforeThrowing()
+    async throws
+  {
+    let vault = try makeVault()
+    let source = tempDirectory.appendingPathComponent("mismatched-signal.bin")
+    try Data([0x01]).write(to: source)
+    let sourceSignal = SidebarImportEngineSignal()
+    let coordinatorSignal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 16,
+        totalBytes: 16,
+        maximumEntries: 4,
+        maximumDepth: 1),
+      scopeAccess: scope.access(),
+      cancellation: sourceSignal,
+      metrics: metrics)
+    let prepared = try walker.prepare(rootURL: source, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 16,
+      normalResidentLimitBytes: 8,
+      cancellation: coordinatorSignal)
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: coordinatorSignal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { path in creatorCalls.append(path) }))
+
+    do {
+      _ = try await coordinator.copy(
+        roots: [SidebarImportExternalRoot(providerIndex: 0, preparedSource: prepared)],
+        into: "",
+        reservingMoveBasenames: [])
+      XCTFail("expected mismatched cancellation signal")
+    } catch {
+      XCTAssertEqual(
+        error as? SidebarImportCoordinatorError,
+        .mismatchedCancellationSignal)
+    }
+
+    XCTAssertEqual(creatorCalls.values(), [])
+    XCTAssertEqual(scheduler.snapshot().activeNormalPermits, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testCoordinatorPublishesInitialAndPerRootProgressSnapshots() async throws {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("progress-first.bin")
+    let secondSource = tempDirectory.appendingPathComponent("progress-second.bin")
+    try Data([0x01]).write(to: firstSource)
+    try Data([0x02]).write(to: secondSource)
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = makeWalker(scope: scope, cancellation: signal)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 4_096,
+      normalResidentLimitBytes: 1_024,
+      cancellation: signal)
+    let session = try VaultSession.openFilesystem(rootPath: vault.path)
+    let observedProgress = ProgressRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: .production(session: session),
+      hooks: SidebarImportCoordinatorHooks(
+        didUpdateProgress: { observedProgress.append($0) }))
+
+    let report = try await coordinator.copy(
+      roots: [
+        SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+        SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+      ],
+      into: "",
+      reservingMoveBasenames: [])
+
+    let expected = [
+      SidebarImportProgressSnapshot(completedTopLevel: 0, totalTopLevel: 2),
+      SidebarImportProgressSnapshot(completedTopLevel: 1, totalTopLevel: 2),
+      SidebarImportProgressSnapshot(completedTopLevel: 2, totalTopLevel: 2),
+    ]
+    XCTAssertEqual(report.progressSnapshots, expected)
+    XCTAssertEqual(observedProgress.values(), expected)
+    XCTAssertEqual(scope.counts().stops, 2)
   }
 
   private final class ProviderStub: SidebarImportProviderLoading, @unchecked Sendable {
@@ -268,6 +1890,174 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     }
   }
 
+  private final class ReverseAdmissionGate: @unchecked Sendable {
+    private let firstEntered = DispatchSemaphore(value: 0)
+    private let secondEntered = DispatchSemaphore(value: 0)
+    private let releaseFirst = DispatchSemaphore(value: 0)
+    private let releaseSecond = DispatchSemaphore(value: 0)
+    private let secondProgressed = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var resolvedNames: [String] = []
+    private let firstName: String
+    private let secondName: String
+
+    init(firstName: String, secondName: String) {
+      self.firstName = firstName
+      self.secondName = secondName
+    }
+
+    func reach(_ identity: SidebarImportEntryIdentity) {
+      switch identity.sourceRootName {
+      case firstName:
+        firstEntered.signal()
+        releaseFirst.wait()
+      case secondName:
+        secondEntered.signal()
+        releaseSecond.wait()
+      default:
+        break
+      }
+    }
+
+    func waitForBoth(timeout: TimeInterval = 1) -> Bool {
+      firstEntered.wait(timeout: .now() + timeout) == .success
+        && secondEntered.wait(timeout: .now() + timeout) == .success
+    }
+
+    func unblockFirst() {
+      releaseFirst.signal()
+    }
+
+    func unblockSecond() {
+      releaseSecond.signal()
+    }
+
+    func didResolve(_ identity: SidebarImportEntryIdentity) {
+      lock.lock()
+      resolvedNames.append(identity.sourceRootName)
+      lock.unlock()
+      if identity.sourceRootName == secondName {
+        secondProgressed.signal()
+      }
+    }
+
+    func didWait(_ identity: SidebarImportEntryIdentity) {
+      if identity.sourceRootName == secondName {
+        secondProgressed.signal()
+      }
+    }
+
+    func waitForSecondAdmissionProgress(timeout: TimeInterval = 1) -> Bool {
+      secondProgressed.wait(timeout: .now() + timeout) == .success
+    }
+
+    func resolutionOrder() -> [String] {
+      lock.lock()
+      defer { lock.unlock() }
+      return resolvedNames
+    }
+  }
+
+  private final class OrderedReadGate: @unchecked Sendable {
+    private let aEntered = DispatchSemaphore(value: 0)
+    private let bEntered = DispatchSemaphore(value: 0)
+    private let releaseA = DispatchSemaphore(value: 0)
+    private let releaseB = DispatchSemaphore(value: 0)
+    private let lock = NSLock()
+    private var completed: [String] = []
+
+    func reach(_ boundary: SidebarImportSourceBoundary) {
+      switch boundary {
+      case .beforeRead("a.bin", offset: 0):
+        aEntered.signal()
+        releaseA.wait()
+      case .beforeRead("b.bin", offset: 0):
+        bEntered.signal()
+        releaseB.wait()
+      case .afterRead(let path, _, reachedEnd: true) where path == "a.bin" || path == "b.bin":
+        lock.lock()
+        completed.append(path)
+        lock.unlock()
+      default:
+        break
+      }
+    }
+
+    func waitForA(timeout: TimeInterval = 1) -> Bool {
+      aEntered.wait(timeout: .now() + timeout) == .success
+    }
+
+    func waitForB(timeout: TimeInterval = 1) -> Bool {
+      bEntered.wait(timeout: .now() + timeout) == .success
+    }
+
+    func unblockA() { releaseA.signal() }
+    func unblockB() { releaseB.signal() }
+
+    func completionOrder() -> [String] {
+      lock.lock()
+      defer { lock.unlock() }
+      return completed
+    }
+  }
+
+  private final class StringRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [String] = []
+
+    func append(_ value: String) {
+      lock.lock()
+      storage.append(value)
+      lock.unlock()
+    }
+
+    func values() -> [String] {
+      lock.lock()
+      defer { lock.unlock() }
+      return storage
+    }
+  }
+
+  private final class ProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [SidebarImportProgressSnapshot] = []
+
+    func append(_ value: SidebarImportProgressSnapshot) {
+      lock.lock()
+      storage.append(value)
+      lock.unlock()
+    }
+
+    func values() -> [SidebarImportProgressSnapshot] {
+      lock.lock()
+      defer { lock.unlock() }
+      return storage
+    }
+  }
+
+  private final class AdmissionWaitProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private let recorded = DispatchSemaphore(value: 0)
+    private var storage: [String] = []
+
+    func record(_ identity: SidebarImportEntryIdentity) {
+      lock.lock()
+      storage.append(identity.sourceRootName)
+      lock.unlock()
+      recorded.signal()
+    }
+
+    func waitUntilRecorded(timeout: TimeInterval = 1) -> Bool {
+      recorded.wait(timeout: .now() + timeout) == .success
+    }
+
+    func names() -> [String] {
+      lock.lock()
+      defer { lock.unlock() }
+      return storage
+    }
+  }
+
   private final class BoundaryProbe: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [SidebarImportSourceBoundary] = []
@@ -335,6 +2125,104 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       usleep(1_000)
     } while Date() < deadline
     return predicate()
+  }
+
+  private func assertCoordinatorOrdersReadAdmissionWhenLaterTaskArrivesFirst(
+    firstByteCount: Int,
+    secondByteCount: Int,
+    normalResidentLimitBytes: UInt64
+  ) async throws {
+    let vault = try makeVault()
+    let firstName = "admission-first-\(firstByteCount).bin"
+    let secondName = "admission-second-\(secondByteCount).bin"
+    let firstSource = tempDirectory.appendingPathComponent(firstName)
+    let secondSource = tempDirectory.appendingPathComponent(secondName)
+    try Data(repeating: 0xA1, count: firstByteCount).write(to: firstSource)
+    try Data(repeating: 0xB2, count: secondByteCount).write(to: secondSource)
+
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let metrics = SidebarImportSourceMetrics()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 32,
+        totalBytes: 64,
+        maximumEntries: 10,
+        maximumDepth: 2),
+      scopeAccess: scope.access(),
+      cancellation: signal,
+      metrics: metrics)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 64,
+      normalResidentLimitBytes: normalResidentLimitBytes,
+      cancellation: signal)
+    let admissionGate = ReverseAdmissionGate(
+      firstName: firstName,
+      secondName: secondName)
+    let creatorCalls = StringRecorder()
+    let completion = ValueBox<Bool>()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in creatorCalls.append(path) },
+        createDirectory: { _ in XCTFail("file roots must not create directories") }),
+      hooks: SidebarImportCoordinatorHooks(
+        willAttemptReadAdmission: { admissionGate.reach($0) },
+        didWaitForReadAdmission: { admissionGate.didWait($0) },
+        didResolveReadAdmission: { admissionGate.didResolve($0) }))
+
+    let copyTask = Task { () -> Result<SidebarImportReport, Error> in
+      do {
+        let report = try await coordinator.copy(
+          roots: [
+            SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+            SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+          ],
+          into: "",
+          reservingMoveBasenames: [])
+        completion.store(true)
+        return .success(report)
+      } catch {
+        completion.store(true)
+        return .failure(error)
+      }
+    }
+    XCTAssertTrue(admissionGate.waitForBoth())
+    admissionGate.unblockSecond()
+    XCTAssertTrue(admissionGate.waitForSecondAdmissionProgress())
+    admissionGate.unblockFirst()
+    let completedWithoutCancellation = waitForScheduler(timeout: 1) {
+      completion.load() == true
+    }
+    guard completedWithoutCancellation else {
+      signal.requestCancellation()
+      _ = await copyTask.value
+      return XCTFail(
+        "later scheduler admission must not deadlock earlier ordered publication")
+    }
+
+    let result = await copyTask.value
+    guard case .success(let report) = result else {
+      return XCTFail("ordered admission copy unexpectedly failed: \(result)")
+    }
+    XCTAssertEqual(creatorCalls.values(), [firstName, secondName])
+    XCTAssertEqual(admissionGate.resolutionOrder(), [firstName, secondName])
+    XCTAssertEqual(report.verifiedTopLevelDestinations.map(\.path), [firstName, secondName])
+    XCTAssertEqual(report.successfulFileCount, 2)
+    XCTAssertEqual(report.bytesCopied, UInt64(firstByteCount + secondByteCount))
+    XCTAssertEqual(report.failures, [])
+    XCTAssertFalse(report.wasCancelled)
+    let snapshot = scheduler.snapshot()
+    XCTAssertLessThanOrEqual(snapshot.highWaterNormalResidentBytes, normalResidentLimitBytes)
+    XCTAssertEqual(snapshot.committedBytes, UInt64(firstByteCount + secondByteCount))
+    XCTAssertEqual(snapshot.tentativeBytes, 0)
+    XCTAssertEqual(snapshot.activeNormalPermits, 0)
+    XCTAssertFalse(snapshot.hasExclusivePermit)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 2)
   }
 
   private final class PostInspectionSwapProbe: @unchecked Sendable {

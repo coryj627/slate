@@ -73,6 +73,13 @@ final class SidebarImportEngineSignal: @unchecked Sendable {
   private var cancelled = false
   private var activeOperationLeases = 0
 
+  func requestCancellation() {
+    condition.lock()
+    cancelled = true
+    condition.broadcast()
+    condition.unlock()
+  }
+
   func cancel() {
     condition.lock()
     cancelled = true
@@ -286,13 +293,26 @@ struct SidebarImportSourceLimits {
   }
 }
 
-enum SidebarImportSourceEntryKind: Equatable {
+enum SidebarImportSourceEntryKind: Equatable, Sendable {
   case directory
   case regularFile
 }
 
-struct SidebarImportSourceRelativePath: Equatable {
+struct SidebarImportSourceRelativePath: Equatable, Sendable {
   let display: String
+
+  var leafName: String? { components.last }
+
+  var parentDisplay: String {
+    components.dropLast().joined(separator: "/")
+  }
+
+  var directoryAncestorDisplays: [String] {
+    guard !components.isEmpty else { return [] }
+    return stride(from: components.count - 1, through: 0, by: -1).map {
+      components.prefix($0).joined(separator: "/")
+    }
+  }
 
   fileprivate let components: [String]
 
@@ -302,10 +322,11 @@ struct SidebarImportSourceRelativePath: Equatable {
   }
 }
 
-struct SidebarImportSourceEntry: Equatable {
+struct SidebarImportSourceEntry: Equatable, Sendable {
   let relativePath: SidebarImportSourceRelativePath
   let kind: SidebarImportSourceEntryKind
   let advisoryByteCount: UInt64
+  let traversalOrdinal: Int
 }
 
 struct SidebarImportSourceAdvisoryByteCount: Equatable, Sendable {
@@ -342,7 +363,7 @@ struct SidebarImportSourceAdvisoryByteCount: Equatable, Sendable {
   }
 }
 
-enum SidebarImportSourceFailureReason: Equatable {
+enum SidebarImportSourceFailureReason: Equatable, Sendable {
   case hidden
   case symbolicLink
   case fifo
@@ -359,9 +380,10 @@ enum SidebarImportSourceFailureReason: Equatable {
   case fileTooLarge(limitBytes: Int64)
 }
 
-struct SidebarImportSourceFailure: Equatable {
+struct SidebarImportSourceFailure: Equatable, Sendable {
   let relativePath: SidebarImportSourceRelativePath
   let reason: SidebarImportSourceFailureReason
+  let traversalOrdinal: Int
 }
 
 struct SidebarImportSourceEntryPairs: Equatable, ExpressibleByArrayLiteral {
@@ -412,15 +434,18 @@ struct SidebarImportSourceManifest: Equatable {
   let entries: SidebarImportSourceEntries
   let failures: [SidebarImportSourceFailure]
   let advisoryByteCount: SidebarImportSourceAdvisoryByteCount
+  let encounteredEntryCount: Int
 
   fileprivate init(
     entries: [SidebarImportSourceEntry],
     failures: [SidebarImportSourceFailure],
-    advisoryByteCount: SidebarImportSourceAdvisoryByteCount
+    advisoryByteCount: SidebarImportSourceAdvisoryByteCount,
+    encounteredEntryCount: Int
   ) {
     self.entries = SidebarImportSourceEntries(entries)
     self.failures = failures
     self.advisoryByteCount = advisoryByteCount
+    self.encounteredEntryCount = encounteredEntryCount
   }
 }
 
@@ -503,8 +528,32 @@ private final class SidebarImportPreparedSourceReadAuthority: @unchecked Sendabl
   }
 }
 
-final class SidebarImportPreparedSource {
+final class SidebarImportReservedRead: @unchecked Sendable {
+  private let lock = NSLock()
+  private var readAction: (() throws -> SidebarImportReadyRead)?
+
+  fileprivate init(
+    read: @escaping () throws -> SidebarImportReadyRead
+  ) {
+    readAction = read
+  }
+
+  func readBytes() throws -> SidebarImportReadyRead {
+    lock.lock()
+    guard let action = readAction else {
+      lock.unlock()
+      throw SidebarImportByteSchedulerError.invalidReservation
+    }
+    readAction = nil
+    lock.unlock()
+    return try action()
+  }
+}
+
+final class SidebarImportPreparedSource: @unchecked Sendable {
   let manifest: SidebarImportSourceManifest
+
+  var sourceRootName: String { rootURL.lastPathComponent }
 
   private let rootURL: URL
   private let limits: SidebarImportSourceLimits
@@ -551,6 +600,10 @@ final class SidebarImportPreparedSource {
 
   deinit {
     close()
+  }
+
+  func usesSignal(_ signal: SidebarImportEngineSignal) -> Bool {
+    cancellation === signal
   }
 
   func readBytes(for entry: SidebarImportSourceEntry) throws -> Data {
@@ -657,6 +710,13 @@ final class SidebarImportPreparedSource {
     for entry: SidebarImportSourceEntry,
     scheduler: SidebarImportByteScheduler
   ) throws -> SidebarImportReadyRead {
+    try reserveRead(for: entry, scheduler: scheduler).readBytes()
+  }
+
+  func reserveRead(
+    for entry: SidebarImportSourceEntry,
+    scheduler: SidebarImportByteScheduler
+  ) throws -> SidebarImportReservedRead {
     guard scheduler.usesSignal(cancellation) else {
       throw SidebarImportByteSchedulerError.mismatchedCancellationSignal
     }
@@ -668,14 +728,16 @@ final class SidebarImportPreparedSource {
     }
 
     let reservation = try scheduler.reserve(advisoryByteCount: entry.advisoryByteCount)
-    do {
-      return try readReservedBytes(
-        for: entry,
-        scheduler: scheduler,
-        reservation: reservation)
-    } catch {
-      reservation.discard()
-      throw error
+    return SidebarImportReservedRead { [self] in
+      do {
+        return try readReservedBytes(
+          for: entry,
+          scheduler: scheduler,
+          reservation: reservation)
+      } catch {
+        reservation.discard()
+        throw error
+      }
     }
   }
 
@@ -1230,7 +1292,8 @@ struct SidebarImportSourceWalker {
       manifest: SidebarImportSourceManifest(
         entries: state.entries,
         failures: state.failures,
-        advisoryByteCount: state.advisoryByteCount))
+        advisoryByteCount: state.advisoryByteCount,
+        encounteredEntryCount: state.encounteredEntries))
     transferredRoot = true
     transferredScope = true
     return prepared
@@ -1249,6 +1312,7 @@ struct SidebarImportSourceWalker {
     var failures: [SidebarImportSourceFailure] = []
     var advisoryByteCount: SidebarImportSourceAdvisoryByteCount
     var encounteredEntries = 0
+    var nextTraversalOrdinal = 0
 
     init(limits: SidebarImportSourceLimits) {
       self.limits = limits
@@ -1282,21 +1346,27 @@ struct SidebarImportSourceWalker {
           limitBytes: limits.refuseBytes)
       }
       advisoryByteCount.record(UInt64(fileBytes))
+      let traversalOrdinal = nextTraversalOrdinal
+      nextTraversalOrdinal += 1
       entries.append(
         SidebarImportSourceEntry(
           relativePath: SidebarImportSourceRelativePath(components: components),
           kind: kind,
-          advisoryByteCount: UInt64(fileBytes)))
+          advisoryByteCount: UInt64(fileBytes),
+          traversalOrdinal: traversalOrdinal))
     }
 
     mutating func reject(
       components: [String],
       reason: SidebarImportSourceFailureReason
     ) {
+      let traversalOrdinal = nextTraversalOrdinal
+      nextTraversalOrdinal += 1
       failures.append(
         SidebarImportSourceFailure(
           relativePath: SidebarImportSourceRelativePath(components: components),
-          reason: reason))
+          reason: reason,
+          traversalOrdinal: traversalOrdinal))
     }
   }
 
