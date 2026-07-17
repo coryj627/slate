@@ -4081,7 +4081,7 @@ struct FileTreeSidebar: View {
         _ node: TreeNode, rename: AppState.RenamingNode
     ) -> some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
-            HStack(spacing: Tokens.Spacing.xs) {
+            HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.xs) {
                 indent(for: node.depth)
                 if node.isDirectory {
                     SlateSymbol.folder.decorative.foregroundStyle(Tokens.ColorRole.textSecondary)
@@ -4096,15 +4096,6 @@ struct FileTreeSidebar: View {
                     onCancel: {
                         appState.cancelPendingRename(id: rename.id)
                     })
-            }
-            if let error = appState.structuralRenameError {
-                Text(error)
-                    .font(Tokens.Typography.caption)
-                    .foregroundStyle(Tokens.ColorRole.destructiveText)
-                    // WCAG 1.4.4: wrap, don't clip.
-                    .lineLimit(3)
-                    .padding(.leading, Self.indentWidth(for: node.depth))
-                    .accessibilityLabel("Rename error. \(error)")
             }
         }
     }
@@ -5188,34 +5179,55 @@ private struct RenameField: View {
     let onCommit: (String) -> Void
     let onCancel: () -> Void
 
-    @State private var text: String = ""
-    @State private var didSeed = false
+    @State private var text: String
     @FocusState private var focused: Bool
 
+    init(
+        initialName: String,
+        isDirectory: Bool,
+        error: String?,
+        onCommit: @escaping (String) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        self.initialName = initialName
+        self.isDirectory = isDirectory
+        self.error = error
+        self.onCommit = onCommit
+        self.onCancel = onCancel
+        _text = State(initialValue: initialName)
+    }
+
     var body: some View {
-        TextField("Name", text: $text)
-            .textFieldStyle(.roundedBorder)
-            .font(Tokens.Typography.body)
-            .focused($focused)
-            .accessibilityLabel(isDirectory ? "Folder name" : "File name")
-            .accessibilityHint("Type a new name. Return renames; Escape cancels.")
-            .onSubmit { onCommit(text) }
-            .onExitCommand { onCancel() }
-            .onChange(of: focused) { _, isFocused in
-                // Commit on focus loss (click-away) — but not on the initial
-                // pre-focus render, and not while an error keeps us focused.
-                if !isFocused && didSeed && error == nil {
-                    onCommit(text)
+        VStack(alignment: .leading, spacing: Tokens.Spacing.xxs) {
+            TextField("Name", text: $text)
+                .textFieldStyle(.roundedBorder)
+                .font(Tokens.Typography.body)
+                .focused($focused)
+                .accessibilityLabel(isDirectory ? "Folder name" : "File name")
+                .accessibilityHint("Type a new name. Return renames; Escape cancels.")
+                .onSubmit { onCommit(text) }
+                .onExitCommand { onCancel() }
+                .onChange(of: focused) { _, isFocused in
+                    // Commit on focus loss (click-away), unless a validation
+                    // error deliberately keeps the edit active for correction.
+                    if !isFocused && error == nil {
+                        onCommit(text)
+                    }
                 }
-            }
-            .onAppear {
-                if !didSeed {
-                    text = initialName
-                    didSeed = true
+                .onAppear {
+                    focused = true
+                    selectBaseName()
                 }
-                focused = true
-                selectBaseName()
+            if let error = error {
+                Text(error)
+                    .font(Tokens.Typography.caption)
+                    .foregroundStyle(Tokens.ColorRole.destructiveText)
+                    // WCAG 1.4.4: wrap, don't clip.
+                    .lineLimit(3)
+                    .accessibilityLabel("Rename error. \(error)")
             }
+            FilenameAdvisoryView(name: text)
+        }
     }
 
     /// Select the editable portion of the name: the whole thing for a folder,

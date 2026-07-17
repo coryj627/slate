@@ -29,7 +29,8 @@ struct TemplatePromptSheet: View {
                 PromptStep(template: template, prompts: prompts)
                     .environmentObject(appState)
             case .needsName(let template, _):
-                NameStep(template: template)
+                NameStep(template: template, initialName: appState.templateRetryNoteName
+                        ?? appState.defaultNewNoteName(for: template))
                     .environmentObject(appState)
             case .idle:
                 // Should never present in this state — the binding
@@ -149,9 +150,13 @@ private struct NameStep: View {
     let template: TemplateSummary
 
     @EnvironmentObject private var appState: AppState
-    @State private var noteName: String = ""
-    @State private var didSeed: Bool = false
+    @State private var noteName: String
     @FocusState private var nameFocused: Bool
+
+    init(template: TemplateSummary, initialName: String) {
+        self.template = template
+        _noteName = State(initialValue: initialName)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -177,6 +182,7 @@ private struct NameStep: View {
                         .foregroundStyle(Tokens.ColorRole.destructiveText)
                         .accessibilityLabel("Validation error: \(error)")
                 }
+                FilenameAdvisoryView(name: noteName)
                 if let reason = appState.structuralMutationDisabledReason {
                     Text(reason)
                         .font(.caption)
@@ -189,11 +195,6 @@ private struct NameStep: View {
             footer
         }
         .onAppear {
-            if !didSeed {
-                noteName = appState.templateRetryNoteName
-                    ?? appState.defaultNewNoteName(for: template)
-                didSeed = true
-            }
             DispatchQueue.main.async { nameFocused = true }
         }
     }

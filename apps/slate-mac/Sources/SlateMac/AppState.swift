@@ -1481,6 +1481,9 @@ final class AppState: ObservableObject {
         "The sidebar selection changed. Select the items again and retry."
     static let sidebarSelectionStaleReason =
         "That Sidebar action belongs to a vault that is no longer open."
+    static let sidebarCopyFailureReason = "Could not copy to the clipboard."
+    static let sidebarWikilinkFailureReason =
+        "Could not create a wikilink for this file."
 
     /// Accept a tree-owned snapshot only while the exact captured native
     /// session is current. A late publisher from a replaced tree is ignored;
@@ -1699,7 +1702,9 @@ final class AppState: ObservableObject {
             return .completed(actionID: intent.actionID)
 
         case SlateCommandID.copyPath:
-            return .copyPrepared(.path(intent.snapshot.items[0].path))
+            return try completeSidebarCopy(
+                intent.snapshot.items[0].path,
+                actionID: intent.actionID)
 
         case SlateCommandID.sidebarCopyWikilink:
             guard let session = currentSession else {
@@ -1714,10 +1719,12 @@ final class AppState: ObservableObject {
                     value = try session.wikilinkForPath(path: path)
                 }
             } catch {
-                throw sidebarActionFailure(error.localizedDescription)
+                throw sidebarActionFailure(Self.sidebarWikilinkFailureReason)
             }
-            guard let value else { throw sidebarActionFailure(rejected) }
-            return .copyPrepared(.wikilink(value))
+            guard let value else {
+                throw sidebarActionFailure(Self.sidebarWikilinkFailureReason)
+            }
+            return try completeSidebarCopy(value, actionID: intent.actionID)
 
         case SlateCommandID.deleteEntry:
             let selections = intent.snapshot.items.map {
@@ -1741,6 +1748,18 @@ final class AppState: ObservableObject {
         default:
             throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
         }
+    }
+
+    private func completeSidebarCopy(
+        _ value: String,
+        actionID: String
+    ) throws -> SidebarActionDispatchResult {
+        sidebarPasteboard.clearContents()
+        guard sidebarPasteboard.setString(value) else {
+            throw sidebarActionFailure(Self.sidebarCopyFailureReason)
+        }
+        announcer.post("Copied.", priority: .medium)
+        return .completed(actionID: actionID)
     }
 
     private func canonicalSidebarCreationParent(
@@ -4659,15 +4678,21 @@ final class AppState: ObservableObject {
     /// The default wraps the global `postAccessibilityAnnouncement`;
     /// tests inject a recording fake to assert the announce gates.
     let announcer: AnnouncementPosting
+    /// Clipboard seam for the Sidebar action dispatcher. The production value
+    /// is AppKit-backed; tests inject a recorder so copy failures are observable
+    /// without mutating the user's clipboard.
+    private let sidebarPasteboard: SidebarPasteboardWriting
 
     init(
         recentsStore: RecentVaultsStore? = nil,
         externalOpener: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
         preferencesStore: PreferencesStore = PreferencesStore(),
         commandPaletteRecentsStore: CommandPaletteRecentsStore? = nil,
-        announcer: AnnouncementPosting = AppKitAnnouncementPoster()
+        announcer: AnnouncementPosting = AppKitAnnouncementPoster(),
+        sidebarPasteboard: SidebarPasteboardWriting = AppKitSidebarPasteboard()
     ) {
         self.announcer = announcer
+        self.sidebarPasteboard = sidebarPasteboard
         // Fall back to an in-memory-only store (writes go to a temp
         // path that's discarded on exit) if the standard Application
         // Support location can't be set up. Better degraded than crash
@@ -14051,27 +14076,6 @@ final class AppState: ObservableObject {
             let url = currentVaultURL?.appendingPathComponent(node.path)
         else { return }
         NSWorkspace.shared.activateFileViewerSelecting([url])
-    }
-
-    /// File ▸ Copy Path / palette — copy the selected node's absolute
-    /// filesystem path (Finder's Copy-as-Pathname affordance).
-    func copySelectedPathCommand() {
-        guard let node = treeSelectedNode else { return }
-        copyAbsolutePath(vaultRelative: node.path)
-    }
-
-    /// Shared Copy Path implementation — the menu/palette command above
-    /// and the tree's context menu both land here so the pasteboard
-    /// write and the AT announcement can never diverge between surfaces
-    /// (red-team F7 on the corpus pass).
-    func copyAbsolutePath(vaultRelative path: String) {
-        guard isVaultOpen,
-            let url = currentVaultURL?.appendingPathComponent(path)
-        else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(url.path, forType: .string)
-        let name = (path as NSString).lastPathComponent
-        postAccessibilityAnnouncement("Copied path of \(name).")
     }
 
     /// ⌘⌫ (tree-focused) / context-menu "Move to Trash" — delete the selected

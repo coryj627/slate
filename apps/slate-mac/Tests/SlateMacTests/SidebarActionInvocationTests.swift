@@ -18,6 +18,20 @@ final class SidebarActionInvocationTests: XCTestCase {
         }
     }
 
+    private final class RecordingPasteboard: SidebarPasteboardWriting {
+        private(set) var clearCount = 0
+        private(set) var values: [String] = []
+
+        func clearContents() {
+            clearCount += 1
+        }
+
+        func setString(_ value: String) -> Bool {
+            values.append(value)
+            return true
+        }
+    }
+
     override func setUpWithError() throws {
         root = FileManager.default.temporaryDirectory
             .appendingPathComponent("slate-sidebar-invocation-\(UUID().uuidString)")
@@ -32,7 +46,8 @@ final class SidebarActionInvocationTests: XCTestCase {
         named name: String,
         files: [String] = [],
         folders: [String] = [],
-        announcer: AnnouncementPosting = AppKitAnnouncementPoster()
+        announcer: AnnouncementPosting = AppKitAnnouncementPoster(),
+        sidebarPasteboard: SidebarPasteboardWriting = AppKitSidebarPasteboard()
     ) throws -> AppState {
         let vault = root.appendingPathComponent(name)
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
@@ -53,7 +68,8 @@ final class SidebarActionInvocationTests: XCTestCase {
             recentsStore: RecentVaultsStore(
                 fileURL: root.appendingPathComponent("\(name)-recents.json")),
             externalOpener: { _ in true },
-            announcer: announcer)
+            announcer: announcer,
+            sidebarPasteboard: sidebarPasteboard)
         state.openVault(at: vault)
         let session = try XCTUnwrap(state.currentSession)
         _ = try session.scanInitial(cancel: CancelToken())
@@ -531,37 +547,34 @@ final class SidebarActionInvocationTests: XCTestCase {
         XCTAssertEqual(requests.map(\.1), ["Folder/A.md", "Folder/A.md"])
     }
 
-    func test09CopyPathReturnsPreparedVaultRelativeValueOnly() throws {
+    func test09CopyPathWritesVaultRelativeValueAndCompletes() throws {
         let announcer = RecordingAnnouncer()
+        let pasteboard = RecordingPasteboard()
         let state = try openVault(
             named: "copy-path", files: ["Folder/A.md"], folders: ["Folder"],
-            announcer: announcer)
+            announcer: announcer, sidebarPasteboard: pasteboard)
         let selection = try snapshot(
             on: state, [item("Folder/A.md")], focusedPath: "Folder/A.md",
             creationParent: "Folder")
         let announcementBaseline = announcer.posts.count
         let result = try state.dispatchSidebarAction(
             intent(SlateCommandID.copyPath, snapshot: selection))
-        XCTAssertEqual(result, .copyPrepared(.path("Folder/A.md")))
+        XCTAssertEqual(result, .completed(actionID: SlateCommandID.copyPath))
         XCTAssertFalse(String(describing: result).contains(root.path))
+        XCTAssertEqual(pasteboard.clearCount, 1)
+        XCTAssertEqual(pasteboard.values, ["Folder/A.md"])
         XCTAssertEqual(
-            announcer.posts.count, announcementBaseline,
-            "prepared copy never announces before Task 3 performs the copy")
-
-        let appState = try appSource("AppState.swift")
-        let dispatch = try functionBody(
-            named: "dispatchSidebarAction",
-            signatureFragment: "SidebarActionInvocationIntent",
-            in: appState)
-        for forbidden in ["NSPasteboard", "postAccessibilityAnnouncement", "announcer.post"] {
-            XCTAssertFalse(
-                dispatch.contains(forbidden),
-                "the synchronous dispatcher must only prepare copy: \(forbidden)")
+            announcer.posts.count, announcementBaseline + 1)
+        XCTAssertEqual(announcer.posts.last?.message, "Copied.")
+        guard case .medium = announcer.posts.last?.priority else {
+            return XCTFail("successful copy must announce politely")
         }
     }
 
     func test10WikilinkRenderIsPureAndInvocationFormatsExactlyOnce() throws {
-        let state = try openVault(named: "wikilink", files: ["A.md"])
+        let pasteboard = RecordingPasteboard()
+        let state = try openVault(
+            named: "wikilink", files: ["A.md"], sidebarPasteboard: pasteboard)
         let currentSession = try XCTUnwrap(state.currentSession)
         let selection = try snapshot(on: state, [item("A.md")], focusedPath: "A.md")
         var requests: [(sessionIdentity: ObjectIdentifier, path: String)] = []
@@ -580,17 +593,21 @@ final class SidebarActionInvocationTests: XCTestCase {
         XCTAssertEqual(
             try state.dispatchSidebarAction(
                 intent(SlateCommandID.sidebarCopyWikilink, snapshot: selection)),
-            .copyPrepared(.wikilink("[[Exact A]]")))
+            .completed(actionID: SlateCommandID.sidebarCopyWikilink))
         XCTAssertEqual(requests.count, 1, "invocation formats exactly once")
         XCTAssertEqual(requests.first?.sessionIdentity, ObjectIdentifier(currentSession))
         XCTAssertEqual(requests.first?.sessionIdentity, selection.sessionIdentity)
         XCTAssertEqual(requests.first?.path, "A.md")
+        XCTAssertEqual(pasteboard.clearCount, 1)
+        XCTAssertEqual(pasteboard.values, ["[[Exact A]]"])
     }
 
     func test11WikilinkNilAndThrowRejectAfterExactlyOneCallWithoutPreparedCopy() throws {
         let announcer = RecordingAnnouncer()
+        let pasteboard = RecordingPasteboard()
         let state = try openVault(
-            named: "wikilink-failure", files: ["A.md"], announcer: announcer)
+            named: "wikilink-failure", files: ["A.md"], announcer: announcer,
+            sidebarPasteboard: pasteboard)
         let selection = try snapshot(on: state, [item("A.md")], focusedPath: "A.md")
         let sessionIdentity = ObjectIdentifier(try XCTUnwrap(state.currentSession))
         let wikilinkIntent = try intent(
@@ -601,7 +618,9 @@ final class SidebarActionInvocationTests: XCTestCase {
             requests.append((ObjectIdentifier(session), path))
             return nil
         }
-        assertRejected { try state.dispatchSidebarAction(wikilinkIntent) }
+        assertRejected(expectedMessage: AppState.sidebarWikilinkFailureReason) {
+            try state.dispatchSidebarAction(wikilinkIntent)
+        }
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(requests.first?.0, sessionIdentity)
         XCTAssertEqual(requests.first?.1, "A.md")
@@ -612,13 +631,17 @@ final class SidebarActionInvocationTests: XCTestCase {
             requests.append((ObjectIdentifier(session), path))
             throw ProbeError.formatterFailed
         }
-        assertRejected { try state.dispatchSidebarAction(wikilinkIntent) }
+        assertRejected(expectedMessage: AppState.sidebarWikilinkFailureReason) {
+            try state.dispatchSidebarAction(wikilinkIntent)
+        }
         XCTAssertEqual(requests.count, 1)
         XCTAssertEqual(requests.first?.0, sessionIdentity)
         XCTAssertEqual(requests.first?.1, "A.md")
         XCTAssertEqual(
             announcer.posts.count, announcementBaseline,
             "synchronous formatter rejection is returned to its caller without announcing")
+        XCTAssertEqual(pasteboard.clearCount, 0)
+        XCTAssertEqual(pasteboard.values, [])
     }
 
     func test12TrashUsesExactSingleFileFolderOrOrderedBatchAndRejectsFalse() throws {

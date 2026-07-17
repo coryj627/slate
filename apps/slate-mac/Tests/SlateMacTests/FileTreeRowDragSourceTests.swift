@@ -228,7 +228,7 @@ final class FileTreeRowDragSourceTests: XCTestCase {
         XCTAssertTrue(bridge.contains("session.animatesToStartingPositionsOnCancelOrFail = true"))
     }
 
-    func testDefaultAccessibilityActivationSharesExactPlainPointerSemantics() throws {
+    func testDefaultAccessibilityActivationUsesFrozenOpenWithoutChangingPlainPointer() throws {
         let source = try Self.source("FileTreeSidebar.swift")
 
         func compactBody(from start: String, to end: String) throws -> String {
@@ -267,8 +267,23 @@ final class FileTreeRowDragSourceTests: XCTestCase {
             file.contains("if click == .plain { activate() }"),
             "plain pointer activation must use the shared file closure")
         XCTAssertTrue(
-            file.contains(".accessibilityAction(.default) { activate() }"),
-            "AXPress/VoiceOver-Space must use that same file closure")
+            file.contains(
+                "openEvaluation: voiceOverProjection?.openEvaluation"),
+            "VoiceOver Open must derive from the same frozen catalog projection")
+        XCTAssertTrue(
+            file.contains("FileRowOpenAccessibilityModifier("),
+            "the file row must attach its conditional shared-catalog Open action")
+        XCTAssertTrue(
+            file.contains("_ = try appState.dispatchSidebarAction(openIntent)"),
+            "AXPress/VoiceOver-Space must dispatch the frozen Open intent directly")
+
+        let modifier = try compactBody(
+            from: "private struct FileRowOpenAccessibilityModifier",
+            to: "static func invokeSidebarKeyboardAction")
+        XCTAssertTrue(
+            modifier.contains(
+                ".accessibilityAction(.default) { dispatch(openIntent) }"),
+            "the conditional default action must dispatch exactly its retained intent")
     }
 
     private func mouseEvent(

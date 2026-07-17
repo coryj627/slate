@@ -199,19 +199,12 @@ enum SidebarOpenSelectionDisposition: Equatable {
     case confirm(SidebarOpenSelectionRequest)
 }
 
-enum SidebarPreparedCopy: Equatable {
-    case path(String)
-    case wikilink(String)
-}
-
-/// Typed result prevents Copy actions from being mistaken for completed Void
-/// work. Task 3 replaces the temporary prepared-copy adapter with the final
-/// pasteboard payload and announcement contract.
+/// Typed result keeps staged Open confirmation distinct from actions that have
+/// completed all of their effects inside AppState.
 enum SidebarActionDispatchResult: Equatable {
     case completed(actionID: String)
     case opened([String])
     case openConfirmation(SidebarOpenSelectionRequest)
-    case copyPrepared(SidebarPreparedCopy)
 }
 
 enum SidebarActionCatalog {
