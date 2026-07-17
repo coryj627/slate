@@ -416,14 +416,19 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     }
   }
 
-  private func makeWalker(scope: ScopeProbe) -> SidebarImportSourceWalker {
+  private func makeWalker(
+    scope: ScopeProbe,
+    cancellation: SidebarImportSourceCancellationToken =
+      SidebarImportSourceCancellationToken()
+  ) -> SidebarImportSourceWalker {
     SidebarImportSourceWalker(
       limits: SidebarImportSourceLimits(
         refuseBytes: 1_024,
         totalBytes: 4_096,
         maximumEntries: 100,
         maximumDepth: 8),
-      scopeAccess: scope.access())
+      scopeAccess: scope.access(),
+      cancellation: cancellation)
   }
 
   private func makeVault(named name: String = "vault") throws -> URL {
@@ -699,7 +704,12 @@ final class SidebarImportCoordinatorTests: XCTestCase {
 
     cancelledIntake.cancel()
     let cancelledResult = await cancelledResultTask.value
-    for _ in 0..<20 where cancelledProvider.progressBox.load() != nil {
+    for _ in 0..<1_000 {
+      if cancelledProvider.progressCancellations() == 1,
+        cancelledProvider.progressBox.load() == nil
+      {
+        break
+      }
       await Task.yield()
     }
 
@@ -1296,6 +1306,7 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       }
     }
     XCTAssertEqual(scope.counts().stops, 1)
+    XCTAssertEqual(metrics.snapshot().totalDirectoryReadOperations, 3)
     XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
   }
 
@@ -1419,6 +1430,109 @@ final class SidebarImportCoordinatorTests: XCTestCase {
         return
       }
     }
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testPreparedReadCancellationWinsBeforePreadOperationLease() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source.bin")
+    try Data([0x41]).write(to: root)
+    let cancellation = SidebarImportSourceCancellationToken()
+    let metrics = SidebarImportSourceMetrics()
+    let scope = ScopeProbe()
+    let gate = BlockingGate()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(sessionRefuseBytes: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(didReachBoundary: { boundary in
+        if case .beforeRead(_, offset: 0) = boundary {
+          gate.block()
+        }
+      }),
+      cancellation: cancellation,
+      metrics: metrics
+    ).prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+    let result = ResultBox<Data>()
+    let finished = expectation(description: "cancel-wins read finished")
+
+    DispatchQueue.global().async {
+      result.store(Result { try prepared.readBytes(for: entry) })
+      finished.fulfill()
+    }
+    XCTAssertTrue(gate.waitUntilBlocked())
+
+    cancellation.cancel()
+    XCTAssertEqual(metrics.snapshot().totalReadOperations, 0)
+    gate.unblock()
+    wait(for: [finished], timeout: 1)
+
+    XCTAssertThrowsError(try XCTUnwrap(result.load()).get()) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected cancellation before pread lease, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(metrics.snapshot().totalReadOperations, 0)
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testPreparedReadOperationLeaseMakesCancellationWaitForPread() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source.bin")
+    try Data([0x41]).write(to: root)
+    let cancellation = SidebarImportSourceCancellationToken()
+    let metrics = SidebarImportSourceMetrics()
+    let scope = ScopeProbe()
+    let operationGate = BlockingGate()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(sessionRefuseBytes: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didAcquireOperationLease: { boundary in
+          if case .beforeRead(_, offset: 0) = boundary {
+            operationGate.block()
+          }
+        }),
+      cancellation: cancellation,
+      metrics: metrics
+    ).prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+    let readResult = ResultBox<Data>()
+    let readFinished = expectation(description: "lease-wins read finished")
+    let cancelReturned = ValueBox<Bool>()
+    let cancelFinished = expectation(description: "lease-draining cancel returned")
+
+    DispatchQueue.global().async {
+      readResult.store(Result { try prepared.readBytes(for: entry) })
+      readFinished.fulfill()
+    }
+    XCTAssertTrue(operationGate.waitUntilBlocked())
+
+    DispatchQueue.global().async {
+      cancellation.cancel()
+      cancelReturned.store(true)
+      cancelFinished.fulfill()
+    }
+    XCTAssertTrue(waitForScheduler { cancellation.isCancelled })
+    XCTAssertNotEqual(cancelReturned.load(), true)
+    XCTAssertEqual(metrics.snapshot().totalReadOperations, 0)
+
+    operationGate.unblock()
+    wait(for: [cancelFinished, readFinished], timeout: 1)
+
+    XCTAssertEqual(cancelReturned.load(), true)
+    XCTAssertThrowsError(try XCTUnwrap(readResult.load()).get()) { error in
+      guard case SidebarImportSourceWalkerError.cancelled = error else {
+        XCTFail("expected cancellation after leased pread, got \(error)")
+        return
+      }
+    }
+    XCTAssertEqual(metrics.snapshot().totalReadOperations, 1)
     XCTAssertEqual(metrics.snapshot().activeReads, 0)
     XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
     XCTAssertEqual(scope.counts().stops, 1)
@@ -1853,22 +1967,262 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     let bytes = Data([0x00, 0xFF, 0x41, 0x42])
     try bytes.write(to: root)
     let scope = ScopeProbe()
-    let prepared = try makeWalker(scope: scope).prepare(rootURL: root, vaultURL: vault)
+    let cancellation = SidebarImportSourceCancellationToken()
+    let prepared = try makeWalker(
+      scope: scope,
+      cancellation: cancellation
+    ).prepare(rootURL: root, vaultURL: vault)
     defer { prepared.close() }
     let entry = try XCTUnwrap(prepared.manifest.entries.first)
     let scheduler = SidebarImportByteScheduler(
       totalLimitBytes: 16,
       normalResidentLimitBytes: 8,
-      cancellation: SidebarImportSourceCancellationToken())
+      cancellation: cancellation)
 
     let ready = try prepared.readBytes(for: entry, scheduler: scheduler)
 
-    XCTAssertEqual(ready.data, bytes)
+    try ready.withData { data in
+      XCTAssertEqual(data, bytes)
+      return .retainForRetry
+    }
     XCTAssertEqual(scheduler.snapshot().tentativeBytes, UInt64(bytes.count))
     XCTAssertEqual(scheduler.snapshot().normalResidentBytes, UInt64(bytes.count))
     ready.discard()
     XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
     XCTAssertEqual(scheduler.snapshot().normalResidentBytes, 0)
+  }
+
+  func testReadyDiscardDefersBytesLaneAndSourceAuthorityUntilActiveUseReturns() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source.bin")
+    let bytes = Data([0x00, 0xFF, 0x41, 0x42])
+    try bytes.write(to: root)
+    let cancellation = SidebarImportSourceCancellationToken()
+    let metrics = SidebarImportSourceMetrics()
+    let scope = ScopeProbe()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(sessionRefuseBytes: 8),
+      scopeAccess: scope.access(),
+      cancellation: cancellation,
+      metrics: metrics
+    ).prepare(rootURL: root, vaultURL: vault)
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 8,
+      normalResidentLimitBytes: 4,
+      cancellation: cancellation)
+    let ready = try prepared.readBytes(for: entry, scheduler: scheduler)
+    let useGate = BlockingGate()
+    let useResult = ResultBox<Void>()
+    let sawExpectedBytes = ValueBox<Bool>()
+    let useFinished = expectation(description: "scoped ready-byte use finished")
+    let waitingResult = ResultBox<SidebarImportByteReservation>()
+    let waitingFinished = expectation(description: "cancelled next admission finished")
+
+    DispatchQueue.global().async {
+      useResult.store(Result {
+        try ready.withData { data in
+          sawExpectedBytes.store(data == bytes)
+          useGate.block()
+          return .retainForRetry
+        }
+      })
+      useFinished.fulfill()
+    }
+    XCTAssertTrue(useGate.waitUntilBlocked())
+    XCTAssertEqual(metrics.snapshot().activeReads, 1)
+
+    DispatchQueue.global().async {
+      waitingResult.store(Result { try scheduler.reserve(advisoryByteCount: 1) })
+      waitingFinished.fulfill()
+    }
+    XCTAssertTrue(waitForScheduler { scheduler.snapshot().waitingRequests == 1 })
+
+    cancellation.cancel()
+    prepared.close()
+    ready.discard()
+    wait(for: [waitingFinished], timeout: 1)
+
+    XCTAssertThrowsError(try XCTUnwrap(waitingResult.load()).get()) { error in
+      XCTAssertEqual(error as? SidebarImportByteSchedulerError, .cancelled)
+    }
+    XCTAssertThrowsError(try ready.withData { _ in .retainForRetry }) { error in
+      XCTAssertEqual(error as? SidebarImportByteSchedulerError, .readyReadFinished)
+    }
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, UInt64(bytes.count))
+    XCTAssertEqual(scheduler.snapshot().normalResidentBytes, UInt64(bytes.count))
+    XCTAssertEqual(scheduler.snapshot().activeReadyPermits, 1)
+    XCTAssertEqual(metrics.snapshot().activeReads, 1)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 2)
+    XCTAssertEqual(scope.counts().stops, 0)
+
+    useGate.unblock()
+    wait(for: [useFinished], timeout: 1)
+
+    _ = try XCTUnwrap(useResult.load()).get()
+    XCTAssertEqual(sawExpectedBytes.load(), true)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().normalResidentBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().activeReadyPermits, 0)
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(metrics.snapshot().currentOwnedDescriptors, 0)
+    XCTAssertEqual(scope.counts().stops, 1)
+    ready.discard()
+    prepared.close()
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testReadyActivePublishDispositionOverridesPendingCancellationDiscard() throws {
+    let cancellation = SidebarImportSourceCancellationToken()
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 8,
+      normalResidentLimitBytes: 8,
+      cancellation: cancellation)
+    let reservation = try scheduler.reserve(advisoryByteCount: 4)
+    let ready = try reservation.makeReady(data: Data(repeating: 0x41, count: 4))
+    let gate = BlockingGate()
+    let result = ResultBox<Void>()
+    let finished = expectation(description: "active publish disposition recorded")
+
+    DispatchQueue.global().async {
+      result.store(Result {
+        try ready.withData { _ in
+          gate.block()
+          return .publishSucceeded
+        }
+      })
+      finished.fulfill()
+    }
+    XCTAssertTrue(gate.waitUntilBlocked())
+
+    ready.discard()
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 4)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+
+    gate.unblock()
+    wait(for: [finished], timeout: 1)
+
+    _ = try XCTUnwrap(result.load()).get()
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 4)
+    ready.discard()
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 4)
+  }
+
+  func testReadyThrownCreatorBodyAutoDiscardsWhileCaughtCollisionCanRetain() throws {
+    let cancellation = SidebarImportSourceCancellationToken()
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 8,
+      normalResidentLimitBytes: 8,
+      cancellation: cancellation)
+    let thrownReservation = try scheduler.reserve(advisoryByteCount: 4)
+    let thrownReady = try thrownReservation.makeReady(
+      data: Data(repeating: 0x41, count: 4))
+
+    XCTAssertThrowsError(
+      try thrownReady.withData { _ in
+        throw POSIXError(.EIO)
+      })
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().activeReadyPermits, 0)
+    thrownReady.discard()
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+
+    let retryReservation = try scheduler.reserve(advisoryByteCount: 4)
+    let retryReady = try retryReservation.makeReady(
+      data: Data(repeating: 0x42, count: 4))
+    try retryReady.withData { _ in
+      do {
+        throw POSIXError(.EEXIST)
+      } catch {
+        return .retainForRetry
+      }
+    }
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 4)
+    XCTAssertEqual(scheduler.snapshot().activeReadyPermits, 1)
+    retryReady.discard()
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+  }
+
+  func testReadyRetainDispositionCannotOverrideDeferredDiscard() throws {
+    let cancellation = SidebarImportSourceCancellationToken()
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 8,
+      normalResidentLimitBytes: 8,
+      cancellation: cancellation)
+    let reservation = try scheduler.reserve(advisoryByteCount: 4)
+    let ready = try reservation.makeReady(data: Data(repeating: 0x41, count: 4))
+    let gate = BlockingGate()
+    let result = ResultBox<Void>()
+    let finished = expectation(description: "active retry disposition recorded")
+
+    DispatchQueue.global().async {
+      result.store(Result {
+        try ready.withData { _ in
+          gate.block()
+          return .retainForRetry
+        }
+      })
+      finished.fulfill()
+    }
+    XCTAssertTrue(gate.waitUntilBlocked())
+
+    ready.discard()
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 4)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+
+    gate.unblock()
+    wait(for: [finished], timeout: 1)
+
+    _ = try XCTUnwrap(result.load()).get()
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().activeReadyPermits, 0)
+  }
+
+  func testReservableReadRejectsMismatchedSignalBeforeAdmissionOrOpen() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source.bin")
+    try Data([0x41]).write(to: root)
+    let sourceCancellation = SidebarImportSourceCancellationToken()
+    let schedulerCancellation = SidebarImportSourceCancellationToken()
+    let metrics = SidebarImportSourceMetrics()
+    let boundaries = BoundaryProbe()
+    let scope = ScopeProbe()
+    let prepared = try SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(sessionRefuseBytes: 8),
+      scopeAccess: scope.access(),
+      hooks: SidebarImportSourceWalkerHooks(
+        didReachBoundary: { boundaries.record($0) }),
+      cancellation: sourceCancellation,
+      metrics: metrics
+    ).prepare(rootURL: root, vaultURL: vault)
+    defer { prepared.close() }
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 8,
+      normalResidentLimitBytes: 8,
+      cancellation: schedulerCancellation)
+    let opensBeforeRead = boundaries.count { boundary in
+      if case .beforeOpen = boundary { return true }
+      return false
+    }
+
+    XCTAssertThrowsError(try prepared.readBytes(for: entry, scheduler: scheduler)) { error in
+      XCTAssertEqual(
+        error as? SidebarImportByteSchedulerError,
+        .mismatchedCancellationSignal)
+    }
+    XCTAssertEqual(metrics.snapshot().activeReads, 0)
+    XCTAssertEqual(
+      boundaries.count { boundary in
+        if case .beforeOpen = boundary { return true }
+        return false
+      },
+      opensBeforeRead)
+    XCTAssertEqual(scheduler.snapshot().activeNormalPermits, 0)
+    XCTAssertEqual(scheduler.snapshot().waitingRequests, 0)
   }
 
   func testReservableReadKeepsOpenedReservationUntilEOF() throws {
@@ -1889,7 +2243,7 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       hooks: SidebarImportSourceWalkerHooks(didReachBoundary: { boundary in
         if case .beforeRead(_, offset: 64 * 1_024) = boundary {
           observed.store(scheduler.snapshot())
-          scheduler.cancel()
+          cancellation.cancel()
         }
       }),
       cancellation: cancellation
@@ -1918,8 +2272,10 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     let exact = try scheduler.reserve(advisoryByteCount: 8)
     let ready = try exact.makeReady(data: Data(repeating: 0x41, count: 8))
 
-    ready.publishSucceeded()
-    ready.publishSucceeded()
+    try ready.withData { _ in .publishSucceeded }
+    XCTAssertThrowsError(try ready.withData { _ in .publishSucceeded }) { error in
+      XCTAssertEqual(error as? SidebarImportByteSchedulerError, .readyReadFinished)
+    }
     ready.discard()
     XCTAssertEqual(scheduler.snapshot().committedBytes, 8)
     XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
@@ -2213,8 +2569,8 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       return false
     }
 
-    scheduler.cancel()
-    scheduler.cancel()
+    cancellation.cancel()
+    cancellation.cancel()
     XCTAssertThrowsError(try prepared.readBytes(for: entry, scheduler: scheduler)) { error in
       XCTAssertEqual(error as? SidebarImportByteSchedulerError, .cancelled)
     }
@@ -2246,8 +2602,8 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       waitingFinished.fulfill()
     }
     XCTAssertTrue(waitForScheduler { scheduler.snapshot().waitingRequests == 1 })
-    scheduler.cancel()
-    scheduler.cancel()
+    cancellation.cancel()
+    cancellation.cancel()
     wait(for: [waitingFinished], timeout: 1)
 
     XCTAssertThrowsError(try XCTUnwrap(waitingResult.load()).get()) { error in
@@ -2258,6 +2614,35 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
     XCTAssertEqual(scheduler.snapshot().normalResidentBytes, 0)
     XCTAssertEqual(scheduler.snapshot().normalPlannedBytes, 0)
+  }
+
+  func testByteSchedulerCancellationWinsDeterministicPermitInstallGate() throws {
+    let cancellation = SidebarImportSourceCancellationToken()
+    let gate = BlockingGate()
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 8,
+      normalResidentLimitBytes: 8,
+      cancellation: cancellation,
+      hooks: SidebarImportByteSchedulerHooks(
+        willAttemptPermitInstall: { gate.block() }))
+    let result = ResultBox<SidebarImportByteReservation>()
+    let finished = expectation(description: "cancelled install attempt finished")
+
+    DispatchQueue.global().async {
+      result.store(Result { try scheduler.reserve(advisoryByteCount: 1) })
+      finished.fulfill()
+    }
+    XCTAssertTrue(gate.waitUntilBlocked())
+
+    cancellation.cancel()
+    gate.unblock()
+    wait(for: [finished], timeout: 1)
+
+    XCTAssertThrowsError(try XCTUnwrap(result.load()).get()) { error in
+      XCTAssertEqual(error as? SidebarImportByteSchedulerError, .cancelled)
+    }
+    XCTAssertEqual(scheduler.snapshot().activeNormalPermits, 0)
+    XCTAssertEqual(scheduler.snapshot().waitingRequests, 0)
   }
 
   func testReservableReadCancellationDuringChunkUnwindsLedgerDescriptorsAndScope() throws {
@@ -2276,7 +2661,7 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       scopeAccess: scope.access(),
       hooks: SidebarImportSourceWalkerHooks(didReachBoundary: { boundary in
         if case .afterRead(_, offset: 0, reachedEnd: false) = boundary {
-          scheduler.cancel()
+          cancellation.cancel()
         }
       }),
       cancellation: cancellation,
@@ -2320,8 +2705,8 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     let ready = try prepared.readBytes(for: entry, scheduler: scheduler)
     XCTAssertEqual(scheduler.snapshot().tentativeBytes, 4)
 
-    scheduler.cancel()
-    scheduler.cancel()
+    cancellation.cancel()
+    cancellation.cancel()
     ready.discard()
     ready.discard()
 

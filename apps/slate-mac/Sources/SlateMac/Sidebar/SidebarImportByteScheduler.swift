@@ -5,9 +5,25 @@ import Foundation
 
 enum SidebarImportByteSchedulerError: Error, Equatable {
   case cancelled
+  case mismatchedCancellationSignal
   case capacityExceeded(limitBytes: UInt64)
   case promotionRequiresExclusiveAccess
   case invalidReservation
+  case readyReadFinished
+}
+
+struct SidebarImportByteSchedulerHooks {
+  let willAttemptPermitInstall: (@Sendable () -> Void)?
+
+  init(willAttemptPermitInstall: (@Sendable () -> Void)? = nil) {
+    self.willAttemptPermitInstall = willAttemptPermitInstall
+  }
+}
+
+enum SidebarImportReadyReadDisposition: Sendable {
+  case retainForRetry
+  case publishSucceeded
+  case discard
 }
 
 struct SidebarImportByteSchedulerSnapshot: Equatable, Sendable {
@@ -30,46 +46,113 @@ struct SidebarImportByteSchedulerSnapshot: Equatable, Sendable {
 }
 
 final class SidebarImportReadyRead: @unchecked Sendable {
+  private enum TerminalAction {
+    case publish
+    case discard
+  }
+
+  private struct Finalization {
+    let action: TerminalAction
+    let reservation: SidebarImportByteReservation
+    let releaseSourceAuthority: (() -> Void)?
+  }
+
   private let lock = NSLock()
   private var bytes: Data?
   private var reservation: SidebarImportByteReservation?
+  private var releaseSourceAuthority: (() -> Void)?
+  private var activeUses = 0
+  private var terminalAction: TerminalAction?
 
-  fileprivate init(data: Data, reservation: SidebarImportByteReservation) {
+  fileprivate init(
+    data: Data,
+    reservation: SidebarImportByteReservation,
+    releaseSourceAuthority: (() -> Void)?
+  ) {
     bytes = data
     self.reservation = reservation
+    self.releaseSourceAuthority = releaseSourceAuthority
   }
 
   deinit {
     discard()
   }
 
-  var data: Data {
+  func withData(
+    _ body: (Data) throws -> SidebarImportReadyReadDisposition
+  ) throws {
     lock.lock()
-    defer { lock.unlock() }
-    precondition(bytes != nil, "ready-read bytes are no longer available")
-    return bytes!
-  }
+    guard terminalAction == nil, let ownedBytes = bytes else {
+      lock.unlock()
+      throw SidebarImportByteSchedulerError.readyReadFinished
+    }
+    activeUses += 1
+    lock.unlock()
 
-  func publishSucceeded() {
-    finish(commit: true)
+    do {
+      let disposition = try body(ownedBytes)
+      finishUse(disposition: disposition)
+    } catch {
+      finishUse(disposition: .discard)
+      throw error
+    }
   }
 
   func discard() {
-    finish(commit: false)
-  }
-
-  private func finish(commit: Bool) {
     lock.lock()
-    let ownedReservation = reservation
-    reservation = nil
-    bytes = nil
+    if terminalAction == nil {
+      terminalAction = .discard
+    }
+    let finalization = takeFinalizationIfReadyLocked()
     lock.unlock()
 
-    if commit {
-      ownedReservation?.publishSucceeded()
-    } else {
-      ownedReservation?.discard()
+    finalize(finalization)
+  }
+
+  private func finishUse(disposition: SidebarImportReadyReadDisposition) {
+    lock.lock()
+    precondition(activeUses > 0)
+    activeUses -= 1
+    switch disposition {
+    case .publishSucceeded:
+      terminalAction = .publish
+    case .discard:
+      if terminalAction != .publish {
+        terminalAction = .discard
+      }
+    case .retainForRetry:
+      break
     }
+    let finalization = takeFinalizationIfReadyLocked()
+    lock.unlock()
+
+    finalize(finalization)
+  }
+
+  private func takeFinalizationIfReadyLocked() -> Finalization? {
+    guard activeUses == 0,
+      let action = terminalAction,
+      let ownedReservation = reservation
+    else { return nil }
+    let ownedSourceAuthority = releaseSourceAuthority
+    bytes = nil
+    reservation = nil
+    releaseSourceAuthority = nil
+    return Finalization(
+      action: action,
+      reservation: ownedReservation,
+      releaseSourceAuthority: ownedSourceAuthority)
+  }
+
+  private func finalize(_ finalization: Finalization?) {
+    guard let finalization else { return }
+    switch finalization.action {
+    case .publish:
+      finalization.reservation.publishSucceeded()
+    case .discard:
+      finalization.reservation.discard()
+    }
+    finalization.releaseSourceAuthority?()
   }
 }
 
@@ -90,9 +173,15 @@ final class SidebarImportByteReservation: @unchecked Sendable {
     try scheduler.resize(identifier: identifier, toByteCount: byteCount)
   }
 
-  func makeReady(data: Data) throws -> SidebarImportReadyRead {
+  func makeReady(
+    data: Data,
+    releaseSourceAuthority: (() -> Void)? = nil
+  ) throws -> SidebarImportReadyRead {
     try scheduler.markReady(identifier: identifier, actualByteCount: UInt64(data.count))
-    return SidebarImportReadyRead(data: data, reservation: self)
+    return SidebarImportReadyRead(
+      data: data,
+      reservation: self,
+      releaseSourceAuthority: releaseSourceAuthority)
   }
 
   fileprivate func publishSucceeded() {
@@ -131,10 +220,10 @@ final class SidebarImportByteScheduler: @unchecked Sendable {
     let lane: Lane
   }
 
-  private let condition = NSCondition()
   private let totalLimitBytes: UInt64
   private let normalResidentLimitBytes: UInt64
-  private let cancellation: SidebarImportSourceCancellationToken
+  private let signal: SidebarImportEngineSignal
+  private let hooks: SidebarImportByteSchedulerHooks
   private var nextIdentifier: UInt64 = 1
   private var permits: [UInt64: Permit] = [:]
   private var waiters: [Waiter] = []
@@ -153,21 +242,17 @@ final class SidebarImportByteScheduler: @unchecked Sendable {
   init(
     totalLimitBytes: UInt64 = productionTotalLimitBytes,
     normalResidentLimitBytes: UInt64 = productionNormalResidentLimitBytes,
-    cancellation: SidebarImportSourceCancellationToken
+    cancellation signal: SidebarImportEngineSignal,
+    hooks: SidebarImportByteSchedulerHooks = SidebarImportByteSchedulerHooks()
   ) {
     self.totalLimitBytes = totalLimitBytes
     self.normalResidentLimitBytes = normalResidentLimitBytes
-    self.cancellation = cancellation
-  }
-
-  func cancel() {
-    condition.lock()
-    cancellation.cancel()
-    condition.broadcast()
-    condition.unlock()
+    self.signal = signal
+    self.hooks = hooks
   }
 
   func snapshot() -> SidebarImportByteSchedulerSnapshot {
+    let condition = signal.condition
     condition.lock()
     defer { condition.unlock() }
     return SidebarImportByteSchedulerSnapshot(
@@ -198,6 +283,7 @@ final class SidebarImportByteScheduler: @unchecked Sendable {
   func reserve(advisoryByteCount: UInt64) throws
     -> SidebarImportByteReservation
   {
+    let condition = signal.condition
     condition.lock()
     defer { condition.unlock() }
     try throwIfCancelledLocked()
@@ -205,14 +291,44 @@ final class SidebarImportByteScheduler: @unchecked Sendable {
     let identifier = nextIdentifier
     nextIdentifier &+= 1
     let lane: Lane = advisoryByteCount <= normalResidentLimitBytes ? .normal : .oversized
-    if !waiters.isEmpty || !canEnterLaneLocked(lane, advisoryByteCount: advisoryByteCount) {
+    if let installGate = hooks.willAttemptPermitInstall {
+      waiters.append(Waiter(identifier: identifier, lane: lane))
+      highWaterWaitingRequests = max(highWaterWaitingRequests, waiters.count)
+      var passedInstallGate = false
+      do {
+        while true {
+          try throwIfCancelledLocked()
+          guard waiters.first?.identifier == identifier,
+            canEnterLaneLocked(lane, advisoryByteCount: advisoryByteCount)
+          else {
+            condition.wait()
+            continue
+          }
+          if !passedInstallGate {
+            passedInstallGate = true
+            condition.unlock()
+            installGate()
+            condition.lock()
+            continue
+          }
+          precondition(waiters.removeFirst().identifier == identifier)
+          break
+        }
+      } catch {
+        waiters.removeAll { $0.identifier == identifier }
+        condition.broadcast()
+        throw error
+      }
+    } else if !waiters.isEmpty
+      || !canEnterLaneLocked(lane, advisoryByteCount: advisoryByteCount)
+    {
       waiters.append(Waiter(identifier: identifier, lane: lane))
       highWaterWaitingRequests = max(highWaterWaitingRequests, waiters.count)
       do {
         while waiters.first?.identifier != identifier
           || !canEnterLaneLocked(lane, advisoryByteCount: advisoryByteCount)
         {
-          _ = condition.wait(until: Date(timeIntervalSinceNow: 0.01))
+          condition.wait()
           try throwIfCancelledLocked()
         }
         precondition(waiters.removeFirst().identifier == identifier)
@@ -236,12 +352,14 @@ final class SidebarImportByteScheduler: @unchecked Sendable {
   }
 
   func checkCancellation() throws {
+    let condition = signal.condition
     condition.lock()
     defer { condition.unlock() }
     try throwIfCancelledLocked()
   }
 
   fileprivate func resize(identifier: UInt64, toByteCount newByteCount: UInt64) throws {
+    let condition = signal.condition
     condition.lock()
     defer { condition.unlock() }
     try throwIfCancelledLocked()
@@ -341,6 +459,7 @@ final class SidebarImportByteScheduler: @unchecked Sendable {
 
   fileprivate func markReady(identifier: UInt64, actualByteCount: UInt64) throws {
     try resize(identifier: identifier, toByteCount: actualByteCount)
+    let condition = signal.condition
     condition.lock()
     defer { condition.unlock() }
     try throwIfCancelledLocked()
@@ -352,6 +471,7 @@ final class SidebarImportByteScheduler: @unchecked Sendable {
   }
 
   fileprivate func finish(identifier: UInt64, commit: Bool) {
+    let condition = signal.condition
     condition.lock()
     guard let permit = permits.removeValue(forKey: identifier) else {
       condition.unlock()
@@ -397,9 +517,13 @@ final class SidebarImportByteScheduler: @unchecked Sendable {
   }
 
   private func throwIfCancelledLocked() throws {
-    if cancellation.isCancelled || Task.isCancelled {
+    if signal.isCancelledWithConditionHeld {
       throw SidebarImportByteSchedulerError.cancelled
     }
+  }
+
+  func usesSignal(_ candidate: SidebarImportEngineSignal) -> Bool {
+    signal === candidate
   }
 
   private func recordHighWaterLocked() {
