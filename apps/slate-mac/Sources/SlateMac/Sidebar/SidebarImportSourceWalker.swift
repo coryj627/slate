@@ -223,6 +223,41 @@ struct SidebarImportSourceRelativePath: Equatable {
 struct SidebarImportSourceEntry: Equatable {
   let relativePath: SidebarImportSourceRelativePath
   let kind: SidebarImportSourceEntryKind
+  let advisoryByteCount: UInt64
+}
+
+struct SidebarImportSourceAdvisoryByteCount: Equatable, Sendable {
+  private(set) var totalBytes: UInt64 = 0
+  private(set) var overflowed = false
+  private(set) var exceedsConfiguredTotal = false
+
+  private let configuredTotalBytes: UInt64
+
+  init(configuredTotalBytes: UInt64) {
+    self.configuredTotalBytes = configuredTotalBytes
+  }
+
+  mutating func record(_ byteCount: UInt64) {
+    let (sum, didOverflow) = totalBytes.addingReportingOverflow(byteCount)
+    if didOverflow {
+      totalBytes = UInt64.max
+      overflowed = true
+    } else {
+      totalBytes = sum
+    }
+    if overflowed || totalBytes > configuredTotalBytes {
+      exceedsConfiguredTotal = true
+    }
+  }
+
+  static func == (
+    left: SidebarImportSourceAdvisoryByteCount,
+    right: SidebarImportSourceAdvisoryByteCount
+  ) -> Bool {
+    left.totalBytes == right.totalBytes
+      && left.overflowed == right.overflowed
+      && left.exceedsConfiguredTotal == right.exceedsConfiguredTotal
+  }
 }
 
 enum SidebarImportSourceFailureReason: Equatable {
@@ -294,13 +329,16 @@ struct SidebarImportSourceEntries: Equatable, RandomAccessCollection {
 struct SidebarImportSourceManifest: Equatable {
   let entries: SidebarImportSourceEntries
   let failures: [SidebarImportSourceFailure]
+  let advisoryByteCount: SidebarImportSourceAdvisoryByteCount
 
   fileprivate init(
     entries: [SidebarImportSourceEntry],
-    failures: [SidebarImportSourceFailure]
+    failures: [SidebarImportSourceFailure],
+    advisoryByteCount: SidebarImportSourceAdvisoryByteCount
   ) {
     self.entries = SidebarImportSourceEntries(entries)
     self.failures = failures
+    self.advisoryByteCount = advisoryByteCount
   }
 }
 
@@ -315,7 +353,6 @@ enum SidebarImportSourceWalkerError: Error {
   case tooManyEntries(limit: Int)
   case tooDeep(path: String, limit: Int)
   case fileTooLarge(path: String, limitBytes: Int64)
-  case totalTooLarge(limitBytes: Int64)
   case preparedSourceClosed
   case notARegularFile(path: String)
   case readFailed(path: String, reason: String)
@@ -441,6 +478,116 @@ final class SidebarImportPreparedSource {
     return try readBytes(from: fileFD, path: entry.relativePath.display)
   }
 
+  func readBytes(
+    for entry: SidebarImportSourceEntry,
+    scheduler: SidebarImportByteScheduler
+  ) throws -> SidebarImportReadyRead {
+    try scheduler.checkCancellation()
+    try throwIfCancelled()
+    guard entry.kind == .regularFile else {
+      throw SidebarImportSourceWalkerError.notARegularFile(
+        path: entry.relativePath.display)
+    }
+
+    let reservation = try scheduler.reserve(advisoryByteCount: entry.advisoryByteCount)
+    do {
+      return try readReservedBytes(
+        for: entry,
+        scheduler: scheduler,
+        reservation: reservation)
+    } catch {
+      reservation.discard()
+      throw error
+    }
+  }
+
+  private func readReservedBytes(
+    for entry: SidebarImportSourceEntry,
+    scheduler: SidebarImportByteScheduler,
+    reservation: SidebarImportByteReservation
+  ) throws -> SidebarImportReadyRead {
+    try scheduler.checkCancellation()
+    try throwIfCancelled()
+
+    let pinnedRoot = try beginRead()
+    defer {
+      Darwin.close(pinnedRoot)
+      metrics.descriptorClosed()
+      finishRead()
+    }
+
+    let components = entry.relativePath.components
+    if components.isEmpty {
+      return try readBytes(
+        from: pinnedRoot,
+        path: entry.relativePath.display,
+        scheduler: scheduler,
+        reservation: reservation)
+    }
+    let fileName = components[components.index(before: components.endIndex)]
+
+    var directoryFD = pinnedRoot
+    var ownsDirectoryFD = false
+    defer {
+      if ownsDirectoryFD {
+        Darwin.close(directoryFD)
+        metrics.descriptorClosed()
+      }
+    }
+
+    for component in components.dropLast() {
+      try scheduler.checkCancellation()
+      try reachBoundary(.beforeOpen(entry.relativePath.display))
+      let nextFD = component.withCString { name in
+        openat(
+          directoryFD,
+          name,
+          O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
+        )
+      }
+      guard nextFD >= 0 else {
+        throw SidebarImportSourceWalkerError.openFailed(
+          path: entry.relativePath.display,
+          reason: Self.posixReason())
+      }
+      metrics.descriptorOpened()
+      if ownsDirectoryFD {
+        Darwin.close(directoryFD)
+        metrics.descriptorClosed()
+      }
+      directoryFD = nextFD
+      ownsDirectoryFD = true
+    }
+
+    try scheduler.checkCancellation()
+    try reachBoundary(.beforeOpen(entry.relativePath.display))
+    let fileFD = fileName.withCString { name in
+      openat(
+        directoryFD,
+        name,
+        O_RDONLY | O_NONBLOCK | O_NOFOLLOW | O_CLOEXEC
+      )
+    }
+    guard fileFD >= 0 else {
+      throw SidebarImportSourceWalkerError.openFailed(
+        path: entry.relativePath.display,
+        reason: Self.posixReason())
+    }
+    metrics.descriptorOpened()
+    defer {
+      Darwin.close(fileFD)
+      metrics.descriptorClosed()
+    }
+    try scheduler.checkCancellation()
+    try throwIfCancelled()
+
+    return try readBytes(
+      from: fileFD,
+      path: entry.relativePath.display,
+      scheduler: scheduler,
+      reservation: reservation)
+  }
+
   private func readBytes(from fileFD: Int32, path: String) throws -> Data {
     var metadata = stat()
     guard fstat(fileFD, &metadata) == 0 else {
@@ -496,6 +643,87 @@ final class SidebarImportPreparedSource {
         offset += off_t(count)
       } else if count == 0 {
         return output
+      } else if readError == EINTR {
+        try reachBoundary(.afterInterruptedRead(path))
+      } else {
+        throw SidebarImportSourceWalkerError.readFailed(
+          path: path,
+          reason: Self.posixReason(readError))
+      }
+    }
+  }
+
+  private func readBytes(
+    from fileFD: Int32,
+    path: String,
+    scheduler: SidebarImportByteScheduler,
+    reservation: SidebarImportByteReservation
+  ) throws -> SidebarImportReadyRead {
+    var metadata = stat()
+    guard fstat(fileFD, &metadata) == 0 else {
+      throw SidebarImportSourceWalkerError.inspectFailed(
+        path: path,
+        reason: Self.posixReason())
+    }
+    guard metadata.st_mode & S_IFMT == S_IFREG else {
+      throw SidebarImportSourceWalkerError.notARegularFile(path: path)
+    }
+    let size = metadata.st_size
+    guard size >= 0, size <= limits.refuseBytes else {
+      throw SidebarImportSourceWalkerError.fileTooLarge(
+        path: path,
+        limitBytes: limits.refuseBytes)
+    }
+
+    try reservation.resize(toByteCount: UInt64(size))
+    var approvedByteCount = UInt64(size)
+    var output = Data()
+    let reserve = min(Int(size), 64 * 1_024)
+    if reserve > 0 {
+      output.reserveCapacity(reserve)
+    }
+    metrics.recordReservedCapacity(reserve)
+    var buffer = [UInt8](repeating: 0, count: 64 * 1_024)
+    var offset: off_t = 0
+    let probeLimit = limits.refuseBytes + 1
+    while true {
+      try scheduler.checkCancellation()
+      try reachBoundary(.beforeRead(path, offset: Int64(offset)))
+      let remaining = probeLimit - Int64(output.count)
+      guard remaining > 0 else {
+        throw SidebarImportSourceWalkerError.fileTooLarge(
+          path: path,
+          limitBytes: limits.refuseBytes)
+      }
+      let requestCount = min(buffer.count, Int(remaining))
+      metrics.recordReadRequest(offset: Int64(offset), count: requestCount)
+      let count = buffer.withUnsafeMutableBytes { bytes in
+        Darwin.pread(fileFD, bytes.baseAddress, requestCount, offset)
+      }
+      let readError = errno
+      try reachBoundary(
+        .afterRead(path, offset: Int64(offset), reachedEnd: count == 0))
+      try scheduler.checkCancellation()
+      if count > 0 {
+        let (newCount, overflow) = Int64(output.count).addingReportingOverflow(Int64(count))
+        guard !overflow, newCount <= limits.refuseBytes else {
+          throw SidebarImportSourceWalkerError.fileTooLarge(
+            path: path,
+            limitBytes: limits.refuseBytes)
+        }
+        let requestedByteCount = UInt64(newCount)
+        if requestedByteCount > approvedByteCount {
+          try reservation.resize(toByteCount: requestedByteCount)
+          approvedByteCount = requestedByteCount
+        }
+        buffer.withUnsafeBytes { bytes in
+          output.append(bytes.bindMemory(to: UInt8.self).baseAddress!, count: count)
+        }
+        offset += off_t(count)
+      } else if count == 0 {
+        try reservation.resize(toByteCount: UInt64(output.count))
+        try scheduler.checkCancellation()
+        return try reservation.makeReady(data: output)
       } else if readError == EINTR {
         try reachBoundary(.afterInterruptedRead(path))
       } else {
@@ -739,7 +967,8 @@ struct SidebarImportSourceWalker {
       metrics: metrics,
       manifest: SidebarImportSourceManifest(
         entries: state.entries,
-        failures: state.failures))
+        failures: state.failures,
+        advisoryByteCount: state.advisoryByteCount))
     transferredRoot = true
     transferredScope = true
     return prepared
@@ -756,8 +985,14 @@ struct SidebarImportSourceWalker {
     let limits: SidebarImportSourceLimits
     var entries: [SidebarImportSourceEntry] = []
     var failures: [SidebarImportSourceFailure] = []
-    var totalBytes: Int64 = 0
+    var advisoryByteCount: SidebarImportSourceAdvisoryByteCount
     var encounteredEntries = 0
+
+    init(limits: SidebarImportSourceLimits) {
+      self.limits = limits
+      advisoryByteCount = SidebarImportSourceAdvisoryByteCount(
+        configuredTotalBytes: UInt64(limits.totalBytes))
+    }
 
     mutating func chargeEncounteredEntry() throws {
       guard encounteredEntries < limits.maximumEntries else {
@@ -784,16 +1019,12 @@ struct SidebarImportSourceWalker {
           path: display,
           limitBytes: limits.refuseBytes)
       }
-      let (newTotal, overflow) = totalBytes.addingReportingOverflow(fileBytes)
-      guard !overflow, newTotal <= limits.totalBytes else {
-        throw SidebarImportSourceWalkerError.totalTooLarge(
-          limitBytes: limits.totalBytes)
-      }
-      totalBytes = newTotal
+      advisoryByteCount.record(UInt64(fileBytes))
       entries.append(
         SidebarImportSourceEntry(
           relativePath: SidebarImportSourceRelativePath(components: components),
-          kind: kind))
+          kind: kind,
+          advisoryByteCount: UInt64(fileBytes)))
     }
 
     mutating func reject(
