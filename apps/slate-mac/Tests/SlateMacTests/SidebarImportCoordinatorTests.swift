@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import Darwin
 import Foundation
 import XCTest
 
@@ -10,7 +11,7 @@ final class SidebarImportCoordinatorTests: XCTestCase {
   private var tempDirectory: URL!
 
   override func setUpWithError() throws {
-    tempDirectory = FileManager.default.temporaryDirectory
+    tempDirectory = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
       .appendingPathComponent("sidebar-import-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(
       at: tempDirectory, withIntermediateDirectories: true)
@@ -84,8 +85,13 @@ final class SidebarImportCoordinatorTests: XCTestCase {
 
   private final class ScopeProbe: @unchecked Sendable {
     private let lock = NSLock()
+    private let startResult: Bool
     private(set) var starts = 0
     private(set) var stops = 0
+
+    init(startResult: Bool = true) {
+      self.startResult = startResult
+    }
 
     func access() -> SidebarImportSecurityScopeAccess {
       SidebarImportSecurityScopeAccess(
@@ -93,7 +99,7 @@ final class SidebarImportCoordinatorTests: XCTestCase {
           self?.lock.lock()
           self?.starts += 1
           self?.lock.unlock()
-          return true
+          return self?.startResult ?? false
         },
         stop: { [weak self] _ in
           self?.lock.lock()
@@ -106,6 +112,78 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       lock.lock()
       defer { lock.unlock() }
       return (starts, stops)
+    }
+  }
+
+  private func makeWalker(scope: ScopeProbe) -> SidebarImportSourceWalker {
+    SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access())
+  }
+
+  private func makeVault(named name: String = "vault") throws -> URL {
+    let vault = tempDirectory.appendingPathComponent(name, isDirectory: true)
+    try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: false)
+    return vault
+  }
+
+  private func bindUnixSocket(at url: URL) throws -> Int32 {
+    let descriptor = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
+    guard descriptor >= 0 else {
+      throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+    }
+
+    var address = sockaddr_un()
+    address.sun_family = sa_family_t(AF_UNIX)
+    let pathBytes = Array(url.path.utf8CString)
+    let pathCapacity = MemoryLayout.size(ofValue: address.sun_path)
+    guard pathBytes.count <= pathCapacity else {
+      Darwin.close(descriptor)
+      throw POSIXError(.ENAMETOOLONG)
+    }
+    withUnsafeMutablePointer(to: &address.sun_path) { pathPointer in
+      pathPointer.withMemoryRebound(to: CChar.self, capacity: pathCapacity) { bytes in
+        for (index, byte) in pathBytes.enumerated() {
+          bytes[index] = byte
+        }
+      }
+    }
+    let result = withUnsafePointer(to: &address) { pointer in
+      pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { socketAddress in
+        Darwin.bind(descriptor, socketAddress, socklen_t(MemoryLayout<sockaddr_un>.size))
+      }
+    }
+    guard result == 0 else {
+      let code = errno
+      Darwin.close(descriptor)
+      throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
+    }
+    return descriptor
+  }
+
+  private func assertRootRejected(
+    _ root: URL,
+    vault: URL,
+    as expectedReason: SidebarImportSourceFailureReason,
+    scope: ScopeProbe,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    XCTAssertThrowsError(
+      try makeWalker(scope: scope).prepare(rootURL: root, vaultURL: vault),
+      file: file,
+      line: line
+    ) { error in
+      guard case let SidebarImportSourceWalkerError.rejectedRoot(path, reason) = error else {
+        XCTFail("expected typed root rejection, got \(error)", file: file, line: line)
+        return
+      }
+      XCTAssertEqual(path, root.path, file: file, line: line)
+      XCTAssertEqual(reason, expectedReason, file: file, line: line)
     }
   }
 
@@ -222,5 +300,249 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     prepared.close()
     XCTAssertEqual(scope.counts().starts, 1)
     XCTAssertEqual(scope.counts().stops, 1, "close is balanced and idempotent")
+  }
+
+  func testWalkerPreparesRegularFileRootAndPreservesBinaryBytes() throws {
+    let vault = tempDirectory.appendingPathComponent("vault", isDirectory: true)
+    try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: false)
+    let root = tempDirectory.appendingPathComponent("raw.bin")
+    let binary = Data([0x00, 0xFF, 0x80, 0x41, 0x0A])
+    try binary.write(to: root)
+    let scope = ScopeProbe()
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access())
+
+    let prepared = try walker.prepare(rootURL: root, vaultURL: vault)
+    XCTAssertEqual(
+      prepared.manifest.entries.map { ($0.relativePath.display, $0.kind) },
+      [("", .regularFile)])
+    let entry = try XCTUnwrap(prepared.manifest.entries.first)
+    XCTAssertEqual(try prepared.readBytes(for: entry), binary)
+    XCTAssertEqual(try prepared.readBytes(for: entry), binary)
+
+    prepared.close()
+    XCTAssertEqual(scope.counts().starts, 1)
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testWalkerRejectsEverySymlinkPositionWithoutDereferencing() throws {
+    let vault = try makeVault()
+    let target = tempDirectory.appendingPathComponent("target", isDirectory: true)
+    try FileManager.default.createDirectory(at: target, withIntermediateDirectories: false)
+    try Data("secret".utf8).write(to: target.appendingPathComponent("secret.txt"))
+
+    let finalLink = tempDirectory.appendingPathComponent("final-link", isDirectory: true)
+    try FileManager.default.createSymbolicLink(at: finalLink, withDestinationURL: target)
+
+    let container = tempDirectory.appendingPathComponent("container", isDirectory: true)
+    let source = container.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: source, withIntermediateDirectories: true)
+    let containerLink = tempDirectory.appendingPathComponent("container-link", isDirectory: true)
+    try FileManager.default.createSymbolicLink(at: containerLink, withDestinationURL: container)
+    let intermediateLink = containerLink.appendingPathComponent("source", isDirectory: true)
+
+    let dangling = tempDirectory.appendingPathComponent("dangling")
+    try FileManager.default.createSymbolicLink(
+      atPath: dangling.path,
+      withDestinationPath: tempDirectory.appendingPathComponent("missing").path)
+    let loopA = tempDirectory.appendingPathComponent("loop-a")
+    let loopB = tempDirectory.appendingPathComponent("loop-b")
+    try FileManager.default.createSymbolicLink(atPath: loopA.path, withDestinationPath: loopB.path)
+    try FileManager.default.createSymbolicLink(atPath: loopB.path, withDestinationPath: loopA.path)
+
+    for root in [finalLink, intermediateLink, dangling, loopA] {
+      let scope = ScopeProbe()
+      assertRootRejected(root, vault: vault, as: .symbolicLink, scope: scope)
+      XCTAssertEqual(scope.counts().starts, 1)
+      XCTAssertEqual(scope.counts().stops, 1)
+    }
+  }
+
+  func testWalkerKeepsSafeSiblingsAndReportsTypedDescendantFailures() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    let safeBytes = Data([0x00, 0xFF, 0x41])
+    try safeBytes.write(to: root.appendingPathComponent("safe.bin"))
+    try Data("hidden".utf8).write(to: root.appendingPathComponent(".hidden"))
+
+    let externalFile = tempDirectory.appendingPathComponent("external.txt")
+    let externalDirectory = tempDirectory.appendingPathComponent("external-dir", isDirectory: true)
+    try Data("external".utf8).write(to: externalFile)
+    try FileManager.default.createDirectory(
+      at: externalDirectory, withIntermediateDirectories: false)
+    try FileManager.default.createSymbolicLink(
+      at: root.appendingPathComponent("file-link"), withDestinationURL: externalFile)
+    try FileManager.default.createSymbolicLink(
+      at: root.appendingPathComponent("directory-link", isDirectory: true),
+      withDestinationURL: externalDirectory)
+    try FileManager.default.createSymbolicLink(
+      atPath: root.appendingPathComponent("dangling").path,
+      withDestinationPath: root.appendingPathComponent("missing").path)
+    try FileManager.default.createSymbolicLink(
+      atPath: root.appendingPathComponent("loop-a").path,
+      withDestinationPath: root.appendingPathComponent("loop-b").path)
+    try FileManager.default.createSymbolicLink(
+      atPath: root.appendingPathComponent("loop-b").path,
+      withDestinationPath: root.appendingPathComponent("loop-a").path)
+
+    let fifo = root.appendingPathComponent("fifo")
+    XCTAssertEqual(Darwin.mkfifo(fifo.path, 0o600), 0)
+    let socketURL = root.appendingPathComponent("socket")
+    let socketFD = try bindUnixSocket(at: socketURL)
+    defer { Darwin.close(socketFD) }
+    let unreadable = root.appendingPathComponent("unreadable")
+    try Data("no access".utf8).write(to: unreadable)
+    XCTAssertEqual(Darwin.chmod(unreadable.path, 0), 0)
+
+    let scope = ScopeProbe()
+    let prepared = try makeWalker(scope: scope).prepare(rootURL: root, vaultURL: vault)
+    XCTAssertEqual(
+      prepared.manifest.entries.map { ($0.relativePath.display, $0.kind) },
+      [
+        ("", .directory),
+        ("safe.bin", .regularFile),
+      ])
+    XCTAssertEqual(
+      prepared.manifest.failures.map { $0.relativePath.display },
+      [
+        ".hidden",
+        "dangling",
+        "directory-link",
+        "fifo",
+        "file-link",
+        "loop-a",
+        "loop-b",
+        "socket",
+        "unreadable",
+      ])
+    XCTAssertEqual(
+      prepared.manifest.failures.map { $0.reason },
+      [
+        .hidden,
+        .symbolicLink,
+        .symbolicLink,
+        .fifo,
+        .symbolicLink,
+        .symbolicLink,
+        .symbolicLink,
+        .socket,
+        .unreadable,
+      ])
+    let safe = try XCTUnwrap(
+      prepared.manifest.entries.first { $0.relativePath.display == "safe.bin" })
+    XCTAssertEqual(try prepared.readBytes(for: safe), safeBytes)
+
+    XCTAssertEqual(scope.counts().stops, 0)
+    prepared.close()
+    XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testWalkerRejectsHiddenUnreadableAndSpecialRootsWithTypedReasons() throws {
+    let vault = try makeVault()
+    let hidden = tempDirectory.appendingPathComponent(".hidden-root", isDirectory: true)
+    try FileManager.default.createDirectory(at: hidden, withIntermediateDirectories: false)
+    let unreadable = tempDirectory.appendingPathComponent("unreadable-root")
+    try Data("no access".utf8).write(to: unreadable)
+    XCTAssertEqual(Darwin.chmod(unreadable.path, 0), 0)
+    let fifo = tempDirectory.appendingPathComponent("fifo-root")
+    XCTAssertEqual(Darwin.mkfifo(fifo.path, 0o600), 0)
+    let socketURL = tempDirectory.appendingPathComponent("socket-root")
+    let socketFD = try bindUnixSocket(at: socketURL)
+    defer { Darwin.close(socketFD) }
+
+    for (root, reason) in [
+      (hidden, SidebarImportSourceFailureReason.hidden),
+      (unreadable, .unreadable),
+      (fifo, .fifo),
+      (socketURL, .socket),
+      (URL(fileURLWithPath: "/dev/null"), .characterDevice),
+    ] {
+      let scope = ScopeProbe()
+      assertRootRejected(root, vault: vault, as: reason, scope: scope)
+      XCTAssertEqual(scope.counts().starts, 1)
+      XCTAssertEqual(scope.counts().stops, 1)
+    }
+  }
+
+  func testWalkerRejectsVaultAndItsAncestorsByOpenedIdentity() throws {
+    let container = tempDirectory.appendingPathComponent("container", isDirectory: true)
+    let vault = container.appendingPathComponent("vault", isDirectory: true)
+    try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+    let vaultLink = tempDirectory.appendingPathComponent("vault-link", isDirectory: true)
+    try FileManager.default.createSymbolicLink(at: vaultLink, withDestinationURL: vault)
+
+    for (root, trustedVault) in [
+      (vault, vault),
+      (container, vault),
+      (vault, vaultLink),
+      (container, vaultLink),
+    ] {
+      let scope = ScopeProbe()
+      XCTAssertThrowsError(
+        try makeWalker(scope: scope).prepare(rootURL: root, vaultURL: trustedVault)
+      ) { error in
+        guard case let SidebarImportSourceWalkerError.sourceContainsVault(path) = error else {
+          XCTFail("expected sourceContainsVault, got \(error)")
+          return
+        }
+        XCTAssertEqual(path, root.path)
+      }
+      XCTAssertEqual(scope.counts().starts, 1)
+      XCTAssertEqual(scope.counts().stops, 1)
+    }
+  }
+
+  func testWalkerTreatsFalseScopeStartAsSuccessAndBalancesAcquiredScopesOnce() throws {
+    let vault = try makeVault()
+    let root = tempDirectory.appendingPathComponent("source", isDirectory: true)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+    try Data("safe".utf8).write(to: root.appendingPathComponent("safe.txt"))
+
+    let inactiveScope = ScopeProbe(startResult: false)
+    let inactivePrepared = try makeWalker(scope: inactiveScope).prepare(
+      rootURL: root,
+      vaultURL: vault)
+    inactivePrepared.close()
+    inactivePrepared.close()
+    XCTAssertEqual(inactiveScope.counts().starts, 1)
+    XCTAssertEqual(inactiveScope.counts().stops, 0)
+
+    let deinitScope = ScopeProbe()
+    var deinitialized: SidebarImportPreparedSource? = try makeWalker(scope: deinitScope).prepare(
+      rootURL: root,
+      vaultURL: vault)
+    XCTAssertNotNil(deinitialized)
+    deinitialized = nil
+    XCTAssertEqual(deinitScope.counts().starts, 1)
+    XCTAssertEqual(deinitScope.counts().stops, 1)
+
+    let readFailureScope = ScopeProbe()
+    var readFailurePrepared: SidebarImportPreparedSource? = try makeWalker(
+      scope: readFailureScope
+    ).prepare(rootURL: root, vaultURL: vault)
+    let safeEntry = try XCTUnwrap(
+      readFailurePrepared?.manifest.entries.first { $0.relativePath.display == "safe.txt" })
+    try FileManager.default.removeItem(at: root.appendingPathComponent("safe.txt"))
+    try FileManager.default.createSymbolicLink(
+      at: root.appendingPathComponent("safe.txt"),
+      withDestinationURL: tempDirectory.appendingPathComponent("missing"))
+    XCTAssertThrowsError(try readFailurePrepared?.readBytes(for: safeEntry))
+    XCTAssertEqual(readFailureScope.counts().stops, 0)
+    readFailurePrepared = nil
+    XCTAssertEqual(readFailureScope.counts().starts, 1)
+    XCTAssertEqual(readFailureScope.counts().stops, 1)
+
+    let rejectedScope = ScopeProbe(startResult: false)
+    let missing = tempDirectory.appendingPathComponent("missing-source")
+    XCTAssertThrowsError(
+      try makeWalker(scope: rejectedScope).prepare(rootURL: missing, vaultURL: vault))
+    XCTAssertEqual(rejectedScope.counts().starts, 1)
+    XCTAssertEqual(rejectedScope.counts().stops, 0)
   }
 }
