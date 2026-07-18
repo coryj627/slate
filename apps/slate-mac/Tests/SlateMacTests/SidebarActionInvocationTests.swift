@@ -512,7 +512,12 @@ final class SidebarActionInvocationTests: XCTestCase {
             creationParent: "Projects",
             selectionRevision: 9)
         XCTAssertTrue(state.publishSidebarSelectionSnapshot(selection))
-        let externalRoot = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        let temporaryDirectoryPath = try XCTUnwrap(
+            try FileManager.default.temporaryDirectory
+                .resourceValues(forKeys: [.canonicalPathKey])
+                .canonicalPath)
+        let externalRoot = URL(
+            fileURLWithPath: temporaryDirectoryPath, isDirectory: true)
             .appendingPathComponent(
                 "slate-command-source-\(UUID().uuidString)",
                 isDirectory: true)

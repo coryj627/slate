@@ -308,6 +308,18 @@ final class BatchHostQuarantineTests: XCTestCase {
         return provider
     }
 
+    private func canonicalTemporaryDirectory(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> URL {
+        let path = try FileManager.default.temporaryDirectory
+            .resourceValues(forKeys: [.canonicalPathKey])
+            .canonicalPath
+        return URL(
+            fileURLWithPath: try XCTUnwrap(path, file: file, line: line),
+            isDirectory: true)
+    }
+
     func testBatchMoveQuarantinesCoreStandingPathsBeforeRefreshAndPreservesTypedState()
         async throws
     {
@@ -2279,7 +2291,7 @@ final class BatchHostQuarantineTests: XCTestCase {
             preferredFocusPath: uncertain.path))
         await quarantine.value
 
-        let externalRoot = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        let externalRoot = try canonicalTemporaryDirectory()
             .appendingPathComponent("fl05-quarantine-\(UUID().uuidString)")
         tempDirs.append(externalRoot)
         try FileManager.default.createDirectory(
@@ -2331,7 +2343,7 @@ final class BatchHostQuarantineTests: XCTestCase {
             preferredFocusPath: uncertain.path))
         await quarantine.value
 
-        let externalRoot = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        let externalRoot = try canonicalTemporaryDirectory()
             .appendingPathComponent("fl05-quarantine-\(UUID().uuidString)")
         tempDirs.append(externalRoot)
         try FileManager.default.createDirectory(

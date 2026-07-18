@@ -2619,7 +2619,10 @@ final class SidebarImportCoordinatorTests: XCTestCase {
         providerIndex: 0,
         outcome: .failure(.loadFailed("failed immediately")))],
       "the terminal failure must be observable while provider 2 is still loading")
-    pending.complete(with: URL(fileURLWithPath: "/tmp/later.md"))
+    pending.complete(
+      with: FileManager.default.temporaryDirectory
+        .appendingPathComponent("later.md")
+    )
     _ = await resultTask.value
   }
 

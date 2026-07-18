@@ -23,7 +23,12 @@ final class FileTreeDragDropTests: XCTestCase {
     private var tempDir: URL!
 
     override func setUpWithError() throws {
-        tempDir = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
+        let temporaryDirectoryPath = try XCTUnwrap(
+            try FileManager.default.temporaryDirectory
+                .resourceValues(forKeys: [.canonicalPathKey])
+                .canonicalPath)
+        tempDir = URL(
+            fileURLWithPath: temporaryDirectoryPath, isDirectory: true)
             .appendingPathComponent("dnd-fileurl-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
     }
@@ -427,6 +432,10 @@ final class FileTreeDragDropTests: XCTestCase {
         return task
     }
 
+    /// Anchor source-contract checks to the compiler-emitted test-file path so
+    /// they are independent of the test process's current working directory.
+    /// The `Sources/SlateMac` layout is intentionally part of the pin: a source
+    /// refactor must fail these checks until the wiring contract is re-audited.
     private static func source(_ filename: String) throws -> String {
         let url = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()  // SlateMacTests
@@ -813,7 +822,8 @@ final class FileTreeDragDropTests: XCTestCase {
             ) { completion in
                 counter.record(index)
                 completion(
-                    URL(fileURLWithPath: "/private/tmp/item-\(index).md")
+                    FileManager.default.temporaryDirectory
+                        .appendingPathComponent("item-\(index).md")
                         .dataRepresentation,
                     nil)
                 return nil
