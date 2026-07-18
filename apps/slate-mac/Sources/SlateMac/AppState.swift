@@ -4932,6 +4932,10 @@ final class AppState: ObservableObject {
     private func reconcileSidebarOrganizationFromDisk(
         _ recovered: SidebarVaultPrefsReadResult, failure: String
     ) {
+        // Round-12 finding 3: the reconcile supersedes every optimistic
+        // announcement still awaiting verification — a later unrelated
+        // commit must not replay a stale sort correction.
+        sidebarOrganizationPendingAnnouncementVerifications = [:]
         var notice = recovered.notice
         if notice == nil,
             !SidebarOrganizationSchema.knownSectionShapesAreValid(
@@ -5667,38 +5671,62 @@ final class AppState: ObservableObject {
             sidebarPinPruneLedger.shouldPrune(folder: folder),
             let vaultRoot = currentVaultURL
         else { return }
-        // Round-11 finding 3: an absence snapshot from an earlier listing is
-        // not deletion provenance — a synced sidebar.json can arrive before
-        // its pinned note. Re-validate each candidate with a fresh exact-path
-        // check immediately before mutating and retain the pin on anything
-        // but a definite ENOENT. A retained candidate does NOT consume the
-        // folder's once-per-session prune slot.
-        let confirmedStale = stale.filter {
-            Self.sidebarPathDefinitelyMissing(vaultRoot: vaultRoot, path: $0)
-        }
-        guard !confirmedStale.isEmpty else { return }
-        sidebarPinPruneLedger.markPruned(folder: folder)
-        let staleSet = Set(confirmedStale)
-        let currentPaths = sidebarOrganization.pins.paths(forFolder: folder)
-        let remaining = currentPaths.filter { !staleSet.contains($0) }
-        guard remaining.count != currentPaths.count else { return }
+        // Round-12 finding 1: no filesystem work on the main actor, and a
+        // bounded, deduplicated candidate set — an adversarially repetitive
+        // authored list cannot freeze the sidebar. Surplus candidates simply
+        // wait for a later session's prune.
+        var seen: Set<String> = []
+        let candidates = Array(
+            stale.filter { seen.insert($0).inserted }
+                .prefix(Self.sidebarStalePruneCandidateCap))
+        guard !candidates.isEmpty else { return }
+        let staleSet = Set(candidates)
 
-        try? mutateSidebarOrganization(announce: nil) { root in
-            let storedPins = SidebarOrganizationSchema.decode(root: root).pins
-            // Second fresh check under the lock: retain anything that
-            // appeared between the pre-check and this mutation.
-            let storedRemaining = storedPins.paths(forFolder: folder).filter {
-                path in
-                !staleSet.contains(path)
-                    || !Self.sidebarPathDefinitelyMissing(
-                        vaultRoot: vaultRoot, path: path)
+        // All validation and mutation happen under the store lock, off the
+        // main actor (round-11 finding 3's fresh exact-path rule): prune only
+        // candidates that are STILL a definite ENOENT at mutation time. The
+        // removal count reports back so the once-per-session slot is consumed
+        // only by a committed mutation that actually removed a pin (round-12
+        // finding 2). Published memory converges via the tail's decoded
+        // final-root publish; no optimistic reflect is needed.
+        final class RemovalCountBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var count = 0
+            func record(_ value: Int) {
+                lock.lock()
+                count = value
+                lock.unlock()
             }
-            SidebarOrganizationSchema.setPins(
-                &root, folder: folder, paths: storedRemaining)
-        } reflect: { state in
-            state.pins.replacePaths(remaining, forFolder: folder)
+            var value: Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return count
+            }
         }
+        let removals = RemovalCountBox()
+        try? mutateSidebarOrganization(
+            announce: nil,
+            apply: { root in
+                let storedPins = SidebarOrganizationSchema.decode(root: root).pins
+                let storedPaths = storedPins.paths(forFolder: folder)
+                let storedRemaining = storedPaths.filter { path in
+                    !staleSet.contains(path)
+                        || !Self.sidebarPathDefinitelyMissing(
+                            vaultRoot: vaultRoot, path: path)
+                }
+                removals.record(storedPaths.count - storedRemaining.count)
+                guard storedRemaining.count != storedPaths.count else { return }
+                SidebarOrganizationSchema.setPins(
+                    &root, folder: folder, paths: storedRemaining)
+            },
+            reflect: { _ in },
+            acknowledge: { [weak self] in
+                guard let self, removals.value > 0 else { return }
+                self.sidebarPinPruneLedger.markPruned(folder: folder)
+            })
     }
+
+    private static let sidebarStalePruneCandidateCap = 128
 
     /// True only on a definite ENOENT for the vault-relative path; any other
     /// stat outcome (exists, permission error, transient I/O) retains the pin.
@@ -8335,6 +8363,7 @@ final class AppState: ObservableObject {
             }
 
             self.sidebarVaultPrefsNotice = adoptedNotice
+            self.sidebarOrganizationPendingAnnouncementVerifications = [:]
             // A successful repair re-adopts the file's authored organization
             // sections in the same publish; any standing notice publishes
             // defaults instead — partial salvage from an invalid file would

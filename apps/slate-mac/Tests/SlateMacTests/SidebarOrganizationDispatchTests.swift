@@ -1547,6 +1547,99 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       ["Projects/ghost.md", "Projects/real.md"])
   }
 
+  // MARK: - Red-team regressions (adversarial review round 12)
+
+  func testAdversariallyDuplicatedStaleListsPruneBoundedAndOffMain() async throws {
+    // Round-12 finding 1: thousands of duplicated candidates collapse to
+    // one bounded, deduplicated locked pass — and decode dedupes the
+    // authored list itself.
+    let ghost = "Projects/ghost.md"
+    let duplicated = Array(repeating: ghost, count: 5_000) + ["Projects/real.md"]
+    let pinsJSON = duplicated.map { "\"\($0)\"" }.joined(separator: ",")
+    let (state, vault) = try openVault(
+      named: "dup-prune", files: ["Projects/real.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": [\(pinsJSON)]}}
+        """)
+    // Decode collapsed the duplicates (first occurrence wins).
+    XCTAssertEqual(
+      state.sidebarOrganization.pins.paths(forFolder: "Projects"),
+      [ghost, "Projects/real.md"])
+
+    state.pruneStaleSidebarPins(
+      forFolder: "Projects",
+      stale: Array(repeating: ghost, count: 5_000))
+    await awaitPersist(state)
+    XCTAssertEqual(
+      state.sidebarOrganization.pins.paths(forFolder: "Projects"),
+      ["Projects/real.md"])
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(pins["Projects"] as? [String], ["Projects/real.md"])
+  }
+
+  func testPruneWriteFailureDoesNotConsumeTheSlot() async throws {
+    // Round-12 finding 2: the once-per-session slot is consumed only by a
+    // COMMITTED mutation that removed a pin — a failed write retries later.
+    let (state, vault) = try openVault(
+      named: "prune-write-failure", files: ["Projects/real.md"],
+      folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1,
+         "pins": {"Projects": ["Projects/ghost.md", "Projects/real.md"]}}
+        """)
+    let lockURL = vault.appendingPathComponent(".slate/sidebar.json.lock")
+    try FileManager.default.createDirectory(
+      at: lockURL, withIntermediateDirectories: true)
+    state.pruneStaleSidebarPins(
+      forFolder: "Projects", stale: ["Projects/ghost.md"])
+    await awaitPersist(state)
+    XCTAssertEqual(
+      state.sidebarOrganization.pins.paths(forFolder: "Projects"),
+      ["Projects/ghost.md", "Projects/real.md"],
+      "the failed prune changed nothing")
+
+    try FileManager.default.removeItem(at: lockURL)
+    state.pruneStaleSidebarPins(
+      forFolder: "Projects", stale: ["Projects/ghost.md"])
+    await awaitPersist(state)
+    XCTAssertEqual(
+      state.sidebarOrganization.pins.paths(forFolder: "Projects"),
+      ["Projects/real.md"],
+      "the slot survived the failure, so the retry prunes")
+  }
+
+  func testFailedChainDoesNotReplayAStaleSortCorrectionLater() async throws {
+    // Round-12 finding 3: a failed sort's verification record must not leak
+    // into a later unrelated commit and speak a delayed sort announcement.
+    let announcer = RecordingAnnouncer()
+    let (state, vault) = try openVault(
+      named: "record-leak", files: ["Projects/note.md"], folders: ["Projects"],
+      announcer: announcer)
+    let lockURL = vault.appendingPathComponent(".slate/sidebar.json.lock")
+    try FileManager.default.createDirectory(
+      at: lockURL, withIntermediateDirectories: true)
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+    try FileManager.default.removeItem(at: lockURL)
+    let sortMessagesBefore = announcer.messages.filter {
+      $0.hasPrefix("Sorted by")
+    }.count
+
+    try publish(
+      state, [item("Projects/note.md")],
+      focusedPath: "Projects/note.md", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    await awaitPersist(state)
+    let sortMessagesAfter = announcer.messages.filter {
+      $0.hasPrefix("Sorted by")
+    }.count
+    XCTAssertEqual(
+      sortMessagesAfter, sortMessagesBefore,
+      "the pin's tail must not replay the failed sort's stale correction")
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
@@ -1562,10 +1655,10 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
 
     state.pruneStaleSidebarPins(
       forFolder: "Projects", stale: ["Projects/ghost.md"])
+    await awaitPersist(state)
     XCTAssertEqual(
       state.sidebarOrganization.pins.paths(forFolder: "Projects"),
       ["Projects/real.md"])
-    await awaitPersist(state)
     let json = try sidebarJSON(at: vault)
     let pins = try XCTUnwrap(json["pins"] as? [String: Any])
     XCTAssertEqual(pins["Projects"] as? [String], ["Projects/real.md"])

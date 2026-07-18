@@ -711,7 +711,12 @@ enum SidebarOrganizationSchema {
     if let rawPins = root[pinsKey] as? [String: Any] {
       for (folder, raw) in rawPins {
         guard let paths = raw as? [String], !paths.isEmpty else { continue }
-        pins.replacePaths(paths, forFolder: folder)
+        // Round-12 finding 1: collapse duplicates at decode (first authored
+        // occurrence wins) so no downstream consumer performs per-duplicate
+        // work on an adversarially repetitive list.
+        var seen: Set<String> = []
+        let deduped = paths.filter { seen.insert($0).inserted }
+        pins.replacePaths(deduped, forFolder: folder)
       }
     }
     return (prefs, pins)
