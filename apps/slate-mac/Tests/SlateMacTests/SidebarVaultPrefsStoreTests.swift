@@ -224,6 +224,27 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     XCTAssertEqual(store.read().root["allowed"] as? Bool, true)
   }
 
+  func testIdentityBoundReadRefusesAMismatchedRoot() throws {
+    // FL-06 round-23: post-admission re-reads must prove the root is still
+    // the admitted vault; a mismatch returns nil instead of the newcomer's
+    // content (or defaults that would clobber published state).
+    let store = makeStore()
+    try store.update { root in
+      root["ours"] = true
+    }
+    let wrongIdentity = SidebarVaultPrefsStore.RootIdentity(
+      device: 0xDEAD, inode: 0xBEEF)
+    XCTAssertNil(store.read(expectedRootIdentity: wrongIdentity))
+
+    var info = stat()
+    XCTAssertEqual(vault.path.withCString { stat($0, &info) }, 0)
+    let rightIdentity = SidebarVaultPrefsStore.RootIdentity(
+      device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+    XCTAssertEqual(
+      store.read(expectedRootIdentity: rightIdentity)?.root["ours"] as? Bool,
+      true)
+  }
+
   func testNoOpUpdateSkipsThePhysicalReplacement() throws {
     let synchronizer = DirectorySynchronizerSpy()
     let store = makeStore(directorySynchronizer: { synchronizer.synchronize($0) })

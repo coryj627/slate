@@ -4980,6 +4980,16 @@ final class AppState: ObservableObject {
         announcer.post(failure, priority: .medium)
     }
 
+    /// Round-23: the one announcement for any write or reconcile path that
+    /// refuses to touch a same-path replacement vault.
+    private func announceSidebarWriteDiscardedForReplacedVault() {
+        let message =
+            "The vault at this location changed, so a queued "
+            + "sidebar settings write was discarded."
+        lastMutationAnnouncement = message
+        announcer.post(message, priority: .medium)
+    }
+
     /// Availability the pure catalog cannot own: read-only preference files
     /// disable the whole organization set with the notice's reason, and the
     /// pin/override verbs reflect the target's current state so contextual
@@ -5321,11 +5331,7 @@ final class AppState: ObservableObject {
                             return false
                         }) == true
                 {
-                    let message =
-                        "The vault at this location changed, so a queued "
-                        + "sidebar settings write was discarded."
-                    self.lastMutationAnnouncement = message
-                    self.announcer.post(message, priority: .medium)
+                    self.announceSidebarWriteDiscardedForReplacedVault()
                     return
                 }
                 let failure: String
@@ -5345,13 +5351,24 @@ final class AppState: ObservableObject {
                     self.sidebarOrganizationPendingPersistFailure = failure
                     return
                 }
+                // Round-23: disk truth must still BE this vault's disk.
+                // The reconcile read is bound to the enqueue identity; a
+                // mismatch (or a never-captured identity) is the replaced-
+                // vault case — keep current state and announce the discard.
+                let reconcileIdentity = enqueueIdentity
                 let recovered = await Task.detached(priority: .utility) {
-                    store.read()
+                    reconcileIdentity.flatMap {
+                        store.read(expectedRootIdentity: $0)
+                    }
                 }.value
                 guard self.sidebarOrganizationWriteGeneration == generation,
                     self.currentSession === session
                 else { return }
                 self.sidebarOrganizationPendingPersistFailure = nil
+                guard let recovered else {
+                    self.announceSidebarWriteDiscardedForReplacedVault()
+                    return
+                }
                 // A write can fail because the file BECAME unsafe (synced-in
                 // corruption, oversize, a newer version). The reconcile
                 // publishes that notice so the banner appears and the whole
@@ -5405,6 +5422,14 @@ final class AppState: ObservableObject {
     /// Test seam: enqueue one raw write through the production persist chain
     /// — ownership guards, tail bookkeeping, and failure reconcile included —
     /// so chain-ordering behavior is testable without a second funnel.
+    /// Round-23 test seam: simulate an open whose root-identity capture
+    /// failed (fstat raced a deletion) so fail-closed paths are testable.
+    func overrideSidebarVaultRootIdentityForTesting(
+        _ identity: SidebarVaultRootIdentity?
+    ) {
+        sidebarVaultRootIdentity = identity
+    }
+
     func enqueueSidebarOrganizationWriteForTesting(
         _ apply: @escaping @Sendable (inout [String: Any]) -> Void
     ) {
@@ -8470,7 +8495,12 @@ final class AppState: ObservableObject {
         // Round-16: a writer detached before a close/reopen of the SAME
         // vault may still be completing. Queue a silent post-drain refresh
         // so published state converges on whatever that writer committed.
-        if let priorWriter = Self.sidebarStoreWriterChains[store.fileURL] {
+        // Round-23: the refresh republishes disk content after the prior
+        // writer drains — bind its read to THIS open's admitted identity and
+        // skip entirely when identity was never captured (fail closed).
+        if let refreshIdentity = sidebarVaultRootIdentity,
+            let priorWriter = Self.sidebarStoreWriterChains[store.fileURL]
+        {
             let generation = sidebarOrganizationWriteGeneration
             let session = currentSession
             // The refresh is installed as the per-file chain TAIL (round-17):
@@ -8500,11 +8530,13 @@ final class AppState: ObservableObject {
                     self.sidebarVaultPrefsStore?.fileURL == store.fileURL
                 else { return }
                 let refreshed = await Task.detached(priority: .utility) {
-                    store.read()
+                    store.read(expectedRootIdentity: refreshIdentity)
                 }.value
                 guard self.sidebarOrganizationWriteGeneration == generation,
                     self.currentSession === session
                 else { return }
+                // A replaced root publishes nothing (round-23).
+                guard let refreshed else { return }
                 var notice = refreshed.notice
                 if notice == nil,
                     !SidebarOrganizationSchema.knownSectionShapesAreValid(
@@ -8559,7 +8591,13 @@ final class AppState: ObservableObject {
         guard sidebarVaultPrefsRetryTask == nil else {
             return nil
         }
-        guard let store = sidebarVaultPrefsStore, let session = currentSession else {
+        guard let store = sidebarVaultPrefsStore, let session = currentSession,
+            // Round-23: Retry reads, replays the journal, and republishes —
+            // all of which require PROVING the root is still the admitted
+            // vault. A never-captured identity is uncertainty: do nothing,
+            // keep the notice, the journal, and the published state.
+            let retryIdentity = sidebarVaultRootIdentity
+        else {
             return nil
         }
         sidebarVaultPrefsRetryGeneration &+= 1
@@ -8567,7 +8605,7 @@ final class AppState: ObservableObject {
         isRetryingSidebarVaultPreferences = true
         let task = Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) {
-                store.read()
+                store.read(expectedRootIdentity: retryIdentity)
             }.value
             guard let self else { return }
             guard generation == self.sidebarVaultPrefsRetryGeneration else { return }
@@ -8581,6 +8619,9 @@ final class AppState: ObservableObject {
                 self.currentSession === session,
                 self.sidebarVaultPrefsStore?.fileURL == store.fileURL
             else { return }
+            // Round-23: a same-path replacement vault's file is not ours —
+            // keep the notice, the journal, and the published state.
+            guard let result else { return }
 
             // FL-06 (round-4 finding 2): structural transforms that happened
             // while the file was read-only replay under the store lock BEFORE
@@ -8589,7 +8630,6 @@ final class AppState: ObservableObject {
             var adoptedRoot = result.root
             var adoptedNotice = result.notice
             var retryDurabilityWarning: String?
-            let retryIdentity = self.sidebarVaultRootIdentity
             // Round-5 finding 3: a repaired file whose known sections use an
             // unrecognized top-level shape stays in recovery — the replay
             // must not write into it either.
@@ -8675,11 +8715,13 @@ final class AppState: ObservableObject {
                     // keep the whole journal for the next Retry and report
                     // the still-unsafe state honestly.
                     let reread = await Task.detached(priority: .userInitiated) {
-                        store.read()
+                        store.read(expectedRootIdentity: retryIdentity)
                     }.value
                     guard generation == self.sidebarVaultPrefsRetryGeneration,
                         self.currentSession === session
                     else { return }
+                    // A replaced root adopts nothing (round-23).
+                    guard let reread else { return }
                     adoptedRoot = reread.root
                     if let notice = reread.notice {
                         adoptedNotice = notice

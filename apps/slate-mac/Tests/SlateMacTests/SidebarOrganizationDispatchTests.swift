@@ -2012,6 +2012,94 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       "the replacement vault receives nothing")
   }
 
+  // MARK: - Red-team regressions (adversarial review round 23)
+
+  func testRetryRefusesAReplacementVaultAtTheSamePath() async throws {
+    // Round-23: Retry's read is bound to the admitted root identity — a
+    // same-path replacement vault's file is never adopted, A's journal is
+    // never replayed into it, and A's recovery state stays put.
+    let (state, vaultA) = try openVault(
+      named: "retry-swap", files: ["Projects/note.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+    let sidebarURL = vaultA.appendingPathComponent(".slate/sidebar.json")
+    try "{not json".write(to: sidebarURL, atomically: true, encoding: .utf8)
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    XCTAssertEqual(state.sidebarStructuralTransformJournal.count, 1)
+
+    // Replace the vault at the same path with a healthy impostor.
+    let aside = root.appendingPathComponent("retry-swap-moved")
+    try FileManager.default.moveItem(at: vaultA, to: aside)
+    try FileManager.default.createDirectory(
+      at: vaultA.appendingPathComponent(".slate"),
+      withIntermediateDirectories: true)
+    let impostorURL = vaultA.appendingPathComponent(".slate/sidebar.json")
+    let impostorContent = Data(
+      """
+      {"version": 1, "pins": {"Other": ["Other/impostor.md"]}}
+      """.utf8)
+    try impostorContent.write(to: impostorURL)
+
+    await state.retrySidebarVaultPreferences()?.value
+
+    XCTAssertEqual(
+      state.sidebarVaultPrefsNotice, .malformed,
+      "the impostor's healthy file must not clear A's recovery")
+    XCTAssertEqual(
+      state.sidebarStructuralTransformJournal.count, 1,
+      "A's journal waits for A, not the impostor")
+    XCTAssertFalse(
+      state.sidebarOrganization.pins.isPinned(
+        "Other/impostor.md", inFolder: "Other"),
+      "the impostor's preferences never publish into A's session")
+    XCTAssertEqual(
+      try Data(contentsOf: impostorURL), impostorContent,
+      "the impostor's file receives nothing")
+  }
+
+  func testRetryWithUnknownAdmittedIdentityDoesNothing() async throws {
+    // Round-23: a never-captured root identity means Retry cannot prove any
+    // read or replay targets the admitted vault — it must refuse to run
+    // rather than replay the journal into an unverified root.
+    let (state, vault) = try openVault(
+      named: "retry-no-identity", files: ["Projects/note.md"],
+      folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+    let sidebarURL = vault.appendingPathComponent(".slate/sidebar.json")
+    let repaired = try Data(contentsOf: sidebarURL)
+    try "{not json".write(to: sidebarURL, atomically: true, encoding: .utf8)
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    XCTAssertEqual(state.sidebarStructuralTransformJournal.count, 1)
+
+    state.overrideSidebarVaultRootIdentityForTesting(nil)
+    try repaired.write(to: sidebarURL)
+
+    XCTAssertNil(
+      state.retrySidebarVaultPreferences(),
+      "an unproven root starts no retry work at all")
+    XCTAssertFalse(state.isRetryingSidebarVaultPreferences)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    XCTAssertEqual(
+      state.sidebarStructuralTransformJournal.count, 1,
+      "the journal is retained for a future proven retry")
+    XCTAssertEqual(
+      try Data(contentsOf: sidebarURL), repaired,
+      "nothing writes into the unverified root")
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

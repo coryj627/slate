@@ -141,13 +141,40 @@ struct SidebarVaultPrefsStore: Sendable {
 
   /// Reads without creating `.slate`, the preference file, or its lock.
   /// Missing input is writable; every unsafe existing input is read-only.
+  /// This unchecked variant is for vault-open admission only — whatever is
+  /// at the path IS the vault being opened. Post-admission re-reads must
+  /// use `read(expectedRootIdentity:)` instead.
   func read() -> SidebarVaultPrefsReadResult {
+    read(resolvingIdentity: nil)
+      ?? SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: .unreadable)
+  }
+
+  /// FL-06 round-23: identity-bound re-read. Returns nil when the vault
+  /// root cannot be proven to still be the admitted vault (identity
+  /// mismatch, or a root that vanished or became unopenable) — the file at
+  /// this path may belong to a replacement vault and must not be adopted;
+  /// the caller keeps its current state.
+  func read(
+    expectedRootIdentity: RootIdentity
+  ) -> SidebarVaultPrefsReadResult? {
+    read(resolvingIdentity: expectedRootIdentity)
+  }
+
+  private func read(
+    resolvingIdentity expectedRootIdentity: RootIdentity?
+  ) -> SidebarVaultPrefsReadResult? {
     let slateDirectoryFD: Int32
-    switch openSlateDirectory(createIfMissing: false) {
+    switch openSlateDirectory(
+      createIfMissing: false, expectedRootIdentity: expectedRootIdentity)
+    {
     case .missing:
+      if expectedRootIdentity != nil { return nil }
       return SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: nil)
-    case .failed, .identityMismatch:
+    case .failed:
+      if expectedRootIdentity != nil { return nil }
       return SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: .unreadable)
+    case .identityMismatch:
+      return nil
     case .opened(let fd):
       slateDirectoryFD = fd
     }
