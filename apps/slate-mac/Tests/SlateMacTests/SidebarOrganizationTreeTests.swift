@@ -265,6 +265,33 @@ final class SidebarOrganizationTreeTests: XCTestCase {
     XCTAssertEqual(spy.calls, [""])
   }
 
+  // MARK: - Header rendering statics
+
+  func testHeaderAccessibilityValueUsesSingularAndPluralNoteCounts() {
+    let one = SidebarTreeHeaderRow(
+      kind: .group, key: "today", label: "Today", fileCount: 1, depth: 0)
+    let many = SidebarTreeHeaderRow(
+      kind: .pinned, key: "pinned", label: "Pinned", fileCount: 3, depth: 1)
+    XCTAssertEqual(FileTreeSidebar.headerAccessibilityValue(for: one), "1 note")
+    XCTAssertEqual(FileTreeSidebar.headerAccessibilityValue(for: many), "3 notes")
+  }
+
+  func testTreeAccessibilitySummaryMentionsOnlyNonDefaultOrganization() {
+    XCTAssertNil(FileTreeSidebar.treeAccessibilitySummary(for: .defaults))
+    XCTAssertEqual(
+      FileTreeSidebar.treeAccessibilitySummary(
+        for: SidebarOrganizationChoice(
+          sort: SidebarSortOption(field: .modified, direction: .desc),
+          grouping: .none)),
+      "Files. Sorted by modified, newest first.")
+    XCTAssertEqual(
+      FileTreeSidebar.treeAccessibilitySummary(
+        for: SidebarOrganizationChoice(
+          sort: SidebarSortOption(field: .created, direction: .desc),
+          grouping: .dateBuckets)),
+      "Files. Sorted by created, newest first, grouped by date.")
+  }
+
   // MARK: - Day rollover
 
   func testSameDayTickDoesNotReorganizeButRolloverDoes() {

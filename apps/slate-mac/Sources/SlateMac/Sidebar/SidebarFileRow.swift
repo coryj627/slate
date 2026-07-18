@@ -178,21 +178,28 @@ struct SidebarRowModel {
   let taskBadgeText: String?
   let taskAccessibilityText: String?
   let taskBadgeIsComplete: Bool
+  let isPinned: Bool
   let accessibilityValue: String
   let visuallyShowsMetadata: Bool
   let visuallyShowsPreview: Bool
   let visuallyShowsTaskBadge: Bool
   let density: SidebarRowPreferencesSnapshot.Density
 
+  /// The pin badge is row identity, not secondary metadata: it stays visible
+  /// in compact density too (compact reduces detail, never identity).
+  var visuallyShowsPinBadge: Bool { isPinned }
+
   init(
     summary: FileSummary,
     preferences: SidebarRowPreferencesSnapshot,
+    isPinned: Bool = false,
     now: Date = Date(),
     locale: Locale = .current,
     calendar: Calendar = .current,
     civilDateResolver: any SidebarCivilDateResolving = SidebarProductionCivilDateResolver(),
     formatter: any SidebarRowFormatting = SidebarRowFormatterCache.shared
   ) {
+    self.isPinned = isPinned
     filename = summary.name
     filenameTooltip = summary.name
     if let authoredTitle = summary.displayName {
@@ -282,6 +289,9 @@ struct SidebarRowModel {
     if let taskAccessibilityText {
       spokenParts.append(taskAccessibilityText)
     }
+    if isPinned {
+      spokenParts.append("pinned")
+    }
     accessibilityValue = spokenParts.joined(separator: ", ")
 
     density = preferences.density
@@ -370,6 +380,14 @@ struct SidebarFileRow: View {
             .foregroundStyle(primaryText)
             .lineLimit(2)
           Spacer(minLength: 0)
+          if model.visuallyShowsPinBadge {
+            // Spoken via the row value's trailing ", pinned"; the glyph is
+            // the visual twin, so it stays out of the AX tree.
+            SlateSymbol.pin.decorative
+              .font(Tokens.Typography.caption)
+              .foregroundStyle(secondaryText)
+              .accessibilityHidden(true)
+          }
           if model.visuallyShowsTaskBadge, let badge = model.taskBadgeText {
             HStack(spacing: Tokens.Spacing.xxs) {
               (model.taskBadgeIsComplete ? SlateSymbol.taskComplete : SlateSymbol.tasksLeaf)

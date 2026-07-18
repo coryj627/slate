@@ -174,6 +174,7 @@ struct SidebarFolderRowContent: View {
 struct SidebarObservedFileRowContent: View {
     @ObservedObject var fileState: FileTreeFileState
     let preferences: SidebarRowPreferencesSnapshot
+    var isPinned = false
     let now: Date
     let depth: Int
     let isSelected: Bool
@@ -184,6 +185,7 @@ struct SidebarObservedFileRowContent: View {
             model: SidebarRowModel(
                 summary: fileState.summary,
                 preferences: preferences,
+                isPinned: isPinned,
                 now: now),
             depth: depth,
             isSelected: isSelected,
@@ -1343,6 +1345,9 @@ struct FileTreeSidebar: View {
         case node(NodeID)
         case loading(parent: NodeID)
         case error(parent: NodeID)
+        /// A nonselectable FL-06 section header (Pinned or a date bucket),
+        /// stable per (containing folder, bucket key) across renders.
+        case header(parentPath: String, key: String)
     }
 
     // MARK: - Multi-select model (#852)
@@ -4025,6 +4030,7 @@ struct FileTreeSidebar: View {
         case node(TreeNode)
         case loading(parent: NodeID, depth: Int)
         case error(parent: NodeID?, depth: Int, message: String, node: TreeNode?)
+        case header(parentPath: String, header: SidebarTreeHeaderRow)
 
         var rowID: RowID {
             switch self {
@@ -4032,6 +4038,8 @@ struct FileTreeSidebar: View {
             case let .loading(parent, _): return .loading(parent: parent)
             case let .error(parent, _, _, _):
                 return .error(parent: parent ?? FileTreeViewModel.rootFetchKey)
+            case let .header(parentPath, header):
+                return .header(parentPath: parentPath, key: header.key)
             }
         }
 
@@ -4054,6 +4062,14 @@ struct FileTreeSidebar: View {
             break
         }
         for node in tree.visibleRows {
+            // FL-06: splice the Pinned/date-bucket header immediately above
+            // the first file row of its run (nonselectable; see headerRow).
+            if !node.isDirectory, let header = tree.headerRow(before: node.nodeID) {
+                out.append(
+                    .header(
+                        parentPath: SidebarPins.folder(of: node.path),
+                        header: header))
+            }
             out.append(.node(node))
             guard node.isDirectory, tree.expanded.contains(node.nodeID) else { continue }
             switch tree.fetchState[node.nodeID] {
@@ -4078,7 +4094,46 @@ struct FileTreeSidebar: View {
             loadingRow(depth: depth)
         case let .error(_, depth, message, node):
             errorRow(depth: depth, message: message, node: node)
+        case let .header(_, header):
+            sectionHeaderRow(header)
         }
+    }
+
+    /// One nonselectable FL-06 section header (Pinned or a date bucket).
+    /// A real AX header (VO rotor-navigable), never a focus stop: it is
+    /// absent from `visibleSelectionRows`, so arrow navigation skips it, and
+    /// `selectionDisabled` blocks pointer selection.
+    private func sectionHeaderRow(_ header: SidebarTreeHeaderRow) -> some View {
+        HStack(spacing: Tokens.Spacing.xs) {
+            Color.clear
+                .frame(width: Self.indentWidth(for: header.depth), height: 0)
+                .accessibilityHidden(true)
+            Text(header.label)
+                .font(Tokens.Typography.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.top, Tokens.Spacing.xs)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(header.label)
+        .accessibilityValue(Self.headerAccessibilityValue(for: header))
+        .accessibilityAddTraits(.isHeader)
+        .selectionDisabled(true)
+    }
+
+    /// Spoken count for a section header ("3 notes").
+    static func headerAccessibilityValue(for header: SidebarTreeHeaderRow) -> String {
+        header.fileCount == 1 ? "1 note" : "\(header.fileCount) notes"
+    }
+
+    /// Container summary for the tree list. Default organization stays
+    /// silent; any non-default choice is named so a VO user hears the active
+    /// order when entering the list (fl3 spec §FL3-1.6).
+    static func treeAccessibilitySummary(
+        for choice: SidebarOrganizationChoice
+    ) -> String? {
+        choice == .defaults ? nil : "Files. \(choice.sortAnnouncement)"
     }
 
     // MARK: - Rows
@@ -4376,6 +4431,7 @@ struct FileTreeSidebar: View {
             SidebarObservedFileRowContent(
                 fileState: fileState,
                 preferences: rowPreferences,
+                isPinned: tree.isPinnedRow(node.nodeID),
                 now: sidebarNow,
                 depth: node.depth,
                 isSelected: selected,
@@ -5544,6 +5600,7 @@ struct FileTreeSidebar: View {
         let model = SidebarRowModel(
             summary: fileState.summary,
             preferences: rowPreferences,
+            isPinned: tree.isPinnedRow(id),
             now: sidebarNow)
         postAccessibilityAnnouncement(
             Self.selectionAnnouncement(for: model),
