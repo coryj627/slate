@@ -5311,6 +5311,23 @@ final class AppState: ObservableObject {
             switch outcome {
             case .failure(let error):
                 guard ownedForPublish else { return }
+                // Round-22: a vault-replaced refusal must not reconcile from
+                // the NEWCOMER's file — the disk at this path is no longer
+                // ours to read. Announce and keep current published state.
+                if error is SidebarOrganizationVaultReplacedError
+                    || (error as? SidebarVaultPrefsStoreError)
+                        .map({
+                            if case .vaultReplaced = $0 { return true }
+                            return false
+                        }) == true
+                {
+                    let message =
+                        "The vault at this location changed, so a queued "
+                        + "sidebar settings write was discarded."
+                    self.lastMutationAnnouncement = message
+                    self.announcer.post(message, priority: .medium)
+                    return
+                }
                 let failure: String
                 if let conflict = error as? SidebarOrganizationConflictError {
                     failure = conflict.reason
@@ -5783,6 +5800,7 @@ final class AppState: ObservableObject {
             }
         }
         let removals = RemovalCountBox()
+        let pruneIdentity = sidebarVaultRootIdentity
         try? mutateSidebarOrganization(
             announce: nil,
             apply: { root in
@@ -5790,6 +5808,7 @@ final class AppState: ObservableObject {
                 let storedPaths = storedPins.paths(forFolder: folder)
                 let definitelyMissing = Self.sidebarDefinitelyMissingPaths(
                     vaultRoot: vaultRoot,
+                    expectedIdentity: pruneIdentity,
                     candidates: storedPaths.filter { staleSet.contains($0) })
                 let storedRemaining = storedPaths.filter { path in
                     !definitelyMissing.contains(path)
@@ -5848,7 +5867,9 @@ final class AppState: ObservableObject {
     /// with the exact name retains the pin (uncertainty never prunes), and
     /// so does an unreadable parent.
     nonisolated static func sidebarDefinitelyMissingPaths(
-        vaultRoot: URL, candidates: [String]
+        vaultRoot: URL,
+        expectedIdentity: SidebarVaultRootIdentity?,
+        candidates: [String]
     ) -> Set<String> {
         guard !candidates.isEmpty else { return [] }
         var byParent: [String: [String]] = [:]
@@ -5876,6 +5897,20 @@ final class AppState: ObservableObject {
         let rootFD = open(vaultRoot.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
         guard rootFD >= 0 else { return missing }
         defer { close(rootFD) }
+
+        // Round-22: this open re-resolves the path independently of the
+        // store's pinned descriptors — verify it still IS the vault the
+        // prune was admitted for. A same-path replacement (or any stat
+        // failure) is uncertainty: nothing prunes on a newcomer's evidence.
+        if let expectedIdentity {
+            var info = stat()
+            guard fstat(rootFD, &info) == 0,
+                UInt64(info.st_dev) == expectedIdentity.device,
+                UInt64(info.st_ino) == expectedIdentity.inode
+            else { return missing }
+        } else {
+            return missing
+        }
 
         for (parent, children) in byParent {
             var parentFD = dup(rootFD)

@@ -1957,6 +1957,61 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertNil(afterPins["Projects"])
   }
 
+  // MARK: - Red-team regressions (adversarial review round 22)
+
+  func testPruneNeverUsesAReplacementVaultsEvidence() async throws {
+    // Round-22: the prune enumerator's independent root open must verify
+    // the admitted vault identity — a same-path replacement's contents are
+    // never evidence, so nothing prunes and neither vault's file changes.
+    XCTAssertTrue(
+      AppState.sidebarDefinitelyMissingPaths(
+        vaultRoot: root,
+        expectedIdentity: AppState.SidebarVaultRootIdentity(
+          device: 0xDEAD, inode: 0xBEEF),
+        candidates: ["nowhere.md"]
+      ).isEmpty,
+      "an identity mismatch is uncertainty, not absence")
+    XCTAssertTrue(
+      AppState.sidebarDefinitelyMissingPaths(
+        vaultRoot: root, expectedIdentity: nil, candidates: ["nowhere.md"]
+      ).isEmpty,
+      "an unknown admitted identity never prunes")
+
+    let (state, vaultA) = try openVault(
+      named: "prune-swap", files: ["Projects/real.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1,
+         "pins": {"Projects": ["Projects/ghost.md", "Projects/real.md"]}}
+        """)
+    let originalContent = try Data(
+      contentsOf: vaultA.appendingPathComponent(".slate/sidebar.json"))
+
+    // Swap the vault at the same path AFTER open captured A's identity.
+    let aside = root.appendingPathComponent("prune-swap-moved")
+    try FileManager.default.moveItem(at: vaultA, to: aside)
+    try FileManager.default.createDirectory(
+      at: vaultA.appendingPathComponent("Projects"),
+      withIntermediateDirectories: true)
+
+    state.pruneStaleSidebarPins(
+      forFolder: "Projects", stale: ["Projects/ghost.md"])
+    await awaitPersist(state)
+
+    XCTAssertEqual(
+      state.sidebarOrganization.pins.paths(forFolder: "Projects"),
+      ["Projects/ghost.md", "Projects/real.md"],
+      "no prune lands on a replacement vault's evidence")
+    XCTAssertEqual(
+      try Data(
+        contentsOf: aside.appendingPathComponent(".slate/sidebar.json")),
+      originalContent,
+      "the moved-aside original is untouched")
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath: vaultA.appendingPathComponent(".slate/sidebar.json").path),
+      "the replacement vault receives nothing")
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
