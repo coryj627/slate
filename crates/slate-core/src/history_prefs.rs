@@ -39,11 +39,11 @@ impl PrefsLock {
             .truncate(false)
             .write(true)
             .open(&lock_path)?;
-        // Blocking exclusive lock; released on close (Drop).
-        let rc = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) };
-        if rc != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
+        // Blocking exclusive lock; released on close (Drop). On Apple
+        // targets `File::lock` is the same `flock(LOCK_EX)` the Mac
+        // app's `PrefsJsonStore` takes on this file — that
+        // cross-language pairing must survive any future change here.
+        file.lock()?;
         Ok(Self { _file: file })
     }
 }
