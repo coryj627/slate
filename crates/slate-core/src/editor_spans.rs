@@ -414,11 +414,21 @@ fn line_end(source: &str, byte: usize) -> usize {
         .map_or(source.len(), |i| byte + i + 1)
 }
 
-/// A blank line is empty or whitespace-only (a CommonMark block
-/// separator). `line_start_byte` must be a line start.
+/// A blank line is empty or made only of ASCII whitespace (a CommonMark
+/// block separator on every EOL flavour). The byte set is exactly pulldown's
+/// blank-line alphabet — `is_ascii_whitespace_no_nl` (space / tab / `\x0B` /
+/// `\x0C`) plus the EOL bytes — so helper-blank ⟺ pulldown-blank, which the
+/// reconvergence walks rely on in BOTH directions (#927): a line pulldown
+/// treats as content must not be a cut candidate, and a line pulldown skips
+/// as blank must not be mistaken for the "first non-blank below" in the
+/// cond-3 column test. Deliberately **stricter** than `trim().is_empty()`: a
+/// Unicode-whitespace-only line (NBSP, U+2028, …) is paragraph *content* to
+/// pulldown's block parse. `line_start_byte` must be a line start.
 fn line_is_blank(source: &str, line_start_byte: usize) -> bool {
     let le = line_end(source, line_start_byte);
-    source[line_start_byte..le].trim().is_empty()
+    source.as_bytes()[line_start_byte..le]
+        .iter()
+        .all(|&b| matches!(b, b' ' | b'\t' | 0x0B | 0x0C | b'\r' | b'\n'))
 }
 
 /// The document-text operations [`StructureSnapshot::updated`]'s incremental
@@ -438,9 +448,13 @@ pub(crate) trait DocText {
     /// Just past the end of the line containing `byte` (after the next `\n`, or
     /// `len()`).
     fn line_end(&self, byte: usize) -> usize;
-    /// Whether the line starting at `line_start` is blank (whitespace-only).
+    /// Whether the line starting at `line_start` is blank (empty or ASCII
+    /// whitespace only — pulldown's blank-line alphabet; see the free
+    /// [`line_is_blank`], which the `&str` impl and the rope impl both match
+    /// byte-for-byte).
     fn line_is_blank(&self, line_start: usize) -> bool;
-    /// The raw byte at `i` (`i < len()`), for the column-0 indentation test.
+    /// The raw byte at `i` (`i < len()`), for the column-0 indentation test
+    /// and the lone-CR bookkeeping's bounded edit-halo rescan (#927).
     fn byte_at(&self, i: usize) -> u8;
     /// Materialise `[start, end)` as an owned `String` — the re-parse chunk.
     fn slice_to_string(&self, start: usize, end: usize) -> String;
@@ -555,6 +569,10 @@ fn line_is_dashes_delim(source: &str, line_start_byte: usize) -> bool {
 /// block in BOTH the old and the new parse — no indented-code / list / quote
 /// continuation or setext underline from above can reach across the blank into
 /// it — so the parses below the blank are byte-for-byte the same structure.
+/// That argument reads lines the way pulldown reads lines, which the lone-CR
+/// gate in [`StructureSnapshot::updated`] guarantees (#927): on the gated
+/// path every `\r` is half of a `\r\n` pair, so the `\n` walk and the
+/// first-byte column test see exactly pulldown's lines.
 fn first_nonblank_below_is_col0<T: DocText + ?Sized>(source: &T, blank_start: usize) -> bool {
     let mut ls = source.line_end(blank_start);
     while ls < source.len() {
@@ -619,6 +637,22 @@ pub(crate) struct StructureSnapshot {
     /// can extend when text is appended — so a clean break can't sit at or
     /// after its start even though its recorded `end` looks like a boundary.
     len: usize,
+    /// Byte positions (sorted, ascending) of every **lone CR** in the source
+    /// — a `\r` not immediately followed by `\n` (#927). Non-empty gates
+    /// [`updated`](Self::updated) straight to a from-scratch re-parse:
+    /// pulldown's scanners disagree with each other about lone CRs
+    /// (`scan_eol` treats `\r` as a line ending, `scan_nextline` is
+    /// `\n`-only), so what follows one parses differently depending on
+    /// arbitrarily distant context (`\r<script>` opens an HTML block after a
+    /// paragraph but not after an indented code block) — no clean break or
+    /// reconvergence cut is sound anywhere in such a document. When this is
+    /// empty, every `\r` is half of a `\r\n` pair, the `\n`-walking line
+    /// helpers see exactly pulldown's lines, and the reconvergence soundness
+    /// argument holds verbatim — so LF, CRLF, and mixed LF/CRLF documents
+    /// all keep the O(edit) path. Maintained incrementally (the edit
+    /// neighbourhood is rescanned, the tail shifts); the drift guard and the
+    /// censuses cross-check it against `from_source` like every other field.
+    lone_crs: Vec<usize>,
 }
 
 impl StructureSnapshot {
@@ -638,11 +672,53 @@ impl StructureSnapshot {
                 }
             }
         }
+        let bytes = source.as_bytes();
+        let lone_crs = bytes
+            .iter()
+            .enumerate()
+            .filter(|&(i, &b)| b == b'\r' && bytes.get(i + 1) != Some(&b'\n'))
+            .map(|(i, _)| i)
+            .collect();
         Self {
             blocks,
             containers,
             len: source.len(),
+            lone_crs,
         }
+    }
+
+    /// The lone-CR positions of the post-edit source, derived from the
+    /// cached pre-edit set in O(edit): positions left of the edit keep,
+    /// positions in the removed span drop, tail positions shift by the
+    /// length delta, and only the halo `[edit_start - 1, edit_new_end)` is
+    /// rescanned — the one prefix byte whose successor changed, plus the
+    /// inserted text. A `\r` at `edit_new_end` (the first tail byte) keeps
+    /// its old status: its successor is also tail, so it shifts untouched.
+    fn lone_crs_updated<T: DocText + ?Sized>(
+        &self,
+        new_source: &T,
+        edit_start: usize,
+        edit_old_end: usize,
+        new_text_len: usize,
+    ) -> Vec<usize> {
+        let delta = new_text_len as isize - (edit_old_end - edit_start) as isize;
+        let edit_new_end = edit_start + new_text_len;
+        let lo = edit_start.saturating_sub(1);
+        let mut lone: Vec<usize> = self.lone_crs.iter().copied().filter(|&p| p < lo).collect();
+        for i in lo..edit_new_end {
+            if new_source.byte_at(i) == b'\r'
+                && (i + 1 == new_source.len() || new_source.byte_at(i + 1) != b'\n')
+            {
+                lone.push(i);
+            }
+        }
+        lone.extend(
+            self.lone_crs
+                .iter()
+                .filter(|&&p| p >= edit_old_end)
+                .map(|&p| (p as isize + delta) as usize),
+        );
+        lone
     }
 
     /// A blank line at `r` is a **clean break** — a fresh-parser-state point,
@@ -748,8 +824,13 @@ impl StructureSnapshot {
     /// fresh top-level block in BOTH old and new regardless of what sits above
     /// the blank `P` — no indented-code / list / quote / setext construct can
     /// reach across `P` into it — so the two parses below `P` are byte-for-byte
-    /// the same structure. The buffer `debug_assert!`s `updated == from_source`
-    /// on every edit, and the differential census is the proof.
+    /// the same structure. Every step of that argument reads lines the way
+    /// pulldown reads them, which only holds when no **lone CR** hides a line
+    /// boundary from the `\n`-walking helpers — so a lone CR anywhere in the
+    /// document diverts the whole update to `from_source` up front (#927; see
+    /// [`lone_crs`](Self::lone_crs)). The buffer `debug_assert!`s
+    /// `updated == from_source` on every edit, and the differential census is
+    /// the proof.
     pub(crate) fn updated<T: DocText + ?Sized>(
         &self,
         new_source: &T,
@@ -757,6 +838,18 @@ impl StructureSnapshot {
         edit_old_end: usize,
         new_text_len: usize,
     ) -> Self {
+        // #927 gate: with a lone CR anywhere in the document, pulldown's
+        // parse below it depends on arbitrarily distant context (its
+        // scanners split on different EOL sets), so NO clean break or
+        // reconvergence point is provably sound — not above the edit, not
+        // below it, and not on the old side of the tail splice, whose bytes
+        // near `pd` may include deleted content this function never sees.
+        // Re-derive from scratch instead. The set is maintained in O(edit),
+        // so lone-CR-free documents (LF, CRLF, mixed) pay one bounded scan.
+        let lone_crs = self.lone_crs_updated(new_source, edit_start, edit_old_end, new_text_len);
+        if !lone_crs.is_empty() {
+            return Self::from_source(&new_source.slice_to_string(0, new_source.len()));
+        }
         let r = self.clean_break_before(new_source, edit_start);
         if r == 0 {
             return Self::from_source(&new_source.slice_to_string(0, new_source.len()));
@@ -892,6 +985,10 @@ impl StructureSnapshot {
             blocks,
             containers,
             len: new_len,
+            // The splice paths run only behind the lone-CR gate, so the
+            // post-edit document provably has none — matching what
+            // `from_source` would compute.
+            lone_crs: Vec::new(),
         }
     }
 
@@ -918,6 +1015,8 @@ impl StructureSnapshot {
             blocks,
             containers,
             len: new_len,
+            // Behind the lone-CR gate — see `splice`.
+            lone_crs: Vec::new(),
         }
     }
 }
@@ -2834,6 +2933,19 @@ mod redteam_reconvergence {
             1 => Just("- - -".to_string()),
             1 => Just("> quote".to_string()),
             1 => Just("para".to_string()),
+            // CR shapes (#927). A trailing `\r` makes a CRLF pair once the
+            // lines are joined with `\n`; an embedded `\r` is a LONE CR —
+            // pulldown's scanners disagree about those, so the lone-CR gate
+            // must divert every edit on such a document to `from_source`.
+            2 => Just("\r".to_string()),          // CRLF blank line
+            1 => Just("col0\r".to_string()),      // CRLF-terminated text
+            1 => Just("    ind\r".to_string()),   // CRLF-terminated indent
+            1 => Just("```\r".to_string()),       // CRLF-terminated fence
+            2 => Just("\rcol0".to_string()),      // lone CR before col-0 text
+            2 => Just("\r    ind".to_string()),   // lone CR before indent (#927 col0 trap)
+            1 => Just("mid\rline".to_string()),   // lone CR mid-line
+            1 => Just("<script>\r".to_string()),  // CRLF-terminated HTML opener
+            1 => Just("\r<script>".to_string()),  // lone CR before HTML opener (#927)
         ]
     }
 
@@ -2864,6 +2976,12 @@ mod redteam_reconvergence {
             Just("\n\ncol0\n".to_string()),
             Just("- i\n".to_string()),
             Just("    indent\n".to_string()),
+            // CR inserts (#927): a bare `\r` splits/creates CRLF pairs at the
+            // seam; the others plant lone CRs and CRLF lines near EOF.
+            Just("\r".to_string()),
+            Just("\r\n".to_string()),
+            Just("x\r".to_string()),
+            Just("\r<script>\n".to_string()),
         ];
         // pct: 60–100, so the edit concentrates in the last ~40% (the EOF
         // region where open-to-EOF blocks live); del: 0..8 bytes.
@@ -2992,7 +3110,11 @@ mod redteam_reconvergence {
     // ---- Caveat 3: frontmatter boundary + `---` body lines ----
 
     /// A frontmatter-seeded source whose body is `caveat12`-rich. Edits will be
-    /// aimed at `fm_end` (the first body byte) and at `---`-shaped lines.
+    /// aimed at `fm_end` (the first body byte) and at `---`-shaped lines. Each
+    /// delimiter's EOL is drawn independently from `\n` / `\r\n` / lone `\r`
+    /// (#927): the shrunken #927 seed was exactly an LF-opened, CRLF-closed
+    /// frontmatter (`"---\n\n---\r\n\n"`), and an edit that splits the closing
+    /// pair strands a lone CR at the frontmatter/body boundary.
     fn fm_seeded_source() -> impl Strategy<Value = String> {
         let fm_line = prop_oneof![
             Just("title: x".to_string()),
@@ -3001,8 +3123,21 @@ mod redteam_reconvergence {
             Just("```".to_string()),
             Just("".to_string()),
         ];
-        (proptest::collection::vec(fm_line, 0..4), caveat12_source())
-            .prop_map(|(fm, body)| format!("---\n{}\n---\n{body}", fm.join("\n")))
+        let eol = || {
+            prop_oneof![
+                4 => Just("\n".to_string()),
+                1 => Just("\r\n".to_string()),
+                1 => Just("\r".to_string()),
+            ]
+        };
+        (
+            proptest::collection::vec(fm_line, 0..4),
+            caveat12_source(),
+            eol(),
+            eol(),
+            eol(),
+        )
+            .prop_map(|(fm, body, e1, e2, e3)| format!("---{e1}{}{e2}---{e3}{body}", fm.join("\n")))
     }
 
     /// Edits that concentrate on the frontmatter/body boundary and `---`-shaped
@@ -3018,6 +3153,9 @@ mod redteam_reconvergence {
             Just("---".to_string()),
             Just("-".to_string()),
             Just("\n".to_string()),
+            // Deleting one half of a `\r\n` pair strands the other (#927).
+            Just("\r".to_string()),
+            Just("\r\n".to_string()),
         ];
         let ins = prop_oneof![
             Just(String::new()),
@@ -3030,6 +3168,12 @@ mod redteam_reconvergence {
             Just("title: y\n".to_string()),
             Just("```\n".to_string()),
             Just("text\n".to_string()),
+            // CR shapes at the boundary (#927): a CRLF-closed delimiter, a
+            // bare CR (splits an existing CRLF or strands a lone one), and a
+            // CRLF that re-pairs a stranded CR.
+            Just("---\r\n".to_string()),
+            Just("\r".to_string()),
+            Just("\r\n".to_string()),
         ];
         (anchor, del, ins)
     }
@@ -3096,6 +3240,46 @@ mod redteam_reconvergence {
                 source = new_source;
                 structure = incremental;
             }
+        }
+    }
+
+    /// #927 regression: the incremental structure reparse must not diverge
+    /// from `from_source` on CR-bearing input. pulldown-cmark treats a lone
+    /// `\r` as a line ending (`scan_eol`: `\n` / `\r` / `\r\n`), so an edit
+    /// that strands a `\r` (here: inserting `<script>` between a `\r` and its
+    /// `\n`) creates line boundaries the `\n`-only line helpers can't see —
+    /// the reconvergence walk then reasons about the wrong lines and the
+    /// splice drops (or keeps) tail blocks it shouldn't. Exact shrunken seed +
+    /// edit sequence from the first Windows differential run (Milestone W rule
+    /// 0, #714), replayed with the buffer-census edit semantics
+    /// (percent-anchored position, `\n`-appended insert).
+    #[test]
+    fn cr_bearing_incremental_structure_matches_from_source_issue_927() {
+        let seed = "---\n\n---\r\n\n";
+        let edits: &[(usize, usize, &str)] = &[
+            (37, 0, "    ```"),
+            (69, 3, ""),
+            (18, 0, "```"),
+            (91, 0, "<script>"),
+            (30, 4, "    indented"),
+            (0, 0, ""),
+        ];
+        let mut source = seed.to_string();
+        let mut structure = StructureSnapshot::from_source(&source);
+        for &(pct, del, ins) in edits {
+            let ins = format!("{ins}\n");
+            let pos = snap_up(&source, source.len() * pct / 100);
+            let del_end = snap_up(&source, pos + del);
+            let new_source = splice_str(&source, pos, del_end, &ins);
+            let incremental = structure.updated(&new_source, pos, del_end, ins.len());
+            assert_eq!(
+                incremental,
+                StructureSnapshot::from_source(&new_source),
+                "#927: incremental != from_source\n edit: pos={pos} del={pos}..{del_end} \
+                 ins={ins:?}\n old={source:?}\n new={new_source:?}"
+            );
+            source = new_source;
+            structure = incremental;
         }
     }
 

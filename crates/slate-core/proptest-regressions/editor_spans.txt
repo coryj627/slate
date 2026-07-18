@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 2c1a7fae91196ad107e15c4fa2a7242da77f336164485bd93dd9a1beda54d43a # shrinks to seed = "\n\n%% c %%\n\n\n%\n%% c %%\n%%%%\n", edits = [(41, 0, "é%"), (7, 0, "")]
+cc 26702dbcddfa1862916b55fa4379817e0ea4d7f6f1d48e27e0554dc2a2411c29 # shrinks to seed = "--- \n~~~\n---\n```\npara\n- - -\n\tindented\n~~~\n\r    ind\n\rcol0\n\n\r    ind\n- item\n===\n```rust\n~~~\n", edits = [(72, 0, "")]
+cc 48b8d48861b7f2597cbdb7bce6b1358f1cfc9edc9f4f9cf91fbff4fa8beec324 # #927: seed = "---\n\n---\r\n\n" (LF-opened, CRLF-closed frontmatter); an edit strands the `\r` and the incremental structure drops the trailing HTML block. Saved on the first Windows differential run (Milestone W rule 0, #714); the deterministic replay is cr_bearing_incremental_structure_matches_from_source_issue_927.

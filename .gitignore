@@ -143,11 +143,13 @@ apps/slate-mac/Sources/slate_uniffiFFI/slate_uniffiFFI.h
 # checks in CI are authoritative; this file is developer-local state.
 .a11y-scores.json
 
-# proptest's persisted failure seeds. Regenerated on demand when a
-# property test fails locally; the behaviours we care about are pinned
-# by explicit named tests (e.g. text_buffer's LF-only line convention),
-# so we don't commit transient seed caches.
-proptest-regressions/
+# proptest's persisted failure seeds ARE committed (policy flipped for
+# #927): a committed `cc` line replays its shrunken case first on every
+# census run, making a once-found failure deterministic in CI — the
+# Windows-run #927 seed landed together with its fix on those grounds.
+# Keep the files curated: every committed seed should correspond to a
+# real past failure, ideally alongside an explicit named regression
+# test (e.g. cr_bearing_incremental_structure_matches_from_source_issue_927).
 
 # graphify build output (knowledge graph, HTML viz, audit report,
 # per-file extraction cache, cumulative cost tracker). All
