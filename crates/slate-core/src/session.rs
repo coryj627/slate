@@ -756,6 +756,34 @@ fn observe_root_identity(_root: &std::path::Path) -> Option<VaultRootIdentity> {
     None
 }
 
+/// FL-06 round-28: pin the root as an open descriptor and derive the
+/// identity anchor by `fstat` on THAT descriptor — not a pathname
+/// sample. The returned handle is held across the whole filesystem
+/// open so the anchored inode stays alive, and the caller re-verifies
+/// the pathname against the anchor after the interior open completes.
+#[cfg(unix)]
+fn pin_root_identity(root: &std::path::Path) -> (Option<std::fs::File>, Option<VaultRootIdentity>) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(pinned) = std::fs::File::open(root) else {
+        return (None, None);
+    };
+    let Ok(meta) = pinned.metadata() else {
+        return (None, None);
+    };
+    let identity = VaultRootIdentity {
+        device: meta.dev(),
+        inode: meta.ino(),
+    };
+    (Some(pinned), Some(identity))
+}
+
+#[cfg(not(unix))]
+fn pin_root_identity(
+    _root: &std::path::Path,
+) -> (Option<std::fs::File>, Option<VaultRootIdentity>) {
+    (None, None)
+}
+
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
@@ -2155,10 +2183,16 @@ impl VaultSession {
                 reason: "vault root does not exist or is not a directory".into(),
             });
         }
-        // FL-06 round-27: observe the physical root identity INSIDE the
-        // open, so hosts can anchor their own per-surface root checks to
-        // what this session actually opened.
-        let root_identity = observe_root_identity(&root);
+        // FL-06 rounds 27–28: pin the root as an open descriptor for the
+        // duration of this constructor and anchor the identity by fstat on
+        // that descriptor. The interior reads and the cache open below
+        // still resolve by pathname (descriptor-relative interior
+        // resolution is tracked separately — see the round-28 audit
+        // issue), so after the interior open completes the pathname is
+        // re-verified against the anchor and any divergence fails the
+        // open: a root swapped during the open cannot yield a session.
+        let (pinned_root, root_identity) = pin_root_identity(&root);
+        let root_for_reverify = root.clone();
         let cache_dir = root.join(".slate");
         let mut config = SessionConfig::new(cache_dir);
         config.user_actor_id = user_actor_id.to_string();
@@ -2205,6 +2239,17 @@ impl VaultSession {
         }
         let provider = Arc::new(FsVaultProvider::new(root));
         let mut session = Self::open(provider, config)?;
+        // Round-28: the interior open resolved paths while the anchor was
+        // pinned — require the pathname to STILL resolve to the anchored
+        // root, so a swap-and-stay during the open fails loudly instead
+        // of yielding a session whose cache belongs to another vault.
+        if root_identity.is_some() && observe_root_identity(&root_for_reverify) != root_identity {
+            return Err(VaultError::InvalidPath {
+                path: root_for_reverify.display().to_string(),
+                reason: "vault root changed while the session was opening".into(),
+            });
+        }
+        drop(pinned_root);
         session.root_identity = root_identity;
         Ok(session)
     }
