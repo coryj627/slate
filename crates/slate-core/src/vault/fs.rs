@@ -26,6 +26,24 @@ pub struct FsVaultProvider {
     root: PathBuf,
 }
 
+/// A mutation destination whose containing directory is held open for the
+/// lifetime of the operation. Unix callers publish relative to `parent`, so a
+/// pathname ancestor replaced after this value is created cannot redirect the
+/// final kernel operation through a symlink. Other platforms retain the
+/// existing path-based behavior until they gain an equivalent API.
+#[cfg(unix)]
+#[derive(Debug)]
+struct PinnedMutationTarget {
+    parent: fs::File,
+    leaf: std::ffi::CString,
+}
+
+#[cfg(not(unix))]
+#[derive(Debug)]
+struct PinnedMutationTarget {
+    path: PathBuf,
+}
+
 impl FsVaultProvider {
     /// Wrap an on-disk directory as a vault provider.
     ///
@@ -65,6 +83,35 @@ impl FsVaultProvider {
             });
         }
         Ok(path)
+    }
+
+    fn pin_mutation_target(
+        &self,
+        relative: &str,
+        create_missing_parents: bool,
+    ) -> Result<PinnedMutationTarget, VaultError> {
+        let path = self.resolve_for_mutation(relative)?;
+
+        #[cfg(unix)]
+        {
+            let vault_relative =
+                path.strip_prefix(&self.root)
+                    .map_err(|_| VaultError::InvalidPath {
+                        path: relative.to_string(),
+                        reason: "mutation destination is not beneath the vault root".into(),
+                    })?;
+            PinnedMutationTarget::open(&self.root, vault_relative, relative, create_missing_parents)
+        }
+
+        #[cfg(not(unix))]
+        {
+            if create_missing_parents {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).map_err(VaultError::Io)?;
+                }
+            }
+            Ok(PinnedMutationTarget { path })
+        }
     }
 
     /// Directory where `atomic_write` parks tempfiles. Lives under the
@@ -130,14 +177,11 @@ impl FsVaultProvider {
     where
         WriteContents: FnOnce(&mut fs::File, &[u8]) -> io::Result<()>,
         SyncContents: FnOnce(&fs::File) -> io::Result<()>,
-        Publish: FnOnce(&Path, &Path) -> io::Result<()>,
+        Publish: FnOnce(&Path, &PinnedMutationTarget) -> io::Result<()>,
     {
-        let path = self.resolve_for_mutation(relative)?;
         let tmp_dir = self.tmp_dir();
         fs::create_dir_all(&tmp_dir).map_err(VaultError::Io)?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).map_err(VaultError::Io)?;
-        }
+        let destination = self.pin_mutation_target(relative, true)?;
 
         // A managed temp path is the failure guard: every exit before publish,
         // including partial writes and sync failures, still unlinks the staged
@@ -166,7 +210,7 @@ impl FsVaultProvider {
         // Disarm `TempPath` cleanup explicitly: after the move, a new external
         // file could race into the old random name and must not be deleted by
         // the guard's destructor.
-        match publish(temp.path(), &path) {
+        match publish(temp.path(), &destination) {
             Ok(()) => {
                 let (file, mut path_guard) = temp.into_parts();
                 path_guard.disable_cleanup(true);
@@ -197,6 +241,191 @@ impl FsVaultProvider {
             }
         }
     }
+}
+
+#[cfg(unix)]
+impl PinnedMutationTarget {
+    fn open(
+        root: &Path,
+        vault_relative: &Path,
+        original: &str,
+        create_missing_parents: bool,
+    ) -> Result<Self, VaultError> {
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+
+        let leaf = vault_relative
+            .file_name()
+            .ok_or_else(|| VaultError::InvalidPath {
+                path: original.to_string(),
+                reason: "mutation destination has no final component".into(),
+            })?;
+        let leaf =
+            std::ffi::CString::new(leaf.as_bytes()).map_err(|_| VaultError::InvalidPath {
+                path: original.to_string(),
+                reason: "mutation destination contains an embedded NUL".into(),
+            })?;
+
+        // Following the configured vault root itself preserves support for an
+        // intentionally symlinked vault. Every component *beneath* that root
+        // is opened relative to the preceding descriptor with O_NOFOLLOW.
+        let mut parent = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(directory_open_flags(false))
+            .open(root)
+            .map_err(VaultError::Io)?;
+        let parent_path = vault_relative.parent().unwrap_or_else(|| Path::new(""));
+        for component in parent_path.components() {
+            let Component::Normal(name) = component else {
+                return Err(VaultError::InvalidPath {
+                    path: original.to_string(),
+                    reason: "mutation parent is not vault-relative".into(),
+                });
+            };
+            let name =
+                std::ffi::CString::new(name.as_bytes()).map_err(|_| VaultError::InvalidPath {
+                    path: original.to_string(),
+                    reason: "mutation parent contains an embedded NUL".into(),
+                })?;
+
+            let next = match open_directory_at(&parent, &name) {
+                Ok(next) => next,
+                Err(error) if create_missing_parents && error.kind() == io::ErrorKind::NotFound => {
+                    match create_directory_at(&parent, &name) {
+                        Ok(()) => {}
+                        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                        Err(error) => return Err(VaultError::Io(error)),
+                    }
+                    open_directory_at(&parent, &name).map_err(VaultError::Io)?
+                }
+                Err(error) => return Err(VaultError::Io(error)),
+            };
+            parent = next;
+        }
+
+        Ok(Self { parent, leaf })
+    }
+
+    fn create_dir_if_absent(&self) -> io::Result<()> {
+        create_directory_at(&self.parent, &self.leaf)
+    }
+
+    fn publish_staged_no_replace(&self, staged: &Path) -> io::Result<()> {
+        use std::os::fd::AsRawFd as _;
+        use std::os::unix::ffi::OsStrExt as _;
+
+        let staged_c = std::ffi::CString::new(staged.as_os_str().as_bytes())
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidInput, error))?;
+
+        #[cfg(target_os = "macos")]
+        let result = unsafe {
+            libc::renameatx_np(
+                libc::AT_FDCWD,
+                staged_c.as_ptr(),
+                self.parent.as_raw_fd(),
+                self.leaf.as_ptr(),
+                libc::RENAME_EXCL,
+            )
+        };
+
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        let result = unsafe {
+            libc::renameat2(
+                libc::AT_FDCWD,
+                staged_c.as_ptr(),
+                self.parent.as_raw_fd(),
+                self.leaf.as_ptr(),
+                libc::RENAME_NOREPLACE,
+            )
+        };
+
+        #[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+        let result = unsafe {
+            // These targets retain the previous fallback's replace semantics,
+            // but the destination is still descriptor-relative and therefore
+            // cannot be redirected by a swapped pathname ancestor.
+            libc::renameat(
+                libc::AT_FDCWD,
+                staged_c.as_ptr(),
+                self.parent.as_raw_fd(),
+                self.leaf.as_ptr(),
+            )
+        };
+
+        if result != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(not(unix))]
+impl PinnedMutationTarget {
+    fn create_dir_if_absent(&self) -> io::Result<()> {
+        fs::create_dir(&self.path)
+    }
+
+    fn publish_staged_no_replace(&self, staged: &Path) -> io::Result<()> {
+        rename_no_replace(staged, &self.path)
+    }
+}
+
+#[cfg(unix)]
+fn open_directory_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<fs::File> {
+    use std::os::fd::{AsRawFd as _, FromRawFd as _};
+
+    // SAFETY: `name` is NUL-terminated and `parent` remains open throughout
+    // the call. A successful descriptor is uniquely owned by the returned
+    // `File`.
+    let descriptor = unsafe {
+        libc::openat(
+            parent.as_raw_fd(),
+            name.as_ptr(),
+            directory_open_flags(true),
+        )
+    };
+    if descriptor == -1 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { fs::File::from_raw_fd(descriptor) })
+}
+
+#[cfg(target_os = "macos")]
+fn directory_open_flags(no_follow: bool) -> libc::c_int {
+    libc::O_SEARCH | libc::O_CLOEXEC | if no_follow { libc::O_NOFOLLOW } else { 0 }
+}
+
+#[cfg(target_os = "linux")]
+fn directory_open_flags(no_follow: bool) -> libc::c_int {
+    libc::O_PATH
+        | libc::O_DIRECTORY
+        | libc::O_CLOEXEC
+        | if no_follow { libc::O_NOFOLLOW } else { 0 }
+}
+
+#[cfg(all(unix, not(any(target_os = "macos", target_os = "linux"))))]
+fn directory_open_flags(no_follow: bool) -> libc::c_int {
+    libc::O_RDONLY
+        | libc::O_DIRECTORY
+        | libc::O_CLOEXEC
+        | if no_follow { libc::O_NOFOLLOW } else { 0 }
+}
+
+#[cfg(unix)]
+fn create_directory_at(parent: &fs::File, name: &std::ffi::CStr) -> io::Result<()> {
+    use std::os::fd::AsRawFd as _;
+
+    // SAFETY: `name` is NUL-terminated and `parent` remains open throughout
+    // the call. The process umask applies to the requested portable 0777 mode.
+    let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o777) };
+    if result != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn publish_staged_no_replace(staged: &Path, destination: &PinnedMutationTarget) -> io::Result<()> {
+    destination.publish_staged_no_replace(staged)
 }
 
 fn normalize_create_temp_cleanup(result: io::Result<()>) -> io::Result<()> {
@@ -333,7 +562,7 @@ impl VaultProvider for FsVaultProvider {
             contents,
             |file, contents| file.write_all(contents),
             fs::File::sync_data,
-            rename_no_replace,
+            publish_staged_no_replace,
         )
     }
 
@@ -368,8 +597,8 @@ impl VaultProvider for FsVaultProvider {
     }
 
     fn create_dir_if_absent(&self, relative: &str) -> Result<(), VaultError> {
-        let path = self.resolve_for_mutation(relative)?;
-        match std::fs::create_dir(&path) {
+        let destination = self.pin_mutation_target(relative, false)?;
+        match destination.create_dir_if_absent() {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
                 Err(VaultError::DestinationExists {
@@ -966,6 +1195,50 @@ mod tests {
         assert!(tmp.path().join("winner").is_dir());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_if_absent_cannot_be_redirected_when_an_ancestor_is_replaced() {
+        let (tmp, provider) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("parent");
+        let pinned_parent = tmp.path().join("parent-pinned");
+        std::fs::create_dir(&parent).unwrap();
+
+        // Pin the vault-relative destination, then replace an ancestor before
+        // the final create. The descriptor-relative mkdir must stay with the
+        // directory we opened rather than following the replacement symlink.
+        let destination = provider.pin_mutation_target("parent/fresh", false).unwrap();
+        std::fs::rename(&parent, &pinned_parent).unwrap();
+        std::os::unix::fs::symlink(outside.path(), &parent).unwrap();
+
+        destination.create_dir_if_absent().unwrap();
+
+        assert!(
+            !outside.path().join("fresh").exists(),
+            "directory creation escaped through the replacement symlink"
+        );
+        assert!(pinned_parent.join("fresh").is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_dir_if_absent_allows_a_write_search_only_parent() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (tmp, provider) = vault();
+        let parent = tmp.path().join("parent");
+        std::fs::create_dir(&parent).unwrap();
+        std::fs::set_permissions(&parent, fs::Permissions::from_mode(0o300)).unwrap();
+
+        let outcome = provider.create_dir_if_absent("parent/fresh");
+
+        // Restore owner access before asserting so TempDir cleanup remains
+        // reliable even when the regression fails.
+        std::fs::set_permissions(&parent, fs::Permissions::from_mode(0o700)).unwrap();
+        outcome.expect("mkdir only requires write and search permission on its parent");
+        assert!(parent.join("fresh").is_dir());
+    }
+
     #[test]
     fn list_dir_returns_alphabetical_entries() {
         let (_tmp, p) = vault();
@@ -1257,7 +1530,7 @@ mod tests {
                     ))
                 },
                 |_file| Ok(()),
-                rename_no_replace,
+                publish_staged_no_replace,
             )
             .expect_err("the injected write failure must escape");
 
@@ -1278,7 +1551,7 @@ mod tests {
                 b"candidate bytes",
                 |file, contents| file.write_all(contents),
                 |_file| Err(io::Error::other("injected staged sync failure")),
-                rename_no_replace,
+                publish_staged_no_replace,
             )
             .expect_err("the injected sync failure must escape");
 
@@ -1301,7 +1574,7 @@ mod tests {
             |file, contents| file.write_all(contents),
             fs::File::sync_data,
             |staged, destination| {
-                rename_no_replace(staged, destination)?;
+                destination.publish_staged_no_replace(staged)?;
                 // Reproduce the reviewer's post-publish edge: any attempt to
                 // unlink the old staging name now fails. A successful atomic
                 // move must nevertheless remain a successful create.
@@ -1395,6 +1668,42 @@ mod tests {
         assert_eq!(
             std::fs::read(tmp.path().join("occupied.md")).unwrap(),
             b"external winner"
+        );
+        assert_eq!(create_staging_entries(&tmp), Vec::<String>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn create_exclusive_cannot_be_redirected_when_an_ancestor_is_replaced() {
+        let (tmp, provider) = vault();
+        let outside = tempfile::tempdir().unwrap();
+        let parent = tmp.path().join("parent");
+        let pinned_parent = tmp.path().join("parent-pinned");
+        std::fs::create_dir(&parent).unwrap();
+
+        let outcome = provider.write_file_if_absent_with_staging(
+            "parent/fresh.md",
+            b"candidate bytes",
+            |file, contents| file.write_all(contents),
+            |file| {
+                file.sync_data()?;
+                // Staging is complete and the destination has already been
+                // resolved. Swap the ancestor immediately before publish.
+                std::fs::rename(&parent, &pinned_parent)?;
+                std::os::unix::fs::symlink(outside.path(), &parent)?;
+                Ok(())
+            },
+            publish_staged_no_replace,
+        );
+
+        outcome.expect("publishing into the pinned destination should succeed");
+        assert!(
+            !outside.path().join("fresh.md").exists(),
+            "file creation escaped through the replacement symlink"
+        );
+        assert_eq!(
+            std::fs::read(pinned_parent.join("fresh.md")).unwrap(),
+            b"candidate bytes"
         );
         assert_eq!(create_staging_entries(&tmp), Vec::<String>::new());
     }
