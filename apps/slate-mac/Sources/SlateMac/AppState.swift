@@ -4851,6 +4851,9 @@ final class AppState: ObservableObject {
     /// notice is published for the inline sidebar banner; unsafe input is kept
     /// read-only by the store and therefore can never be silently replaced.
     private(set) var sidebarVaultPrefsStore: SidebarVaultPrefsStore?
+    /// Test seam: builds the per-vault store (e.g. with an injected failing
+    /// directory synchronizer) instead of the production initializer.
+    var sidebarVaultPrefsStoreFactoryForTesting: ((URL) -> SidebarVaultPrefsStore)?
     @Published private(set) var sidebarVaultPrefsNotice: SidebarVaultPrefsNotice?
     @Published private(set) var isRetryingSidebarVaultPreferences = false
     private var sidebarVaultPrefsRetryTask: Task<Void, Never>?
@@ -5073,7 +5076,8 @@ final class AppState: ObservableObject {
         apply: @escaping @Sendable (inout [String: Any]) throws -> Void,
         reflect: (inout SidebarOrganizationState) -> Void,
         acknowledge: (() -> Void)? = nil,
-        isBacklogDrain: Bool = false
+        isBacklogDrain: Bool = false,
+        verifyAnnouncement: (container: String, announced: SidebarOrganizationChoice)? = nil
     ) throws {
         if let notice = sidebarVaultPrefsNotice {
             throw sidebarActionFailure(
@@ -5128,10 +5132,18 @@ final class AppState: ObservableObject {
                 self.sidebarStructuralTransformJournal.map(\.id))
             let effectiveBacklog = backlog.filter { pendingIDs.contains($0.id) }
             let effectiveBacklogIDs = Set(effectiveBacklog.map(\.id))
-            let outcome: Result<[String: Any], Error> =
+            enum PersistOutcome {
+                case success([String: Any])
+                /// The atomic rename landed (content committed) but the
+                /// directory fsync failed — treat as success plus a
+                /// durability warning (round-10 finding 1).
+                case replacedButUnsynced([String: Any], reason: String)
+                case failure(Error)
+            }
+            let outcome: PersistOutcome =
                 await Task.detached(priority: .utility) {
+                    var finalRoot: [String: Any] = [:]
                     do {
-                        var finalRoot: [String: Any] = [:]
                         try store.update { root in
                             // Revalidate under the lock: shapes may have
                             // changed since open-time validation (round-6
@@ -5149,6 +5161,12 @@ final class AppState: ObservableObject {
                             finalRoot = root
                         }
                         return .success(finalRoot)
+                    } catch SidebarVaultPrefsStoreError.replacedButUnsynced(
+                        let reason)
+                    {
+                        // The mutation ran and the atomic rename landed:
+                        // `finalRoot` holds the file's committed content.
+                        return .replacedButUnsynced(finalRoot, reason: reason)
                     } catch {
                         // Reconcile candidate: what the file actually holds.
                         return .failure(error)
@@ -5159,6 +5177,58 @@ final class AppState: ObservableObject {
             else { return }
 
             let isTail = self.sidebarOrganizationPersistTailToken == token
+
+            @MainActor
+            func handleCommit(_ finalRoot: [String: Any], durabilityWarning: String?) {
+                if !effectiveBacklogIDs.isEmpty {
+                    self.sidebarStructuralTransformJournal.removeAll {
+                        effectiveBacklogIDs.contains($0.id)
+                    }
+                    for id in effectiveBacklogIDs {
+                        self.sidebarStructuralReplayCountsForTesting[id, default: 0]
+                            += 1
+                    }
+                }
+                acknowledge?()
+                if let durabilityWarning {
+                    self.lastMutationAnnouncement = durabilityWarning
+                    self.announcer.post(durabilityWarning, priority: .medium)
+                }
+                guard isTail else { return }
+                // The tail publishes decoded post-write disk truth: a locked
+                // read-modify-write can merge ANOTHER writer's changes, and
+                // the live tree and accessibility state must see that merge,
+                // not just this window's optimistic reflect (round-4
+                // finding 1). Queued optimistic successors are preserved
+                // because only the tail publishes.
+                let decoded = SidebarOrganizationSchema.decode(root: finalRoot)
+                let organization = SidebarOrganizationState(
+                    prefs: decoded.prefs, pins: decoded.pins)
+                if organization != self.sidebarOrganization {
+                    self.sidebarOrganization = organization
+                }
+                // Round-10 finding 2: if the merge changed the effective
+                // choice the optimistic announcement described, speak the
+                // corrected truth once.
+                if let verifyAnnouncement {
+                    let merged = organization.prefs
+                        .effectiveChoice(forFolder: verifyAnnouncement.container)
+                        .normalized
+                    if merged != verifyAnnouncement.announced.normalized {
+                        let correction = merged.sortAnnouncement
+                        self.lastMutationAnnouncement = correction
+                        self.announcer.post(correction, priority: .medium)
+                    }
+                }
+                if let pending = self.sidebarOrganizationPendingPersistFailure {
+                    // An earlier queued write failed mid-chain; surface that
+                    // failure exactly once now that state matches the file.
+                    self.sidebarOrganizationPendingPersistFailure = nil
+                    self.lastMutationAnnouncement = pending
+                    self.announcer.post(pending, priority: .medium)
+                }
+            }
+
             switch outcome {
             case .failure(let error):
                 let failure: String
@@ -5206,36 +5276,17 @@ final class AppState: ObservableObject {
                         isBacklogDrain: true)
                 }
             case .success(let finalRoot):
-                if !effectiveBacklogIDs.isEmpty {
-                    self.sidebarStructuralTransformJournal.removeAll {
-                        effectiveBacklogIDs.contains($0.id)
-                    }
-                    for id in effectiveBacklogIDs {
-                        self.sidebarStructuralReplayCountsForTesting[id, default: 0]
-                            += 1
-                    }
-                }
-                acknowledge?()
-                guard isTail else { return }
-                // The tail publishes decoded post-write disk truth: a locked
-                // read-modify-write can merge ANOTHER writer's changes, and
-                // the live tree and accessibility state must see that merge,
-                // not just this window's optimistic reflect (round-4
-                // finding 1). Queued optimistic successors are preserved
-                // because only the tail publishes.
-                let decoded = SidebarOrganizationSchema.decode(root: finalRoot)
-                let organization = SidebarOrganizationState(
-                    prefs: decoded.prefs, pins: decoded.pins)
-                if organization != self.sidebarOrganization {
-                    self.sidebarOrganization = organization
-                }
-                if let pending = self.sidebarOrganizationPendingPersistFailure {
-                    // An earlier queued write failed mid-chain; surface that
-                    // failure exactly once now that state matches the file.
-                    self.sidebarOrganizationPendingPersistFailure = nil
-                    self.lastMutationAnnouncement = pending
-                    self.announcer.post(pending, priority: .medium)
-                }
+                handleCommit(finalRoot, durabilityWarning: nil)
+            case .replacedButUnsynced(let finalRoot, let reason):
+                // Content committed; report only durability (round-10
+                // finding 1) — never leave the transform pending, or a later
+                // drain could wrongly transform paths another process
+                // recreated in between.
+                handleCommit(
+                    finalRoot,
+                    durabilityWarning:
+                        "Sidebar settings were saved, but the change may not "
+                        + "survive a sudden power loss: \(reason)")
             }
         }
         sidebarOrganizationPersistChain = task
@@ -5288,12 +5339,14 @@ final class AppState: ObservableObject {
             // (round-3 finding 5).
             if container.isEmpty {
                 try mutateSidebarOrganization(
-                    announce: announced.sortAnnouncement
-                ) { root in
-                    SidebarOrganizationSchema.setVaultGrouping(&root, next)
-                } reflect: { state in
-                    state.prefs.vaultChoice.grouping = next
-                }
+                    announce: announced.sortAnnouncement,
+                    apply: { root in
+                        SidebarOrganizationSchema.setVaultGrouping(&root, next)
+                    },
+                    reflect: { state in
+                        state.prefs.vaultChoice.grouping = next
+                    },
+                    verifyAnnouncement: (container: "", announced: announced))
             } else {
                 // Choosing the vault's CURRENT value returns the folder to
                 // inheritance instead of pinning an explicit copy (round-6
@@ -5303,8 +5356,8 @@ final class AppState: ObservableObject {
                 // no-op (round-7 finding 3). The intended `next` value is
                 // carried in; only the clear-vs-set decision is re-derived.
                 try mutateSidebarOrganization(
-                    announce: announced.sortAnnouncement
-                ) { root in
+                    announce: announced.sortAnnouncement,
+                    apply: { root in
                     let vaultGrouping = SidebarOrganizationSchema.decode(root: root)
                         .prefs.vaultChoice.grouping
                     if next == vaultGrouping {
@@ -5314,7 +5367,7 @@ final class AppState: ObservableObject {
                         SidebarOrganizationSchema.setFolderGrouping(
                             &root, folder: container, next)
                     }
-                } reflect: { state in
+                }, reflect: { state in
                     if next == state.prefs.vaultChoice.grouping {
                         guard var override = state.prefs.folderOverrides[container]
                         else { return }
@@ -5327,7 +5380,8 @@ final class AppState: ObservableObject {
                         override.grouping = next
                         state.prefs.folderOverrides[container] = override
                     }
-                }
+                },
+                    verifyAnnouncement: (container: container, announced: announced))
             }
 
         case SlateCommandID.sidebarUseVaultDefaultSort:
@@ -5346,18 +5400,19 @@ final class AppState: ObservableObject {
                 forFolder: container)
             announced.sort = sidebarOrganization.prefs.vaultChoice.sort
             try mutateSidebarOrganization(
-                announce: announced.sortAnnouncement
-            ) { root in
+                announce: announced.sortAnnouncement,
+                apply: { root in
                 SidebarOrganizationSchema.clearFolderSortOverride(
                     &root, folder: container)
-            } reflect: { state in
+            }, reflect: { state in
                 guard var override = state.prefs.folderOverrides[container] else {
                     return
                 }
                 override.sort = nil
                 state.prefs.folderOverrides[container] =
                     override.isEmpty ? nil : override
-            }
+            },
+                verifyAnnouncement: (container: container, announced: announced))
 
         case SlateCommandID.sidebarPinNote:
             let target = try singleFileTarget(of: intent, rejected: rejected)
@@ -5454,8 +5509,8 @@ final class AppState: ObservableObject {
             var announced = sidebarOrganization.prefs.vaultChoice
             announced.sort = option
             try mutateSidebarOrganization(
-                announce: announced.sortAnnouncement
-            ) { root in
+                announce: announced.sortAnnouncement,
+                apply: { root in
                 // Authoritative recheck under the lock: a concurrent writer
                 // may have enabled grouping since the pre-dispatch guard
                 // read this process's published state (round-7 finding 2).
@@ -5468,16 +5523,18 @@ final class AppState: ObservableObject {
                         reason: Self.sidebarGroupedSortInertReason)
                 }
                 SidebarOrganizationSchema.setVaultSort(&root, option)
-            } reflect: { state in
-                state.prefs.vaultChoice.sort = option
-            }
+            },
+                reflect: { state in
+                    state.prefs.vaultChoice.sort = option
+                },
+                verifyAnnouncement: (container: "", announced: announced))
         } else {
             var announced = sidebarOrganization.prefs.effectiveChoice(
                 forFolder: container)
             announced.sort = option
             try mutateSidebarOrganization(
-                announce: announced.sortAnnouncement
-            ) { root in
+                announce: announced.sortAnnouncement,
+                apply: { root in
                 let grouping = SidebarOrganizationSchema.decode(root: root)
                     .prefs.effectiveChoice(forFolder: container).grouping
                 if grouping == .dateBuckets,
@@ -5488,12 +5545,14 @@ final class AppState: ObservableObject {
                 }
                 SidebarOrganizationSchema.setFolderSort(
                     &root, folder: container, option)
-            } reflect: { state in
-                var override = state.prefs.folderOverrides[container]
-                    ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
-                override.sort = option
-                state.prefs.folderOverrides[container] = override
-            }
+            },
+                reflect: { state in
+                    var override = state.prefs.folderOverrides[container]
+                        ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
+                    override.sort = option
+                    state.prefs.folderOverrides[container] = override
+                },
+                verifyAnnouncement: (container: container, announced: announced))
         }
     }
 
@@ -8057,7 +8116,8 @@ final class AppState: ObservableObject {
     /// whichever single open announcement owns this transition and remains
     /// visible in the sidebar until the vault closes.
     private func loadSidebarVaultPreferences(at vaultRoot: URL) {
-        let store = SidebarVaultPrefsStore(vaultRoot: vaultRoot)
+        let store = sidebarVaultPrefsStoreFactoryForTesting?(vaultRoot)
+            ?? SidebarVaultPrefsStore(vaultRoot: vaultRoot)
         let result = store.read()
         sidebarVaultPrefsStore = store
         // FL-06 (round-5 finding 3): a KNOWN section with an unrecognized

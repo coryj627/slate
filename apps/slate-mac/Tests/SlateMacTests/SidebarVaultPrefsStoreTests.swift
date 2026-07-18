@@ -199,8 +199,10 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
         root["writtenBeforeSyncFailure"] = true
       }
     ) { error in
-      guard case SidebarVaultPrefsStoreError.writeFailed(let reason) = error else {
-        return XCTFail("expected writeFailed, got \(error)")
+      guard
+        case SidebarVaultPrefsStoreError.replacedButUnsynced(let reason) = error
+      else {
+        return XCTFail("expected replacedButUnsynced, got \(error)")
       }
       XCTAssertTrue(reason.contains("directory"))
       XCTAssertTrue(reason.contains("synchronized"))

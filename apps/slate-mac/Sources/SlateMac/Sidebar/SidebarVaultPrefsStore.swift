@@ -50,6 +50,13 @@ enum SidebarVaultPrefsStoreError: Error, LocalizedError, Equatable {
   case lockUnavailable(reason: String)
   case encodingFailed(reason: String)
   case writeFailed(reason: String)
+  /// The atomic rename already took effect — the file's CONTENT is the new
+  /// value — but the parent-directory synchronization afterward failed, so
+  /// the replacement's durability across a crash is not guaranteed. Callers
+  /// must treat the content as committed and report only the durability
+  /// concern (FL-06 round-10 finding 1: replaying the mutation later could
+  /// wrongly transform paths another process recreated in between).
+  case replacedButUnsynced(reason: String)
 
   var errorDescription: String? {
     switch self {
@@ -62,6 +69,9 @@ enum SidebarVaultPrefsStoreError: Error, LocalizedError, Equatable {
       return "Sidebar settings could not be encoded: \(reason)"
     case .writeFailed(let reason):
       return "Sidebar settings could not be saved: \(reason)"
+    case .replacedButUnsynced(let reason):
+      return "Sidebar settings were saved, but the change may not survive a "
+        + "sudden power loss: \(reason)"
     }
   }
 }
@@ -510,7 +520,7 @@ struct SidebarVaultPrefsStore: Sendable {
     // now makes the replacement directory entry durable as well. Report a
     // failure honestly even though the atomic rename has already taken effect.
     guard directorySynchronizer(slateDirectoryFD) == 0 else {
-      throw SidebarVaultPrefsStoreError.writeFailed(
+      throw SidebarVaultPrefsStoreError.replacedButUnsynced(
         reason: "the preference directory could not be synchronized after replacement: "
           + Self.posixReason()
       )

@@ -1246,6 +1246,128 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       ["field": "modified", "direction": "desc"])
   }
 
+  // MARK: - Red-team regressions (adversarial review round 10)
+
+  func testReplacedButUnsyncedCommitAcknowledgesTheTransform() async throws {
+    // Round-10 finding 1: the atomic rename landed but the directory fsync
+    // failed. The transform's content IS in the file — it must acknowledge
+    // (never re-replay onto recreated paths) and only a durability warning
+    // is announced. A recreated source folder with fresh pins then survives
+    // the next persist untouched.
+    let announcer = RecordingAnnouncer()
+    final class FailOnceBox: @unchecked Sendable {
+      private let lock = NSLock()
+      private var failed = false
+      func shouldFail() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if failed { return false }
+        failed = true
+        return true
+      }
+    }
+    let failOnce = FailOnceBox()
+
+    let vault = root.appendingPathComponent("unsynced-commit")
+    try FileManager.default.createDirectory(
+      at: vault.appendingPathComponent("Projects"),
+      withIntermediateDirectories: true)
+    try "# note".write(
+      to: vault.appendingPathComponent("Projects/note.md"),
+      atomically: true, encoding: .utf8)
+    let slate = vault.appendingPathComponent(".slate", isDirectory: true)
+    try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
+    try """
+      {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+      """.write(
+        to: slate.appendingPathComponent("sidebar.json"),
+        atomically: true, encoding: .utf8)
+
+    let state = AppState(
+      recentsStore: RecentVaultsStore(
+        fileURL: root.appendingPathComponent("unsynced-recents.json")),
+      externalOpener: { _ in true },
+      announcer: announcer)
+    state.sidebarVaultPrefsStoreFactoryForTesting = { vaultRoot in
+      SidebarVaultPrefsStore(
+        vaultRoot: vaultRoot,
+        sidebarFileOpener: { directoryFD in
+          "sidebar.json".withCString { name in
+            openat(
+              directoryFD, name,
+              O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW)
+          }
+        },
+        directorySynchronizer: { fd in
+          failOnce.shouldFail() ? -1 : fsync(fd)
+        })
+    }
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    await awaitPersist(state)
+
+    XCTAssertTrue(
+      state.sidebarStructuralTransformJournal.isEmpty,
+      "a committed-but-unsynced transform acknowledges — it must not stay pending")
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Archive/note.md", inFolder: "Archive"))
+    XCTAssertTrue(
+      announcer.messages.contains {
+        $0.hasPrefix("Sidebar settings were saved, but")
+      })
+
+    // Another process recreates Projects with fresh pins; the next persist
+    // must not re-apply the old rename to them.
+    let otherWriter = SidebarVaultPrefsStore(vaultRoot: vault)
+    try otherWriter.update { root in
+      SidebarOrganizationSchema.setPins(
+        &root, folder: "Projects", paths: ["Projects/fresh.md"])
+    }
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Projects"] as? [String], ["Projects/fresh.md"],
+      "the recreated folder's fresh pins survive — no ghost re-replay")
+    XCTAssertEqual(pins["Archive"] as? [String], ["Archive/note.md"])
+  }
+
+  func testMergedWriteAnnouncesTheCorrectedEffectiveChoice() async throws {
+    // Round-10 finding 2: the optimistic announcement described the stale
+    // sort; after the locked update merges another writer's sort, the tail
+    // must speak the corrected effective truth once.
+    let announcer = RecordingAnnouncer()
+    let (state, vault) = try openVault(
+      named: "announce-correction", files: ["a.md"], announcer: announcer)
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+
+    let otherWriter = SidebarVaultPrefsStore(vaultRoot: vault)
+    try otherWriter.update { root in
+      SidebarOrganizationSchema.setVaultSort(
+        &root, SidebarSortOption(field: .created, direction: .desc))
+    }
+
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    await awaitPersist(state)
+
+    XCTAssertTrue(
+      announcer.messages.contains(
+        "Sorted by modified, newest first, grouped by date."),
+      "the optimistic announcement fires immediately")
+    XCTAssertTrue(
+      announcer.messages.contains(
+        "Sorted by created, newest first, grouped by date."),
+      "the merged effective truth is corrected after the locked update")
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
