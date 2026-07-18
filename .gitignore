@@ -1,6 +1,11 @@
 # Miscellaneous
 *.class
 *.lock
+# Cargo.lock is deliberately committed (CI Phase 3): reproducible builds,
+# stable warm caches (a dep release can't invalidate CI mid-week), and
+# cargo-audit scanning the graph that actually ships. Bump deliberately
+# via `cargo update` PRs. The `*.lock` glob above still covers the rest.
+!Cargo.lock
 *.log
 *.pyc
 *.swp

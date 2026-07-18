@@ -1,3 +1,9 @@
 [toolchain]
-channel = "stable"
+# Pinned exact stable (CI Phase 3, matches the repo's pin-everything
+# convention): a floating "stable" channel invalidates the entire CI
+# target/ cache the morning each 6-week release lands — a surprise cold
+# rebuild on whichever PR is unlucky. Bump deliberately in a one-line PR
+# (expect exactly one cold CI rebuild on that PR, plus a toolchain
+# download if the runner image hasn't caught up yet).
+channel = "1.95.0"
 components = ["rustfmt", "clippy"]

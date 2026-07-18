@@ -86,7 +86,7 @@ jobs:
         # --all-targets covers libs, tests, examples, AND benches — so a
         # bench or test that doesn't type-check fails CI here, in check
         # mode, without paying bench-profile codegen.
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
     name: test (nextest, ci profile)
@@ -131,7 +131,7 @@ jobs:
         # exact-match filter + --no-tests=fail turns the rename into a
         # loud CI failure, preserving the old `--list | grep` protection.
         run: >-
-          cargo nextest run --workspace --cargo-profile ci
+          cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
           -E "not test(${ROOT_LISTING_PERF_GUARD})"
 
@@ -141,14 +141,14 @@ jobs:
         # identical and nothing recompiles (the old `-p slate-core` form
         # re-unified features and paid a ~26s rebuild here).
         run: >-
-          cargo nextest run --workspace --cargo-profile ci
+          cargo nextest run --workspace --cargo-profile ci --locked
           --no-tests=fail --test-threads 1
           -E "test(=${ROOT_LISTING_PERF_GUARD})"
 
       - name: Doc-tests
         # nextest doesn't run doctests; keep them via libtest. Edition
         # 2024 merges doctests into one binary, so this is cheap.
-        run: cargo test --workspace --doc --profile ci
+        run: cargo test --workspace --doc --profile ci --locked
 
       - name: Cache footprint report
         # The volume holds target/debug (lint check artifacts), target/ci
@@ -190,11 +190,11 @@ jobs:
         if: github.event_name == 'pull_request'
         env:
           CARGO_PROFILE_BENCH_LTO: 'false'
-        run: cargo bench --workspace --no-run
+        run: cargo bench --workspace --no-run --locked
 
       - name: cargo bench --no-run (main — full profile)
         # On main the full committed profile (thin-LTO) still compiles,
         # so codegen/link-level bench rot is caught within one merge, not
         # left to the next local bench run.
         if: github.event_name == 'push'
-        run: cargo bench --workspace --no-run
+        run: cargo bench --workspace --no-run --locked
