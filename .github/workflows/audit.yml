@@ -2,8 +2,8 @@
 # known RustSec advisories. Fails the build on *vulnerabilities*;
 # unmaintained-crate warnings are reported but don't fail the gate.
 #
-# Cargo.lock isn't tracked in this repo (see .gitignore), so the lockfile
-# is resolved fresh before auditing. Runs on a Namespace Linux runner — the
+# Cargo.lock is committed (CI Phase 3), so the audit scans the exact
+# resolved graph the build uses. Runs on a Namespace Linux runner — the
 # audit only inspects the dependency graph, which is platform-independent,
 # so it doesn't need the macOS pin the Swift build uses.
 
@@ -13,6 +13,7 @@ on:
   pull_request:
     paths:
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'crates/**/Cargo.toml'
       - '.github/workflows/audit.yml'
       # Re-run the gate when the ignore list changes, so a newly-added
@@ -22,6 +23,7 @@ on:
     branches: [main]
     paths:
       - 'Cargo.toml'
+      - 'Cargo.lock'
       - 'crates/**/Cargo.toml'
       - '.github/workflows/audit.yml'
       # Re-run the gate when the ignore list changes, so a newly-added
@@ -104,7 +106,7 @@ jobs:
       - name: Install cargo-audit
         # Prebuilt, checksum-verified binary in seconds instead of
         # `cargo install` compiling from source every run (~/.cargo/bin
-        # is deliberately never cached — see the cache step below — so
+        # is deliberately never cached — see the cache step above — so
         # the compile used to repeat per run). Version stays pinned
         # (repo pin-everything convention); the advisory database is
         # still fetched fresh each run, so coverage is unchanged. Bump
@@ -113,11 +115,10 @@ jobs:
         with:
           tool: cargo-audit@0.22.2
 
-      - name: Resolve lockfile
-        # Cargo.lock is not committed; generate it so the audit has a
-        # concrete dependency graph to scan.
-        run: cargo generate-lockfile
-
+      # Cargo.lock is committed (CI Phase 3), so the audit scans the graph
+      # that actually builds — no fresh resolution step. Staleness of the
+      # lockfile vs the manifests is enforced by rust.yml's --locked lanes
+      # on every PR that could desync them.
       - name: cargo audit
         # Non-zero exit on RustSec vulnerabilities fails the gate.
         # Unmaintained-crate warnings (e.g. transitive paste / yaml-rust)
