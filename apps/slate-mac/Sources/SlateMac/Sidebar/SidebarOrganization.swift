@@ -548,6 +548,82 @@ struct SidebarPinPruneLedger {
   }
 }
 
+/// One structural path transform normalized from a `TreeMutation`: the same
+/// value drives the in-memory application, the locked raw disk replay, and —
+/// while the preference file is read-only — the deferred journal that Retry
+/// replays before republishing (round-4 finding 2).
+struct SidebarStructuralTransform: Equatable, Sendable {
+  struct Rename: Equatable, Sendable {
+    let oldPath: String
+    let newPath: String
+    /// nil when the mutation cannot say (single rename/move): the pin and
+    /// override transforms are disjoint on file vs folder paths, so both
+    /// interpretations apply safely.
+    let isDirectory: Bool?
+  }
+
+  var renames: [Rename] = []
+  var deletedFiles: [String] = []
+  var deletedFolders: [String] = []
+
+  var isEmpty: Bool {
+    renames.isEmpty && deletedFiles.isEmpty && deletedFolders.isEmpty
+  }
+
+  @discardableResult
+  func apply(to pins: inout SidebarPins) -> Bool {
+    var changed = false
+    for rename in renames {
+      if rename.isDirectory != false {
+        changed =
+          pins.applyFolderRename(from: rename.oldPath, to: rename.newPath)
+          || changed
+      }
+      if rename.isDirectory != true {
+        changed =
+          pins.applyRename(from: rename.oldPath, to: rename.newPath) || changed
+      }
+    }
+    changed =
+      pins.applyDelete(paths: deletedFiles, deletedFolders: deletedFolders)
+      || changed
+    return changed
+  }
+
+  @discardableResult
+  func apply(to prefs: inout SidebarOrganizationPrefs) -> Bool {
+    var changed = false
+    for rename in renames where rename.isDirectory != false {
+      changed =
+        prefs.applyFolderRename(from: rename.oldPath, to: rename.newPath)
+        || changed
+    }
+    changed = prefs.applyFolderDelete(folders: deletedFolders) || changed
+    return changed
+  }
+
+  /// The locked disk replay: pins are replayed as exact operations against
+  /// the decoded on-disk state (only changed folders rewritten), and the
+  /// folder-override entries are rekeyed/dropped RAW so entries this build
+  /// cannot decode still follow their folder.
+  func applyRaw(to root: inout [String: Any]) {
+    var storedPins = SidebarOrganizationSchema.decode(root: root).pins
+    let before = storedPins.byFolder
+    apply(to: &storedPins)
+    for folder in Set(before.keys).union(storedPins.byFolder.keys)
+    where before[folder] != storedPins.byFolder[folder] {
+      SidebarOrganizationSchema.setPins(
+        &root, folder: folder, paths: storedPins.paths(forFolder: folder))
+    }
+    for rename in renames where rename.isDirectory != false {
+      SidebarOrganizationSchema.renameFolderOverrides(
+        &root, from: rename.oldPath, to: rename.newPath)
+    }
+    SidebarOrganizationSchema.deleteFolderOverrides(
+      &root, folders: deletedFolders)
+  }
+}
+
 /// Reads and mutates the FL-06 sections of the generic `.slate/sidebar.json`
 /// root. Decoding is lenient per key — an unreadable value falls back to its
 /// default without discarding siblings — and mutators edit only their own

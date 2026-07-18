@@ -775,6 +775,112 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertEqual(json["grouping"] as? String, "dateBuckets")
   }
 
+  // MARK: - Red-team regressions (adversarial review round 4)
+
+  func testSuccessfulWritePublishesMergedDiskTruthToLiveState() async throws {
+    // Round-4 finding 1: when the locked update merges another writer's
+    // change, the tail publishes decoded post-write disk truth — the live
+    // tree and AX state see the merge, not just this window's optimistic
+    // reflect.
+    let (state, _) = try openVault(named: "merge-publish", files: ["a.md"])
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+
+    let otherWriter = SidebarVaultPrefsStore(
+      vaultRoot: try XCTUnwrap(state.currentVaultURL))
+    try otherWriter.update { root in
+      SidebarOrganizationSchema.setVaultSort(
+        &root, SidebarSortOption(field: .created, direction: .desc))
+    }
+
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    await awaitPersist(state)
+
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.vaultChoice,
+      SidebarOrganizationChoice(
+        sort: SidebarSortOption(field: .created, direction: .desc),
+        grouping: .dateBuckets),
+      "published state must adopt the merged on-disk sort, not restore the optimistic one")
+
+    // Same for pins: a second writer's same-folder pin becomes visible.
+    let (pinState, pinVault) = try openVault(
+      named: "merge-publish-pins",
+      files: ["Projects/mine.md", "Projects/theirs.md"], folders: ["Projects"])
+    let pinWriter = SidebarVaultPrefsStore(vaultRoot: pinVault)
+    try pinWriter.update { root in
+      SidebarOrganizationSchema.setPins(
+        &root, folder: "Projects", paths: ["Projects/theirs.md"])
+    }
+    try publish(
+      pinState, [item("Projects/mine.md")],
+      focusedPath: "Projects/mine.md", creationParent: "Projects")
+    _ = try pinState.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    await awaitPersist(pinState)
+    XCTAssertEqual(
+      Set(pinState.sidebarOrganization.pins.paths(forFolder: "Projects")),
+      ["Projects/theirs.md", "Projects/mine.md"],
+      "live pin state includes the merged concurrent pin")
+  }
+
+  func testStructuralTransformsDuringReadOnlyReplayOnRetry() async throws {
+    // Round-4 finding 2: a rename made while sidebar.json is read-only must
+    // not orphan the file's pins/overrides — Retry replays the journaled
+    // transform under the lock before republishing.
+    let announcer = RecordingAnnouncer()
+    let (state, vault) = try openVault(
+      named: "journal-replay",
+      files: ["Projects/note.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1,
+         "pins": {"Projects": ["Projects/note.md"]},
+         "folderOverrides": {"Projects": {"grouping": "dateBuckets"}}}
+        """,
+      announcer: announcer)
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Projects/note.md", inFolder: "Projects"))
+
+    // The file becomes unsafe (synced-in corruption); a failed write
+    // publishes the notice.
+    let slate = vault.appendingPathComponent(".slate", isDirectory: true)
+    let sidebarURL = slate.appendingPathComponent("sidebar.json")
+    let originalContent = try Data(contentsOf: sidebarURL)
+    try "{not json".write(to: sidebarURL, atomically: true, encoding: .utf8)
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+
+    // A structural rename happens during the outage: journaled, not lost.
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    XCTAssertEqual(state.sidebarStructuralTransformJournal.count, 1)
+
+    // The user repairs the file (restoring the pre-outage content) and
+    // retries: the journal replays before the republish.
+    try originalContent.write(to: sidebarURL)
+    await state.retrySidebarVaultPreferences()?.value
+
+    XCTAssertNil(state.sidebarVaultPrefsNotice)
+    XCTAssertTrue(state.sidebarStructuralTransformJournal.isEmpty)
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Archive/note.md", inFolder: "Archive"),
+      "the outage rename retargets the repaired file's pins")
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.folderOverrides["Archive"]?.grouping,
+      .dateBuckets)
+    XCTAssertNil(state.sidebarOrganization.prefs.folderOverrides["Projects"])
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(pins["Archive"] as? [String], ["Archive/note.md"])
+    XCTAssertNil(pins["Projects"])
+    XCTAssertTrue(announcer.messages.contains("Sidebar settings reloaded."))
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

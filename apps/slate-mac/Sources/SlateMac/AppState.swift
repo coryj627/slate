@@ -4884,6 +4884,14 @@ final class AppState: ObservableObject {
     private var sidebarOrganizationPersistTailToken: UUID?
     private var sidebarOrganizationPendingPersistFailure: String?
     private(set) var sidebarOrganizationPersistTaskForTesting: Task<Void, Never>?
+    /// Structural path transforms that arrived while `.slate/sidebar.json`
+    /// was read-only. Retry replays them under the store lock before it
+    /// republishes, so a rename made during the outage cannot orphan the
+    /// file's pins/overrides (round-4 finding 2). Bounded; overflow is
+    /// reported honestly instead of replaying an incomplete journal.
+    private(set) var sidebarStructuralTransformJournal: [SidebarStructuralTransform] = []
+    private var sidebarStructuralTransformJournalOverflowed = false
+    private static let sidebarStructuralTransformJournalCap = 1000
 
     private func resetSidebarOrganizationState() {
         sidebarOrganizationWriteGeneration &+= 1
@@ -4891,6 +4899,8 @@ final class AppState: ObservableObject {
         sidebarOrganizationPersistTailToken = nil
         sidebarOrganizationPendingPersistFailure = nil
         sidebarOrganizationPersistTaskForTesting = nil
+        sidebarStructuralTransformJournal = []
+        sidebarStructuralTransformJournalOverflowed = false
         sidebarPinPruneLedger.reset()
         if sidebarOrganization != SidebarOrganizationState() {
             sidebarOrganization = SidebarOrganizationState()
@@ -5055,11 +5065,15 @@ final class AppState: ObservableObject {
                 self.currentSession === session,
                 self.sidebarVaultPrefsStore?.fileURL == storeFileURL
             else { return }
-            let outcome: Result<SidebarVaultPrefsReadResult?, Error> =
+            let outcome: Result<[String: Any], Error> =
                 await Task.detached(priority: .utility) {
                     do {
-                        try store.update { root in apply(&root) }
-                        return .success(nil)
+                        var finalRoot: [String: Any] = [:]
+                        try store.update { root in
+                            apply(&root)
+                            finalRoot = root
+                        }
+                        return .success(finalRoot)
                     } catch {
                         // Reconcile candidate: what the file actually holds.
                         return .failure(error)
@@ -5097,24 +5111,27 @@ final class AppState: ObservableObject {
                 // organization set disables with its reason.
                 self.reconcileSidebarOrganizationFromDisk(
                     recovered, failure: failure)
-            case .success:
-                guard isTail,
-                    let pending = self.sidebarOrganizationPendingPersistFailure
-                else { return }
-                // An earlier queued write failed; now that the chain has
-                // drained, converge on authoritative disk truth (which
-                // includes every successful write) and surface that failure
-                // exactly once.
-                let recovered = await Task.detached(priority: .utility) {
-                    store.read()
-                }.value
-                guard self.sidebarOrganizationWriteGeneration == generation,
-                    self.currentSession === session,
-                    self.sidebarOrganizationPersistTailToken == token
-                else { return }
-                self.sidebarOrganizationPendingPersistFailure = nil
-                self.reconcileSidebarOrganizationFromDisk(
-                    recovered, failure: pending)
+            case .success(let finalRoot):
+                guard isTail else { return }
+                // The tail publishes decoded post-write disk truth: a locked
+                // read-modify-write can merge ANOTHER writer's changes, and
+                // the live tree and accessibility state must see that merge,
+                // not just this window's optimistic reflect (round-4
+                // finding 1). Queued optimistic successors are preserved
+                // because only the tail publishes.
+                let decoded = SidebarOrganizationSchema.decode(root: finalRoot)
+                let organization = SidebarOrganizationState(
+                    prefs: decoded.prefs, pins: decoded.pins)
+                if organization != self.sidebarOrganization {
+                    self.sidebarOrganization = organization
+                }
+                if let pending = self.sidebarOrganizationPendingPersistFailure {
+                    // An earlier queued write failed mid-chain; surface that
+                    // failure exactly once now that state matches the file.
+                    self.sidebarOrganizationPendingPersistFailure = nil
+                    self.lastMutationAnnouncement = pending
+                    self.announcer.post(pending, priority: .medium)
+                }
             }
         }
         sidebarOrganizationPersistChain = task
@@ -5348,95 +5365,65 @@ final class AppState: ObservableObject {
     /// snapshot (round-2 finding 1). Silent — the structural mutation's own
     /// announcement already spoke.
     func applySidebarPinsMutation(_ kind: TreeMutation.Kind) {
-        // Normalize the kind into plain path transforms so the disk replay
-        // closure is Sendable and identical to the in-memory application.
-        var renames: [(old: String, new: String, isDirectory: Bool?)] = []
-        var deletedFiles: [String] = []
-        var deletedFolders: [String] = []
+        // Normalize the kind into one transform value so the in-memory
+        // application, the locked disk replay, and the read-only journal all
+        // consume the identical operation.
+        var transform = SidebarStructuralTransform()
         switch kind {
         case let .rename(oldPath, newPath),
             let .move(oldPath, newPath, _, _):
             // The node kind is unknown here; pins/overrides transforms are
             // disjoint on file vs folder paths, so both are applied.
-            renames.append((oldPath, newPath, nil))
+            transform.renames.append(
+                .init(oldPath: oldPath, newPath: newPath, isDirectory: nil))
         case let .delete(path, _, wasDirectory):
             if wasDirectory {
-                deletedFolders.append(path)
+                transform.deletedFolders.append(path)
             } else {
-                deletedFiles.append(path)
+                transform.deletedFiles.append(path)
             }
         case let .batchMove(standing, _), let .importBatch(_, standing, _):
             for change in standing {
-                renames.append((change.oldPath, change.newPath, change.isDirectory))
+                transform.renames.append(
+                    .init(
+                        oldPath: change.oldPath,
+                        newPath: change.newPath,
+                        isDirectory: change.isDirectory))
             }
         case let .batchTrash(trashed):
-            deletedFiles.append(
+            transform.deletedFiles.append(
                 contentsOf: trashed.filter { !$0.isDirectory }.map(\.path))
-            deletedFolders.append(
+            transform.deletedFolders.append(
                 contentsOf: trashed.filter(\.isDirectory).map(\.path))
         case .createFolder, .createNote, .batchReconcile:
             return
         }
+        guard !transform.isEmpty else { return }
 
-        let applyToPins: @Sendable (inout SidebarPins) -> Bool = { pins in
-            var changed = false
-            for rename in renames {
-                if rename.isDirectory != false {
-                    changed =
-                        pins.applyFolderRename(from: rename.old, to: rename.new)
-                        || changed
-                }
-                if rename.isDirectory != true {
-                    changed =
-                        pins.applyRename(from: rename.old, to: rename.new)
-                        || changed
-                }
+        // While the preference file is read-only, the vault mutation still
+        // happened: journal the transform for the Retry replay instead of
+        // silently dropping it (round-4 finding 2).
+        if sidebarVaultPrefsNotice != nil, sidebarVaultPrefsStore != nil {
+            if sidebarStructuralTransformJournal.count
+                < Self.sidebarStructuralTransformJournalCap
+            {
+                sidebarStructuralTransformJournal.append(transform)
+            } else {
+                sidebarStructuralTransformJournalOverflowed = true
             }
-            changed =
-                pins.applyDelete(paths: deletedFiles, deletedFolders: deletedFolders)
-                || changed
-            return changed
-        }
-        let applyToOverrides: @Sendable (inout SidebarOrganizationPrefs) -> Bool = {
-            prefs in
-            var changed = false
-            for rename in renames where rename.isDirectory != false {
-                changed =
-                    prefs.applyFolderRename(from: rename.old, to: rename.new)
-                    || changed
-            }
-            changed = prefs.applyFolderDelete(folders: deletedFolders) || changed
-            return changed
+            return
         }
 
-        var nextPins = sidebarOrganization.pins
-        var nextPrefs = sidebarOrganization.prefs
-        _ = applyToPins(&nextPins)
-        _ = applyToOverrides(&nextPrefs)
         // The locked raw replay always runs for a path transform: the file
         // can hold entries this build cannot decode (an unknown-only
         // override) or that another writer added after load, so in-memory
         // change flags must not gate the disk-side rekey (round-3 finding 1).
-
+        let frozen = transform
         try? mutateSidebarOrganization(announce: nil) { root in
-            // Replay the exact mutation against what the file actually holds.
-            var storedPins = SidebarOrganizationSchema.decode(root: root).pins
-            let before = storedPins.byFolder
-            _ = applyToPins(&storedPins)
-            for folder in Set(before.keys).union(storedPins.byFolder.keys)
-            where before[folder] != storedPins.byFolder[folder] {
-                SidebarOrganizationSchema.setPins(
-                    &root, folder: folder, paths: storedPins.paths(forFolder: folder))
-            }
-            for rename in renames where rename.isDirectory != false {
-                SidebarOrganizationSchema.renameFolderOverrides(
-                    &root, from: rename.old, to: rename.new)
-            }
-            SidebarOrganizationSchema.deleteFolderOverrides(
-                &root, folders: deletedFolders)
+            frozen.applyRaw(to: &root)
         } reflect: { state in
-            state.pins = nextPins
-            state.prefs.folderOverrides = nextPrefs.folderOverrides
+            frozen.apply(to: &state.pins)
+            frozen.apply(to: &state.prefs)
         }
     }
 
@@ -7966,18 +7953,71 @@ final class AppState: ObservableObject {
                 self.currentSession === session,
                 self.sidebarVaultPrefsStore?.fileURL == store.fileURL
             else { return }
-            self.sidebarVaultPrefsNotice = result.notice
-            // FL-06: a successful repair also re-adopts the file's authored
+
+            // FL-06 (round-4 finding 2): structural transforms that happened
+            // while the file was read-only replay under the store lock BEFORE
+            // the repaired content republishes, so the outage cannot orphan
+            // the file's pins/overrides against their renamed folders.
+            var adoptedRoot = result.root
+            var adoptedNotice = result.notice
+            let journal = self.sidebarStructuralTransformJournal
+            if adoptedNotice == nil, !journal.isEmpty {
+                let replay: Result<[String: Any], Error> =
+                    await Task.detached(priority: .userInitiated) {
+                        do {
+                            var finalRoot: [String: Any] = [:]
+                            try store.update { root in
+                                for transform in journal {
+                                    transform.applyRaw(to: &root)
+                                }
+                                finalRoot = root
+                            }
+                            return .success(finalRoot)
+                        } catch {
+                            return .failure(error)
+                        }
+                    }.value
+                guard generation == self.sidebarVaultPrefsRetryGeneration,
+                    self.currentSession === session,
+                    self.sidebarVaultPrefsStore?.fileURL == store.fileURL
+                else { return }
+                switch replay {
+                case .success(let finalRoot):
+                    adoptedRoot = finalRoot
+                    self.sidebarStructuralTransformJournal = []
+                case .failure:
+                    // The file regressed between the read and the replay;
+                    // keep the journal for the next Retry and report the
+                    // still-unsafe state honestly.
+                    let reread = await Task.detached(priority: .userInitiated) {
+                        store.read()
+                    }.value
+                    guard generation == self.sidebarVaultPrefsRetryGeneration,
+                        self.currentSession === session
+                    else { return }
+                    adoptedRoot = reread.root
+                    adoptedNotice = reread.notice ?? .unreadable
+                }
+            }
+
+            self.sidebarVaultPrefsNotice = adoptedNotice
+            // A successful repair also re-adopts the file's authored
             // organization sections in the same publish.
-            let decoded = SidebarOrganizationSchema.decode(root: result.root)
+            let decoded = SidebarOrganizationSchema.decode(root: adoptedRoot)
             let organization = SidebarOrganizationState(
                 prefs: decoded.prefs, pins: decoded.pins)
             if organization != self.sidebarOrganization {
                 self.sidebarOrganization = organization
             }
-            if let notice = result.notice {
+            if let notice = adoptedNotice {
                 self.announcer.post(
                     "Sidebar settings still use defaults. \(notice.localizedDescription)",
+                    priority: .medium)
+            } else if self.sidebarStructuralTransformJournalOverflowed {
+                self.sidebarStructuralTransformJournalOverflowed = false
+                self.announcer.post(
+                    "Sidebar settings reloaded. Some pinned notes or sort "
+                        + "overrides may still reference old locations.",
                     priority: .medium)
             } else {
                 self.announcer.post("Sidebar settings reloaded.", priority: .medium)
