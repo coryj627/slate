@@ -2189,6 +2189,170 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       state.sidebarOrganization, AppState.SidebarOrganizationState())
   }
 
+  // MARK: - Red-team regressions (adversarial review round 25)
+
+  func testOpenAbortsWhenTheRootSwapsBetweenSessionAndSidebarAdmission()
+    throws
+  {
+    // Round-25: the pre-open identity brackets the session's own path
+    // resolution; sidebar admission (descriptor-bound) must observe the
+    // SAME root or the whole open aborts — a session on vault A must never
+    // run with sidebar writes bound to vault B.
+    let vaultA = root.appendingPathComponent("race-a")
+    try FileManager.default.createDirectory(
+      at: vaultA, withIntermediateDirectories: true)
+    try "# a".write(
+      to: vaultA.appendingPathComponent("a.md"), atomically: true,
+      encoding: .utf8)
+    let state = AppState(
+      recentsStore: RecentVaultsStore(
+        fileURL: root.appendingPathComponent("race-recents.json")),
+      externalOpener: { _ in true },
+      announcer: AppKitAnnouncementPoster())
+    let aside = root.appendingPathComponent("race-a-moved")
+    state.sidebarVaultPrefsStoreFactoryForTesting = { vaultRoot in
+      // Simulate a root swap in the window between the session's open and
+      // the sidebar store's admission.
+      try? FileManager.default.moveItem(at: vaultA, to: aside)
+      try? FileManager.default.createDirectory(
+        at: vaultA, withIntermediateDirectories: true)
+      return SidebarVaultPrefsStore(vaultRoot: vaultRoot)
+    }
+    state.openVault(at: vaultA)
+
+    XCTAssertNil(state.currentSession, "the racy open must abort")
+    XCTAssertNil(state.currentVaultURL)
+    XCTAssertNil(state.sidebarVaultPrefsStore)
+    XCTAssertEqual(
+      state.lastError,
+      "The folder changed while it was being opened. Try opening the "
+        + "vault again.")
+  }
+
+  func testReopenRefreshReplaysTheJournalBeforePublishingARepairedFile()
+    async throws
+  {
+    // Round-25: a writable post-reopen refresh must not clear the notice
+    // and publish PAST a rename journaled during the outage — the journal
+    // replays first, so the repaired file's pins land at the new path.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let (state, vault) = try openVault(
+      named: "refresh-journal", files: ["Projects/note.md"],
+      folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+    let sidebarURL = vault.appendingPathComponent(".slate/sidebar.json")
+    let repaired = try Data(contentsOf: sidebarURL)
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      root["slow"] = true
+    }
+    state.closeVault()
+
+    // The file is corrupted while closed; the reopen admits it read-only.
+    try "{not json".write(to: sidebarURL, atomically: true, encoding: .utf8)
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    XCTAssertEqual(state.sidebarStructuralTransformJournal.count, 1)
+
+    // External repair, then the stalled pre-close writer completes.
+    try repaired.write(to: sidebarURL)
+    gate.open()
+
+    var attempts = 0
+    while attempts < 1000,
+      !state.sidebarStructuralTransformJournal.isEmpty
+        || state.sidebarVaultPrefsNotice != nil
+    {
+      attempts += 1
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    await awaitPersist(state)
+
+    XCTAssertNil(state.sidebarVaultPrefsNotice)
+    XCTAssertTrue(state.sidebarStructuralTransformJournal.isEmpty)
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Archive"] as? [String], ["Archive/note.md"],
+      "the journaled rename replays before the refresh publish")
+    XCTAssertNil(pins["Projects"])
+    XCTAssertEqual(json["slow"] as? Bool, true)
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Archive/note.md", inFolder: "Archive"))
+  }
+
+  func testRetryQueuesBehindASurvivingWriterAndReplaysInOrder() async throws {
+    // Round-25: Retry holds the identity-keyed writer slot. An old queued
+    // rename surviving close/reopen commits FIRST; Retry's replay of the
+    // new session's journal then composes on top, so two noncommutative
+    // renames land in enqueue order even across an outage and repair.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let (state, vault) = try openVault(
+      named: "retry-chain", files: ["Start/note.md"], folders: ["Start"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Start": ["Start/note.md"]}}
+        """)
+    let sidebarURL = vault.appendingPathComponent(".slate/sidebar.json")
+    let repaired = try Data(contentsOf: sidebarURL)
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      root["slow"] = true
+    }
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Start", newPath: "Mid"))
+    state.closeVault()
+
+    try "{not json".write(to: sidebarURL, atomically: true, encoding: .utf8)
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Mid", newPath: "End"))
+    XCTAssertEqual(state.sidebarStructuralTransformJournal.count, 1)
+
+    try repaired.write(to: sidebarURL)
+    let retryTask = state.retrySidebarVaultPreferences()
+    XCTAssertNotNil(retryTask)
+    gate.open()
+    await retryTask?.value
+
+    var attempts = 0
+    while attempts < 1000,
+      !state.sidebarStructuralTransformJournal.isEmpty
+        || state.sidebarVaultPrefsNotice != nil
+    {
+      attempts += 1
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["End"] as? [String], ["End/note.md"],
+      "old writer commits Start→Mid first, Retry replays Mid→End on top")
+    XCTAssertNil(pins["Start"])
+    XCTAssertNil(pins["Mid"])
+    XCTAssertEqual(json["slow"] as? Bool, true)
+    XCTAssertNil(state.sidebarVaultPrefsNotice)
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

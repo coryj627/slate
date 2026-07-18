@@ -8240,6 +8240,10 @@ final class AppState: ObservableObject {
         // be cancelled first in every case.
         cancelCurrentImportBatchForVaultTransition()
         cancelStructuralMutationOwnership()
+        // Round-25: bracket the session's own path resolution with a physical
+        // pre-stat; the descriptor-bound sidebar admission below must observe
+        // the SAME root or the whole open aborts.
+        let preOpenIdentity = Self.vaultRootIdentity(of: url)
         do {
             let session = try VaultSession.openFilesystem(rootPath: url.path)
             // Audit #259: push the persisted math prefs into the
@@ -8312,6 +8316,17 @@ final class AppState: ObservableObject {
                 creationParent: "")
             lastError = nil
             loadSidebarVaultPreferences(at: url)
+            // Round-25: the admission identity (fstat on the sidebar store's
+            // own root descriptor) must match the pre-open observation that
+            // bracketed the session's path resolution. Divergence means the
+            // directory was swapped mid-open: abort the whole open (the
+            // catch below tears down everything installed so far) rather
+            // than run a session on one vault with sidebar writes bound to
+            // another. Both-nil stays open-but-write-disabled (degraded
+            // filesystems observe no identity at all).
+            if sidebarVaultRootIdentity != preOpenIdentity {
+                throw VaultOpenIdentityRaceError()
+            }
             // Load this vault's file-recents (#495) now that the store's
             // vault path resolves. Per-vault, so it's repopulated on
             // every vault switch; a missing / malformed file loads empty.
@@ -8484,6 +8499,16 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Round-25: the root observed just before the session opened and the
+    /// root the sidebar store admitted (descriptor-bound) disagree — the
+    /// directory was swapped mid-open, so the open aborts as a whole.
+    private struct VaultOpenIdentityRaceError: LocalizedError {
+        var errorDescription: String? {
+            "The folder changed while it was being opened. Try opening the "
+                + "vault again."
+        }
+    }
+
     /// Install and inspect the per-vault store once per successful open. Reads
     /// are bounded by the store's 16 MiB cap. The typed notice is included in
     /// whichever single open announcement owns this transition and remains
@@ -8564,6 +8589,25 @@ final class AppState: ObservableObject {
                 if self.sidebarVaultPrefsNotice != notice {
                     self.sidebarVaultPrefsNotice = notice
                 }
+                // Round-25: a writable refresh must not publish PAST the
+                // session's pending structural journal — a rename journaled
+                // while the file was read-only would be stranded (its Retry
+                // surface removed with the notice) and a later close would
+                // discard it. Route this publish through a backlog drain:
+                // it replays the journal under the store lock with
+                // committed-ID dedupe, and its tail publishes decoded
+                // post-replay disk truth. A standing notice keeps defaults
+                // published and the journal parked for Retry.
+                if notice == nil,
+                    !self.sidebarStructuralTransformJournal.isEmpty
+                {
+                    try? self.mutateSidebarOrganization(
+                        announce: nil,
+                        apply: { _ in },
+                        reflect: { _ in },
+                        isBacklogDrain: true)
+                    return
+                }
                 let organization: SidebarOrganizationState
                 if notice == nil {
                     let decoded = SidebarOrganizationSchema.decode(
@@ -8602,7 +8646,10 @@ final class AppState: ObservableObject {
     /// one owned task coalesces repeated activations, while its generation
     /// prevents a cancelled old-vault read from publishing or clearing the
     /// replacement vault's state. Unsafe input remains untouched and keeps its
-    /// typed recovery notice.
+    /// typed recovery notice. Round-25: the whole read/replay/publish
+    /// transaction holds the vault's ONE identity-keyed writer slot — a
+    /// queued writer surviving close/reopen commits first, and writes
+    /// issued after Retry queue behind it.
     @discardableResult
     func retrySidebarVaultPreferences() -> Task<Void, Never>? {
         guard sidebarVaultPrefsRetryTask == nil else {
@@ -8620,11 +8667,26 @@ final class AppState: ObservableObject {
         sidebarVaultPrefsRetryGeneration &+= 1
         let generation = sidebarVaultPrefsRetryGeneration
         isRetryingSidebarVaultPreferences = true
+        let previousWriter = Self.sidebarStoreWriterChains[retryIdentity]
+        let chainToken = UUID()
         let task = Task { [weak self] in
+            await previousWriter?.value
             let result = await Task.detached(priority: .userInitiated) {
                 store.read(expectedRootIdentity: retryIdentity)
             }.value
             guard let self else { return }
+            // The chain slot belongs to this task regardless of retry
+            // generation — release it (and the drained ledger) exactly as
+            // the mutate funnel does.
+            defer {
+                if Self.sidebarStoreWriterChainTokens[retryIdentity]
+                    == chainToken
+                {
+                    Self.sidebarStoreWriterChains[retryIdentity] = nil
+                    Self.sidebarStoreWriterChainTokens[retryIdentity] = nil
+                    Self.sidebarCommittedTransformIDs[retryIdentity] = nil
+                }
+            }
             guard generation == self.sidebarVaultPrefsRetryGeneration else { return }
             defer {
                 if generation == self.sidebarVaultPrefsRetryGeneration {
@@ -8665,6 +8727,19 @@ final class AppState: ObservableObject {
                 !self.sidebarStructuralTransformJournal.isEmpty
             {
                 let pass = self.sidebarStructuralTransformJournal
+                // Round-25: entries an earlier chained writer already
+                // committed to this vault replay nowhere — acknowledge them
+                // and continue (the mutate funnel's ledger filter, mirrored).
+                let committed =
+                    Self.sidebarCommittedTransformIDs[retryIdentity] ?? []
+                let effectivePass = pass.filter { !committed.contains($0.id) }
+                if effectivePass.isEmpty {
+                    let passIDs = Set(pass.map(\.id))
+                    self.sidebarStructuralTransformJournal.removeAll {
+                        passIDs.contains($0.id)
+                    }
+                    continue
+                }
                 enum RetryReplayOutcome {
                     case success([String: Any])
                     case replacedButUnsynced([String: Any], reason: String)
@@ -8683,7 +8758,7 @@ final class AppState: ObservableObject {
                             else {
                                 throw SidebarOrganizationShapeError()
                             }
-                            for transform in pass {
+                            for transform in effectivePass {
                                 transform.applyRaw(to: &root)
                             }
                             finalRoot = root
@@ -8711,6 +8786,8 @@ final class AppState: ObservableObject {
                 switch replay {
                 case .success(let finalRoot):
                     adoptedRoot = finalRoot
+                    Self.sidebarCommittedTransformIDs[retryIdentity, default: []]
+                        .formUnion(effectivePass.map(\.id))
                     let passIDs = Set(pass.map(\.id))
                     self.sidebarStructuralTransformJournal.removeAll {
                         passIDs.contains($0.id)
@@ -8720,6 +8797,8 @@ final class AppState: ObservableObject {
                     // continue any suffix, and surface only the durability
                     // warning after publish (round-11 finding 1).
                     adoptedRoot = finalRoot
+                    Self.sidebarCommittedTransformIDs[retryIdentity, default: []]
+                        .formUnion(effectivePass.map(\.id))
                     let passIDs = Set(pass.map(\.id))
                     self.sidebarStructuralTransformJournal.removeAll {
                         passIDs.contains($0.id)
@@ -8787,6 +8866,8 @@ final class AppState: ObservableObject {
             }
         }
         sidebarVaultPrefsRetryTask = task
+        Self.sidebarStoreWriterChains[retryIdentity] = task
+        Self.sidebarStoreWriterChainTokens[retryIdentity] = chainToken
         return task
     }
 
