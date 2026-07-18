@@ -249,6 +249,9 @@ final class FileTreeViewModel: ObservableObject {
     private var presentationByParent: [NodeID: SidebarLevelPresentation] = [:]
     private var parentPathByKey: [NodeID: String] = [:]
     private var parentKeyByPath: [String: NodeID] = [:]
+    /// Whether a stored level's listing was complete (no next page). Stale
+    /// pins are only ever reported from complete levels.
+    private var completeLevelByKey: [NodeID: Bool] = [:]
     private(set) var levelReorganizeCountForTesting = 0
 
     /// Adopt new organization inputs. Cached levels re-sort only when the
@@ -381,8 +384,13 @@ final class FileTreeViewModel: ObservableObject {
             current = level
         }
         guard !current.isEmpty, let parentPath = parentPathByKey[key] else { return }
-        let (organized, presentation) = organizedPresentation(
+        let reorganizedResult = organizedPresentation(
             level: current, parentPath: parentPath)
+        let organized = reorganizedResult.nodes
+        var presentation = reorganizedResult.presentation
+        if completeLevelByKey[key] != true {
+            presentation.stalePinnedPaths = []
+        }
         let orderChanged = organized.map(\.nodeID) != current.map(\.nodeID)
         let presentationChanged = presentationByParent[key] != presentation
         guard orderChanged || presentationChanged else { return }
@@ -453,15 +461,25 @@ final class FileTreeViewModel: ObservableObject {
         parentKeyByPath = [:]
         presentationByParent = [:]
         parentPathByKey = [:]
+        completeLevelByKey = [:]
         if treePresentation != SidebarTreePresentation() {
             treePresentation = SidebarTreePresentation()
         }
     }
 
-    private func replaceRootLevel(with level: [TreeNode]) {
+    private func replaceRootLevel(with level: [TreeNode], isCompleteLevel: Bool = true) {
         removeFileStates(in: rootLevel)
-        let (organized, presentation) = organizedPresentation(
+        let organizedResult = organizedPresentation(
             level: level, parentPath: "")
+        let organized = organizedResult.nodes
+        var presentation = organizedResult.presentation
+        // Round-5 finding 2: a paginated level omits real files, so absent
+        // pinned paths are unknowable, not stale — never offer them for
+        // pruning from a partial listing.
+        if !isCompleteLevel {
+            presentation.stalePinnedPaths = []
+        }
+        completeLevelByKey[Self.rootFetchKey] = isCompleteLevel
         rootLevel = organized
         presentationByParent[Self.rootFetchKey] = presentation
         parentPathByKey[Self.rootFetchKey] = ""
@@ -471,7 +489,8 @@ final class FileTreeViewModel: ObservableObject {
     }
 
     private func replaceChildLevel(
-        _ level: [TreeNode]?, for parent: NodeID, parentPath: String?
+        _ level: [TreeNode]?, for parent: NodeID, parentPath: String?,
+        isCompleteLevel: Bool = true
     ) {
         if let oldLevel = children[parent] {
             removeFileStates(in: oldLevel)
@@ -480,11 +499,18 @@ final class FileTreeViewModel: ObservableObject {
             children[parent] = level
             presentationByParent[parent] = nil
             parentPathByKey[parent] = nil
+            completeLevelByKey[parent] = nil
             rebuildMergedPresentation()
             return
         }
-        let (organized, presentation) = organizedPresentation(
+        let organizedResult = organizedPresentation(
             level: level, parentPath: parentPath)
+        let organized = organizedResult.nodes
+        var presentation = organizedResult.presentation
+        if !isCompleteLevel {
+            presentation.stalePinnedPaths = []
+        }
+        completeLevelByKey[parent] = isCompleteLevel
         children[parent] = organized
         presentationByParent[parent] = presentation
         parentPathByKey[parent] = parentPath
@@ -607,7 +633,9 @@ final class FileTreeViewModel: ObservableObject {
         fetchState[Self.rootFetchKey] = .loading
         do {
             let listing = try fetcher("")
-            replaceRootLevel(with: Self.nodes(from: listing, depth: 0))
+            replaceRootLevel(
+                with: Self.nodes(from: listing, depth: 0),
+                isCompleteLevel: listing.files.nextCursor == nil)
             fetchState[Self.rootFetchKey] = nil
             adoptPendingExpansions(in: rootLevel)
             materializeExpandedChildren(in: rootLevel)
@@ -628,7 +656,9 @@ final class FileTreeViewModel: ObservableObject {
         do {
             let listing = try fetcher(node.path)
             let level = Self.nodes(from: listing, depth: node.depth + 1)
-            replaceChildLevel(level, for: node.nodeID, parentPath: node.path)
+            replaceChildLevel(
+                level, for: node.nodeID, parentPath: node.path,
+                isCompleteLevel: listing.files.nextCursor == nil)
             fetchState[node.nodeID] = nil
             adoptPendingExpansions(in: level)
             materializeExpandedChildren(in: level)

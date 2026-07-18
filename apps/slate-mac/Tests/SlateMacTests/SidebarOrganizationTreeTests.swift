@@ -201,6 +201,38 @@ final class SidebarOrganizationTreeTests: XCTestCase {
     XCTAssertFalse(vm.isPinnedRow(.file(path: "c.md")))
   }
 
+  func testPartialLevelsNeverClassifyPinsAsStale() {
+    // Round-5 finding 2: a paginated listing omits real files; a pinned
+    // file on a later page must not be offered for pruning.
+    let now = instant(2026, 7, 18)
+    let partial = DirListing(
+      dirs: [],
+      files: FileSummaryPage(
+        items: [file("visible.md")], nextCursor: "page-2", totalFiltered: 2))
+    let spy = FetchSpy(["": partial])
+    let vm = FileTreeViewModel()
+    var pins = SidebarPins()
+    pins.pin("beyond-the-page.md", inFolder: "")
+    pins.pin("visible.md", inFolder: "")
+    var reported: [(String, [String])] = []
+    vm.onStalePins = { folder, stale in reported.append((folder, stale)) }
+    vm.applyOrganization(context(pins: pins, now: now))
+    vm.bindForTesting(fetcher: spy.fetch)
+
+    XCTAssertEqual(vm.stalePins(forFolder: ""), [])
+    XCTAssertTrue(reported.isEmpty, "no prune offer from a partial level")
+    // The materialized pinned row still renders pinned.
+    XCTAssertTrue(vm.isPinnedRow(.file(path: "visible.md")))
+
+    // A later organization pass over the cached partial level stays silent
+    // too.
+    var updated = pins
+    updated.pin("another.md", inFolder: "")
+    vm.applyOrganization(context(pins: updated, now: now))
+    XCTAssertEqual(vm.stalePins(forFolder: ""), [])
+    XCTAssertTrue(reported.isEmpty)
+  }
+
   func testStalePinsSurfacedPerFolderForLazyPrune() {
     let now = instant(2026, 7, 18)
     let spy = FetchSpy([

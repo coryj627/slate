@@ -4891,6 +4891,11 @@ final class AppState: ObservableObject {
     /// reported honestly instead of replaying an incomplete journal.
     private(set) var sidebarStructuralTransformJournal: [SidebarStructuralTransform] = []
     private var sidebarStructuralTransformJournalOverflowed = false
+    /// One-shot test seam: runs on the main actor after a retry replay pass
+    /// captures its journal prefix and before the pass completes, so tests
+    /// can deterministically interleave a structural append (round-5
+    /// finding 1's race).
+    var sidebarStructuralJournalReplayInterleaveHookForTesting: (() -> Void)?
     private static let sidebarStructuralTransformJournalCap = 1000
 
     private func resetSidebarOrganizationState() {
@@ -4913,14 +4918,26 @@ final class AppState: ObservableObject {
     private func reconcileSidebarOrganizationFromDisk(
         _ recovered: SidebarVaultPrefsReadResult, failure: String
     ) {
-        let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
-        let organization = SidebarOrganizationState(
-            prefs: decoded.prefs, pins: decoded.pins)
+        var notice = recovered.notice
+        if notice == nil,
+            !SidebarOrganizationSchema.knownSectionShapesAreValid(
+                root: recovered.root)
+        {
+            notice = .malformed
+        }
+        let organization: SidebarOrganizationState
+        if notice == nil {
+            let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
+            organization = SidebarOrganizationState(
+                prefs: decoded.prefs, pins: decoded.pins)
+        } else {
+            organization = SidebarOrganizationState()
+        }
         if organization != sidebarOrganization {
             sidebarOrganization = organization
         }
-        if sidebarVaultPrefsNotice != recovered.notice {
-            sidebarVaultPrefsNotice = recovered.notice
+        if sidebarVaultPrefsNotice != notice {
+            sidebarVaultPrefsNotice = notice
         }
         lastMutationAnnouncement = failure
         announcer.post(failure, priority: .medium)
@@ -7907,14 +7924,28 @@ final class AppState: ObservableObject {
         let store = SidebarVaultPrefsStore(vaultRoot: vaultRoot)
         let result = store.read()
         sidebarVaultPrefsStore = store
-        sidebarVaultPrefsNotice = result.notice
-        // FL-06: adopt the vault's authored organization in the same step.
-        // Unsafe input already resolved to the default root, so this can't
+        // FL-06 (round-5 finding 3): a KNOWN section with an unrecognized
+        // top-level shape enters the same read-only recovery flow as
+        // malformed JSON — a later write must never silently replace it.
+        if result.notice == nil,
+            !SidebarOrganizationSchema.knownSectionShapesAreValid(root: result.root)
+        {
+            sidebarVaultPrefsNotice = .malformed
+        } else {
+            sidebarVaultPrefsNotice = result.notice
+        }
+        // Adopt the vault's authored organization in the same step. Unsafe
+        // input already resolved to the default root, so this can't
         // interpret unreadable data.
         sidebarPinPruneLedger.reset()
-        let decoded = SidebarOrganizationSchema.decode(root: result.root)
-        let organization = SidebarOrganizationState(
-            prefs: decoded.prefs, pins: decoded.pins)
+        let organization: SidebarOrganizationState
+        if sidebarVaultPrefsNotice == nil {
+            let decoded = SidebarOrganizationSchema.decode(root: result.root)
+            organization = SidebarOrganizationState(
+                prefs: decoded.prefs, pins: decoded.pins)
+        } else {
+            organization = SidebarOrganizationState()
+        }
         if organization != sidebarOrganization {
             sidebarOrganization = organization
         }
@@ -7960,23 +7991,44 @@ final class AppState: ObservableObject {
             // the file's pins/overrides against their renamed folders.
             var adoptedRoot = result.root
             var adoptedNotice = result.notice
-            let journal = self.sidebarStructuralTransformJournal
-            if adoptedNotice == nil, !journal.isEmpty {
-                let replay: Result<[String: Any], Error> =
-                    await Task.detached(priority: .userInitiated) {
-                        do {
-                            var finalRoot: [String: Any] = [:]
-                            try store.update { root in
-                                for transform in journal {
-                                    transform.applyRaw(to: &root)
-                                }
-                                finalRoot = root
+            // Round-5 finding 3: a repaired file whose known sections use an
+            // unrecognized top-level shape stays in recovery — the replay
+            // must not write into it either.
+            if adoptedNotice == nil,
+                !SidebarOrganizationSchema.knownSectionShapesAreValid(
+                    root: adoptedRoot)
+            {
+                adoptedNotice = .malformed
+            }
+            // Round-5 finding 1: the main actor is reentrant across the
+            // detached replay, and the read-only notice is still active, so
+            // completed structural mutations may APPEND to the journal while
+            // a pass is in flight. Acknowledge only each pass's captured
+            // prefix and loop until no suffix remains.
+            while adoptedNotice == nil,
+                !self.sidebarStructuralTransformJournal.isEmpty
+            {
+                let pass = self.sidebarStructuralTransformJournal
+                let replayTask = Task.detached(priority: .userInitiated) {
+                    () -> Result<[String: Any], Error> in
+                    do {
+                        var finalRoot: [String: Any] = [:]
+                        try store.update { root in
+                            for transform in pass {
+                                transform.applyRaw(to: &root)
                             }
-                            return .success(finalRoot)
-                        } catch {
-                            return .failure(error)
+                            finalRoot = root
                         }
-                    }.value
+                        return .success(finalRoot)
+                    } catch {
+                        return .failure(error)
+                    }
+                }
+                // Test seam: deterministically interleave a structural append
+                // between a pass's capture and its completion.
+                self.sidebarStructuralJournalReplayInterleaveHookForTesting?()
+                self.sidebarStructuralJournalReplayInterleaveHookForTesting = nil
+                let replay = await replayTask.value
                 guard generation == self.sidebarVaultPrefsRetryGeneration,
                     self.currentSession === session,
                     self.sidebarVaultPrefsStore?.fileURL == store.fileURL
@@ -7984,11 +8036,11 @@ final class AppState: ObservableObject {
                 switch replay {
                 case .success(let finalRoot):
                     adoptedRoot = finalRoot
-                    self.sidebarStructuralTransformJournal = []
+                    self.sidebarStructuralTransformJournal.removeFirst(pass.count)
                 case .failure:
                     // The file regressed between the read and the replay;
-                    // keep the journal for the next Retry and report the
-                    // still-unsafe state honestly.
+                    // keep the whole journal for the next Retry and report
+                    // the still-unsafe state honestly.
                     let reread = await Task.detached(priority: .userInitiated) {
                         store.read()
                     }.value

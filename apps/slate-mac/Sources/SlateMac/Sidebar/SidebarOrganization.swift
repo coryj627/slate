@@ -634,6 +634,22 @@ enum SidebarOrganizationSchema {
   static let folderOverridesKey = "folderOverrides"
   static let pinsKey = "pins"
 
+  /// Top-level shape validation for the FL-06 known sections. A file whose
+  /// KNOWN section uses an unrecognized top-level shape (for example `pins`
+  /// as an array) likely comes from a newer schema this build cannot merge
+  /// into safely — the caller places it into the read-only recovery flow
+  /// instead of silently replacing it on the next write (round-5 finding 3).
+  /// Per-entry leniency inside a well-shaped section is unchanged.
+  static func knownSectionShapesAreValid(root: [String: Any]) -> Bool {
+    if let sort = root[sortKey], !(sort is [String: Any]) { return false }
+    if let grouping = root[groupingKey], !(grouping is String) { return false }
+    if let overrides = root[folderOverridesKey], !(overrides is [String: Any]) {
+      return false
+    }
+    if let pins = root[pinsKey], !(pins is [String: Any]) { return false }
+    return true
+  }
+
   static func decode(root: [String: Any]) -> (prefs: SidebarOrganizationPrefs, pins: SidebarPins) {
     var prefs = SidebarOrganizationPrefs()
     if let sort = decodeSort(root[sortKey]) {

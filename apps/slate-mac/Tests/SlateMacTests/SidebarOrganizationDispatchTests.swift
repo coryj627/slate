@@ -881,6 +881,75 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertTrue(announcer.messages.contains("Sidebar settings reloaded."))
   }
 
+  // MARK: - Red-team regressions (adversarial review round 5)
+
+  func testRetryReplayPreservesTransformsAppendedMidPass() async throws {
+    // Round-5 finding 1: an append that lands while a replay pass is in
+    // flight must survive the pass's acknowledgement and replay in a
+    // follow-up pass before the notice clears.
+    let (state, vault) = try openVault(
+      named: "journal-suffix",
+      files: ["Projects/note.md", "Other/keep.md"],
+      folders: ["Projects", "Other"],
+      sidebarJSON: """
+        {"version": 1,
+         "pins": {
+           "Projects": ["Projects/note.md"],
+           "Other": ["Other/keep.md"]}}
+        """)
+    let slate = vault.appendingPathComponent(".slate", isDirectory: true)
+    let sidebarURL = slate.appendingPathComponent("sidebar.json")
+    let originalContent = try Data(contentsOf: sidebarURL)
+    try "{not json".write(to: sidebarURL, atomically: true, encoding: .utf8)
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+
+    // First outage transform, journaled before Retry.
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    XCTAssertEqual(state.sidebarStructuralTransformJournal.count, 1)
+    try originalContent.write(to: sidebarURL)
+
+    // Second transform lands mid-pass, via the deterministic interleave
+    // seam (the notice is still active at that instant).
+    state.sidebarStructuralJournalReplayInterleaveHookForTesting = {
+      state.applySidebarPinsMutation(
+        .rename(oldPath: "Other/keep.md", newPath: "Other/kept.md"))
+    }
+    await state.retrySidebarVaultPreferences()?.value
+
+    XCTAssertNil(state.sidebarVaultPrefsNotice)
+    XCTAssertTrue(state.sidebarStructuralTransformJournal.isEmpty)
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Archive/note.md", inFolder: "Archive"))
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned("Other/kept.md", inFolder: "Other"),
+      "the mid-pass append replays in a follow-up pass, not silently cleared")
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(pins["Archive"] as? [String], ["Archive/note.md"])
+    XCTAssertEqual(pins["Other"] as? [String], ["Other/kept.md"])
+  }
+
+  func testInvalidKnownSectionShapeEntersReadOnlyRecovery() throws {
+    // Round-5 finding 3: `pins` as an array is parseable JSON but not this
+    // build's schema — it must enter recovery, not be silently replaced by
+    // the next write.
+    let (state, _) = try openVault(
+      named: "shape-recovery", files: ["a.md"],
+      sidebarJSON: """
+        {"version": 1, "pins": ["future-data"]}
+        """)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    XCTAssertEqual(state.sidebarOrganization, AppState.SidebarOrganizationState())
+    try publish(state, [])
+    XCTAssertThrowsError(
+      try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortNameAsc))
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
