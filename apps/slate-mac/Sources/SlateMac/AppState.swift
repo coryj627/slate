@@ -5160,18 +5160,15 @@ final class AppState: ObservableObject {
         let backlog = sidebarStructuralTransformJournal
         let task = Task { [weak self] in
             await previous?.value
-            // Main-actor gate BEFORE any disk I/O (round-1, refined round-17):
-            // FILE identity is the write-safety boundary — a queued exact-op
-            // write may land on the SAME file across a close/reopen (it is
-            // the user's committed intent, chain-ordered and merge-safe),
-            // while a closed-for-good or different vault drops it. The
-            // publishes, acknowledgements, and announcements below
-            // additionally require the original generation/session.
-            guard let self,
-                self.sidebarVaultPrefsStore?.fileURL == storeFileURL,
-                enqueueIdentity != nil,
-                self.sidebarVaultRootIdentity == enqueueIdentity
-            else { return }
+            // Round-1, refined rounds 17–21: a queued exact-op write is the
+            // user's committed intent and always finishes against its
+            // CAPTURED store — including after the vault closed without
+            // reopening. Safety lives in the identity checks bound to the
+            // actual disk: the fresh pre-stat below and the store's own
+            // descriptor-bound fstat refuse a replaced or deleted vault.
+            // Publishes, acknowledgements, and announcements additionally
+            // require the original generation/session ownership.
+            guard let self, enqueueIdentity != nil else { return }
             // Round-9 finding 1 (at-most-once), rebased on the per-file
             // committed ledger (round-20 finding 1): the captured backlog is
             // immutable, and only ids NOT yet committed to this file replay.

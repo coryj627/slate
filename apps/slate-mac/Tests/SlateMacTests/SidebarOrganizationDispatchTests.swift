@@ -382,26 +382,60 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
 
   // MARK: - Red-team regressions (adversarial review round 1)
 
-  func testQueuedPersistFromAClosedVaultNeverTouchesTheFile() async throws {
-    // Finding 1: a persist queued under an old session must revalidate its
-    // write generation on the main actor BEFORE disk I/O. Closing the vault
-    // immediately after dispatch — before the queued task has run — must
-    // leave the file untouched by that stale write.
-    let (state, vault) = try openVault(named: "stale-write", files: ["a.md"])
+  func testQueuedPersistFinishesAgainstItsCapturedVaultAfterClose() async throws {
+    // Round-1 as refined by round-21: a queued write is the user's
+    // committed intent — closing the vault before it lands must not lose
+    // it. The write finishes against its captured store (identity-checked
+    // on disk), while the closed session's UI state stays reset and
+    // publishes nothing.
+    let (state, vault) = try openVault(named: "close-flush", files: ["a.md"])
     try publish(state, [])
     _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
-    let staleTask = state.sidebarOrganizationPersistTaskForTesting
+    let queued = state.sidebarOrganizationPersistTaskForTesting
     state.closeVault()
-    await staleTask?.value
+    await queued?.value
 
-    let sidebarURL = vault.appendingPathComponent(".slate/sidebar.json")
-    if FileManager.default.fileExists(atPath: sidebarURL.path) {
-      let json = try sidebarJSON(at: vault)
-      XCTAssertNil(
-        json["sort"],
-        "a stale queued write must not land after vault teardown")
+    let json = try sidebarJSON(at: vault)
+    XCTAssertEqual(
+      json["sort"] as? [String: String],
+      ["field": "modified", "direction": "desc"],
+      "the committed intent lands even though the vault closed first")
+    // The closed session's published state stays reset — no stale publish.
+    XCTAssertEqual(state.sidebarOrganization, AppState.SidebarOrganizationState())
+  }
+
+  func testQueuedWriteBehindABlockerSurvivesACloseWithoutReopen() async throws {
+    // Round-21 finding 1: write A is slow, write B (a pin) is queued behind
+    // it, and the user closes the vault before A finishes — B must still
+    // land in the (intact, identity-verified) vault file.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
     }
-    // And the reset state is defaults, not the rolled-back old vault's data.
+    let gate = GateBox()
+    let (state, vault) = try openVault(
+      named: "close-drain", files: ["Projects/note.md"], folders: ["Projects"])
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      root["slow"] = true
+    }
+    try publish(
+      state, [item("Projects/note.md")],
+      focusedPath: "Projects/note.md", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    let queued = state.sidebarOrganizationPersistTaskForTesting
+
+    state.closeVault()
+    gate.open()
+    await queued?.value
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Projects"] as? [String], ["Projects/note.md"],
+      "the queued pin drains into the closed-but-intact vault")
+    XCTAssertEqual(json["slow"] as? Bool, true)
     XCTAssertEqual(state.sidebarOrganization, AppState.SidebarOrganizationState())
   }
 
