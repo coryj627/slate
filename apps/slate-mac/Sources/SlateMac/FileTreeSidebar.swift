@@ -219,6 +219,200 @@ final class FileTreeViewModel: ObservableObject {
     /// The root level uses the `.dir(-1)` sentinel (no real dir has id -1).
     @Published private(set) var fetchState: [NodeID: FetchState] = [:]
 
+    // MARK: - Organization (FL-06, #658/#659)
+
+    /// Everything level organization consumes: effective sort/grouping
+    /// preferences, pins, and an injected clock/calendar/locale so bucket
+    /// boundaries never read wall time inside the model.
+    struct OrganizationContext {
+        var prefs = SidebarOrganizationPrefs()
+        var pins = SidebarPins()
+        var now = Date()
+        var calendar = Calendar.current
+        var locale = Locale.current
+        var civilDateResolver: any SidebarCivilDateResolving =
+            SidebarProductionCivilDateResolver()
+    }
+
+    /// Header/pin lookups for the rendered rows, merged across levels.
+    /// Published separately from the structural arrays so a label-only change
+    /// (a day rollover) still re-renders without republishing every level.
+    @Published private(set) var treePresentation = SidebarTreePresentation()
+
+    private var organization = OrganizationContext()
+    private var presentationByParent: [NodeID: SidebarLevelPresentation] = [:]
+    private var parentPathByKey: [NodeID: String] = [:]
+    private var parentKeyByPath: [String: NodeID] = [:]
+    private(set) var levelReorganizeCountForTesting = 0
+
+    /// Adopt new organization inputs. Cached levels re-sort only when the
+    /// preferences, pins, calendar/locale, or the local civil day actually
+    /// changed — the relative-date clock tick is a no-op here.
+    func applyOrganization(_ context: OrganizationContext) {
+        let previous = organization
+        organization = context
+        let inputsChanged =
+            previous.prefs != context.prefs
+            || previous.pins != context.pins
+            || previous.calendar.identifier != context.calendar.identifier
+            || previous.calendar.timeZone != context.calendar.timeZone
+            || previous.locale != context.locale
+        let dayChanged = !context.calendar.isDate(
+            previous.now, inSameDayAs: context.now)
+        guard inputsChanged || dayChanged else { return }
+        reorganizeCachedLevels()
+    }
+
+    /// The synthetic header rendered immediately above this file row, if any.
+    func headerRow(before id: NodeID) -> SidebarTreeHeaderRow? {
+        treePresentation.headersBefore[id]
+    }
+
+    func isPinnedRow(_ id: NodeID) -> Bool {
+        treePresentation.pinnedIDs.contains(id)
+    }
+
+    /// Authored pin entries that no longer resolve to a row in the folder's
+    /// materialized level. AppState consumes this for the lazy once-per-
+    /// session prune (fl3 spec §FL3-2.3).
+    func stalePins(forFolder folder: String) -> [String] {
+        for (key, path) in parentPathByKey where path == folder {
+            return presentationByParent[key]?.stalePinnedPaths ?? []
+        }
+        return []
+    }
+
+    /// Sort the file portion of a fetched level and derive its header/pin
+    /// presentation. Directories keep their backend order and always precede
+    /// files (fl3 spec §FL3-1.1).
+    private func organizedPresentation(
+        level: [TreeNode], parentPath: String
+    ) -> (nodes: [TreeNode], presentation: SidebarLevelPresentation) {
+        let fileNodes = level.filter { !$0.isDirectory }
+        let pinnedPaths = organization.pins.paths(forFolder: parentPath)
+        if fileNodes.isEmpty {
+            // Nothing to sort; every authored pin for this folder is stale.
+            return (level, SidebarLevelPresentation(stalePinnedPaths: pinnedPaths))
+        }
+
+        let files = fileNodes.map { node -> SidebarOrganizerFile in
+            let summary: FileSummary
+            if case let .file(state) = node.kind {
+                summary = state.summary
+            } else {
+                summary = FileSummary(
+                    path: node.path, name: node.name, mtimeMs: 0, sizeBytes: 0,
+                    isMarkdown: false, displayName: nil, createdDate: nil,
+                    createdMs: nil, wordCount: nil, preview: nil, taskTotal: 0,
+                    taskOpen: 0)
+            }
+            return SidebarOrganizerFile(
+                path: summary.path,
+                name: summary.name,
+                displayName: summary.displayName,
+                createdDate: summary.createdDate,
+                createdMs: summary.createdMs,
+                mtimeMs: summary.mtimeMs)
+        }
+
+        let organized = SidebarLevelOrganizer.organize(
+            files: files,
+            choice: organization.prefs.effectiveChoice(forFolder: parentPath),
+            pinnedPaths: pinnedPaths,
+            now: organization.now,
+            calendar: organization.calendar,
+            locale: organization.locale,
+            civilDateResolver: organization.civilDateResolver)
+
+        var nodeByPath: [String: TreeNode] = [:]
+        nodeByPath.reserveCapacity(fileNodes.count)
+        for node in fileNodes { nodeByPath[node.path] = node }
+        let orderedFiles = organized.orderedPaths.compactMap { nodeByPath[$0] }
+        let depth = fileNodes[0].depth
+
+        var headers: [NodeID: SidebarTreeHeaderRow] = [:]
+        if organized.pinnedCount > 0, let firstPinned = orderedFiles.first {
+            headers[firstPinned.nodeID] = SidebarTreeHeaderRow(
+                kind: .pinned,
+                key: "pinned",
+                label: "Pinned",
+                fileCount: organized.pinnedCount,
+                depth: depth)
+        }
+        for group in organized.groups {
+            headers[.file(path: group.firstPath)] = SidebarTreeHeaderRow(
+                kind: .group,
+                key: group.key,
+                label: group.label,
+                fileCount: group.fileCount,
+                depth: depth)
+        }
+
+        let presentation = SidebarLevelPresentation(
+            headersBefore: headers,
+            pinnedIDs: Set(orderedFiles.prefix(organized.pinnedCount).map(\.nodeID)),
+            stalePinnedPaths: organized.stalePinnedPaths)
+        let dirs = level.filter(\.isDirectory)
+        return (dirs + orderedFiles, presentation)
+    }
+
+    /// Re-run organization over every cached level, publishing only levels
+    /// whose order or presentation actually changed.
+    private func reorganizeCachedLevels() {
+        reorganizeLevel(key: Self.rootFetchKey)
+        for key in children.keys {
+            reorganizeLevel(key: key)
+        }
+        rebuildMergedPresentation()
+    }
+
+    private func reorganizeLevel(key: NodeID) {
+        let current: [TreeNode]
+        if key == Self.rootFetchKey {
+            current = rootLevel
+        } else {
+            guard let level = children[key] else { return }
+            current = level
+        }
+        guard !current.isEmpty, let parentPath = parentPathByKey[key] else { return }
+        let (organized, presentation) = organizedPresentation(
+            level: current, parentPath: parentPath)
+        let orderChanged = organized.map(\.nodeID) != current.map(\.nodeID)
+        let presentationChanged = presentationByParent[key] != presentation
+        guard orderChanged || presentationChanged else { return }
+        levelReorganizeCountForTesting += 1
+        presentationByParent[key] = presentation
+        guard orderChanged else { return }
+        // Membership is unchanged, so the path/state indexes stay valid.
+        if key == Self.rootFetchKey {
+            rootLevel = organized
+        } else {
+            children[key] = organized
+        }
+    }
+
+    private func rebuildMergedPresentation() {
+        var merged = SidebarTreePresentation()
+        for presentation in presentationByParent.values {
+            merged.headersBefore.merge(presentation.headersBefore) { _, new in new }
+            merged.pinnedIDs.formUnion(presentation.pinnedIDs)
+        }
+        if merged != treePresentation {
+            treePresentation = merged
+        }
+    }
+
+    /// Fields whose change can move a row under some active sort or grouping.
+    private static func organizationKeyChanged(
+        _ old: FileSummary, _ new: FileSummary
+    ) -> Bool {
+        old.displayName != new.displayName
+            || old.name != new.name
+            || old.createdDate != new.createdDate
+            || old.createdMs != new.createdMs
+            || old.mtimeMs != new.mtimeMs
+    }
+
     /// The session the tree reads from. Swapped by `bind(to:)` when the vault
     /// changes; nil clears the tree.
     private var session: VaultSession?
@@ -242,21 +436,45 @@ final class FileTreeViewModel: ObservableObject {
         rootLevel = []
         children = [:]
         fileStateByPath = [:]
+        parentKeyByPath = [:]
+        presentationByParent = [:]
+        parentPathByKey = [:]
+        if treePresentation != SidebarTreePresentation() {
+            treePresentation = SidebarTreePresentation()
+        }
     }
 
     private func replaceRootLevel(with level: [TreeNode]) {
         removeFileStates(in: rootLevel)
-        rootLevel = level
-        indexFileStates(in: level)
+        let (organized, presentation) = organizedPresentation(
+            level: level, parentPath: "")
+        rootLevel = organized
+        presentationByParent[Self.rootFetchKey] = presentation
+        parentPathByKey[Self.rootFetchKey] = ""
+        indexFileStates(in: organized, parentKey: Self.rootFetchKey)
+        rebuildMergedPresentation()
     }
 
-    private func replaceChildLevel(_ level: [TreeNode]?, for parent: NodeID) {
+    private func replaceChildLevel(
+        _ level: [TreeNode]?, for parent: NodeID, parentPath: String?
+    ) {
         if let oldLevel = children[parent] {
             removeFileStates(in: oldLevel)
         }
-        children[parent] = level
-        guard let level else { return }
-        indexFileStates(in: level)
+        guard let level, let parentPath else {
+            children[parent] = level
+            presentationByParent[parent] = nil
+            parentPathByKey[parent] = nil
+            rebuildMergedPresentation()
+            return
+        }
+        let (organized, presentation) = organizedPresentation(
+            level: level, parentPath: parentPath)
+        children[parent] = organized
+        presentationByParent[parent] = presentation
+        parentPathByKey[parent] = parentPath
+        indexFileStates(in: organized, parentKey: parent)
+        rebuildMergedPresentation()
     }
 
     private func removeFileStates(in level: [TreeNode]) {
@@ -265,13 +483,15 @@ final class FileTreeViewModel: ObservableObject {
                 fileStateByPath[node.path] === state
             else { continue }
             fileStateByPath[node.path] = nil
+            parentKeyByPath[node.path] = nil
         }
     }
 
-    private func indexFileStates(in level: [TreeNode]) {
+    private func indexFileStates(in level: [TreeNode], parentKey: NodeID) {
         for node in level {
             guard case let .file(state) = node.kind else { continue }
             fileStateByPath[node.path] = state
+            parentKeyByPath[node.path] = parentKey
         }
     }
 
@@ -392,7 +612,7 @@ final class FileTreeViewModel: ObservableObject {
         do {
             let listing = try fetcher(node.path)
             let level = Self.nodes(from: listing, depth: node.depth + 1)
-            replaceChildLevel(level, for: node.nodeID)
+            replaceChildLevel(level, for: node.nodeID, parentPath: node.path)
             fetchState[node.nodeID] = nil
             adoptPendingExpansions(in: level)
             materializeExpandedChildren(in: level)
@@ -556,7 +776,7 @@ final class FileTreeViewModel: ObservableObject {
             if let kids = children[row.nodeID] {
                 dropDescendantCaches(rows: kids)
             }
-            replaceChildLevel(nil, for: row.nodeID)
+            replaceChildLevel(nil, for: row.nodeID, parentPath: nil)
             fetchState[row.nodeID] = nil
         }
     }
@@ -650,7 +870,7 @@ final class FileTreeViewModel: ObservableObject {
         let oldRows = children[parent] ?? []
         demoteExpandedSubtree(rows: oldRows)
         dropDescendantCaches(rows: oldRows)
-        replaceChildLevel(nil, for: parent)
+        replaceChildLevel(nil, for: parent, parentPath: nil)
         fetchState[parent] = nil
         if expanded.contains(parent), let node = node(for: parent) {
             loadChildren(of: node)
@@ -677,7 +897,7 @@ final class FileTreeViewModel: ObservableObject {
             let oldChildren = children[old.nodeID] ?? []
             demoteExpandedSubtree(rows: oldChildren)
             dropDescendantCaches(rows: oldChildren)
-            replaceChildLevel(nil, for: old.nodeID)
+            replaceChildLevel(nil, for: old.nodeID, parentPath: nil)
             fetchState[old.nodeID] = nil
         }
     }
@@ -730,11 +950,30 @@ final class FileTreeViewModel: ObservableObject {
         summaryReplacementLookupCountForTesting = 0
         guard !summaries.isEmpty else { return 0 }
         var replacementCount = 0
+        var affectedParents: Set<NodeID> = []
 
         for summary in summaries {
             summaryReplacementLookupCountForTesting += 1
             guard let state = fileStateByPath[summary.path] else { continue }
-            if state.replace(with: summary) { replacementCount += 1 }
+            let previous = state.summary
+            if state.replace(with: summary) {
+                replacementCount += 1
+                // A save can move a row under the active sort (mtime, an
+                // authored title or created date). Re-sort only the levels
+                // that contain a key-relevant change; the reorganize itself
+                // publishes nothing when the order is already correct.
+                if Self.organizationKeyChanged(previous, summary),
+                    let parent = parentKeyByPath[summary.path]
+                {
+                    affectedParents.insert(parent)
+                }
+            }
+        }
+        if !affectedParents.isEmpty {
+            for parent in affectedParents {
+                reorganizeLevel(key: parent)
+            }
+            rebuildMergedPresentation()
         }
         return replacementCount
     }

@@ -42,15 +42,11 @@ struct SidebarRowPreferencesSnapshot: Equatable {
 
 /// Injectable wrapper around FL-01's one canonical civil-date parser. Tests
 /// use this seam to prove presentation formats the resolver's absolute `Date`
-/// rather than parsing authored Gregorian components a second time.
+/// rather than parsing authored Gregorian components a second time. The
+/// production conformance is `SidebarProductionCivilDateResolver`, shared
+/// with level organization.
 protocol SidebarCivilDateResolving {
   func resolve(_ canonicalDate: String, calendar: Calendar) -> Date?
-}
-
-private struct ProductionSidebarCivilDateResolver: SidebarCivilDateResolving {
-  func resolve(_ canonicalDate: String, calendar: Calendar) -> Date? {
-    SidebarCivilDateResolver.resolve(canonicalDate, calendar: calendar)
-  }
 }
 
 /// Formatting seam for deterministic row-model tests. Production uses the
@@ -194,7 +190,7 @@ struct SidebarRowModel {
     now: Date = Date(),
     locale: Locale = .current,
     calendar: Calendar = .current,
-    civilDateResolver: any SidebarCivilDateResolving = ProductionSidebarCivilDateResolver(),
+    civilDateResolver: any SidebarCivilDateResolving = SidebarProductionCivilDateResolver(),
     formatter: any SidebarRowFormatting = SidebarRowFormatterCache.shared
   ) {
     filename = summary.name

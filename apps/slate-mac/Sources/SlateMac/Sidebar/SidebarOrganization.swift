@@ -102,6 +102,48 @@ struct SidebarOrganizationPrefs: Equatable {
   }
 }
 
+/// The production civil-date resolver behind the shared
+/// `SidebarCivilDateResolving` seam. FL-01 owns the parser; organization and
+/// row presentation both consume this wrapper instead of reparsing.
+struct SidebarProductionCivilDateResolver: SidebarCivilDateResolving {
+  func resolve(_ canonicalDate: String, calendar: Calendar) -> Date? {
+    SidebarCivilDateResolver.resolve(canonicalDate, calendar: calendar)
+  }
+}
+
+/// One synthetic, nonselectable section header spliced above a file row:
+/// the Pinned section or a date bucket (fl3 spec §FL3-1.4/§FL3-2.2).
+struct SidebarTreeHeaderRow: Equatable, Hashable {
+  enum Kind: Equatable, Hashable {
+    case pinned
+    case group
+  }
+
+  let kind: Kind
+  /// Stable identity component ("pinned" or the bucket key), so the List row
+  /// id survives re-renders without colliding across kinds.
+  let key: String
+  let label: String
+  let fileCount: Int
+  let depth: Int
+}
+
+/// Everything the rendered tree needs to splice headers and badge pinned
+/// rows, merged across materialized levels. Header lookups key off the file
+/// node the header precedes.
+struct SidebarTreePresentation: Equatable {
+  var headersBefore: [NodeID: SidebarTreeHeaderRow] = [:]
+  var pinnedIDs: Set<NodeID> = []
+}
+
+/// Per-level organization bookkeeping retained by the view model so a
+/// preference change can re-sort cached levels without refetching.
+struct SidebarLevelPresentation: Equatable {
+  var headersBefore: [NodeID: SidebarTreeHeaderRow] = [:]
+  var pinnedIDs: Set<NodeID> = []
+  var stalePinnedPaths: [String] = []
+}
+
 /// The organized presentation of one level's file portion.
 struct SidebarOrganizedLevel: Equatable {
   struct Group: Equatable {
