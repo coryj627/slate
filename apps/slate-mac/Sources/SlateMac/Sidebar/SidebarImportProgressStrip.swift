@@ -11,6 +11,22 @@ enum SidebarImportProgressPhase: Equatable {
     case finishing
 }
 
+/// Deterministic count copy for Slate's current English-only UI contract.
+/// `String(Int)` intentionally keeps the digits ASCII and ungrouped so they
+/// aren't locale-formatted beside the still-English word "of". When string
+/// catalogs land, localize this entire phrase atomically instead of formatting
+/// either integer independently.
+enum SidebarImportProgressCountText {
+    static func make(
+        completedProviderCount: Int,
+        totalProviderCount: Int
+    ) -> String {
+        String(completedProviderCount)
+            + " of "
+            + String(totalProviderCount)
+    }
+}
+
 /// Admission-owned import progress. The denominator is immutable for the
 /// lifetime of one batch; terminal provider outcomes can only move completion
 /// forward, never change the meaning of an earlier progress value.
@@ -46,7 +62,9 @@ final class SidebarImportProgressModel: ObservableObject {
     }
 
     var accessibilityValue: String {
-        "\(completedProviderCount.formatted()) of \(totalProviderCount.formatted())"
+        SidebarImportProgressCountText.make(
+            completedProviderCount: completedProviderCount,
+            totalProviderCount: totalProviderCount)
     }
 
     var hasRemainingProviders: Bool {
@@ -168,8 +186,9 @@ struct SidebarImportProgressControlValues: Equatable {
     let progressIndicatorMaximum: Int
 
     var accessibilityValue: String {
-        "\(normalizedCompletedProviderCount.formatted()) of "
-            + "\(normalizedTotalProviderCount.formatted())"
+        SidebarImportProgressCountText.make(
+            completedProviderCount: normalizedCompletedProviderCount,
+            totalProviderCount: normalizedTotalProviderCount)
     }
 
     init(

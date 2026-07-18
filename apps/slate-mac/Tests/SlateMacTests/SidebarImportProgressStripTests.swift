@@ -32,6 +32,21 @@ final class SidebarImportProgressStripTests: XCTestCase {
         XCTAssertFalse(progress.hasRemainingProviders)
     }
 
+    func testCountTextStaysASCIIAlongsideNonEnglishNumberFormatting() throws {
+        let arabicFormatter = NumberFormatter()
+        arabicFormatter.locale = Locale(identifier: "ar_EG")
+        arabicFormatter.numberStyle = .decimal
+        let localeFormatted = try XCTUnwrap(
+            arabicFormatter.string(from: 12_345))
+        XCTAssertNotEqual(localeFormatted, "12345")
+
+        XCTAssertEqual(
+            SidebarImportProgressCountText.make(
+                completedProviderCount: 12_345,
+                totalProviderCount: 67_890),
+            "12345 of 67890")
+    }
+
     func testNativeProgressValuesDefensivelyClampInvalidInputs() {
         func assertValues(
             completedProviderCount: Int,
