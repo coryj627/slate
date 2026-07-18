@@ -625,6 +625,156 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertNil(overrides["Archive/sub"])
   }
 
+  // MARK: - Red-team regressions (adversarial review round 3)
+
+  func testStructuralReplayCarriesDiskOnlyOverridesAndPins() async throws {
+    // Round-3 finding 1: an override made only of unknown keys is invisible
+    // to the decoded in-memory state, but a folder rename must still rekey
+    // its raw entry on disk; likewise a pin another writer added after load.
+    let (state, vault) = try openVault(
+      named: "disk-only-replay", files: ["Projects/a.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1,
+         "folderOverrides": {"Projects": {"future-only": true}}}
+        """)
+    XCTAssertTrue(state.sidebarOrganization.prefs.folderOverrides.isEmpty)
+
+    // A concurrent writer pins a path under the folder after this AppState
+    // loaded; the rename replay must retarget it too.
+    let otherWriter = SidebarVaultPrefsStore(vaultRoot: vault)
+    try otherWriter.update { root in
+      SidebarOrganizationSchema.setPins(
+        &root, folder: "Projects", paths: ["Projects/a.md"])
+    }
+
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    let overrides = try XCTUnwrap(json["folderOverrides"] as? [String: Any])
+    XCTAssertEqual(
+      (overrides["Archive"] as? [String: Any])?["future-only"] as? Bool, true,
+      "an unknown-only override entry follows its folder through a rename")
+    XCTAssertNil(overrides["Projects"])
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(pins["Archive"] as? [String], ["Archive/a.md"])
+    XCTAssertNil(pins["Projects"])
+  }
+
+  func testContextRowReasonsNeverInheritTheSelectedRowsPinState() async throws {
+    // Round-3 finding 2: right-clicking an unpinned row while a pinned row
+    // is the published selection must offer Pin (not hide both directions),
+    // and vice versa.
+    let (state, _) = try openVault(
+      named: "row-reasons",
+      files: ["Projects/pinned.md", "Projects/plain.md"], folders: ["Projects"])
+    try publish(
+      state, [item("Projects/pinned.md")],
+      focusedPath: "Projects/pinned.md", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+
+    // The published-selection reasons say "already pinned" for Pin. A
+    // different row's reasons must fully replace the organization set.
+    let publishedReasons = state.sidebarActionDisabledReasons
+    XCTAssertEqual(
+      publishedReasons[SlateCommandID.sidebarPinNote], "This note is already pinned.")
+
+    let rowReasons = state.sidebarOrganizationActionReasons(
+      target: item("Projects/plain.md"))
+    XCTAssertNil(rowReasons[SlateCommandID.sidebarPinNote])
+    XCTAssertEqual(
+      rowReasons[SlateCommandID.sidebarUnpinNote], "This note isn't pinned.")
+    await awaitPersist(state)
+  }
+
+  func testMidChainPersistFailureConvergesToDiskTruthAfterTheTail() async throws {
+    // Round-3 finding 3: with writes A (fails) and B (succeeds) queued, the
+    // failed mid-chain write must not roll back B's optimistic state; the
+    // tail converges published state on authoritative disk truth and
+    // surfaces A's failure exactly once.
+    let announcer = RecordingAnnouncer()
+    let (state, vault) = try openVault(
+      named: "mid-chain", files: ["a.md"], announcer: announcer)
+    try publish(state, [])
+
+    // A: an apply whose payload JSON cannot encode — the write itself fails
+    // while the file stays untouched.
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      root["boom"] = NSObject()
+    }
+    // B: a real command, queued behind A.
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.vaultChoice.sort,
+      SidebarSortOption(field: .modified, direction: .desc),
+      "the successful later write must survive the earlier failure")
+    let json = try sidebarJSON(at: vault)
+    XCTAssertEqual(
+      json["sort"] as? [String: String],
+      ["field": "modified", "direction": "desc"])
+    XCTAssertEqual(
+      announcer.messages.filter {
+        $0.hasPrefix("Sidebar organization could not be saved.")
+      }.count,
+      1,
+      "the mid-chain failure surfaces exactly once, from the tail")
+  }
+
+  func testSameFolderTwoWriterPinsBothSurvive() async throws {
+    // Round-3 finding 4: pinning replays the exact op against decoded disk
+    // state, so a second writer's pin in the SAME folder survives.
+    let (state, vault) = try openVault(
+      named: "two-writer-pin",
+      files: ["Projects/mine.md", "Projects/theirs.md"], folders: ["Projects"])
+
+    let otherWriter = SidebarVaultPrefsStore(vaultRoot: vault)
+    try otherWriter.update { root in
+      SidebarOrganizationSchema.setPins(
+        &root, folder: "Projects", paths: ["Projects/theirs.md"])
+    }
+
+    try publish(
+      state, [item("Projects/mine.md")],
+      focusedPath: "Projects/mine.md", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      Set(try XCTUnwrap(pins["Projects"] as? [String])),
+      ["Projects/theirs.md", "Projects/mine.md"],
+      "both writers' pins survive the locked exact-op replay")
+  }
+
+  func testGroupingToggleLeavesAConcurrentSortWriteIntact() async throws {
+    // Round-3 finding 5: the grouping toggle writes only the grouping key —
+    // a sort another writer changed after load must not be restored.
+    let (state, vault) = try openVault(named: "axis-isolation", files: ["a.md"])
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+
+    let otherWriter = SidebarVaultPrefsStore(vaultRoot: vault)
+    try otherWriter.update { root in
+      SidebarOrganizationSchema.setVaultSort(
+        &root, SidebarSortOption(field: .created, direction: .desc))
+    }
+
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    XCTAssertEqual(
+      json["sort"] as? [String: String],
+      ["field": "created", "direction": "desc"],
+      "a concurrent sort write survives the grouping toggle")
+    XCTAssertEqual(json["grouping"] as? String, "dateBuckets")
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

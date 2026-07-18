@@ -4237,11 +4237,18 @@ struct FileTreeSidebar: View {
 
     /// Row-targeted variant: the FL-06 pin/override reasons depend on the
     /// exact row a context menu or rotor targets, which may differ from the
-    /// published selection the shared dictionary describes.
+    /// published selection the shared dictionary describes. The published
+    /// selection's organization reasons are removed wholesale first — a
+    /// reason keyed to the selected row must never leak onto a different
+    /// right-clicked row and hide its applicable direction (round-3
+    /// finding 2).
     private func sidebarRowActionDisabledReasons(
         for row: SidebarSelectionItem
     ) -> [String: String] {
         var reasons = sidebarRowActionDisabledReasons
+        for id in SlateCommandID.sidebarOrganizationCommands {
+            reasons[id] = nil
+        }
         reasons.merge(
             appState.sidebarOrganizationActionReasons(target: row)
         ) { _, rowSpecific in rowSpecific }

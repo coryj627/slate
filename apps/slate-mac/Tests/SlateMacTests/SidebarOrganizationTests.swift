@@ -532,14 +532,12 @@ final class SidebarOrganizationTests: XCTestCase {
       ],
       "pins": ["Elsewhere": ["Elsewhere/x.md"]],
     ]
-    SidebarOrganizationSchema.setVaultChoice(
-      &root,
-      SidebarOrganizationChoice(
-        sort: .init(field: .modified, direction: .desc), grouping: .dateBuckets))
-    SidebarOrganizationSchema.setFolderOverride(
+    SidebarOrganizationSchema.setVaultSort(
+      &root, SidebarSortOption(field: .modified, direction: .desc))
+    SidebarOrganizationSchema.setVaultGrouping(&root, .dateBuckets)
+    SidebarOrganizationSchema.setFolderSort(
       &root, folder: "Projects",
-      override: SidebarOrganizationOverride(
-        sort: SidebarSortOption(field: .created, direction: .asc), grouping: nil))
+      SidebarSortOption(field: .created, direction: .asc))
     SidebarOrganizationSchema.setPins(
       &root, folder: "Projects", paths: ["Projects/pin.md"])
 
@@ -595,15 +593,11 @@ final class SidebarOrganizationTests: XCTestCase {
         ]
       ],
     ]
-    SidebarOrganizationSchema.setVaultChoice(
-      &root,
-      SidebarOrganizationChoice(
-        sort: SidebarSortOption(field: .modified, direction: .desc),
-        grouping: .none))
-    SidebarOrganizationSchema.setFolderOverride(
+    SidebarOrganizationSchema.setVaultSort(
+      &root, SidebarSortOption(field: .modified, direction: .desc))
+    SidebarOrganizationSchema.setFolderSort(
       &root, folder: "Projects",
-      override: SidebarOrganizationOverride(
-        sort: SidebarSortOption(field: .name, direction: .desc), grouping: nil))
+      SidebarSortOption(field: .name, direction: .desc))
 
     let sort = try XCTUnwrap(root["sort"] as? [String: Any])
     XCTAssertEqual(sort["field"] as? String, "modified")
@@ -614,6 +608,64 @@ final class SidebarOrganizationTests: XCTestCase {
     let projectsSort = try XCTUnwrap(projects["sort"] as? [String: Any])
     XCTAssertEqual(projectsSort["field"] as? String, "name")
     XCTAssertEqual(projectsSort["future-member"] as? Int, 7)
+  }
+
+  func testSingleAxisWritesNeverTouchTheOtherAxisOrUndecodableData() throws {
+    // Round-3 finding 5: a grouping write must not restore or destroy sort
+    // data it did not change — including a raw sort object this build
+    // cannot decode.
+    var root: [String: Any] = [
+      "sort": ["field": "someday-field", "direction": "asc"],
+      "folderOverrides": [
+        "Projects": ["sort": ["field": "future", "flavor": "spicy"]]
+      ],
+    ]
+    SidebarOrganizationSchema.setVaultGrouping(&root, .dateBuckets)
+    SidebarOrganizationSchema.setFolderGrouping(
+      &root, folder: "Projects", .dateBuckets)
+
+    let vaultSort = try XCTUnwrap(root["sort"] as? [String: Any])
+    XCTAssertEqual(vaultSort["field"] as? String, "someday-field")
+    let overrides = try XCTUnwrap(root["folderOverrides"] as? [String: Any])
+    let projects = try XCTUnwrap(overrides["Projects"] as? [String: Any])
+    let projectsSort = try XCTUnwrap(projects["sort"] as? [String: Any])
+    XCTAssertEqual(projectsSort["field"] as? String, "future")
+    XCTAssertEqual(projectsSort["flavor"] as? String, "spicy")
+    XCTAssertEqual(projects["grouping"] as? String, "dateBuckets")
+
+    // And a sort write leaves grouping alone.
+    SidebarOrganizationSchema.setFolderSort(
+      &root, folder: "Projects",
+      SidebarSortOption(field: .modified, direction: .desc))
+    let after = try XCTUnwrap(
+      (root["folderOverrides"] as? [String: Any])?["Projects"] as? [String: Any])
+    XCTAssertEqual(after["grouping"] as? String, "dateBuckets")
+    XCTAssertEqual(
+      (after["sort"] as? [String: Any])?["flavor"] as? String, "spicy")
+  }
+
+  func testRawOverrideReplayCarriesUndecodableEntries() throws {
+    // Round-3 finding 1 (engine half): an override entry made ONLY of
+    // unknown keys decodes to nothing, but the raw rekey must still carry it
+    // through a folder rename and drop it on delete.
+    var root: [String: Any] = [
+      "folderOverrides": [
+        "Projects": ["future-only": true],
+        "Projects/sub": ["another": 1],
+      ]
+    ]
+    SidebarOrganizationSchema.renameFolderOverrides(
+      &root, from: "Projects", to: "Archive")
+    var overrides = try XCTUnwrap(root["folderOverrides"] as? [String: Any])
+    XCTAssertEqual(
+      (overrides["Archive"] as? [String: Any])?["future-only"] as? Bool, true)
+    XCTAssertNotNil(overrides["Archive/sub"])
+    XCTAssertNil(overrides["Projects"])
+
+    SidebarOrganizationSchema.deleteFolderOverrides(&root, folders: ["Archive"])
+    overrides = (root["folderOverrides"] as? [String: Any]) ?? [:]
+    XCTAssertNil(overrides["Archive"])
+    XCTAssertNil(overrides["Archive/sub"])
   }
 
   func testPrefsStructuralReplayRekeysAndDropsFolderOverrides() {

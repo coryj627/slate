@@ -4876,16 +4876,44 @@ final class AppState: ObservableObject {
     /// teardown/switch; a queued task whose captured generation no longer
     /// matches skips its disk I/O and publishes nothing.
     private(set) var sidebarOrganizationWriteGeneration = 0
+    /// Token of the most recently enqueued persist. Only the chain's tail
+    /// may reconcile published state from disk: a mid-chain failure defers
+    /// to the queued successors (which still apply their exact mutations)
+    /// and stashes its message here for the tail to surface (round-3
+    /// finding 3).
+    private var sidebarOrganizationPersistTailToken: UUID?
+    private var sidebarOrganizationPendingPersistFailure: String?
     private(set) var sidebarOrganizationPersistTaskForTesting: Task<Void, Never>?
 
     private func resetSidebarOrganizationState() {
         sidebarOrganizationWriteGeneration &+= 1
         sidebarOrganizationPersistChain = nil
+        sidebarOrganizationPersistTailToken = nil
+        sidebarOrganizationPendingPersistFailure = nil
         sidebarOrganizationPersistTaskForTesting = nil
         sidebarPinPruneLedger.reset()
         if sidebarOrganization != SidebarOrganizationState() {
             sidebarOrganization = SidebarOrganizationState()
         }
+    }
+
+    /// Publish disk truth (state + any newly detected unsafe-file notice)
+    /// and announce one persist failure. Runs only at the chain tail with
+    /// ownership already validated by the caller.
+    private func reconcileSidebarOrganizationFromDisk(
+        _ recovered: SidebarVaultPrefsReadResult, failure: String
+    ) {
+        let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
+        let organization = SidebarOrganizationState(
+            prefs: decoded.prefs, pins: decoded.pins)
+        if organization != sidebarOrganization {
+            sidebarOrganization = organization
+        }
+        if sidebarVaultPrefsNotice != recovered.notice {
+            sidebarVaultPrefsNotice = recovered.notice
+        }
+        lastMutationAnnouncement = failure
+        announcer.post(failure, priority: .medium)
     }
 
     /// Availability the pure catalog cannot own: read-only preference files
@@ -5015,6 +5043,8 @@ final class AppState: ObservableObject {
         let session = currentSession
         let generation = sidebarOrganizationWriteGeneration
         let storeFileURL = store.fileURL
+        let token = UUID()
+        sidebarOrganizationPersistTailToken = token
         let task = Task { [weak self] in
             await previous?.value
             // Main-actor ownership gate BEFORE any disk I/O: the captured
@@ -5038,32 +5068,66 @@ final class AppState: ObservableObject {
             guard self.sidebarOrganizationWriteGeneration == generation,
                 self.currentSession === session
             else { return }
-            if case let .failure(error) = outcome {
+
+            let isTail = self.sidebarOrganizationPersistTailToken == token
+            switch outcome {
+            case .failure(let error):
+                let failure =
+                    "Sidebar organization could not be saved. "
+                    + error.localizedDescription
+                guard isTail else {
+                    // A queued successor still holds an optimistic mutation
+                    // the user was told about; let the tail publish disk
+                    // truth once every queued write has run, instead of
+                    // rolling that successor back mid-chain (round-3
+                    // finding 3).
+                    self.sidebarOrganizationPendingPersistFailure = failure
+                    return
+                }
                 let recovered = await Task.detached(priority: .utility) {
                     store.read()
                 }.value
                 guard self.sidebarOrganizationWriteGeneration == generation,
                     self.currentSession === session
                 else { return }
-                let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
-                self.sidebarOrganization = SidebarOrganizationState(
-                    prefs: decoded.prefs, pins: decoded.pins)
+                self.sidebarOrganizationPendingPersistFailure = nil
                 // A write can fail because the file BECAME unsafe (synced-in
-                // corruption, oversize, a newer version). Publish that notice
-                // so the banner appears and the whole organization set
-                // disables with its reason (red-team finding 3).
-                if self.sidebarVaultPrefsNotice != recovered.notice {
-                    self.sidebarVaultPrefsNotice = recovered.notice
-                }
-                let failure =
-                    "Sidebar organization could not be saved. "
-                    + error.localizedDescription
-                self.lastMutationAnnouncement = failure
-                self.announcer.post(failure, priority: .medium)
+                // corruption, oversize, a newer version). The reconcile
+                // publishes that notice so the banner appears and the whole
+                // organization set disables with its reason.
+                self.reconcileSidebarOrganizationFromDisk(
+                    recovered, failure: failure)
+            case .success:
+                guard isTail,
+                    let pending = self.sidebarOrganizationPendingPersistFailure
+                else { return }
+                // An earlier queued write failed; now that the chain has
+                // drained, converge on authoritative disk truth (which
+                // includes every successful write) and surface that failure
+                // exactly once.
+                let recovered = await Task.detached(priority: .utility) {
+                    store.read()
+                }.value
+                guard self.sidebarOrganizationWriteGeneration == generation,
+                    self.currentSession === session,
+                    self.sidebarOrganizationPersistTailToken == token
+                else { return }
+                self.sidebarOrganizationPendingPersistFailure = nil
+                self.reconcileSidebarOrganizationFromDisk(
+                    recovered, failure: pending)
             }
         }
         sidebarOrganizationPersistChain = task
         sidebarOrganizationPersistTaskForTesting = task
+    }
+
+    /// Test seam: enqueue one raw write through the production persist chain
+    /// — ownership guards, tail bookkeeping, and failure reconcile included —
+    /// so chain-ordering behavior is testable without a second funnel.
+    func enqueueSidebarOrganizationWriteForTesting(
+        _ apply: @escaping @Sendable (inout [String: Any]) -> Void
+    ) {
+        try? mutateSidebarOrganization(announce: nil, apply: apply) { _ in }
     }
 
     /// Dispatch seam for the eleven FL-06 organization commands. Container
@@ -5097,30 +5161,29 @@ final class AppState: ObservableObject {
                 effective.grouping == .dateBuckets ? .none : .dateBuckets
             var announced = effective
             announced.grouping = next
+            // Single-axis write: only the grouping key changes, so an
+            // interleaved writer's sort — or a raw sort object this build
+            // cannot decode — is never restored from a stale snapshot
+            // (round-3 finding 5).
             if container.isEmpty {
                 try mutateSidebarOrganization(
                     announce: announced.sortAnnouncement
                 ) { root in
-                    var choice = SidebarOrganizationSchema.decode(root: root)
-                        .prefs.vaultChoice
-                    choice.grouping = next
-                    SidebarOrganizationSchema.setVaultChoice(&root, choice)
+                    SidebarOrganizationSchema.setVaultGrouping(&root, next)
                 } reflect: { state in
                     state.prefs.vaultChoice.grouping = next
                 }
             } else {
-                var override = sidebarOrganization.prefs
-                    .folderOverrides[container]
-                    ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
-                override.grouping = next
-                let frozen = override
                 try mutateSidebarOrganization(
                     announce: announced.sortAnnouncement
                 ) { root in
-                    SidebarOrganizationSchema.setFolderOverride(
-                        &root, folder: container, override: frozen)
+                    SidebarOrganizationSchema.setFolderGrouping(
+                        &root, folder: container, next)
                 } reflect: { state in
-                    state.prefs.folderOverrides[container] = frozen
+                    var override = state.prefs.folderOverrides[container]
+                        ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
+                    override.grouping = next
+                    state.prefs.folderOverrides[container] = override
                 }
             }
 
@@ -5161,12 +5224,13 @@ final class AppState: ObservableObject {
             else {
                 throw sidebarActionFailure("This note is already pinned.")
             }
-            var paths = sidebarOrganization.pins.paths(forFolder: folder)
-            paths.append(target)
-            let frozen = paths
+            // Exact op against the decoded on-disk pins: a concurrent
+            // writer's pin in the same folder survives (round-3 finding 4).
             try mutateSidebarOrganization(announce: "Pinned.") { root in
+                var stored = SidebarOrganizationSchema.decode(root: root).pins
+                stored.pin(target, inFolder: folder)
                 SidebarOrganizationSchema.setPins(
-                    &root, folder: folder, paths: frozen)
+                    &root, folder: folder, paths: stored.paths(forFolder: folder))
             } reflect: { state in
                 state.pins.pin(target, inFolder: folder)
             }
@@ -5178,11 +5242,11 @@ final class AppState: ObservableObject {
             else {
                 throw sidebarActionFailure("This note isn't pinned.")
             }
-            let frozen = sidebarOrganization.pins.paths(forFolder: folder)
-                .filter { $0 != target }
             try mutateSidebarOrganization(announce: "Unpinned.") { root in
+                var stored = SidebarOrganizationSchema.decode(root: root).pins
+                stored.unpin(target, inFolder: folder)
                 SidebarOrganizationSchema.setPins(
-                    &root, folder: folder, paths: frozen)
+                    &root, folder: folder, paths: stored.paths(forFolder: folder))
             } reflect: { state in
                 state.pins.unpin(target, inFolder: folder)
             }
@@ -5242,34 +5306,33 @@ final class AppState: ObservableObject {
                 "Date grouping sorts newest first. Turn off Group by Date to "
                     + "use this order.")
         }
+        // Single-axis writes: only the sort object changes (merged in place,
+        // unknown members preserved); a concurrent grouping change is never
+        // restored from a stale snapshot (round-3 finding 5).
         if container.isEmpty {
             var announced = sidebarOrganization.prefs.vaultChoice
             announced.sort = option
             try mutateSidebarOrganization(
                 announce: announced.sortAnnouncement
             ) { root in
-                var choice = SidebarOrganizationSchema.decode(root: root)
-                    .prefs.vaultChoice
-                choice.sort = option
-                SidebarOrganizationSchema.setVaultChoice(&root, choice)
+                SidebarOrganizationSchema.setVaultSort(&root, option)
             } reflect: { state in
                 state.prefs.vaultChoice.sort = option
             }
         } else {
-            var override = sidebarOrganization.prefs.folderOverrides[container]
-                ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
-            override.sort = option
-            let frozen = override
             var announced = sidebarOrganization.prefs.effectiveChoice(
                 forFolder: container)
             announced.sort = option
             try mutateSidebarOrganization(
                 announce: announced.sortAnnouncement
             ) { root in
-                SidebarOrganizationSchema.setFolderOverride(
-                    &root, folder: container, override: frozen)
+                SidebarOrganizationSchema.setFolderSort(
+                    &root, folder: container, option)
             } reflect: { state in
-                state.prefs.folderOverrides[container] = frozen
+                var override = state.prefs.folderOverrides[container]
+                    ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
+                override.sort = option
+                state.prefs.folderOverrides[container] = override
             }
         }
     }
@@ -5348,9 +5411,12 @@ final class AppState: ObservableObject {
 
         var nextPins = sidebarOrganization.pins
         var nextPrefs = sidebarOrganization.prefs
-        let pinsChanged = applyToPins(&nextPins)
-        let overridesChanged = applyToOverrides(&nextPrefs)
-        guard pinsChanged || overridesChanged else { return }
+        _ = applyToPins(&nextPins)
+        _ = applyToOverrides(&nextPrefs)
+        // The locked raw replay always runs for a path transform: the file
+        // can hold entries this build cannot decode (an unknown-only
+        // override) or that another writer added after load, so in-memory
+        // change flags must not gate the disk-side rekey (round-3 finding 1).
 
         try? mutateSidebarOrganization(announce: nil) { root in
             // Replay the exact mutation against what the file actually holds.

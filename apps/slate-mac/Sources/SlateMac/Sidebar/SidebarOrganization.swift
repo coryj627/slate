@@ -614,32 +614,38 @@ enum SidebarOrganizationSchema {
     return entry
   }
 
-  static func setVaultChoice(
-    _ root: inout [String: Any], _ choice: SidebarOrganizationChoice
-  ) {
-    root[sortKey] = mergeSort(choice.sort, into: root[sortKey])
-    root[groupingKey] = choice.grouping.rawValue
+  /// Field-specific vault mutators: each touches ONLY its own key so an
+  /// interleaved writer's change to the other axis — or a raw value this
+  /// build cannot decode — is never restored from a stale snapshot.
+  static func setVaultSort(_ root: inout [String: Any], _ sort: SidebarSortOption) {
+    root[sortKey] = mergeSort(sort, into: root[sortKey])
   }
 
-  static func setFolderOverride(
-    _ root: inout [String: Any],
-    folder: String,
-    override: SidebarOrganizationOverride
+  static func setVaultGrouping(
+    _ root: inout [String: Any], _ grouping: SidebarGroupingOption
+  ) {
+    root[groupingKey] = grouping.rawValue
+  }
+
+  /// Field-specific folder-override mutators, same single-axis rule.
+  static func setFolderSort(
+    _ root: inout [String: Any], folder: String, _ sort: SidebarSortOption
   ) {
     var overrides = root[folderOverridesKey] as? [String: Any] ?? [:]
     var entry = overrides[folder] as? [String: Any] ?? [:]
-    if let sort = override.sort {
-      entry[sortKey] = mergeSort(sort, into: entry[sortKey])
-    } else {
-      entry[sortKey] = nil
-    }
-    if let grouping = override.grouping {
-      entry[groupingKey] = grouping.rawValue
-    } else {
-      entry[groupingKey] = nil
-    }
-    overrides[folder] = entry.isEmpty ? nil : entry
-    root[folderOverridesKey] = overrides.isEmpty ? nil : overrides
+    entry[sortKey] = mergeSort(sort, into: entry[sortKey])
+    overrides[folder] = entry
+    root[folderOverridesKey] = overrides
+  }
+
+  static func setFolderGrouping(
+    _ root: inout [String: Any], folder: String, _ grouping: SidebarGroupingOption
+  ) {
+    var overrides = root[folderOverridesKey] as? [String: Any] ?? [:]
+    var entry = overrides[folder] as? [String: Any] ?? [:]
+    entry[groupingKey] = grouping.rawValue
+    overrides[folder] = entry
+    root[folderOverridesKey] = overrides
   }
 
   /// Removes only the folder's sort override, preserving a grouping override
