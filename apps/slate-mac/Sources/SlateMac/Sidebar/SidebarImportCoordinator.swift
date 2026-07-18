@@ -50,7 +50,7 @@ struct SidebarImportDestinationCreators: Sendable {
   static func production(session: VaultSession) -> Self {
     Self(
       createFile: { path, bytes in
-        if let text = String(data: bytes, encoding: .utf8) {
+        if let text = String(validating: bytes, as: UTF8.self) {
           _ = try session.createExclusive(path: path, content: text)
         } else {
           _ = try session.createExclusiveBytes(path: path, bytes: bytes)
@@ -540,7 +540,7 @@ final class SidebarImportCoordinator: @unchecked Sendable {
                       return .retainForRetry
                     }
                     attempt = .physicalOutcomeUnknown(String(describing: error))
-                    return .discard
+                    return .consumeCapacity
                   }
                 }
                 switch attempt {

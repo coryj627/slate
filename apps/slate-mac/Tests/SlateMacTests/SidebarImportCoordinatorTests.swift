@@ -174,6 +174,39 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       "the imported bytes remain reconstructable after the first edit")
   }
 
+  func testProductionDestinationCreatorsPreserveUTF8BOMInBytesAndHistory() throws {
+    let vault = try makeVault()
+    let session = try VaultSession.openFilesystem(rootPath: vault.path)
+    let creators = SidebarImportDestinationCreators.production(session: session)
+    let body = "# Imported\nOriginal body.\n"
+    let originalBytes = Data([0xEF, 0xBB, 0xBF]) + Data(body.utf8)
+    let originalText = "\u{FEFF}" + body
+
+    try creators.createFile(path: "bom.md", bytes: originalBytes)
+
+    XCTAssertEqual(
+      try Data(contentsOf: vault.appendingPathComponent("bom.md")),
+      originalBytes,
+      "a valid UTF-8 BOM is part of the source bytes and must survive import")
+
+    let initialPage = try session.listVersions(
+      path: "bom.md",
+      paging: Paging(cursor: nil, limit: 10))
+    let initialVersion = try XCTUnwrap(initialPage.items.first)
+
+    _ = try session.saveText(
+      path: "bom.md",
+      contents: "# Imported\nEdited body.\n",
+      expectedContentHash: nil)
+
+    XCTAssertEqual(
+      try session.versionContent(
+        path: "bom.md",
+        versionHash: initialVersion.contentHashAfter),
+      originalText,
+      "the BOM-bearing import must remain reconstructable after the first edit")
+  }
+
   func testCoordinatorCopiesBinaryFileAndDirectoryTreeWithVerifiedReport() async throws {
     let vault = try makeVault()
     try FileManager.default.createDirectory(
@@ -1381,7 +1414,58 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       ])
     XCTAssertTrue(report.requiresRescan)
     XCTAssertFalse(report.wasCancelled)
-    XCTAssertEqual(scheduler.snapshot().committedBytes, 1)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 2)
+    XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
+    XCTAssertEqual(scope.counts().stops, 2)
+  }
+
+  func testCoordinatorUnknownCreateConsumesCapacityBeforeLaterEntry() async throws {
+    let vault = try makeVault()
+    let firstSource = tempDirectory.appendingPathComponent("a-unknown.bin")
+    let secondSource = tempDirectory.appendingPathComponent("b-later.bin")
+    try Data([0x01, 0x02]).write(to: firstSource)
+    try Data([0x03]).write(to: secondSource)
+    let signal = SidebarImportEngineSignal()
+    let scope = ScopeProbe()
+    let walker = makeWalker(scope: scope, cancellation: signal)
+    let firstPrepared = try walker.prepare(rootURL: firstSource, vaultURL: vault)
+    let secondPrepared = try walker.prepare(rootURL: secondSource, vaultURL: vault)
+    let scheduler = SidebarImportByteScheduler(
+      totalLimitBytes: 2,
+      normalResidentLimitBytes: 2,
+      cancellation: signal)
+    let creatorCalls = StringRecorder()
+    let coordinator = SidebarImportCoordinator(
+      signal: signal,
+      scheduler: scheduler,
+      creators: SidebarImportDestinationCreators(
+        createFile: { path, _ in
+          creatorCalls.append(path)
+          throw CreatorTestError.postPublishIndexFailure
+        },
+        createDirectory: { _ in XCTFail("file roots must not create directories") }))
+
+    let report = try await coordinator.copy(
+      roots: [
+        SidebarImportExternalRoot(providerIndex: 0, preparedSource: firstPrepared),
+        SidebarImportExternalRoot(providerIndex: 1, preparedSource: secondPrepared),
+      ],
+      into: "",
+      reservingMoveBasenames: [])
+
+    XCTAssertEqual(creatorCalls.values(), ["a-unknown.bin"])
+    XCTAssertEqual(report.successfulFileCount, 0)
+    XCTAssertEqual(
+      report.failures.map(\.reason),
+      [
+        .physicalOutcomeUnknown(
+          candidatePath: "a-unknown.bin",
+          underlying: "postPublishIndexFailure"),
+        .capacityExceeded,
+      ])
+    XCTAssertEqual(report.unknownCandidates.map(\.candidatePath), ["a-unknown.bin"])
+    XCTAssertTrue(report.requiresRescan)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 2)
     XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
     XCTAssertEqual(scope.counts().stops, 2)
   }
@@ -1517,7 +1601,7 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     ])
     XCTAssertTrue(report.requiresRescan)
     XCTAssertTrue(report.wasCancelled)
-    XCTAssertEqual(scheduler.snapshot().committedBytes, 0)
+    XCTAssertEqual(scheduler.snapshot().committedBytes, 1)
     XCTAssertEqual(scheduler.snapshot().tentativeBytes, 0)
     XCTAssertEqual(scope.counts().stops, 2)
   }

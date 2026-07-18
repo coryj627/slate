@@ -23,6 +23,9 @@ struct SidebarImportByteSchedulerHooks {
 enum SidebarImportReadyReadDisposition: Sendable {
   case retainForRetry
   case publishSucceeded
+  /// The physical write may have completed, so consume cumulative capacity
+  /// without promoting the item to a verified import success.
+  case consumeCapacity
   case discard
 }
 
@@ -114,7 +117,7 @@ final class SidebarImportReadyRead: @unchecked Sendable {
     precondition(activeUses > 0)
     activeUses -= 1
     switch disposition {
-    case .publishSucceeded:
+    case .publishSucceeded, .consumeCapacity:
       terminalAction = .publish
     case .discard:
       if terminalAction != .publish {
