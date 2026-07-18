@@ -5069,7 +5069,8 @@ final class AppState: ObservableObject {
         announce announcement: String?,
         apply: @escaping @Sendable (inout [String: Any]) throws -> Void,
         reflect: (inout SidebarOrganizationState) -> Void,
-        acknowledge: (() -> Void)? = nil
+        acknowledge: (() -> Void)? = nil,
+        isBacklogDrain: Bool = false
     ) throws {
         if let notice = sidebarVaultPrefsNotice {
             throw sidebarActionFailure(
@@ -5096,6 +5097,12 @@ final class AppState: ObservableObject {
         let storeFileURL = store.fileURL
         let token = UUID()
         sidebarOrganizationPersistTailToken = token
+        // Round-8 finding 1: EVERY persist first drains the pending
+        // structural backlog under the lock, so a transform stranded by an
+        // earlier readable-write failure (lock/temp/fsync) commits with the
+        // next write of any kind instead of waiting for a notice-gated Retry.
+        let backlog = sidebarStructuralTransformJournal
+        let backlogIDs = Set(backlog.map(\.id))
         let task = Task { [weak self] in
             await previous?.value
             // Main-actor ownership gate BEFORE any disk I/O: the captured
@@ -5119,6 +5126,9 @@ final class AppState: ObservableObject {
                                     .knownSectionShapesAreValid(root: root)
                             else {
                                 throw SidebarOrganizationShapeError()
+                            }
+                            for transform in backlog {
+                                transform.applyRaw(to: &root)
                             }
                             try apply(&root)
                             finalRoot = root
@@ -5166,7 +5176,26 @@ final class AppState: ObservableObject {
                 // organization set disables with its reason.
                 self.reconcileSidebarOrganizationFromDisk(
                     recovered, failure: failure)
+                // Round-8 finding 1: a failure that leaves the file READABLE
+                // publishes no notice, so the notice-gated Retry never runs.
+                // Schedule one automatic drain for the surviving backlog;
+                // any later persist drains it again regardless.
+                if !isBacklogDrain,
+                    self.sidebarVaultPrefsNotice == nil,
+                    !self.sidebarStructuralTransformJournal.isEmpty
+                {
+                    try? self.mutateSidebarOrganization(
+                        announce: nil,
+                        apply: { _ in },
+                        reflect: { _ in },
+                        isBacklogDrain: true)
+                }
             case .success(let finalRoot):
+                if !backlogIDs.isEmpty {
+                    self.sidebarStructuralTransformJournal.removeAll {
+                        backlogIDs.contains($0.id)
+                    }
+                }
                 acknowledge?()
                 guard isTail else { return }
                 // The tail publishes decoded post-write disk truth: a locked
@@ -5518,17 +5547,17 @@ final class AppState: ObservableObject {
         // can hold entries this build cannot decode (an unknown-only
         // override) or that another writer added after load, so in-memory
         // change flags must not gate the disk-side rekey (round-3 finding 1).
+        // The transform itself was journaled above, and every persist drains
+        // the journal backlog under the lock (round-8 finding 1), so the
+        // payload here is empty — the drain both replays and, on commit,
+        // acknowledges it.
         let frozen = transform
-        try? mutateSidebarOrganization(announce: nil) { root in
-            frozen.applyRaw(to: &root)
-        } reflect: { state in
+        try? mutateSidebarOrganization(
+            announce: nil,
+            apply: { _ in }
+        ) { state in
             frozen.apply(to: &state.pins)
             frozen.apply(to: &state.prefs)
-        } acknowledge: { [weak self] in
-            guard let self else { return }
-            self.sidebarStructuralTransformJournal.removeAll {
-                $0.id == frozen.id
-            }
         }
     }
 
@@ -8158,11 +8187,18 @@ final class AppState: ObservableObject {
             }
 
             self.sidebarVaultPrefsNotice = adoptedNotice
-            // A successful repair also re-adopts the file's authored
-            // organization sections in the same publish.
-            let decoded = SidebarOrganizationSchema.decode(root: adoptedRoot)
-            let organization = SidebarOrganizationState(
-                prefs: decoded.prefs, pins: decoded.pins)
+            // A successful repair re-adopts the file's authored organization
+            // sections in the same publish; any standing notice publishes
+            // defaults instead — partial salvage from an invalid file would
+            // misrepresent it (round-8 finding 2).
+            let organization: SidebarOrganizationState
+            if adoptedNotice == nil {
+                let decoded = SidebarOrganizationSchema.decode(root: adoptedRoot)
+                organization = SidebarOrganizationState(
+                    prefs: decoded.prefs, pins: decoded.pins)
+            } else {
+                organization = SidebarOrganizationState()
+            }
             if organization != self.sidebarOrganization {
                 self.sidebarOrganization = organization
             }

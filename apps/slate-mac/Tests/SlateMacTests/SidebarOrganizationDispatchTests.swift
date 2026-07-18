@@ -1143,6 +1143,74 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       SidebarGroupingOption.none)
   }
 
+  // MARK: - Red-team regressions (adversarial review round 8)
+
+  func testReadableWriteFailureDrainsWithTheNextPersistOfAnyKind() async throws {
+    // Round-8 finding 1: a structural replay that fails while the file
+    // stays READABLE (lock unavailable) publishes no notice, so the
+    // notice-gated Retry never runs — the journaled transform must commit
+    // with the next persist of any kind.
+    let (state, vault) = try openVault(
+      named: "readable-failure",
+      files: ["Projects/note.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+
+    // A DIRECTORY at the lock path makes every locked write fail while
+    // read() stays clean.
+    let lockURL = vault.appendingPathComponent(".slate/sidebar.json.lock")
+    try FileManager.default.createDirectory(
+      at: lockURL, withIntermediateDirectories: true)
+
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    await awaitPersist(state)
+    XCTAssertNil(state.sidebarVaultPrefsNotice, "the file is still readable")
+    XCTAssertEqual(
+      state.sidebarStructuralTransformJournal.count, 1,
+      "the transform survives the readable failure")
+
+    // Unblock the lock; ANY later persist drains the backlog first.
+    try FileManager.default.removeItem(at: lockURL)
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+
+    XCTAssertTrue(state.sidebarStructuralTransformJournal.isEmpty)
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(pins["Archive"] as? [String], ["Archive/note.md"])
+    XCTAssertNil(pins["Projects"])
+    XCTAssertEqual(
+      json["sort"] as? [String: String],
+      ["field": "modified", "direction": "desc"])
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Archive/note.md", inFolder: "Archive"))
+  }
+
+  func testRetryAgainstAnUnchangedShapeInvalidFilePublishesDefaults() async throws {
+    // Round-8 finding 2: a shape-invalid file carrying an otherwise-valid
+    // sort must not be partially salvaged by Retry — a standing notice
+    // publishes defaults.
+    let (state, _) = try openVault(
+      named: "no-salvage", files: ["a.md"],
+      sidebarJSON: """
+        {"version": 1,
+         "sort": {"field": "modified", "direction": "desc"},
+         "pins": ["future-data"]}
+        """)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    XCTAssertEqual(state.sidebarOrganization, AppState.SidebarOrganizationState())
+
+    await state.retrySidebarVaultPreferences()?.value
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    XCTAssertEqual(
+      state.sidebarOrganization, AppState.SidebarOrganizationState(),
+      "Retry must not salvage the valid sort beside the invalid pins section")
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

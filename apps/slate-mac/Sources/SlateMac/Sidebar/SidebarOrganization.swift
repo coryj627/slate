@@ -107,22 +107,25 @@ struct SidebarOrganizationPrefs: Equatable {
   mutating func applyFolderRename(from oldFolder: String, to newFolder: String) -> Bool {
     let oldPrefix = oldFolder + "/"
     let newPrefix = newFolder + "/"
-    var changed = false
     var next: [String: SidebarOrganizationOverride] = [:]
     next.reserveCapacity(folderOverrides.count)
+    var renamed: [(key: String, value: SidebarOrganizationOverride)] = []
     for (folder, override) in folderOverrides {
       if folder == oldFolder {
-        next[newFolder] = override
-        changed = true
+        renamed.append((newFolder, override))
       } else if folder.hasPrefix(oldPrefix) {
-        next[newPrefix + folder.dropFirst(oldPrefix.count)] = override
-        changed = true
+        renamed.append((newPrefix + folder.dropFirst(oldPrefix.count), override))
       } else {
         next[folder] = override
       }
     }
-    if changed { folderOverrides = next }
-    return changed
+    guard !renamed.isEmpty else { return false }
+    // Renamed source wins over a stale destination entry (round-8 finding 3).
+    for entry in renamed {
+      next[entry.key] = entry.value
+    }
+    folderOverrides = next
+    return true
   }
 
   /// Deleted folders drop their own and every descendant override.
@@ -462,6 +465,10 @@ struct SidebarPins: Equatable {
     else { return false }
     if Self.folder(of: newPath) == oldFolder {
       paths[index] = newPath
+      // A rename onto an already-pinned path keeps one authored entry —
+      // the earlier position wins (round-8 finding 3, member level).
+      var seen: Set<String> = []
+      paths = paths.filter { seen.insert($0).inserted }
     } else {
       paths.remove(at: index)
     }
@@ -475,9 +482,9 @@ struct SidebarPins: Equatable {
   mutating func applyFolderRename(from oldFolder: String, to newFolder: String) -> Bool {
     let oldPrefix = oldFolder + "/"
     let newPrefix = newFolder + "/"
-    var changed = false
     var next: [String: [String]] = [:]
     next.reserveCapacity(byFolder.count)
+    var renamed: [(key: String, paths: [String])] = []
     for (folder, paths) in byFolder {
       let newKey: String
       if folder == oldFolder {
@@ -488,15 +495,25 @@ struct SidebarPins: Equatable {
         next[folder] = paths
         continue
       }
-      changed = true
-      next[newKey] = paths.map { path in
-        path.hasPrefix(oldPrefix)
-          ? newPrefix + path.dropFirst(oldPrefix.count)
-          : path
-      }
+      renamed.append(
+        (
+          newKey,
+          paths.map { path in
+            path.hasPrefix(oldPrefix)
+              ? newPrefix + path.dropFirst(oldPrefix.count)
+              : path
+          }
+        ))
     }
-    if changed { byFolder = next }
-    return changed
+    guard !renamed.isEmpty else { return false }
+    // Deterministic collision rule (round-8 finding 3): the renamed source
+    // subtree is authoritative over any stale destination entry — the
+    // filesystem rename proves the destination's previous occupant is gone.
+    for entry in renamed {
+      next[entry.key] = entry.paths
+    }
+    byFolder = next
+    return true
   }
 
   /// Deletions drop the affected file pins and every pin under a deleted
@@ -795,19 +812,21 @@ enum SidebarOrganizationSchema {
     let newPrefix = newFolder + "/"
     var next: [String: Any] = [:]
     next.reserveCapacity(overrides.count)
-    var changed = false
+    var renamed: [(key: String, entry: Any)] = []
     for (folder, entry) in overrides {
       if folder == oldFolder {
-        next[newFolder] = entry
-        changed = true
+        renamed.append((newFolder, entry))
       } else if folder.hasPrefix(oldPrefix) {
-        next[newPrefix + folder.dropFirst(oldPrefix.count)] = entry
-        changed = true
+        renamed.append((newPrefix + folder.dropFirst(oldPrefix.count), entry))
       } else {
         next[folder] = entry
       }
     }
-    guard changed else { return }
+    guard !renamed.isEmpty else { return }
+    // Renamed source wins over a stale destination entry (round-8 finding 3).
+    for item in renamed {
+      next[item.key] = item.entry
+    }
     root[folderOverridesKey] = next.isEmpty ? nil : next
   }
 

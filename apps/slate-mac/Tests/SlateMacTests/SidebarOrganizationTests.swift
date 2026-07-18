@@ -701,6 +701,49 @@ final class SidebarOrganizationTests: XCTestCase {
     XCTAssertNil(overrides["Archive/sub"])
   }
 
+  func testRenameCollisionsAreDeterministicallySourceAuthoritative() {
+    // Round-8 finding 3: a stale destination entry (left by an outside-
+    // Slate removal) loses to the renamed source subtree, exactly and for
+    // descendants, in both models and the raw rekey.
+    var pins = SidebarPins()
+    pins.pin("Archive/stale.md", inFolder: "Archive")
+    pins.pin("Archive/sub/staler.md", inFolder: "Archive/sub")
+    pins.pin("Projects/live.md", inFolder: "Projects")
+    pins.pin("Projects/sub/deep.md", inFolder: "Projects/sub")
+    XCTAssertTrue(pins.applyFolderRename(from: "Projects", to: "Archive"))
+    XCTAssertEqual(pins.paths(forFolder: "Archive"), ["Archive/live.md"])
+    XCTAssertEqual(pins.paths(forFolder: "Archive/sub"), ["Archive/sub/deep.md"])
+
+    var prefs = SidebarOrganizationPrefs()
+    prefs.folderOverrides["Archive"] = SidebarOrganizationOverride(
+      sort: SidebarSortOption(field: .name, direction: .desc), grouping: nil)
+    prefs.folderOverrides["Projects"] = SidebarOrganizationOverride(
+      sort: SidebarSortOption(field: .modified, direction: .desc), grouping: nil)
+    XCTAssertTrue(prefs.applyFolderRename(from: "Projects", to: "Archive"))
+    XCTAssertEqual(prefs.folderOverrides["Archive"]?.sort?.field, .modified)
+
+    var root: [String: Any] = [
+      "folderOverrides": [
+        "Archive": ["future-stale": true],
+        "Projects": ["future-live": true],
+      ]
+    ]
+    SidebarOrganizationSchema.renameFolderOverrides(
+      &root, from: "Projects", to: "Archive")
+    let overrides = root["folderOverrides"] as? [String: Any]
+    let archive = overrides?["Archive"] as? [String: Any]
+    XCTAssertEqual(archive?["future-live"] as? Bool, true)
+    XCTAssertNil(archive?["future-stale"])
+  }
+
+  func testFileRenameOntoAnAlreadyPinnedPathDedupes() {
+    var pins = SidebarPins()
+    pins.pin("f/a.md", inFolder: "f")
+    pins.pin("f/b.md", inFolder: "f")
+    XCTAssertTrue(pins.applyRename(from: "f/b.md", to: "f/a.md"))
+    XCTAssertEqual(pins.paths(forFolder: "f"), ["f/a.md"])
+  }
+
   func testPrefsStructuralReplayRekeysAndDropsFolderOverrides() {
     var prefs = SidebarOrganizationPrefs()
     prefs.folderOverrides["Projects"] = SidebarOrganizationOverride(
