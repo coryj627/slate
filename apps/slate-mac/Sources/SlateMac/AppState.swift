@@ -5042,10 +5042,22 @@ final class AppState: ObservableObject {
     /// revalidates on the main actor and skips its disk I/O entirely — a
     /// write queued under an old session can neither touch the file after
     /// reopen nor roll the UI back (red-team finding 1).
+    /// Thrown from inside the locked update when the file's known sections
+    /// no longer use shapes this build understands — a cooperating writer
+    /// may have replaced them after our open-time validation, and the write
+    /// must fail instead of clobbering that data (round-6 finding 2).
+    private struct SidebarOrganizationShapeError: LocalizedError {
+        var errorDescription: String? {
+            ".slate/sidebar.json uses an unrecognized layout for a sidebar "
+                + "section, so it was left untouched."
+        }
+    }
+
     private func mutateSidebarOrganization(
         announce announcement: String?,
         apply: @escaping @Sendable (inout [String: Any]) -> Void,
-        reflect: (inout SidebarOrganizationState) -> Void
+        reflect: (inout SidebarOrganizationState) -> Void,
+        acknowledge: (() -> Void)? = nil
     ) throws {
         if let notice = sidebarVaultPrefsNotice {
             throw sidebarActionFailure(
@@ -5087,6 +5099,15 @@ final class AppState: ObservableObject {
                     do {
                         var finalRoot: [String: Any] = [:]
                         try store.update { root in
+                            // Revalidate under the lock: shapes may have
+                            // changed since open-time validation (round-6
+                            // finding 2).
+                            guard
+                                SidebarOrganizationSchema
+                                    .knownSectionShapesAreValid(root: root)
+                            else {
+                                throw SidebarOrganizationShapeError()
+                            }
                             apply(&root)
                             finalRoot = root
                         }
@@ -5129,6 +5150,7 @@ final class AppState: ObservableObject {
                 self.reconcileSidebarOrganizationFromDisk(
                     recovered, failure: failure)
             case .success(let finalRoot):
+                acknowledge?()
                 guard isTail else { return }
                 // The tail publishes decoded post-write disk truth: a locked
                 // read-modify-write can merge ANOTHER writer's changes, and
@@ -5206,6 +5228,22 @@ final class AppState: ObservableObject {
                     SidebarOrganizationSchema.setVaultGrouping(&root, next)
                 } reflect: { state in
                     state.prefs.vaultChoice.grouping = next
+                }
+            } else if next == sidebarOrganization.prefs.vaultChoice.grouping {
+                // Choosing the vault's current value returns the folder to
+                // inheritance instead of pinning an explicit copy that would
+                // ignore future vault changes (round-6 finding 3).
+                try mutateSidebarOrganization(
+                    announce: announced.sortAnnouncement
+                ) { root in
+                    SidebarOrganizationSchema.clearFolderGroupingOverride(
+                        &root, folder: container)
+                } reflect: { state in
+                    guard var override = state.prefs.folderOverrides[container]
+                    else { return }
+                    override.grouping = nil
+                    state.prefs.folderOverrides[container] =
+                        override.isEmpty ? nil : override
                 }
             } else {
                 try mutateSidebarOrganization(
@@ -5416,20 +5454,25 @@ final class AppState: ObservableObject {
             return
         }
         guard !transform.isEmpty else { return }
+        guard sidebarVaultPrefsStore != nil else { return }
 
-        // While the preference file is read-only, the vault mutation still
-        // happened: journal the transform for the Retry replay instead of
-        // silently dropping it (round-4 finding 2).
-        if sidebarVaultPrefsNotice != nil, sidebarVaultPrefsStore != nil {
-            if sidebarStructuralTransformJournal.count
+        // Every structural transform is journaled as PENDING first and only
+        // acknowledged (removed) after its locked replay commits. The vault
+        // mutation already happened on disk, so a replay that fails — even
+        // one whose failure is what first DETECTS silent corruption — must
+        // survive for Retry rather than vanish with the rollback (round-6
+        // finding 1; round-4 finding 2).
+        guard
+            sidebarStructuralTransformJournal.count
                 < Self.sidebarStructuralTransformJournalCap
-            {
-                sidebarStructuralTransformJournal.append(transform)
-            } else {
-                sidebarStructuralTransformJournalOverflowed = true
-            }
+        else {
+            sidebarStructuralTransformJournalOverflowed = true
             return
         }
+        sidebarStructuralTransformJournal.append(transform)
+
+        // While the file is already known read-only, Retry owns the replay.
+        guard sidebarVaultPrefsNotice == nil else { return }
 
         // The locked raw replay always runs for a path transform: the file
         // can hold entries this build cannot decode (an unknown-only
@@ -5441,6 +5484,11 @@ final class AppState: ObservableObject {
         } reflect: { state in
             frozen.apply(to: &state.pins)
             frozen.apply(to: &state.prefs)
+        } acknowledge: { [weak self] in
+            guard let self else { return }
+            self.sidebarStructuralTransformJournal.removeAll {
+                $0.id == frozen.id
+            }
         }
     }
 
@@ -8014,6 +8062,12 @@ final class AppState: ObservableObject {
                     do {
                         var finalRoot: [String: Any] = [:]
                         try store.update { root in
+                            guard
+                                SidebarOrganizationSchema
+                                    .knownSectionShapesAreValid(root: root)
+                            else {
+                                throw SidebarOrganizationShapeError()
+                            }
                             for transform in pass {
                                 transform.applyRaw(to: &root)
                             }
@@ -8036,7 +8090,10 @@ final class AppState: ObservableObject {
                 switch replay {
                 case .success(let finalRoot):
                     adoptedRoot = finalRoot
-                    self.sidebarStructuralTransformJournal.removeFirst(pass.count)
+                    let passIDs = Set(pass.map(\.id))
+                    self.sidebarStructuralTransformJournal.removeAll {
+                        passIDs.contains($0.id)
+                    }
                 case .failure:
                     // The file regressed between the read and the replay;
                     // keep the whole journal for the next Retry and report
@@ -8048,7 +8105,15 @@ final class AppState: ObservableObject {
                         self.currentSession === session
                     else { return }
                     adoptedRoot = reread.root
-                    adoptedNotice = reread.notice ?? .unreadable
+                    if let notice = reread.notice {
+                        adoptedNotice = notice
+                    } else if !SidebarOrganizationSchema
+                        .knownSectionShapesAreValid(root: reread.root)
+                    {
+                        adoptedNotice = .malformed
+                    } else {
+                        adoptedNotice = .unreadable
+                    }
                 }
             }
 

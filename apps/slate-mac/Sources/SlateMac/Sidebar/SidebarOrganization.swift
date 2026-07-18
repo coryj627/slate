@@ -552,7 +552,11 @@ struct SidebarPinPruneLedger {
 /// value drives the in-memory application, the locked raw disk replay, and —
 /// while the preference file is read-only — the deferred journal that Retry
 /// replays before republishing (round-4 finding 2).
-struct SidebarStructuralTransform: Equatable, Sendable {
+struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
+  /// Journal identity: pending transforms are acknowledged (removed) only
+  /// after their locked replay commits (round-6 finding 1).
+  let id = UUID()
+
   struct Rename: Equatable, Sendable {
     let oldPath: String
     let newPath: String
@@ -738,6 +742,18 @@ enum SidebarOrganizationSchema {
     entry[groupingKey] = grouping.rawValue
     overrides[folder] = entry
     root[folderOverridesKey] = overrides
+  }
+
+  /// Removes only the folder's grouping override so the folder returns to
+  /// vault inheritance (round-6 finding 3); sort and unknown entry keys
+  /// survive, and the entry disappears only when empty.
+  static func clearFolderGroupingOverride(_ root: inout [String: Any], folder: String) {
+    guard var overrides = root[folderOverridesKey] as? [String: Any],
+      var entry = overrides[folder] as? [String: Any]
+    else { return }
+    entry[groupingKey] = nil
+    overrides[folder] = entry.isEmpty ? nil : entry
+    root[folderOverridesKey] = overrides.isEmpty ? nil : overrides
   }
 
   /// Removes only the folder's sort override, preserving a grouping override

@@ -950,6 +950,112 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortNameAsc))
   }
 
+  // MARK: - Red-team regressions (adversarial review round 6)
+
+  func testFirstStructuralTransformAfterSilentCorruptionSurvivesForRetry() async throws {
+    // Round-6 finding 1: when a rename is the FIRST operation after the
+    // file silently became malformed (no prior failed write, so no notice
+    // yet), the failed replay must retain the journaled transform for
+    // Retry instead of losing it with the rollback.
+    let (state, vault) = try openVault(
+      named: "silent-corruption",
+      files: ["Projects/note.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+    XCTAssertNil(state.sidebarVaultPrefsNotice)
+
+    let sidebarURL = vault.appendingPathComponent(".slate/sidebar.json")
+    let originalContent = try Data(contentsOf: sidebarURL)
+    try "{not json".write(to: sidebarURL, atomically: true, encoding: .utf8)
+
+    // Notice is still nil here — the failure below is what detects it.
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    await awaitPersist(state)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    XCTAssertEqual(
+      state.sidebarStructuralTransformJournal.count, 1,
+      "the un-committed transform stays journaled for Retry")
+
+    try originalContent.write(to: sidebarURL)
+    await state.retrySidebarVaultPreferences()?.value
+    XCTAssertNil(state.sidebarVaultPrefsNotice)
+    XCTAssertTrue(state.sidebarStructuralTransformJournal.isEmpty)
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(pins["Archive"] as? [String], ["Archive/note.md"])
+    XCTAssertNil(pins["Projects"])
+  }
+
+  func testLockedWriteRefusesAConcurrentlyReshapedFile() async throws {
+    // Round-6 finding 2: a cooperating writer replaces `pins` with an array
+    // AFTER open-time validation; the next locked write must fail and enter
+    // recovery instead of clobbering that data.
+    let (state, vault) = try openVault(named: "reshaped", files: ["a.md"])
+    try publish(state, [])
+
+    let sidebarURL = vault.appendingPathComponent(".slate/sidebar.json")
+    let slate = vault.appendingPathComponent(".slate", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: slate, withIntermediateDirectories: true)
+    try """
+      {"version": 1, "pins": ["future-data"]}
+      """.write(to: sidebarURL, atomically: true, encoding: .utf8)
+
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    let json = try sidebarJSON(at: vault)
+    XCTAssertEqual(
+      json["pins"] as? [String], ["future-data"],
+      "the unrecognized section survives untouched")
+    XCTAssertNil(json["sort"], "the refused write left no partial data")
+  }
+
+  func testGroupingToggleReturnsToVaultInheritance() async throws {
+    // Round-6 finding 3: toggling a folder back to the vault's current
+    // grouping clears the override (inheritance restored) instead of
+    // pinning an explicit copy.
+    let (state, vault) = try openVault(
+      named: "grouping-inherit", files: ["Projects/a.md"], folders: ["Projects"])
+    try publish(
+      state, [item("Projects", directory: true)],
+      focusedPath: "Projects", creationParent: "Projects")
+
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.folderOverrides["Projects"]?.grouping,
+      .dateBuckets)
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    XCTAssertNil(
+      state.sidebarOrganization.prefs.folderOverrides["Projects"],
+      "matching the vault default removes the override entirely")
+    await awaitPersist(state)
+    let cleared = try sidebarJSON(at: vault)
+    XCTAssertNil((cleared["folderOverrides"] as? [String: Any])?["Projects"])
+
+    // The folder now follows a later vault-wide change.
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs
+        .effectiveChoice(forFolder: "Projects").grouping,
+      .dateBuckets)
+
+    // Asymmetry: turning the folder OFF while the vault is ON is a real
+    // difference and stays explicit.
+    try publish(
+      state, [item("Projects", directory: true)],
+      focusedPath: "Projects", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.folderOverrides["Projects"]?.grouping,
+      SidebarGroupingOption.none)
+    await awaitPersist(state)
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
