@@ -22,6 +22,36 @@ enum SlateCommandID {
     static let sidebarOpen = "slate.sidebar.open"
     static let sidebarCopyWikilink = "slate.sidebar.copyWikilink"
 
+    // Sidebar organization (FL-06, #658/#659): sort, date grouping, pins.
+    static let sidebarPinNote = "slate.sidebar.pinNote"
+    static let sidebarUnpinNote = "slate.sidebar.unpinNote"
+    static let sidebarUnpinAll = "slate.sidebar.unpinAllInFolder"
+    static let sidebarSortNameAsc = "slate.sidebar.sortNameAsc"
+    static let sidebarSortNameDesc = "slate.sidebar.sortNameDesc"
+    static let sidebarSortCreatedDesc = "slate.sidebar.sortCreatedDesc"
+    static let sidebarSortCreatedAsc = "slate.sidebar.sortCreatedAsc"
+    static let sidebarSortModifiedDesc = "slate.sidebar.sortModifiedDesc"
+    static let sidebarSortModifiedAsc = "slate.sidebar.sortModifiedAsc"
+    static let sidebarToggleDateGrouping = "slate.sidebar.toggleDateGrouping"
+    static let sidebarUseVaultDefaultSort = "slate.sidebar.useVaultDefaultSort"
+
+    /// The FL-06 organization command set: enabled/disabled together when
+    /// `.slate/sidebar.json` is read-only, and every member routes through
+    /// `AppState`'s one organization mutation funnel.
+    static let sidebarOrganizationCommands: Set<String> = [
+        sidebarPinNote,
+        sidebarUnpinNote,
+        sidebarUnpinAll,
+        sidebarSortNameAsc,
+        sidebarSortNameDesc,
+        sidebarSortCreatedDesc,
+        sidebarSortCreatedAsc,
+        sidebarSortModifiedDesc,
+        sidebarSortModifiedAsc,
+        sidebarToggleDateGrouping,
+        sidebarUseVaultDefaultSort,
+    ]
+
     // File
     static let newFromTemplate = "slate.file.newFromTemplate"
     // File management (U2-5, #463). Act on the tree's selected node.
@@ -383,6 +413,17 @@ enum SlateCommandID {
         revealInFinder,
         copyPath,
         sidebarCopyWikilink,
+        sidebarPinNote,
+        sidebarUnpinNote,
+        sidebarUnpinAll,
+        sidebarSortNameAsc,
+        sidebarSortNameDesc,
+        sidebarSortCreatedDesc,
+        sidebarSortCreatedAsc,
+        sidebarSortModifiedDesc,
+        sidebarSortModifiedAsc,
+        sidebarToggleDateGrouping,
+        sidebarUseVaultDefaultSort,
         deleteEntry,
         printNote,
         jumpToBibliography,

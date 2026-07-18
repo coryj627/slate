@@ -242,6 +242,10 @@ final class FileTreeViewModel: ObservableObject {
     @Published private(set) var treePresentation = SidebarTreePresentation()
 
     private var organization = OrganizationContext()
+    /// Stale-pin report seam: fired whenever an organized level carries
+    /// authored pin entries that no longer resolve to rows. The subscriber
+    /// (AppState's once-per-session prune) owns dedup and persistence.
+    var onStalePins: ((_ folder: String, _ stale: [String]) -> Void)?
     private var presentationByParent: [NodeID: SidebarLevelPresentation] = [:]
     private var parentPathByKey: [NodeID: String] = [:]
     private var parentKeyByPath: [String: NodeID] = [:]
@@ -384,6 +388,7 @@ final class FileTreeViewModel: ObservableObject {
         guard orderChanged || presentationChanged else { return }
         levelReorganizeCountForTesting += 1
         presentationByParent[key] = presentation
+        reportStalePins(presentation, folder: parentPath)
         guard orderChanged else { return }
         // Membership is unchanged, so the path/state indexes stay valid.
         if key == Self.rootFetchKey {
@@ -391,6 +396,13 @@ final class FileTreeViewModel: ObservableObject {
         } else {
             children[key] = organized
         }
+    }
+
+    private func reportStalePins(
+        _ presentation: SidebarLevelPresentation, folder: String
+    ) {
+        guard !presentation.stalePinnedPaths.isEmpty else { return }
+        onStalePins?(folder, presentation.stalePinnedPaths)
     }
 
     private func rebuildMergedPresentation() {
@@ -455,6 +467,7 @@ final class FileTreeViewModel: ObservableObject {
         parentPathByKey[Self.rootFetchKey] = ""
         indexFileStates(in: organized, parentKey: Self.rootFetchKey)
         rebuildMergedPresentation()
+        reportStalePins(presentation, folder: "")
     }
 
     private func replaceChildLevel(
@@ -477,6 +490,7 @@ final class FileTreeViewModel: ObservableObject {
         parentPathByKey[parent] = parentPath
         indexFileStates(in: organized, parentKey: parent)
         rebuildMergedPresentation()
+        reportStalePins(presentation, folder: parentPath)
     }
 
     private func removeFileStates(in level: [TreeNode]) {
@@ -2545,6 +2559,15 @@ struct FileTreeSidebar: View {
             // #873: rehydrate the persisted expansion state instead of
             // resetting — `restoreWorkspaceLayout` filled the mirror before
             // any view update could run this.
+            // FL-06: adopt organization BEFORE the bind so the first level
+            // fetch already stores sorted levels; the stale-pin seam defers
+            // one turn so a bind-time prune cannot publish mid-update.
+            tree.onStalePins = { folder, stale in
+                Task { @MainActor in
+                    appState.pruneStaleSidebarPins(forFolder: folder, stale: stale)
+                }
+            }
+            tree.applyOrganization(currentOrganizationContext())
             tree.bind(
                 to: appState.currentSession,
                 restoringExpandedDirPaths: appState.treeExpandedDirPaths)
@@ -2556,9 +2579,18 @@ struct FileTreeSidebar: View {
             typeSelectBuffer = ""  // #850: a prefix never spans vaults
             pendingBatchFocus = nil
             Self.cancelPendingPostMutationFocus(&pendingPostMutationFocus)
+            tree.applyOrganization(currentOrganizationContext())
             tree.bind(
                 to: appState.currentSession,
                 restoringExpandedDirPaths: appState.treeExpandedDirPaths)
+        }
+        // FL-06: preference/pin changes re-sort cached levels in place; the
+        // clock tick re-buckets only when the local civil day changes.
+        .onChange(of: appState.sidebarOrganization) { _, _ in
+            tree.applyOrganization(currentOrganizationContext())
+        }
+        .onChange(of: sidebarNow) { _, _ in
+            tree.applyOrganization(currentOrganizationContext())
         }
         // #873: mirror every expansion change (user toggles, restores,
         // move-reveals, spring-loads) into AppState, whose debounced
@@ -2598,8 +2630,14 @@ struct FileTreeSidebar: View {
                 // refetch lands and resolution is fresh.
             }
         }
-        .task(id: rowPreferences.dateFormat) {
-            guard rowPreferences.dateFormat == .relative else { return }
+        .task(id: sidebarClockKey) {
+            // The shared sidebar clock: relative row dates need periodic
+            // refresh, and FL-06 date buckets need to observe local-midnight
+            // rollover. Same-day ticks are no-ops in the view model's
+            // organization gate, so the grouped case costs one comparison.
+            guard rowPreferences.dateFormat == .relative
+                || sidebarGroupingIsActive
+            else { return }
             sidebarNow = Date()
             while !Task.isCancelled {
                 do {
@@ -2610,6 +2648,28 @@ struct FileTreeSidebar: View {
                 sidebarNow = Date()
             }
         }
+    }
+
+    /// One identity for the clock task: restarts when either consumer's need
+    /// appears or disappears.
+    private var sidebarClockKey: String {
+        "\(rowPreferences.dateFormat.rawValue)-\(sidebarGroupingIsActive)"
+    }
+
+    private var sidebarGroupingIsActive: Bool {
+        let prefs = appState.sidebarOrganization.prefs
+        return prefs.vaultChoice.grouping == .dateBuckets
+            || prefs.folderOverrides.values.contains { $0.grouping == .dateBuckets }
+    }
+
+    /// The complete FL-06 organization context handed to the view model.
+    private func currentOrganizationContext() -> FileTreeViewModel.OrganizationContext {
+        FileTreeViewModel.OrganizationContext(
+            prefs: appState.sidebarOrganization.prefs,
+            pins: appState.sidebarOrganization.pins,
+            now: sidebarNow,
+            calendar: .current,
+            locale: .current)
     }
 
     // MARK: - States
@@ -2738,6 +2798,12 @@ struct FileTreeSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        // FL-06 §FL3-1.6: the container names any non-default organization so
+        // a VoiceOver user entering the list hears the active order.
+        .accessibilityLabel(
+            Self.treeAccessibilitySummary(
+                for: appState.sidebarOrganization.prefs.vaultChoice.normalized
+            ) ?? "Files")
         // Tree folder glyphs (disclosure + open/closed folder) render
         // hierarchical so open and closed folders read as one family (U5-1,
         // DoD §B rendering-mode consistency). Rendering-mode only — the sidebar
@@ -4166,6 +4232,19 @@ struct FileTreeSidebar: View {
         return reasons
     }
 
+    /// Row-targeted variant: the FL-06 pin/override reasons depend on the
+    /// exact row a context menu or rotor targets, which may differ from the
+    /// published selection the shared dictionary describes.
+    private func sidebarRowActionDisabledReasons(
+        for row: SidebarSelectionItem
+    ) -> [String: String] {
+        var reasons = sidebarRowActionDisabledReasons
+        reasons.merge(
+            appState.sidebarOrganizationActionReasons(target: row)
+        ) { _, rowSpecific in rowSpecific }
+        return reasons
+    }
+
     /// The only context-menu/VoiceOver catalog renderer. Its projection has
     /// already omitted unavailable actions, so every emitted button owns one
     /// frozen intent and announces an activation-time rejection exactly once.
@@ -4294,7 +4373,8 @@ struct FileTreeSidebar: View {
                         publishedSnapshot: publishedSnapshot,
                         structuralMutationDisabledReason:
                             appState.structuralMutationDisabledReason,
-                        actionDisabledReasons: sidebarRowActionDisabledReasons)
+                        actionDisabledReasons: sidebarRowActionDisabledReasons(
+                            for: sidebarSelectionItem(for: node)))
                     sidebarCatalogActions(projection.evaluations)
                 }
             }
@@ -4315,7 +4395,8 @@ struct FileTreeSidebar: View {
                         publishedSnapshot: publishedSnapshot,
                         structuralMutationDisabledReason:
                             appState.structuralMutationDisabledReason,
-                        actionDisabledReasons: sidebarRowActionDisabledReasons)
+                        actionDisabledReasons: sidebarRowActionDisabledReasons(
+                            for: sidebarSelectionItem(for: node)))
                     if projection.targetSnapshot.items.count == 1,
                         projection.targetSnapshot.items.first?.isDirectory == true
                     {
@@ -4326,6 +4407,17 @@ struct FileTreeSidebar: View {
                         let managementIDs = [
                             SlateCommandID.renameEntry, SlateCommandID.moveTo,
                         ]
+                        let sortIDs = [
+                            SlateCommandID.sidebarSortNameAsc,
+                            SlateCommandID.sidebarSortNameDesc,
+                            SlateCommandID.sidebarSortCreatedDesc,
+                            SlateCommandID.sidebarSortCreatedAsc,
+                            SlateCommandID.sidebarSortModifiedDesc,
+                            SlateCommandID.sidebarSortModifiedAsc,
+                            SlateCommandID.sidebarToggleDateGrouping,
+                            SlateCommandID.sidebarUseVaultDefaultSort,
+                        ]
+                        let pinIDs = [SlateCommandID.sidebarUnpinAll]
                         let inspectionIDs = [
                             SlateCommandID.revealInFinder, SlateCommandID.copyPath,
                         ]
@@ -4333,6 +4425,8 @@ struct FileTreeSidebar: View {
                         let availableIDs = Set(projection.evaluations.map(\.id))
                         let hasCreation = creationIDs.contains(where: availableIDs.contains)
                         let hasManagement = managementIDs.contains(where: availableIDs.contains)
+                        let hasSort = sortIDs.contains(where: availableIDs.contains)
+                        let hasPins = pinIDs.contains(where: availableIDs.contains)
                         let hasInspection = inspectionIDs.contains(where: availableIDs.contains)
                         let hasTrash = trashIDs.contains(where: availableIDs.contains)
 
@@ -4355,7 +4449,39 @@ struct FileTreeSidebar: View {
                                     SlateCommandID.renameEntry, SlateCommandID.moveTo
                                 ])
                         }
-                        if (hasCreation || hasManagement) && hasInspection {
+                        if (hasCreation || hasManagement) && (hasSort || hasPins) {
+                            Divider()
+                        }
+                        if hasSort {
+                            // FL-06 (#658): the per-folder Sort submenu — the
+                            // same catalog radio set the View menu and toolbar
+                            // project, targeting this exact folder.
+                            Menu {
+                                SidebarSortMenuItems(
+                                    evaluations: projection.evaluations,
+                                    effectiveChoice: appState.sidebarOrganization
+                                        .prefs.effectiveChoice(forFolder: node.path)
+                                        .normalized,
+                                    dispatch: { intent in
+                                        do {
+                                            _ = try appState.dispatchSidebarAction(intent)
+                                        } catch {
+                                            appState.postMutationAnnouncement(
+                                                error.sidebarActionAnnouncement)
+                                        }
+                                    })
+                            } label: {
+                                SlateSymbol.sortOrder.label("Sort")
+                            }
+                        }
+                        if hasPins {
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [SlateCommandID.sidebarUnpinAll])
+                        }
+                        if (hasCreation || hasManagement || hasSort || hasPins)
+                            && hasInspection
+                        {
                             Divider()
                         }
                         if hasInspection {
@@ -4366,7 +4492,9 @@ struct FileTreeSidebar: View {
                                     SlateCommandID.copyPath,
                                 ])
                         }
-                        if (hasCreation || hasManagement || hasInspection) && hasTrash {
+                        if (hasCreation || hasManagement || hasSort || hasPins
+                            || hasInspection) && hasTrash
+                        {
                             Divider()
                         }
                         if hasTrash {
@@ -4410,7 +4538,8 @@ struct FileTreeSidebar: View {
                     publishedSnapshot: $0,
                     structuralMutationDisabledReason:
                         appState.structuralMutationDisabledReason,
-                    actionDisabledReasons: sidebarRowActionDisabledReasons)
+                    actionDisabledReasons: sidebarRowActionDisabledReasons(
+                        for: sidebarSelectionItem(for: node)))
             }
             let openPresentation = Self.fileRowOpenAccessibilityPresentation(
                 openEvaluation: voiceOverProjection?.openEvaluation,
@@ -4511,7 +4640,8 @@ struct FileTreeSidebar: View {
                         publishedSnapshot: publishedSnapshot,
                         structuralMutationDisabledReason:
                             appState.structuralMutationDisabledReason,
-                        actionDisabledReasons: sidebarRowActionDisabledReasons)
+                        actionDisabledReasons: sidebarRowActionDisabledReasons(
+                            for: sidebarSelectionItem(for: node)))
                     if projection.targetSnapshot.items.count == 1,
                         projection.targetSnapshot.items.first?.isDirectory == false
                     {
@@ -4519,6 +4649,10 @@ struct FileTreeSidebar: View {
                             SlateCommandID.renameEntry,
                             SlateCommandID.moveTo,
                             SlateCommandID.duplicateEntry,
+                        ]
+                        let pinIDs = [
+                            SlateCommandID.sidebarPinNote,
+                            SlateCommandID.sidebarUnpinNote,
                         ]
                         let revealIDs = [SlateCommandID.revealInFinder]
                         let copyIDs = [
@@ -4531,6 +4665,7 @@ struct FileTreeSidebar: View {
                             SlateCommandID.sidebarOpen)
                         let hasManagement = managementIDs.contains(
                             where: availableIDs.contains)
+                        let hasPins = pinIDs.contains(where: availableIDs.contains)
                         let hasReveal = revealIDs.contains(where: availableIDs.contains)
                         let hasCopy = copyIDs.contains(where: availableIDs.contains)
                         let hasTrash = trashIDs.contains(where: availableIDs.contains)
@@ -4563,6 +4698,17 @@ struct FileTreeSidebar: View {
                                     SlateCommandID.renameEntry,
                                     SlateCommandID.moveTo,
                                     SlateCommandID.duplicateEntry,
+                                ])
+                        }
+                        if hasPins {
+                            // FL-06 (#659): the applicable pin direction only
+                            // — the row-targeted reasons omit the other one.
+                            Divider()
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [
+                                    SlateCommandID.sidebarPinNote,
+                                    SlateCommandID.sidebarUnpinNote,
                                 ])
                         }
                         if hasReveal || hasCopy {

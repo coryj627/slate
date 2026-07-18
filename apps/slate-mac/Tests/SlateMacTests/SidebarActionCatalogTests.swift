@@ -46,6 +46,17 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "slate.file.revealInFinder",
                 "slate.file.copyPath",
                 "slate.sidebar.copyWikilink",
+                "slate.sidebar.pinNote",
+                "slate.sidebar.unpinNote",
+                "slate.sidebar.unpinAllInFolder",
+                "slate.sidebar.sortNameAsc",
+                "slate.sidebar.sortNameDesc",
+                "slate.sidebar.sortCreatedDesc",
+                "slate.sidebar.sortCreatedAsc",
+                "slate.sidebar.sortModifiedDesc",
+                "slate.sidebar.sortModifiedAsc",
+                "slate.sidebar.toggleDateGrouping",
+                "slate.sidebar.useVaultDefaultSort",
                 "slate.file.delete",
             ])
         XCTAssertEqual(
@@ -54,14 +65,24 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "Open", "New Note", "New Folder", "New Note from Template…",
                 "Import Files and Folders…",
                 "Rename…", "Move To…", "Duplicate", "Reveal in Finder",
-                "Copy Path", "Copy Wikilink", "Move to Trash",
+                "Copy Path", "Copy Wikilink",
+                "Pin to Top of Folder", "Unpin", "Unpin All in Folder",
+                "Sort by Name (A to Z)", "Sort by Name (Z to A)",
+                "Sort by Created (Newest First)", "Sort by Created (Oldest First)",
+                "Sort by Modified (Newest First)", "Sort by Modified (Oldest First)",
+                "Group by Date", "Use Vault Default Sort",
+                "Move to Trash",
             ])
         XCTAssertEqual(
             SidebarActionCatalog.actions.map(\.symbol),
             [
                 .open, .newNote, .newFolder, .newFromTemplate,
                 .importFilesAndFolders, .rename, .moveTo,
-                .duplicate, .revealInFinder, .copyPath, .copyWikilink, .trash,
+                .duplicate, .revealInFinder, .copyPath, .copyWikilink,
+                .pin, .unpin, .unpin,
+                .sortOrder, .sortOrder, .sortOrder, .sortOrder, .sortOrder,
+                .sortOrder, .dateGrouping, .sortOrder,
+                .trash,
             ])
         XCTAssertEqual(
             Set(SidebarActionCatalog.actions.map(\.id)).count,
@@ -162,15 +183,30 @@ final class SidebarActionCatalogTests: XCTestCase {
         let folders = snapshot(
             [item("A", directory: true), item("B", directory: true)], focusedPath: "B")
 
-        XCTAssertEqual(ids(empty), [
-            SlateCommandID.newNote, SlateCommandID.newFolder,
-            SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
-        ])
-        XCTAssertEqual(ids(markdown), SidebarActionCatalog.actions.map(\.id))
+        let organizationLocationIDs: [String] = [
+            SlateCommandID.sidebarSortNameAsc, SlateCommandID.sidebarSortNameDesc,
+            SlateCommandID.sidebarSortCreatedDesc, SlateCommandID.sidebarSortCreatedAsc,
+            SlateCommandID.sidebarSortModifiedDesc, SlateCommandID.sidebarSortModifiedAsc,
+            SlateCommandID.sidebarToggleDateGrouping,
+            SlateCommandID.sidebarUseVaultDefaultSort,
+        ]
+        XCTAssertEqual(
+            ids(empty),
+            [
+                SlateCommandID.newNote, SlateCommandID.newFolder,
+                SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
+            ] + organizationLocationIDs)
+        // A single file takes every verb except the folder-only Unpin All.
+        XCTAssertEqual(
+            ids(markdown),
+            SidebarActionCatalog.actions.map(\.id).filter {
+                $0 != SlateCommandID.sidebarUnpinAll
+            })
         XCTAssertEqual(
             ids(nonMarkdown),
             SidebarActionCatalog.actions.map(\.id).filter {
                 $0 != SlateCommandID.sidebarCopyWikilink
+                    && $0 != SlateCommandID.sidebarUnpinAll
             })
         XCTAssertEqual(
             ids(folder),
@@ -179,8 +215,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
                 SlateCommandID.renameEntry,
                 SlateCommandID.moveTo, SlateCommandID.revealInFinder,
-                SlateCommandID.copyPath, SlateCommandID.deleteEntry,
-            ])
+                SlateCommandID.copyPath, SlateCommandID.sidebarUnpinAll,
+            ] + organizationLocationIDs + [SlateCommandID.deleteEntry])
         XCTAssertEqual(
             ids(files),
             [
@@ -291,7 +327,9 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.sidebarOpen, SlateCommandID.renameEntry,
                 SlateCommandID.moveTo, SlateCommandID.duplicateEntry,
                 SlateCommandID.revealInFinder, SlateCommandID.copyPath,
-                SlateCommandID.sidebarCopyWikilink, SlateCommandID.deleteEntry,
+                SlateCommandID.sidebarCopyWikilink,
+                SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
             SidebarActionCatalog.project(surface: .voiceOver, snapshot: markdown).map(\.id),
@@ -299,6 +337,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.renameEntry, SlateCommandID.moveTo,
                 SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                 SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
+                SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                 SlateCommandID.deleteEntry,
             ],
             "VoiceOver Open belongs only to the conditional default action")
@@ -346,7 +385,9 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarOpen, SlateCommandID.renameEntry,
                     SlateCommandID.moveTo, SlateCommandID.duplicateEntry,
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
-                    SlateCommandID.sidebarCopyWikilink, SlateCommandID.deleteEntry,
+                    SlateCommandID.sidebarCopyWikilink,
+                    SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.deleteEntry,
                 ]
             ),
             (
@@ -355,6 +396,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarOpen, SlateCommandID.renameEntry,
                     SlateCommandID.moveTo, SlateCommandID.duplicateEntry,
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
+                    SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -365,6 +407,15 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.newFromTemplate, SlateCommandID.renameEntry,
                     SlateCommandID.moveTo,
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
+                    SlateCommandID.sidebarUnpinAll,
+                    SlateCommandID.sidebarSortNameAsc,
+                    SlateCommandID.sidebarSortNameDesc,
+                    SlateCommandID.sidebarSortCreatedDesc,
+                    SlateCommandID.sidebarSortCreatedAsc,
+                    SlateCommandID.sidebarSortModifiedDesc,
+                    SlateCommandID.sidebarSortModifiedAsc,
+                    SlateCommandID.sidebarToggleDateGrouping,
+                    SlateCommandID.sidebarUseVaultDefaultSort,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -388,8 +439,18 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SidebarActionCatalog.project(
                     surface: .voiceOver, snapshot: selection
                 ).map(\.id),
-                expected.filter { $0 != SlateCommandID.sidebarOpen },
-                "VoiceOver is the same concise matrix minus default-owned Open")
+                expected.filter {
+                    $0 != SlateCommandID.sidebarOpen
+                        && $0 != SlateCommandID.sidebarSortNameAsc
+                        && $0 != SlateCommandID.sidebarSortNameDesc
+                        && $0 != SlateCommandID.sidebarSortCreatedDesc
+                        && $0 != SlateCommandID.sidebarSortCreatedAsc
+                        && $0 != SlateCommandID.sidebarSortModifiedDesc
+                        && $0 != SlateCommandID.sidebarSortModifiedAsc
+                        && $0 != SlateCommandID.sidebarToggleDateGrouping
+                        && $0 != SlateCommandID.sidebarUseVaultDefaultSort
+                },
+                "VoiceOver is the concise matrix minus default-owned Open and the sort radio set")
         }
         XCTAssertEqual(
             contextCases.filter { $0.1.contains(SlateCommandID.newFromTemplate) }.count,
@@ -420,10 +481,30 @@ final class SidebarActionCatalogTests: XCTestCase {
                 surface: surface,
                 snapshot: folder,
                 structuralMutationDisabledReason: busy)
+            let expected: [String]
+            if surface == .contextMenu {
+                expected = [
+                    SlateCommandID.revealInFinder, SlateCommandID.copyPath,
+                    SlateCommandID.sidebarUnpinAll,
+                    SlateCommandID.sidebarSortNameAsc,
+                    SlateCommandID.sidebarSortNameDesc,
+                    SlateCommandID.sidebarSortCreatedDesc,
+                    SlateCommandID.sidebarSortCreatedAsc,
+                    SlateCommandID.sidebarSortModifiedDesc,
+                    SlateCommandID.sidebarSortModifiedAsc,
+                    SlateCommandID.sidebarToggleDateGrouping,
+                    SlateCommandID.sidebarUseVaultDefaultSort,
+                ]
+            } else {
+                expected = [
+                    SlateCommandID.revealInFinder, SlateCommandID.copyPath,
+                    SlateCommandID.sidebarUnpinAll,
+                ]
+            }
             XCTAssertEqual(
                 projected.map(\.id),
-                [SlateCommandID.revealInFinder, SlateCommandID.copyPath],
-                "context and VoiceOver omit structural and temporary unavailability")
+                expected,
+                "context and VoiceOver omit structural and temporary unavailability; preference edits never block on the structural gate")
             XCTAssertTrue(projected.allSatisfy { $0.disabledReason == nil })
         }
     }

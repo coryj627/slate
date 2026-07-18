@@ -62,8 +62,15 @@ enum SlateSymbol: CaseIterable {
     /// Base tab glyph (Milestone N, #702) — marks `.base` tabs in the
     /// tab strip; the tab's AX value carries "base" for VoiceOver.
     case base
-    /// Pinned saved-query glyph (Milestone N, #709).
+    /// Pinned saved-query glyph (Milestone N, #709); also the FL-06 pinned-
+    /// note badge and Pin command glyph.
     case pin
+    /// Unpin command glyph (FL-06, #659).
+    case unpin
+    /// Sidebar sort/organization commands and toolbar menu (FL-06, #658).
+    case sortOrder
+    /// Date-bucket grouping toggle (FL-06, #658).
+    case dateGrouping
     case splitRight
     case readingMode
     case editingMode
@@ -209,6 +216,9 @@ enum SlateSymbol: CaseIterable {
         case .canvas: return "Canvas"
         case .base: return "Base"
         case .pin: return "Pin"
+        case .unpin: return "Unpin"
+        case .sortOrder: return "Sort"
+        case .dateGrouping: return "Group by Date"
         case .closeTab: return "Close tab"
         case .splitRight: return "Split right"
         case .readingMode: return "Reading mode"
@@ -300,6 +310,9 @@ enum SlateSymbol: CaseIterable {
         case .canvas: return ("rectangle.3.group", "rectangle.3.group")
         case .base: return ("tablecells", "tablecells")
         case .pin: return ("pin", "pin")
+        case .unpin: return ("pin.slash", "pin.slash")
+        case .sortOrder: return ("arrow.up.arrow.down", "arrow.up.arrow.down")
+        case .dateGrouping: return ("calendar", "calendar")
         case .closeTab: return ("xmark", "xmark")
         case .splitRight: return ("rectangle.split.2x1", "rectangle.split.2x1")
         case .readingMode: return ("text.book.closed", "book")

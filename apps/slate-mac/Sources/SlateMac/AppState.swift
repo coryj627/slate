@@ -2136,6 +2136,20 @@ final class AppState: ObservableObject {
             guard admitted else { throw sidebarActionFailure(rejected) }
             return .completed(actionID: intent.actionID)
 
+        case SlateCommandID.sidebarSortNameAsc,
+            SlateCommandID.sidebarSortNameDesc,
+            SlateCommandID.sidebarSortCreatedDesc,
+            SlateCommandID.sidebarSortCreatedAsc,
+            SlateCommandID.sidebarSortModifiedDesc,
+            SlateCommandID.sidebarSortModifiedAsc,
+            SlateCommandID.sidebarToggleDateGrouping,
+            SlateCommandID.sidebarUseVaultDefaultSort,
+            SlateCommandID.sidebarPinNote,
+            SlateCommandID.sidebarUnpinNote,
+            SlateCommandID.sidebarUnpinAll:
+            try dispatchSidebarOrganizationAction(intent, rejected: rejected)
+            return .completed(actionID: intent.actionID)
+
         default:
             throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
         }
@@ -2416,6 +2430,15 @@ final class AppState: ObservableObject {
             reasons[SlateCommandID.sidebarCopyWikilink] =
                 Self.sidebarWikilinkCopyPendingReason
         }
+        // FL-06 organization availability follows the published selection's
+        // single target (nil covers both empty and multi selections; multi is
+        // already capability-disabled upstream of these reasons).
+        let organizationTarget = sidebarSelectionSnapshot.flatMap { snapshot in
+            snapshot.items.count == 1 ? snapshot.items.first : nil
+        }
+        reasons.merge(
+            sidebarOrganizationActionReasons(target: organizationTarget)
+        ) { existing, _ in existing }
         return reasons
     }
 
@@ -4833,6 +4856,440 @@ final class AppState: ObservableObject {
     private var sidebarVaultPrefsRetryTask: Task<Void, Never>?
     private var sidebarVaultPrefsRetryGeneration = 0
 
+    // MARK: - Sidebar organization (FL-06, #658/#659)
+
+    /// One published value carries the vault's authored organization: the
+    /// sort/grouping preferences (vault default + per-folder overrides) and
+    /// per-folder pins. The tree derives every level order from this.
+    struct SidebarOrganizationState: Equatable {
+        var prefs = SidebarOrganizationPrefs()
+        var pins = SidebarPins()
+    }
+
+    @Published private(set) var sidebarOrganization = SidebarOrganizationState()
+    private var sidebarPinPruneLedger = SidebarPinPruneLedger()
+    /// Serializes `.slate/sidebar.json` writes: each persist awaits its
+    /// predecessor, so two quick commands cannot interleave read-modify-write
+    /// cycles even though each cycle also holds the cross-process lock.
+    private var sidebarOrganizationPersistChain: Task<Void, Never>?
+    private(set) var sidebarOrganizationPersistTaskForTesting: Task<Void, Never>?
+
+    private func resetSidebarOrganizationState() {
+        sidebarOrganizationPersistChain = nil
+        sidebarOrganizationPersistTaskForTesting = nil
+        sidebarPinPruneLedger.reset()
+        if sidebarOrganization != SidebarOrganizationState() {
+            sidebarOrganization = SidebarOrganizationState()
+        }
+    }
+
+    /// Availability the pure catalog cannot own: read-only preference files
+    /// disable the whole organization set with the notice's reason, and the
+    /// pin/override verbs reflect the target's current state so contextual
+    /// surfaces show exactly the applicable direction.
+    func sidebarOrganizationActionReasons(
+        target: SidebarSelectionItem?
+    ) -> [String: String] {
+        var reasons: [String: String] = [:]
+        if let notice = sidebarVaultPrefsNotice {
+            let blocked =
+                "Sidebar organization can't change while its settings file is "
+                + "read-only. \(notice.localizedDescription)"
+            for id in SlateCommandID.sidebarOrganizationCommands {
+                reasons[id] = blocked
+            }
+            return reasons
+        }
+
+        if let target, !target.isDirectory {
+            let folder = SidebarPins.folder(of: target.path)
+            if sidebarOrganization.pins.isPinned(target.path, inFolder: folder) {
+                reasons[SlateCommandID.sidebarPinNote] = "This note is already pinned."
+            } else {
+                reasons[SlateCommandID.sidebarUnpinNote] = "This note isn't pinned."
+            }
+        }
+
+        if let target, target.isDirectory,
+            sidebarOrganization.pins.paths(forFolder: target.path).isEmpty
+        {
+            reasons[SlateCommandID.sidebarUnpinAll] = "No pinned notes in this folder."
+        }
+
+        let container: String
+        if let target {
+            container = target.isDirectory
+                ? target.path : SidebarPins.folder(of: target.path)
+        } else {
+            container = ""
+        }
+        if container.isEmpty {
+            reasons[SlateCommandID.sidebarUseVaultDefaultSort] =
+                "The vault default applies here."
+        } else if sidebarOrganization.prefs.folderOverrides[container] == nil {
+            reasons[SlateCommandID.sidebarUseVaultDefaultSort] =
+                "This folder uses the vault default."
+        }
+        return reasons
+    }
+
+    /// The published selection's organization container: a selected folder is
+    /// its own container, a selected file targets its parent, anything else
+    /// targets the vault default. Drives the menu-bar/toolbar radio state.
+    var sidebarOrganizationMenuTargetChoice: SidebarOrganizationChoice {
+        let target = sidebarSelectionSnapshot.flatMap { snapshot in
+            snapshot.items.count == 1 ? snapshot.items.first : nil
+        }
+        let container: String
+        if let target {
+            container = target.isDirectory
+                ? target.path : SidebarPins.folder(of: target.path)
+        } else {
+            container = ""
+        }
+        return sidebarOrganization.prefs
+            .effectiveChoice(forFolder: container).normalized
+    }
+
+    /// The one FL-06 mutation funnel: reflect the change into the published
+    /// state synchronously (the tree re-sorts immediately), announce it, and
+    /// persist through the store's locked read-modify-write on a serialized
+    /// background chain. A failed write reconciles the published state from
+    /// disk truth and reports honestly — it never leaves silent divergence.
+    private func mutateSidebarOrganization(
+        announce announcement: String?,
+        apply: @escaping @Sendable (inout [String: Any]) -> Void,
+        reflect: (inout SidebarOrganizationState) -> Void
+    ) throws {
+        if let notice = sidebarVaultPrefsNotice {
+            throw sidebarActionFailure(
+                "Sidebar organization can't change while its settings file is "
+                    + "read-only. \(notice.localizedDescription)")
+        }
+        guard let store = sidebarVaultPrefsStore else {
+            throw sidebarActionFailure("Open a vault to use Sidebar actions.")
+        }
+
+        var next = sidebarOrganization
+        reflect(&next)
+        if next != sidebarOrganization {
+            sidebarOrganization = next
+        }
+        if let announcement {
+            lastMutationAnnouncement = announcement
+            announcer.post(announcement, priority: .medium)
+        }
+
+        let previous = sidebarOrganizationPersistChain
+        let session = currentSession
+        let task = Task { [weak self] in
+            await previous?.value
+            let outcome: Result<SidebarVaultPrefsReadResult?, Error> =
+                await Task.detached(priority: .utility) {
+                    do {
+                        try store.update { root in apply(&root) }
+                        return .success(nil)
+                    } catch {
+                        // Reconcile candidate: what the file actually holds.
+                        return .failure(error)
+                    }
+                }.value
+            guard let self, self.currentSession === session else { return }
+            if case let .failure(error) = outcome {
+                let recovered = await Task.detached(priority: .utility) {
+                    store.read()
+                }.value
+                guard self.currentSession === session else { return }
+                let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
+                self.sidebarOrganization = SidebarOrganizationState(
+                    prefs: decoded.prefs, pins: decoded.pins)
+                let failure =
+                    "Sidebar organization could not be saved. "
+                    + error.localizedDescription
+                self.lastMutationAnnouncement = failure
+                self.announcer.post(failure, priority: .medium)
+            }
+        }
+        sidebarOrganizationPersistChain = task
+        sidebarOrganizationPersistTaskForTesting = task
+    }
+
+    /// Dispatch seam for the eleven FL-06 organization commands. Container
+    /// resolution reuses the creation-parent contract: a selected folder is
+    /// its own container, a selected file targets its parent, and an empty
+    /// selection targets the vault default.
+    func dispatchSidebarOrganizationAction(
+        _ intent: SidebarActionInvocationIntent,
+        rejected: String
+    ) throws {
+        switch intent.actionID {
+        case SlateCommandID.sidebarSortNameAsc:
+            try setSidebarSort(.init(field: .name, direction: .asc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortNameDesc:
+            try setSidebarSort(.init(field: .name, direction: .desc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortCreatedDesc:
+            try setSidebarSort(.init(field: .created, direction: .desc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortCreatedAsc:
+            try setSidebarSort(.init(field: .created, direction: .asc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortModifiedDesc:
+            try setSidebarSort(.init(field: .modified, direction: .desc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortModifiedAsc:
+            try setSidebarSort(.init(field: .modified, direction: .asc), intent: intent, rejected: rejected)
+
+        case SlateCommandID.sidebarToggleDateGrouping:
+            let container = try canonicalSidebarCreationParent(
+                for: intent.snapshot, rejection: rejected)
+            let effective = sidebarOrganization.prefs.effectiveChoice(
+                forFolder: container)
+            let next: SidebarGroupingOption =
+                effective.grouping == .dateBuckets ? .none : .dateBuckets
+            var announced = effective
+            announced.grouping = next
+            if container.isEmpty {
+                try mutateSidebarOrganization(
+                    announce: announced.sortAnnouncement
+                ) { root in
+                    var choice = SidebarOrganizationSchema.decode(root: root)
+                        .prefs.vaultChoice
+                    choice.grouping = next
+                    SidebarOrganizationSchema.setVaultChoice(&root, choice)
+                } reflect: { state in
+                    state.prefs.vaultChoice.grouping = next
+                }
+            } else {
+                var override = sidebarOrganization.prefs
+                    .folderOverrides[container]
+                    ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
+                override.grouping = next
+                let frozen = override
+                try mutateSidebarOrganization(
+                    announce: announced.sortAnnouncement
+                ) { root in
+                    SidebarOrganizationSchema.setFolderOverride(
+                        &root, folder: container, override: frozen)
+                } reflect: { state in
+                    state.prefs.folderOverrides[container] = frozen
+                }
+            }
+
+        case SlateCommandID.sidebarUseVaultDefaultSort:
+            let container = try canonicalSidebarCreationParent(
+                for: intent.snapshot, rejection: rejected)
+            guard !container.isEmpty else {
+                throw sidebarActionFailure("The vault default applies here.")
+            }
+            guard sidebarOrganization.prefs.folderOverrides[container] != nil else {
+                throw sidebarActionFailure("This folder uses the vault default.")
+            }
+            let announced = sidebarOrganization.prefs.vaultChoice
+            try mutateSidebarOrganization(
+                announce: announced.sortAnnouncement
+            ) { root in
+                SidebarOrganizationSchema.clearFolderOverride(
+                    &root, folder: container)
+            } reflect: { state in
+                state.prefs.folderOverrides[container] = nil
+            }
+
+        case SlateCommandID.sidebarPinNote:
+            let target = try singleFileTarget(of: intent, rejected: rejected)
+            let folder = SidebarPins.folder(of: target)
+            guard
+                !sidebarOrganization.pins.isPinned(target, inFolder: folder)
+            else {
+                throw sidebarActionFailure("This note is already pinned.")
+            }
+            var paths = sidebarOrganization.pins.paths(forFolder: folder)
+            paths.append(target)
+            let frozen = paths
+            try mutateSidebarOrganization(announce: "Pinned.") { root in
+                SidebarOrganizationSchema.setPins(
+                    &root, folder: folder, paths: frozen)
+            } reflect: { state in
+                state.pins.pin(target, inFolder: folder)
+            }
+
+        case SlateCommandID.sidebarUnpinNote:
+            let target = try singleFileTarget(of: intent, rejected: rejected)
+            let folder = SidebarPins.folder(of: target)
+            guard sidebarOrganization.pins.isPinned(target, inFolder: folder)
+            else {
+                throw sidebarActionFailure("This note isn't pinned.")
+            }
+            let frozen = sidebarOrganization.pins.paths(forFolder: folder)
+                .filter { $0 != target }
+            try mutateSidebarOrganization(announce: "Unpinned.") { root in
+                SidebarOrganizationSchema.setPins(
+                    &root, folder: folder, paths: frozen)
+            } reflect: { state in
+                state.pins.unpin(target, inFolder: folder)
+            }
+
+        case SlateCommandID.sidebarUnpinAll:
+            guard intent.snapshot.items.count == 1,
+                let item = intent.snapshot.items.first, item.isDirectory
+            else {
+                throw sidebarActionFailure(rejected)
+            }
+            let folder = item.path
+            let count = sidebarOrganization.pins.paths(forFolder: folder).count
+            guard count > 0 else {
+                throw sidebarActionFailure("No pinned notes in this folder.")
+            }
+            let noun = count == 1 ? "note" : "notes"
+            try mutateSidebarOrganization(
+                announce: "Unpinned \(count) \(noun)."
+            ) { root in
+                SidebarOrganizationSchema.setPins(&root, folder: folder, paths: [])
+            } reflect: { state in
+                state.pins.unpinAll(inFolder: folder)
+            }
+
+        default:
+            throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
+        }
+    }
+
+    private func singleFileTarget(
+        of intent: SidebarActionInvocationIntent, rejected: String
+    ) throws -> String {
+        guard intent.snapshot.items.count == 1,
+            let item = intent.snapshot.items.first, !item.isDirectory
+        else {
+            throw sidebarActionFailure(rejected)
+        }
+        return item.path
+    }
+
+    private func setSidebarSort(
+        _ option: SidebarSortOption,
+        intent: SidebarActionInvocationIntent,
+        rejected: String
+    ) throws {
+        let container = try canonicalSidebarCreationParent(
+            for: intent.snapshot, rejection: rejected)
+        if container.isEmpty {
+            var announced = sidebarOrganization.prefs.vaultChoice
+            announced.sort = option
+            try mutateSidebarOrganization(
+                announce: announced.sortAnnouncement
+            ) { root in
+                var choice = SidebarOrganizationSchema.decode(root: root)
+                    .prefs.vaultChoice
+                choice.sort = option
+                SidebarOrganizationSchema.setVaultChoice(&root, choice)
+            } reflect: { state in
+                state.prefs.vaultChoice.sort = option
+            }
+        } else {
+            var override = sidebarOrganization.prefs.folderOverrides[container]
+                ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
+            override.sort = option
+            let frozen = override
+            var announced = sidebarOrganization.prefs.effectiveChoice(
+                forFolder: container)
+            announced.sort = option
+            try mutateSidebarOrganization(
+                announce: announced.sortAnnouncement
+            ) { root in
+                SidebarOrganizationSchema.setFolderOverride(
+                    &root, folder: container, override: frozen)
+            } reflect: { state in
+                state.prefs.folderOverrides[container] = frozen
+            }
+        }
+    }
+
+    /// Keep pins consistent with every structural mutation (fl3 spec
+    /// §FL3-2.3): renames retarget in place, moves out of the folder and
+    /// deletions drop, and folder transforms carry their whole subtree.
+    /// Persistence is silent — the mutation's own announcement already spoke.
+    func applySidebarPinsMutation(_ kind: TreeMutation.Kind) {
+        guard !sidebarOrganization.pins.isEmpty else { return }
+        var pins = sidebarOrganization.pins
+        var changed = false
+        switch kind {
+        case let .rename(oldPath, newPath),
+            let .move(oldPath, newPath, _, _):
+            // File and folder transforms are disjoint on the pins model, so
+            // applying both is safe without knowing the node kind.
+            changed = pins.applyRename(from: oldPath, to: newPath)
+            changed = pins.applyFolderRename(from: oldPath, to: newPath) || changed
+        case let .delete(path, _, wasDirectory):
+            changed = pins.applyDelete(
+                paths: wasDirectory ? [] : [path],
+                deletedFolders: wasDirectory ? [path] : [])
+        case let .batchMove(standing, _):
+            for change in standing {
+                if change.isDirectory {
+                    changed =
+                        pins.applyFolderRename(
+                            from: change.oldPath, to: change.newPath) || changed
+                } else {
+                    changed =
+                        pins.applyRename(
+                            from: change.oldPath, to: change.newPath) || changed
+                }
+            }
+        case let .batchTrash(trashed):
+            changed = pins.applyDelete(
+                paths: trashed.filter { !$0.isDirectory }.map(\.path),
+                deletedFolders: trashed.filter(\.isDirectory).map(\.path))
+        case let .importBatch(_, standing, _):
+            for change in standing {
+                if change.isDirectory {
+                    changed =
+                        pins.applyFolderRename(
+                            from: change.oldPath, to: change.newPath) || changed
+                } else {
+                    changed =
+                        pins.applyRename(
+                            from: change.oldPath, to: change.newPath) || changed
+                }
+            }
+        case .createFolder, .createNote, .batchReconcile:
+            return
+        }
+        guard changed else { return }
+        persistSidebarPinsSilently(pins)
+    }
+
+    /// Drop authored pin entries that no longer resolve to a real row —
+    /// invoked lazily from level presentation, at most once per folder per
+    /// session, and never against a read-only preference file.
+    func pruneStaleSidebarPins(forFolder folder: String, stale: [String]) {
+        guard !stale.isEmpty,
+            sidebarVaultPrefsNotice == nil,
+            sidebarPinPruneLedger.shouldPrune(folder: folder)
+        else { return }
+        sidebarPinPruneLedger.markPruned(folder: folder)
+        let staleSet = Set(stale)
+        var pins = sidebarOrganization.pins
+        let remaining = pins.paths(forFolder: folder).filter {
+            !staleSet.contains($0)
+        }
+        guard remaining.count != pins.paths(forFolder: folder).count else { return }
+        pins.replacePaths(remaining, forFolder: folder)
+        persistSidebarPinsSilently(pins)
+    }
+
+    private func persistSidebarPinsSilently(_ pins: SidebarPins) {
+        let frozen = pins.byFolder
+        try? mutateSidebarOrganization(announce: nil) { root in
+            for (folder, paths) in frozen {
+                SidebarOrganizationSchema.setPins(&root, folder: folder, paths: paths)
+            }
+            // Folders whose last pin vanished must clear their stored entry.
+            if let stored = root[SidebarOrganizationSchema.pinsKey] as? [String: Any] {
+                for folder in stored.keys where frozen[folder] == nil {
+                    SidebarOrganizationSchema.setPins(&root, folder: folder, paths: [])
+                }
+            }
+        } reflect: { state in
+            state.pins = pins
+        }
+    }
+
     /// Injectable targeted lookup for deterministic coalescing tests. The
     /// production closure uses the exact-path Rust projection and runs only
     /// from a detached task.
@@ -7025,6 +7482,7 @@ final class AppState: ObservableObject {
         // warnings or a writer targeting the previous root.
         sidebarVaultPrefsStore = nil
         sidebarVaultPrefsNotice = nil
+        resetSidebarOrganizationState()
         // Commit the old operation lifecycle before attempting the new open.
         // Both success and either catch path replace/clear `currentSession`, so
         // provider progress, Task 3 work, and structural-token ownership must
@@ -7259,6 +7717,7 @@ final class AppState: ObservableObject {
         } catch let error as VaultError {
             sidebarVaultPrefsStore = nil
             sidebarVaultPrefsNotice = nil
+            resetSidebarOrganizationState()
             currentSession = nil
             currentVaultURL = nil
             sidebarSelectionSnapshot = nil
@@ -7266,6 +7725,7 @@ final class AppState: ObservableObject {
         } catch {
             sidebarVaultPrefsStore = nil
             sidebarVaultPrefsNotice = nil
+            resetSidebarOrganizationState()
             currentSession = nil
             currentVaultURL = nil
             sidebarSelectionSnapshot = nil
@@ -7282,6 +7742,16 @@ final class AppState: ObservableObject {
         let result = store.read()
         sidebarVaultPrefsStore = store
         sidebarVaultPrefsNotice = result.notice
+        // FL-06: adopt the vault's authored organization in the same step.
+        // Unsafe input already resolved to the default root, so this can't
+        // interpret unreadable data.
+        sidebarPinPruneLedger.reset()
+        let decoded = SidebarOrganizationSchema.decode(root: result.root)
+        let organization = SidebarOrganizationState(
+            prefs: decoded.prefs, pins: decoded.pins)
+        if organization != sidebarOrganization {
+            sidebarOrganization = organization
+        }
     }
 
     /// Re-read a repaired `.slate/sidebar.json` without making the user close
@@ -7302,8 +7772,8 @@ final class AppState: ObservableObject {
         let generation = sidebarVaultPrefsRetryGeneration
         isRetryingSidebarVaultPreferences = true
         let task = Task { [weak self] in
-            let notice = await Task.detached(priority: .userInitiated) {
-                store.read().notice
+            let result = await Task.detached(priority: .userInitiated) {
+                store.read()
             }.value
             guard let self else { return }
             guard generation == self.sidebarVaultPrefsRetryGeneration else { return }
@@ -7317,8 +7787,16 @@ final class AppState: ObservableObject {
                 self.currentSession === session,
                 self.sidebarVaultPrefsStore?.fileURL == store.fileURL
             else { return }
-            self.sidebarVaultPrefsNotice = notice
-            if let notice {
+            self.sidebarVaultPrefsNotice = result.notice
+            // FL-06: a successful repair also re-adopts the file's authored
+            // organization sections in the same publish.
+            let decoded = SidebarOrganizationSchema.decode(root: result.root)
+            let organization = SidebarOrganizationState(
+                prefs: decoded.prefs, pins: decoded.pins)
+            if organization != self.sidebarOrganization {
+                self.sidebarOrganization = organization
+            }
+            if let notice = result.notice {
                 self.announcer.post(
                     "Sidebar settings still use defaults. \(notice.localizedDescription)",
                     priority: .medium)
@@ -7984,6 +8462,7 @@ final class AppState: ObservableObject {
         currentVaultURL = nil
         sidebarVaultPrefsStore = nil
         sidebarVaultPrefsNotice = nil
+        resetSidebarOrganizationState()
         files = []
         scanError = nil
         stopSyncMarkerWatcher()  // #638: no vault, no watch
@@ -13036,6 +13515,9 @@ final class AppState: ObservableObject {
         structuralMutationToken: Int? = nil,
         importOwnedScanGeneration: Int? = nil
     ) {
+        // FL-06: pins follow every structural transform before the tree
+        // refetches, so the re-fetched levels already see consistent pins.
+        applySidebarPinsMutation(kind)
         treeMutationCounter += 1
         treeMutation = TreeMutation(
             token: treeMutationCounter,

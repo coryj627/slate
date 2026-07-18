@@ -265,6 +265,35 @@ final class SidebarOrganizationTreeTests: XCTestCase {
     XCTAssertEqual(spy.calls, [""])
   }
 
+  // MARK: - Select-after-mutate stays path-based
+
+  func testPostMutationFocusResolvesByPathUnderAnyActiveSort() {
+    // The U2-6 re-find seam locates rows by stable path, never index. Under
+    // a date sort that moves rows around, the path lookup must still resolve
+    // the same node (fl3 spec §FL3-1.5's easy regression).
+    let now = instant(2026, 7, 18)
+    let spy = FetchSpy([
+      "": listing(files: [
+        file("a.md", mtime: 1_000),
+        file("b.md", mtime: 9_000),
+        file("c.md", mtime: 5_000),
+      ])
+    ])
+    let vm = FileTreeViewModel()
+    var prefs = SidebarOrganizationPrefs()
+    prefs.vaultChoice = SidebarOrganizationChoice(
+      sort: SidebarSortOption(field: .modified, direction: .desc), grouping: .none)
+    vm.applyOrganization(context(prefs: prefs, now: now))
+    vm.bindForTesting(fetcher: spy.fetch)
+    XCTAssertEqual(visiblePaths(vm), ["b.md", "c.md", "a.md"])
+
+    // The row's identity and lookup are path-stable at every position.
+    XCTAssertEqual(vm.focusTarget(forPath: "a.md"), .file(path: "a.md"))
+    vm.applyOrganization(context(now: now))  // back to name ascending
+    XCTAssertEqual(visiblePaths(vm), ["a.md", "b.md", "c.md"])
+    XCTAssertEqual(vm.focusTarget(forPath: "a.md"), .file(path: "a.md"))
+  }
+
   // MARK: - Header rendering statics
 
   func testHeaderAccessibilityValueUsesSingularAndPluralNoteCounts() {

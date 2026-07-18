@@ -30,6 +30,7 @@ struct SlateMacApp: App {
         case creation
         case open
         case management
+        case organization
         case inspection
         case destructive
 
@@ -47,6 +48,12 @@ struct SlateMacApp: App {
                 return [
                     SlateCommandID.renameEntry, SlateCommandID.moveTo,
                     SlateCommandID.duplicateEntry,
+                ]
+            case .organization:
+                return [
+                    SlateCommandID.sidebarPinNote,
+                    SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarUnpinAll,
                 ]
             case .inspection:
                 return [
@@ -205,6 +212,12 @@ struct SlateMacApp: App {
                 Divider()
 
                 sidebarFileMenuActions(.management, evaluations: sidebarEvaluations)
+
+                Divider()
+
+                // FL-06 (#659): the pin verbs' menu-bar home. Sort lives in
+                // the View menu ("Sort Sidebar By"), Finder-style.
+                sidebarFileMenuActions(.organization, evaluations: sidebarEvaluations)
 
                 Divider()
 
@@ -439,6 +452,14 @@ struct SlateMacApp: App {
                 }
                 .keyboardShortcut("i", modifiers: [.command, .option])
                 .disabled(!appState.isVaultOpen)
+
+                Divider()
+
+                // FL-06 (#658): the sort/group command set's menu-bar home,
+                // Finder's View ▸ Sort By convention. Radio state reflects
+                // the published selection's container; every item dispatches
+                // the same catalog command the palette owns.
+                SidebarSortMenu()
 
                 Divider()
 
