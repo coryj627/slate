@@ -249,26 +249,59 @@ final class FileTreeDragDropTests: XCTestCase {
         XCTAssertNil(FileTreeSidebar.encodeDragPayload([]))
     }
 
-    func testPrivateDropFlavorWinsEvenWhenItsDataIsInvalid() {
-        let provider = NSItemProvider()
-        provider.registerDataRepresentation(
+    func testFirstPrivateProviderWinsGloballyAndNeverFallsBackToPublic() async throws {
+        let (state, _) = try await makeVault(files: [])
+        let publicOnly = NSItemProvider()
+        publicOnly.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { _ in
+            XCTFail("an earlier public-only provider must never load")
+            return nil
+        }
+        let firstPrivate = NSItemProvider()
+        let privateLoad = expectation(description: "first private loaded once")
+        privateLoad.assertForOverFulfill = true
+        firstPrivate.registerDataRepresentation(
             forTypeIdentifier: FileTreeSidebar.nodeUTType,
             visibility: .ownProcess
         ) { completion in
+            privateLoad.fulfill()
             completion(Data("malformed".utf8), nil)
             return nil
         }
-        provider.registerDataRepresentation(
+        firstPrivate.registerDataRepresentation(
             forTypeIdentifier: FileTreeSidebar.fileURLUTType,
             visibility: .all
-        ) { completion in
-            completion(URL(fileURLWithPath: "/tmp/fallback.md").dataRepresentation, nil)
+        ) { _ in
+            XCTFail("the selected private provider's public flavor must never load")
+            return nil
+        }
+        let secondPrivate = NSItemProvider()
+        secondPrivate.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.nodeUTType,
+            visibility: .ownProcess
+        ) { _ in
+            XCTFail("only the first private provider may load")
             return nil
         }
 
-        guard case .privatePayload = FileTreeSidebar.preferredDropProvider(in: [provider]) else {
+        let preferred = FileTreeSidebar.preferredDropProvider(
+            in: [publicOnly, firstPrivate, secondPrivate])
+        guard case let .privatePayload(selected) = preferred else {
             return XCTFail("private data must win; invalid private data must not become an import")
         }
+        XCTAssertTrue(selected === firstPrivate)
+        let privateDispatch = expectation(description: "malformed private dispatch")
+        privateDispatch.isInverted = true
+        XCTAssertTrue(
+            FileTreeSidebar.loadAdmittedDropProvider(
+                preferred,
+                appState: state,
+                onPrivate: { _, _ in privateDispatch.fulfill() },
+                onFileURL: { _ in XCTFail("private bytes must not fall through") }))
+        await fulfillment(of: [privateLoad], timeout: 1)
+        await fulfillment(of: [privateDispatch], timeout: 0.2)
     }
 
     func testForgedPrivatePayloadCannotDispatchAnInAppMove() async throws {
@@ -325,12 +358,40 @@ final class FileTreeDragDropTests: XCTestCase {
 
     func testRegisteredPrivatePayloadDispatchesWithinItsOriginVault() async throws {
         let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
-        let provider = FileTreeSidebar.makeDragProvider(
+        let source = FileTreeSidebar.makeDragProvider(
             items: [.init(path: "a.md", isDirectory: false)],
             originFileURL: vault.appendingPathComponent("a.md"),
             preferredFocusPath: "a.md",
             originSession: state.currentSession)
+        let registeredData: Data = try await withCheckedThrowingContinuation { continuation in
+            source.loadDataRepresentation(
+                forTypeIdentifier: FileTreeSidebar.nodeUTType
+            ) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else {
+                    continuation.resume(
+                        throwing: error ?? URLError(.cannotDecodeRawData))
+                }
+            }
+        }
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.nodeUTType,
+            visibility: .ownProcess
+        ) { completion in
+            completion(registeredData, nil)
+            completion(registeredData, nil)
+            return nil
+        }
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { _ in
+            XCTFail("a private callback must never load public fallback data")
+            return nil
+        }
         let privateDispatch = expectation(description: "same-vault private dispatch")
+        privateDispatch.assertForOverFulfill = true
 
         XCTAssertTrue(
             FileTreeSidebar.loadAdmittedDropProvider(
@@ -344,6 +405,82 @@ final class FileTreeDragDropTests: XCTestCase {
                 onFileURL: { _ in XCTFail("the preferred private flavor must not fall through") }))
 
         await fulfillment(of: [privateDispatch], timeout: 1)
+
+        let replay = NSItemProvider()
+        replay.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.nodeUTType,
+            visibility: .ownProcess
+        ) { completion in
+            completion(registeredData, nil)
+            return nil
+        }
+        let replayDispatch = expectation(description: "consumed capability replay")
+        replayDispatch.isInverted = true
+        XCTAssertTrue(
+            FileTreeSidebar.loadAdmittedDropProvider(
+                .privatePayload(replay),
+                appState: state,
+                onPrivate: { _, _ in replayDispatch.fulfill() },
+                onFileURL: { _ in XCTFail("private replay must not fall through") }))
+        await fulfillment(of: [replayDispatch], timeout: 0.2)
+    }
+
+    func testRegisteredPrivatePayloadErrorFailsClosedAndConsumesCapabilityOnce()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+        let source = FileTreeSidebar.makeDragProvider(
+            items: [.init(path: "a.md", isDirectory: false)],
+            originFileURL: vault.appendingPathComponent("a.md"),
+            preferredFocusPath: "a.md",
+            originSession: state.currentSession)
+        let registeredData: Data = try await withCheckedThrowingContinuation { continuation in
+            source.loadDataRepresentation(
+                forTypeIdentifier: FileTreeSidebar.nodeUTType
+            ) { data, error in
+                if let data { continuation.resume(returning: data) }
+                else {
+                    continuation.resume(
+                        throwing: error ?? URLError(.cannotDecodeRawData))
+                }
+            }
+        }
+
+        let selected = NSItemProvider()
+        var publicLoads = 0
+        selected.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.nodeUTType,
+            visibility: .ownProcess
+        ) { completion in
+            completion(
+                registeredData,
+                NSError(
+                    domain: "FileTreeDragDropTests",
+                    code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "private load failed"]))
+            completion(registeredData, nil)
+            return nil
+        }
+        selected.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { completion in
+            publicLoads += 1
+            completion(vault.appendingPathComponent("a.md").dataRepresentation, nil)
+            return nil
+        }
+        let privateDispatch = expectation(description: "errored private dispatch")
+        privateDispatch.isInverted = true
+
+        XCTAssertTrue(
+            FileTreeSidebar.loadAdmittedDropProvider(
+                .privatePayload(selected),
+                appState: state,
+                onPrivate: { _, _ in privateDispatch.fulfill() },
+                onFileURL: { _ in XCTFail("private failure must not fall through") }))
+
+        await fulfillment(of: [privateDispatch], timeout: 0.2)
+        XCTAssertEqual(publicLoads, 0)
     }
 
     func testTreeDropMoveIntentUsesSingleAndBatchFunnels() async throws {

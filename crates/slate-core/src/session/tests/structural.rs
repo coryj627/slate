@@ -133,6 +133,208 @@ fn create_folder_indexes_and_appears_on_disk_and_in_tree() {
 }
 
 #[test]
+fn create_folder_exclusive_indexes_without_adding_a_structural_journal_entry() {
+    let (dir, session) = fixture_session();
+    let journal_count = |session: &crate::VaultSession| -> i64 {
+        session
+            .conn
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM structural_ops", [], |row| row.get(0))
+            .unwrap()
+    };
+    let before = journal_count(&session);
+
+    session
+        .create_folder_exclusive("c/imported")
+        .expect("exclusive create");
+
+    assert!(dir.path().join("c/imported").is_dir());
+    let listing = session
+        .list_dir_children("c", crate::Paging::first(50))
+        .expect("list");
+    assert!(listing.dirs.iter().any(|dir| dir.path == "c/imported"));
+    assert_eq!(journal_count(&session), before);
+}
+
+#[test]
+fn create_folder_exclusive_rejects_an_indexed_file_occupant() {
+    let (_dir, session) = fixture_session();
+
+    let error = session.create_folder_exclusive("five.md").unwrap_err();
+
+    assert!(
+        matches!(error, VaultError::DestinationExists { ref path } if path == "five.md"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn create_folder_exclusive_rejects_an_indexed_folder_occupant() {
+    let (_dir, session) = fixture_session();
+
+    let error = session.create_folder_exclusive("c").unwrap_err();
+
+    assert!(
+        matches!(error, VaultError::DestinationExists { ref path } if path == "c"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn create_folder_exclusive_rejects_an_unindexed_file_occupant() {
+    let (dir, session) = fixture_session();
+    std::fs::write(dir.path().join("external"), b"external bytes").unwrap();
+
+    let error = session.create_folder_exclusive("external").unwrap_err();
+
+    assert!(
+        matches!(error, VaultError::DestinationExists { ref path } if path == "external"),
+        "{error:?}"
+    );
+    assert_eq!(
+        std::fs::read(dir.path().join("external")).unwrap(),
+        b"external bytes"
+    );
+}
+
+#[test]
+fn create_folder_exclusive_rejects_an_unindexed_folder_occupant() {
+    let (dir, session) = fixture_session();
+    std::fs::create_dir(dir.path().join("external")).unwrap();
+
+    let error = session.create_folder_exclusive("external").unwrap_err();
+
+    assert!(
+        matches!(error, VaultError::DestinationExists { ref path } if path == "external"),
+        "{error:?}"
+    );
+    let indexed: bool = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM dirs WHERE path = 'external')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!indexed, "a rejected disk occupant must stay unindexed");
+}
+
+#[test]
+fn create_folder_exclusive_rejects_a_case_only_index_collision() {
+    let (_dir, session) = fixture_session();
+
+    let error = session.create_folder_exclusive("A").unwrap_err();
+
+    assert!(
+        matches!(error, VaultError::DestinationExists { ref path } if path == "a"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn create_folder_exclusive_applies_save_path_validation() {
+    let (_dir, session) = fixture_session();
+
+    let error = session.create_folder_exclusive("../escape").unwrap_err();
+
+    assert!(matches!(error, VaultError::InvalidPath { .. }), "{error:?}");
+}
+
+#[test]
+fn create_folder_exclusive_applies_leaf_validation() {
+    let (dir, session) = fixture_session();
+
+    let error = session.create_folder_exclusive("bad\\name").unwrap_err();
+
+    assert!(
+        matches!(error, VaultError::InvalidArgument { .. }),
+        "{error:?}"
+    );
+    assert!(!dir.path().join("bad\\name").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn create_folder_exclusive_rejects_an_unindexed_dangling_symlink() {
+    let (dir, session) = fixture_session();
+    std::os::unix::fs::symlink(
+        dir.path().join("missing-target"),
+        dir.path().join("external"),
+    )
+    .unwrap();
+
+    let error = session.create_folder_exclusive("external").unwrap_err();
+
+    assert!(
+        matches!(error, VaultError::DestinationExists { ref path } if path == "external"),
+        "{error:?}"
+    );
+    assert!(dir.path().join("external").symlink_metadata().is_ok());
+}
+
+#[test]
+fn create_folder_exclusive_does_not_create_missing_parents_or_index_rows() {
+    let (dir, session) = fixture_session();
+
+    let error = session
+        .create_folder_exclusive("missing/imported")
+        .unwrap_err();
+
+    assert!(
+        matches!(error, VaultError::Io(ref error) if error.kind() == std::io::ErrorKind::NotFound),
+        "{error:?}"
+    );
+    assert!(!dir.path().join("missing").exists());
+    let indexed: bool = session
+        .conn
+        .lock()
+        .unwrap()
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM dirs WHERE path = 'missing' OR path = 'missing/imported')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(!indexed);
+}
+
+#[test]
+fn create_folder_exclusive_has_exactly_one_winner_between_racing_sessions() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let first = crate::VaultSession::from_filesystem(dir.path().to_path_buf()).expect("first open");
+    let second =
+        crate::VaultSession::from_filesystem(dir.path().to_path_buf()).expect("second open");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let mut creators = Vec::new();
+    for session in [first, second] {
+        let barrier = std::sync::Arc::clone(&barrier);
+        creators.push(std::thread::spawn(move || {
+            barrier.wait();
+            session.create_folder_exclusive("winner")
+        }));
+    }
+    barrier.wait();
+
+    let results: Vec<_> = creators
+        .into_iter()
+        .map(|creator| creator.join().expect("creator thread"))
+        .collect();
+
+    assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, Err(VaultError::DestinationExists { .. })))
+            .count(),
+        1
+    );
+    assert!(dir.path().join("winner").is_dir());
+}
+
+#[test]
 fn create_folder_rejects_case_insensitive_collision() {
     let (_dir, session) = fixture_session();
     let err = session.create_folder("A").unwrap_err();
