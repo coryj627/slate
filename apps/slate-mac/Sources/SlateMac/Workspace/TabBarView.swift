@@ -106,7 +106,7 @@ struct TabBarView: View {
                 // the live fields — never mutate mode across a bypassed
                 // focus change). Focused group: activateTab is the cheap
                 // same-tab path.
-                appState.activateTab(activeTabID)
+                appState.selectTab(id: activeTabID)
                 appState.setViewMode(target, for: activeTabID)
             } label: {
                 (target == .reading

@@ -39,6 +39,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "slate.file.newNote",
                 "slate.file.newFolder",
                 "slate.file.newFromTemplate",
+                "slate.file.importFilesAndFolders",
                 "slate.file.rename",
                 "slate.file.moveTo",
                 "slate.file.duplicate",
@@ -51,19 +52,99 @@ final class SidebarActionCatalogTests: XCTestCase {
             SidebarActionCatalog.actions.map(\.label),
             [
                 "Open", "New Note", "New Folder", "New Note from Template…",
+                "Import Files and Folders…",
                 "Rename…", "Move To…", "Duplicate", "Reveal in Finder",
                 "Copy Path", "Copy Wikilink", "Move to Trash",
             ])
         XCTAssertEqual(
             SidebarActionCatalog.actions.map(\.symbol),
             [
-                .open, .newNote, .newFolder, .newFromTemplate, .rename, .moveTo,
+                .open, .newNote, .newFolder, .newFromTemplate,
+                .importFilesAndFolders, .rename, .moveTo,
                 .duplicate, .revealInFinder, .copyPath, .copyWikilink, .trash,
             ])
         XCTAssertEqual(
             Set(SidebarActionCatalog.actions.map(\.id)).count,
             SidebarActionCatalog.actions.count)
         XCTAssertTrue(SidebarActionCatalog.actions.allSatisfy { $0.section == .sidebar })
+    }
+
+    func testImportFilesAndFoldersIsAFileCreationAction() throws {
+        let definition = try XCTUnwrap(
+            SidebarActionCatalog.actions.first {
+                $0.id == "slate.file.importFilesAndFolders"
+            })
+
+        XCTAssertEqual(definition.label, "Import Files and Folders…")
+        XCTAssertEqual(definition.section, .sidebar)
+        XCTAssertEqual(definition.capability, .zeroOrOneItem)
+        XCTAssertTrue(definition.blocksDuringStructuralMutation)
+        XCTAssertEqual(definition.undoBehavior, .runtimeDetermined)
+        XCTAssertFalse(definition.isDestructive)
+        XCTAssertEqual(
+            definition.accessibilityHint,
+            "Choose files and folders. External items are copied into the selected location; items already in this vault are moved.")
+        XCTAssertFalse(definition.accessibilityHint.localizedCaseInsensitiveContains("undo"))
+        XCTAssertFalse(definition.accessibilityHint.localizedCaseInsensitiveContains("rollback"))
+    }
+
+    func testImportFilesAndFoldersAvailabilityAndSurfaceParityAreDeterministic() throws {
+        let id = "slate.file.importFilesAndFolders"
+        let busy = "Another file operation is still running."
+        let noSelection = snapshot([])
+        let oneFile = snapshot(
+            [item("Folder/Note.md")],
+            focusedPath: "Folder/Note.md",
+            creationParent: "Folder")
+        let oneFolder = snapshot(
+            [item("Folder", directory: true)],
+            focusedPath: "Folder",
+            creationParent: "Folder")
+        let many = snapshot(
+            [item("A.md"), item("B.md")],
+            focusedPath: "B.md")
+
+        let noVault = try XCTUnwrap(
+            SidebarActionCatalog.evaluation(for: id, snapshot: nil))
+        XCTAssertEqual(noVault.disabledReason, SidebarActionCatalog.noVaultReason)
+        XCTAssertNil(noVault.intent)
+
+        for available in [noSelection, oneFile, oneFolder] {
+            let evaluation = try XCTUnwrap(
+                SidebarActionCatalog.evaluation(for: id, snapshot: available))
+            XCTAssertNil(evaluation.disabledReason)
+            XCTAssertEqual(evaluation.intent?.snapshot, available)
+        }
+
+        let ambiguous = try XCTUnwrap(
+            SidebarActionCatalog.evaluation(for: id, snapshot: many))
+        XCTAssertEqual(
+            ambiguous.disabledReason,
+            "Select no more than one item to choose an import location.")
+        XCTAssertNil(ambiguous.intent)
+
+        let blocked = try XCTUnwrap(
+            SidebarActionCatalog.evaluation(
+                for: id,
+                snapshot: oneFolder,
+                structuralMutationDisabledReason: busy))
+        XCTAssertEqual(blocked.disabledReason, busy)
+        XCTAssertNil(blocked.intent)
+
+        let menu = try XCTUnwrap(
+            SidebarActionCatalog.project(
+                surface: .menuBar,
+                snapshot: many,
+                structuralMutationDisabledReason: busy
+            ).first { $0.id == id })
+        let palette = try XCTUnwrap(
+            SidebarActionCatalog.project(
+                surface: .commandPalette,
+                snapshot: many,
+                structuralMutationDisabledReason: busy
+            ).first { $0.id == id })
+        XCTAssertEqual(menu, palette)
+        XCTAssertEqual(menu.label, "Import Files and Folders…")
     }
 
     func testCapabilityMatrixIsExactForSelectionShapes() {
@@ -82,7 +163,8 @@ final class SidebarActionCatalogTests: XCTestCase {
             [item("A", directory: true), item("B", directory: true)], focusedPath: "B")
 
         XCTAssertEqual(ids(empty), [
-            SlateCommandID.newNote, SlateCommandID.newFolder, SlateCommandID.newFromTemplate,
+            SlateCommandID.newNote, SlateCommandID.newFolder,
+            SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
         ])
         XCTAssertEqual(ids(markdown), SidebarActionCatalog.actions.map(\.id))
         XCTAssertEqual(
@@ -94,7 +176,8 @@ final class SidebarActionCatalogTests: XCTestCase {
             ids(folder),
             [
                 SlateCommandID.newNote, SlateCommandID.newFolder,
-                SlateCommandID.newFromTemplate, SlateCommandID.renameEntry,
+                SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
+                SlateCommandID.renameEntry,
                 SlateCommandID.moveTo, SlateCommandID.revealInFinder,
                 SlateCommandID.copyPath, SlateCommandID.deleteEntry,
             ])
@@ -168,7 +251,8 @@ final class SidebarActionCatalogTests: XCTestCase {
             blocked.map(\.id),
             [
                 SlateCommandID.newNote, SlateCommandID.newFolder,
-                SlateCommandID.newFromTemplate, SlateCommandID.renameEntry,
+                SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
+                SlateCommandID.renameEntry,
                 SlateCommandID.moveTo, SlateCommandID.duplicateEntry,
                 SlateCommandID.sidebarCopyWikilink, SlateCommandID.deleteEntry,
             ])
@@ -176,7 +260,8 @@ final class SidebarActionCatalogTests: XCTestCase {
             blocked.map(\.undoBehavior),
             [
                 .historyBarrier, .historyBarrier, .historyBarrier,
-                .slateUndo, .slateUndo, .historyBarrier, .noChange, .notUndoable,
+                .runtimeDetermined, .slateUndo, .slateUndo, .historyBarrier,
+                .noChange, .notUndoable,
             ],
             "blocking during native writes does not make Copy Wikilink a mutation")
         XCTAssertEqual(blocked.filter(\.isDestructive).map(\.id), [SlateCommandID.deleteEntry])

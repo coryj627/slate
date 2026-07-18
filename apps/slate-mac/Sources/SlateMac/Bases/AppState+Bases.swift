@@ -426,10 +426,17 @@ extension AppState {
         }
     }
 
-    func openBaseFile(_ path: String, target: OpenTarget = .currentTab) {
+    func openBaseFile(
+        _ path: String,
+        target: OpenTarget = .currentTab,
+        advancesSidebarSelectionRevision: Bool = true
+    ) {
         if let reason = propertyEditNavigationDisabledReason {
             postMutationAnnouncement(reason)
             return
+        }
+        if advancesSidebarSelectionRevision {
+            recordExplicitSidebarNavigationIntent()
         }
         switch target {
         case .currentTab:
@@ -468,21 +475,43 @@ extension AppState {
             let paneCount = workspace.model.groupsInOrder.count
             splitActivePane(axis: axis)
             if workspace.model.groupsInOrder.count == paneCount {
-                openBaseFile(path, target: .newTab)
+                openBaseFile(
+                    path,
+                    target: .newTab,
+                    advancesSidebarSelectionRevision: false)
                 return
             }
-            openBaseFile(path, target: .currentTab)
+            openBaseFile(
+                path,
+                target: .currentTab,
+                advancesSidebarSelectionRevision: false)
         }
     }
 
-    func openSavedQuery(_ summary: SavedQuerySummary, target: OpenTarget = .currentTab) {
-        openSavedQuery(id: summary.id, name: summary.name, target: target)
+    func openSavedQuery(
+        _ summary: SavedQuerySummary,
+        target: OpenTarget = .currentTab,
+        advancesSidebarSelectionRevision: Bool = true
+    ) {
+        openSavedQuery(
+            id: summary.id,
+            name: summary.name,
+            target: target,
+            advancesSidebarSelectionRevision: advancesSidebarSelectionRevision)
     }
 
-    func openSavedQuery(id: String, name: String, target: OpenTarget = .currentTab) {
+    func openSavedQuery(
+        id: String,
+        name: String,
+        target: OpenTarget = .currentTab,
+        advancesSidebarSelectionRevision: Bool = true
+    ) {
         if let reason = propertyEditNavigationDisabledReason {
             postMutationAnnouncement(reason)
             return
+        }
+        if advancesSidebarSelectionRevision {
+            recordExplicitSidebarNavigationIntent()
         }
         let item = EditorItem.savedQuery(id: id, name: name)
         switch target {
@@ -522,17 +551,33 @@ extension AppState {
             let paneCount = workspace.model.groupsInOrder.count
             splitActivePane(axis: axis)
             if workspace.model.groupsInOrder.count == paneCount {
-                openSavedQuery(id: id, name: name, target: .newTab)
+                openSavedQuery(
+                    id: id,
+                    name: name,
+                    target: .newTab,
+                    advancesSidebarSelectionRevision: false)
                 return
             }
-            openSavedQuery(id: id, name: name, target: .currentTab)
+            openSavedQuery(
+                id: id,
+                name: name,
+                target: .currentTab,
+                advancesSidebarSelectionRevision: false)
         }
     }
 
-    func openDashboard(id: String, name: String, target: OpenTarget = .currentTab) {
+    func openDashboard(
+        id: String,
+        name: String,
+        target: OpenTarget = .currentTab,
+        advancesSidebarSelectionRevision: Bool = true
+    ) {
         if let reason = propertyEditNavigationDisabledReason {
             postMutationAnnouncement(reason)
             return
+        }
+        if advancesSidebarSelectionRevision {
+            recordExplicitSidebarNavigationIntent()
         }
         let item = EditorItem.dashboard(id: id, name: name)
         switch target {
@@ -571,10 +616,18 @@ extension AppState {
             let paneCount = workspace.model.groupsInOrder.count
             splitActivePane(axis: axis)
             if workspace.model.groupsInOrder.count == paneCount {
-                openDashboard(id: id, name: name, target: .newTab)
+                openDashboard(
+                    id: id,
+                    name: name,
+                    target: .newTab,
+                    advancesSidebarSelectionRevision: false)
                 return
             }
-            openDashboard(id: id, name: name, target: .currentTab)
+            openDashboard(
+                id: id,
+                name: name,
+                target: .currentTab,
+                advancesSidebarSelectionRevision: false)
         }
     }
 

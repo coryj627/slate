@@ -657,6 +657,37 @@ final class FileTreeViewModel: ObservableObject {
         }
     }
 
+    /// Targeted root-level mutation refresh. It refetches only the root and
+    /// retains unaffected expanded descendant caches. Directory ids whose path
+    /// changed or disappeared are demoted and cleared after the refetch, so an
+    /// SQLite id reused by a new root folder cannot inherit stale children.
+    func rootLevelInvalidation() {
+        let oldRoot = rootLevel
+        loadRoot()
+        let newPathByID = Dictionary(uniqueKeysWithValues: rootLevel.compactMap {
+            node -> (NodeID, String)? in
+            node.isDirectory ? (node.nodeID, node.path) : nil
+        })
+        for old in oldRoot where old.isDirectory
+            && newPathByID[old.nodeID] != old.path
+        {
+            if expanded.remove(old.nodeID) != nil {
+                pendingExpandedPaths.insert(old.path)
+            }
+            let oldChildren = children[old.nodeID] ?? []
+            demoteExpandedSubtree(rows: oldChildren)
+            dropDescendantCaches(rows: oldChildren)
+            replaceChildLevel(nil, for: old.nodeID)
+            fetchState[old.nodeID] = nil
+        }
+    }
+
+    /// Explicit whole-tree reconcile used only for authoritative scans or
+    /// reports whose touched levels are unknown.
+    func authoritativeTreeInvalidation() {
+        treeInvalidation(parent: nil)
+    }
+
     // MARK: - Flattening
 
     /// The rows the `List` renders: a pre-order walk of the expanded subtree.
@@ -998,9 +1029,16 @@ struct FileTreeSidebar: View {
     /// onto the List. The originating surface owns its announcement, so the
     /// ensuing `listSelection` edge must not repeat it.
     @State private var selectionAnnouncementGate = SelectionAnnouncementGate()
+    /// Distinguishes an App/semantic-model carrier write from a fresh native
+    /// List user edge so selection revisions advance exactly once.
+    @State private var selectionRevisionGate = SelectionRevisionGate()
     /// A destination level can briefly disappear while a batch Move refetches.
     /// Keep one restoration intent; a newer user focus edge supersedes it.
     @State private var pendingBatchFocus: PendingBatchFocus?
+    /// Finder import selects its provider-ordered materialized results as one
+    /// atomic union only after every row is present and all admission guards
+    /// still match.
+    @State private var pendingImportSelection: PendingImportSelection?
     /// Single create/rename/move focus waits for its refetched row; Delete owns
     /// a complete pre-invalidation fallback row and therefore does not depend
     /// on a cache that the mutation is about to drop.
@@ -1053,6 +1091,10 @@ struct FileTreeSidebar: View {
     /// targets off for a frame or two — far under the window — so they
     /// don't end the session.
     @State private var dragSessionEndTask: Task<Void, Never>?
+    /// One-shot drag settlement. Public import admission flips structural busy
+    /// synchronously; the later busy observer must not settle the same accepted
+    /// drag a second time with a nil destination.
+    @State private var dragSessionHasSettled = true
 
     /// The `List` row id / selection key. A real tree node (`.node`) or a
     /// per-level loading/error placeholder derived from its parent level id so
@@ -1129,7 +1171,8 @@ struct FileTreeSidebar: View {
                 focusedPath: row.path,
                 creationParent: row.isDirectory
                     ? row.path
-                    : (parent == "." ? "" : parent))
+                    : (parent == "." ? "" : parent),
+                selectionRevision: publishedSnapshot.selectionRevision)
         }
         let evaluations = SidebarActionCatalog.project(
             surface: surface,
@@ -1338,6 +1381,28 @@ struct FileTreeSidebar: View {
         mutating func consume() -> Bool {
             defer { isArmed = false }
             return isArmed
+        }
+    }
+
+    /// One expected programmatic/semantic carrier value. A same-value write may
+    /// produce no SwiftUI edge; a later different user value consumes the stale
+    /// gate without being misclassified as programmatic.
+    struct SelectionRevisionGate: Equatable {
+        private var isArmed = false
+        private var expected: RowID?
+
+        mutating func arm(for selection: RowID?) {
+            isArmed = true
+            expected = selection
+        }
+
+        mutating func consume(if selection: RowID?) -> Bool {
+            guard isArmed else { return false }
+            defer {
+                isArmed = false
+                expected = nil
+            }
+            return expected == selection
         }
     }
 
@@ -1819,6 +1884,15 @@ struct FileTreeSidebar: View {
         }
     }
 
+    struct PendingImportSelection: Equatable {
+        let paths: [String]
+        let expectedSelectionRevision: UInt64
+        let deferredModel: SelectionModel
+        let ownerSessionIdentity: ObjectIdentifier
+        let ownerStructuralMutationToken: Int
+        let treeMutationToken: Int
+    }
+
     enum PendingBatchFocusDisposition: Equatable {
         case wait
         case restore
@@ -2165,17 +2239,26 @@ struct FileTreeSidebar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Thin progress strip that mirrors the scanner's FileIndexed
-            // events. The `@ViewBuilder` renders EmptyView when there's no
-            // scanProgress, which collapses to no rendered output.
-            progressBar
-            structuralMutationProgress
+            if let progress = appState.importBatchProgress {
+                SidebarImportProgressStrip(
+                    progress: progress,
+                    onCancel: {
+                        _ = appState.requestImportBatchCancellation()
+                    })
+            } else {
+                // Import owns the only visible progress/cancellation surface
+                // for its complete lifetime, including mandatory final scan.
+                progressBar
+                structuralMutationProgress
+            }
             batchTrashQuarantineRecovery
             if let notice = appState.sidebarVaultPrefsNotice {
                 sidebarPreferencesNotice(notice)
             }
             Group {
-                if appState.isScanning && appState.files.isEmpty {
+                if appState.currentImportBatchOwner != nil {
+                    treeList
+                } else if appState.isScanning && appState.files.isEmpty {
                     scanningState
                 } else if let error = appState.scanError {
                     errorState(error)
@@ -2257,7 +2340,13 @@ struct FileTreeSidebar: View {
             // refetch. This is the "after rescans" arm of the treeInvalidation
             // seam; U2-5 wires the per-mutation arm from AppState.
             if !scanning && appState.currentSession != nil {
-                tree.treeInvalidation(parent: nil)
+                if appState.consumeImportOwnedScanCompletion() != nil {
+                    // Aggregate import publishes its own authoritative root
+                    // mutation after all copy/move work. Acknowledge this scan
+                    // edge without issuing a duplicate generic invalidation.
+                } else {
+                    tree.authoritativeTreeInvalidation()
+                }
                 // #852 (Codex round-4 finding 1): the reused-id reconcile does NOT
                 // run here — `treeInvalidation` schedules an ASYNC refetch, so ids
                 // wouldn't yet resolve to the new reality. It runs on
@@ -2605,7 +2694,7 @@ struct FileTreeSidebar: View {
         // Complex-gesture disclosure (WCAG 3.3.2) for the container-level
         // drop target above.
         .accessibilityHint(
-            "Dropping a dragged file or folder on empty space moves it to the vault root.")
+            "Drop files or folders here to copy external items into the vault or move vault items to the root.")
         // Seed the mirror if a selection already exists when the sidebar mounts
         // (e.g. re-entering the vault view with a file open).
         .onAppear { mirrorProgrammaticSelection(rowID(forPath: appState.selectedFilePath)) }
@@ -2632,7 +2721,8 @@ struct FileTreeSidebar: View {
         // already remapped its snapshots in `handleTreeMutation`, so its entries
         // resolve to a matching path and survive this reconcile untouched.
         .onChange(of: tree.visibleRows) { _, _ in
-            if restorePendingBatchFocus(proxy: proxy)
+            if restorePendingImportSelection(proxy: proxy)
+                || restorePendingBatchFocus(proxy: proxy)
                 || restorePendingPostMutationFocus(proxy: proxy)
             {
                 mirrorTreeSelectionToAppState(listSelection)
@@ -2653,6 +2743,7 @@ struct FileTreeSidebar: View {
         .onChange(of: appState.currentVaultURL) { _, _ in
             Self.cancelPendingPostMutationFocus(&pendingPostMutationFocus)
             mutateSelectionAndPublish { $0.reveal(nil) }
+            selectionRevisionGate.arm(for: nil)
             listSelection = nil
         }
         .alert(
@@ -2680,6 +2771,7 @@ struct FileTreeSidebar: View {
         // mirror `.onChange` below.
         .onChange(of: listSelection) { _, newSelection in
             let announcementIsSuppressed = selectionAnnouncementGate.consume()
+            let revisionIsNeutral = selectionRevisionGate.consume(if: newSelection)
             // #852: a ⌘/⇧ multi-select gesture manages the set + open itself
             // (`applyMultiSelectClick`) — consume its one-shot suppression and
             // don't re-open or collapse here.
@@ -2699,7 +2791,12 @@ struct FileTreeSidebar: View {
             // programmatic open, plain click) is SINGLE — collapse any lingering
             // batch set to this one row so batch state never outlives it.
             mutateSelectionAndPublish {
-                $0.reveal(newSelection.flatMap { selectionRow(for: $0) })
+                let row = newSelection.flatMap { selectionRow(for: $0) }
+                if revisionIsNeutral {
+                    $0.reveal(row)
+                } else {
+                    $0.revealFromUserIntent(row)
+                }
             }
             // Mirror the selection (file OR folder) to AppState so the file-
             // management commands know their target. Placeholders clear it.
@@ -2719,7 +2816,10 @@ struct FileTreeSidebar: View {
             // a new tab; the highlight then reverts to the mirror (the
             // CURRENT tab did not change files — a new tab was created).
             if appState.openTargetFromCurrentEvent() == .newTab {
-                appState.openFile(path, target: .newTab)
+                appState.openFile(
+                    path,
+                    target: .newTab,
+                    advancesSidebarSelectionRevision: false)
                 if case let .node(.file(selected)) = listSelection,
                     selected != appState.selectedFilePath {
                     revertCommandClickSelection(
@@ -2728,7 +2828,10 @@ struct FileTreeSidebar: View {
                 return
             }
             if !BaseExactIdentity.matches(appState.selectedFilePath, path) {
-                appState.openFile(path, target: .currentTab)
+                appState.openFile(
+                    path,
+                    target: .currentTab,
+                    advancesSidebarSelectionRevision: false)
             }
             announceFocusedFileSelection(
                 newSelection,
@@ -2761,7 +2864,18 @@ struct FileTreeSidebar: View {
                 if outcome.shouldSuppressAnnouncement {
                     selectionAnnouncementGate.arm()
                 }
+                selectionRevisionGate.arm(for: outcome.listSelection)
                 listSelection = outcome.listSelection
+            }
+        }
+        // Search, graph, link, template, and command navigation does not pass
+        // through the List's pointer/key transition. Preserve that newer user
+        // agency as its own monotone edge, including a same-file re-open that
+        // produces no `selectedFilePath` change at all. The path mirror above
+        // remains neutral and owns only the visible single-row projection.
+        .onChange(of: appState.sidebarSelectionIntentRevision) { _, _ in
+            mutateSelectionAndPublish {
+                $0.noteExternalNavigationIntent()
             }
         }
         }  // ScrollViewReader
@@ -2820,6 +2934,7 @@ struct FileTreeSidebar: View {
         if outcome.shouldMirrorListSelection {
             suppressOpenForSelectionChange = true
             selectionAnnouncementGate.arm()
+            selectionRevisionGate.arm(for: outcome.listSelection)
             listSelection = outcome.listSelection
             if let focus = outcome.listSelection {
                 proxy.scrollTo(focus, anchor: .center)
@@ -2913,6 +3028,7 @@ struct FileTreeSidebar: View {
         mutateSelectionAndPublish {
             $0.reveal(rowID.flatMap { selectionRow(for: $0) })
         }
+        selectionRevisionGate.arm(for: selectionModel.focused)
         listSelection = selectionModel.focused
     }
 
@@ -2924,6 +3040,7 @@ struct FileTreeSidebar: View {
         mutateSelectionAndPublish {
             $0.reveal(rowID.flatMap { selectionRow(for: $0) })
         }
+        selectionRevisionGate.arm(for: selectionModel.focused)
         listSelection = selectionModel.focused
     }
 
@@ -2958,6 +3075,7 @@ struct FileTreeSidebar: View {
         }
         if listSelection != selectionModel.focused {
             suppressOpenForSelectionChange = true
+            selectionRevisionGate.arm(for: selectionModel.focused)
             listSelection = selectionModel.focused
         }
     }
@@ -2984,6 +3102,7 @@ struct FileTreeSidebar: View {
         // id, so this is a no-op (handled by applyPostMutationFocus + the mirror).
         if listSelection != selectionModel.focused {
             suppressOpenForSelectionChange = true
+            selectionRevisionGate.arm(for: selectionModel.focused)
             listSelection = selectionModel.focused
         }
     }
@@ -3028,11 +3147,15 @@ struct FileTreeSidebar: View {
                 row: selectedRow,
                 visibleRows: visibleSelectionRows)
         }
+        selectionRevisionGate.arm(for: selectionModel.focused)
         listSelection = selectionModel.focused
         if sameFocus, case let .node(.file(path)) = row,
             !BaseExactIdentity.matches(appState.selectedFilePath, path)
         {
-            appState.openFile(path, target: .currentTab)
+            appState.openFile(
+                path,
+                target: .currentTab,
+                advancesSidebarSelectionRevision: false)
         }
     }
 
@@ -3084,6 +3207,7 @@ struct FileTreeSidebar: View {
         if listSelection != selectionModel.focused {
             suppressOpenForSelectionChange = true
         }
+        selectionRevisionGate.arm(for: selectionModel.focused)
         listSelection = selectionModel.focused
         // #852 VoiceOver (point 8): the selection COUNT must be discoverable.
         // Multi (≥2) and emptied (0) cases need an explicit count announcement.
@@ -3133,8 +3257,12 @@ struct FileTreeSidebar: View {
     /// it into view.
     private func handleTreeMutation(proxy: ScrollViewProxy) {
         guard let mutation = appState.treeMutation else { return }
+        if let generation = mutation.importOwnedScanGeneration {
+            appState.acknowledgeImportOwnedScanCompletion(generation)
+        }
         // A newer structural landing supersedes any focus still waiting on the
         // previous mutation's destination refetch.
+        pendingImportSelection = nil
         pendingBatchFocus = nil
         Self.cancelPendingPostMutationFocus(&pendingPostMutationFocus)
         let preMutationRows = visibleSelectionRows
@@ -3151,7 +3279,8 @@ struct FileTreeSidebar: View {
         var batchMoveFocus: BatchMoveFocusPlan?
         var componentVisits = 0
         switch mutation.kind {
-        case .batchMove(let standing, _):
+        case .batchMove(let standing, _),
+            .importBatch(_, let standing, _):
             let index = SelectionModel.KnownMoveIndex(standing.map {
                 .init(
                     oldPath: $0.oldPath, newPath: $0.newPath,
@@ -3182,8 +3311,16 @@ struct FileTreeSidebar: View {
         }
         // Invalidate each dirtied level. A move dirties two (source +
         // destination); everything else dirties one. `nil` = the root level.
-        for parent in mutation.affectedParents {
-            tree.treeInvalidation(parent: parentNodeID(forPath: parent))
+        if mutation.requiresRescan {
+            tree.authoritativeTreeInvalidation()
+        } else {
+            for parent in mutation.affectedParents {
+                if parent == nil {
+                    tree.rootLevelInvalidation()
+                } else if let parentID = parentNodeID(forPath: parent) {
+                    tree.treeInvalidation(parent: parentID)
+                }
+            }
         }
         // Expansion follows the entity (Codex round 4): invalidation just
         // demoted the affected subtree to OLD paths — rewrite them for
@@ -3195,7 +3332,7 @@ struct FileTreeSidebar: View {
             tree.remapExpansion(fromPrefix: oldPath, to: newPath)
         case let .delete(path, _, wasDirectory) where wasDirectory:
             tree.removeExpansion(underPrefix: path)
-        case .batchMove:
+        case .batchMove, .importBatch:
             if let batchMoveIndex {
                 tree.remapExpansions(
                     using: batchMoveIndex, componentVisits: &componentVisits)
@@ -3229,7 +3366,7 @@ struct FileTreeSidebar: View {
         switch mutation.kind {
         case let .rename(oldPath, newPath), let .move(oldPath, newPath, _, _):
             remapSelectionForKnownMove(oldPath: oldPath, newPath: newPath)
-        case .batchMove:
+        case .batchMove, .importBatch:
             // Remap + final focus publish as one atomic snapshot below.
             break
         case .batchTrash:
@@ -3252,6 +3389,13 @@ struct FileTreeSidebar: View {
                 moveIndex: batchMoveIndex,
                 componentVisits: &componentVisits,
                 proxy: proxy)
+        case .importBatch(let materialized, _, _):
+            applyImportSelection(
+                materialized: materialized,
+                moveIndex: batchMoveIndex,
+                mutation: mutation,
+                componentVisits: &componentVisits,
+                proxy: proxy)
         case .batchTrash:
             applyBatchSelectionFocus(proxy: proxy)
         case .batchReconcile:
@@ -3265,6 +3409,106 @@ struct FileTreeSidebar: View {
         // `applyPostMutationFocus`'s `listSelection` assignment is a same-value
         // no-op that never fires `.onChange` — the mirror must be refreshed
         // against the NEW path, and node resolution is only reliable post-refetch).
+    }
+
+    private func applyImportSelection(
+        materialized: [SidebarImportMaterializedResult],
+        moveIndex: SelectionModel.KnownMoveIndex?,
+        mutation: AppState.TreeMutation,
+        componentVisits: inout Int,
+        proxy: ScrollViewProxy
+    ) {
+        guard !materialized.isEmpty,
+            let expectedRevision = mutation.selectionRevision,
+            let ownerToken = mutation.structuralMutationToken,
+            let sessionIdentity = tree.sessionIdentity,
+            selectionModel.selectionRevision == expectedRevision,
+            appState.currentSession.map(ObjectIdentifier.init) == sessionIdentity,
+            appState.currentStructuralMutationGeneration == ownerToken
+        else { return }
+
+        var deferredModel = selectionModel
+        if let moveIndex {
+            deferredModel = Self.deferredBatchSelectionModel(
+                from: deferredModel,
+                using: moveIndex,
+                componentVisits: &componentVisits)
+        }
+        let paths = materialized.map(\.path)
+        for path in paths { tree.ensureAncestorsExpanded(forPath: path) }
+        let pending = PendingImportSelection(
+            paths: paths,
+            expectedSelectionRevision: expectedRevision,
+            deferredModel: deferredModel,
+            ownerSessionIdentity: sessionIdentity,
+            ownerStructuralMutationToken: ownerToken,
+            treeMutationToken: mutation.token)
+        guard let rows = materializedImportRows(for: paths) else {
+            pendingImportSelection = pending
+            return
+        }
+        installImportSelection(pending, rows: rows, proxy: proxy)
+    }
+
+    private func materializedImportRows(for paths: [String]) -> [SelectionRow]? {
+        var rows: [SelectionRow] = []
+        rows.reserveCapacity(paths.count)
+        for path in paths {
+            guard let target = tree.focusTarget(forPath: path),
+                let row = selectionRow(for: .node(target))
+            else { return nil }
+            rows.append(row)
+        }
+        return rows
+    }
+
+    private func importSelectionGuardsMatch(
+        _ pending: PendingImportSelection
+    ) -> Bool {
+        tree.sessionIdentity == pending.ownerSessionIdentity
+            && appState.currentSession.map(ObjectIdentifier.init)
+                == pending.ownerSessionIdentity
+            && appState.currentStructuralMutationGeneration
+                == pending.ownerStructuralMutationToken
+            && appState.treeMutation?.token == pending.treeMutationToken
+            && selectionModel.selectionRevision
+                == pending.expectedSelectionRevision
+    }
+
+    private func installImportSelection(
+        _ pending: PendingImportSelection,
+        rows: [SelectionRow],
+        proxy: ScrollViewProxy
+    ) {
+        guard importSelectionGuardsMatch(pending) else { return }
+        Self.mutateSelectionAndPublish(
+            model: &selectionModel,
+            capturedSessionIdentity: pending.ownerSessionIdentity,
+            visibleRows: visibleSelectionRows,
+            appState: appState
+        ) {
+            $0 = pending.deferredModel
+            _ = $0.selectImportedResults(
+                rows,
+                ifSelectionRevisionIs: pending.expectedSelectionRevision)
+        }
+        applyBatchSelectionFocus(proxy: proxy)
+    }
+
+    @discardableResult
+    private func restorePendingImportSelection(proxy: ScrollViewProxy) -> Bool {
+        guard let pending = pendingImportSelection else { return false }
+        guard importSelectionGuardsMatch(pending) else {
+            pendingImportSelection = nil
+            return false
+        }
+        for path in pending.paths { tree.ensureAncestorsExpanded(forPath: path) }
+        guard let rows = materializedImportRows(for: pending.paths) else {
+            return true
+        }
+        pendingImportSelection = nil
+        installImportSelection(pending, rows: rows, proxy: proxy)
+        return true
     }
 
     private func applyBatchMoveFocus(
@@ -3351,6 +3595,7 @@ struct FileTreeSidebar: View {
         if listSelection != target {
             suppressOpenForSelectionChange = true
             selectionAnnouncementGate.arm()
+            selectionRevisionGate.arm(for: target)
             listSelection = target
         }
         if let target {
@@ -3404,7 +3649,7 @@ struct FileTreeSidebar: View {
                     ownerSessionIdentity: tree.sessionIdentity,
                     ownerMutationToken: mutation.token)
             }
-        case .batchMove, .batchTrash, .batchReconcile:
+        case .batchMove, .batchTrash, .importBatch, .batchReconcile:
             pending = nil
         }
         guard let pending else {
@@ -3462,6 +3707,7 @@ struct FileTreeSidebar: View {
         suppressOpenForPostMutationFocus = suppressOpen
         if listSelection != targetRow.identity {
             suppressOpenForSelectionChange = true
+            selectionRevisionGate.arm(for: targetRow.identity)
             listSelection = targetRow.identity
         } else {
             // Selection didn't change (already there) → the open-suppression
@@ -3764,7 +4010,7 @@ struct FileTreeSidebar: View {
             .accessibilityHint(
                 Self.rowAccessibilityHint(
                     primaryAction: "Expands or collapses.",
-                    idleHint: "Expands or collapses. Drag to move the folder; drop items on it to move them inside. Other available actions are in the context menu.",
+                    idleHint: "Expands or collapses. Drag to move within Slate or copy to another app; drop items on it to copy external items in or move vault items inside. Other available actions are in the context menu.",
                     structuralDisabledReason: disabledReason))
             .help(disabledReason ?? node.path)
             .contextMenu {
@@ -3877,13 +4123,13 @@ struct FileTreeSidebar: View {
                 availableHint: Self.fileRowAvailableOpenHint(
                     targetCount: voiceOverProjection?.targetSnapshot.items.count ?? 1,
                     idleGuidance: voiceOverProjection?.targetSnapshot.items.count == 1
-                        ? "Drag to move it into a folder. Open-in-new-tab, split, rename, duplicate, move, and delete actions are in the context menu."
-                        : "Drag to move the selected files into a folder. Other available actions are in the context menu.",
+                        ? "Drag to move it within Slate or copy it to another app. Open-in-new-tab, split, rename, duplicate, move, and delete actions are in the context menu."
+                        : "Drag to move the selected files within Slate or copy them to another app. Other available actions are in the context menu.",
                     structuralDisabledReason: disabledReason),
                 unavailableHint:
                     voiceOverProjection?.targetSnapshot.items.count == 1
-                        ? "Drag to move it into a folder. Other available actions are in the context menu."
-                        : "Drag to move the selected items into a folder. Other available actions are in the context menu.")
+                        ? "Drag to move it within Slate or copy it to another app. Other available actions are in the context menu."
+                        : "Drag to move the selected items within Slate or copy them to another app. Other available actions are in the context menu.")
             let activate = {
                 fileTreeFocused = true
                 applyPlainSelection(.node(node.nodeID))
@@ -4318,6 +4564,7 @@ struct FileTreeSidebar: View {
         if !springOpenedDirs.isEmpty || !springLoadTasks.isEmpty {
             endDragSession(dropDestination: nil)
         }
+        dragSessionHasSettled = false
         let origin = SelectionRow(
             identity: .node(node.nodeID),
             path: node.path,
@@ -4486,7 +4733,28 @@ struct FileTreeSidebar: View {
     /// data fails closed instead of falling through as a file import. Public
     /// file URLs preserve the existing in-vault move / external import path.
     private func handleDrop(_ providers: [NSItemProvider], into destinationFolder: String) -> Bool {
+        dragSessionHasSettled = false
         let preferred = Self.preferredDropProvider(in: providers)
+        guard case .privatePayload = preferred else {
+            let hasPublicProvider = providers.contains {
+                $0.hasItemConformingToTypeIdentifier(Self.fileURLUTType)
+            }
+            guard hasPublicProvider else {
+                endDragSession(dropDestination: nil)
+                return false
+            }
+            guard let owner = appState.beginImportBatch(
+                providers: providers,
+                destinationFolder: destinationFolder,
+                selectionRevision: selectionModel.selectionRevision)
+            else {
+                endDragSession(dropDestination: nil)
+                return false
+            }
+            endDragSession(dropDestination: destinationFolder)
+            _ = appState.startImportBatch(owner)
+            return true
+        }
         return Self.loadAdmittedDropProvider(
             preferred,
             appState: appState,
@@ -4571,6 +4839,7 @@ struct FileTreeSidebar: View {
                     targeted,
                     busy: appState.structuralMutationDisabledReason != nil)
                 {
+                    dragSessionHasSettled = false
                     dropTargetedNodes.insert(node.nodeID)
                     dragSessionEndTask?.cancel()
                     dragSessionEndTask = nil
@@ -4600,6 +4869,7 @@ struct FileTreeSidebar: View {
                     busy: appState.structuralMutationDisabledReason != nil)
                 rootDropTargeted = active
                 if active {
+                    dragSessionHasSettled = false
                     dragSessionEndTask?.cancel()
                     dragSessionEndTask = nil
                 } else {
@@ -4648,6 +4918,8 @@ struct FileTreeSidebar: View {
     /// re-collapse the spring-opened folders the drop did NOT land in
     /// (`springFoldersToRecollapse`; nil destination ⇒ all of them).
     private func endDragSession(dropDestination: String?) {
+        guard !dragSessionHasSettled else { return }
+        dragSessionHasSettled = true
         dragSessionEndTask?.cancel()
         dragSessionEndTask = nil
         for task in springLoadTasks.values { task.cancel() }
@@ -5079,8 +5351,9 @@ struct FileTreeSidebar: View {
         let moved = listSelection != .node(target)
         if moved {
             if let row = selectionRow(for: .node(target)) {
-                mutateSelectionAndPublish { $0.reveal(row) }
+                mutateSelectionAndPublish { $0.revealFromUserIntent(row) }
             }
+            selectionRevisionGate.arm(for: .node(target))
             listSelection = .node(target)
         }
         // Reveal + MATERIALIZE the landing (red-team probe: without the
@@ -5121,8 +5394,9 @@ struct FileTreeSidebar: View {
             if let node = tree.node(for: id) { tree.collapse(node) }
         case let .select(id):
             if let row = selectionRow(for: .node(id)) {
-                mutateSelectionAndPublish { $0.reveal(row) }
+                mutateSelectionAndPublish { $0.revealFromUserIntent(row) }
             }
+            selectionRevisionGate.arm(for: .node(id))
             listSelection = .node(id)
         case .none:
             break

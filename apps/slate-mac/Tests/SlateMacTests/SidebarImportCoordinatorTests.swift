@@ -2589,6 +2589,43 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     XCTAssertTrue(pending.progress.isCancelled)
   }
 
+  func testPublicProviderFailurePublishesBeforeOtherProvidersFinish() async {
+    let failed = ProviderStub()
+    let pending = ProviderStub()
+    let intake = SidebarImportProviderIntake(providers: [failed, pending])
+    let observedFailure = SlotBox()
+    let resultTask = Task {
+      await intake.load(onTerminalFailure: { slot in
+        observedFailure.store([slot])
+      })
+    }
+    while failed.loadsStarted() == 0 || pending.loadsStarted() == 0 {
+      await Task.yield()
+    }
+
+    failed.complete(
+      data: nil,
+      error: NSError(
+        domain: "SidebarImportCoordinatorTests",
+        code: 7,
+        userInfo: [NSLocalizedDescriptionKey: "failed immediately"]))
+    for _ in 0..<1_000 where observedFailure.load() == nil {
+      await Task.yield()
+    }
+
+    XCTAssertEqual(
+      observedFailure.load(),
+      [SidebarImportProviderSlot(
+        providerIndex: 0,
+        outcome: .failure(.loadFailed("failed immediately")))],
+      "the terminal failure must be observable while provider 2 is still loading")
+    pending.complete(
+      with: FileManager.default.temporaryDirectory
+        .appendingPathComponent("later.md")
+    )
+    _ = await resultTask.value
+  }
+
   func testPublicProviderIntakeEmptyAndUnsupportedOnlyCompleteWithoutLoads() async {
     let unsupported = ProviderStub(registeredTypeIdentifiers: ["public.text"])
 
@@ -2852,6 +2889,45 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     }
     XCTAssertEqual(scope.counts().starts, 1)
     XCTAssertEqual(scope.counts().stops, 1)
+  }
+
+  func testSharedBatchEntryBudgetStopsLaterRootsBeforeScopeAdmission() throws {
+    let vault = try makeVault()
+    let roots = (0..<3).map { index in
+      tempDirectory.appendingPathComponent("root-\(index).bin")
+    }
+    for root in roots {
+      try Data([0x01]).write(to: root)
+    }
+    let scope = ScopeProbe()
+    let budget = SidebarImportSourceEntryBudget(limit: 2)
+    let walker = SidebarImportSourceWalker(
+      limits: SidebarImportSourceLimits(
+        refuseBytes: 1_024,
+        totalBytes: 4_096,
+        maximumEntries: 100,
+        maximumDepth: 8),
+      scopeAccess: scope.access(),
+      aggregateEntryBudget: budget)
+
+    let first = try walker.prepare(rootURL: roots[0], vaultURL: vault)
+    let second = try walker.prepare(rootURL: roots[1], vaultURL: vault)
+    XCTAssertEqual(budget.consumedCount, 2)
+    XCTAssertThrowsError(
+      try walker.prepare(rootURL: roots[2], vaultURL: vault)
+    ) { error in
+      guard case let SidebarImportSourceWalkerError.aggregateEntryLimitExceeded(limit) = error
+      else {
+        return XCTFail("expected aggregate entry exhaustion, got \(error)")
+      }
+      XCTAssertEqual(limit, 2)
+    }
+    XCTAssertEqual(
+      scope.counts().starts, 2,
+      "an exhausted batch must reject later roots before scope or FD admission")
+    first.close()
+    second.close()
+    XCTAssertEqual(scope.counts().stops, 2)
   }
 
   func testSourceLimitsUseProductionDefaultsAndClampBridgeCap() {

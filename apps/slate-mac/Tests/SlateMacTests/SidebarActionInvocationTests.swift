@@ -108,13 +108,15 @@ final class SidebarActionInvocationTests: XCTestCase {
         on state: AppState,
         _ items: [SidebarSelectionItem],
         focusedPath: String? = nil,
-        creationParent: String = ""
+        creationParent: String = "",
+        selectionRevision: UInt64 = 0
     ) throws -> SidebarSelectionSnapshot {
         SidebarSelectionSnapshot(
             sessionIdentity: ObjectIdentifier(try XCTUnwrap(state.currentSession)),
             items: items,
             focusedPath: focusedPath,
-            creationParent: creationParent)
+            creationParent: creationParent,
+            selectionRevision: selectionRevision)
     }
 
     private func item(
@@ -497,6 +499,165 @@ final class SidebarActionInvocationTests: XCTestCase {
         XCTAssertEqual(
             parents, ["", "Folder", "Folder"],
             "root, selected-row, and ID invocations preserve their canonical frozen parent")
+    }
+
+    func testFL05ImportCommandDismissesPaletteAndUsesFrozenFolderDestination()
+        async throws
+    {
+        let state = try openVault(named: "import-command", folders: ["Projects"])
+        let selection = try snapshot(
+            on: state,
+            [item("Projects", directory: true)],
+            focusedPath: "Projects",
+            creationParent: "Projects",
+            selectionRevision: 9)
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(selection))
+        let temporaryDirectoryPath = try XCTUnwrap(
+            try FileManager.default.temporaryDirectory
+                .resourceValues(forKeys: [.canonicalPathKey])
+                .canonicalPath)
+        let externalRoot = URL(
+            fileURLWithPath: temporaryDirectoryPath, isDirectory: true)
+            .appendingPathComponent(
+                "slate-command-source-\(UUID().uuidString)",
+                isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: externalRoot, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: externalRoot) }
+        let external = externalRoot.appendingPathComponent("command-source.md")
+        try "command import".write(
+            to: external, atomically: true, encoding: .utf8)
+        state.isCommandPaletteOpen = true
+        var pickerSawDismissedPalette = false
+        state.importSourcePicker = {
+            pickerSawDismissedPalette = !state.isCommandPaletteOpen
+            return [external]
+        }
+
+        XCTAssertEqual(
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.importFilesAndFolders, snapshot: selection)),
+            .completed(actionID: SlateCommandID.importFilesAndFolders))
+        await state.pendingStructuralTaskForTesting?.value
+
+        XCTAssertTrue(pickerSawDismissedPalette)
+        XCTAssertFalse(state.isCommandPaletteOpen)
+        XCTAssertEqual(
+            try String(
+                contentsOf: try XCTUnwrap(state.currentVaultURL)
+                    .appendingPathComponent("Projects/command-source.md"),
+                encoding: .utf8),
+            "command import")
+    }
+
+    func testFL05ImportCommandRejectsPickerOverflowWithExactReasonAndNoOwner()
+        throws
+    {
+        let state = try openVault(named: "import-command-limit")
+        let selection = try snapshot(on: state, [], selectionRevision: 3)
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(selection))
+        let limit = SidebarImportProviderIntake.maximumProviderCount
+        state.importSourcePicker = {
+            (0...limit).map {
+                self.root.appendingPathComponent("overflow-\($0).md")
+            }
+        }
+
+        assertRejected(expectedMessage: AppState.importProviderLimitReason) {
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.importFilesAndFolders, snapshot: selection))
+        }
+        XCTAssertNil(state.currentImportBatchOwner)
+        XCTAssertFalse(state.isMutatingStructure)
+        XCTAssertEqual(
+            state.sidebarActionBackgroundFailure,
+            AppState.importProviderLimitReason)
+    }
+
+    func testFL05ImportCommandRevalidatesSelectionAfterPanelReturns() throws {
+        let state = try openVault(
+            named: "import-command-revalidate",
+            folders: ["Projects", "Other"])
+        let projects = try snapshot(
+            on: state,
+            [item("Projects", directory: true)],
+            focusedPath: "Projects",
+            creationParent: "Projects",
+            selectionRevision: 4)
+        let other = try snapshot(
+            on: state,
+            [item("Other", directory: true)],
+            focusedPath: "Other",
+            creationParent: "Other",
+            selectionRevision: 5)
+        XCTAssertTrue(state.publishSidebarSelectionSnapshot(projects))
+        let external = root.appendingPathComponent("stale-command.md")
+        try "stale".write(to: external, atomically: true, encoding: .utf8)
+        state.importSourcePicker = {
+            _ = state.publishSidebarSelectionSnapshot(other)
+            return [external]
+        }
+
+        assertRejected(expectedMessage: AppState.sidebarSelectionChangedReason) {
+            try state.dispatchSidebarAction(
+                intent(SlateCommandID.importFilesAndFolders, snapshot: projects))
+        }
+        XCTAssertNil(state.currentImportBatchOwner)
+        XCTAssertFalse(state.isMutatingStructure)
+    }
+
+    func testFL05ImportCommandReportsSameParentSubtreeAndVaultRootNoOps()
+        async throws
+    {
+        let state = try openVault(
+            named: "import-command-noops",
+            files: ["dest/already.md"],
+            folders: ["parent/child"])
+        let vault = try XCTUnwrap(state.currentVaultURL)
+        let cases: [(SidebarSelectionSnapshot, URL, String)] = [
+            (
+                try snapshot(
+                    on: state,
+                    [item("dest", directory: true)],
+                    focusedPath: "dest",
+                    creationParent: "dest",
+                    selectionRevision: 11),
+                vault.appendingPathComponent("dest/already.md"),
+                AppState.sameParentImportNoOpReason
+            ),
+            (
+                try snapshot(
+                    on: state,
+                    [item("parent/child", directory: true)],
+                    focusedPath: "parent/child",
+                    creationParent: "parent/child",
+                    selectionRevision: 12),
+                vault.appendingPathComponent("parent", isDirectory: true),
+                AppState.ownSubtreeImportNoOpReason
+            ),
+            (
+                try snapshot(on: state, [], selectionRevision: 13),
+                vault,
+                AppState.vaultRootImportNoOpReason
+            ),
+        ]
+
+        for (selection, url, expectedReason) in cases {
+            XCTAssertTrue(state.publishSidebarSelectionSnapshot(selection))
+            state.importSourcePicker = { [url] }
+            XCTAssertEqual(
+                try state.dispatchSidebarAction(
+                    intent(SlateCommandID.importFilesAndFolders, snapshot: selection)),
+                .completed(actionID: SlateCommandID.importFilesAndFolders))
+            await state.pendingStructuralTaskForTesting?.value
+
+            guard case .result(let result)? = state.activeBatchAlertPresentation,
+                case .importBatch(let report) = result.payload
+            else { return XCTFail("each no-op needs one reason-bearing import report") }
+            XCTAssertEqual(report.terminalFailureCount, 1)
+            XCTAssertEqual(report.allDetails.map(\.reason), [expectedReason])
+            XCTAssertTrue(state.dismissBatchStructuralResult(id: result.id))
+        }
     }
 
     func test04aUnavailableTemplateKeyboardInvocationAnnouncesEachSharedReasonOnceWithoutPresentation()

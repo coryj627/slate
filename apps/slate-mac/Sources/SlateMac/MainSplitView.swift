@@ -717,7 +717,11 @@ struct MainSplitView: View {
             presenting: batchStructuralAttention
         ) { result in
             let copy = AppState.BatchStructuralCopy.attention(for: result)
-            if appState.batchTrashQuarantineNotice != nil {
+            if AppState.BatchStructuralCopy.shouldOfferTrashReconciliation(
+                for: result,
+                hasQuarantinedTrashItems:
+                    appState.batchTrashQuarantineNotice != nil)
+            {
                 Button(AppState.BatchTrashCopy.checkAgainLabel) {
                     _ = appState.retryBatchTrashUnknownReconciliation()
                 }

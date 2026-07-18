@@ -139,12 +139,14 @@ enum SlateSymbol: CaseIterable {
     case rename
     /// "Move to Trash" — sends the selected file/folder to the system trash.
     case trash
-    // FL04-A shared sidebar action roles not covered by U2-5.
+    // Shared sidebar action roles not covered by U2-5.
     case open
     case duplicate
     case revealInFinder
     case copyPath
     case copyWikilink
+    /// Imports external files and folders into the selected vault location.
+    case importFilesAndFolders
 
     // Milestone M sync diagnostics (M-3, #534) — per the m_spec SlateSymbol
     // additions table. `.warning` above is reused for the High-risk badge and
@@ -239,6 +241,7 @@ enum SlateSymbol: CaseIterable {
         case .revealInFinder: return "Reveal in Finder"
         case .copyPath: return "Copy Path"
         case .copyWikilink: return "Copy Wikilink"
+        case .importFilesAndFolders: return "Import Files and Folders"
         case .syncDiagnostics: return "Sync"
         case .riskMedium: return "Medium risk"
         case .riskLow: return "Low risk"
@@ -351,6 +354,7 @@ enum SlateSymbol: CaseIterable {
         case .revealInFinder: return ("folder", "folder")
         case .copyPath: return ("doc.on.clipboard", "doc.on.clipboard")
         case .copyWikilink: return ("link", "link")
+        case .importFilesAndFolders: return ("tray.and.arrow.down", "tray.and.arrow.down")
         // Milestone M (M-3, #534): the leaf glyph is the one genuinely
         // v7-divergent role today (the trianglehead arrows are SF Symbols 7);
         // arrow.triangle.2.circlepath is SF Symbols 1-era, floor-safe. The two

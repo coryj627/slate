@@ -120,6 +120,8 @@ struct CommandPaletteView: View {
                 sidebarActionProjection:
                     appState.sidebarActionProjection(surface: .commandPalette),
                 structuralMutationDisabledReason: appState.structuralMutationDisabledReason,
+                importCancellationDisabledReason:
+                    appState.importCancellationDisabledReason,
                 canvasMutationDisabledReason: appState.activeCanvasMutationDisabledReason,
                 noteAuthoringDisabledReason: appState.activeNoteAuthoringDisabledReason,
                 baseInteractionDisabledReason: appState.activeBaseInteractionDisabledReason,
@@ -249,6 +251,8 @@ struct CommandPaletteView: View {
             sidebarActionProjection:
                 appState.sidebarActionProjection(surface: .commandPalette),
             structuralMutationDisabledReason: appState.structuralMutationDisabledReason,
+            importCancellationDisabledReason:
+                appState.importCancellationDisabledReason,
             canvasMutationDisabledReason: appState.activeCanvasMutationDisabledReason,
             noteAuthoringDisabledReason: appState.activeNoteAuthoringDisabledReason,
             baseInteractionDisabledReason: appState.activeBaseInteractionDisabledReason,
@@ -333,6 +337,7 @@ struct CommandPaletteView: View {
         for command: Command,
         sidebarActionProjection: [SidebarActionEvaluation] = [],
         structuralMutationDisabledReason: String?,
+        importCancellationDisabledReason: String? = nil,
         canvasMutationDisabledReason: String? = nil,
         noteAuthoringDisabledReason: String? = nil,
         baseInteractionDisabledReason: String? = nil,
@@ -343,6 +348,9 @@ struct CommandPaletteView: View {
             $0.id == command.id
         }) {
             return evaluation.disabledReason
+        }
+        if command.id == SlateCommandID.cancelImport {
+            return importCancellationDisabledReason
         }
         if SlateCommandID.structuralMutationCommands.contains(command.id),
             let structuralMutationDisabledReason
@@ -629,6 +637,8 @@ struct CommandPaletteView: View {
             sidebarActionProjection:
                 appState.sidebarActionProjection(surface: .commandPalette),
             structuralMutationDisabledReason: appState.structuralMutationDisabledReason,
+            importCancellationDisabledReason:
+                appState.importCancellationDisabledReason,
             canvasMutationDisabledReason: appState.activeCanvasMutationDisabledReason,
             noteAuthoringDisabledReason: appState.activeNoteAuthoringDisabledReason,
             baseInteractionDisabledReason: appState.activeBaseInteractionDisabledReason,
