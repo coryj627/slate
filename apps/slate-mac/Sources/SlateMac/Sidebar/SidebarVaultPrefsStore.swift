@@ -209,10 +209,22 @@ struct SidebarVaultPrefsStore: Sendable {
       throw SidebarVaultPrefsStoreError.readOnly(notice)
     }
 
+    // Baseline for the no-op check below: what an unchanged root would look
+    // like after the store's own version stamp.
+    var unchangedBaseline = root
+    unchangedBaseline["version"] = Self.currentVersion
+
     try mutation(&root)
     // The store, not callers, owns the schema marker. This also prevents a
     // mutation from accidentally manufacturing a forward-version file.
     root["version"] = Self.currentVersion
+
+    // A mutation that leaves the root unchanged performs no physical
+    // replacement (FL-06 round-13): repeated no-op cycles must not churn the
+    // file's bytes, mtime, or sync state.
+    if (root as NSDictionary).isEqual(to: unchangedBaseline) {
+      return
+    }
 
     guard JSONSerialization.isValidJSONObject(root) else {
       throw SidebarVaultPrefsStoreError.encodingFailed(

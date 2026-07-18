@@ -190,6 +190,27 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     XCTAssertEqual(store.read().root["durable"] as? Bool, true)
   }
 
+  func testNoOpUpdateSkipsThePhysicalReplacement() throws {
+    let synchronizer = DirectorySynchronizerSpy()
+    let store = makeStore(directorySynchronizer: { synchronizer.synchronize($0) })
+    try store.update { root in
+      root["value"] = "same"
+    }
+    XCTAssertEqual(synchronizer.callCount, 1)
+
+    let before = try Data(contentsOf: store.fileURL)
+    try store.update { _ in
+      // No change at all.
+    }
+    try store.update { root in
+      root["value"] = "same"  // identical value: still a no-op
+    }
+    XCTAssertEqual(
+      synchronizer.callCount, 1,
+      "an unchanged root performs no physical replacement")
+    XCTAssertEqual(try Data(contentsOf: store.fileURL), before)
+  }
+
   func testDirectorySyncFailureIsReportedAfterAtomicReplacement() throws {
     let synchronizer = DirectorySynchronizerSpy(shouldFail: true)
     let store = makeStore(directorySynchronizer: { synchronizer.synchronize($0) })

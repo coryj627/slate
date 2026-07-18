@@ -447,7 +447,63 @@ final class FileTreeViewModel: ObservableObject {
     /// `session.listDirChildren`; tests inject a spy to assert *which* levels
     /// are fetched (the lazy-fetch guarantee) and to stand up large synthetic
     /// fixtures without an FFI round-trip. `nil` until `bind(to:)`.
-    private var fetcher: ((String) throws -> DirListing)?
+    private var fetcher: ((String, String?) throws -> DirListing)?
+
+    /// Sentinel thrown by the single-shot test wrapper for a continuation
+    /// cursor it cannot serve; the drain treats it as "incomplete level".
+    private struct LevelPageUnavailable: Error {}
+
+    /// Total-files safety bound for one level's drain. Levels beyond it are
+    /// stored partial (organization still applies to what is materialized,
+    /// stale pruning stays suppressed).
+    nonisolated static let levelTotalSafetyCap = 50_000
+
+    /// Drain every page of a level (round-13 finding 1): the page limit is a
+    /// PAGE size, not a level cap, so created/modified sorting and pinned
+    /// lookup see the complete file set for any realistic folder.
+    private func fetchCompleteLevel(
+        _ parentPath: String
+    ) throws -> (listing: DirListing, isComplete: Bool) {
+        guard let fetcher else {
+            throw LevelPageUnavailable()
+        }
+        var dirs: [DirNodeSummary] = []
+        var files: [FileSummary] = []
+        var totalFiltered: UInt64 = 0
+        var cursor: String?
+        var isComplete = true
+        var isFirstPage = true
+        repeat {
+            let page: DirListing
+            do {
+                page = try fetcher(parentPath, cursor)
+            } catch is LevelPageUnavailable {
+                // The injected single-shot fixture cannot continue; keep what
+                // is materialized and record the level as partial.
+                isComplete = false
+                break
+            }
+            if isFirstPage {
+                dirs = page.dirs
+                totalFiltered = page.files.totalFiltered
+                isFirstPage = false
+            }
+            files.append(contentsOf: page.files.items)
+            cursor = page.files.nextCursor
+            if cursor != nil, files.count >= Self.levelTotalSafetyCap {
+                isComplete = false
+                break
+            }
+        } while cursor != nil
+        return (
+            DirListing(
+                dirs: dirs,
+                files: FileSummaryPage(
+                    items: files, nextCursor: isComplete ? nil : cursor,
+                    totalFiltered: totalFiltered)),
+            isComplete
+        )
+    }
 
     /// Exact path → the one observable owned by its materialized row. Rich
     /// metadata refreshes use this index and never mutate a published level.
@@ -551,9 +607,21 @@ final class FileTreeViewModel: ObservableObject {
         fetcher: @escaping (String) throws -> DirListing,
         restoringExpandedDirPaths: [String] = []
     ) {
+        bindForTesting(
+            pagedFetcher: { parentPath, cursor in
+                guard cursor == nil else { throw LevelPageUnavailable() }
+                return try fetcher(parentPath)
+            },
+            restoringExpandedDirPaths: restoringExpandedDirPaths)
+    }
+
+    func bindForTesting(
+        pagedFetcher: @escaping (String, String?) throws -> DirListing,
+        restoringExpandedDirPaths: [String] = []
+    ) {
         self.session = nil
         sessionIdentity = nil
-        self.fetcher = fetcher
+        self.fetcher = pagedFetcher
         clearMaterializedLevels()
         expanded = []
         pendingExpandedPaths = Set(restoringExpandedDirPaths)
@@ -616,10 +684,10 @@ final class FileTreeViewModel: ObservableObject {
         // Route level fetches through the session. `Paging` with a nil cursor
         // and a generous limit takes the whole level in one call (see
         // `levelPageLimit`).
-        fetcher = { parentPath in
+        fetcher = { parentPath, cursor in
             try session.listDirChildren(
                 parentPath: parentPath,
-                paging: Paging(cursor: nil, limit: Self.levelPageLimit))
+                paging: Paging(cursor: cursor, limit: Self.levelPageLimit))
         }
         loadRoot()
     }
@@ -629,13 +697,13 @@ final class FileTreeViewModel: ObservableObject {
     /// (Re)fetch the root level. Sets `.loading` on the root sentinel while in
     /// flight so the view can show a spinner if the root is slow.
     func loadRoot() {
-        guard let fetcher else { return }
+        guard fetcher != nil else { return }
         fetchState[Self.rootFetchKey] = .loading
         do {
-            let listing = try fetcher("")
+            let (listing, isComplete) = try fetchCompleteLevel("")
             replaceRootLevel(
                 with: Self.nodes(from: listing, depth: 0),
-                isCompleteLevel: listing.files.nextCursor == nil)
+                isCompleteLevel: isComplete)
             fetchState[Self.rootFetchKey] = nil
             adoptPendingExpansions(in: rootLevel)
             materializeExpandedChildren(in: rootLevel)
@@ -650,15 +718,15 @@ final class FileTreeViewModel: ObservableObject {
     /// while in flight and clears it (or records `.failed`) on completion.
     func loadChildren(of node: TreeNode) {
         guard case .directory = node.kind else { return }
-        guard let fetcher else { return }
+        guard fetcher != nil else { return }
         if children[node.nodeID] != nil { return }  // already cached
         fetchState[node.nodeID] = .loading
         do {
-            let listing = try fetcher(node.path)
+            let (listing, isComplete) = try fetchCompleteLevel(node.path)
             let level = Self.nodes(from: listing, depth: node.depth + 1)
             replaceChildLevel(
                 level, for: node.nodeID, parentPath: node.path,
-                isCompleteLevel: listing.files.nextCursor == nil)
+                isCompleteLevel: isComplete)
             fetchState[node.nodeID] = nil
             adoptPendingExpansions(in: level)
             materializeExpandedChildren(in: level)

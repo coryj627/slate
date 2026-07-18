@@ -4920,6 +4920,7 @@ final class AppState: ObservableObject {
         sidebarOrganizationPersistTaskForTesting = nil
         sidebarStructuralTransformJournal = []
         sidebarStructuralTransformJournalOverflowed = false
+        sidebarPinPruneInFlight = []
         sidebarPinPruneLedger.reset()
         if sidebarOrganization != SidebarOrganizationState() {
             sidebarOrganization = SidebarOrganizationState()
@@ -5088,6 +5089,7 @@ final class AppState: ObservableObject {
         apply: @escaping @Sendable (inout [String: Any]) throws -> Void,
         reflect: (inout SidebarOrganizationState) -> Void,
         acknowledge: (() -> Void)? = nil,
+        onSettled: (() -> Void)? = nil,
         isBacklogDrain: Bool = false,
         verifyAnnouncement: (container: String, announced: SidebarOrganizationChoice)? = nil
     ) throws {
@@ -5249,6 +5251,7 @@ final class AppState: ObservableObject {
                 }
             }
 
+            defer { onSettled?() }
             switch outcome {
             case .failure(let error):
                 let failure: String
@@ -5669,8 +5672,13 @@ final class AppState: ObservableObject {
         guard !stale.isEmpty,
             sidebarVaultPrefsNotice == nil,
             sidebarPinPruneLedger.shouldPrune(folder: folder),
+            !sidebarPinPruneInFlight.contains(folder),
             let vaultRoot = currentVaultURL
         else { return }
+        // Round-13 finding 2: one in-flight prune per folder — repeated
+        // stale reports while a prune is pending coalesce into the next
+        // report after it settles.
+        sidebarPinPruneInFlight.insert(folder)
         // Round-12 finding 1: no filesystem work on the main actor, and a
         // bounded, deduplicated candidate set — an adversarially repetitive
         // authored list cannot freeze the sidebar. Surplus candidates simply
@@ -5723,9 +5731,13 @@ final class AppState: ObservableObject {
             acknowledge: { [weak self] in
                 guard let self, removals.value > 0 else { return }
                 self.sidebarPinPruneLedger.markPruned(folder: folder)
+            },
+            onSettled: { [weak self] in
+                self?.sidebarPinPruneInFlight.remove(folder)
             })
     }
 
+    private var sidebarPinPruneInFlight: Set<String> = []
     private static let sidebarStalePruneCandidateCap = 128
 
     /// True only on a definite ENOENT for the vault-relative path; any other

@@ -1528,12 +1528,14 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       atomically: true, encoding: .utf8)
     state.pruneStaleSidebarPins(
       forFolder: "Projects", stale: ["Projects/ghost.md"])
+    await awaitPersist(state)
     XCTAssertEqual(
       state.sidebarOrganization.pins.paths(forFolder: "Projects"),
       ["Projects/ghost.md", "Projects/real.md", "Projects/gone.md"],
       "a re-appeared file is never pruned")
 
-    // The slot was not consumed: a genuinely missing path still prunes.
+    // The slot was not consumed (and the first prune has settled): a
+    // genuinely missing path still prunes on the next report.
     state.pruneStaleSidebarPins(
       forFolder: "Projects", stale: ["Projects/gone.md"])
     await awaitPersist(state)

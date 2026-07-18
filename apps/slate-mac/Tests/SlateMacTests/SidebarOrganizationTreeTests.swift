@@ -201,6 +201,54 @@ final class SidebarOrganizationTreeTests: XCTestCase {
     XCTAssertFalse(vm.isPinnedRow(.file(path: "c.md")))
   }
 
+  func testLevelsDrainEveryPageBeforeOrganization() {
+    // Round-13 finding 1: the page limit is a page SIZE, not a level cap.
+    // With the newest and the pinned file on page two, created/modified
+    // sorting and the pinned section must still see them.
+    let now = instant(2026, 7, 18)
+    let pageOne = DirListing(
+      dirs: [],
+      files: FileSummaryPage(
+        items: [
+          file("old-a.md", mtime: 1_000),
+          file("old-b.md", mtime: 2_000),
+        ],
+        nextCursor: "page-2", totalFiltered: 4))
+    let pageTwo = DirListing(
+      dirs: [],
+      files: FileSummaryPage(
+        items: [
+          file("newest.md", mtime: 9_000),
+          file("pinned.md", mtime: 500),
+        ],
+        nextCursor: nil, totalFiltered: 4))
+    let vm = FileTreeViewModel()
+    var prefs = SidebarOrganizationPrefs()
+    prefs.vaultChoice = SidebarOrganizationChoice(
+      sort: SidebarSortOption(field: .modified, direction: .desc), grouping: .none)
+    var pins = SidebarPins()
+    pins.pin("pinned.md", inFolder: "")
+    vm.applyOrganization(context(prefs: prefs, pins: pins, now: now))
+    vm.bindForTesting(pagedFetcher: { parent, cursor in
+      XCTAssertEqual(parent, "")
+      switch cursor {
+      case nil: return pageOne
+      case "page-2": return pageTwo
+      default:
+        XCTFail("unexpected cursor \(String(describing: cursor))")
+        return pageTwo
+      }
+    })
+
+    XCTAssertEqual(
+      visiblePaths(vm),
+      ["pinned.md", "newest.md", "old-b.md", "old-a.md"],
+      "page-two files participate in the pinned section and the sort")
+    XCTAssertTrue(vm.isPinnedRow(.file(path: "pinned.md")))
+    // The drained level is complete, so stale classification works again.
+    XCTAssertEqual(vm.stalePins(forFolder: ""), [])
+  }
+
   func testPartialLevelsNeverClassifyPinsAsStale() {
     // Round-5 finding 2: a paginated listing omits real files; a pinned
     // file on a later page must not be offered for pruning.
