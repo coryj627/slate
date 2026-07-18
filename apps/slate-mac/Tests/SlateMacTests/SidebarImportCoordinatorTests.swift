@@ -144,6 +144,36 @@ final class SidebarImportCoordinatorTests: XCTestCase {
       }
   }
 
+  func testProductionDestinationCreatorsKeepUTF8ImportAsInitialHistory() throws {
+    let vault = try makeVault()
+    let session = try VaultSession.openFilesystem(rootPath: vault.path)
+    let creators = SidebarImportDestinationCreators.production(session: session)
+    let original = "# Imported\nOriginal body.\n"
+
+    try creators.createFile(
+      path: "note.md",
+      bytes: try XCTUnwrap(original.data(using: .utf8)))
+
+    let initialPage = try session.listVersions(
+      path: "note.md",
+      paging: Paging(cursor: nil, limit: 10))
+    let initialVersion = try XCTUnwrap(
+      initialPage.items.first,
+      "a valid UTF-8 import must seed recoverable local history")
+
+    _ = try session.saveText(
+      path: "note.md",
+      contents: "# Imported\nEdited body.\n",
+      expectedContentHash: nil)
+
+    XCTAssertEqual(
+      try session.versionContent(
+        path: "note.md",
+        versionHash: initialVersion.contentHashAfter),
+      original,
+      "the imported bytes remain reconstructable after the first edit")
+  }
+
   func testCoordinatorCopiesBinaryFileAndDirectoryTreeWithVerifiedReport() async throws {
     let vault = try makeVault()
     try FileManager.default.createDirectory(

@@ -50,7 +50,11 @@ struct SidebarImportDestinationCreators: Sendable {
   static func production(session: VaultSession) -> Self {
     Self(
       createFile: { path, bytes in
-        _ = try session.createExclusiveBytes(path: path, bytes: bytes)
+        if let text = String(data: bytes, encoding: .utf8) {
+          _ = try session.createExclusive(path: path, content: text)
+        } else {
+          _ = try session.createExclusiveBytes(path: path, bytes: bytes)
+        }
       },
       createDirectory: { path in
         try session.createFolderExclusive(path: path)
