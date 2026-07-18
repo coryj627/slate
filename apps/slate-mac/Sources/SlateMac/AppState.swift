@@ -4886,6 +4886,13 @@ final class AppState: ObservableObject {
     /// finding 3).
     private var sidebarOrganizationPersistTailToken: UUID?
     private var sidebarOrganizationPendingPersistFailure: String?
+    /// Announcement-verification records awaiting the chain tail: container →
+    /// the effective choice the optimistic announcement described. The tail
+    /// verifies every record against decoded final disk truth; a later action
+    /// on the same container supersedes the earlier record (round-11
+    /// finding 2).
+    private var sidebarOrganizationPendingAnnouncementVerifications:
+        [String: SidebarOrganizationChoice] = [:]
     private(set) var sidebarOrganizationPersistTaskForTesting: Task<Void, Never>?
     /// Structural path transforms that arrived while `.slate/sidebar.json`
     /// was read-only. Retry replays them under the store lock before it
@@ -4909,6 +4916,7 @@ final class AppState: ObservableObject {
         sidebarOrganizationPersistChain = nil
         sidebarOrganizationPersistTailToken = nil
         sidebarOrganizationPendingPersistFailure = nil
+        sidebarOrganizationPendingAnnouncementVerifications = [:]
         sidebarOrganizationPersistTaskForTesting = nil
         sidebarStructuralTransformJournal = []
         sidebarStructuralTransformJournalOverflowed = false
@@ -5104,6 +5112,10 @@ final class AppState: ObservableObject {
         let storeFileURL = store.fileURL
         let token = UUID()
         sidebarOrganizationPersistTailToken = token
+        if let verifyAnnouncement {
+            sidebarOrganizationPendingAnnouncementVerifications[
+                verifyAnnouncement.container] = verifyAnnouncement.announced
+        }
         // Round-8 finding 1: EVERY persist first drains the pending
         // structural backlog under the lock, so a transform stranded by an
         // earlier readable-write failure (lock/temp/fsync) commits with the
@@ -5207,14 +5219,18 @@ final class AppState: ObservableObject {
                 if organization != self.sidebarOrganization {
                     self.sidebarOrganization = organization
                 }
-                // Round-10 finding 2: if the merge changed the effective
-                // choice the optimistic announcement described, speak the
-                // corrected truth once.
-                if let verifyAnnouncement {
+                // Round-10 finding 2 + round-11 finding 2: the tail verifies
+                // EVERY pending record — including ones enqueued by earlier
+                // non-tail writes in this chain — against final disk truth,
+                // announcing each container whose merged effective choice
+                // differs from what its optimistic announcement described.
+                let pendingVerifications =
+                    self.sidebarOrganizationPendingAnnouncementVerifications
+                self.sidebarOrganizationPendingAnnouncementVerifications = [:]
+                for (container, announced) in pendingVerifications {
                     let merged = organization.prefs
-                        .effectiveChoice(forFolder: verifyAnnouncement.container)
-                        .normalized
-                    if merged != verifyAnnouncement.announced.normalized {
+                        .effectiveChoice(forFolder: container).normalized
+                    if merged != announced.normalized {
                         let correction = merged.sortAnnouncement
                         self.lastMutationAnnouncement = correction
                         self.announcer.post(correction, priority: .medium)
@@ -5648,24 +5664,53 @@ final class AppState: ObservableObject {
     func pruneStaleSidebarPins(forFolder folder: String, stale: [String]) {
         guard !stale.isEmpty,
             sidebarVaultPrefsNotice == nil,
-            sidebarPinPruneLedger.shouldPrune(folder: folder)
+            sidebarPinPruneLedger.shouldPrune(folder: folder),
+            let vaultRoot = currentVaultURL
         else { return }
+        // Round-11 finding 3: an absence snapshot from an earlier listing is
+        // not deletion provenance — a synced sidebar.json can arrive before
+        // its pinned note. Re-validate each candidate with a fresh exact-path
+        // check immediately before mutating and retain the pin on anything
+        // but a definite ENOENT. A retained candidate does NOT consume the
+        // folder's once-per-session prune slot.
+        let confirmedStale = stale.filter {
+            Self.sidebarPathDefinitelyMissing(vaultRoot: vaultRoot, path: $0)
+        }
+        guard !confirmedStale.isEmpty else { return }
         sidebarPinPruneLedger.markPruned(folder: folder)
-        let staleSet = Set(stale)
+        let staleSet = Set(confirmedStale)
         let currentPaths = sidebarOrganization.pins.paths(forFolder: folder)
         let remaining = currentPaths.filter { !staleSet.contains($0) }
         guard remaining.count != currentPaths.count else { return }
 
         try? mutateSidebarOrganization(announce: nil) { root in
             let storedPins = SidebarOrganizationSchema.decode(root: root).pins
+            // Second fresh check under the lock: retain anything that
+            // appeared between the pre-check and this mutation.
             let storedRemaining = storedPins.paths(forFolder: folder).filter {
-                !staleSet.contains($0)
+                path in
+                !staleSet.contains(path)
+                    || !Self.sidebarPathDefinitelyMissing(
+                        vaultRoot: vaultRoot, path: path)
             }
             SidebarOrganizationSchema.setPins(
                 &root, folder: folder, paths: storedRemaining)
         } reflect: { state in
             state.pins.replacePaths(remaining, forFolder: folder)
         }
+    }
+
+    /// True only on a definite ENOENT for the vault-relative path; any other
+    /// stat outcome (exists, permission error, transient I/O) retains the pin.
+    nonisolated static func sidebarPathDefinitelyMissing(
+        vaultRoot: URL, path: String
+    ) -> Bool {
+        var info = stat()
+        let result = vaultRoot.appendingPathComponent(path).path.withCString {
+            stat($0, &info)
+        }
+        if result == 0 { return false }
+        return errno == ENOENT
     }
 
     /// Injectable targeted lookup for deterministic coalescing tests. The
@@ -8187,6 +8232,7 @@ final class AppState: ObservableObject {
             // the file's pins/overrides against their renamed folders.
             var adoptedRoot = result.root
             var adoptedNotice = result.notice
+            var retryDurabilityWarning: String?
             // Round-5 finding 3: a repaired file whose known sections use an
             // unrecognized top-level shape stays in recovery — the replay
             // must not write into it either.
@@ -8205,10 +8251,15 @@ final class AppState: ObservableObject {
                 !self.sidebarStructuralTransformJournal.isEmpty
             {
                 let pass = self.sidebarStructuralTransformJournal
+                enum RetryReplayOutcome {
+                    case success([String: Any])
+                    case replacedButUnsynced([String: Any], reason: String)
+                    case failure(Error)
+                }
                 let replayTask = Task.detached(priority: .userInitiated) {
-                    () -> Result<[String: Any], Error> in
+                    () -> RetryReplayOutcome in
+                    var finalRoot: [String: Any] = [:]
                     do {
-                        var finalRoot: [String: Any] = [:]
                         try store.update { root in
                             guard
                                 SidebarOrganizationSchema
@@ -8222,6 +8273,12 @@ final class AppState: ObservableObject {
                             finalRoot = root
                         }
                         return .success(finalRoot)
+                    } catch SidebarVaultPrefsStoreError.replacedButUnsynced(
+                        let reason)
+                    {
+                        // The rename landed: the pass's content is committed
+                        // (round-11 finding 1) — only durability is at risk.
+                        return .replacedButUnsynced(finalRoot, reason: reason)
                     } catch {
                         return .failure(error)
                     }
@@ -8242,6 +8299,18 @@ final class AppState: ObservableObject {
                     self.sidebarStructuralTransformJournal.removeAll {
                         passIDs.contains($0.id)
                     }
+                case .replacedButUnsynced(let finalRoot, let reason):
+                    // Committed: adopt and acknowledge exactly this pass,
+                    // continue any suffix, and surface only the durability
+                    // warning after publish (round-11 finding 1).
+                    adoptedRoot = finalRoot
+                    let passIDs = Set(pass.map(\.id))
+                    self.sidebarStructuralTransformJournal.removeAll {
+                        passIDs.contains($0.id)
+                    }
+                    retryDurabilityWarning =
+                        "Sidebar settings were saved, but the change may not "
+                        + "survive a sudden power loss: \(reason)"
                 case .failure:
                     // The file regressed between the read and the replay;
                     // keep the whole journal for the next Retry and report
@@ -8293,6 +8362,9 @@ final class AppState: ObservableObject {
                     priority: .medium)
             } else {
                 self.announcer.post("Sidebar settings reloaded.", priority: .medium)
+            }
+            if adoptedNotice == nil, let retryDurabilityWarning {
+                self.announcer.post(retryDurabilityWarning, priority: .medium)
             }
         }
         sidebarVaultPrefsRetryTask = task
