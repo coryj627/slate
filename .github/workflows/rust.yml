@@ -130,6 +130,17 @@ jobs:
         # it (harmless: it just runs twice), but the isolated step's
         # exact-match filter + --no-tests=fail turns the rename into a
         # loud CI failure, preserving the old `--list | grep` protection.
+        #
+        # TMPDIR on tmpfs: the fs-heavy censuses spend their time churning
+        # tempdir vaults (create/scan/delete thousands of small files per
+        # run — the dir-tree census alone was 549s on ext4, run
+        # 29649179445). tmpfs keeps identical filesystem *semantics* for
+        # what these censuses assert (logical tree/scan equivalence) while
+        # dropping journal/flush cost. The perf guard below deliberately
+        # keeps the default on-disk TMPDIR — its wall-clock bound measures
+        # real-fs listing behavior.
+        env:
+          TMPDIR: /dev/shm
         run: >-
           cargo nextest run --workspace --cargo-profile ci
           --no-fail-fast --no-tests=fail
