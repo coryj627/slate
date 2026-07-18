@@ -4875,6 +4875,11 @@ final class AppState: ObservableObject {
     /// predecessor, so two quick commands cannot interleave read-modify-write
     /// cycles even though each cycle also holds the cross-process lock.
     private var sidebarOrganizationPersistChain: Task<Void, Never>?
+    /// Per-FILE writer chains that survive vault teardown (round-16): a
+    /// persist detached before a close/reopen still holds the file's
+    /// serialization slot, so the reopened session's writers — and its
+    /// post-open refresh — queue behind it instead of interleaving.
+    @MainActor private static var sidebarStoreWriterChains: [URL: Task<Void, Never>] = [:]
     /// Ownership generation for queued persists. Bumped on every vault
     /// teardown/switch; a queued task whose captured generation no longer
     /// matches skips its disk I/O and publishes nothing.
@@ -5112,7 +5117,7 @@ final class AppState: ObservableObject {
             announcer.post(announcement, priority: .medium)
         }
 
-        let previous = sidebarOrganizationPersistChain
+        let previous = Self.sidebarStoreWriterChains[store.fileURL]
         let session = currentSession
         let generation = sidebarOrganizationWriteGeneration
         let storeFileURL = store.fileURL
@@ -5313,6 +5318,7 @@ final class AppState: ObservableObject {
             }
         }
         sidebarOrganizationPersistChain = task
+        Self.sidebarStoreWriterChains[storeFileURL] = task
         sidebarOrganizationPersistTaskForTesting = task
     }
 
@@ -5688,6 +5694,8 @@ final class AppState: ObservableObject {
             stale.filter { seen.insert($0).inserted }
                 .prefix(Self.sidebarStalePruneCandidateCap))
         guard !candidates.isEmpty else { return }
+        guard Self.sidebarVaultRelativePathIsAdmissible(folder) || folder.isEmpty
+        else { return }
         let staleSet = Set(candidates)
 
         // All validation and mutation happen under the store lock, off the
@@ -5741,6 +5749,19 @@ final class AppState: ObservableObject {
     private var sidebarPinPruneInFlight: Set<String> = []
     private static let sidebarStalePruneCandidateCap = 128
 
+    /// A vault-relative path safe to join to the vault root: nonempty,
+    /// relative, forward-slash separated, with no empty, `.`, or `..`
+    /// components (the organizer/index canonical form).
+    nonisolated static func sidebarVaultRelativePathIsAdmissible(
+        _ path: String
+    ) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/") else { return false }
+        return path.split(separator: "/", omittingEmptySubsequences: false)
+            .allSatisfy { component in
+                !component.isEmpty && component != "." && component != ".."
+            }
+    }
+
     /// The subset of candidates that are DEFINITELY absent: their parent
     /// directory is readable (or itself definitively gone) and contains no
     /// byte-exact entry for the final path component. A plain `stat` is not
@@ -5753,11 +5774,19 @@ final class AppState: ObservableObject {
     ) -> Set<String> {
         guard !candidates.isEmpty else { return [] }
         var byParent: [String: [String]] = [:]
+        var missing: Set<String> = []
         for candidate in candidates {
+            // Round-16: admission BEFORE any filesystem access. An authored
+            // pin that is absolute or traverses (`..`) can never be a real
+            // vault-relative entry — it is definitively invalid and prunes
+            // WITHOUT ever touching a path outside the vault.
+            guard sidebarVaultRelativePathIsAdmissible(candidate) else {
+                missing.insert(candidate)
+                continue
+            }
             byParent[SidebarPins.folder(of: candidate), default: []]
                 .append(candidate)
         }
-        var missing: Set<String> = []
         for (parent, children) in byParent {
             let parentURL = parent.isEmpty
                 ? vaultRoot : vaultRoot.appendingPathComponent(parent)
@@ -8248,6 +8277,49 @@ final class AppState: ObservableObject {
             sidebarVaultPrefsNotice = .malformed
         } else {
             sidebarVaultPrefsNotice = result.notice
+        }
+        // Round-16: a writer detached before a close/reopen of the SAME
+        // vault may still be completing. Queue a silent post-drain refresh
+        // so published state converges on whatever that writer committed.
+        if let priorWriter = Self.sidebarStoreWriterChains[store.fileURL] {
+            let generation = sidebarOrganizationWriteGeneration
+            let session = currentSession
+            Task { [weak self] in
+                await priorWriter.value
+                guard let self,
+                    self.sidebarOrganizationWriteGeneration == generation,
+                    self.currentSession === session,
+                    self.sidebarVaultPrefsStore?.fileURL == store.fileURL
+                else { return }
+                let refreshed = await Task.detached(priority: .utility) {
+                    store.read()
+                }.value
+                guard self.sidebarOrganizationWriteGeneration == generation,
+                    self.currentSession === session
+                else { return }
+                var notice = refreshed.notice
+                if notice == nil,
+                    !SidebarOrganizationSchema.knownSectionShapesAreValid(
+                        root: refreshed.root)
+                {
+                    notice = .malformed
+                }
+                if self.sidebarVaultPrefsNotice != notice {
+                    self.sidebarVaultPrefsNotice = notice
+                }
+                let organization: SidebarOrganizationState
+                if notice == nil {
+                    let decoded = SidebarOrganizationSchema.decode(
+                        root: refreshed.root)
+                    organization = SidebarOrganizationState(
+                        prefs: decoded.prefs, pins: decoded.pins)
+                } else {
+                    organization = SidebarOrganizationState()
+                }
+                if organization != self.sidebarOrganization {
+                    self.sidebarOrganization = organization
+                }
+            }
         }
         // Adopt the vault's authored organization in the same step. Unsafe
         // input already resolved to the default root, so this can't
