@@ -65,7 +65,11 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
     provider
         .write_file("Note.md", b"---\ndates: [2026-01-02]\n---\n# Epoch mtime\n")
         .unwrap();
-    std::fs::File::open(tmp.path().join("Note.md"))
+    // write(true): Windows SetFileTime needs a write-attributes
+    // handle; a read-only open is EACCES there.
+    std::fs::File::options()
+        .write(true)
+        .open(tmp.path().join("Note.md"))
         .unwrap()
         .set_modified(SystemTime::UNIX_EPOCH)
         .unwrap();
@@ -159,7 +163,11 @@ fn migration_031_backfills_epoch_mtime_file_instead_of_taking_fast_path() {
     let provider = FsVaultProvider::new(tmp.path().to_path_buf());
     let source = b"# Epoch note\n\nbody";
     provider.write_file("epoch.md", source).unwrap();
-    std::fs::File::open(tmp.path().join("epoch.md"))
+    // write(true): Windows SetFileTime needs a write-attributes
+    // handle; a read-only open is EACCES there.
+    std::fs::File::options()
+        .write(true)
+        .open(tmp.path().join("epoch.md"))
         .unwrap()
         .set_modified(SystemTime::UNIX_EPOCH)
         .unwrap();
