@@ -6,7 +6,7 @@
 # picks it up). If you hit "cargo: command not found", source
 # the rustup env once: `. "$HOME/.cargo/env"`.
 
-.PHONY: help check test fmt fmt-check clippy bench-check check-license-headers ci regenerate-bindings swift-cli mac-app mac-app-run mac-app-launch bench clean
+.PHONY: help check test test-fast fmt fmt-check clippy bench-check check-license-headers ci regenerate-bindings swift-cli mac-app mac-app-run mac-app-launch bench clean
 
 help:
 	@echo "Slate — common commands"
@@ -40,9 +40,17 @@ test:
 # see Cargo.toml). ~5x faster wall clock than `make test` once warm; the
 # doc-test pass keeps parity with what CI runs. Needs cargo-nextest
 # (`brew install cargo-nextest` or `cargo install cargo-nextest --locked`).
+# Mirrors CI exactly (adversarial-review fix): --locked like the CI
+# lanes, and the wall-clock perf guard is excluded from the sweep and
+# run isolated afterward so census contention can't fail its 100ms
+# bound locally either.
+ROOT_LISTING_PERF_GUARD := session::tests::dir_tree::perf_guard_root_listing_under_100ms_on_10k_files
 test-fast:
-	cargo nextest run --workspace --cargo-profile ci --no-fail-fast
-	cargo test --workspace --doc --profile ci
+	cargo nextest run --workspace --cargo-profile ci --locked --no-fail-fast \
+		-E "not test($(ROOT_LISTING_PERF_GUARD))"
+	cargo nextest run --workspace --cargo-profile ci --locked --no-tests=fail --test-threads 1 \
+		-E "test(=$(ROOT_LISTING_PERF_GUARD))"
+	cargo test --workspace --doc --profile ci --locked
 
 fmt:
 	cargo fmt --all
