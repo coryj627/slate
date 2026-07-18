@@ -700,16 +700,57 @@ fn walk_api_level(
 }
 
 // --- census: tree matches filesystem -------------------------------------
+//
+// 500 random vaults (depth <= 6, width <= 12) with unicode / spaces /
+// bracket / star / question-mark names, plus the exhaustive small shapes
+// (every tree with <= 4 dirs). After scanning, the recursive
+// `list_dir_children` walk must equal a direct filesystem walk: identical
+// directory sets, identical file sets, identical counts.
+//
+// The 500 random seeds are split across four `#[test]` chunks so the test
+// runner can schedule them in parallel: as one test fn this census ran
+// 549s single-threaded on CI (run 29649179445) and was the entire test
+// lane's wall-clock tail. The chunks cover exactly the same seeds with
+// the same RNG construction — `census_dir_tree_seed_chunks_are_contiguous`
+// machine-checks that the union is precisely 0..500, so a future edit
+// can't silently drop coverage.
+
+const DIR_TREE_SEED_CHUNKS: [(u64, u64); 4] = [(0, 125), (125, 250), (250, 375), (375, 500)];
 
 #[test]
-fn census_dir_tree_matches_filesystem() {
-    // 500 random vaults (depth <= 6, width <= 12) with unicode / spaces /
-    // bracket / star / question-mark names, plus the exhaustive small
-    // shapes (every tree with <= 4 dirs). After scanning, the recursive
-    // `list_dir_children` walk must equal a direct filesystem walk:
-    // identical directory sets, identical file sets, identical counts.
-    const RANDOM_VAULTS: u64 = 500;
-    for seed in 0..RANDOM_VAULTS {
+fn census_dir_tree_seed_chunks_are_contiguous() {
+    assert_eq!(DIR_TREE_SEED_CHUNKS[0].0, 0);
+    assert_eq!(DIR_TREE_SEED_CHUNKS[DIR_TREE_SEED_CHUNKS.len() - 1].1, 500);
+    for pair in DIR_TREE_SEED_CHUNKS.windows(2) {
+        assert_eq!(
+            pair[0].1, pair[1].0,
+            "seed chunks must be contiguous: {pair:?}"
+        );
+    }
+}
+
+#[test]
+fn census_dir_tree_matches_filesystem_seeds_000_125() {
+    dir_tree_matches_filesystem_for_seeds(DIR_TREE_SEED_CHUNKS[0]);
+}
+
+#[test]
+fn census_dir_tree_matches_filesystem_seeds_125_250() {
+    dir_tree_matches_filesystem_for_seeds(DIR_TREE_SEED_CHUNKS[1]);
+}
+
+#[test]
+fn census_dir_tree_matches_filesystem_seeds_250_375() {
+    dir_tree_matches_filesystem_for_seeds(DIR_TREE_SEED_CHUNKS[2]);
+}
+
+#[test]
+fn census_dir_tree_matches_filesystem_seeds_375_500() {
+    dir_tree_matches_filesystem_for_seeds(DIR_TREE_SEED_CHUNKS[3]);
+}
+
+fn dir_tree_matches_filesystem_for_seeds((lo, hi): (u64, u64)) {
+    for seed in lo..hi {
         let tmp = tempfile::tempdir().unwrap();
         let mut rng = SplitMix64::new(seed);
         let (fs_dirs, fs_files) = generate_random_vault(tmp.path(), &mut rng, 6, 12);
@@ -733,11 +774,14 @@ fn census_dir_tree_matches_filesystem() {
             fs_files.difference(&api_files).collect::<Vec<_>>()
         );
     }
+}
 
-    // Exhaustive small shapes: every rooted tree with <= 4 directories.
-    // We enumerate parent-pointer forests over dir slots 1..=n where each
-    // slot's parent is any earlier slot or the root (slot 0). Each shape
-    // is realized on disk (each dir also gets one marker file) and checked.
+// Exhaustive small shapes: every rooted tree with <= 4 directories.
+// We enumerate parent-pointer forests over dir slots 1..=n where each
+// slot's parent is any earlier slot or the root (slot 0). Each shape
+// is realized on disk (each dir also gets one marker file) and checked.
+#[test]
+fn census_dir_tree_matches_filesystem_exhaustive_shapes() {
     for n in 0..=4usize {
         exhaustive_shapes(n, &mut |parents: &[usize]| {
             let tmp = tempfile::tempdir().unwrap();
