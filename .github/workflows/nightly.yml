@@ -1,0 +1,77 @@
+# Nightly deep verification (CI Phase 3, decision 3).
+#
+# Two things the per-PR lanes deliberately don't pay for:
+#
+#   1. The FULL census tier. Every census file honors SLATE_CENSUS_FULL=1
+#      (48 -> 400 seeds); before this workflow the 400-seed tier ran
+#      nowhere automated — it is the release-behavior guarantee, so it
+#      gets a nightly home. PRs keep the 48-seed tier for latency.
+#   2. The full thin-LTO bench compile. PR lanes compile benches with
+#      LTO off (compile-rot check only); main-push covers the full
+#      profile per merge, and this catches rot on merge-free days too.
+#
+# Failures surface via GitHub's scheduled-workflow failure notifications;
+# fix-forward with a normal PR.
+
+name: Nightly
+
+on:
+  schedule:
+    # 08:00 UTC daily (~1am PT) — after the day's merges, before the next.
+    - cron: '0 8 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  full-census:
+    name: full-tier censuses (400 seeds)
+    runs-on: namespace-profile-arm64-fast
+    # A hung census must not burn the runner all night; per-PR runs finish
+    # in ~4 min, full tier is expected in the 15-30 min band.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      ROOT_LISTING_PERF_GUARD: session::tests::dir_tree::perf_guard_root_listing_under_100ms_on_10k_files
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Assert runner architecture matches the cache lineage
+        # Twin of the rust.yml guard — same cache volume, same rationale.
+        run: |
+          arch="$(uname -m)"
+          if [ "$arch" != "x86_64" ]; then
+            echo "::error::runner arch is $arch, cache lineage expects x86_64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
+            exit 1
+          fi
+
+      - name: Cache Rust build (Namespace NVMe cache)
+        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        with:
+          cache: rust
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b  # v2.83.4
+        with:
+          tool: cargo-nextest@0.9.140
+
+      - name: cargo nextest run (ci profile, FULL census tier)
+        # Same sweep shape as the PR test lane (perf guard excluded — it
+        # runs isolated on every PR already and has no census dimension),
+        # with the 400-seed tier switched on. TMPDIR on tmpfs as in the
+        # PR lane; the dir-tree chunks are fixed at 500 seeds regardless
+        # of tier.
+        env:
+          SLATE_CENSUS_FULL: '1'
+          TMPDIR: /dev/shm
+        run: >-
+          cargo nextest run --workspace --cargo-profile ci --locked
+          --no-fail-fast --no-tests=fail
+          -E "not test(${ROOT_LISTING_PERF_GUARD})"
+
+      - name: cargo bench --no-run (full committed profile)
+        # Thin-LTO bench compile — the rot class PR lanes skip.
+        run: cargo bench --workspace --no-run --locked
