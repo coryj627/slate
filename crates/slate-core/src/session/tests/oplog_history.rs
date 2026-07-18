@@ -580,11 +580,14 @@ fn write_file_if_absent_is_no_replace_under_racing_writers() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn failed_recovery_leaves_no_phantom_row_and_stays_retryable() {
     // Adversarial review: a recovery whose disk write fails must roll
     // the whole row (and its remnant binding) back — the remnant stays
-    // listed and a later retry succeeds.
+    // listed and a later retry succeeds. Unix-only: the failure is
+    // injected by chmod-ing the vault root read-only, and a Windows
+    // directory's read-only attribute doesn't block child writes.
     let (tmp, session) = make_vault(|_| {});
     session.scan_initial(&CancelToken::new()).unwrap();
     session.save_text("fragile.md", "precious\n", None).unwrap();

@@ -89,11 +89,7 @@ impl VaultStructuralLock {
                 .read(true)
                 .write(true)
                 .open(&lock_path)?;
-            let result =
-                unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_EX) };
-            if result != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
+            file.lock()?;
             Ok(file)
         })();
 
@@ -118,7 +114,7 @@ impl VaultStructuralLock {
 impl Drop for VaultStructuralLock {
     fn drop(&mut self) {
         if let Some(file) = self.file.take() {
-            let _ = unsafe { libc::flock(std::os::fd::AsRawFd::as_raw_fd(&file), libc::LOCK_UN) };
+            let _ = file.unlock();
             drop(file);
         }
         let registry = process_structural_locks();

@@ -1530,6 +1530,17 @@ fn open_base_before_scan_mirrors_the_healed_row() {
     );
 }
 
+/// Pin a file's mtime. `write(true)` matters: Windows `SetFileTime`
+/// needs a write-attributes handle; a read-only open is EACCES there.
+fn set_mtime(path: &std::path::Path, t: std::time::SystemTime) {
+    std::fs::File::options()
+        .write(true)
+        .open(path)
+        .unwrap()
+        .set_modified(t)
+        .unwrap();
+}
+
 /// The generation discriminator bumps on a genuine `modified_ms`
 /// (mtime) move but NOT on a slow-path rescan that leaves both the
 /// linkset and `modified_ms` untouched (review rounds 2–4). Driven
@@ -1552,10 +1563,7 @@ fn generation_tracks_modified_ms_not_slow_path_entry() {
     };
     // Pin the attachment's mtime to a fixed, distinctly-old value.
     let old = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
-    std::fs::File::open(&pic)
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
+    set_mtime(&pic, old);
     session.scan_initial(&CancelToken::new()).unwrap();
     let attachments = || {
         session
@@ -1574,10 +1582,7 @@ fn generation_tracks_modified_ms_not_slow_path_entry() {
     // has no links, so nothing structural changes and modified_ms is
     // unchanged — the generation must hold regardless of scan path.
     std::fs::write(&pic, b"different bytes, larger").unwrap();
-    std::fs::File::open(&pic)
-        .unwrap()
-        .set_modified(old)
-        .unwrap();
+    set_mtime(&pic, old);
     session.scan_initial(&CancelToken::new()).unwrap();
     assert_eq!(
         session.graph_generation(),
@@ -1592,10 +1597,7 @@ fn generation_tracks_modified_ms_not_slow_path_entry() {
     // A GENUINE mtime move: the discriminator must advance and the
     // surfaced modified_ms must reflect the new mtime.
     let newer = old + Duration::from_secs(60);
-    std::fs::File::open(&pic)
-        .unwrap()
-        .set_modified(newer)
-        .unwrap();
+    set_mtime(&pic, newer);
     session.scan_initial(&CancelToken::new()).unwrap();
     let snap = attachments();
     assert!(
@@ -1627,7 +1629,7 @@ fn structural_change_bumps_independent_of_mtime() {
     });
     let a = tmp.path().join("a.md");
     let old = SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000);
-    std::fs::File::open(&a).unwrap().set_modified(old).unwrap();
+    set_mtime(&a, old);
     session.scan_initial(&CancelToken::new()).unwrap();
     let g0 = session
         .graph_snapshot(crate::graph::GraphFilter::default())
@@ -1638,7 +1640,7 @@ fn structural_change_bumps_independent_of_mtime() {
     // unchanged → no bump (size differs → slow path is entered, so
     // this proves the structural-no-op gate, not the fast path).
     std::fs::write(&a, b"[[b]] with extra prose that changes size").unwrap();
-    std::fs::File::open(&a).unwrap().set_modified(old).unwrap();
+    set_mtime(&a, old);
     session.scan_initial(&CancelToken::new()).unwrap();
     assert_eq!(
         session.graph_generation(),
@@ -1649,7 +1651,7 @@ fn structural_change_bumps_independent_of_mtime() {
     // Link change, mtime STILL pinned: b → d is a real structural
     // delta, so it bumps even though modified_ms didn't move.
     std::fs::write(&a, b"[[d]] with extra prose that changes size!").unwrap();
-    std::fs::File::open(&a).unwrap().set_modified(old).unwrap();
+    set_mtime(&a, old);
     session.scan_initial(&CancelToken::new()).unwrap();
     assert!(
         session.graph_generation() > g0,

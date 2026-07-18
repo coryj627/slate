@@ -1,3 +1,12 @@
+# Bytes are bytes (18_windows_port program decision 9): the core never
+# normalizes line endings, fixtures may be deliberately CRLF or mixed,
+# and byte-stability tests compare working-tree files verbatim. Disable
+# git's eol conversion for every path so a checkout is byte-identical
+# on every platform regardless of the machine's core.autocrlf. Without
+# this, autocrlf=true (the Git for Windows default) smudges fixtures to
+# CRLF and the canvas byte-stability suite fails on Windows.
+* -text
+
 demo-vault/.obsidian/themes/** binary
 demo-vault/attachments/*.mp3 binary
 demo-vault/attachments/*.pdf binary
