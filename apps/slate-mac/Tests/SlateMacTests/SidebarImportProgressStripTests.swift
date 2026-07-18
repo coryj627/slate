@@ -32,6 +32,71 @@ final class SidebarImportProgressStripTests: XCTestCase {
         XCTAssertFalse(progress.hasRemainingProviders)
     }
 
+    func testNativeProgressValuesDefensivelyClampInvalidInputs() {
+        func assertValues(
+            completedProviderCount: Int,
+            totalProviderCount: Int,
+            expectedCompleted: Int,
+            expectedTotal: Int,
+            expectedIndicatorMaximum: Int,
+            expectedAccessibilityValue: String,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            let values = SidebarImportProgressControlValues(
+                completedProviderCount: completedProviderCount,
+                totalProviderCount: totalProviderCount)
+            XCTAssertEqual(
+                values.normalizedCompletedProviderCount, expectedCompleted,
+                file: file, line: line)
+            XCTAssertEqual(
+                values.normalizedTotalProviderCount, expectedTotal,
+                file: file, line: line)
+            XCTAssertEqual(
+                values.progressIndicatorMaximum, expectedIndicatorMaximum,
+                file: file, line: line)
+            XCTAssertEqual(
+                values.accessibilityValue, expectedAccessibilityValue,
+                file: file, line: line)
+        }
+
+        assertValues(
+            completedProviderCount: 0,
+            totalProviderCount: 0,
+            expectedCompleted: 0,
+            expectedTotal: 0,
+            expectedIndicatorMaximum: 1,
+            expectedAccessibilityValue: "0 of 0")
+        assertValues(
+            completedProviderCount: 8,
+            totalProviderCount: -4,
+            expectedCompleted: 0,
+            expectedTotal: 0,
+            expectedIndicatorMaximum: 1,
+            expectedAccessibilityValue: "0 of 0")
+        assertValues(
+            completedProviderCount: 8,
+            totalProviderCount: 0,
+            expectedCompleted: 0,
+            expectedTotal: 0,
+            expectedIndicatorMaximum: 1,
+            expectedAccessibilityValue: "0 of 0")
+        assertValues(
+            completedProviderCount: -2,
+            totalProviderCount: 3,
+            expectedCompleted: 0,
+            expectedTotal: 3,
+            expectedIndicatorMaximum: 3,
+            expectedAccessibilityValue: "0 of 3")
+        assertValues(
+            completedProviderCount: 9,
+            totalProviderCount: 3,
+            expectedCompleted: 3,
+            expectedTotal: 3,
+            expectedIndicatorMaximum: 3,
+            expectedAccessibilityValue: "3 of 3")
+    }
+
     func testCancellationGateInvokesCallbackExactlyOnce() {
         var gate = SidebarImportCancellationGate()
         var invocationCount = 0
@@ -87,12 +152,14 @@ final class SidebarImportProgressStripTests: XCTestCase {
         }
     }
 
-    func testHostedStripExposesLiveProgressAndSingleDeliveryCancel() throws {
+    func testHostedStripExposesLiveProgressAndSingleDeliveryCancel()
+        async throws
+    {
         let progress = SidebarImportProgressModel(
             admittedProviderCount: 3,
             completedProviderCount: 1)
         var cancellationCount = 0
-        let hosted = host(
+        let hosted = await host(
             SidebarImportProgressStrip(
                 progress: progress,
                 onCancel: { cancellationCount += 1 }))
@@ -146,8 +213,12 @@ final class SidebarImportProgressStripTests: XCTestCase {
             charactersIgnoringModifiers: "\u{1b}",
             isARepeat: false,
             keyCode: 53))
+        let cancelDisabled = keyValueObservingExpectation(
+            for: cancelButton,
+            keyPath: "enabled",
+            expectedValue: false)
         XCTAssertTrue(cancelButton.performKeyEquivalent(with: escapeEvent))
-        pumpRunLoop()
+        await fulfillment(of: [cancelDisabled], timeout: 1)
         XCTAssertEqual(cancellationCount, 1)
         XCTAssertTrue(hosted.window.firstResponder === hosted.focusProbe)
 
@@ -160,10 +231,23 @@ final class SidebarImportProgressStripTests: XCTestCase {
         disabledCancelButton.performClick(nil)
         XCTAssertEqual(cancellationCount, 1)
 
+        let movingHint = SidebarImportProgressStrip.cancellationHint(
+            phase: .moving,
+            available: false)
+        let progressUpdated = keyValueObservingExpectation(
+            for: progressIndicator,
+            keyPath: "doubleValue",
+            expectedValue: 2.0)
+        let hintUpdated = keyValueObservingExpectation(
+            for: cancelButton,
+            keyPath: "toolTip",
+            expectedValue: movingHint)
         progress.recordCompletedProviderCount(2)
         progress.setPhase(.moving)
         progress.setCancellationAvailability(false)
-        pumpRunLoop()
+        await fulfillment(
+            of: [progressUpdated, hintUpdated],
+            timeout: 1)
         XCTAssertTrue(hosted.window.firstResponder === hosted.focusProbe)
 
         let updatedProgress = try XCTUnwrap(
@@ -182,16 +266,20 @@ final class SidebarImportProgressStripTests: XCTestCase {
         XCTAssertFalse(updatedCancelButton.isEnabled)
         XCTAssertEqual(
             updatedCancelButton.accessibilityHelp(),
-            SidebarImportProgressStrip.cancellationHint(
-                phase: .moving,
-                available: false))
+            movingHint)
     }
 
     private func host<V: View>(
         _ view: V
-    ) -> (host: NSHostingView<V>, window: NSWindow, focusProbe: FocusProbeView) {
+    ) async -> (
+        host: NSHostingView<AnyView>,
+        window: NSWindow,
+        focusProbe: FocusProbeView
+    ) {
         let frame = NSRect(x: 0, y: 0, width: 440, height: 96)
-        let host = NSHostingView(rootView: view)
+        let appeared = expectation(description: "hosted progress strip appeared")
+        let host = NSHostingView(rootView: AnyView(
+            view.onAppear { appeared.fulfill() }))
         host.frame = NSRect(x: 0, y: 0, width: 320, height: 96)
         let focusProbe = FocusProbeView(frame: NSRect(x: 340, y: 32, width: 80, height: 24))
         let contentView = NSView(frame: frame)
@@ -206,13 +294,9 @@ final class SidebarImportProgressStripTests: XCTestCase {
         window.contentView = contentView
         window.makeKeyAndOrderFront(nil)
         window.makeFirstResponder(focusProbe)
+        await fulfillment(of: [appeared], timeout: 1)
         host.layoutSubtreeIfNeeded()
-        pumpRunLoop()
         return (host, window, focusProbe)
-    }
-
-    private func pumpRunLoop() {
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
     }
 
     private func firstSubview<T: NSView>(

@@ -130,7 +130,6 @@ struct SidebarImportProgressStrip: View {
             SidebarImportProgressControls(
                 completedProviderCount: progress.completedProviderCount,
                 totalProviderCount: progress.totalProviderCount,
-                accessibilityValue: progress.accessibilityValue,
                 cancellationEnabled:
                     !cancellationGate.isCancellationRequested
                         && progress.canRequestCancellation,
@@ -157,6 +156,34 @@ struct SidebarImportProgressStrip: View {
     }
 }
 
+/// Defensive values at the AppKit progress-control boundary. Production
+/// callers arrive through `SidebarImportProgressModel`, whose positive-total
+/// precondition remains the public invariant; this last-mile clamp prevents an
+/// invalid future caller from giving `NSProgressIndicator` an inverted range
+/// or an out-of-range value, while VoiceOver still gets coherent semantic
+/// counts.
+struct SidebarImportProgressControlValues: Equatable {
+    let normalizedCompletedProviderCount: Int
+    let normalizedTotalProviderCount: Int
+    let progressIndicatorMaximum: Int
+
+    var accessibilityValue: String {
+        "\(normalizedCompletedProviderCount.formatted()) of "
+            + "\(normalizedTotalProviderCount.formatted())"
+    }
+
+    init(
+        completedProviderCount: Int,
+        totalProviderCount: Int
+    ) {
+        let normalizedTotalProviderCount = max(0, totalProviderCount)
+        self.normalizedCompletedProviderCount = min(
+            max(0, completedProviderCount), normalizedTotalProviderCount)
+        self.normalizedTotalProviderCount = normalizedTotalProviderCount
+        progressIndicatorMaximum = max(1, normalizedTotalProviderCount)
+    }
+}
+
 /// Native controls keep the determinate value and cancellation action
 /// inspectable through AppKit as well as VoiceOver. SwiftUI's virtualized
 /// controls don't expose a stable hosted view subtree, which makes it
@@ -164,7 +191,6 @@ struct SidebarImportProgressStrip: View {
 private struct SidebarImportProgressControls: NSViewRepresentable {
     let completedProviderCount: Int
     let totalProviderCount: Int
-    let accessibilityValue: String
     let cancellationEnabled: Bool
     let cancellationHint: String
     let onCancel: () -> Void
@@ -177,7 +203,6 @@ private struct SidebarImportProgressControls: NSViewRepresentable {
         nsView.update(
             completedProviderCount: completedProviderCount,
             totalProviderCount: totalProviderCount,
-            accessibilityValue: accessibilityValue,
             cancellationEnabled: cancellationEnabled,
             cancellationHint: cancellationHint,
             onCancel: onCancel)
@@ -240,14 +265,19 @@ private struct SidebarImportProgressControls: NSViewRepresentable {
         func update(
             completedProviderCount: Int,
             totalProviderCount: Int,
-            accessibilityValue: String,
             cancellationEnabled: Bool,
             cancellationHint: String,
             onCancel: @escaping () -> Void
         ) {
-            progressIndicator.maxValue = Double(totalProviderCount)
-            progressIndicator.doubleValue = Double(completedProviderCount)
-            progressIndicator.setAccessibilityValueDescription(accessibilityValue)
+            let progressValues = SidebarImportProgressControlValues(
+                completedProviderCount: completedProviderCount,
+                totalProviderCount: totalProviderCount)
+            progressIndicator.maxValue = Double(
+                progressValues.progressIndicatorMaximum)
+            progressIndicator.doubleValue = Double(
+                progressValues.normalizedCompletedProviderCount)
+            progressIndicator.setAccessibilityValueDescription(
+                progressValues.accessibilityValue)
 
             cancelButton.isEnabled = cancellationEnabled
             cancelButton.toolTip = cancellationHint
