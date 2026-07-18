@@ -1674,6 +1674,96 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       ["Projects/dir-entry", "Projects/old.md"])
   }
 
+  // MARK: - Red-team regressions (adversarial review round 17)
+
+  func testReopenRefreshChainsBeforeNewerWriters() async throws {
+    // Round-17 finding 1: the post-reopen refresh is the per-file chain
+    // tail, so a command issued immediately after reopen queues behind it —
+    // the refresh can never republish pre-command state over that command's
+    // tail publish.
+    let (state, vault) = try openVault(
+      named: "reopen-chain", files: ["Projects/note.md"], folders: ["Projects"])
+    try publish(
+      state, [item("Projects/note.md")],
+      focusedPath: "Projects/note.md", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    let preCloseWriter = state.sidebarOrganizationPersistTaskForTesting
+
+    _ = state.closeVault()
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+
+    // A NEW command lands right after reopen, before anything drains.
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await preCloseWriter?.value
+    await awaitPersist(state)
+    // Let the (chained) refresh settle if it ran between.
+    for _ in 0..<50 {
+      if state.sidebarOrganization.prefs.vaultChoice.sort
+        == SidebarSortOption(field: .modified, direction: .desc),
+        state.sidebarOrganization.pins.isPinned(
+          "Projects/note.md", inFolder: "Projects")
+      {
+        break
+      }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.vaultChoice.sort,
+      SidebarSortOption(field: .modified, direction: .desc),
+      "the refresh must never clobber the post-reopen command")
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Projects/note.md", inFolder: "Projects"),
+      "the pre-close write's pin is visible too")
+    let json = try sidebarJSON(at: vault)
+    XCTAssertEqual(
+      json["sort"] as? [String: String],
+      ["field": "modified", "direction": "desc"])
+  }
+
+  func testSymlinkedParentRetainsPinsAndNeverEscapesTheVault() async throws {
+    // Round-17 finding 2: a parent component replaced by a symlink after
+    // stale detection is uncertainty — the no-follow descriptor walk retains
+    // the pin and never enumerates the link's target.
+    let (state, vault) = try openVault(
+      named: "symlink-parent", files: ["Projects/real.md"],
+      folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1,
+         "pins": {"Projects": ["Projects/ghost.md", "Projects/real.md"]}}
+        """)
+
+    // Swap Projects for a symlink to an OUTSIDE directory that happens to
+    // contain an exactly-named ghost.md (the escape bait).
+    let outside = root.appendingPathComponent("outside-target")
+    try FileManager.default.createDirectory(
+      at: outside, withIntermediateDirectories: true)
+    try "# bait".write(
+      to: outside.appendingPathComponent("ghost.md"),
+      atomically: true, encoding: .utf8)
+    let projectsURL = vault.appendingPathComponent("Projects")
+    try FileManager.default.removeItem(at: projectsURL)
+    try FileManager.default.createSymbolicLink(
+      at: projectsURL, withDestinationURL: outside)
+
+    state.pruneStaleSidebarPins(
+      forFolder: "Projects", stale: ["Projects/ghost.md"])
+    await awaitPersist(state)
+
+    XCTAssertEqual(
+      state.sidebarOrganization.pins.paths(forFolder: "Projects"),
+      ["Projects/ghost.md", "Projects/real.md"],
+      "a symlinked parent is uncertainty: nothing prunes, nothing escapes")
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Projects"] as? [String],
+      ["Projects/ghost.md", "Projects/real.md"])
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

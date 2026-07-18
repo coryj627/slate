@@ -5136,12 +5136,14 @@ final class AppState: ObservableObject {
         let backlog = sidebarStructuralTransformJournal
         let task = Task { [weak self] in
             await previous?.value
-            // Main-actor ownership gate BEFORE any disk I/O: the captured
-            // generation, session, and store identity must all still be
-            // current, or this queued write belongs to a closed vault.
+            // Main-actor gate BEFORE any disk I/O (round-1, refined round-17):
+            // FILE identity is the write-safety boundary — a queued exact-op
+            // write may land on the SAME file across a close/reopen (it is
+            // the user's committed intent, chain-ordered and merge-safe),
+            // while a closed-for-good or different vault drops it. The
+            // publishes, acknowledgements, and announcements below
+            // additionally require the original generation/session.
             guard let self,
-                self.sidebarOrganizationWriteGeneration == generation,
-                self.currentSession === session,
                 self.sidebarVaultPrefsStore?.fileURL == storeFileURL
             else { return }
             // Round-9 finding 1 (at-most-once): a predecessor in the chain
@@ -5195,9 +5197,9 @@ final class AppState: ObservableObject {
                         return .failure(error)
                     }
                 }.value
-            guard self.sidebarOrganizationWriteGeneration == generation,
-                self.currentSession === session
-            else { return }
+            let ownedForPublish =
+                self.sidebarOrganizationWriteGeneration == generation
+                && self.currentSession === session
 
             let isTail = self.sidebarOrganizationPersistTailToken == token
 
@@ -5259,6 +5261,7 @@ final class AppState: ObservableObject {
             defer { onSettled?() }
             switch outcome {
             case .failure(let error):
+                guard ownedForPublish else { return }
                 let failure: String
                 if let conflict = error as? SidebarOrganizationConflictError {
                     failure = conflict.reason
@@ -5304,8 +5307,10 @@ final class AppState: ObservableObject {
                         isBacklogDrain: true)
                 }
             case .success(let finalRoot):
+                guard ownedForPublish else { return }
                 handleCommit(finalRoot, durabilityWarning: nil)
             case .replacedButUnsynced(let finalRoot, let reason):
+                guard ownedForPublish else { return }
                 // Content committed; report only durability (round-10
                 // finding 1) — never leave the transform pending, or a later
                 // drain could wrongly transform paths another process
@@ -5787,33 +5792,78 @@ final class AppState: ObservableObject {
             byParent[SidebarPins.folder(of: candidate), default: []]
                 .append(candidate)
         }
+        guard !byParent.isEmpty else { return missing }
+
+        // Round-17: descriptor-walk each parent with O_NOFOLLOW so a
+        // component swapped to a symlink after stale detection can neither
+        // escape the vault nor prove absence — symlinked/unreadable
+        // components are uncertainty and retain their pins. The vault root
+        // itself resolves once (a user may legitimately open a vault via a
+        // symlink); every component below it refuses links.
+        let rootFD = open(vaultRoot.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard rootFD >= 0 else { return missing }
+        defer { close(rootFD) }
+
         for (parent, children) in byParent {
-            let parentURL = parent.isEmpty
-                ? vaultRoot : vaultRoot.appendingPathComponent(parent)
-            let exactNames: Set<String>
-            do {
-                exactNames = Set(
-                    try FileManager.default.contentsOfDirectory(
-                        atPath: parentURL.path))
-            } catch let error as NSError
-                where error.domain == NSCocoaErrorDomain
-                && error.code == NSFileReadNoSuchFileError
-            {
-                // The parent itself is definitively gone: so are its entries.
-                missing.formUnion(children)
-                continue
-            } catch {
-                // Unreadable parent: uncertainty retains every candidate.
-                continue
+            var parentFD = dup(rootFD)
+            guard parentFD >= 0 else { continue }
+            var walkOutcome: WalkOutcome = .opened
+            if !parent.isEmpty {
+                for component in parent.split(separator: "/") {
+                    let nextFD = String(component).withCString { name in
+                        openat(
+                            parentFD, name,
+                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                    }
+                    if nextFD >= 0 {
+                        close(parentFD)
+                        parentFD = nextFD
+                        continue
+                    }
+                    walkOutcome = errno == ENOENT ? .definitelyMissing : .uncertain
+                    break
+                }
             }
-            for candidate in children {
-                let name = (candidate as NSString).lastPathComponent
-                if !exactNames.contains(name) {
-                    missing.insert(candidate)
+            switch walkOutcome {
+            case .definitelyMissing:
+                // The parent chain itself is definitively gone: so are its
+                // entries.
+                close(parentFD)
+                missing.formUnion(children)
+            case .uncertain:
+                // A symlinked, replaced, or unreadable component: retain.
+                close(parentFD)
+            case .opened:
+                guard let dir = fdopendir(parentFD) else {
+                    close(parentFD)
+                    continue
+                }
+                defer { closedir(dir) }  // closes parentFD too
+                var exactNames: Set<String> = []
+                while let entry = readdir(dir) {
+                    let name = withUnsafeBytes(of: entry.pointee.d_name) {
+                        buffer -> String in
+                        let pointer = buffer.baseAddress!
+                            .assumingMemoryBound(to: CChar.self)
+                        return String(cString: pointer)
+                    }
+                    exactNames.insert(name)
+                }
+                for candidate in children {
+                    let name = (candidate as NSString).lastPathComponent
+                    if !exactNames.contains(name) {
+                        missing.insert(candidate)
+                    }
                 }
             }
         }
         return missing
+    }
+
+    private enum WalkOutcome {
+        case opened
+        case definitelyMissing
+        case uncertain
     }
 
     /// Injectable targeted lookup for deterministic coalescing tests. The
@@ -8284,7 +8334,11 @@ final class AppState: ObservableObject {
         if let priorWriter = Self.sidebarStoreWriterChains[store.fileURL] {
             let generation = sidebarOrganizationWriteGeneration
             let session = currentSession
-            Task { [weak self] in
+            // The refresh is installed as the per-file chain TAIL (round-17):
+            // a command issued after reopen queues behind IT, so the refresh
+            // can neither read past a newer writer nor republish stale state
+            // over that writer's tail publish.
+            let refreshTask = Task { [weak self] in
                 await priorWriter.value
                 guard let self,
                     self.sidebarOrganizationWriteGeneration == generation,
@@ -8320,6 +8374,7 @@ final class AppState: ObservableObject {
                     self.sidebarOrganization = organization
                 }
             }
+            Self.sidebarStoreWriterChains[store.fileURL] = refreshTask
         }
         // Adopt the vault's authored organization in the same step. Unsafe
         // input already resolved to the default root, so this can't
