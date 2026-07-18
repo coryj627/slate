@@ -26,6 +26,11 @@ permissions:
   security-events: write   # for SARIF upload
   pull-requests: write     # for the score comment
 
+# Superseded PR pushes cancel the in-flight run; main never cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   # Pin to a specific cvs-health/ios-swiftui-accessibility-techniques
   # commit. Bump deliberately when you want newer rules; cache key

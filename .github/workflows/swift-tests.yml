@@ -31,6 +31,12 @@ on:
 permissions:
   contents: read
 
+# Superseded PR pushes cancel the in-flight run (macOS runner minutes are
+# the expensive pool); runs on main never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   swift-tests:
     name: Mac app XCTest suite
