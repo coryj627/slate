@@ -37,7 +37,7 @@ final class SidebarImportProgressStripTests: XCTestCase {
         arabicFormatter.locale = Locale(identifier: "ar_EG")
         arabicFormatter.numberStyle = .decimal
         let localeFormatted = try XCTUnwrap(
-            arabicFormatter.string(from: 12_345))
+            arabicFormatter.string(from: NSNumber(value: 12_345)))
         XCTAssertNotEqual(localeFormatted, "12345")
 
         XCTAssertEqual(
@@ -45,6 +45,48 @@ final class SidebarImportProgressStripTests: XCTestCase {
                 completedProviderCount: 12_345,
                 totalProviderCount: 67_890),
             "12345 of 67890")
+    }
+
+    func testCountTextPreservesSignedIntBoundariesWithoutGroupingOrTruncation() {
+        // This exercises formatter robustness directly; public progress
+        // consumers still clamp invalid negative counts at their boundaries.
+        XCTAssertEqual(
+            SidebarImportProgressCountText.make(
+                completedProviderCount: -12_345,
+                totalProviderCount: -67_890),
+            "-12345 of -67890")
+        XCTAssertEqual(
+            SidebarImportProgressCountText.make(
+                completedProviderCount: Int.min,
+                totalProviderCount: Int.max),
+            "-9223372036854775808 of 9223372036854775807")
+    }
+
+    func testModelAndNativeValuesShareDeterministicCountText() {
+        let expected = SidebarImportProgressCountText.make(
+            completedProviderCount: 6_789,
+            totalProviderCount: 12_345)
+        let model = SidebarImportProgressModel(
+            admittedProviderCount: 12_345,
+            completedProviderCount: 6_789)
+        let nativeValues = SidebarImportProgressControlValues(
+            completedProviderCount: 6_789,
+            totalProviderCount: 12_345)
+
+        XCTAssertEqual(expected, "6789 of 12345")
+        XCTAssertEqual(model.accessibilityValue, expected)
+        XCTAssertEqual(nativeValues.accessibilityValue, expected)
+
+        let clampedModel = SidebarImportProgressModel(
+            admittedProviderCount: 12_345,
+            completedProviderCount: -1)
+        let normalizedNativeValues = SidebarImportProgressControlValues(
+            completedProviderCount: -1,
+            totalProviderCount: 12_345)
+        XCTAssertEqual(clampedModel.accessibilityValue, "0 of 12345")
+        XCTAssertEqual(
+            normalizedNativeValues.accessibilityValue,
+            clampedModel.accessibilityValue)
     }
 
     func testNativeProgressValuesDefensivelyClampInvalidInputs() {

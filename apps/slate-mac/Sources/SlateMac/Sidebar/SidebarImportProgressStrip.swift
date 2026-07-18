@@ -13,9 +13,14 @@ enum SidebarImportProgressPhase: Equatable {
 
 /// Deterministic count copy for Slate's current English-only UI contract.
 /// `String(Int)` intentionally keeps the digits ASCII and ungrouped so they
-/// aren't locale-formatted beside the still-English word "of". When string
-/// catalogs land, localize this entire phrase atomically instead of formatting
-/// either integer independently.
+/// aren't locale-formatted beside the still-English word "of". An
+/// `en_US_POSIX` `NumberFormatter` is deliberately avoided: `String(Int)`
+/// guarantees this representation directly, without formatter setup or
+/// grouping behavior.
+///
+/// TODO(string catalogs): Replace the whole "completed of total" phrase
+/// atomically when localization lands; never localize either integer beside an
+/// English connector independently.
 enum SidebarImportProgressCountText {
     static func make(
         completedProviderCount: Int,
