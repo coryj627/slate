@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import AppKit
 import SwiftUI
 
 enum SidebarImportProgressPhase: Equatable {
@@ -126,30 +127,18 @@ struct SidebarImportProgressStrip: View {
                     .accessibilityHidden(true)
             }
 
-            HStack(spacing: Tokens.Spacing.sm) {
-                ProgressView(
-                    value: Double(progress.completedProviderCount),
-                    total: Double(progress.totalProviderCount)
-                )
-                .progressViewStyle(.linear)
-                .accessibilityLabel("Import progress")
-                .accessibilityValue(progress.accessibilityValue)
-
-                Button("Cancel") {
-                    requestCancellation()
-                }
-                .controlSize(.small)
-                .keyboardShortcut(.cancelAction)
-                .disabled(
-                    cancellationGate.isCancellationRequested
-                        || !progress.canRequestCancellation)
-                .accessibilityHint(Self.cancellationHint(
+            SidebarImportProgressControls(
+                completedProviderCount: progress.completedProviderCount,
+                totalProviderCount: progress.totalProviderCount,
+                accessibilityValue: progress.accessibilityValue,
+                cancellationEnabled:
+                    !cancellationGate.isCancellationRequested
+                        && progress.canRequestCancellation,
+                cancellationHint: Self.cancellationHint(
                     phase: progress.phase,
-                    available: progress.canRequestCancellation))
-                .help(Self.cancellationHint(
-                    phase: progress.phase,
-                    available: progress.canRequestCancellation))
-            }
+                    available: progress.canRequestCancellation),
+                onCancel: requestCancellation)
+                .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, Tokens.Spacing.md)
         .padding(.vertical, Tokens.Spacing.xs)
@@ -165,5 +154,109 @@ struct SidebarImportProgressStrip: View {
     private func requestCancellation() {
         guard progress.canRequestCancellation else { return }
         cancellationGate.request(onCancel)
+    }
+}
+
+/// Native controls keep the determinate value and cancellation action
+/// inspectable through AppKit as well as VoiceOver. SwiftUI's virtualized
+/// controls don't expose a stable hosted view subtree, which makes it
+/// impossible to exercise the real press/update behavior in-process.
+private struct SidebarImportProgressControls: NSViewRepresentable {
+    let completedProviderCount: Int
+    let totalProviderCount: Int
+    let accessibilityValue: String
+    let cancellationEnabled: Bool
+    let cancellationHint: String
+    let onCancel: () -> Void
+
+    func makeNSView(context: Context) -> ControlsView {
+        ControlsView()
+    }
+
+    func updateNSView(_ nsView: ControlsView, context: Context) {
+        nsView.update(
+            completedProviderCount: completedProviderCount,
+            totalProviderCount: totalProviderCount,
+            accessibilityValue: accessibilityValue,
+            cancellationEnabled: cancellationEnabled,
+            cancellationHint: cancellationHint,
+            onCancel: onCancel)
+    }
+
+    final class ControlsView: NSStackView {
+        let progressIndicator = NSProgressIndicator()
+        let cancelButton = NSButton()
+
+        private var onCancel: () -> Void = {}
+
+        override init(frame frameRect: NSRect) {
+            super.init(frame: frameRect)
+            orientation = .horizontal
+            alignment = .centerY
+            spacing = Tokens.Spacing.sm
+            distribution = .fill
+
+            progressIndicator.style = .bar
+            progressIndicator.controlSize = .small
+            progressIndicator.isIndeterminate = false
+            progressIndicator.minValue = 0
+            progressIndicator.setAccessibilityRole(.progressIndicator)
+            progressIndicator.setAccessibilityIdentifier("sidebar.import.progress")
+            progressIndicator.setAccessibilityLabel("Import progress")
+
+            cancelButton.title = "Cancel"
+            cancelButton.bezelStyle = .rounded
+            cancelButton.controlSize = .small
+            cancelButton.target = self
+            cancelButton.action = #selector(cancelPressed)
+            cancelButton.keyEquivalent = "\u{1b}"
+            cancelButton.keyEquivalentModifierMask = []
+            cancelButton.setAccessibilityRole(.button)
+            cancelButton.setAccessibilityIdentifier("sidebar.import.cancel")
+            cancelButton.setAccessibilityLabel("Cancel")
+
+            progressIndicator.setContentHuggingPriority(.defaultLow, for: .horizontal)
+            progressIndicator.setContentCompressionResistancePriority(
+                .defaultLow,
+                for: .horizontal)
+            cancelButton.setContentHuggingPriority(.required, for: .horizontal)
+            addArrangedSubview(progressIndicator)
+            addArrangedSubview(cancelButton)
+        }
+
+        @available(*, unavailable)
+        required init?(coder: NSCoder) {
+            nil
+        }
+
+        override var intrinsicContentSize: NSSize {
+            NSSize(
+                width: NSView.noIntrinsicMetric,
+                height: max(
+                    progressIndicator.intrinsicContentSize.height,
+                    cancelButton.intrinsicContentSize.height))
+        }
+
+        func update(
+            completedProviderCount: Int,
+            totalProviderCount: Int,
+            accessibilityValue: String,
+            cancellationEnabled: Bool,
+            cancellationHint: String,
+            onCancel: @escaping () -> Void
+        ) {
+            progressIndicator.maxValue = Double(totalProviderCount)
+            progressIndicator.doubleValue = Double(completedProviderCount)
+            progressIndicator.setAccessibilityValueDescription(accessibilityValue)
+
+            cancelButton.isEnabled = cancellationEnabled
+            cancelButton.toolTip = cancellationHint
+            cancelButton.setAccessibilityHelp(cancellationHint)
+            self.onCancel = onCancel
+        }
+
+        @objc private func cancelPressed() {
+            onCancel()
+        }
     }
 }

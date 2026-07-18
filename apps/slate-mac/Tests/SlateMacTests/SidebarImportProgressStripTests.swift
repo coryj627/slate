@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import Foundation
+import AppKit
+import SwiftUI
 import XCTest
 
 @testable import SlateMac
@@ -86,64 +87,157 @@ final class SidebarImportProgressStripTests: XCTestCase {
         }
     }
 
-    func testViewUsesNativeDeterminateProgressAndStandardCancellationCommands()
-        throws
-    {
-        let source = try progressStripSource()
-        XCTAssertTrue(source.contains("ProgressView("))
-        XCTAssertTrue(source.contains("ProgressView()"))
-        XCTAssertTrue(source.contains(".controlSize(.mini)"))
-        XCTAssertTrue(source.contains(".accessibilityHidden(true)"))
-        XCTAssertTrue(source.contains("total: Double(progress.totalProviderCount)"))
-        XCTAssertTrue(source.contains("Button(\"Cancel\")"))
-        XCTAssertTrue(source.contains(".keyboardShortcut(.cancelAction)"))
-        XCTAssertTrue(source.contains(".onExitCommand"))
-        XCTAssertTrue(source.contains("guard progress.canRequestCancellation else { return }"))
-        XCTAssertTrue(source.contains("!progress.canRequestCancellation"))
-        XCTAssertTrue(source.contains("Tokens.Spacing"))
-        XCTAssertTrue(source.contains("Tokens.Typography.caption"))
-        XCTAssertTrue(source.contains(".controlSize(.small)"))
-        XCTAssertTrue(source.contains(".accessibilityValue(progress.accessibilityValue)"))
+    func testHostedStripExposesLiveProgressAndSingleDeliveryCancel() throws {
+        let progress = SidebarImportProgressModel(
+            admittedProviderCount: 3,
+            completedProviderCount: 1)
+        var cancellationCount = 0
+        let hosted = host(
+            SidebarImportProgressStrip(
+                progress: progress,
+                onCancel: { cancellationCount += 1 }))
+        defer { hosted.window.close() }
+        XCTAssertTrue(hosted.window.firstResponder === hosted.focusProbe)
 
-        for focusStealer in [
-            "NSEvent.addLocalMonitorForEvents", ".focused(", ".focusable(",
-            "withAnimation", ".animation(", "KeyboardShortcut(\".\"",
-        ] {
-            XCTAssertFalse(
-                source.contains(focusStealer),
-                "progress strip must not add focus interception or custom motion: \(focusStealer)")
+        let progressIndicator = try XCTUnwrap(
+            firstSubview(
+                of: NSProgressIndicator.self,
+                identifiedBy: "sidebar.import.progress",
+                in: hosted.host))
+        XCTAssertEqual(progressIndicator.style, .bar)
+        XCTAssertFalse(progressIndicator.isIndeterminate)
+        XCTAssertEqual(progressIndicator.minValue, 0)
+        XCTAssertEqual(progressIndicator.maxValue, 3)
+        XCTAssertEqual(progressIndicator.doubleValue, 1)
+        XCTAssertEqual(progressIndicator.accessibilityRole(), .progressIndicator)
+        XCTAssertEqual(progressIndicator.accessibilityLabel(), "Import progress")
+        XCTAssertEqual(progressIndicator.accessibilityValueDescription(), "1 of 3")
+
+        let cancelButton = try XCTUnwrap(
+            firstSubview(
+                of: NSButton.self,
+                identifiedBy: "sidebar.import.cancel",
+                in: hosted.host))
+        XCTAssertEqual(cancelButton.title, "Cancel")
+        XCTAssertEqual(cancelButton.accessibilityRole(), .button)
+        XCTAssertEqual(cancelButton.accessibilityLabel(), "Cancel")
+        XCTAssertEqual(
+            cancelButton.accessibilityHelp(),
+            SidebarImportProgressStrip.cancelAccessibilityHint)
+        XCTAssertEqual(
+            cancelButton.toolTip,
+            SidebarImportProgressStrip.cancelAccessibilityHint)
+        XCTAssertEqual(cancelButton.keyEquivalent, "\u{1b}")
+        XCTAssertTrue(cancelButton.keyEquivalentModifierMask.isEmpty)
+        XCTAssertTrue(cancelButton.isEnabled)
+        XCTAssertGreaterThan(progressIndicator.frame.width, 0)
+        XCTAssertGreaterThan(cancelButton.frame.width, 0)
+        XCTAssertGreaterThanOrEqual(cancelButton.frame.height, 20)
+        XCTAssertLessThan(progressIndicator.frame.maxX, cancelButton.frame.minX)
+
+        let escapeEvent = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: hosted.window.windowNumber,
+            context: nil,
+            characters: "\u{1b}",
+            charactersIgnoringModifiers: "\u{1b}",
+            isARepeat: false,
+            keyCode: 53))
+        XCTAssertTrue(cancelButton.performKeyEquivalent(with: escapeEvent))
+        pumpRunLoop()
+        XCTAssertEqual(cancellationCount, 1)
+        XCTAssertTrue(hosted.window.firstResponder === hosted.focusProbe)
+
+        let disabledCancelButton = try XCTUnwrap(
+            firstSubview(
+                of: NSButton.self,
+                identifiedBy: "sidebar.import.cancel",
+                in: hosted.host))
+        XCTAssertFalse(disabledCancelButton.isEnabled)
+        disabledCancelButton.performClick(nil)
+        XCTAssertEqual(cancellationCount, 1)
+
+        progress.recordCompletedProviderCount(2)
+        progress.setPhase(.moving)
+        progress.setCancellationAvailability(false)
+        pumpRunLoop()
+        XCTAssertTrue(hosted.window.firstResponder === hosted.focusProbe)
+
+        let updatedProgress = try XCTUnwrap(
+            firstSubview(
+                of: NSProgressIndicator.self,
+                identifiedBy: "sidebar.import.progress",
+                in: hosted.host))
+        XCTAssertEqual(updatedProgress.maxValue, 3)
+        XCTAssertEqual(updatedProgress.doubleValue, 2)
+        XCTAssertEqual(updatedProgress.accessibilityValueDescription(), "2 of 3")
+        let updatedCancelButton = try XCTUnwrap(
+            firstSubview(
+                of: NSButton.self,
+                identifiedBy: "sidebar.import.cancel",
+                in: hosted.host))
+        XCTAssertFalse(updatedCancelButton.isEnabled)
+        XCTAssertEqual(
+            updatedCancelButton.accessibilityHelp(),
+            SidebarImportProgressStrip.cancellationHint(
+                phase: .moving,
+                available: false))
+    }
+
+    private func host<V: View>(
+        _ view: V
+    ) -> (host: NSHostingView<V>, window: NSWindow, focusProbe: FocusProbeView) {
+        let frame = NSRect(x: 0, y: 0, width: 440, height: 96)
+        let host = NSHostingView(rootView: view)
+        host.frame = NSRect(x: 0, y: 0, width: 320, height: 96)
+        let focusProbe = FocusProbeView(frame: NSRect(x: 340, y: 32, width: 80, height: 24))
+        let contentView = NSView(frame: frame)
+        contentView.addSubview(host)
+        contentView.addSubview(focusProbe)
+        let window = NSWindow(
+            contentRect: frame,
+            styleMask: [.titled],
+            backing: .buffered,
+            defer: false)
+        window.isReleasedWhenClosed = false
+        window.contentView = contentView
+        window.makeKeyAndOrderFront(nil)
+        window.makeFirstResponder(focusProbe)
+        host.layoutSubtreeIfNeeded()
+        pumpRunLoop()
+        return (host, window, focusProbe)
+    }
+
+    private func pumpRunLoop() {
+        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+    }
+
+    private func firstSubview<T: NSView>(
+        of type: T.Type,
+        identifiedBy identifier: String,
+        in root: NSView
+    ) -> T? {
+        if let match = root as? T,
+            match.accessibilityIdentifier() == identifier
+        {
+            return match
         }
-    }
-
-    func testFileMenuOwnsFocusIndependentCommandPeriodCancellation() throws {
-        let source = try appSource("SlateMacApp.swift")
-        guard let start = source.range(of: "Button(\"Cancel Import\")") else {
-            return XCTFail("File menu needs a discoverable Cancel Import item")
+        for child in root.subviews {
+            if let match = firstSubview(
+                of: type,
+                identifiedBy: identifier,
+                in: child)
+            {
+                return match
+            }
         }
-        let tail = String(source[start.lowerBound...].prefix(1_200))
-        XCTAssertTrue(tail.contains("appState.requestImportBatchCancellation()"))
-        XCTAssertTrue(tail.contains(".keyboardShortcut(\".\", modifiers: [.command])"))
-        XCTAssertTrue(tail.contains("cancelImportDisabledReason != nil"))
-        XCTAssertTrue(source.contains("appState.importCancellationDisabledReason"))
-        XCTAssertTrue(source.contains("SidebarImportProgressStrip.cancelAccessibilityHint"))
+        return nil
     }
 
-    private func progressStripSource() throws -> String {
-        let sourceURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/SlateMac/Sidebar/SidebarImportProgressStrip.swift")
-        return try String(contentsOf: sourceURL, encoding: .utf8)
-    }
-
-    private func appSource(_ relativePath: String) throws -> String {
-        let sourceURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/SlateMac")
-            .appendingPathComponent(relativePath)
-        return try String(contentsOf: sourceURL, encoding: .utf8)
+    private final class FocusProbeView: NSView {
+        override var acceptsFirstResponder: Bool { true }
     }
 }

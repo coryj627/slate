@@ -869,6 +869,84 @@ final class FileTreeDragDropTests: XCTestCase {
         state.cancelImportBatch(owner)
     }
 
+    func testFL05CancelImportCommandContractProjectsAndPerformsLiveLifecycle()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: [])
+
+        XCTAssertEqual(
+            CancelImportCommandContract.id, SlateCommandID.cancelImport)
+        XCTAssertEqual(CancelImportCommandContract.label, "Cancel Import")
+        XCTAssertEqual(CancelImportCommandContract.section, .sidebar)
+        XCTAssertEqual(CancelImportCommandContract.hotkeyHint, "⌘.")
+        XCTAssertEqual(
+            CancelImportCommandContract.availableHint,
+            SidebarImportProgressStrip.cancelAccessibilityHint)
+        XCTAssertEqual(
+            CancelImportCommandContract.keyboardShortcut.key.character, ".")
+        XCTAssertEqual(
+            CancelImportCommandContract.keyboardShortcut.modifiers, [.command])
+
+        func assertProjection(
+            disabledReason: String?,
+            hint: String,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) {
+            let projection = CancelImportCommandContract.projection(for: state)
+            XCTAssertEqual(
+                projection.disabledReason, disabledReason,
+                file: file, line: line)
+            XCTAssertEqual(
+                projection.isEnabled, disabledReason == nil,
+                file: file, line: line)
+            XCTAssertEqual(projection.hint, hint, file: file, line: line)
+        }
+
+        assertProjection(
+            disabledReason: SidebarImportProgressStrip.noImportInProgressHint,
+            hint: SidebarImportProgressStrip.noImportInProgressHint)
+        XCTAssertThrowsError(
+            try CancelImportCommandContract.perform(on: state)
+        ) { error in
+            XCTAssertEqual(
+                error as? CommandError,
+                .ActionFailed(
+                    message: SidebarImportProgressStrip.noImportInProgressHint))
+        }
+
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [
+                fileURLProvider(tempDir.appendingPathComponent("pending.md"))
+            ],
+            destinationFolder: ""))
+        assertProjection(
+            disabledReason: nil,
+            hint: SidebarImportProgressStrip.cancelAccessibilityHint)
+
+        try CancelImportCommandContract.perform(on: state)
+        XCTAssertTrue(owner.isCancellationRequested)
+        XCTAssertEqual(owner.progress.phase, .cancelling)
+
+        let cancellingReason = SidebarImportProgressStrip.cancellationHint(
+            phase: .cancelling, available: false)
+        assertProjection(
+            disabledReason: cancellingReason,
+            hint: cancellingReason)
+        XCTAssertThrowsError(
+            try CancelImportCommandContract.perform(on: state)
+        ) { error in
+            XCTAssertEqual(
+                error as? CommandError,
+                .ActionFailed(message: cancellingReason))
+        }
+
+        state.cancelImportBatch(owner)
+        assertProjection(
+            disabledReason: SidebarImportProgressStrip.noImportInProgressHint,
+            hint: SidebarImportProgressStrip.noImportInProgressHint)
+    }
+
     func testFL05RegisteredCancelCommandUsesLiveLifecycleAvailability()
         async throws
     {

@@ -4,6 +4,14 @@
 import AppKit
 import SwiftUI
 
+extension CancelImportCommandContract {
+    /// Typed File-menu counterpart of the registry's `hotkeyHint`.
+    /// Keeping the literal in this menu-hosting file also preserves the
+    /// existing source-wide menu reachability gate for Command-period.
+    static let keyboardShortcut = KeyboardShortcut(
+        ".", modifiers: [.command])
+}
+
 /// Entry point for the Slate Mac app.
 ///
 /// The single window hosts a `RootView` that picks between the welcome
@@ -114,22 +122,21 @@ struct SlateMacApp: App {
                 let noteSaveDisabledReason = appState.activeNoteSaveDisabledReason
                 let sidebarEvaluations = appState.sidebarActionProjection(
                     surface: .menuBar)
-                let cancelImportDisabledReason =
-                    appState.importCancellationDisabledReason
-                let cancelImportHint = cancelImportDisabledReason
-                    ?? SidebarImportProgressStrip.cancelAccessibilityHint
+                let cancelImport = CancelImportCommandContract.projection(
+                    for: appState)
 
                 // File starts with New-family commands, in the familiar macOS
                 // order, while every item still owns its live catalog state.
                 sidebarFileMenuActions(.creation, evaluations: sidebarEvaluations)
 
-                Button("Cancel Import") {
-                    _ = appState.requestImportBatchCancellation()
+                Button(CancelImportCommandContract.label) {
+                    try? CancelImportCommandContract.perform(on: appState)
                 }
-                .keyboardShortcut(".", modifiers: [.command])
-                .disabled(cancelImportDisabledReason != nil)
-                .accessibilityHint(cancelImportHint)
-                .help(cancelImportHint)
+                .keyboardShortcut(
+                    CancelImportCommandContract.keyboardShortcut)
+                .disabled(!cancelImport.isEnabled)
+                .accessibilityHint(cancelImport.hint)
+                .help(cancelImport.hint)
 
                 Divider()
 

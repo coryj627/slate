@@ -1189,19 +1189,22 @@ final class SlateCommandsTests: XCTestCase {
 
     @MainActor
     func testCancelImportCommandIsRegisteredAsTheOnlyCommandPeriodOwner() throws {
-        let id = "slate.file.cancelImport"
+        let id = CancelImportCommandContract.id
+        XCTAssertEqual(id, "slate.file.cancelImport")
         let appState = AppState()
         let command = try XCTUnwrap(
             appState.commandRegistry.list().first { $0.id == id },
             "Cancel Import must be a stable global command, not a menu-only shortcut")
 
-        XCTAssertEqual(command.label, "Cancel Import")
-        XCTAssertEqual(command.section, .sidebar)
-        XCTAssertEqual(command.hotkeyHint, "⌘.")
-        XCTAssertFalse(SlateCommandID.structuralMutationCommands.contains(id))
+        XCTAssertEqual(command.label, CancelImportCommandContract.label)
+        XCTAssertEqual(command.section, CancelImportCommandContract.section)
         XCTAssertEqual(
-            appState.commandRegistry.list().filter { $0.hotkeyHint == "⌘." }.map(\.id),
-            [id])
+            command.hotkeyHint, CancelImportCommandContract.hotkeyHint)
+        XCTAssertFalse(SlateCommandID.structuralMutationCommands.contains(id))
+        let shortcutOwners = appState.commandRegistry.list().filter {
+            $0.hotkeyHint == CancelImportCommandContract.hotkeyHint
+        }
+        XCTAssertEqual(shortcutOwners.map(\.id), [id])
         XCTAssertThrowsError(try appState.commandRegistry.invokeById(id: id)) { error in
             XCTAssertEqual(
                 error as? CommandError,
