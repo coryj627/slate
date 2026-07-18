@@ -872,60 +872,61 @@ pub(crate) fn read_header(file: &mut fs::File, path: &Path) -> io::Result<Option
     }
 }
 
-/// Lock-then-verify-inode (O-2 #540, load-bearing): a compaction
-/// rewrite swaps the path→inode binding with a rename-over, so a
-/// writer that opened the OLD inode and then acquired its advisory
-/// lock would append to an orphaned file and lose the entry. After
-/// every lock acquisition, verify the locked handle still IS the file
-/// at `path`; on mismatch close, reopen, retry (bounded — a hard error
-/// after 5 attempts, which would take 5 back-to-back rewrites of the
-/// same log inside this window).
+/// The per-log **sidecar lock file**: `<stem>.oplog.lock`, next to the
+/// log. The `.lock` suffix keeps it out of every `.oplog` enumeration
+/// (`reconcile_oplogs` strips exactly `".oplog"`).
+pub(crate) fn sidecar_lock_path(log_path: &Path) -> std::path::PathBuf {
+    let mut name = log_path.file_name().unwrap_or_default().to_os_string();
+    name.push(".lock");
+    log_path.with_file_name(name)
+}
+
+/// Held for the duration of one oplog mutation (append / marker /
+/// compaction rewrite / event-index regeneration). Dropping it closes
+/// the sidecar handle, which releases the OS lock on every platform.
+#[derive(Debug)]
+pub(crate) struct OplogLock(#[allow(dead_code)] fs::File);
+
+/// Acquire the per-log exclusive mutation lock — on the **sidecar**
+/// file, never on the log itself (#928, supersedes O-2's
+/// lock-then-verify-inode).
 ///
-/// Returns `Ok(None)` when `path` stops existing (only possible for
-/// openers that don't `create(true)` — the marker path treats it as
-/// "no log, nothing to do").
-pub(crate) fn open_locked_verified(
-    path: &Path,
-    opts: &OpenOptions,
-) -> io::Result<Option<fs::File>> {
-    for _ in 0..5 {
-        let file = match opts.open(path) {
-            Ok(f) => f,
-            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(e),
-        };
-        file.lock()?;
-        if same_inode(&file, path)? {
-            return Ok(Some(file));
-        }
-        // The lock releases when `file` drops; retry the fresh inode.
+/// Why a sidecar: `File::lock` is advisory `flock(2)` on unix but
+/// **mandatory** `LockFileEx` on Windows — while a lock on the log
+/// itself is held, *any other handle's* read or write of the log fails
+/// with a lock violation instead of proceeding (unix) or blocking.
+/// That broke the choreography twice on the first Windows run: the
+/// lock-free readers (`read_oplog`, history scans — including the
+/// event-regeneration path reading through a second handle while
+/// itself holding the lock) failed mid-compaction, and the old
+/// lock-then-verify-inode protocol silently lost appends because the
+/// non-unix inode check was a no-op. Locking a file whose bytes nobody
+/// reads or writes makes mandatory-ness unobservable, so both
+/// platforms get identical, advisory-shaped semantics.
+///
+/// Why no verify-retry anymore: the inode race existed because writers
+/// opened the log **before** acquiring its lock, so a compaction
+/// rename could swap the binding in between. With the sidecar the lock
+/// is acquired **before** the log is opened, and every path→file
+/// mutation (the compaction rename-over) happens under this same lock
+/// — so a handle opened under the lock is the current file by
+/// construction.
+///
+/// Creates the oplog directory if needed (so lock-first ordering works
+/// for the compact-a-never-created-log case). The sidecar is created
+/// once and never deleted while its log lives; reclamation removes it
+/// best-effort together with the log.
+pub(crate) fn lock_oplog(log_path: &Path) -> io::Result<OplogLock> {
+    if let Some(dir) = log_path.parent() {
+        fs::create_dir_all(dir)?;
     }
-    Err(io::Error::other(format!(
-        "oplog {path:?}: lost the rename/inode race 5 times"
-    )))
-}
-
-/// Does the open handle still refer to the file currently at `path`?
-/// A missing path counts as "no" (the appender should re-create or
-/// bail, per its own policy).
-#[cfg(unix)]
-fn same_inode(file: &fs::File, path: &Path) -> io::Result<bool> {
-    use std::os::unix::fs::MetadataExt;
-    let handle = file.metadata()?;
-    let on_disk = match fs::metadata(path) {
-        Ok(m) => m,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
-        Err(e) => return Err(e),
-    };
-    Ok(handle.dev() == on_disk.dev() && handle.ino() == on_disk.ino())
-}
-
-/// Non-Unix: no stable (dev, inode) identity to compare — the Windows
-/// port (Milestone W) supplies the file-index equivalent. Until then
-/// the check is a no-op there (single-writer-per-platform in practice).
-#[cfg(not(unix))]
-fn same_inode(_file: &fs::File, _path: &Path) -> io::Result<bool> {
-    Ok(true)
+    let sidecar = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(sidecar_lock_path(log_path))?;
+    sidecar.lock()?;
+    Ok(OplogLock(sidecar))
 }
 
 /// Append a single entry to `<cache_dir>/oplog/<log_name>.oplog`.
@@ -957,19 +958,24 @@ pub fn append_entry(
     // MAGIC should be. `read_oplog` then rejects the file with "bad
     // magic" and every previously committed entry is unrecoverable.
     //
-    // Fix: hold an OS-level exclusive lock across "decide whether
-    // to write the header" *and* "write our entry." Whoever gets the
-    // lock first sees the empty file and writes the header before
-    // appending. Subsequent lock-holders see a non-empty file with a
-    // valid header already in place and just append. The lock uses
-    // OFD locks on Linux (per fd, cross-thread-safe) and `LockFileEx`
-    // on Windows — `File::lock` papers over the platform difference.
-    // Lock is released when `file` is dropped at the end of this
-    // function.
-    let mut opts = OpenOptions::new();
-    opts.create(true).read(true).append(true);
-    let mut file =
-        open_locked_verified(&path, &opts)?.expect("create(true) openers always get a file");
+    // Fix: hold the per-log exclusive mutation lock (the SIDECAR lock
+    // — see `lock_oplog`, #928: never an OS lock on the log itself,
+    // which is mandatory on Windows and fails other handles' reads)
+    // across "decide whether to write the header" *and* "write our
+    // entry." Whoever gets the lock first sees the empty file and
+    // writes the header before appending. Subsequent lock-holders see
+    // a non-empty file with a valid header already in place and just
+    // append. Acquiring the lock BEFORE opening the log means a
+    // compaction rename can't swap the path→file binding in between —
+    // this handle is the current file by construction (the race the
+    // old lock-then-verify-inode retry existed for). The lock is
+    // released when `_lock` drops at the end of this function.
+    let _lock = lock_oplog(&path)?;
+    let mut file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .append(true)
+        .open(&path)?;
 
     let len = file.metadata()?.len();
     let is_new_file = len == 0;
@@ -1068,10 +1074,13 @@ pub fn append_path_changed_marker(
     timestamp_ms: i64,
 ) -> io::Result<Option<u64>> {
     let path = oplog_path_for_name(cache_dir, log_name);
-    let mut opts = OpenOptions::new();
-    opts.read(true).append(true);
-    let Some(mut file) = open_locked_verified(&path, &opts)? else {
-        return Ok(None);
+    // Sidecar mutation lock first, then open (#928) — a missing log
+    // stays "nothing to re-path", it just surfaces from the open now.
+    let _lock = lock_oplog(&path)?;
+    let mut file = match OpenOptions::new().read(true).append(true).open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
     };
 
     let len = file.metadata()?.len();
@@ -1904,10 +1913,10 @@ mod tests {
         // the loser's `body_len` u32 where MAGIC should be.
         // `read_oplog` then rejected the whole file with "bad magic".
         //
-        // The fix takes an OS-level exclusive lock (`File::lock`)
-        // across the "is the header in place?" check *and* the
-        // entry append, so whichever thread gets the lock first
-        // observes an empty file and writes the header before
+        // The fix takes the per-log exclusive mutation lock (the
+        // #928 sidecar) across the "is the header in place?" check
+        // *and* the entry append, so whichever thread gets the lock
+        // first observes an empty file and writes the header before
         // releasing. With the lock, this test is deterministic; with
         // the pre-fix code it was flaky under `cargo test --workspace`
         // (~10% reproduction rate on macOS) and visibly broken under

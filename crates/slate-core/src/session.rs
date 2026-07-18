@@ -982,24 +982,30 @@ fn regen_events_after_compaction(
     marker_rowid: Option<i64>,
     events_cutoff_ms: i64,
 ) -> Result<(), VaultError> {
-    // Hold the LOG's exclusive lock across read + transaction
+    // Hold the log's exclusive mutation lock across read + transaction
     // (milestone re-review High): without it, a save can append entry
     // N+1 and commit its event row between our read and our
     // DELETE+reinsert — erasing that row forever with every marker
     // already cleared. Under the lock a concurrent save blocks at its
     // own append (milliseconds) and its event insert lands strictly
-    // after this commit. Same lock-then-verify-inode protocol as the
-    // appenders and the compactor; a vanished log aborts (the marker
-    // stays, the scan heals).
+    // after this commit. Same SIDECAR lock as the appenders and the
+    // compactor (`lock_oplog`, #928) — deliberately not a lock on the
+    // log itself, which is mandatory on Windows and would fail THIS
+    // function's own `read_oplog` below (it reads through a second
+    // handle). A vanished log aborts (the marker stays, the scan
+    // heals); the existence check runs under the lock, so no rename
+    // or reclamation can swap the answer before the read.
     let log_path = crate::oplog::oplog_path_for_name(cache_dir, log_name);
-    let _log_lock = crate::oplog::open_locked_verified(
-        &log_path,
-        std::fs::OpenOptions::new().read(true).write(true),
-    )
-    .map_err(VaultError::Io)?
-    .ok_or_else(|| VaultError::Trash {
-        message: "log vanished before event regeneration".into(),
-    })?;
+    let _log_lock = crate::oplog::lock_oplog(&log_path).map_err(VaultError::Io)?;
+    match std::fs::metadata(&log_path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(VaultError::Trash {
+                message: "log vanished before event regeneration".into(),
+            });
+        }
+        Err(e) => return Err(VaultError::Io(e)),
+    }
     let entries = crate::oplog::read_oplog(cache_dir, log_name).map_err(VaultError::Io)?;
     let events = crate::oplog_events::derive_events_for_log(&entries);
     let tx = conn.transaction()?;
@@ -2550,9 +2556,20 @@ impl VaultSession {
                     {
                         let log_path =
                             crate::oplog::oplog_path_for_name(&self.config.cache_dir, stem);
-                        if let Err(e) = std::fs::remove_file(&log_path) {
-                            log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
-                            log::debug!("oplog reclamation failure detail: {e}");
+                        match std::fs::remove_file(&log_path) {
+                            // The log is gone; its sidecar lock file
+                            // (#928) has nothing left to guard —
+                            // best-effort cleanup, same junk profile
+                            // as a crashed `.tmp` if it fails.
+                            Ok(()) => {
+                                let _ = std::fs::remove_file(crate::oplog::sidecar_lock_path(
+                                    &log_path,
+                                ));
+                            }
+                            Err(e) => {
+                                log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
+                                log::debug!("oplog reclamation failure detail: {e}");
+                            }
                         }
                     }
                 }
@@ -2604,9 +2621,17 @@ impl VaultSession {
             match (effective_path, entries.last()) {
                 (_, Some(_)) if newest_ts.is_some_and(|ts| ts <= cutoff) => {
                     let log_path = crate::oplog::oplog_path_for_name(&self.config.cache_dir, stem);
-                    if let Err(e) = std::fs::remove_file(&log_path) {
-                        log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
-                        log::debug!("oplog reclamation failure detail: {e}");
+                    match std::fs::remove_file(&log_path) {
+                        // See the quarantine branch: reclaim the #928
+                        // sidecar alongside its log, best-effort.
+                        Ok(()) => {
+                            let _ =
+                                std::fs::remove_file(crate::oplog::sidecar_lock_path(&log_path));
+                        }
+                        Err(e) => {
+                            log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
+                            log::debug!("oplog reclamation failure detail: {e}");
+                        }
                     }
                 }
                 (Some(eff), Some(tail)) => remnants.push(RemnantLog {
