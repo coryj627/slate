@@ -27,6 +27,11 @@ on:
 permissions:
   contents: read
 
+# Superseded PR pushes cancel the in-flight run; main never cancels.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
     name: SPDX header present on every .rs/.swift

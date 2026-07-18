@@ -35,6 +35,11 @@ on:
 permissions:
   contents: read
 
+# Superseded PR pushes cancel the in-flight run; main/cron never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   audit:
     name: cargo audit
@@ -97,12 +102,16 @@ jobs:
           cache: rust
 
       - name: Install cargo-audit
-        # Pin the scanner version (matching the repo's pin-everything
-        # convention) for reproducible runs. The advisory database is
-        # still fetched fresh on every run, so pinning the tool doesn't
-        # reduce coverage — newly-disclosed advisories are still caught.
-        # Bump deliberately.
-        run: cargo install cargo-audit --locked --version 0.22.2
+        # Prebuilt, checksum-verified binary in seconds instead of
+        # `cargo install` compiling from source every run (~/.cargo/bin
+        # is deliberately never cached — see the cache step below — so
+        # the compile used to repeat per run). Version stays pinned
+        # (repo pin-everything convention); the advisory database is
+        # still fetched fresh each run, so coverage is unchanged. Bump
+        # deliberately.
+        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b  # v2.83.4
+        with:
+          tool: cargo-audit@0.22.2
 
       - name: Resolve lockfile
         # Cargo.lock is not committed; generate it so the audit has a

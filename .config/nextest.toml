@@ -1,0 +1,12 @@
+# Nextest configuration for the CI test lane (and local `make test-fast`).
+#
+# Minimal by design:
+#   - slow-timeout marks tests SLOW after 120s so census stragglers are
+#     visible in every log, with NO termination — the fs-heavy session
+#     censuses legitimately run minutes today; they get split into
+#     parallel seed chunks rather than timed out.
+#   - final-status-level = "slow" reprints every SLOW test in the run
+#     summary, so per-test census cost is one glance away in CI logs.
+[profile.default]
+slow-timeout = { period = "120s" }
+final-status-level = "slow"

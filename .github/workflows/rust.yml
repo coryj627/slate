@@ -1,10 +1,23 @@
 # Rust CI for slate-core + slate-uniffi.
 #
-# Mirrors what `make ci` runs locally, plus a bench-compile step so
-# benchmark code can't silently rot. Runs on a Namespace Linux ARM64 runner
-# (arm64-fast — high capacity): the Rust workspace is platform-independent, so
-# Linux is faster + cheaper than the macOS pool, and Namespace's NVMe
-# cross-invocation cache keeps cold cargo runs short.
+# Three parallel lanes replace the old serial fmt→clippy→test→bench job:
+# the PR wall clock is now just the test lane. Measured on the old shape
+# (run 29626113718): 24m46s total, of which `cargo test --workspace` was
+# 20m52s — 1,193s of that running the slate_core lib binary's ~30
+# `census_*` suites at opt-level 0. Tests now run under the `ci` cargo
+# profile (opt-level 2 with debug-assertions + overflow-checks still on;
+# see Cargo.toml) via cargo-nextest, which also gives per-test timings,
+# so census stragglers stay visible in every run's log.
+#
+# All lanes run on the same Namespace profile and mount its NVMe cache
+# volume. Volumes are fork-on-mount / commit-on-clean-exit /
+# last-write-wins (namespace.so/docs/architecture/storage/cache-volumes),
+# so concurrent lanes are safe: each gets a private fork. The longest
+# lane (test) commits last, so the big `target/ci` tree stays warm run
+# to run; the short lanes may re-do a little work from a stale fork —
+# that costs billed seconds off the critical path, not wall time. The
+# lanes write disjoint profile dirs anyway (lint → target/debug check
+# artifacts, test → target/ci, bench → target/release).
 
 name: Rust
 
@@ -14,6 +27,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'crates/**'
+      - '.config/nextest.toml'
       - '.github/workflows/rust.yml'
   push:
     branches: [main]
@@ -21,17 +35,61 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'crates/**'
+      - '.config/nextest.toml'
       - '.github/workflows/rust.yml'
+
+# Superseded pushes to the same PR cancel the in-flight run (a rapid
+# fix-up push shouldn't stack full pipelines). Runs on main never cancel.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
 
 jobs:
-  rust:
-    name: fmt / clippy / test / bench-compile
-    # Namespace Linux ARM64 runner (arm64-fast — high capacity + NVMe cache).
-    # The Rust workspace is platform-independent, so this needs neither the
-    # macOS pin the Swift build uses nor any specific arch.
+  lint:
+    name: fmt / clippy
+    # Namespace Linux runner profile (dashboard-configured; currently
+    # serves amd64 8x16 despite the historical "arm64" name).
+    runs-on: namespace-profile-arm64-fast
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Assert runner architecture matches the cache lineage
+        # The NVMe cache volume is keyed per profile+repo, NOT per
+        # architecture. The profile currently serves amd64 (its dashboard
+        # platform field — the "arm64-fast" name is historical); if that
+        # field ever flips, arch-specific rlibs would silently thrash the
+        # shared cache on every alternation. Fail loudly instead. On a
+        # deliberate re-pin, update the expected value here and expect
+        # one cold rebuild.
+        run: |
+          arch="$(uname -m)"
+          if [ "$arch" != "x86_64" ]; then
+            echo "::error::runner arch is $arch, cache lineage expects x86_64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
+            exit 1
+          fi
+
+      - name: Cache Rust build (Namespace NVMe cache)
+        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        with:
+          cache: rust
+
+      - name: cargo fmt --check
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        # --all-targets covers libs, tests, examples, AND benches — so a
+        # bench or test that doesn't type-check fails CI here, in check
+        # mode, without paying bench-profile codegen.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (nextest, ci profile)
     runs-on: namespace-profile-arm64-fast
     permissions:
       contents: read
@@ -41,40 +99,102 @@ jobs:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
+      - name: Assert runner architecture matches the cache lineage
+        # See the lint lane's twin step for the rationale.
+        run: |
+          arch="$(uname -m)"
+          if [ "$arch" != "x86_64" ]; then
+            echo "::error::runner arch is $arch, cache lineage expects x86_64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
+            exit 1
+          fi
+
       - name: Cache Rust build (Namespace NVMe cache)
-        # Namespace cross-invocation cache — ~/.cargo + target/ on the NVMe
-        # volume attached to the arm64-fast profile.
         uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
         with:
           cache: rust
 
-      - name: cargo fmt --check
-        run: cargo fmt --all --check
+      - name: Install cargo-nextest
+        # Prebuilt, checksum-verified binary in seconds. Installs into
+        # $CARGO_HOME/bin at job runtime, so nothing needs caching and
+        # the preinstalled toolchain is never shadowed (the reason
+        # ~/.cargo/bin is deliberately not part of the cache volume).
+        uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b  # v2.83.4
+        with:
+          tool: cargo-nextest@0.9.140
 
-      - name: cargo clippy
-        # --all-targets covers libs, tests, examples, AND benches —
-        # so a bench that doesn't compile fails CI here.
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: cargo test
-        # This wall-clock guard is run in isolation below. Running it beside
-        # the long dir-tree census makes scheduler contention indistinguishable
-        # from a list_dir_children regression on shared CI runners.
+      - name: cargo nextest run (ci profile)
+        # The wall-clock perf guard is excluded here and run in isolation
+        # below — beside the long dir-tree censuses, scheduler contention
+        # is indistinguishable from a list_dir_children regression. If the
+        # guard is ever renamed, this filterset silently stops excluding
+        # it (harmless: it just runs twice), but the isolated step's
+        # exact-match filter + --no-tests=fail turns the rename into a
+        # loud CI failure, preserving the old `--list | grep` protection.
         run: >-
-          cargo test --workspace --
-          --skip "$ROOT_LISTING_PERF_GUARD"
+          cargo nextest run --workspace --cargo-profile ci
+          --no-fail-fast --no-tests=fail
+          -E "not test(${ROOT_LISTING_PERF_GUARD})"
 
       - name: root-listing performance guard (isolated)
-        run: |
-          set -o pipefail
-          cargo test -p slate-core --lib "$ROOT_LISTING_PERF_GUARD" -- --exact --list |
-            grep -F -x "$ROOT_LISTING_PERF_GUARD: test"
-          cargo test -p slate-core --lib "$ROOT_LISTING_PERF_GUARD" -- \
-            --exact --test-threads=1 --include-ignored
+        # Same workspace-level package selection as the sweep above, so
+        # feature unification — and therefore the build fingerprint — is
+        # identical and nothing recompiles (the old `-p slate-core` form
+        # re-unified features and paid a ~26s rebuild here).
+        run: >-
+          cargo nextest run --workspace --cargo-profile ci
+          --no-tests=fail --test-threads 1
+          -E "test(=${ROOT_LISTING_PERF_GUARD})"
 
-      - name: cargo bench --no-run
-        # Compile every bench in the workspace without running them.
-        # Full bench execution takes ~15 min and isn't a per-PR
-        # concern, but a broken bench binary anywhere in the workspace
-        # should fail CI loudly.
+      - name: Doc-tests
+        # nextest doesn't run doctests; keep them via libtest. Edition
+        # 2024 merges doctests into one binary, so this is cheap.
+        run: cargo test --workspace --doc --profile ci
+
+      - name: Cache footprint report
+        # The volume holds target/debug (lint check artifacts), target/ci
+        # (this lane), and target/release (bench lane) and resets to
+        # EMPTY if content exceeds its 50GB configured size — watch the
+        # trend here; prune or grow the volume before hitting the cliff.
+        run: du -sh target/* 2>/dev/null | sort -rh || true
+
+  bench-compile:
+    name: bench-compile
+    runs-on: namespace-profile-arm64-fast
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: Assert runner architecture matches the cache lineage
+        # See the lint lane's twin step for the rationale.
+        run: |
+          arch="$(uname -m)"
+          if [ "$arch" != "x86_64" ]; then
+            echo "::error::runner arch is $arch, cache lineage expects x86_64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
+            exit 1
+          fi
+
+      - name: Cache Rust build (Namespace NVMe cache)
+        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        with:
+          cache: rust
+
+      - name: cargo bench --no-run (PR — LTO off)
+        # Compile every bench without running it, so a broken bench
+        # binary fails CI loudly. On PRs the thin-LTO knob is disabled
+        # via Cargo's documented CARGO_PROFILE_<name>_<key> env override:
+        # this is a compile-rot check, not a benchmark, and thin-LTO
+        # codegen was ~60% of the old 2m24s step. Local `make bench-check`
+        # and real bench runs keep the committed [profile.release] LTO.
+        if: github.event_name == 'pull_request'
+        env:
+          CARGO_PROFILE_BENCH_LTO: 'false'
+        run: cargo bench --workspace --no-run
+
+      - name: cargo bench --no-run (main — full profile)
+        # On main the full committed profile (thin-LTO) still compiles,
+        # so codegen/link-level bench rot is caught within one merge, not
+        # left to the next local bench run.
+        if: github.event_name == 'push'
         run: cargo bench --workspace --no-run

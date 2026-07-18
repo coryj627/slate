@@ -140,3 +140,18 @@ debug = true
 opt-level = 3
 lto = "thin"
 strip = "symbols"
+
+# CI test profile (`cargo test --profile ci`): optimized code with every
+# assertion still armed. The ~30 `census_*` suites dominate CI wall time
+# at opt-level 0; opt-level 2 recovers most of it while debug-assertions
+# and overflow-checks stay on (inherited dev defaults, restated here so a
+# future edit can't silently disarm them) — every `debug_assert!` the
+# censuses exercise is still checked. Line-tables-only debuginfo keeps
+# panic backtraces readable at a fraction of full debuginfo's compile
+# cost. Local `cargo test` (dev profile) is unchanged.
+[profile.ci]
+inherits = "dev"
+opt-level = 2
+debug = "line-tables-only"
+debug-assertions = true
+overflow-checks = true

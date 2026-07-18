@@ -35,6 +35,15 @@ check:
 test:
 	cargo test --workspace
 
+# Fast local sweep mirroring the CI test lane: cargo-nextest + the `ci`
+# cargo profile (opt-level 2, debug-assertions/overflow-checks still on —
+# see Cargo.toml). ~5x faster wall clock than `make test` once warm; the
+# doc-test pass keeps parity with what CI runs. Needs cargo-nextest
+# (`brew install cargo-nextest` or `cargo install cargo-nextest --locked`).
+test-fast:
+	cargo nextest run --workspace --cargo-profile ci --no-fail-fast
+	cargo test --workspace --doc --profile ci
+
 fmt:
 	cargo fmt --all
 
