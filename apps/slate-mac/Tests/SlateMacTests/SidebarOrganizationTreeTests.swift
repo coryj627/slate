@@ -435,6 +435,54 @@ final class SidebarOrganizationTreeTests: XCTestCase {
     XCTAssertNil(vm.fetchState[FileTreeViewModel.rootFetchKey])
   }
 
+  func testSaveForAnUnlandedLaterPageFileSurvivesTheDrain() async {
+    // Round-19 finding 2: a save publishing a newer summary for a page-two
+    // file BEFORE its page lands must overlay the stale page snapshot.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let now = instant(2026, 7, 18)
+    let vm = FileTreeViewModel()
+    var prefs = SidebarOrganizationPrefs()
+    prefs.vaultChoice = SidebarOrganizationChoice(
+      sort: SidebarSortOption(field: .modified, direction: .desc), grouping: .none)
+    vm.applyOrganization(context(prefs: prefs, now: now))
+    vm.bindForTesting(pagedFetcher: { [self] _, cursor in
+      if cursor == nil {
+        return DirListing(
+          dirs: [],
+          files: FileSummaryPage(
+            items: [file("first.md", mtime: 5_000)],
+            nextCursor: "page-2", totalFiltered: 2))
+      }
+      // Hold page two until the newer save has been published.
+      gate.wait()
+      return DirListing(
+        dirs: [],
+        files: FileSummaryPage(
+          items: [file("late.md", mtime: 1_000)],
+          nextCursor: nil, totalFiltered: 2))
+    })
+
+    // The save lands while page two is still being fetched.
+    vm.replaceFileSummaries([
+      file("late.md", mtime: 9_000, displayName: "Newest")
+    ])
+    gate.open()
+    await vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]?.value
+
+    XCTAssertEqual(
+      vm.fileSummary(forPath: "late.md")?.displayName, "Newest",
+      "the buffered newest summary overlays the stale page snapshot")
+    XCTAssertEqual(vm.fileSummary(forPath: "late.md")?.mtimeMs, 9_000)
+    XCTAssertEqual(
+      visiblePaths(vm), ["late.md", "first.md"],
+      "the merged order reflects the buffered mtime")
+  }
+
   func testPartialLevelsNeverClassifyPinsAsStale() {
     // Round-5 finding 2: a paginated listing omits real files; a pinned
     // file on a later page must not be offered for pruning.

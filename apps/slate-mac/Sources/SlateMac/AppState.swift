@@ -5199,7 +5199,9 @@ final class AppState: ObservableObject {
                     }
                     var finalRoot: [String: Any] = [:]
                     do {
-                        try store.update { root in
+                        try store.update(
+                            expectedRootIdentity: enqueueIdentity
+                        ) { root in
                             // Revalidate under the lock: shapes may have
                             // changed since open-time validation (round-6
                             // finding 2).
@@ -5784,10 +5786,7 @@ final class AppState: ObservableObject {
     private var sidebarPinPruneInFlight: Set<String> = []
     private static let sidebarStalePruneCandidateCap = 128
 
-    struct SidebarVaultRootIdentity: Equatable, Sendable {
-        let device: UInt64
-        let inode: UInt64
-    }
+    typealias SidebarVaultRootIdentity = SidebarVaultPrefsStore.RootIdentity
 
     /// The vault root's stable (device, inode) identity; nil when it cannot
     /// be determined (in which case queued writes are dropped, never risked).
@@ -8513,6 +8512,7 @@ final class AppState: ObservableObject {
             var adoptedRoot = result.root
             var adoptedNotice = result.notice
             var retryDurabilityWarning: String?
+            let retryIdentity = self.sidebarVaultRootIdentity
             // Round-5 finding 3: a repaired file whose known sections use an
             // unrecognized top-level shape stays in recovery — the replay
             // must not write into it either.
@@ -8540,7 +8540,9 @@ final class AppState: ObservableObject {
                     () -> RetryReplayOutcome in
                     var finalRoot: [String: Any] = [:]
                     do {
-                        try store.update { root in
+                        try store.update(
+                            expectedRootIdentity: retryIdentity
+                        ) { root in
                             guard
                                 SidebarOrganizationSchema
                                     .knownSectionShapesAreValid(root: root)

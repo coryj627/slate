@@ -467,6 +467,14 @@ final class FileTreeViewModel: ObservableObject {
     /// targeted invalidation of one folder never strands another folder's
     /// running drain as a silent permanent partial.
     private var levelDrainTokens: [NodeID: UUID] = [:]
+    /// Newest summaries for paths NOT yet materialized while a continuation
+    /// drain is in flight (round-19 finding 2): a save landing for a
+    /// later-page file before its page lands would otherwise be dropped by
+    /// `replaceFileSummaries` and overwritten by the stale page snapshot.
+    /// Consumed (newest-wins) when the drained rows land; cleared when the
+    /// last drain settles or the tree rebinds.
+    private var pendingSummaryOverlay: [String: FileSummary] = [:]
+    private static let pendingSummaryOverlayCap = 4096
     private(set) var levelDrainTasksForTesting: [NodeID: Task<Void, Never>] = [:]
 
 
@@ -520,6 +528,13 @@ final class FileTreeViewModel: ObservableObject {
             else { return }
             self.levelDrainTokens[parentKey] = nil
             self.levelDrainTasksForTesting[parentKey] = nil
+            let isLastDrain = self.levelDrainTokens.isEmpty
+            defer {
+                if isLastDrain {
+                    // No drain can consume leftovers anymore.
+                    self.pendingSummaryOverlay = [:]
+                }
+            }
             guard case .success(let drained) = outcome else {
                 // Round-15 finding 2: a failed continuation keeps the
                 // already-published partial page but surfaces the existing
@@ -551,9 +566,18 @@ final class FileTreeViewModel: ObservableObject {
                             childFileCount: Int(dir.childFileCount))))
             }
             for summary in firstPage.files.items + drained.files {
-                let state =
-                    self.fileStateByPath[summary.path]
-                    ?? FileTreeFileState(summary: summary)
+                let state: FileTreeFileState
+                if let existing = self.fileStateByPath[summary.path] {
+                    state = existing
+                } else if let buffered =
+                    self.pendingSummaryOverlay.removeValue(forKey: summary.path)
+                {
+                    // A save landed for this later-page file mid-drain: the
+                    // buffered newest summary wins over the page snapshot.
+                    state = FileTreeFileState(summary: buffered)
+                } else {
+                    state = FileTreeFileState(summary: summary)
+                }
                 level.append(
                     TreeNode(
                         nodeID: .file(path: summary.path),
@@ -589,6 +613,7 @@ final class FileTreeViewModel: ObservableObject {
         completeLevelByKey = [:]
         levelDrainTokens = [:]
         levelDrainTasksForTesting = [:]
+        pendingSummaryOverlay = [:]
         if treePresentation != SidebarTreePresentation() {
             treePresentation = SidebarTreePresentation()
         }
@@ -1173,7 +1198,17 @@ final class FileTreeViewModel: ObservableObject {
 
         for summary in summaries {
             summaryReplacementLookupCountForTesting += 1
-            guard let state = fileStateByPath[summary.path] else { continue }
+            guard let state = fileStateByPath[summary.path] else {
+                // Round-19 finding 2: while a drain is in flight this path
+                // may be a later-page row that just hasn't landed — buffer
+                // the newest summary so the landing overlays it.
+                if !levelDrainTokens.isEmpty,
+                    pendingSummaryOverlay.count < Self.pendingSummaryOverlayCap
+                {
+                    pendingSummaryOverlay[summary.path] = summary
+                }
+                continue
+            }
             let previous = state.summary
             if state.replace(with: summary) {
                 replacementCount += 1

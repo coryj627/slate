@@ -190,6 +190,40 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     XCTAssertEqual(store.read().root["durable"] as? Bool, true)
   }
 
+  func testUpdateRejectsAMismatchedRootIdentityOnItsOwnDescriptor() throws {
+    // FL-06 round-19: identity verifies via fstat on the exact descriptor
+    // the locked write resolves through — a mismatch refuses the write and
+    // leaves the file untouched.
+    let store = makeStore()
+    try store.update { root in
+      root["original"] = true
+    }
+    let before = try Data(contentsOf: store.fileURL)
+
+    let wrongIdentity = SidebarVaultPrefsStore.RootIdentity(
+      device: 0xDEAD, inode: 0xBEEF)
+    XCTAssertThrowsError(
+      try store.update(expectedRootIdentity: wrongIdentity) { root in
+        root["intruder"] = true
+      }
+    ) { error in
+      guard case SidebarVaultPrefsStoreError.vaultReplaced = error else {
+        return XCTFail("expected vaultReplaced, got \(error)")
+      }
+    }
+    XCTAssertEqual(try Data(contentsOf: store.fileURL), before)
+
+    // The correct identity passes.
+    var info = stat()
+    XCTAssertEqual(vault.path.withCString { stat($0, &info) }, 0)
+    let rightIdentity = SidebarVaultPrefsStore.RootIdentity(
+      device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+    try store.update(expectedRootIdentity: rightIdentity) { root in
+      root["allowed"] = true
+    }
+    XCTAssertEqual(store.read().root["allowed"] as? Bool, true)
+  }
+
   func testNoOpUpdateSkipsThePhysicalReplacement() throws {
     let synchronizer = DirectorySynchronizerSpy()
     let store = makeStore(directorySynchronizer: { synchronizer.synchronize($0) })

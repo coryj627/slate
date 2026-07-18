@@ -50,6 +50,10 @@ enum SidebarVaultPrefsStoreError: Error, LocalizedError, Equatable {
   case lockUnavailable(reason: String)
   case encodingFailed(reason: String)
   case writeFailed(reason: String)
+  /// The pinned vault-root descriptor no longer matches the identity the
+  /// caller captured at enqueue: the vault at this path was replaced, and
+  /// the write is refused before touching the newcomer (FL-06 round-19).
+  case vaultReplaced
   /// The atomic rename already took effect — the file's CONTENT is the new
   /// value — but the parent-directory synchronization afterward failed, so
   /// the replacement's durability across a crash is not guaranteed. Callers
@@ -72,6 +76,9 @@ enum SidebarVaultPrefsStoreError: Error, LocalizedError, Equatable {
     case .replacedButUnsynced(let reason):
       return "Sidebar settings were saved, but the change may not survive a "
         + "sudden power loss: \(reason)"
+    case .vaultReplaced:
+      return "The vault at this location changed, so a queued sidebar "
+        + "settings write was discarded."
     }
   }
 }
@@ -85,6 +92,15 @@ enum SidebarVaultPrefsStoreError: Error, LocalizedError, Equatable {
 /// directory descriptors, and writes use a same-directory temp + `renameat`, so
 /// neither a symlink swap nor a kill can expose a partial or out-of-vault file.
 struct SidebarVaultPrefsStore: Sendable {
+  /// Stable (device, inode) identity of a vault root. Callers capture it at
+  /// enqueue and `update` verifies it against an `fstat` of the exact
+  /// descriptor the locked write resolves through — no separate-stat TOCTOU
+  /// window exists (FL-06 round-19).
+  struct RootIdentity: Equatable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+  }
+
   static let currentVersion = 1
   static let maxReadBytes = 16 * 1_024 * 1_024
 
@@ -130,7 +146,7 @@ struct SidebarVaultPrefsStore: Sendable {
     switch openSlateDirectory(createIfMissing: false) {
     case .missing:
       return SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: nil)
-    case .failed:
+    case .failed, .identityMismatch:
       return SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: .unreadable)
     case .opened(let fd):
       slateDirectoryFD = fd
@@ -158,9 +174,14 @@ struct SidebarVaultPrefsStore: Sendable {
   ///
   /// Existing malformed, oversized, unreadable, or forward-version files are
   /// never overwritten. A missing file is created only by this write path.
-  func update(_ mutation: (inout [String: Any]) throws -> Void) throws {
+  func update(
+    expectedRootIdentity: RootIdentity? = nil,
+    _ mutation: (inout [String: Any]) throws -> Void
+  ) throws {
     let slateDirectoryFD: Int32
-    switch openSlateDirectory(createIfMissing: true) {
+    switch openSlateDirectory(
+      createIfMissing: true, expectedRootIdentity: expectedRootIdentity)
+    {
     case .opened(let fd):
       slateDirectoryFD = fd
     case .missing:
@@ -169,6 +190,8 @@ struct SidebarVaultPrefsStore: Sendable {
       )
     case .failed(let reason):
       throw SidebarVaultPrefsStoreError.writeFailed(reason: reason)
+    case .identityMismatch:
+      throw SidebarVaultPrefsStoreError.vaultReplaced
     }
     defer { close(slateDirectoryFD) }
 
@@ -372,6 +395,7 @@ struct SidebarVaultPrefsStore: Sendable {
     case missing
     case opened(Int32)
     case failed(reason: String)
+    case identityMismatch
   }
 
   private enum EntryState {
@@ -385,7 +409,10 @@ struct SidebarVaultPrefsStore: Sendable {
   /// Opens the vault root once, then resolves `.slate` exactly once relative
   /// to that descriptor with `O_NOFOLLOW | O_DIRECTORY`. The returned fd pins
   /// the validated directory for all later lock/read/temp/rename operations.
-  private func openSlateDirectory(createIfMissing: Bool) -> SlateDirectoryOpenResult {
+  private func openSlateDirectory(
+    createIfMissing: Bool,
+    expectedRootIdentity: RootIdentity? = nil
+  ) -> SlateDirectoryOpenResult {
     let rootFD = open(vaultRoot.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard rootFD >= 0 else {
       let code = errno
@@ -397,6 +424,19 @@ struct SidebarVaultPrefsStore: Sendable {
       )
     }
     defer { close(rootFD) }
+
+    // FL-06 round-19: verify identity on the EXACT descriptor every later
+    // operation resolves through — the path may point at a replacement
+    // vault by now, and that newcomer must never receive this write.
+    if let expectedRootIdentity {
+      var info = stat()
+      guard fstat(rootFD, &info) == 0,
+        UInt64(info.st_dev) == expectedRootIdentity.device,
+        UInt64(info.st_ino) == expectedRootIdentity.inode
+      else {
+        return .identityMismatch
+      }
+    }
 
     func openPinnedSlateDirectory() -> Int32 {
       Self.slateDirectoryName.withCString { name in
