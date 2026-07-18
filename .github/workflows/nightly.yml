@@ -55,8 +55,8 @@ jobs:
         # Twin of the rust.yml guard — same cache volume, same rationale.
         run: |
           arch="$(uname -m)"
-          if [ "$arch" != "x86_64" ]; then
-            echo "::error::runner arch is $arch, cache lineage expects x86_64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
+          if [ "$arch" != "aarch64" ]; then
+            echo "::error::runner arch is $arch, cache lineage expects aarch64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
             exit 1
           fi
 

@@ -57,8 +57,8 @@ permissions:
 jobs:
   lint:
     name: fmt / clippy
-    # Namespace Linux runner profile (dashboard-configured; currently
-    # serves amd64 8x16 despite the historical "arm64" name).
+    # Namespace Linux runner profile (dashboard-configured; re-pinned to
+    # genuine ARM64 by the owner on 2026-07-18 — the name is truthful now).
     runs-on: namespace-profile-arm64-fast
     permissions:
       contents: read
@@ -68,16 +68,16 @@ jobs:
 
       - name: Assert runner architecture matches the cache lineage
         # The NVMe cache volume is keyed per profile+repo, NOT per
-        # architecture. The profile currently serves amd64 (its dashboard
-        # platform field — the "arm64-fast" name is historical); if that
-        # field ever flips, arch-specific rlibs would silently thrash the
-        # shared cache on every alternation. Fail loudly instead. On a
-        # deliberate re-pin, update the expected value here and expect
-        # one cold rebuild.
+        # architecture. The profile serves genuine ARM64 since the owner's
+        # 2026-07-18 dashboard re-pin (it historically served amd64); if
+        # the platform field ever flips again, arch-specific rlibs would
+        # silently thrash the shared cache on every alternation. Fail
+        # loudly instead. On a deliberate re-pin, update the expected
+        # value here and expect one cold rebuild.
         run: |
           arch="$(uname -m)"
-          if [ "$arch" != "x86_64" ]; then
-            echo "::error::runner arch is $arch, cache lineage expects x86_64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
+          if [ "$arch" != "aarch64" ]; then
+            echo "::error::runner arch is $arch, cache lineage expects aarch64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
             exit 1
           fi
 
@@ -110,8 +110,8 @@ jobs:
         # See the lint lane's twin step for the rationale.
         run: |
           arch="$(uname -m)"
-          if [ "$arch" != "x86_64" ]; then
-            echo "::error::runner arch is $arch, cache lineage expects x86_64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
+          if [ "$arch" != "aarch64" ]; then
+            echo "::error::runner arch is $arch, cache lineage expects aarch64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
             exit 1
           fi
 
@@ -199,8 +199,8 @@ jobs:
         # See the lint lane's twin step for the rationale.
         run: |
           arch="$(uname -m)"
-          if [ "$arch" != "x86_64" ]; then
-            echo "::error::runner arch is $arch, cache lineage expects x86_64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
+          if [ "$arch" != "aarch64" ]; then
+            echo "::error::runner arch is $arch, cache lineage expects aarch64 — profile platform changed in the dashboard? Update this guard and expect one cold rebuild."
             exit 1
           fi
 
