@@ -5717,10 +5717,11 @@ final class AppState: ObservableObject {
             apply: { root in
                 let storedPins = SidebarOrganizationSchema.decode(root: root).pins
                 let storedPaths = storedPins.paths(forFolder: folder)
+                let definitelyMissing = Self.sidebarDefinitelyMissingPaths(
+                    vaultRoot: vaultRoot,
+                    candidates: storedPaths.filter { staleSet.contains($0) })
                 let storedRemaining = storedPaths.filter { path in
-                    !staleSet.contains(path)
-                        || !Self.sidebarPathDefinitelyMissing(
-                            vaultRoot: vaultRoot, path: path)
+                    !definitelyMissing.contains(path)
                 }
                 removals.record(storedPaths.count - storedRemaining.count)
                 guard storedRemaining.count != storedPaths.count else { return }
@@ -5740,17 +5741,50 @@ final class AppState: ObservableObject {
     private var sidebarPinPruneInFlight: Set<String> = []
     private static let sidebarStalePruneCandidateCap = 128
 
-    /// True only on a definite ENOENT for the vault-relative path; any other
-    /// stat outcome (exists, permission error, transient I/O) retains the pin.
-    nonisolated static func sidebarPathDefinitelyMissing(
-        vaultRoot: URL, path: String
-    ) -> Bool {
-        var info = stat()
-        let result = vaultRoot.appendingPathComponent(path).path.withCString {
-            stat($0, &info)
+    /// The subset of candidates that are DEFINITELY absent: their parent
+    /// directory is readable (or itself definitively gone) and contains no
+    /// byte-exact entry for the final path component. A plain `stat` is not
+    /// exact on the default case-insensitive APFS volume, follows symlinks,
+    /// and accepts directories (round-14 finding 2) — an entry of any type
+    /// with the exact name retains the pin (uncertainty never prunes), and
+    /// so does an unreadable parent.
+    nonisolated static func sidebarDefinitelyMissingPaths(
+        vaultRoot: URL, candidates: [String]
+    ) -> Set<String> {
+        guard !candidates.isEmpty else { return [] }
+        var byParent: [String: [String]] = [:]
+        for candidate in candidates {
+            byParent[SidebarPins.folder(of: candidate), default: []]
+                .append(candidate)
         }
-        if result == 0 { return false }
-        return errno == ENOENT
+        var missing: Set<String> = []
+        for (parent, children) in byParent {
+            let parentURL = parent.isEmpty
+                ? vaultRoot : vaultRoot.appendingPathComponent(parent)
+            let exactNames: Set<String>
+            do {
+                exactNames = Set(
+                    try FileManager.default.contentsOfDirectory(
+                        atPath: parentURL.path))
+            } catch let error as NSError
+                where error.domain == NSCocoaErrorDomain
+                && error.code == NSFileReadNoSuchFileError
+            {
+                // The parent itself is definitively gone: so are its entries.
+                missing.formUnion(children)
+                continue
+            } catch {
+                // Unreadable parent: uncertainty retains every candidate.
+                continue
+            }
+            for candidate in children {
+                let name = (candidate as NSString).lastPathComponent
+                if !exactNames.contains(name) {
+                    missing.insert(candidate)
+                }
+            }
+        }
+        return missing
     }
 
     /// Injectable targeted lookup for deterministic coalescing tests. The

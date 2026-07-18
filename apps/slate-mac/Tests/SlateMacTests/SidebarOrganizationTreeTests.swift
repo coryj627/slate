@@ -201,7 +201,7 @@ final class SidebarOrganizationTreeTests: XCTestCase {
     XCTAssertFalse(vm.isPinnedRow(.file(path: "c.md")))
   }
 
-  func testLevelsDrainEveryPageBeforeOrganization() {
+  func testLevelsDrainEveryPageBeforeOrganization() async {
     // Round-13 finding 1: the page limit is a page SIZE, not a level cap.
     // With the newest and the pinned file on page two, created/modified
     // sorting and the pinned section must still see them.
@@ -240,6 +240,7 @@ final class SidebarOrganizationTreeTests: XCTestCase {
       }
     })
 
+    await vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]?.value
     XCTAssertEqual(
       visiblePaths(vm),
       ["pinned.md", "newest.md", "old-b.md", "old-a.md"],
@@ -247,6 +248,82 @@ final class SidebarOrganizationTreeTests: XCTestCase {
     XCTAssertTrue(vm.isPinnedRow(.file(path: "pinned.md")))
     // The drained level is complete, so stale classification works again.
     XCTAssertEqual(vm.stalePins(forFolder: ""), [])
+  }
+
+  func testContinuationDrainMergesOffMainAndStaysPartialUntilItLands() async {
+    // Round-14 finding 1: the first page publishes synchronously; the
+    // remaining pages drain off the main actor and merge in one publish.
+    // Until then the level is partial (no stale classification).
+    let now = instant(2026, 7, 18)
+    let pageOne = DirListing(
+      dirs: [],
+      files: FileSummaryPage(
+        items: [file("old-a.md", mtime: 1_000)],
+        nextCursor: "page-2", totalFiltered: 2))
+    let pageTwo = DirListing(
+      dirs: [],
+      files: FileSummaryPage(
+        items: [file("newest.md", mtime: 9_000)],
+        nextCursor: nil, totalFiltered: 2))
+    let vm = FileTreeViewModel()
+    var prefs = SidebarOrganizationPrefs()
+    prefs.vaultChoice = SidebarOrganizationChoice(
+      sort: SidebarSortOption(field: .modified, direction: .desc), grouping: .none)
+    var pins = SidebarPins()
+    pins.pin("newest.md", inFolder: "")
+    var staleReports: [[String]] = []
+    vm.onStalePins = { _, stale in staleReports.append(stale) }
+    vm.applyOrganization(context(prefs: prefs, pins: pins, now: now))
+    vm.bindForTesting(pagedFetcher: { _, cursor in
+      cursor == nil ? pageOne : pageTwo
+    })
+
+    // Synchronously: first page only, partial, page-two pin unknowable.
+    XCTAssertEqual(visiblePaths(vm), ["old-a.md"])
+    XCTAssertEqual(vm.stalePins(forFolder: ""), [])
+
+    await vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]?.value
+    XCTAssertEqual(
+      visiblePaths(vm), ["newest.md", "old-a.md"],
+      "the drained pages merge in one publish with full organization")
+    XCTAssertTrue(vm.isPinnedRow(.file(path: "newest.md")))
+    XCTAssertTrue(
+      staleReports.allSatisfy { $0.isEmpty },
+      "no stale classification fired from the partial window")
+  }
+
+  func testVaultSwitchMidDrainDropsTheStaleContinuation() async {
+    // Ownership: a rebind before the continuation lands must drop it.
+    let now = instant(2026, 7, 18)
+    let pageOne = DirListing(
+      dirs: [],
+      files: FileSummaryPage(
+        items: [file("first-vault.md", mtime: 1_000)],
+        nextCursor: "page-2", totalFiltered: 2))
+    let pageTwo = DirListing(
+      dirs: [],
+      files: FileSummaryPage(
+        items: [file("first-vault-late.md", mtime: 9_000)],
+        nextCursor: nil, totalFiltered: 2))
+    let vm = FileTreeViewModel()
+    vm.applyOrganization(context(now: now))
+    vm.bindForTesting(pagedFetcher: { _, cursor in
+      cursor == nil ? pageOne : pageTwo
+    })
+    let staleDrain = vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]
+
+    // Rebind to a different (single-page) vault before the drain lands.
+    vm.bindForTesting(fetcher: { _ in
+      DirListing(
+        dirs: [],
+        files: FileSummaryPage(
+          items: [self.file("second-vault.md")], nextCursor: nil,
+          totalFiltered: 1))
+    })
+    await staleDrain?.value
+    XCTAssertEqual(
+      visiblePaths(vm), ["second-vault.md"],
+      "the first vault's late continuation never publishes into the new bind")
   }
 
   func testPartialLevelsNeverClassifyPinsAsStale() {

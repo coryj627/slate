@@ -458,51 +458,84 @@ final class FileTreeViewModel: ObservableObject {
     /// stale pruning stays suppressed).
     nonisolated static let levelTotalSafetyCap = 50_000
 
-    /// Drain every page of a level (round-13 finding 1): the page limit is a
-    /// PAGE size, not a level cap, so created/modified sorting and pinned
-    /// lookup see the complete file set for any realistic folder.
-    private func fetchCompleteLevel(
-        _ parentPath: String
-    ) throws -> (listing: DirListing, isComplete: Bool) {
-        guard let fetcher else {
-            throw LevelPageUnavailable()
-        }
-        var dirs: [DirNodeSummary] = []
-        var files: [FileSummary] = []
-        var totalFiltered: UInt64 = 0
-        var cursor: String?
-        var isComplete = true
-        var isFirstPage = true
-        repeat {
-            let page: DirListing
-            do {
-                page = try fetcher(parentPath, cursor)
-            } catch is LevelPageUnavailable {
-                // The injected single-shot fixture cannot continue; keep what
-                // is materialized and record the level as partial.
-                isComplete = false
-                break
+    /// Ownership token per level for the asynchronous continuation drain
+    /// (round-14 finding 1): a drain publishes only if its token is still
+    /// current for that level and the session identity is unchanged.
+    private var levelDrainTokens: [NodeID: UUID] = [:]
+    private(set) var levelDrainTasksForTesting: [NodeID: Task<Void, Never>] = [:]
+
+    /// Round-13 finding 1 + round-14 finding 1: the FIRST page fetches
+    /// synchronously (the shipped U2 behavior — content appears immediately
+    /// and every synchronous test seam holds), while any REMAINING pages
+    /// drain off the main actor and merge in one publish when they land.
+    /// Until the drain completes the level is stored partial, so stale-pin
+    /// pruning stays suppressed (round-5 finding 2).
+    private func scheduleContinuationDrain(
+        parentKey: NodeID,
+        parentPath: String,
+        depth: Int,
+        firstPage: DirListing
+    ) {
+        guard let fetcher else { return }
+        let token = UUID()
+        levelDrainTokens[parentKey] = token
+        let capturedSession = sessionIdentity
+        let startCursor = firstPage.files.nextCursor
+        let baseCount = firstPage.files.items.count
+        let task = Task { [weak self] in
+            let outcome: Result<(files: [FileSummary], isComplete: Bool), Error> =
+                await Task.detached(priority: .userInitiated) {
+                    var files: [FileSummary] = []
+                    var cursor = startCursor
+                    var isComplete = true
+                    do {
+                        while let next = cursor {
+                            let page = try fetcher(parentPath, next)
+                            files.append(contentsOf: page.files.items)
+                            cursor = page.files.nextCursor
+                            if cursor != nil,
+                                baseCount + files.count
+                                    >= FileTreeViewModel.levelTotalSafetyCap
+                            {
+                                isComplete = false
+                                break
+                            }
+                        }
+                        return .success((files, isComplete))
+                    } catch is LevelPageUnavailable {
+                        return .success(([], false))
+                    } catch {
+                        return .failure(error)
+                    }
+                }.value
+            guard let self,
+                self.levelDrainTokens[parentKey] == token,
+                self.sessionIdentity == capturedSession
+            else { return }
+            self.levelDrainTokens[parentKey] = nil
+            self.levelDrainTasksForTesting[parentKey] = nil
+            guard case .success(let drained) = outcome else {
+                // A failed continuation keeps the already-published partial
+                // page; the level simply stays partial for this session.
+                return
             }
-            if isFirstPage {
-                dirs = page.dirs
-                totalFiltered = page.files.totalFiltered
-                isFirstPage = false
-            }
-            files.append(contentsOf: page.files.items)
-            cursor = page.files.nextCursor
-            if cursor != nil, files.count >= Self.levelTotalSafetyCap {
-                isComplete = false
-                break
-            }
-        } while cursor != nil
-        return (
-            DirListing(
-                dirs: dirs,
+            let merged = DirListing(
+                dirs: firstPage.dirs,
                 files: FileSummaryPage(
-                    items: files, nextCursor: isComplete ? nil : cursor,
-                    totalFiltered: totalFiltered)),
-            isComplete
-        )
+                    items: firstPage.files.items + drained.files,
+                    nextCursor: nil,
+                    totalFiltered: firstPage.files.totalFiltered))
+            let level = Self.nodes(from: merged, depth: depth)
+            if parentKey == Self.rootFetchKey {
+                self.replaceRootLevel(
+                    with: level, isCompleteLevel: drained.isComplete)
+            } else {
+                self.replaceChildLevel(
+                    level, for: parentKey, parentPath: parentPath,
+                    isCompleteLevel: drained.isComplete)
+            }
+        }
+        levelDrainTasksForTesting[parentKey] = task
     }
 
     /// Exact path → the one observable owned by its materialized row. Rich
@@ -518,6 +551,8 @@ final class FileTreeViewModel: ObservableObject {
         presentationByParent = [:]
         parentPathByKey = [:]
         completeLevelByKey = [:]
+        levelDrainTokens = [:]
+        levelDrainTasksForTesting = [:]
         if treePresentation != SidebarTreePresentation() {
             treePresentation = SidebarTreePresentation()
         }
@@ -556,6 +591,8 @@ final class FileTreeViewModel: ObservableObject {
             presentationByParent[parent] = nil
             parentPathByKey[parent] = nil
             completeLevelByKey[parent] = nil
+            levelDrainTokens[parent] = nil
+            levelDrainTasksForTesting[parent] = nil
             rebuildMergedPresentation()
             return
         }
@@ -697,13 +734,19 @@ final class FileTreeViewModel: ObservableObject {
     /// (Re)fetch the root level. Sets `.loading` on the root sentinel while in
     /// flight so the view can show a spinner if the root is slow.
     func loadRoot() {
-        guard fetcher != nil else { return }
+        guard let fetcher else { return }
         fetchState[Self.rootFetchKey] = .loading
         do {
-            let (listing, isComplete) = try fetchCompleteLevel("")
+            let firstPage = try fetcher("", nil)
+            let isComplete = firstPage.files.nextCursor == nil
             replaceRootLevel(
-                with: Self.nodes(from: listing, depth: 0),
+                with: Self.nodes(from: firstPage, depth: 0),
                 isCompleteLevel: isComplete)
+            if !isComplete {
+                scheduleContinuationDrain(
+                    parentKey: Self.rootFetchKey, parentPath: "", depth: 0,
+                    firstPage: firstPage)
+            }
             fetchState[Self.rootFetchKey] = nil
             adoptPendingExpansions(in: rootLevel)
             materializeExpandedChildren(in: rootLevel)
@@ -718,15 +761,21 @@ final class FileTreeViewModel: ObservableObject {
     /// while in flight and clears it (or records `.failed`) on completion.
     func loadChildren(of node: TreeNode) {
         guard case .directory = node.kind else { return }
-        guard fetcher != nil else { return }
+        guard let fetcher else { return }
         if children[node.nodeID] != nil { return }  // already cached
         fetchState[node.nodeID] = .loading
         do {
-            let (listing, isComplete) = try fetchCompleteLevel(node.path)
-            let level = Self.nodes(from: listing, depth: node.depth + 1)
+            let firstPage = try fetcher(node.path, nil)
+            let isComplete = firstPage.files.nextCursor == nil
+            let level = Self.nodes(from: firstPage, depth: node.depth + 1)
             replaceChildLevel(
                 level, for: node.nodeID, parentPath: node.path,
                 isCompleteLevel: isComplete)
+            if !isComplete {
+                scheduleContinuationDrain(
+                    parentKey: node.nodeID, parentPath: node.path,
+                    depth: node.depth + 1, firstPage: firstPage)
+            }
             fetchState[node.nodeID] = nil
             adoptPendingExpansions(in: level)
             materializeExpandedChildren(in: level)

@@ -1642,6 +1642,38 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       "the pin's tail must not replay the failed sort's stale correction")
   }
 
+  // MARK: - Red-team regressions (adversarial review round 14)
+
+  func testStaleRevalidationIsExactOnCaseInsensitiveFilesystems() async throws {
+    // Round-14 finding 2: on the default case-insensitive volume a stat for
+    // OLD.md succeeds via old.md. The byte-exact entry check prunes the
+    // wrong-case pin, retains a same-name directory, and retains everything
+    // under an unreadable parent.
+    let (state, vault) = try openVault(
+      named: "exact-revalidate", files: ["Projects/old.md"],
+      folders: ["Projects", "Projects/dir-entry"],
+      sidebarJSON: """
+        {"version": 1,
+         "pins": {"Projects": [
+           "Projects/OLD.md", "Projects/dir-entry", "Projects/old.md"]}}
+        """)
+
+    state.pruneStaleSidebarPins(
+      forFolder: "Projects",
+      stale: ["Projects/OLD.md", "Projects/dir-entry", "Projects/old.md"])
+    await awaitPersist(state)
+
+    XCTAssertEqual(
+      state.sidebarOrganization.pins.paths(forFolder: "Projects"),
+      ["Projects/dir-entry", "Projects/old.md"],
+      "the wrong-case pin prunes; an exact-name directory entry and the real file retain")
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Projects"] as? [String],
+      ["Projects/dir-entry", "Projects/old.md"])
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
