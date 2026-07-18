@@ -13,6 +13,23 @@ import XCTest
 /// view is its first content consumer.
 final class AccessibleDataGridTests: XCTestCase {
 
+    override func setUp() {
+        super.setUp()
+        // `NSMenu.performActionForItem(at:)` dispatches through
+        // `NSApp.sendAction` — even for items with an explicit target,
+        // like `ClosureMenuItem` — and is a SILENT no-op in a process
+        // where nothing has initialized `NSApplication.shared` yet. The
+        // menu-firing tests below only passed in full-suite serial order
+        // because an earlier test class happened to touch NSApp (#935);
+        // in isolation (`--filter`) or under `swift test --parallel`
+        // (fresh worker process per class) the fire never dispatched.
+        // Establish the production precondition ourselves: the real app
+        // always has NSApp before any menu can be opened.
+        MainActor.assumeIsolated {
+            _ = NSApplication.shared
+        }
+    }
+
     private final class VisibleRowsTableView: NSTableView {
         var reportedVisibleRows = NSRange(location: 0, length: 0)
 

@@ -87,9 +87,16 @@ jobs:
         run: ./scripts/build-mac-app.sh --skip-a11y-check
 
       - name: Run swift test
+        # --parallel: SwiftPM runs XCTest suites SERIALLY by default;
+        # this fans test classes across worker processes. Gated on #935's
+        # fix — worker processes start without NSApplication.shared, and
+        # menu-dispatch tests must establish that precondition themselves
+        # (AccessibleDataGridTests.setUp) instead of inheriting it from
+        # suite order. Debug-config build products from the build script
+        # step are reused; swift test only pays a planning pass.
         run: |
           cd apps/slate-mac
-          DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug" swift test
+          DYLD_LIBRARY_PATH="$GITHUB_WORKSPACE/target/debug" swift test --parallel
 
       - name: Build + run swift-cli FFI smoke example
         # The swift-cli example shares the generated VaultError binding; its
