@@ -206,15 +206,19 @@ impl TextBuffer {
     }
 
     /// True when the line starting at `line_start_byte` (a line start) is
-    /// empty or whitespace-only — a CommonMark block separator. Matches
-    /// `source[ls..le].trim().is_empty()`: a line is blank iff every char
-    /// (including its trailing `\n`) is `char::is_whitespace`.
+    /// empty or made only of ASCII whitespace — a CommonMark block separator
+    /// on every EOL flavour. Matches `editor_spans::line_is_blank`
+    /// byte-for-byte (the parity test pins it): the byte set is exactly
+    /// pulldown's blank-line alphabet (space / tab / `\x0B` / `\x0C` + EOL
+    /// bytes), deliberately stricter than `trim().is_empty()` — a
+    /// Unicode-whitespace-only line (NBSP, U+2028, …) is paragraph content
+    /// to pulldown's block parse (#927).
     pub fn line_is_blank(&self, line_start_byte: usize) -> bool {
         let le = self.line_end_byte(line_start_byte);
         self.rope
             .slice(line_start_byte..le)
-            .chars()
-            .all(|c| c.is_whitespace())
+            .bytes()
+            .all(|b| matches!(b, b' ' | b'\t' | 0x0B | 0x0C | b'\r' | b'\n'))
     }
 
     /// Walk `start` (a line start) up to a block boundary — the first line of
@@ -542,8 +546,11 @@ mod proptests {
                 let byte = byte.min(s.len());
                 s[byte..].find('\n').map_or(s.len(), |i| byte + i + 1)
             };
-            let line_is_blank =
-                |ls: usize| s[ls..line_end(ls)].trim().is_empty();
+            let line_is_blank = |ls: usize| {
+                s.as_bytes()[ls..line_end(ls)]
+                    .iter()
+                    .all(|&b| matches!(b, b' ' | b'\t' | 0x0B | 0x0C | b'\r' | b'\n'))
+            };
             let extend_up = |start: usize| {
                 let mut ls = start;
                 while ls > 0 {
