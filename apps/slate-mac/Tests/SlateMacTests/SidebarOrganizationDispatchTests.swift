@@ -1764,6 +1764,100 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       ["Projects/ghost.md", "Projects/real.md"])
   }
 
+  // MARK: - Red-team regressions (adversarial review round 18)
+
+  func testQueuedWriteNeverLandsInASamePathReplacementVault() async throws {
+    // Round-18 finding 1: pathname equality is not vault identity. A write
+    // queued for vault A, still pending across a close, must not land in a
+    // replacement vault B mounted at the same path. A blocked predecessor
+    // holds the chain so the pin write is deterministically pending.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let (state, vaultA) = try openVault(
+      named: "identity-a", files: ["Projects/note.md"], folders: ["Projects"])
+
+    // Blocker write: holds the chain inside its locked update.
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      root["blocker"] = true
+    }
+    try publish(
+      state, [item("Projects/note.md")],
+      focusedPath: "Projects/note.md", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    let pending = state.sidebarOrganizationPersistTaskForTesting
+
+    // Close A; replace it with a brand-new vault B at the same path.
+    _ = state.closeVault()
+    let aside = root.appendingPathComponent("identity-a-moved")
+    try FileManager.default.moveItem(at: vaultA, to: aside)
+    try FileManager.default.createDirectory(
+      at: vaultA.appendingPathComponent("Projects"),
+      withIntermediateDirectories: true)
+    try "# b-note".write(
+      to: vaultA.appendingPathComponent("Projects/note.md"),
+      atomically: true, encoding: .utf8)
+    state.openVault(at: vaultA)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+
+    gate.open()
+    await pending?.value
+    // Allow the chained refresh (if any) to settle.
+    try await Task.sleep(for: .milliseconds(100))
+
+    let sidebarURL = vaultA.appendingPathComponent(".slate/sidebar.json")
+    if FileManager.default.fileExists(atPath: sidebarURL.path) {
+      let json = try sidebarJSON(at: vaultA)
+      XCTAssertNil(
+        (json["pins"] as? [String: Any])?["Projects"],
+        "the queued pin must not land in the replacement vault")
+      XCTAssertNil(json["blocker"])
+    }
+    XCTAssertFalse(
+      state.sidebarOrganization.pins.isPinned(
+        "Projects/note.md", inFolder: "Projects"))
+    // The original vault's file (moved aside, its store FD pinned the old
+    // directory) may carry the blocker write; either way B stayed clean.
+  }
+
+  func testEnumerationFailureRetainsEveryCandidate() async throws {
+    // Round-18 finding 2: an enumeration error yields an incomplete name
+    // set — every candidate of that parent retains, and the prune slot is
+    // not consumed.
+    AppState.sidebarDirectoryEnumeratorForTesting = { _ in nil }
+    defer { AppState.sidebarDirectoryEnumeratorForTesting = nil }
+
+    let (state, vault) = try openVault(
+      named: "enum-failure", files: ["Projects/real.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1,
+         "pins": {"Projects": ["Projects/ghost.md", "Projects/real.md"]}}
+        """)
+    state.pruneStaleSidebarPins(
+      forFolder: "Projects", stale: ["Projects/ghost.md"])
+    await awaitPersist(state)
+    XCTAssertEqual(
+      state.sidebarOrganization.pins.paths(forFolder: "Projects"),
+      ["Projects/ghost.md", "Projects/real.md"],
+      "an enumeration failure retains every candidate")
+
+    // With enumeration healthy again, the slot is still available.
+    AppState.sidebarDirectoryEnumeratorForTesting = nil
+    state.pruneStaleSidebarPins(
+      forFolder: "Projects", stale: ["Projects/ghost.md"])
+    await awaitPersist(state)
+    XCTAssertEqual(
+      state.sidebarOrganization.pins.paths(forFolder: "Projects"),
+      ["Projects/real.md"])
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(pins["Projects"] as? [String], ["Projects/real.md"])
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

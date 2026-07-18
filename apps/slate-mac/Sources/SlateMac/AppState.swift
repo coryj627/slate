@@ -4851,6 +4851,11 @@ final class AppState: ObservableObject {
     /// notice is published for the inline sidebar banner; unsafe input is kept
     /// read-only by the store and therefore can never be silently replaced.
     private(set) var sidebarVaultPrefsStore: SidebarVaultPrefsStore?
+    /// Stable identity (device, inode) of the vault root captured when the
+    /// store was installed. Pathname equality alone cannot gate queued
+    /// writes: a same-path replacement vault must never receive them
+    /// (round-18 finding 1).
+    private(set) var sidebarVaultRootIdentity: SidebarVaultRootIdentity?
     /// Test seam: builds the per-vault store (e.g. with an injected failing
     /// directory synchronizer) instead of the production initializer.
     var sidebarVaultPrefsStoreFactoryForTesting: ((URL) -> SidebarVaultPrefsStore)?
@@ -5081,6 +5086,15 @@ final class AppState: ObservableObject {
     /// the write is refused, published state reconciles to the merged disk
     /// truth, and the reason is announced as-is (it is a user-facing rule,
     /// not a save failure).
+    /// The vault root no longer resolves to the identity this write was
+    /// enqueued for; the write is dropped without touching the newcomer.
+    private struct SidebarOrganizationVaultReplacedError: LocalizedError {
+        var errorDescription: String? {
+            "The vault at this location changed, so a queued sidebar "
+                + "settings write was discarded."
+        }
+    }
+
     private struct SidebarOrganizationConflictError: LocalizedError {
         let reason: String
         var errorDescription: String? { reason }
@@ -5121,6 +5135,8 @@ final class AppState: ObservableObject {
         let session = currentSession
         let generation = sidebarOrganizationWriteGeneration
         let storeFileURL = store.fileURL
+        let vaultRootURL = store.vaultRoot
+        let enqueueIdentity = sidebarVaultRootIdentity
         let token = UUID()
         sidebarOrganizationPersistTailToken = token
         if let verifyAnnouncement {
@@ -5144,7 +5160,9 @@ final class AppState: ObservableObject {
             // publishes, acknowledgements, and announcements below
             // additionally require the original generation/session.
             guard let self,
-                self.sidebarVaultPrefsStore?.fileURL == storeFileURL
+                self.sidebarVaultPrefsStore?.fileURL == storeFileURL,
+                enqueueIdentity != nil,
+                self.sidebarVaultRootIdentity == enqueueIdentity
             else { return }
             // Round-9 finding 1 (at-most-once): a predecessor in the chain
             // may already have committed and acknowledged part of the
@@ -5167,6 +5185,18 @@ final class AppState: ObservableObject {
             }
             let outcome: PersistOutcome =
                 await Task.detached(priority: .utility) {
+                    // Fresh on-disk revalidation immediately before the
+                    // locked write: the path must still resolve to the SAME
+                    // vault root the write was enqueued for (round-18
+                    // finding 1 — a same-path replacement never receives
+                    // queued writes).
+                    guard
+                        AppState.vaultRootIdentity(of: vaultRootURL)
+                            == enqueueIdentity
+                    else {
+                        return .failure(
+                            SidebarOrganizationVaultReplacedError())
+                    }
                     var finalRoot: [String: Any] = [:]
                     do {
                         try store.update { root in
@@ -5754,6 +5784,24 @@ final class AppState: ObservableObject {
     private var sidebarPinPruneInFlight: Set<String> = []
     private static let sidebarStalePruneCandidateCap = 128
 
+    struct SidebarVaultRootIdentity: Equatable, Sendable {
+        let device: UInt64
+        let inode: UInt64
+    }
+
+    /// The vault root's stable (device, inode) identity; nil when it cannot
+    /// be determined (in which case queued writes are dropped, never risked).
+    nonisolated static func vaultRootIdentity(
+        of vaultRoot: URL
+    ) -> SidebarVaultRootIdentity? {
+        var info = stat()
+        guard vaultRoot.path.withCString({ stat($0, &info) }) == 0 else {
+            return nil
+        }
+        return SidebarVaultRootIdentity(
+            device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+    }
+
     /// A vault-relative path safe to join to the vault root: nonempty,
     /// relative, forward-slash separated, with no empty, `.`, or `..`
     /// components (the organizer/index canonical form).
@@ -5834,20 +5882,13 @@ final class AppState: ObservableObject {
                 // A symlinked, replaced, or unreadable component: retain.
                 close(parentFD)
             case .opened:
-                guard let dir = fdopendir(parentFD) else {
-                    close(parentFD)
+                // nil from the enumerator means "error mid-listing": an
+                // incomplete name set must retain, never prune (round-18
+                // finding 2).
+                guard
+                    let exactNames = sidebarExactDirectoryNames(parentFD)
+                else {
                     continue
-                }
-                defer { closedir(dir) }  // closes parentFD too
-                var exactNames: Set<String> = []
-                while let entry = readdir(dir) {
-                    let name = withUnsafeBytes(of: entry.pointee.d_name) {
-                        buffer -> String in
-                        let pointer = buffer.baseAddress!
-                            .assumingMemoryBound(to: CChar.self)
-                        return String(cString: pointer)
-                    }
-                    exactNames.insert(name)
                 }
                 for candidate in children {
                     let name = (candidate as NSString).lastPathComponent
@@ -5864,6 +5905,43 @@ final class AppState: ObservableObject {
         case opened
         case definitelyMissing
         case uncertain
+    }
+
+    /// Test seam: replaces the readdir enumeration (return nil = failure).
+    /// The production path distinguishes end-of-directory from an error via
+    /// errno, per POSIX readdir semantics.
+    nonisolated(unsafe) static var sidebarDirectoryEnumeratorForTesting:
+        (@Sendable (Int32) -> Set<String>?)?
+
+    /// Byte-exact entry names of the directory the descriptor pins, or nil
+    /// when enumeration failed partway (round-18 finding 2: an incomplete
+    /// listing must read as uncertainty, not absence). Consumes the fd.
+    private nonisolated static func sidebarExactDirectoryNames(
+        _ parentFD: Int32
+    ) -> Set<String>? {
+        if let enumerator = sidebarDirectoryEnumeratorForTesting {
+            close(parentFD)
+            return enumerator(parentFD)
+        }
+        guard let dir = fdopendir(parentFD) else {
+            close(parentFD)
+            return nil
+        }
+        defer { closedir(dir) }  // closes parentFD too
+        var names: Set<String> = []
+        errno = 0
+        while let entry = readdir(dir) {
+            let name = withUnsafeBytes(of: entry.pointee.d_name) {
+                buffer -> String in
+                let pointer = buffer.baseAddress!
+                    .assumingMemoryBound(to: CChar.self)
+                return String(cString: pointer)
+            }
+            names.insert(name)
+            errno = 0
+        }
+        guard errno == 0 else { return nil }
+        return names
     }
 
     /// Injectable targeted lookup for deterministic coalescing tests. The
@@ -8318,6 +8396,7 @@ final class AppState: ObservableObject {
             ?? SidebarVaultPrefsStore(vaultRoot: vaultRoot)
         let result = store.read()
         sidebarVaultPrefsStore = store
+        sidebarVaultRootIdentity = Self.vaultRootIdentity(of: vaultRoot)
         // FL-06 (round-5 finding 3): a KNOWN section with an unrecognized
         // top-level shape enters the same read-only recovery flow as
         // malformed JSON — a later write must never silently replace it.
