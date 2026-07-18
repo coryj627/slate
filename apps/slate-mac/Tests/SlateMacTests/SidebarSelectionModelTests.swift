@@ -248,6 +248,101 @@ final class SidebarSelectionModelTests: XCTestCase {
         XCTAssertNil(model.rangeAnchorPathSnapshot)
     }
 
+    func testFL05ImportLandingRequiresUnchangedMonotoneSelectionRevision() {
+        let original = file("original.md")
+        let other = file("other.md")
+        let imported = file("imported.md")
+        let rows = [original, other, imported]
+        var model = Model()
+        model.applyPointerClick(.plain, row: original, visibleRows: rows)
+        let capturedRevision = model.selectionRevision
+
+        model.applyPointerClick(.plain, row: other, visibleRows: rows)
+        model.applyPointerClick(.plain, row: original, visibleRows: rows)
+
+        XCTAssertEqual(model.focused, original.identity)
+        XCTAssertGreaterThan(
+            model.selectionRevision,
+            capturedRevision,
+            "returning to the same path must still record newer user intent")
+        let rejected = model.focusAfterStructuralMutation(
+            imported,
+            ifSelectionRevisionIs: capturedRevision)
+        XCTAssertFalse(rejected.handled)
+        XCTAssertEqual(model.focused, original.identity)
+
+        let currentRevision = model.selectionRevision
+        let accepted = model.focusAfterStructuralMutation(
+            imported,
+            ifSelectionRevisionIs: currentRevision)
+        XCTAssertTrue(accepted.handled)
+        XCTAssertEqual(model.focused, imported.identity)
+        XCTAssertEqual(
+            model.selectionRevision,
+            currentRevision,
+            "programmatic structural landing must not masquerade as user intent")
+    }
+
+    func testFL05ProgrammaticRevealIsNeutralAndEveryExplicitUserIntentAdvancesRevision() {
+        let row = file("same.md")
+        var model = Model()
+
+        model.reveal(row)
+        XCTAssertEqual(
+            model.selectionRevision, 0,
+            "app-driven mirrors and restore paths must not cancel deferred landing")
+
+        let first = model.revealFromUserIntent(row)
+        XCTAssertFalse(first.changed, "the row was already selected")
+        XCTAssertEqual(
+            model.selectionRevision, 1,
+            "a same-row user focus intent is still newer than captured import intent")
+
+        model.reveal(nil)
+        XCTAssertEqual(
+            model.selectionRevision, 1,
+            "programmatic clearing remains revision-neutral")
+        model.applyPointerClick(.plain, row: row, visibleRows: [row])
+        XCTAssertEqual(model.selectionRevision, 2)
+    }
+
+    func testFL05ImportedResultsReplaceSelectionExactlyInProviderOrder() {
+        let original = file("original.md")
+        let first = file("first-import.md")
+        let second = directory("second-import", id: 7)
+        var model = Model()
+        model.reveal(original)
+        let revision = model.selectionRevision
+
+        let landing = model.selectImportedResults(
+            [first, second],
+            ifSelectionRevisionIs: revision)
+
+        XCTAssertTrue(landing.handled)
+        XCTAssertEqual(model.selected, [first.identity, second.identity])
+        XCTAssertFalse(model.selected.contains(original.identity))
+        XCTAssertEqual(model.focused, first.identity)
+        XCTAssertEqual(model.rangeAnchor, first.identity)
+        XCTAssertEqual(model.selectionRevision, revision)
+    }
+
+    func testFL05ExternalNavigationIntentRejectsWholeDeferredImportLanding() {
+        let original = file("original.md")
+        let imported = [file("first.md"), file("second.md")]
+        var model = Model()
+        model.reveal(original)
+        let capturedRevision = model.selectionRevision
+
+        model.noteExternalNavigationIntent()
+        let rejected = model.selectImportedResults(
+            imported,
+            ifSelectionRevisionIs: capturedRevision)
+
+        XCTAssertFalse(rejected.handled)
+        XCTAssertEqual(model.selected, [original.identity])
+        XCTAssertEqual(model.focused, original.identity)
+    }
+
     func testKnownMultiMoveRemapsStableDirectoriesFilesFocusAndDeselectedAnchor() {
         let folder = directory("folder", id: 42)
         let other = file("other.md")

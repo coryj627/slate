@@ -16,6 +16,21 @@ struct SidebarSelectionSnapshot: Equatable {
     let items: [SidebarSelectionItem]
     let focusedPath: String?
     let creationParent: String
+    let selectionRevision: UInt64
+
+    init(
+        sessionIdentity: ObjectIdentifier,
+        items: [SidebarSelectionItem],
+        focusedPath: String?,
+        creationParent: String,
+        selectionRevision: UInt64 = 0
+    ) {
+        self.sessionIdentity = sessionIdentity
+        self.items = items
+        self.focusedPath = focusedPath
+        self.creationParent = creationParent
+        self.selectionRevision = selectionRevision
+    }
 
     static func capture<Identity: Hashable>(
         sessionIdentity: ObjectIdentifier,
@@ -43,7 +58,8 @@ struct SidebarSelectionSnapshot: Equatable {
                     isMarkdown: $0.isMarkdown)
             },
             focusedPath: focusedRow?.path,
-            creationParent: creationParent)
+            creationParent: creationParent,
+            selectionRevision: model.selectionRevision)
     }
 
     private static func parentPath(of path: String) -> String {
@@ -67,6 +83,10 @@ enum SidebarActionUndoBehavior: Equatable {
     case historyBarrier
     case slateUndo
     case notUndoable
+    /// The aggregate import outcome selects the truthful runtime policy:
+    /// pure moves are undoable, verified or outcome-unknown external work
+    /// clears history, and a clean no-op preserves history.
+    case runtimeDetermined
 }
 
 enum SidebarActionSurface: Equatable {
@@ -246,6 +266,11 @@ enum SidebarActionCatalog {
             SlateCommandID.newFromTemplate, "New Note from Template…", .newFromTemplate,
             .zeroOrOneItem, "Choose a template for a new note.",
             blocksDuringStructuralMutation: true, undo: .historyBarrier),
+        action(
+            SlateCommandID.importFilesAndFolders, "Import Files and Folders…",
+            .importFilesAndFolders, .zeroOrOneItem,
+            "Choose files and folders. External items are copied into the selected location; items already in this vault are moved.",
+            blocksDuringStructuralMutation: true, undo: .runtimeDetermined),
         action(
             SlateCommandID.renameEntry, "Rename…", .rename, .exactlyOneItem,
             "Rename the selected file or folder in place.",
@@ -429,6 +454,9 @@ enum SidebarActionCatalog {
             }
         case .zeroOrOneItem:
             guard items.count <= 1 else {
+                if action.id == SlateCommandID.importFilesAndFolders {
+                    return "Select no more than one item to choose an import location."
+                }
                 return "Select no more than one item to choose a creation location."
             }
         case .exactlyOneItem:

@@ -27,6 +27,8 @@ enum SlateCommandID {
     // File management (U2-5, #463). Act on the tree's selected node.
     static let newNote = "slate.file.newNote"
     static let newFolder = "slate.file.newFolder"
+    static let importFilesAndFolders = "slate.file.importFilesAndFolders"
+    static let cancelImport = "slate.file.cancelImport"
     static let renameEntry = "slate.file.rename"
     static let moveTo = "slate.file.moveTo"
     static let deleteEntry = "slate.file.delete"
@@ -46,6 +48,7 @@ enum SlateCommandID {
         newFromTemplate,
         newNote,
         newFolder,
+        importFilesAndFolders,
         renameEntry,
         moveTo,
         deleteEntry,
@@ -372,6 +375,8 @@ enum SlateCommandID {
         newNote,
         newFolder,
         newFromTemplate,
+        importFilesAndFolders,
+        cancelImport,
         renameEntry,
         moveTo,
         duplicateEntry,
@@ -591,6 +596,47 @@ func registerSidebarCommands(
     }
 }
 
+/// One production contract for every global Cancel Import surface.
+///
+/// The File menu consumes this contract's typed shortcut extension; the
+/// command registry consumes its stable palette metadata; both ask for a fresh
+/// projection and route through the same fallible action. Keeping the
+/// projection live avoids a stale enabled item during importing -> cancelling.
+@MainActor
+enum CancelImportCommandContract {
+    struct Projection: Equatable {
+        let disabledReason: String?
+        let hint: String
+
+        var isEnabled: Bool { disabledReason == nil }
+    }
+
+    static let id = SlateCommandID.cancelImport
+    static let label = "Cancel Import"
+    static let section: CommandSection = .sidebar
+    static let hotkeyHint = "⌘."
+    static let availableHint =
+        SidebarImportProgressStrip.cancelAccessibilityHint
+
+    static func projection(for appState: AppState) -> Projection {
+        let disabledReason = appState.importCancellationDisabledReason
+        return Projection(
+            disabledReason: disabledReason,
+            hint: disabledReason ?? availableHint)
+    }
+
+    static func perform(on appState: AppState) throws {
+        if let reason = projection(for: appState).disabledReason {
+            throw CommandError.ActionFailed(message: reason)
+        }
+        guard appState.requestImportBatchCancellation() else {
+            throw CommandError.ActionFailed(
+                message: projection(for: appState).disabledReason
+                    ?? SidebarImportProgressStrip.noImportInProgressHint)
+        }
+    }
+}
+
 /// Wire every existing menu item exposed by `MainSplitView`,
 /// `SlateMacApp`, and `PropertiesPanel` into the `CommandRegistry`
 /// so the palette mirrors the menus. Called once from
@@ -661,6 +707,20 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
     registerSidebarCommands(into: registry) { [weak appState] id in
         guard let appState else { return }
         _ = try appState.dispatchSidebarAction(id: id)
+    }
+
+    // FL05 lifecycle control is global rather than selection-scoped: it stays
+    // visible in the stable palette inventory and must remain invokable while
+    // the structural gate is occupied by the import it cancels.
+    register(
+        CancelImportCommandContract.id,
+        label: CancelImportCommandContract.label,
+        section: CancelImportCommandContract.section,
+        hotkey: CancelImportCommandContract.hotkeyHint,
+        hint: CancelImportCommandContract.availableHint
+    ) { [weak appState] in
+        guard let appState else { return }
+        try CancelImportCommandContract.perform(on: appState)
     }
 
     // ----- Canvas (Milestone T, #369) -----

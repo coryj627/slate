@@ -800,8 +800,13 @@ struct SidebarImportProviderSlot: Equatable, Sendable {
 
 final class SidebarImportProviderIntake: @unchecked Sendable {
   static let fileURLTypeIdentifier = UTType.fileURL.identifier
+  /// Each prepared top-level root retains one no-follow descriptor/security
+  /// scope until aggregate copy completes. Keep provider loading and live root
+  /// ownership below the process descriptor budget.
+  static let maximumProviderCount = 64
 
   private let providers: [(index: Int, provider: SidebarImportProviderLoading)]
+  let supportedProviderCount: Int
   private let lock = NSLock()
   private var continuation: CheckedContinuation<[SidebarImportProviderSlot], Never>?
   private var slots: [SidebarImportProviderSlot?]
@@ -809,6 +814,8 @@ final class SidebarImportProviderIntake: @unchecked Sendable {
   private var didStart = false
   private var didFinish = false
   private var isCancelled = false
+  private var terminalFailureHandler:
+    (@Sendable (SidebarImportProviderSlot) -> Void)?
 
   init(providers: [SidebarImportProviderLoading]) {
     self.providers = providers.enumerated().compactMap { index, provider in
@@ -817,26 +824,40 @@ final class SidebarImportProviderIntake: @unchecked Sendable {
       }
       return (index, provider)
     }
+    supportedProviderCount = self.providers.count
     slots = Array(repeating: nil, count: self.providers.count)
     retainedProgress = Array(repeating: nil, count: self.providers.count)
   }
 
-  func load() async -> [SidebarImportProviderSlot] {
+  func load(
+    onTerminalFailure:
+      (@Sendable (SidebarImportProviderSlot) -> Void)? = nil
+  ) async -> [SidebarImportProviderSlot] {
     await withTaskCancellationHandler {
       await withCheckedContinuation { continuation in
         var immediateResult: [SidebarImportProviderSlot]?
+        var immediateFailures: [SidebarImportProviderSlot] = []
         lock.lock()
         precondition(!didStart, "SidebarImportProviderIntake.load() may only be called once")
         didStart = true
         self.continuation = continuation
+        terminalFailureHandler = onTerminalFailure
         if slots.allSatisfy({ $0 != nil }) {
           didFinish = true
           self.continuation = nil
           immediateResult = slots.compactMap { $0 }
+          immediateFailures = immediateResult?.filter {
+            if case .failure = $0.outcome { return true }
+            return false
+          } ?? []
+          terminalFailureHandler = nil
         }
         lock.unlock()
 
         if let immediateResult {
+          for failure in immediateFailures {
+            onTerminalFailure?(failure)
+          }
           continuation.resume(returning: immediateResult)
           return
         }
@@ -877,6 +898,8 @@ final class SidebarImportProviderIntake: @unchecked Sendable {
     var progressToCancel: [Progress] = []
     var resume: CheckedContinuation<[SidebarImportProviderSlot], Never>?
     var result: [SidebarImportProviderSlot] = []
+    var newlyTerminalFailures: [SidebarImportProviderSlot] = []
+    var failureHandler: (@Sendable (SidebarImportProviderSlot) -> Void)?
     lock.lock()
     guard !didFinish else {
       lock.unlock()
@@ -888,20 +911,27 @@ final class SidebarImportProviderIntake: @unchecked Sendable {
         progressToCancel.append(progress)
       }
       retainedProgress[slotIndex] = nil
-      slots[slotIndex] = SidebarImportProviderSlot(
+      let slot = SidebarImportProviderSlot(
         providerIndex: providers[slotIndex].index,
         outcome: .failure(.cancelled))
+      slots[slotIndex] = slot
+      newlyTerminalFailures.append(slot)
     }
+    failureHandler = terminalFailureHandler
     if let continuation {
       didFinish = true
       resume = continuation
       self.continuation = nil
       result = slots.compactMap { $0 }
+      terminalFailureHandler = nil
     }
     lock.unlock()
 
     for progress in progressToCancel {
       progress.cancel()
+    }
+    for failure in newlyTerminalFailures {
+      failureHandler?(failure)
     }
     resume?.resume(returning: result)
   }
@@ -928,20 +958,31 @@ final class SidebarImportProviderIntake: @unchecked Sendable {
 
     var resume: CheckedContinuation<[SidebarImportProviderSlot], Never>?
     var result: [SidebarImportProviderSlot] = []
+    var terminalFailure: SidebarImportProviderSlot?
+    var failureHandler: (@Sendable (SidebarImportProviderSlot) -> Void)?
     lock.lock()
     if !didFinish, slots[slotIndex] == nil {
-      slots[slotIndex] = SidebarImportProviderSlot(
+      let slot = SidebarImportProviderSlot(
         providerIndex: providerIndex,
         outcome: outcome)
+      slots[slotIndex] = slot
       retainedProgress[slotIndex] = nil
+      if case .failure = outcome {
+        terminalFailure = slot
+        failureHandler = terminalFailureHandler
+      }
     }
     if !didFinish, slots.allSatisfy({ $0 != nil }), let continuation {
       didFinish = true
       resume = continuation
       self.continuation = nil
       result = slots.compactMap { $0 }
+      terminalFailureHandler = nil
     }
     lock.unlock()
+    if let terminalFailure {
+      failureHandler?(terminalFailure)
+    }
     resume?.resume(returning: result)
   }
 }

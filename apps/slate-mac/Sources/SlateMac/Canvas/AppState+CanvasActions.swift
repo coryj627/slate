@@ -294,7 +294,10 @@ extension AppState {
             // New documents get their own tab. Replacing the current tab
             // would destroy the only owner of an unsaved Markdown buffer;
             // it could also synchronously release a native editor object.
-            self.openFile(name, target: .newTab)
+            self.openFile(
+                name,
+                target: .newTab,
+                advancesSidebarSelectionRevision: false)
             self.canvasAnnouncer.announce(
                 .confirmation(
                     "Created canvas \"\((name as NSString).deletingPathExtension)\"."))

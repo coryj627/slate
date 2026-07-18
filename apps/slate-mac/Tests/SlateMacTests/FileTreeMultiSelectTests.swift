@@ -3537,8 +3537,9 @@ final class FileTreeMultiSelectTests: XCTestCase {
             src.contains(
                 "if listSelection != selectionModel.focused { "
                     + "suppressOpenForSelectionChange = true } "
+                    + "selectionRevisionGate.arm(for: selectionModel.focused) "
                     + "listSelection = selectionModel.focused"),
-            "suppress is armed conditionally (only when focus changes), then focus moves")
+            "suppress is armed conditionally, the user-intent revision is captured, then focus moves")
         XCTAssertTrue(
             src.contains(
                 "if suppressOpenForSelectionChange { suppressOpenForSelectionChange = false "
@@ -3914,12 +3915,13 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertTrue(
             src.contains(
                 ".onChange(of: tree.visibleRows) { _, _ in "
-                    + "if restorePendingBatchFocus(proxy: proxy) "
+                    + "if restorePendingImportSelection(proxy: proxy) "
+                    + "|| restorePendingBatchFocus(proxy: proxy) "
                     + "|| restorePendingPostMutationFocus(proxy: proxy) { "
                     + "mirrorTreeSelectionToAppState(listSelection) return } "
                     + "reconcileSelectionAfterTreeChange() "
                     + "mirrorTreeSelectionToAppState(listSelection) }"),
-            "pending focus owns transient edges; otherwise reconcile then mirror")
+            "pending import, batch, and post-mutation focus own transient edges; otherwise reconcile then mirror")
         XCTAssertTrue(
             src.contains(
                 "let resolvedSelection = selection.flatMap { selection in "
@@ -4135,6 +4137,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
             usesExplicitSelf: Bool = true,
             ownershipGuardCount: Int = 3,
             refreshedSuccessContinuation: String? = nil,
+            initialOwnershipPrefix: String? = nil,
+            failureClearsHistory: Bool = true,
             file: StaticString = #filePath,
             line: UInt = #line
         ) {
@@ -4153,7 +4157,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
                 file: file, line: line)
             XCTAssertTrue(
                 body.contains(
-                    "\(initialGuard) switch outcome"),
+                    "\(initialOwnershipPrefix ?? initialGuard) switch outcome"),
                 "the no-refresh success path is owned before any state landing",
                 file: file, line: line)
             XCTAssertTrue(
@@ -4167,14 +4171,18 @@ final class FileTreeMultiSelectTests: XCTestCase {
                 return XCTFail("missing infrastructure-failure branch", file: file, line: line)
             }
             let failureBody = String(body[failure.lowerBound...])
-            let ordered = [
+            var ordered = [
                 "await refresher(self)",
                 "guard \(qualifier)\(owner) else { return }",
-                "\(qualifier)clearStructuralUndoStacks()",
+            ]
+            if failureClearsHistory {
+                ordered.append("\(qualifier)clearStructuralUndoStacks()")
+            }
+            ordered.append(contentsOf: [
                 "\(qualifier)publishTreeMutation(",
                 "\(qualifier)setBatchStructuralResult(",
                 "\(qualifier)postMutationAnnouncement(",
-            ]
+            ])
             var remainder = failureBody[...]
             for token in ordered {
                 guard let range = remainder.range(of: token) else {
@@ -4190,7 +4198,49 @@ final class FileTreeMultiSelectTests: XCTestCase {
             start: "func batchMove( _ items: [TreeSelection], to newParent: String, "
                 + "preferredFocusPath: String? ) -> Task<Void, Never>? {",
             end: "private static func batchMoveNeedsRefresh")
-        assertOwnershipGuards(move, successLanding: "self.landForwardBatchMove(")
+        assertOwnershipGuards(
+            move,
+            successLanding: "self.landForwardBatchMove(",
+            initialOwnershipPrefix:
+                "guard let self, let outcome = await self.executeForwardBatchMove( "
+                + "session: session, request: request, mutationToken: token, runner: runner) "
+                + "else { return } guard self.ownsStructuralMutation(token, session: session) "
+                + "else { return }",
+            failureClearsHistory: false)
+
+        let moveExecutor = try functionBody(
+            start: "private func executeForwardBatchMove(",
+            end: "private func quarantineBatchMovePathsBeforeRefresh")
+        XCTAssertEqual(
+            moveExecutor.components(
+                separatedBy: "ownsStructuralMutation(mutationToken, session: session)"
+            ).count - 1,
+            2,
+            "shared Move success and failure each recheck structural ownership")
+        for ordered in [
+            [
+                "try await runner(session, request)",
+                "guard ownsStructuralMutation(mutationToken, session: session) else { return nil }",
+                "quarantineBatchMovePathsBeforeRefresh(report)",
+                "switch reduction.historyAction",
+                "return .success(reduction)",
+            ],
+            [
+                "catch {",
+                "guard ownsStructuralMutation(mutationToken, session: session) else { return nil }",
+                "clearStructuralUndoStacks()",
+                "return .failure(error)",
+            ],
+        ] {
+            var remainder = moveExecutor[...]
+            for token in ordered {
+                guard let range = remainder.range(of: token) else {
+                    return XCTFail(
+                        "shared Move state write is missing or precedes its ownership guard: \(token)")
+                }
+                remainder = remainder[range.upperBound...]
+            }
+        }
 
         let trash = try functionBody(
             start: "private func performBatchTrash(",
@@ -4218,6 +4268,51 @@ final class FileTreeMultiSelectTests: XCTestCase {
             }
             unknownRemainder = unknownRemainder[range.upperBound...]
         }
+
+        let refresh = try functionBody(
+            start: "private func runImportRefreshPhase(",
+            end: "private func performImportBatch(")
+        XCTAssertTrue(
+            refresh.contains(
+                "let result = await task.result guard ownsImportBatch(owner) "
+                    + "else { return result } owner.clearActivePhaseCancellation()"),
+            "a stale finishing owner cannot clear a replacement import's cancellation state")
+
+        let aggregate = try functionBody(
+            start: "private func performImportBatch(",
+            end: "private static func importProviderFailureMessage(")
+        for ordered in [
+            [
+                "copyReport = try await copyTask.value",
+                "guard ownsImportBatch(owner) else { return }",
+                "owner.clearActivePhaseCancellation()",
+            ],
+            [
+                "let nativeOutcome = await nativeTask.value",
+                "guard ownsImportBatch(owner) else { return }",
+                "sidebarActionBackgroundFailure",
+                "owner.clearActivePhaseCancellation()",
+                "guard let outcome = nativeOutcome else { return }",
+            ],
+        ] {
+            var remainder = aggregate[...]
+            for token in ordered {
+                guard let range = remainder.range(of: token) else {
+                    return XCTFail(
+                        "aggregate import state write is missing or precedes its owner guard: \(token)")
+                }
+                remainder = remainder[range.upperBound...]
+            }
+        }
+
+        let cancellation = try functionBody(
+            start: "func cancelImportBatch(_ owner: SidebarImportBatchOwner) {",
+            end: "func finishImportBatch(_ owner: SidebarImportBatchOwner) {")
+        XCTAssertTrue(
+            cancellation.contains(
+                "guard currentImportBatchOwner === owner else { return } "
+                    + "owner.requestCancellation()"),
+            "a replayed stale owner must not publish cancellation state over a replacement")
     }
 
     // MARK: - Codex finding 1: every batch member is visibly + accessibly selected

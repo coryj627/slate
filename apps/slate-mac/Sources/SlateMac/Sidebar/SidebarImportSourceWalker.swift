@@ -293,6 +293,35 @@ struct SidebarImportSourceLimits {
   }
 }
 
+/// One lock-safe item budget shared by every external root in an admitted
+/// batch. Charging happens before scope/descriptor admission for each root and
+/// for every descendant encountered, including roots that later fail.
+final class SidebarImportSourceEntryBudget: @unchecked Sendable {
+  let limit: Int
+
+  private let lock = NSLock()
+  private var consumed = 0
+
+  init(limit: Int) {
+    precondition(limit > 0)
+    self.limit = limit
+  }
+
+  func charge() -> Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    guard consumed < limit else { return false }
+    consumed += 1
+    return true
+  }
+
+  var consumedCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return consumed
+  }
+}
+
 enum SidebarImportSourceEntryKind: Equatable, Sendable {
   case directory
   case regularFile
@@ -458,6 +487,7 @@ enum SidebarImportSourceWalkerError: Error {
   case inspectFailed(path: String, reason: String)
   case unsupportedEntry(path: String)
   case tooManyEntries(limit: Int)
+  case aggregateEntryLimitExceeded(limit: Int)
   case tooDeep(path: String, limit: Int)
   case fileTooLarge(path: String, limitBytes: Int64)
   case preparedSourceClosed
@@ -1131,6 +1161,7 @@ struct SidebarImportSourceWalker {
   let hooks: SidebarImportSourceWalkerHooks
   let cancellation: SidebarImportSourceCancellationToken
   let metrics: SidebarImportSourceMetrics
+  let aggregateEntryBudget: SidebarImportSourceEntryBudget?
 
   init(
     limits: SidebarImportSourceLimits,
@@ -1138,13 +1169,15 @@ struct SidebarImportSourceWalker {
     hooks: SidebarImportSourceWalkerHooks = SidebarImportSourceWalkerHooks(),
     cancellation: SidebarImportSourceCancellationToken =
       SidebarImportSourceCancellationToken(),
-    metrics: SidebarImportSourceMetrics = SidebarImportSourceMetrics()
+    metrics: SidebarImportSourceMetrics = SidebarImportSourceMetrics(),
+    aggregateEntryBudget: SidebarImportSourceEntryBudget? = nil
   ) {
     self.limits = limits
     self.scopeAccess = scopeAccess
     self.hooks = hooks
     self.cancellation = cancellation
     self.metrics = metrics
+    self.aggregateEntryBudget = aggregateEntryBudget
   }
 
   func prepare(rootURL: URL, vaultURL: URL) throws -> SidebarImportPreparedSource {
@@ -1157,7 +1190,9 @@ struct SidebarImportSourceWalker {
     }
 
     try reachBoundary(.beforeRootAdmission)
-    var state = WalkState(limits: limits)
+    var state = WalkState(
+      limits: limits,
+      aggregateEntryBudget: aggregateEntryBudget)
     try state.chargeEncounteredEntry()
 
     let scopeWasStarted = scopeAccess.start(rootURL)
@@ -1308,14 +1343,19 @@ struct SidebarImportSourceWalker {
 
   private struct WalkState {
     let limits: SidebarImportSourceLimits
+    let aggregateEntryBudget: SidebarImportSourceEntryBudget?
     var entries: [SidebarImportSourceEntry] = []
     var failures: [SidebarImportSourceFailure] = []
     var advisoryByteCount: SidebarImportSourceAdvisoryByteCount
     var encounteredEntries = 0
     var nextTraversalOrdinal = 0
 
-    init(limits: SidebarImportSourceLimits) {
+    init(
+      limits: SidebarImportSourceLimits,
+      aggregateEntryBudget: SidebarImportSourceEntryBudget?
+    ) {
       self.limits = limits
+      self.aggregateEntryBudget = aggregateEntryBudget
       advisoryByteCount = SidebarImportSourceAdvisoryByteCount(
         configuredTotalBytes: UInt64(limits.totalBytes))
     }
@@ -1324,6 +1364,10 @@ struct SidebarImportSourceWalker {
       guard encounteredEntries < limits.maximumEntries else {
         throw SidebarImportSourceWalkerError.tooManyEntries(
           limit: limits.maximumEntries)
+      }
+      if let aggregateEntryBudget, !aggregateEntryBudget.charge() {
+        throw SidebarImportSourceWalkerError.aggregateEntryLimitExceeded(
+          limit: aggregateEntryBudget.limit)
       }
       encounteredEntries += 1
     }

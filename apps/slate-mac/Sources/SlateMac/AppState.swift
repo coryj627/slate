@@ -516,6 +516,12 @@ final class AppState: ObservableObject {
     /// `currentNoteText`; AppState watches this property and kicks
     /// off the load whenever it changes.
     @Published var selectedFilePath: String?
+    /// Monotone user-navigation edge for file opens originating outside the
+    /// tree selection model (search, graph, links, templates, and commands).
+    /// The tree consumes this independently of `selectedFilePath` so choosing
+    /// an already-open result still protects newer user agency from a deferred
+    /// structural landing.
+    @Published private(set) var sidebarSelectionIntentRevision: UInt64 = 0
 
     // MARK: File-management command state (U2-5, #463)
 
@@ -582,6 +588,7 @@ final class AppState: ObservableObject {
         enum Payload: Equatable {
             case move(BatchMoveReport, mode: MoveMode)
             case trash(BatchTrashReport)
+            case importBatch(ImportBatchFailureReport)
             case infrastructure(operation: Operation, message: String)
         }
 
@@ -594,6 +601,125 @@ final class AppState: ObservableObject {
             self.payload = payload
             self.requiresAttention = requiresAttention
         }
+    }
+
+    struct ImportBatchFailureDetail: Equatable {
+        enum Scope: Equatable {
+            case provider(Int)
+            case batch(stage: String)
+        }
+
+        enum Kind: Equatable {
+            /// The source item did not reach its requested destination.
+            case terminalFailure
+            /// The item landed, but ancillary reconciliation needs attention.
+            case warning
+        }
+
+        let scope: Scope
+        let treeOrder: Int
+        let item: String
+        let reason: String
+        let kind: Kind
+        /// Stable identity of one failed source item. Multiple diagnostic rows
+        /// for that item share this key; recursive provider entries use distinct
+        /// keys. Providerless batch diagnostics intentionally carry nil.
+        let terminalItemKey: String?
+        /// Destination path whose create outcome can be resolved only by the
+        /// mandatory authoritative scan. Nil for ordinary failures/warnings.
+        let reconciliationCandidatePath: String?
+
+        init(
+            providerIndex: Int,
+            treeOrder: Int,
+            item: String,
+            reason: String,
+            kind: Kind = .terminalFailure,
+            terminalItemKey: String? = nil,
+            reconciliationCandidatePath: String? = nil
+        ) {
+            scope = .provider(providerIndex)
+            self.treeOrder = treeOrder
+            self.item = item
+            self.reason = reason
+            self.kind = kind
+            self.terminalItemKey = kind == .terminalFailure
+                ? (terminalItemKey ?? "provider:\(providerIndex)")
+                : nil
+            self.reconciliationCandidatePath = reconciliationCandidatePath
+        }
+
+        init(
+            batchStage: String,
+            treeOrder: Int,
+            item: String,
+            reason: String,
+            kind: Kind = .warning
+        ) {
+            scope = .batch(stage: batchStage)
+            self.treeOrder = treeOrder
+            self.item = item
+            self.reason = reason
+            self.kind = kind
+            terminalItemKey = nil
+            reconciliationCandidatePath = nil
+        }
+
+        var sourceLabel: String {
+            switch scope {
+            case .provider(let index): return "Provider \(index + 1)"
+            case .batch(let stage): return stage
+            }
+        }
+    }
+
+    /// The UI retains only Task 3's one bounded first-N presentation. The
+    /// complete, admission-bounded ledger remains available to Copy Details so
+    /// no path or reason becomes unrecoverable after the alert is dismissed.
+    struct ImportBatchFailureReport: Equatable {
+        static let presentationLimit = 5
+        let allDetails: [ImportBatchFailureDetail]
+        let details: [ImportBatchFailureDetail]
+        let omittedCount: Int
+        let terminalFailureCount: Int
+        let warningCount: Int
+
+        init(_ failures: [ImportBatchFailureDetail]) {
+            let ordered = failures.enumerated().sorted { lhs, rhs in
+                let left = lhs.element
+                let right = rhs.element
+                switch (left.scope, right.scope) {
+                case (.provider(let leftIndex), .provider(let rightIndex)):
+                    if leftIndex != rightIndex { return leftIndex < rightIndex }
+                    if left.treeOrder != right.treeOrder {
+                        return left.treeOrder < right.treeOrder
+                    }
+                case (.provider, .batch):
+                    return true
+                case (.batch, .provider):
+                    return false
+                case (.batch, .batch):
+                    if left.treeOrder != right.treeOrder {
+                        return left.treeOrder < right.treeOrder
+                    }
+                }
+                return lhs.offset < rhs.offset
+            }
+            let orderedDetails = ordered.map(\.element)
+            allDetails = orderedDetails
+            details = Array(orderedDetails.prefix(Self.presentationLimit))
+            omittedCount = allDetails.count - details.count
+            // Diagnostic rows and failed source items are different ledgers.
+            // Deduplicate native facts by provider occurrence, retain distinct
+            // recursive external entries, and never infer an item from a
+            // providerless batch diagnostic.
+            terminalFailureCount = Set(allDetails.compactMap { detail in
+                detail.kind == .terminalFailure ? detail.terminalItemKey : nil
+            }).count
+            warningCount = allDetails.count { $0.kind == .warning }
+        }
+
+        var totalDetailCount: Int { allDetails.count }
     }
 
     /// Pure copy and deterministic detail formatting shared by Move and Trash
@@ -715,6 +841,38 @@ final class AppState: ObservableObject {
                     hasDetails: detailCount > 0,
                     hasOmittedDetails: detailCount > inlinePreviewLimit,
                     previewWorkCount: preview.workCount)
+            case .importBatch(let report):
+                let failureSummary = report.terminalFailureCount == 1
+                    ? "1 item could not be imported."
+                    : "\(report.terminalFailureCount) items could not be imported."
+                let warningSummary = report.warningCount == 1
+                    ? "1 import warning needs attention."
+                    : "\(report.warningCount) import warnings need attention."
+                let summary: String
+                if report.terminalFailureCount == 0 {
+                    summary = "Import completed. " + warningSummary
+                } else if report.warningCount == 0 {
+                    summary = failureSummary
+                } else {
+                    summary = failureSummary + " " + warningSummary
+                }
+                let entries = report.details.map {
+                    "\($0.sourceLabel) — \($0.item): \($0.reason)"
+                }
+                let message = previewMessage(
+                    summary: summary,
+                    entries: entries,
+                    totalEntryCount: report.totalDetailCount,
+                    visibleEntryLimit: ImportBatchFailureReport.presentationLimit)
+                return Attention(
+                    title: report.terminalFailureCount > 0
+                        ? "Some Items Were Not Imported"
+                        : "Import Completed with Warnings",
+                    message: message,
+                    inlineMessage: message,
+                    hasDetails: report.totalDetailCount > 0,
+                    hasOmittedDetails: report.omittedCount > 0,
+                    previewWorkCount: report.details.count)
             case .infrastructure(let operation, let message):
                 let verb = operationLabel(operation)
                 let copy =
@@ -727,6 +885,16 @@ final class AppState: ObservableObject {
                     hasOmittedDetails: false,
                     previewWorkCount: 0)
             }
+        }
+
+        static func shouldOfferTrashReconciliation(
+            for result: BatchStructuralResult,
+            hasQuarantinedTrashItems: Bool
+        ) -> Bool {
+            guard hasQuarantinedTrashItems,
+                case .trash(let report) = result.payload
+            else { return false }
+            return !report.unknown.isEmpty
         }
 
         static func copiedDetails(for result: BatchStructuralResult) -> String {
@@ -746,6 +914,15 @@ final class AppState: ObservableObject {
                 lines.append(contentsOf: moveDetailEntries(report))
                 lines.append(
                     "Reconciliation required: \(report.requiresRescan ? "Yes" : "No")")
+                return lines.joined(separator: "\n")
+            case .importBatch(let report):
+                let state = report.terminalFailureCount > 0
+                    ? "Completed with failures"
+                    : "Completed with warnings"
+                var lines = ["Import", "State: \(state)"]
+                lines.append(contentsOf: report.allDetails.map {
+                    "\($0.sourceLabel) — \($0.item): \($0.reason)"
+                })
                 return lines.joined(separator: "\n")
             case .infrastructure(let operation, let message):
                 let verb = operationLabel(operation)
@@ -937,7 +1114,7 @@ final class AppState: ObservableObject {
         static let checkAgainLabel = "Check Again"
         static let checkAgainHint =
             "Refresh the vault and check whether the affected items are still present."
-        static let copyDetailsLabel = "Copy Details and Close"
+        static let copyDetailsLabel = "Copy Details"
         static let copyDetailsHint =
             "Copies the complete batch report, closes this report, and returns to the files sidebar."
 
@@ -1443,6 +1620,8 @@ final class AppState: ObservableObject {
         @Sendable (VaultSession, Int64) async throws -> BatchMoveReport
     typealias StructuralBatchRefreshRunner =
         @MainActor @Sendable (AppState) async -> Void
+    typealias ImportRefreshRunner =
+        @MainActor @Sendable (AppState, VaultSession) async throws -> Void
     typealias StructuralRenameRunner =
         @Sendable (VaultSession, String, Bool, String) async throws -> StructuralReport
     typealias TemplateListRunner = @Sendable (VaultSession, CancelToken) -> Result<
@@ -1483,6 +1662,23 @@ final class AppState: ObservableObject {
     var structuralBatchRefreshRunner: StructuralBatchRefreshRunner = { state in
         await state.loadFiles()
     }
+    /// Clean import landings need only the indexed file inventory. This seam is
+    /// intentionally separate from every pre-existing structural operation,
+    /// whose uncertainty contract continues to use a full scan.
+    var importInventoryRefreshRunner: ImportRefreshRunner = { state, session in
+        try await state.reloadImportInventoryOnly(for: session)
+    }
+    /// All copy/move/list uncertainty coalesces into this one scan, always after
+    /// native work. The import owner remains live so FileTree suppresses the
+    /// generic scan-finish invalidation and accepts only the aggregate landing.
+    var importScanRefreshRunner: ImportRefreshRunner = { state, session in
+        try await state.reloadImportInventoryWithAuthoritativeScan(for: session)
+    }
+    var importDestinationCreators:
+        @Sendable (VaultSession) -> SidebarImportDestinationCreators = {
+            .production(session: $0)
+        }
+    var importSourceWalkerHooks = SidebarImportSourceWalkerHooks()
     /// Deterministic race seam for the accepted two-phase New Folder → Move
     /// carve-out. Tests park after the folder create releases its owner and
     /// before the dependent move tries to claim the gate. Nil in production.
@@ -1787,6 +1983,66 @@ final class AppState: ObservableObject {
             let admitted = sidebarActionDispatchOverrides.openTemplatePicker?(parent)
                 ?? (openTemplatePicker(in: parent) != nil)
             guard admitted else { throw sidebarActionFailure(rejected) }
+            return .completed(actionID: intent.actionID)
+
+        case SlateCommandID.importFilesAndFolders:
+            guard let capturedSession = currentSession else {
+                throw sidebarActionFailure(rejected)
+            }
+            let frozenParent = try canonicalSidebarCreationParent(
+                for: intent.snapshot, rejection: rejected)
+            let frozenRevision = intent.snapshot.selectionRevision
+
+            // `runModal` spins a nested AppKit event loop. Retire the action
+            // launcher first, then revalidate every frozen owner fact after
+            // the panel returns before claiming structural ownership.
+            if isCommandPaletteOpen { isCommandPaletteOpen = false }
+            guard let selectedURLs = importSourcePicker() else {
+                return .completed(actionID: intent.actionID)
+            }
+            guard !selectedURLs.isEmpty else {
+                return .completed(actionID: intent.actionID)
+            }
+            guard selectedURLs.count
+                <= SidebarImportProviderIntake.maximumProviderCount
+            else {
+                sidebarActionBackgroundFailure = Self.importProviderLimitReason
+                throw sidebarActionFailure(Self.importProviderLimitReason)
+            }
+            guard currentSession === capturedSession,
+                sidebarSelectionSnapshot?.selectionRevision == frozenRevision
+            else {
+                throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
+            }
+            do {
+                _ = try validateSidebarActionIntent(intent)
+            } catch let error as SidebarActionValidationError {
+                throw sidebarActionFailure(error.reason)
+            } catch {
+                throw sidebarActionFailure(error.localizedDescription)
+            }
+            let liveParent = try canonicalSidebarCreationParent(
+                for: intent.snapshot, rejection: rejected)
+            guard liveParent == frozenParent else {
+                throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
+            }
+            let providers = selectedURLs.map { url in
+                let provider = NSItemProvider()
+                provider.registerDataRepresentation(
+                    forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+                    visibility: .all
+                ) { completion in
+                    completion(url.dataRepresentation, nil)
+                    return nil
+                }
+                return provider
+            }
+            guard let owner = beginImportBatch(
+                providers: providers,
+                destinationFolder: frozenParent,
+                selectionRevision: frozenRevision)
+            else { throw sidebarActionFailure(rejected) }
+            _ = startImportBatch(owner)
             return .completed(actionID: intent.actionID)
 
         case SlateCommandID.renameEntry:
@@ -2723,18 +2979,32 @@ final class AppState: ObservableObject {
     /// that assignment. Synchronous sink ⇒ a plain flag suffices.
     var isActivatingTab = false
 
+    /// One shared app-to-tree edge for explicit navigation that may otherwise
+    /// produce no `selectedFilePath` change (same-file intent), or whose path
+    /// change is mirrored neutrally by FileTreeSidebar. Internal restoration,
+    /// mutation retargeting, and vault teardown never call this seam.
+    func recordExplicitSidebarNavigationIntent() {
+        sidebarSelectionIntentRevision &+= 1
+    }
+
     /// The single tab-switch funnel (U1-2): snapshot the outgoing tab,
     /// select `id`, restore its parked buffer (or disk-load on first
     /// activation), re-fire the collection loads, and mirror the sidebar
     /// selection. Identity-keyed, so two tabs holding the SAME path switch
     /// correctly (a path-keyed funnel cannot distinguish them).
-    func activateTab(_ id: TabID) {
+    func activateTab(
+        _ id: TabID,
+        advancesSidebarSelectionRevision: Bool = false
+    ) {
         guard let tab = workspace.model.tab(id) else { return }
         if id != workspace.model.activeGroup.activeTabID,
             let reason = propertyEditNavigationDisabledReason
         {
             postMutationAnnouncement(reason)
             return
+        }
+        if advancesSidebarSelectionRevision {
+            recordExplicitSidebarNavigationIntent()
         }
         clearBaseQuickFilterIfLeavingActiveTab(for: id)
         if case .base(let path) = tab.item {
@@ -2841,31 +3111,40 @@ final class AppState: ObservableObject {
 
     /// ⌘W and the tab-strip close buttons. Gates on the tab's dirty state —
     /// active tab reads the live fields; parked tabs read their document.
+    private func performCloseTabFromExplicitRequest(_ id: TabID) {
+        if id == workspace.model.activeGroup.activeTabID {
+            recordExplicitSidebarNavigationIntent()
+        }
+        performCloseTab(id)
+    }
+
     func requestCloseTab(_ id: TabID? = nil) {
         guard let target = id ?? workspace.model.activeGroup.activeTabID else { return }
+        guard workspace.model.tab(target) != nil else { return }
+        let isActive = target == workspace.model.activeGroup.activeTabID
         // Canvas/base tabs are never dirty in the note-buffer sense:
         // canvas mutations write through, and the first Bases surface is
         // read-only (#702), so the close gate is bypassed by design.
         if case .canvas = workspace.model.tab(target)?.item {
-            performCloseTab(target)
+            performCloseTabFromExplicitRequest(target)
             return
         }
         if case .base = workspace.model.tab(target)?.item {
-            performCloseTab(target)
+            performCloseTabFromExplicitRequest(target)
             return
         }
         if case .savedQuery = workspace.model.tab(target)?.item {
-            performCloseTab(target)
+            performCloseTabFromExplicitRequest(target)
             return
         }
         if case .dashboard = workspace.model.tab(target)?.item {
-            performCloseTab(target)
+            performCloseTabFromExplicitRequest(target)
             return
         }
         // The Graph tab has no editable buffer, so it is never dirty —
         // closing it must never present the note save gate.
         if case .graph = workspace.model.tab(target)?.item {
-            performCloseTab(target)
+            performCloseTabFromExplicitRequest(target)
             return
         }
         if let tab = workspace.model.tab(target),
@@ -2886,7 +3165,6 @@ final class AppState: ObservableObject {
             pendingTabClose = nil
             return
         }
-        let isActive = target == workspace.model.activeGroup.activeTabID
         if isActive, isEditingProperty,
             let tab = workspace.model.tab(target),
             case .markdown(let path) = tab.item,
@@ -2906,6 +3184,7 @@ final class AppState: ObservableObject {
             BaseExactIdentity.matches(path, loadedFilePath)
         {
             if pendingTabCloseAfterSave == nil {
+                recordExplicitSidebarNavigationIntent()
                 pendingTabCloseAfterSave = target
             }
             pendingTabClose = nil
@@ -2935,9 +3214,12 @@ final class AppState: ObservableObject {
         }
         let dirty = bodyDirty || recoveryDirty
         if dirty {
+            if isActive {
+                recordExplicitSidebarNavigationIntent()
+            }
             pendingTabClose = target
         } else {
-            performCloseTab(target)
+            performCloseTabFromExplicitRequest(target)
         }
     }
 
@@ -2968,7 +3250,7 @@ final class AppState: ObservableObject {
             return
         }
         if target != workspace.model.activeGroup.activeTabID {
-            activateTab(target)
+            activateTab(target, advancesSidebarSelectionRevision: true)
         }
         // Transactional close-after-save: a quarantine race, an already
         // running save, or an unavailable editor must leave the alert and its
@@ -3170,7 +3452,9 @@ final class AppState: ObservableObject {
     func selectNextTab() { activateComputedTab { $0.selectNextTab() } }
     func selectPreviousTab() { activateComputedTab { $0.selectPreviousTab() } }
     func selectTab(ordinal: Int) { activateComputedTab { $0.selectTab(ordinal: ordinal) } }
-    func selectTab(id: TabID) { activateTab(id) }
+    func selectTab(id: TabID) {
+        activateTab(id, advancesSidebarSelectionRevision: true)
+    }
 
     /// ⌃⌘← / ⌃⌘→ keyboard reorder (the non-drag equivalent to dragging).
     func moveActiveTabLeft() {
@@ -3188,7 +3472,7 @@ final class AppState: ObservableObject {
         guard let target = preview.activeGroup.activeTabID,
             target != workspace.model.activeGroup.activeTabID
         else { return }
-        activateTab(target)
+        activateTab(target, advancesSidebarSelectionRevision: true)
     }
 
     // MARK: - Frontmatter parts (U3-3, #467/#469)
@@ -3730,10 +4014,17 @@ final class AppState: ObservableObject {
     /// The single navigation entry point (U1-5). Every open path — sidebar
     /// row, backlink/outgoing-link/embed activation, search result, palette
     /// command — routes here with an explicit target.
-    func openFile(_ path: String, target: OpenTarget) {
+    func openFile(
+        _ path: String,
+        target: OpenTarget,
+        advancesSidebarSelectionRevision: Bool = true
+    ) {
         if let reason = propertyEditNavigationDisabledReason {
             postMutationAnnouncement(reason)
             return
+        }
+        if advancesSidebarSelectionRevision {
+            recordExplicitSidebarNavigationIntent()
         }
         // Record the open into the vault's file-recents (#495) at this
         // single funnel — every user-visible open routes here, launch
@@ -3743,13 +4034,19 @@ final class AppState: ObservableObject {
         // Milestone T (#369): .canvas paths take the canvas arm of the
         // funnel — the note loader must never read a canvas as text.
         if path.lowercased().hasSuffix(".canvas") {
-            openCanvasFile(path, target: target)
+            openCanvasFile(
+                path,
+                target: target,
+                advancesSidebarSelectionRevision: false)
             return
         }
         // Milestone N (#702): .base paths take the Bases arm of the
         // funnel — the note loader must never read a base as text.
         if path.lowercased().hasSuffix(".base") {
-            openBaseFile(path, target: target)
+            openBaseFile(
+                path,
+                target: target,
+                advancesSidebarSelectionRevision: false)
             return
         }
         clearActiveBaseQuickFilter()
@@ -3784,7 +4081,10 @@ final class AppState: ObservableObject {
             if workspace.model.groupsInOrder.count == paneCount {
                 // Split rejected (capacity / empty) — the document still
                 // deserves to open somewhere visible.
-                openFile(path, target: .newTab)
+                openFile(
+                    path,
+                    target: .newTab,
+                    advancesSidebarSelectionRevision: false)
                 return
             }
             // The new pane holds a duplicate of the previous document;
@@ -3905,7 +4205,7 @@ final class AppState: ObservableObject {
     /// `activateTab`).
     private func enterEditorGroup(_ groupID: GroupID) {
         if let tab = workspace.model.group(groupID)?.activeTabID {
-            activateTab(tab)
+            selectTab(id: tab)
         }
         announcePaneFocus(groupID)
     }
@@ -6080,11 +6380,17 @@ final class AppState: ObservableObject {
         // never the note loader. This lives below the final-owner recovery
         // guard because these arms replace the current tab in place.
         if let path, path.lowercased().hasSuffix(".canvas") {
-            openCanvasFile(path, target: .currentTab)
+            openCanvasFile(
+                path,
+                target: .currentTab,
+                advancesSidebarSelectionRevision: false)
             return
         }
         if let path, path.lowercased().hasSuffix(".base") {
-            openBaseFile(path, target: .currentTab)
+            openBaseFile(
+                path,
+                target: .currentTab,
+                advancesSidebarSelectionRevision: false)
             return
         }
         // Dirty-state gate (issue #63): switching files while the
@@ -6488,7 +6794,9 @@ final class AppState: ObservableObject {
         let wasAlreadyOpen =
             BaseExactIdentity.matches(selectedFilePath, hit.path)
             && target == .currentTab
-        if !wasAlreadyOpen {
+        if wasAlreadyOpen {
+            recordExplicitSidebarNavigationIntent()
+        } else {
             openFile(hit.path, target: target)
         }
         // Snapshot the in-flight load up front so the Task closure
@@ -6669,7 +6977,24 @@ final class AppState: ObservableObject {
 
     var isVaultOpen: Bool { currentSession != nil }
 
+    static let importNativeMoveVaultTransitionReason =
+        "The vault stayed open. Wait for the in-vault move to finish, then try again."
+
+    @discardableResult
+    private func rejectVaultTransitionDuringNativeImport() -> Bool {
+        guard currentImportBatchOwner != nil,
+            importBatchProgress?.phase == .moving
+        else { return false }
+        pendingVaultSwitchTarget = nil
+        announceNextOpenAfterClose = false
+        sidebarActionBackgroundFailure =
+            Self.importNativeMoveVaultTransitionReason
+        postMutationAnnouncement(Self.importNativeMoveVaultTransitionReason)
+        return true
+    }
+
     func openVault(at url: URL) {
+        guard !rejectVaultTransitionDuringNativeImport() else { return }
         if isVaultOpen, let reason = authoredPropertyPublicationRecoveryReason {
             postMutationAnnouncement(reason)
             return
@@ -6700,6 +7025,12 @@ final class AppState: ObservableObject {
         // warnings or a writer targeting the previous root.
         sidebarVaultPrefsStore = nil
         sidebarVaultPrefsNotice = nil
+        // Commit the old operation lifecycle before attempting the new open.
+        // Both success and either catch path replace/clear `currentSession`, so
+        // provider progress, Task 3 work, and structural-token ownership must
+        // be cancelled first in every case.
+        cancelCurrentImportBatchForVaultTransition()
+        cancelStructuralMutationOwnership()
         do {
             let session = try VaultSession.openFilesystem(rootPath: url.path)
             // Audit #259: push the persisted math prefs into the
@@ -6830,7 +7161,6 @@ final class AppState: ObservableObject {
             // stale completion that already passed its session guard and then
             // suspended in `loadFiles` a no-op, so it can't clear a NEWER
             // vault's op flag on resume.
-            cancelStructuralMutationOwnership()
             // #879 Codex red-team: the vault-wide Tasks Review surface must
             // die with the previous vault too — direct Open Vault routes
             // here without `closeVault`, so a stale review would survive and
@@ -7049,6 +7379,7 @@ final class AppState: ObservableObject {
     /// welcome screen" announcement, which would be false for a switch — the
     /// subsequent `openVault` posts its own "Vault … opened" announcement.
     func switchToRecent(_ entry: RecentVault) {
+        guard !rejectVaultTransitionDuringNativeImport() else { return }
         // Already the open vault → no-op (the menu also disables the current
         // vault's row; this guards the programmatic path).
         guard entry.path != currentVaultURL?.path else { return }
@@ -7143,6 +7474,7 @@ final class AppState: ObservableObject {
         // still up (and `isVaultOpen` is still false); without this claim,
         // that task would auto-restore a recent vault BEHIND the open
         // panel — cancelling then strands it open, choosing opens two.
+        guard !rejectVaultTransitionDuringNativeImport() else { return }
         hasAttemptedLaunchRestore = true
         guard let url = vaultPicker() else { return }
         if isVaultOpen {
@@ -7158,6 +7490,21 @@ final class AppState: ObservableObject {
     /// ⌘O quick-open fallthrough (#863) — never present a modal panel
     /// under XCTest. Same injectable-var convention as `scanClock`.
     var vaultPicker: () -> URL? = { VaultPicker.pick() }
+
+    /// Finder import-picker seam. Production uses one native open panel that
+    /// accepts files and folders together; tests inject a deterministic URL
+    /// array (nil means the user cancelled) without presenting AppKit UI.
+    var importSourcePicker: () -> [URL]? = {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.resolvesAliases = false
+        panel.prompt = "Import"
+        panel.message = "Choose files and folders to import. Items already in this vault are moved to the selected location."
+        guard panel.runModal() == .OK else { return nil }
+        return panel.urls
+    }
 
     // MARK: - Launch restore (#872)
 
@@ -7269,6 +7616,7 @@ final class AppState: ObservableObject {
     /// - Clean editor → closes immediately and posts the
     ///   announcement inline here.
     func closeVaultFromUserAction() {
+        guard !rejectVaultTransitionDuringNativeImport() else { return }
         if let reason = authoredPropertyPublicationRecoveryReason {
             postMutationAnnouncement(reason)
             return
@@ -7351,6 +7699,7 @@ final class AppState: ObservableObject {
     /// resolution dialog up; the vault stays open. Closes on full success.
     func resolveVaultCloseSaveAll() {
         guard pendingVaultClose != nil, let session = currentSession else { return }
+        guard !rejectVaultTransitionDuringNativeImport() else { return }
         if let reason = authoredPropertyPublicationRecoveryReason {
             pendingVaultClose = nil
             postMutationAnnouncement(reason)
@@ -7436,6 +7785,7 @@ final class AppState: ObservableObject {
     /// "Discard All": close without saving any tab. The per-tab buffers are
     /// dropped by `closeVault`'s workspace reset.
     func resolveVaultCloseDiscardAll() {
+        guard !rejectVaultTransitionDuringNativeImport() else { return }
         if let reason = authoredPropertyPublicationRecoveryReason {
             pendingVaultClose = nil
             postMutationAnnouncement(reason)
@@ -7482,6 +7832,7 @@ final class AppState: ObservableObject {
 
     @discardableResult
     func closeVault() -> Bool {
+        guard !rejectVaultTransitionDuringNativeImport() else { return false }
         if let reason = authoredPropertyPublicationRecoveryReason {
             pendingVaultSwitchTarget = nil
             pendingVaultClose = nil
@@ -7558,6 +7909,7 @@ final class AppState: ObservableObject {
         // #871: the structural (file-op) undo/redo stacks are per-vault;
         // drop them so a stale inverse can't reverse against the next vault.
         clearStructuralUndoStacks()
+        cancelCurrentImportBatchForVaultTransition()
         // #871 Codex round 2: invalidate + release the structural-mutation
         // guard on vault close too (see the openVault reset for the full
         // token rationale).
@@ -7897,6 +8249,75 @@ final class AppState: ObservableObject {
         } catch {
             guard !Task.isCancelled, currentSession === session else { return }
             scanError = error.localizedDescription
+        }
+    }
+
+    /// Refresh only the indexed openable-file inventory. Structural native
+    /// calls and exclusive creates update the index themselves, so a clean
+    /// import/move landing must not pay for or expose a vault scan. Directory
+    /// rows resolve through the aggregate tree invalidation that follows.
+    private func reloadImportInventoryOnly(for session: VaultSession) async throws {
+        let loaded = try await Task.detached(priority: .userInitiated) {
+            var all: [FileSummary] = []
+            var cursor: String? = nil
+            repeat {
+                let page = try session.listFiles(
+                    filter: .openableDocuments,
+                    paging: Paging(cursor: cursor, limit: 1_000))
+                all.append(contentsOf: page.items)
+                cursor = page.nextCursor
+            } while cursor != nil
+            return all
+        }.value
+        guard currentSession === session else { return }
+        files = loaded.sorted {
+            $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending
+        }
+    }
+
+    /// Import-owned authoritative scan. Unlike `loadFiles`, errors and
+    /// cancellation are not swallowed: Task 4 may promote unknown candidates
+    /// only after this method returns successfully. The caller runs it as a
+    /// separately cancellable phase so ordinary Cancel can stop remaining copy
+    /// work without poisoning mandatory final reconciliation.
+    private func reloadImportInventoryWithAuthoritativeScan(
+        for session: VaultSession
+    ) async throws {
+        guard currentSession === session else { throw CancellationError() }
+        importOwnedScanCounter &+= 1
+        let importScanGeneration = importOwnedScanCounter
+        lastImportOwnedScanGeneration = importScanGeneration
+        importOwnedScanCompletionGeneration = importScanGeneration
+        isScanning = true
+        scanError = nil
+        defer {
+            if currentSession === session || currentSession == nil {
+                isScanning = false
+            }
+        }
+        let cancel = CancelToken()
+        let loaded = try await withTaskCancellationHandler {
+            try Task.checkCancellation()
+            return try await Task.detached(priority: .userInitiated) {
+                _ = try session.scanInitial(cancel: cancel)
+                var all: [FileSummary] = []
+                var cursor: String? = nil
+                repeat {
+                    let page = try session.listFiles(
+                        filter: .openableDocuments,
+                        paging: Paging(cursor: cursor, limit: 1_000))
+                    all.append(contentsOf: page.items)
+                    cursor = page.nextCursor
+                } while cursor != nil
+                return all
+            }.value
+        } onCancel: {
+            cancel.cancel()
+        }
+        try Task.checkCancellation()
+        guard currentSession === session else { throw CancellationError() }
+        files = loaded.sorted {
+            $0.path.localizedCaseInsensitiveCompare($1.path) == .orderedAscending
         }
     }
 
@@ -9761,6 +10182,7 @@ final class AppState: ObservableObject {
     func openTaskRowInEditor(_ row: TaskWithLocation) {
         let target = row.path
         let line = Int(row.task.line)
+        recordExplicitSidebarNavigationIntent()
 
         // If we're already on the file, just scroll.
         if BaseExactIdentity.matches(selectedFilePath, target) {
@@ -10358,6 +10780,13 @@ final class AppState: ObservableObject {
             /// One native batch Trash landing. Only these exact items left the
             /// vault; failed/untrashed report entries never appear here.
             case batchTrash(trashed: [StructuralBatchItem])
+            /// One Finder import landing. Verified external destinations and
+            /// authoritative native standing/touched changes publish together
+            /// after the batch's sole refresh/reconcile decision.
+            case importBatch(
+                materialized: [SidebarImportMaterializedResult],
+                standing: [BatchPathChange],
+                touched: [BatchPathChange])
             /// Report/infrastructure state requires one authoritative root
             /// reconciliation but contains no truthful path transform.
             case batchReconcile
@@ -10374,19 +10803,35 @@ final class AppState: ObservableObject {
         /// Captured keyboard locus for one atomic post-batch focus decision.
         /// Nil leaves the tree's deterministic report-order fallback in charge.
         let preferredFocusPath: String?
+        /// User selection/focus intent captured at atomic admission. Import
+        /// landing may focus only if the tree model still owns this revision.
+        let selectionRevision: UInt64?
+        /// The admitted structural-owner generation, distinct from the
+        /// presentation edge token. Deferred import selection must reject as
+        /// soon as any newer structural operation begins, even before it lands.
+        let structuralMutationToken: Int?
+        /// Generation of the authoritative scan already performed by this
+        /// import, used to acknowledge/suppress the generic scan-finish path.
+        let importOwnedScanGeneration: Int?
 
         init(
             token: Int,
             kind: Kind,
             rewrittenCount: Int,
             requiresRescan: Bool = false,
-            preferredFocusPath: String? = nil
+            preferredFocusPath: String? = nil,
+            selectionRevision: UInt64? = nil,
+            structuralMutationToken: Int? = nil,
+            importOwnedScanGeneration: Int? = nil
         ) {
             self.token = token
             self.kind = kind
             self.rewrittenCount = rewrittenCount
             self.requiresRescan = requiresRescan
             self.preferredFocusPath = preferredFocusPath
+            self.selectionRevision = selectionRevision
+            self.structuralMutationToken = structuralMutationToken
+            self.importOwnedScanGeneration = importOwnedScanGeneration
         }
 
         /// The parent-level paths this mutation dirtied (nil = the vault root
@@ -10421,6 +10866,20 @@ final class AppState: ObservableObject {
                     if seen.insert(parent).inserted { parents.append(parent) }
                 }
                 return parents
+            case let .importBatch(materialized, standing, touched):
+                var seen = Set<String?>()
+                var parents: [String?] = []
+                for result in materialized {
+                    let parent = Self.parentPath(of: result.path)
+                    if seen.insert(parent).inserted { parents.append(parent) }
+                }
+                for change in standing + touched {
+                    for path in [change.oldPath, change.newPath] {
+                        let parent = Self.parentPath(of: path)
+                        if seen.insert(parent).inserted { parents.append(parent) }
+                    }
+                }
+                return parents.isEmpty ? [nil] : parents
             case .batchReconcile:
                 return [nil]
             }
@@ -10794,6 +11253,55 @@ final class AppState: ObservableObject {
     /// second mutation before the first's tree refresh lands).
     @Published private(set) var isMutatingStructure = false
 
+    /// Aggregate Finder import ownership is claimed synchronously before any
+    /// public item-provider load. The reference identity is the lifecycle
+    /// capability used by delayed callbacks and final landing.
+    @Published private(set) var currentImportBatchOwner: SidebarImportBatchOwner?
+    @Published private(set) var canRequestImportBatchCancellation = false
+
+    /// Explicit handshake for the scan performed inside an aggregate import.
+    /// The generic scan-finish observer consumes this generation and skips its
+    /// own root invalidation; the aggregate TreeMutation owns the sole landing.
+    @Published private(set) var importOwnedScanCompletionGeneration: Int?
+    private var importOwnedScanCounter = 0
+    private(set) var lastImportOwnedScanGeneration: Int?
+    private var acknowledgedImportOwnedScanGeneration: Int?
+
+    /// The visible strip observes the owner's immutable-denominator model. It
+    /// exists from atomic admission through final refresh/reconciliation only.
+    var importBatchProgress: SidebarImportProgressModel? {
+        currentImportBatchOwner?.progress
+    }
+
+    /// One live reason shared by the File menu, command palette, and registry
+    /// backstop. Nil means cancellation is currently actionable.
+    var importCancellationDisabledReason: String? {
+        guard !canRequestImportBatchCancellation else { return nil }
+        guard let progress = importBatchProgress else {
+            return SidebarImportProgressStrip.noImportInProgressHint
+        }
+        return SidebarImportProgressStrip.cancellationHint(
+            phase: progress.phase,
+            available: false)
+    }
+
+    func acknowledgeImportOwnedScanCompletion(_ generation: Int) {
+        guard importOwnedScanCompletionGeneration == generation else { return }
+        importOwnedScanCompletionGeneration = nil
+        acknowledgedImportOwnedScanGeneration = generation
+    }
+
+    /// Consume exactly one generic scan-finish suppression regardless of
+    /// whether the scan observer or aggregate mutation observer runs first.
+    func consumeImportOwnedScanCompletion() -> Int? {
+        if let generation = importOwnedScanCompletionGeneration {
+            importOwnedScanCompletionGeneration = nil
+            return generation
+        }
+        defer { acknowledgedImportOwnedScanGeneration = nil }
+        return acknowledgedImportOwnedScanGeneration
+    }
+
     /// Physical verification failed for these Trash roots. Keep the user's
     /// in-memory document state, but deny every path-bound write until a scan
     /// proves the item present or absent. The trie keeps the write check
@@ -11063,30 +11571,43 @@ final class AppState: ObservableObject {
         to paths: [String],
         ignoringStructuralRecoveryReservationToken: Int? = nil
     ) -> Bool {
+        guard let reason = batchTrashWriteFailureReason(
+            to: paths,
+            ignoringStructuralRecoveryReservationToken:
+                ignoringStructuralRecoveryReservationToken)
+        else { return true }
+        postMutationAnnouncement(reason)
+        return false
+    }
+
+    /// Non-presenting counterpart used by aggregate import after provider
+    /// classification. Unsafe native move slots become provider-scoped failures
+    /// while unrelated external copies continue under the same owner.
+    private func batchTrashWriteFailureReason(
+        to paths: [String],
+        ignoringStructuralRecoveryReservationToken: Int? = nil
+    ) -> String? {
         let ownsIgnoredReservation =
             ignoringStructuralRecoveryReservationToken.map {
                 isMutatingStructure && structuralMutationToken == $0
             } ?? false
         for path in paths {
             if missingNoteRecoveryDraft(for: path) != nil {
-                postMutationAnnouncement(Self.missingNoteDraftReason)
-                return false
+                return Self.missingNoteDraftReason
             }
             switch batchTrashPathCapability(for: path) {
             case .writable:
                 break
             case .readOnly(let reason), .invalid(let reason):
-                postMutationAnnouncement(reason)
-                return false
+                return reason
             }
             if !ownsIgnoredReservation,
                 let reason = structuralRecoveryReservationDisabledReason(for: path)
             {
-                postMutationAnnouncement(reason)
-                return false
+                return reason
             }
         }
-        return true
+        return nil
     }
 
     /// Destructive path admission. A file checks its exact path; a directory
@@ -11128,6 +11649,30 @@ final class AppState: ObservableObject {
             else { return nil }
             let name = (path as NSString).lastPathComponent
             return name.isEmpty ? nil : name.lowercased()
+        })
+    }
+
+    /// Reserve the first child identity below an import destination for every
+    /// outcome-unknown Trash descendant. Reserving only direct unknown leaves
+    /// is insufficient: recreating an absent ancestor folder could later let
+    /// Check Again attach stale recovery to new bytes below that ancestor.
+    private func batchTrashUnknownImportReservationNames(
+        in destination: String
+    ) -> Set<String> {
+        guard case .normalized(let normalizedDestination) =
+            Self.normalizeBatchTrashAdmissionPath(destination)
+        else { return [] }
+        let destinationComponents = normalizedDestination.split(separator: "/")
+        return Set(batchTrashUnknownItems.compactMap { item in
+            guard case .normalized(let path) =
+                Self.normalizeBatchTrashAdmissionPath(item.path)
+            else { return nil }
+            let components = path.split(separator: "/")
+            guard components.count > destinationComponents.count,
+                components.prefix(destinationComponents.count)
+                    .elementsEqual(destinationComponents)
+            else { return nil }
+            return String(components[destinationComponents.count]).lowercased()
         })
     }
 
@@ -11218,6 +11763,1171 @@ final class AppState: ObservableObject {
         admitStructuralMutationRequest()
     }
 
+    /// Atomically claim one supported public Finder batch. All validation is
+    /// complete before `beginStructuralMutation`, and the returned owner exists
+    /// before any caller can invoke `SidebarImportProviderIntake.load()`.
+    static var importProviderLimitReason: String {
+        "Choose \(SidebarImportProviderIntake.maximumProviderCount) or fewer files and folders to import at once."
+    }
+
+    @discardableResult
+    func beginImportBatch(
+        providers: [NSItemProvider],
+        destinationFolder: String,
+        selectionRevision: UInt64 = 0
+    ) -> SidebarImportBatchOwner? {
+        let intake = SidebarImportProviderIntake(providers: providers)
+        guard intake.supportedProviderCount > 0 else { return nil }
+        guard intake.supportedProviderCount
+            <= SidebarImportProviderIntake.maximumProviderCount
+        else {
+            sidebarActionBackgroundFailure = Self.importProviderLimitReason
+            postMutationAnnouncement(Self.importProviderLimitReason)
+            return nil
+        }
+        guard
+            let session = currentSession,
+            let vaultURL = currentVaultURL
+        else {
+            return nil
+        }
+
+        let canonicalDestination: String
+        switch Self.normalizeBatchTrashAdmissionPath(destinationFolder) {
+        case .normalized(let path):
+            canonicalDestination = path
+        case .invalid(let reason):
+            postMutationAnnouncement(reason)
+            return nil
+        }
+
+        guard admitStructuralMutationRequest(),
+            admitBatchTrashWrite(to: [canonicalDestination]),
+            let recoveryReservation = admitStructuralRecoveryDestination(
+                canonicalDestination,
+                includesDescendants: true)
+        else { return nil }
+
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let cancellationSignal = SidebarImportEngineSignal()
+        let owner = SidebarImportBatchOwner(
+            mutationToken: token,
+            session: session,
+            vaultURL: vaultURL,
+            destinationFolder: canonicalDestination,
+            selectionRevision: selectionRevision,
+            supportedProviderCount: intake.supportedProviderCount,
+            intake: intake,
+            cancellationSignal: cancellationSignal,
+            cancellationAvailabilityChanged: { [weak self] available in
+                self?.canRequestImportBatchCancellation = available
+            })
+        currentImportBatchOwner = owner
+        canRequestImportBatchCancellation = true
+        return owner
+    }
+
+    /// Cancel a specific batch capability. Before its worker starts there is no
+    /// physical work to drain, so ownership can be released immediately. Once
+    /// a worker exists it remains the sole owner through final reconciliation.
+    func cancelImportBatch(_ owner: SidebarImportBatchOwner) {
+        guard currentImportBatchOwner === owner else { return }
+        owner.requestCancellation()
+        guard owner.workerTask == nil else { return }
+        currentImportBatchOwner = nil
+        canRequestImportBatchCancellation = false
+        endStructuralMutation(owner.mutationToken)
+    }
+
+    /// Finalize only the exact owner that still belongs to this AppState.
+    func finishImportBatch(_ owner: SidebarImportBatchOwner) {
+        guard currentImportBatchOwner === owner else { return }
+        owner.clearWorkerTask()
+        currentImportBatchOwner = nil
+        canRequestImportBatchCancellation = false
+        if sidebarActionBackgroundFailure
+            == Self.importNativeMoveVaultTransitionReason
+        {
+            sidebarActionBackgroundFailure = nil
+        }
+        endStructuralMutation(owner.mutationToken)
+    }
+
+    /// Vault replacement/close must signal provider and Task 3 cancellation
+    /// before changing `currentSession`. Token invalidation remains centralized
+    /// in `cancelStructuralMutationOwnership()` immediately afterward.
+    private func cancelCurrentImportBatchForVaultTransition() {
+        currentImportBatchOwner?.requestOwnershipLossCancellation()
+        currentImportBatchOwner = nil
+        canRequestImportBatchCancellation = false
+        importOwnedScanCompletionGeneration = nil
+        acknowledgedImportOwnedScanGeneration = nil
+    }
+
+    private struct ImportBatchPreparationFailure: Sendable {
+        let providerIndex: Int
+        let item: String
+        let reason: String
+    }
+
+    private struct ImportBatchPreparation: @unchecked Sendable {
+        let roots: [SidebarImportExternalRoot]
+        let failures: [ImportBatchPreparationFailure]
+    }
+
+    private struct ImportMoveSlot: Sendable {
+        let providerIndex: Int
+        let item: TreeSelection
+    }
+
+    private struct ImportReconciledCandidateKey: Hashable {
+        let providerIndex: Int
+        let path: String
+    }
+
+    private func admittedImportMoveSlots(
+        _ moveSlots: [ImportMoveSlot],
+        owner: SidebarImportBatchOwner,
+        failures: inout [ImportBatchFailureDetail]
+    ) -> [ImportMoveSlot] {
+        let vaultWideFailure = batchTrashUnknownItems.isEmpty
+            ? nil
+            : Self.batchTrashQuarantineReason
+        var admitted: [ImportMoveSlot] = []
+        admitted.reserveCapacity(moveSlots.count)
+        for slot in moveSlots {
+            let destination = Self.joinVaultPath(
+                owner.destinationFolder,
+                (slot.item.path as NSString).lastPathComponent)
+            let reason = vaultWideFailure ?? batchTrashWriteFailureReason(
+                to: [slot.item.path, destination],
+                ignoringStructuralRecoveryReservationToken: owner.mutationToken)
+            guard let reason else {
+                admitted.append(slot)
+                continue
+            }
+            owner.markProviderTerminal(slot.providerIndex)
+            failures.append(ImportBatchFailureDetail(
+                providerIndex: slot.providerIndex,
+                treeOrder: 0,
+                item: slot.item.path,
+                reason: reason))
+        }
+        return admitted
+    }
+
+    /// Start exactly one worker after atomic admission and drag settlement.
+    /// The owner itself is the capability: stale/replayed starts are no-ops.
+    @discardableResult
+    func startImportBatch(_ owner: SidebarImportBatchOwner) -> Task<Void, Never> {
+        guard currentImportBatchOwner === owner, owner.workerTask == nil,
+            ownsStructuralMutation(owner.mutationToken, session: owner.session)
+        else { return Task {} }
+
+        let task = Task { @MainActor [weak self, weak owner] in
+            guard let self, let owner else { return }
+            await self.performImportBatch(owner)
+        }
+        owner.installWorkerTask(task)
+        pendingStructuralTaskForTesting = task
+        return task
+    }
+
+    /// Shared visible-button / Escape / Command-period cancellation seam.
+    /// Signalling is idempotent and nonblocking; the worker retains structural
+    /// ownership until its final reconciliation, while a missing owner is a no-op.
+    @discardableResult
+    func requestImportBatchCancellation() -> Bool {
+        guard let owner = currentImportBatchOwner else { return false }
+        return owner.requestCancellation()
+    }
+
+    private func ownsImportBatch(_ owner: SidebarImportBatchOwner) -> Bool {
+        currentImportBatchOwner === owner
+            && ownsStructuralMutation(owner.mutationToken, session: owner.session)
+    }
+
+    private func runImportRefreshPhase(
+        _ runner: @escaping ImportRefreshRunner,
+        owner: SidebarImportBatchOwner
+    ) async -> Result<Void, Error> {
+        let task = Task { @MainActor in
+            try await runner(self, owner.session)
+        }
+        owner.installActivePhaseCancellation(
+            phase: .finishing,
+            cancellableByUser: false
+        ) {
+            task.cancel()
+        }
+        let result = await task.result
+        guard ownsImportBatch(owner) else { return result }
+        owner.clearActivePhaseCancellation()
+        return result
+    }
+
+    private func performImportBatch(_ owner: SidebarImportBatchOwner) async {
+        let slots = await owner.intake.load(
+            onTerminalFailure: { [weak self, weak owner] slot in
+                Task { @MainActor [weak self, weak owner] in
+                    guard let self, let owner,
+                        self.ownsImportBatch(owner)
+                    else { return }
+                    owner.markProviderTerminal(slot.providerIndex)
+                }
+            })
+        guard ownsImportBatch(owner) else { return }
+
+        var externalSlots: [(providerIndex: Int, url: URL)] = []
+        var moveSlots: [ImportMoveSlot] = []
+        var failures: [ImportBatchFailureDetail] = []
+
+        for slot in slots {
+            switch slot.outcome {
+            case .failure(let failure):
+                owner.markProviderTerminal(slot.providerIndex)
+                failures.append(ImportBatchFailureDetail(
+                    providerIndex: slot.providerIndex,
+                    treeOrder: 0,
+                    item: "Provider \(slot.providerIndex + 1)",
+                    reason: Self.importProviderFailureMessage(failure)))
+            case .url(let url):
+                let isDirectory = Self.urlIsDirectory(url)
+                switch Self.fileURLDropAction(
+                    url: url,
+                    vaultURL: owner.vaultURL,
+                    destinationFolder: owner.destinationFolder,
+                    isDirectory: isDirectory)
+                {
+                case .importFile(let externalURL, _):
+                    externalSlots.append((slot.providerIndex, externalURL))
+                case .move(let path, let isDirectory, _):
+                    moveSlots.append(ImportMoveSlot(
+                        providerIndex: slot.providerIndex,
+                        item: TreeSelection(path: path, isDirectory: isDirectory)))
+                case .none(let reason):
+                    owner.markProviderTerminal(slot.providerIndex)
+                    failures.append(ImportBatchFailureDetail(
+                        providerIndex: slot.providerIndex,
+                        treeOrder: 0,
+                        item: url.lastPathComponent,
+                        reason: reason))
+                }
+            }
+        }
+
+        // Provider kind is known only after intake. Preserve standalone Move's
+        // quarantine contract here while allowing unrelated external copies to
+        // continue under the aggregate owner.
+        moveSlots = admittedImportMoveSlots(
+            moveSlots,
+            owner: owner,
+            failures: &failures)
+
+        if owner.isCancellationRequested || Task.isCancelled {
+            for slot in externalSlots {
+                Self.appendImportCancellationFailure(
+                    providerIndex: slot.providerIndex,
+                    item: slot.url.lastPathComponent,
+                    to: &failures)
+            }
+            for slot in moveSlots {
+                Self.appendImportCancellationFailure(
+                    providerIndex: slot.providerIndex,
+                    item: slot.item.path,
+                    to: &failures)
+            }
+            owner.markProvidersTerminal(slots.map(\.providerIndex))
+            presentImportBatchOutcome(
+                owner: owner,
+                report: SidebarImportReport(failures: [], wasCancelled: true),
+                moveCount: 0,
+                failures: failures,
+                wasCancelled: true)
+            return
+        }
+
+        let signal = owner.cancellationSignal
+        let vaultURL = owner.vaultURL
+        let limits = SidebarImportSourceLimits(
+            sessionRefuseBytes: owner.session.largeFileRefuseBytes())
+        let preparationSlots = externalSlots
+        let sourceWalkerHooks = importSourceWalkerHooks
+        let aggregateEntryBudget = SidebarImportSourceEntryBudget(
+            limit: SidebarImportSourceLimits.productionMaximumEntries)
+        let preparationFailureDidBecomeTerminal: @Sendable (Int) -> Void = {
+            [weak self, weak owner] providerIndex in
+            Task { @MainActor [weak self, weak owner] in
+                guard let self, let owner,
+                    self.ownsImportBatch(owner)
+                else { return }
+                owner.markProviderTerminal(providerIndex)
+            }
+        }
+        let preparation = await Task.detached(priority: .userInitiated) {
+            var roots: [SidebarImportExternalRoot] = []
+            var failures: [ImportBatchPreparationFailure] = []
+            let walker = SidebarImportSourceWalker(
+                limits: limits,
+                scopeAccess: SidebarImportSecurityScopeAccess(
+                    start: { $0.startAccessingSecurityScopedResource() },
+                    stop: { $0.stopAccessingSecurityScopedResource() }),
+                hooks: sourceWalkerHooks,
+                cancellation: signal,
+                aggregateEntryBudget: aggregateEntryBudget)
+            for slot in preparationSlots {
+                guard !signal.isCancelled else {
+                    failures.append(ImportBatchPreparationFailure(
+                        providerIndex: slot.providerIndex,
+                        item: slot.url.lastPathComponent,
+                        reason: "Cancelled"))
+                    preparationFailureDidBecomeTerminal(slot.providerIndex)
+                    continue
+                }
+                do {
+                    roots.append(SidebarImportExternalRoot(
+                        providerIndex: slot.providerIndex,
+                        preparedSource: try walker.prepare(
+                            rootURL: slot.url,
+                            vaultURL: vaultURL)))
+                } catch {
+                    failures.append(ImportBatchPreparationFailure(
+                        providerIndex: slot.providerIndex,
+                        item: slot.url.lastPathComponent,
+                        reason: Self.importPreparationFailureMessage(error)))
+                    preparationFailureDidBecomeTerminal(slot.providerIndex)
+                }
+            }
+            return ImportBatchPreparation(roots: roots, failures: failures)
+        }.value
+        guard ownsImportBatch(owner) else {
+            preparation.roots.forEach { $0.preparedSource.close() }
+            return
+        }
+
+        failures.append(contentsOf: preparation.failures.map {
+            ImportBatchFailureDetail(
+                providerIndex: $0.providerIndex,
+                treeOrder: 0,
+                item: $0.item,
+                reason: $0.reason)
+        })
+        owner.markProvidersTerminal(preparation.failures.map(\.providerIndex))
+
+        if owner.isCancellationRequested || Task.isCancelled || signal.isCancelled {
+            for root in preparation.roots {
+                Self.appendImportCancellationFailure(
+                    providerIndex: root.providerIndex,
+                    item: root.preparedSource.sourceRootName,
+                    to: &failures)
+            }
+            for slot in moveSlots {
+                Self.appendImportCancellationFailure(
+                    providerIndex: slot.providerIndex,
+                    item: slot.item.path,
+                    to: &failures)
+            }
+            preparation.roots.forEach { $0.preparedSource.close() }
+            owner.markProvidersTerminal(slots.map(\.providerIndex))
+            presentImportBatchOutcome(
+                owner: owner,
+                report: SidebarImportReport(failures: [], wasCancelled: true),
+                moveCount: 0,
+                failures: failures,
+                wasCancelled: true)
+            return
+        }
+
+        let copyReport: SidebarImportReport
+        if preparation.roots.isEmpty {
+            copyReport = SidebarImportReport(
+                failures: [], wasCancelled: signal.isCancelled)
+        } else {
+            let scheduler = SidebarImportByteScheduler(cancellation: signal)
+            let progressProviderIndices = preparation.roots.map(\.providerIndex)
+            let coordinator = SidebarImportCoordinator(
+                signal: signal,
+                scheduler: scheduler,
+                creators: importDestinationCreators(owner.session),
+                hooks: SidebarImportCoordinatorHooks(
+                    didUpdateProgress: { [weak self, weak owner] snapshot in
+                        let completedIndex = snapshot.completedTopLevel - 1
+                        guard progressProviderIndices.indices.contains(completedIndex) else {
+                            return
+                        }
+                        let providerIndex = progressProviderIndices[completedIndex]
+                        Task { @MainActor [weak self, weak owner] in
+                            guard let self, let owner,
+                                self.ownsImportBatch(owner)
+                            else { return }
+                            owner.markProviderTerminal(providerIndex)
+                        }
+                    }))
+            let reservedImportBasenames = moveSlots.map {
+                ($0.item.path as NSString).lastPathComponent
+            } + batchTrashUnknownImportReservationNames(
+                in: owner.destinationFolder).sorted()
+            let copyTask = Task {
+                try await coordinator.copy(
+                    roots: preparation.roots,
+                    into: owner.destinationFolder,
+                    reservingMoveBasenames: reservedImportBasenames)
+            }
+            owner.installActivePhaseCancellation {
+                copyTask.cancel()
+            }
+            do {
+                copyReport = try await copyTask.value
+            } catch {
+                copyReport = SidebarImportReport(
+                    failures: [],
+                    wasCancelled: signal.isCancelled)
+                failures.append(ImportBatchFailureDetail(
+                    providerIndex: preparation.roots.first?.providerIndex ?? 0,
+                    treeOrder: 0,
+                    item: preparation.roots.first?.preparedSource.sourceRootName
+                        ?? "Import",
+                    reason: error.localizedDescription))
+            }
+            guard ownsImportBatch(owner) else { return }
+            owner.clearActivePhaseCancellation()
+        }
+        guard ownsImportBatch(owner) else { return }
+
+        owner.markProvidersTerminal(externalSlots.map(\.providerIndex))
+        failures.append(contentsOf: Self.importCoordinatorFailureDetails(copyReport))
+
+        let hasVerifiedExternalEffect =
+            copyReport.successfulFileCount > 0
+            || copyReport.successfulFolderCount > 0
+        var requiresScan = copyReport.requiresRescan
+        if hasVerifiedExternalEffect || requiresScan {
+            clearStructuralUndoStacks()
+        }
+
+        var nativeReduction: ForwardBatchMoveReduction?
+        let cancelledBeforeNative = copyReport.wasCancelled
+            || owner.isCancellationRequested
+            || Task.isCancelled
+            || signal.isCancelled
+        if !cancelledBeforeNative {
+            // Revalidate after the last external-copy suspension. Trash
+            // reconciliation can tighten the vault capability while copying;
+            // no await occurs between this live gate and native execution.
+            moveSlots = admittedImportMoveSlots(
+                moveSlots,
+                owner: owner,
+                failures: &failures)
+        }
+        if !cancelledBeforeNative, !moveSlots.isEmpty {
+            let request = BatchMoveRequest(
+                items: moveSlots.map {
+                    StructuralBatchItem(
+                        path: $0.item.path,
+                        isDirectory: $0.item.isDirectory)
+                },
+                newParent: owner.destinationFolder)
+            let runner = batchMoveRunner
+            let nativeTask = Task { @MainActor [weak self] in
+                guard let self else {
+                    return Optional<Result<ForwardBatchMoveReduction, Error>>.none
+                }
+                return await self.executeForwardBatchMove(
+                    session: owner.session,
+                    request: request,
+                    mutationToken: owner.mutationToken,
+                    runner: runner)
+            }
+            owner.installActivePhaseCancellation(
+                phase: .moving,
+                cancellableByUser: false
+            ) {
+                nativeTask.cancel()
+            }
+            let nativeOutcome = await nativeTask.value
+            guard ownsImportBatch(owner) else { return }
+            if sidebarActionBackgroundFailure
+                == Self.importNativeMoveVaultTransitionReason
+            {
+                sidebarActionBackgroundFailure = nil
+            }
+            owner.clearActivePhaseCancellation()
+            guard let outcome = nativeOutcome else { return }
+            owner.markProvidersTerminal(moveSlots.map(\.providerIndex))
+
+            switch outcome {
+            case .success(let reduction):
+                nativeReduction = reduction
+                failures.append(contentsOf: Self.importNativeFailureDetails(
+                    reduction, moveSlots: moveSlots))
+                requiresScan = requiresScan || reduction.requiresRescan
+            case .failure(let error):
+                requiresScan = true
+                for slot in moveSlots {
+                    failures.append(ImportBatchFailureDetail(
+                        providerIndex: slot.providerIndex,
+                        treeOrder: Int.max,
+                        item: slot.item.path,
+                        reason: error.localizedDescription))
+                }
+            }
+        } else if cancelledBeforeNative {
+            for slot in moveSlots {
+                Self.appendImportCancellationFailure(
+                    providerIndex: slot.providerIndex,
+                    item: slot.item.path,
+                    to: &failures)
+            }
+            owner.markProvidersTerminal(moveSlots.map(\.providerIndex))
+        }
+
+        let nativeReport = nativeReduction?.report
+        let standing = nativeReduction?.standing ?? []
+        let touched = nativeReduction?.touched ?? []
+        var materialized = Self.importKnownMaterializedResults(
+            copyReport: copyReport,
+            moveSlots: moveSlots,
+            standing: standing)
+        let hasNativePhysicalWork = !standing.isEmpty || !touched.isEmpty
+        let needsRefresh = hasVerifiedExternalEffect
+            || hasNativePhysicalWork
+            || requiresScan
+        var authoritativeScanSucceeded = false
+        var importOwnedScanGeneration: Int?
+
+        if needsRefresh {
+            if requiresScan {
+                let previousScanGeneration = lastImportOwnedScanGeneration
+                let scanResult = await runImportRefreshPhase(
+                    importScanRefreshRunner, owner: owner)
+                guard ownsImportBatch(owner) else { return }
+                if lastImportOwnedScanGeneration != previousScanGeneration {
+                    importOwnedScanGeneration = lastImportOwnedScanGeneration
+                }
+                switch scanResult {
+                case .success:
+                    authoritativeScanSucceeded = true
+                case .failure(let error):
+                    failures.append(ImportBatchFailureDetail(
+                        batchStage: "Vault refresh",
+                        treeOrder: 0,
+                        item: "Vault refresh",
+                        reason: error.localizedDescription))
+                }
+            } else {
+                let listResult = await runImportRefreshPhase(
+                    importInventoryRefreshRunner, owner: owner)
+                guard ownsImportBatch(owner) else { return }
+                if case .failure(let error) = listResult {
+                    requiresScan = true
+                    failures.append(ImportBatchFailureDetail(
+                        batchStage: "Vault refresh",
+                        treeOrder: 0,
+                        item: "Vault refresh",
+                        reason: error.localizedDescription))
+                    let previousScanGeneration = lastImportOwnedScanGeneration
+                    let scanResult = await runImportRefreshPhase(
+                        importScanRefreshRunner, owner: owner)
+                    guard ownsImportBatch(owner) else { return }
+                    if lastImportOwnedScanGeneration != previousScanGeneration {
+                        importOwnedScanGeneration = lastImportOwnedScanGeneration
+                    }
+                    switch scanResult {
+                    case .success:
+                        authoritativeScanSucceeded = true
+                    case .failure(let scanError):
+                        failures.append(ImportBatchFailureDetail(
+                            batchStage: "Vault rescan",
+                            treeOrder: 0,
+                            item: "Vault rescan",
+                            reason: scanError.localizedDescription))
+                    }
+                }
+            }
+        }
+
+        var reconciledUnknownKeys = Set<ImportReconciledCandidateKey>()
+        if requiresScan, authoritativeScanSucceeded {
+            let unknown = copyReport.unknownCandidates.compactMap { candidate
+                -> SidebarImportMaterializedResult? in
+                let isDirectory: Bool
+                switch candidate.identity.kind {
+                case .directory: isDirectory = true
+                case .regularFile: isDirectory = false
+                case .rejected: return nil
+                }
+                return SidebarImportMaterializedResult(
+                    providerIndex: candidate.identity.providerIndex,
+                    path: candidate.candidatePath,
+                    isDirectory: isDirectory)
+            }
+            var unknownByParent: [String: [SidebarImportMaterializedResult]] = [:]
+            var parentOrder: [String] = []
+            for candidate in unknown {
+                let parent = TreeMutation.parentPath(of: candidate.path) ?? ""
+                if unknownByParent[parent] == nil { parentOrder.append(parent) }
+                unknownByParent[parent, default: []].append(candidate)
+            }
+            for (order, parent) in parentOrder.enumerated() {
+                do {
+                    let resolved = try await Self.resolveImportMaterialization(
+                        unknownByParent[parent] ?? [],
+                        session: owner.session)
+                    materialized.append(contentsOf: resolved)
+                    reconciledUnknownKeys.formUnion(resolved.map {
+                        ImportReconciledCandidateKey(
+                            providerIndex: $0.providerIndex,
+                            path: $0.path)
+                    })
+                } catch {
+                    failures.append(ImportBatchFailureDetail(
+                        batchStage: "Result reconciliation",
+                        treeOrder: order,
+                        item: parent.isEmpty ? "Vault root" : parent,
+                        reason: error.localizedDescription))
+                }
+            }
+            guard ownsImportBatch(owner) else { return }
+        }
+        if !reconciledUnknownKeys.isEmpty {
+            failures = failures.map { detail in
+                guard case .provider(let providerIndex) = detail.scope,
+                    detail.kind == .terminalFailure,
+                    let candidatePath = detail.reconciliationCandidatePath,
+                    reconciledUnknownKeys.contains(ImportReconciledCandidateKey(
+                        providerIndex: providerIndex,
+                        path: candidatePath))
+                else { return detail }
+                return ImportBatchFailureDetail(
+                    providerIndex: providerIndex,
+                    treeOrder: detail.treeOrder,
+                    item: detail.item,
+                    reason: "The destination was found during reconciliation after the copy outcome was initially uncertain.",
+                    kind: .warning,
+                    reconciliationCandidatePath: candidatePath)
+            }
+        }
+        materialized = Self.providerOrderedImportResults(materialized)
+
+        if !materialized.isEmpty || !standing.isEmpty || !touched.isEmpty || requiresScan {
+            publishTreeMutation(
+                .importBatch(
+                    materialized: materialized,
+                    standing: standing,
+                    touched: touched),
+                rewrittenCount: nativeReport.map {
+                    Set($0.rewritten.map(\.path)).count
+                } ?? 0,
+                requiresRescan: requiresScan,
+                preferredFocusPath: materialized.first?.path,
+                selectionRevision: owner.selectionRevision,
+                structuralMutationToken: owner.mutationToken,
+                importOwnedScanGeneration: importOwnedScanGeneration)
+        }
+
+        owner.markProvidersTerminal(slots.map(\.providerIndex))
+        presentImportBatchOutcome(
+            owner: owner,
+            report: copyReport,
+            moveCount: standing.count,
+            failures: failures,
+            reconciledCandidateCount: reconciledUnknownKeys.count,
+            wasCancelled: cancelledBeforeNative
+                || owner.isCancellationRequested
+                || Task.isCancelled
+                || signal.isCancelled)
+    }
+
+    private static func appendImportCancellationFailure(
+        providerIndex: Int,
+        item: String,
+        to failures: inout [ImportBatchFailureDetail]
+    ) {
+        let alreadyTerminal = failures.contains { detail in
+            guard case .provider(let existingIndex) = detail.scope else { return false }
+            return existingIndex == providerIndex
+                && detail.kind == .terminalFailure
+        }
+        guard !alreadyTerminal else { return }
+        failures.append(ImportBatchFailureDetail(
+            providerIndex: providerIndex,
+            treeOrder: Int.max,
+            item: item,
+            reason: "Cancelled"))
+    }
+
+    private func presentImportBatchOutcome(
+        owner: SidebarImportBatchOwner,
+        report: SidebarImportReport,
+        moveCount: Int,
+        failures: [ImportBatchFailureDetail],
+        reconciledCandidateCount: Int = 0,
+        wasCancelled: Bool
+    ) {
+        guard ownsImportBatch(owner) else { return }
+        let failureReport = ImportBatchFailureReport(failures)
+        if failureReport.totalDetailCount > 0 {
+            let result = BatchStructuralResult(
+                payload: .importBatch(failureReport),
+                requiresAttention: true)
+            setBatchStructuralResult(result)
+            lastError = BatchStructuralCopy.attention(for: result).message
+        }
+        postMutationAnnouncement(Self.importBatchAnnouncement(
+            report: report,
+            moveCount: moveCount,
+            destination: owner.destinationFolder,
+            failureCount: failureReport.terminalFailureCount,
+            warningCount: failureReport.warningCount,
+            reconciledCandidateCount: reconciledCandidateCount,
+            wasCancelled: wasCancelled))
+        finishImportBatch(owner)
+    }
+
+    private static func importProviderFailureMessage(
+        _ failure: SidebarImportProviderFailure
+    ) -> String {
+        switch failure {
+        case .loadFailed(let message): return message
+        case .missingData: return "The provider returned no file URL."
+        case .invalidFileURL: return "The provider returned an invalid file URL."
+        case .cancelled: return "Cancelled"
+        }
+    }
+
+    private nonisolated static func importPreparationFailureMessage(
+        _ error: Error
+    ) -> String {
+        guard let error = error as? SidebarImportSourceWalkerError else {
+            return error.localizedDescription
+        }
+        switch error {
+        case .invalidLimits:
+            return "The configured import limits are invalid."
+        case .securityScopeDenied:
+            return "Slate does not have permission to read this item."
+        case .rejectedRoot(_, let reason):
+            return importSourceFailureMessage(reason)
+        case .sourceContainsVault:
+            return "A folder containing the open vault cannot be imported."
+        case .openFailed(_, let reason), .inspectFailed(_, let reason),
+            .readFailed(_, let reason):
+            return reason
+        case .unsupportedEntry:
+            return "This item type is not supported."
+        case .tooManyEntries(let limit):
+            return "The folder contains more than \(limit) items."
+        case .aggregateEntryLimitExceeded(let limit):
+            return "The import batch contains more than \(limit.formatted()) items."
+        case .tooDeep(_, let limit):
+            return "The folder is deeper than the \(limit)-level import limit."
+        case .fileTooLarge(_, let limitBytes):
+            return "The file exceeds the \(limitBytes)-byte import limit."
+        case .preparedSourceClosed:
+            return "The item was no longer available to read."
+        case .notARegularFile:
+            return "The item changed before Slate could read it."
+        case .cancelled:
+            return "Cancelled"
+        }
+    }
+
+    private nonisolated static func importSourceFailureMessage(
+        _ reason: SidebarImportSourceFailureReason
+    ) -> String {
+        switch reason {
+        case .hidden: return "Hidden items are not imported."
+        case .symbolicLink: return "Symbolic links and aliases are not imported."
+        case .fifo, .socket, .characterDevice, .blockDevice, .unsupported:
+            return "This item type is not supported."
+        case .unreadable: return "Slate does not have permission to read this item."
+        case .entryKindChanged: return "The item changed while Slate was reading it."
+        case .notDirectory: return "A folder path changed while Slate was reading it."
+        case .invalidPath, .invalidFileName: return "The item has an invalid path or name."
+        case .tooDeep: return "The item is deeper than the import limit."
+        case .fileTooLarge(let limitBytes):
+            return "The file exceeds the \(limitBytes)-byte import limit."
+        }
+    }
+
+    private static func importCoordinatorFailureDetails(
+        _ report: SidebarImportReport
+    ) -> [ImportBatchFailureDetail] {
+        report.failures.enumerated().map { order, failure in
+            let relative = failure.identity.relativePath
+            let item = relative.isEmpty
+                ? failure.identity.sourceRootName
+                : failure.identity.sourceRootName + "/" + relative
+            let kindKey: String
+            switch failure.identity.kind {
+            case .directory: kindKey = "directory"
+            case .regularFile: kindKey = "file"
+            case .rejected: kindKey = "rejected"
+            }
+            let terminalItemKey = BaseExactIdentity.registryKey(
+                prefix: "import-failed-entry",
+                value: [
+                    String(failure.identity.providerIndex),
+                    failure.identity.sourceRootName,
+                    failure.identity.relativePath,
+                    kindKey,
+                ].joined(separator: "\u{0}"))
+            let reason: String
+            let reconciliationCandidatePath: String?
+            switch failure.reason {
+            case .source(let source):
+                reason = importSourceFailureMessage(source)
+                reconciliationCandidatePath = nil
+            case .readFailed(let message):
+                reason = "Slate could not read the item: \(message)"
+                reconciliationCandidatePath = nil
+            case .capacityExceeded:
+                reason = "The import byte limit was reached."
+                reconciliationCandidatePath = nil
+            case .physicalOutcomeUnknown(let candidatePath, let underlying):
+                reason = "Slate could not verify whether the item was copied: \(underlying)"
+                reconciliationCandidatePath = candidatePath
+            case .blockedByUnknownAncestor:
+                reason = "Slate could not verify its destination folder."
+                reconciliationCandidatePath = nil
+            case .cancelled:
+                reason = "Cancelled"
+                reconciliationCandidatePath = nil
+            }
+            return ImportBatchFailureDetail(
+                providerIndex: failure.identity.providerIndex,
+                treeOrder: order + 1,
+                item: item,
+                reason: reason,
+                terminalItemKey: terminalItemKey,
+                reconciliationCandidatePath: reconciliationCandidatePath)
+        }
+    }
+
+    private static func importNativeFailureDetails(
+        _ reduction: ForwardBatchMoveReduction,
+        moveSlots: [ImportMoveSlot]
+    ) -> [ImportBatchFailureDetail] {
+        let report = reduction.report
+        var providerQueues: [String: [Int]] = [:]
+        for slot in moveSlots {
+            providerQueues[slot.item.path, default: []].append(slot.providerIndex)
+        }
+        var providerQueueOffsets: [String: Int] = [:]
+        func consumeProviderIndex(for path: String) -> Int? {
+            let offset = providerQueueOffsets[path, default: 0]
+            guard let queue = providerQueues[path], queue.indices.contains(offset) else {
+                return nil
+            }
+            providerQueueOffsets[path] = offset + 1
+            return queue[offset]
+        }
+        var plannedProvidersByPath: [String: [Int]] = [:]
+        for item in report.envelope.planned {
+            if let providerIndex = consumeProviderIndex(for: item.path) {
+                plannedProvidersByPath[item.path, default: []].append(providerIndex)
+            }
+        }
+        var fallbackPlannedProviderByPath: [String: Int] = [:]
+        func plannedProviderIndex(for path: String) -> Int? {
+            if let providerIndex = plannedProvidersByPath[path]?.first {
+                return providerIndex
+            }
+            if let providerIndex = fallbackPlannedProviderByPath[path] {
+                return providerIndex
+            }
+            guard let providerIndex = consumeProviderIndex(for: path) else {
+                return nil
+            }
+            fallbackPlannedProviderByPath[path] = providerIndex
+            return providerIndex
+        }
+        var standingProviderByPath: [String: Int] = [:]
+        var standingProviderIndices = Set<Int>()
+        for change in report.standing {
+            guard let providerIndex = plannedProviderIndex(for: change.oldPath) else {
+                continue
+            }
+            standingProviderIndices.insert(providerIndex)
+            standingProviderByPath[change.oldPath] = providerIndex
+            standingProviderByPath[change.newPath] = providerIndex
+        }
+        func kindForProvider(
+            _ providerIndex: Int,
+            proposed: ImportBatchFailureDetail.Kind
+        ) -> ImportBatchFailureDetail.Kind {
+            proposed == .terminalFailure
+                && standingProviderIndices.contains(providerIndex)
+                ? .warning
+                : proposed
+        }
+        var result: [ImportBatchFailureDetail] = []
+        var order = 0
+        func appendProvider(
+            providerIndex: Int,
+            path: String?,
+            reason: String,
+            kind: ImportBatchFailureDetail.Kind = .terminalFailure
+        ) {
+            order += 1
+            result.append(ImportBatchFailureDetail(
+                providerIndex: providerIndex,
+                treeOrder: order,
+                item: path ?? "Move",
+                reason: reason,
+                kind: kind))
+        }
+        for diagnostic in reduction.diagnostics {
+            order += 1
+            let item = diagnostic.path ?? "Move"
+            switch diagnostic.correlation {
+            case .batch:
+                result.append(ImportBatchFailureDetail(
+                    batchStage: "Move reconciliation",
+                    treeOrder: order,
+                    item: item,
+                    reason: diagnostic.reason,
+                    kind: diagnostic.kind))
+            case .standingPath:
+                if let path = diagnostic.path,
+                    let providerIndex = standingProviderByPath[path]
+                {
+                    result.append(ImportBatchFailureDetail(
+                        providerIndex: providerIndex,
+                        treeOrder: order,
+                        item: item,
+                        reason: diagnostic.reason,
+                        kind: kindForProvider(
+                            providerIndex, proposed: diagnostic.kind)))
+                } else {
+                    result.append(ImportBatchFailureDetail(
+                        batchStage: "Move reconciliation",
+                        treeOrder: order,
+                        item: item,
+                        reason: diagnostic.reason,
+                        kind: diagnostic.kind))
+                }
+            case .plannedRequestPath:
+                if let path = diagnostic.path,
+                    let providerIndex = plannedProviderIndex(for: path)
+                {
+                    result.append(ImportBatchFailureDetail(
+                        providerIndex: providerIndex,
+                        treeOrder: order,
+                        item: item,
+                        reason: diagnostic.reason,
+                        kind: kindForProvider(
+                            providerIndex, proposed: diagnostic.kind)))
+                } else {
+                    result.append(ImportBatchFailureDetail(
+                        batchStage: "Move",
+                        treeOrder: order,
+                        item: item,
+                        reason: diagnostic.reason,
+                        kind: diagnostic.kind))
+                }
+            case .skippedRequestPath:
+                if let path = diagnostic.path,
+                    let providerIndex = consumeProviderIndex(for: path)
+                {
+                    result.append(ImportBatchFailureDetail(
+                        providerIndex: providerIndex,
+                        treeOrder: order,
+                        item: item,
+                        reason: diagnostic.reason,
+                        kind: diagnostic.kind))
+                } else {
+                    result.append(ImportBatchFailureDetail(
+                        batchStage: "Move",
+                        treeOrder: order,
+                        item: item,
+                        reason: diagnostic.reason,
+                        kind: diagnostic.kind))
+                }
+            }
+        }
+        var terminalProviderIndices = Set(result.compactMap { detail -> Int? in
+            guard detail.kind == .terminalFailure,
+                case .provider(let providerIndex) = detail.scope
+            else { return nil }
+            return providerIndex
+        })
+        func appendMissingTerminalProvider(
+            _ slot: ImportMoveSlot,
+            reason: String
+        ) {
+            guard !standingProviderIndices.contains(slot.providerIndex),
+                terminalProviderIndices.insert(slot.providerIndex).inserted
+            else { return }
+            appendProvider(
+                providerIndex: slot.providerIndex,
+                path: slot.item.path,
+                reason: reason)
+        }
+        switch report.state {
+        case .rejected:
+            for slot in moveSlots {
+                appendMissingTerminalProvider(slot, reason: "Move could not start.")
+            }
+        case .rolledBack:
+            for slot in moveSlots {
+                appendMissingTerminalProvider(
+                    slot,
+                    reason: "Move stopped and the item was restored.")
+            }
+        case .rollbackIncomplete:
+            for slot in moveSlots {
+                appendMissingTerminalProvider(
+                    slot,
+                    reason: "Move restoration needs attention.")
+            }
+        case .noOp, .succeeded:
+            break
+        }
+        return result
+    }
+
+    private static func importStandingChanges(_ report: BatchMoveReport) -> [BatchPathChange] {
+        switch report.state {
+        case .succeeded, .rollbackIncomplete: return report.standing
+        case .rejected, .noOp, .rolledBack: return []
+        }
+    }
+
+    private static func importTouchedChanges(_ report: BatchMoveReport) -> [BatchPathChange] {
+        switch report.state {
+        case .rolledBack, .rollbackIncomplete: return report.rolledBack
+        case .rejected, .noOp, .succeeded: return []
+        }
+    }
+
+    private static func importKnownMaterializedResults(
+        copyReport: SidebarImportReport,
+        moveSlots: [ImportMoveSlot],
+        standing: [BatchPathChange]
+    ) -> [SidebarImportMaterializedResult] {
+        var result = copyReport.verifiedTopLevelDestinations.map {
+            SidebarImportMaterializedResult(
+                providerIndex: $0.providerIndex,
+                path: $0.path,
+                isDirectory: $0.kind == .directory)
+        }
+        for slot in moveSlots {
+            guard let change = standing.first(where: {
+                $0.oldPath == slot.item.path
+            }) else { continue }
+            result.append(SidebarImportMaterializedResult(
+                providerIndex: slot.providerIndex,
+                path: change.newPath,
+                isDirectory: change.isDirectory))
+        }
+        return providerOrderedImportResults(result)
+    }
+
+    private nonisolated static func providerOrderedImportResults(
+        _ results: [SidebarImportMaterializedResult]
+    ) -> [SidebarImportMaterializedResult] {
+        let ordered = results.enumerated().sorted {
+            if $0.element.providerIndex != $1.element.providerIndex {
+                return $0.element.providerIndex < $1.element.providerIndex
+            }
+            return $0.offset < $1.offset
+        }
+        var seenProviders = Set<Int>()
+        var seenPaths = Set<String>()
+        return ordered.compactMap { _, result in
+            guard seenProviders.insert(result.providerIndex).inserted,
+                seenPaths.insert(result.path).inserted
+            else { return nil }
+            return result
+        }
+    }
+
+    /// After an uncertainty scan, verify every candidate through the session's
+    /// directory listing. This observes both `dirs` and `files`, so an empty
+    /// folder can materialize even though openable-file inventory cannot prove
+    /// its existence.
+    nonisolated static func resolveImportMaterialization(
+        _ candidates: [SidebarImportMaterializedResult],
+        session: VaultSession
+    ) async throws -> [SidebarImportMaterializedResult] {
+        try await Task.detached(priority: .userInitiated) {
+            let grouped = Dictionary(grouping: candidates) {
+                guard let slash = $0.path.lastIndex(of: "/") else { return "" }
+                return String($0.path[$0.path.startIndex..<slash])
+            }
+            var materialized: [SidebarImportMaterializedResult] = []
+            for (parent, values) in grouped {
+                var directoryPaths = Set<String>()
+                var filePaths = Set<String>()
+                var cursor: String? = nil
+                repeat {
+                    let listing = try session.listDirChildren(
+                        parentPath: parent,
+                        paging: Paging(cursor: cursor, limit: 1_000))
+                    directoryPaths.formUnion(listing.dirs.map(\.path))
+                    filePaths.formUnion(listing.files.items.map(\.path))
+                    cursor = listing.files.nextCursor
+                } while cursor != nil
+                materialized.append(contentsOf: values.filter {
+                    $0.isDirectory
+                        ? directoryPaths.contains($0.path)
+                        : filePaths.contains($0.path)
+                })
+            }
+            return providerOrderedImportResults(materialized)
+        }.value
+    }
+
+    private static func importBatchAnnouncement(
+        report: SidebarImportReport,
+        moveCount: Int,
+        destination: String,
+        failureCount: Int,
+        warningCount: Int,
+        reconciledCandidateCount: Int = 0,
+        wasCancelled: Bool = false
+    ) -> String {
+        let location = destination.isEmpty
+            ? "the vault root"
+            : (destination as NSString).lastPathComponent
+        let files = report.successfulFileCount
+        let folders = report.successfulFolderCount
+        var copiedParts: [String] = []
+        if files > 0 { copiedParts.append("\(files) \(files == 1 ? "file" : "files")") }
+        if folders > 0 {
+            copiedParts.append("\(folders) \(folders == 1 ? "folder" : "folders")")
+        }
+        var clauses: [String] = []
+        if !copiedParts.isEmpty {
+            clauses.append("Copied \(copiedParts.joined(separator: " and "))")
+        }
+        if moveCount > 0 {
+            let verb = clauses.isEmpty ? "Moved" : "moved"
+            clauses.append("\(verb) \(moveCount) \(moveCount == 1 ? "item" : "items")")
+        }
+        if reconciledCandidateCount > 0 {
+            let verb = clauses.isEmpty ? "Found" : "found"
+            clauses.append(
+                "\(verb) \(reconciledCandidateCount) destination "
+                    + "\(reconciledCandidateCount == 1 ? "item" : "items") during reconciliation")
+        }
+        var message = clauses.isEmpty
+            ? "No items were imported"
+            : clauses.joined(separator: " and ")
+        message += " to \(location)."
+        if wasCancelled || report.wasCancelled {
+            message += " Import cancelled; completed copies remain."
+        } else if failureCount > 0 {
+            message += " \(failureCount) \(failureCount == 1 ? "item was" : "items were") not imported."
+        }
+        if warningCount > 0 {
+            message += " \(warningCount) import \(warningCount == 1 ? "warning needs" : "warnings need") attention."
+        }
+        return message
+    }
+
     /// Ownership token for the in-flight structural mutation (#871 Codex
     /// round 2). Every structural op captures the token `beginStructuralMutation`
     /// hands it, and its completion only releases `isMutatingStructure` if the
@@ -11228,6 +12938,11 @@ final class AppState: ObservableObject {
     /// during the suspension and a NEW op already claimed it. A vault
     /// open/close bumps the token, so any such stale completion is a no-op.
     private var structuralMutationToken = 0
+
+    /// Read-only generation seam for deferred UI landings. It advances at
+    /// admission, not publication, so stale import focus cannot land while a
+    /// newer operation is still in flight.
+    var currentStructuralMutationGeneration: Int { structuralMutationToken }
 
     /// The destination identities owned by the current native structural
     /// operation. Admission and reservation are installed synchronously on the
@@ -11316,7 +13031,10 @@ final class AppState: ObservableObject {
         _ kind: TreeMutation.Kind,
         rewrittenCount: Int,
         requiresRescan: Bool = false,
-        preferredFocusPath: String? = nil
+        preferredFocusPath: String? = nil,
+        selectionRevision: UInt64? = nil,
+        structuralMutationToken: Int? = nil,
+        importOwnedScanGeneration: Int? = nil
     ) {
         treeMutationCounter += 1
         treeMutation = TreeMutation(
@@ -11324,7 +13042,10 @@ final class AppState: ObservableObject {
             kind: kind,
             rewrittenCount: rewrittenCount,
             requiresRescan: requiresRescan,
-            preferredFocusPath: preferredFocusPath)
+            preferredFocusPath: preferredFocusPath,
+            selectionRevision: selectionRevision,
+            structuralMutationToken: structuralMutationToken,
+            importOwnedScanGeneration: importOwnedScanGeneration)
         // #871 Codex round 1: every structural mutation that is NOT a recorded
         // move/rename is a structural-history BARRIER — it clears the undo/redo
         // stacks. A create / duplicate / import / delete can FREE or REFILL a
@@ -11335,7 +13056,7 @@ final class AppState: ObservableObject {
         // after this call, so they must NOT clear. This is the single choke
         // point every structural op routes through on success.
         switch kind {
-        case .move, .rename, .batchMove, .batchReconcile:
+        case .move, .rename, .batchMove, .importBatch, .batchReconcile:
             break
         case .createFolder, .createNote, .delete, .batchTrash:
             clearStructuralUndoStacks()
@@ -11488,7 +13209,10 @@ final class AppState: ObservableObject {
                     self.ownsStructuralMutation(token, session: session)
                 else { return }
                 self.publishTreeMutation(.createNote(path: path), rewrittenCount: 0)
-                self.openFile(path, target: .currentTab)
+                self.openFile(
+                    path,
+                    target: .currentTab,
+                    advancesSidebarSelectionRevision: false)
                 // Drop the user straight into renaming the fresh note's title.
                 self.installRenameForCreatedEntry(
                     path: path, isDirectory: false, session: session)
@@ -12032,39 +13756,35 @@ final class AppState: ObservableObject {
             },
             newParent: newParent)
         let task = Task { @MainActor [weak self] in
-            let outcome: Result<BatchMoveReport, Error>
-            do {
-                outcome = .success(try await runner(session, request))
-            } catch {
-                outcome = .failure(error)
-            }
-            guard let self, self.ownsStructuralMutation(token, session: session) else {
+            guard let self,
+                let outcome = await self.executeForwardBatchMove(
+                    session: session,
+                    request: request,
+                    mutationToken: token,
+                runner: runner)
+            else { return }
+
+            guard self.ownsStructuralMutation(token, session: session) else {
                 return
             }
-
             switch outcome {
-            case .success(let report):
-                // Core has already changed the filesystem when its report
-                // arrives. Quarantine only the physically-standing paths now,
-                // before the inventory refresh can suspend, so no open editor
-                // can keep writing through a moved-away native handle/path.
-                self.quarantineBatchMovePathsBeforeRefresh(report)
-                if Self.batchMoveNeedsRefresh(report) {
+            case .success(let reduction):
+                if reduction.needsRefresh {
                     await refresher(self)
                     guard self.ownsStructuralMutation(token, session: session) else {
                         return
                     }
                 }
                 self.landForwardBatchMove(
-                    report,
+                    reduction.report,
                     destination: newParent,
-                    preferredFocusPath: preferredFocusPath)
+                    preferredFocusPath: preferredFocusPath,
+                    historyWasReduced: true)
             case .failure(let error):
                 await refresher(self)
                 guard self.ownsStructuralMutation(token, session: session) else {
                     return
                 }
-                self.clearStructuralUndoStacks()
                 self.publishTreeMutation(
                     .batchReconcile,
                     rewrittenCount: 0,
@@ -12090,6 +13810,179 @@ final class AppState: ObservableObject {
             return report.requiresRescan
         case .succeeded, .rolledBack, .rollbackIncomplete:
             return true
+        }
+    }
+
+    private enum ForwardBatchMoveHistoryAction {
+        case preserve
+        case record(StructuralUndoOp)
+        case clear
+    }
+
+    private struct ForwardBatchMoveDiagnostic {
+        enum Correlation {
+            /// A fact about the planned request occurrence. Multiple facts for
+            /// that item retain the same provider attribution.
+            case plannedRequestPath
+            /// A skipped ledger entry is its own request occurrence (notably a
+            /// duplicate path), so it consumes the next provider occurrence.
+            case skippedRequestPath
+            case standingPath
+            case batch
+        }
+
+        let path: String?
+        let reason: String
+        let kind: ImportBatchFailureDetail.Kind
+        let correlation: Correlation
+    }
+
+    /// One canonical interpretation of a forward native batch report. Both
+    /// standalone Move and aggregate Finder import consume this reducer, so
+    /// physical paths, history, rescan requirements, and attention facts cannot
+    /// drift between the two surfaces.
+    private struct ForwardBatchMoveReduction {
+        let report: BatchMoveReport
+        let standing: [BatchPathChange]
+        let touched: [BatchPathChange]
+        let requiresRescan: Bool
+        let needsRefresh: Bool
+        let historyAction: ForwardBatchMoveHistoryAction
+        let diagnostics: [ForwardBatchMoveDiagnostic]
+    }
+
+    private static func reduceForwardBatchMove(
+        _ report: BatchMoveReport
+    ) -> ForwardBatchMoveReduction {
+        let standing = importStandingChanges(report)
+        let touched = importTouchedChanges(report)
+        let historyAction: ForwardBatchMoveHistoryAction
+        var forceRescan = report.requiresRescan
+        switch report.state {
+        case .rejected, .noOp, .rolledBack:
+            historyAction = .preserve
+        case .succeeded:
+            if !report.standing.isEmpty, let opID = report.opId {
+                historyAction = .record(.batchMove(
+                    opId: opID,
+                    entries: report.standing))
+            } else {
+                historyAction = .clear
+                forceRescan = true
+            }
+        case .rollbackIncomplete:
+            historyAction = .clear
+        }
+
+        var diagnostics: [ForwardBatchMoveDiagnostic] = []
+        func append(
+            path: String?,
+            reason: String,
+            kind: ImportBatchFailureDetail.Kind = .terminalFailure,
+            correlation: ForwardBatchMoveDiagnostic.Correlation = .plannedRequestPath
+        ) {
+            diagnostics.append(ForwardBatchMoveDiagnostic(
+                path: path,
+                reason: reason,
+                kind: kind,
+                correlation: correlation))
+        }
+        if let failure = report.failure {
+            append(
+                path: failure.item?.path,
+                reason: BatchStructuralCopy.failureLine(failure))
+        }
+        for failure in report.rollbackFailures {
+            append(
+                path: failure.item?.path,
+                reason: BatchStructuralCopy.failureLine(failure),
+                correlation: .standingPath)
+        }
+        for failure in report.envelope.preflightFailures {
+            append(
+                path: failure.item?.path,
+                reason: BatchStructuralCopy.failureLine(failure))
+        }
+        for skipped in report.envelope.skipped {
+            append(
+                path: skipped.item.path,
+                reason: BatchStructuralCopy.skipReasonLabel(skipped.reason)
+                    + (skipped.detail.isEmpty ? "" : ": \(skipped.detail)"),
+                correlation: .skippedRequestPath)
+        }
+        for failure in report.rewriteFailures {
+            append(
+                path: failure.path,
+                reason: "Link update failed: "
+                    + BatchStructuralCopy.rewriteFailureReason(failure.kind),
+                kind: .warning,
+                correlation: .standingPath)
+        }
+        if forceRescan {
+            append(
+                path: nil,
+                reason: "Slate needed an authoritative vault rescan to reconcile the move.",
+                kind: .warning,
+                correlation: .batch)
+        }
+        if report.state == .rollbackIncomplete {
+            append(
+                path: nil,
+                reason: "Move restoration was incomplete; review the items that remain in their new locations.",
+                kind: .warning,
+                correlation: .batch)
+        }
+        if report.state == .succeeded,
+            (report.standing.isEmpty || report.opId == nil)
+        {
+            append(
+                path: nil,
+                reason: "Slate could not reconcile the move safely.",
+                kind: .warning,
+                correlation: .batch)
+        }
+
+        return ForwardBatchMoveReduction(
+            report: report,
+            standing: standing,
+            touched: touched,
+            requiresRescan: forceRescan,
+            needsRefresh: !standing.isEmpty || !touched.isEmpty || forceRescan,
+            historyAction: historyAction,
+            diagnostics: diagnostics)
+    }
+
+    /// Shared native executor and host reducer for every forward batch Move.
+    /// The ownership guard is checked before any host mutation, so a report
+    /// arriving after a vault replacement cannot retarget editors or history.
+    private func executeForwardBatchMove(
+        session: VaultSession,
+        request: BatchMoveRequest,
+        mutationToken: Int,
+        runner: BatchMoveRunner
+    ) async -> Result<ForwardBatchMoveReduction, Error>? {
+        do {
+            let report = try await runner(session, request)
+            guard ownsStructuralMutation(mutationToken, session: session) else {
+                return nil
+            }
+            let reduction = Self.reduceForwardBatchMove(report)
+            quarantineBatchMovePathsBeforeRefresh(report)
+            switch reduction.historyAction {
+            case .preserve:
+                break
+            case .record(let inverse):
+                recordStructuralUndo(inverse: inverse, context: .record)
+            case .clear:
+                clearStructuralUndoStacks()
+            }
+            return .success(reduction)
+        } catch {
+            guard ownsStructuralMutation(mutationToken, session: session) else {
+                return nil
+            }
+            clearStructuralUndoStacks()
+            return .failure(error)
         }
     }
 
@@ -12193,6 +14086,7 @@ final class AppState: ObservableObject {
 
     private enum BatchMoveHistoryPolicy {
         case recordForward
+        case forwardAlreadyReduced
         case transition(source: StructuralUndoOp, context: StructuralUndoContext)
     }
 
@@ -12213,13 +14107,14 @@ final class AppState: ObservableObject {
     private func landForwardBatchMove(
         _ report: BatchMoveReport,
         destination: String,
-        preferredFocusPath: String?
+        preferredFocusPath: String?,
+        historyWasReduced: Bool = false
     ) {
         let mode = BatchStructuralResult.MoveMode.forward(destination: destination)
         landBatchMove(
             report,
             mode: mode,
-            history: .recordForward,
+            history: historyWasReduced ? .forwardAlreadyReduced : .recordForward,
             preferredFocusPath: preferredFocusPath)
     }
 
@@ -12284,6 +14179,8 @@ final class AppState: ObservableObject {
             case .recordForward:
                 recordStructuralUndo(inverse: landed, context: .record)
                 historyLanded = true
+            case .forwardAlreadyReduced:
+                historyLanded = structuralUndoStack.last == landed
             case .transition(let source, let context):
                 let sourceStillTop: Bool
                 switch context {
@@ -12813,9 +14710,17 @@ final class AppState: ObservableObject {
         case move(path: String, isDirectory: Bool, to: String)
         /// The dropped URL is EXTERNAL → import a copy via `importEntry`.
         case importFile(url: URL, into: String)
-        /// No-op (already in the destination, or a folder onto its own subtree).
-        case none
+        /// A reason-bearing no-op retained by aggregate imports and spoken by
+        /// the legacy single-provider funnel.
+        case none(reason: String)
     }
+
+    static let sameParentImportNoOpReason =
+        "Nothing moved. The item is already in this folder."
+    static let ownSubtreeImportNoOpReason =
+        "Nothing moved. A folder can’t be moved into itself."
+    static let vaultRootImportNoOpReason =
+        "Nothing imported. The open vault can’t be imported into itself."
 
     /// Pure (#870): classify a file-URL drop. A URL under the current vault is
     /// a MOVE (identical to an intra-tree drag — and thus undoable); an
@@ -12840,9 +14745,11 @@ final class AppState: ObservableObject {
     ) -> StructuralDropAction {
         if let rel = vaultRelativePath(of: url, vaultURL: vaultURL) {
             let currentParent = TreeMutation.parentPath(of: rel) ?? ""
-            if currentParent == destinationFolder { return .none }
+            if currentParent == destinationFolder {
+                return .none(reason: sameParentImportNoOpReason)
+            }
             if isDirectory, pathIsWithin(destinationFolder, path: rel, isDirectory: true) {
-                return .none
+                return .none(reason: ownSubtreeImportNoOpReason)
             }
             return .move(path: rel, isDirectory: isDirectory, to: destinationFolder)
         }
@@ -12851,7 +14758,9 @@ final class AppState: ObservableObject {
         // for BOTH the root and a truly-external URL, so distinguish them here
         // before the import branch — otherwise Slate would try to text-import
         // the vault directory and surface a spurious failure.
-        if isVaultRoot(url, vaultURL: vaultURL) { return .none }
+        if isVaultRoot(url, vaultURL: vaultURL) {
+            return .none(reason: vaultRootImportNoOpReason)
+        }
         return .importFile(url: url, into: destinationFolder)
     }
 
@@ -12876,7 +14785,8 @@ final class AppState: ObservableObject {
                 to: destination)
         case .importFile(let externalURL, let destination):
             return importEntry(externalURL: externalURL, into: destination)
-        case .none:
+        case .none(let reason):
+            postMutationAnnouncement(reason)
             return nil
         }
     }
@@ -12888,6 +14798,7 @@ final class AppState: ObservableObject {
     /// spelling still matches.
     private static func isVaultRoot(_ url: URL, vaultURL: URL?) -> Bool {
         guard let vaultURL else { return false }
+        guard !finalPathComponentIsSymbolicLink(url) else { return false }
         let vaultPath = vaultURL.resolvingSymlinksInPath().standardizedFileURL.path
         let droppedPath = url.resolvingSymlinksInPath().standardizedFileURL.path
         return pathComponentsEqual(
@@ -12910,6 +14821,11 @@ final class AppState: ObservableObject {
     /// (what the backend expects).
     static func vaultRelativePath(of url: URL, vaultURL: URL?) -> String? {
         guard let vaultURL else { return nil }
+        // The dropped final component is an object in its own right. Never
+        // follow it into native Move classification: every final symlink stays
+        // on the external path so Task 3's no-follow walker can reject it
+        // truthfully without mutating its target.
+        guard !finalPathComponentIsSymbolicLink(url) else { return nil }
         let vaultPath = vaultURL.resolvingSymlinksInPath().standardizedFileURL.path
         // #870 Codex round 2: resolve symlinks in the CONTAINER only, then
         // re-attach the dropped item's own final component UNRESOLVED. If the
@@ -12932,6 +14848,16 @@ final class AppState: ObservableObject {
             return nil
         }
         return String(filePath.dropFirst(prefix.count))
+    }
+
+    /// `lstat` observes the final directory entry without dereferencing it;
+    /// intermediate components retain normal filesystem resolution.
+    private static func finalPathComponentIsSymbolicLink(_ url: URL) -> Bool {
+        var metadata = stat()
+        return url.withUnsafeFileSystemRepresentation { path in
+            guard let path, lstat(path, &metadata) == 0 else { return false }
+            return metadata.st_mode & S_IFMT == S_IFLNK
+        }
     }
 
     /// Whether `url`'s volume treats names case-INSENSITIVELY (the macOS APFS
@@ -17390,6 +19316,11 @@ final class AppState: ObservableObject {
             let session = currentSession,
             let noteOwner = noteAuthoringOwner()
         else { return nil }
+        if case .closeVault = pending,
+            rejectVaultTransitionDuringNativeImport()
+        {
+            return nil
+        }
         if let reason = pendingNavigationSaveDisabledReason {
             postMutationAnnouncement(reason)
             return nil
@@ -17444,6 +19375,11 @@ final class AppState: ObservableObject {
     /// continue with the pending navigation.
     func resolvePendingNavigationDiscard() {
         guard let pending = pendingNavigation else { return }
+        if case .closeVault = pending,
+            rejectVaultTransitionDuringNativeImport()
+        {
+            return
+        }
         if case .closeVault = pending,
             let reason = authoredPropertyPublicationRecoveryReason
         {

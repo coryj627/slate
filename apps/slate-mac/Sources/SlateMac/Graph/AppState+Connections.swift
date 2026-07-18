@@ -175,6 +175,7 @@ extension AppState {
     /// origin, and lose the first re-root's back step (review round 1
     /// finding 2).
     func reRootConnections(on path: String) {
+        recordExplicitSidebarNavigationIntent()
         // No-op re-root if already rooted here (avoids a self back-step) —
         // but still refresh the SHARED selection to this node, so a Table/
         // Diagram selection that drifted elsewhere is repaired (P2-5 review
@@ -194,7 +195,11 @@ extension AppState {
         if let priorEffective = connectionsEffectivePath {
             connectionsBackStack.append((root: connectionsRootPath, effective: priorEffective))
         }
-        openFile(path, target: .currentTab)
+        openFile(
+            path,
+            target: .currentTab,
+            advancesSidebarSelectionRevision: false
+        )
         connectionsRootPath = path
         workspace.activeLeaf = .connections
         loadConnections()

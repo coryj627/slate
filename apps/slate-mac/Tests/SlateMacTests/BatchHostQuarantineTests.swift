@@ -296,6 +296,30 @@ final class BatchHostQuarantineTests: XCTestCase {
             requiresRescan: true)
     }
 
+    private func fileURLProvider(_ url: URL) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { completion in
+            completion(url.dataRepresentation, nil)
+            return nil
+        }
+        return provider
+    }
+
+    private func canonicalTemporaryDirectory(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> URL {
+        let path = try FileManager.default.temporaryDirectory
+            .resourceValues(forKeys: [.canonicalPathKey])
+            .canonicalPath
+        return URL(
+            fileURLWithPath: try XCTUnwrap(path, file: file, line: line),
+            isDirectory: true)
+    }
+
     func testBatchMoveQuarantinesCoreStandingPathsBeforeRefreshAndPreservesTypedState()
         async throws
     {
@@ -2249,6 +2273,115 @@ final class BatchHostQuarantineTests: XCTestCase {
                 contentsOf: fixture.vault.appendingPathComponent("folder/a copy 2.md"),
                 encoding: .utf8),
             "# Duplicate source\n")
+    }
+
+    func testFL05ExternalImportReservesDirectQuarantinedTrashIdentity()
+        async throws
+    {
+        let fixture = try await makeTypedState()
+        let state = fixture.state
+        let uncertain = StructuralBatchItem(
+            path: "dest/a.md", isDirectory: false)
+        let report = unknownTrashReport([uncertain])
+        state.batchTrashRunner = { _, _ in report }
+        state.batchTrashPresenceProbeRunner = { _, _ in .indeterminate }
+        state.structuralBatchRefreshRunner = { _ in }
+        let quarantine = try XCTUnwrap(state.batchDelete(
+            [.init(path: uncertain.path, isDirectory: false)],
+            preferredFocusPath: uncertain.path))
+        await quarantine.value
+
+        let externalRoot = try canonicalTemporaryDirectory()
+            .appendingPathComponent("fl05-quarantine-\(UUID().uuidString)")
+        tempDirs.append(externalRoot)
+        try FileManager.default.createDirectory(
+            at: externalRoot, withIntermediateDirectories: false)
+        let external = externalRoot.appendingPathComponent("a.md")
+        try "new external bytes".write(
+            to: external, atomically: true, encoding: .utf8)
+        let vault = fixture.vault
+        state.importDestinationCreators = { _ in
+            SidebarImportDestinationCreators(
+                createFile: { path, data in
+                    try data.write(to: vault.appendingPathComponent(path))
+                },
+                createDirectory: { path in
+                    try FileManager.default.createDirectory(
+                        at: vault.appendingPathComponent(path),
+                        withIntermediateDirectories: false)
+                })
+        }
+        state.importInventoryRefreshRunner = { _, _ in }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(external)],
+            destinationFolder: "dest"))
+        await state.startImportBatch(owner).value
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: fixture.vault.appendingPathComponent("dest/a.md").path))
+        XCTAssertEqual(
+            try String(
+                contentsOf: fixture.vault.appendingPathComponent("dest/a 2.md"),
+                encoding: .utf8),
+            "new external bytes")
+    }
+
+    func testFL05ExternalFolderImportReservesAncestorOfNestedQuarantine()
+        async throws
+    {
+        let fixture = try await makeTypedState()
+        let state = fixture.state
+        let uncertain = StructuralBatchItem(
+            path: "dest/sub/a.md", isDirectory: false)
+        let report = unknownTrashReport([uncertain])
+        state.batchTrashRunner = { _, _ in report }
+        state.batchTrashPresenceProbeRunner = { _, _ in .indeterminate }
+        state.structuralBatchRefreshRunner = { _ in }
+        let quarantine = try XCTUnwrap(state.batchDelete(
+            [.init(path: uncertain.path, isDirectory: false)],
+            preferredFocusPath: uncertain.path))
+        await quarantine.value
+
+        let externalRoot = try canonicalTemporaryDirectory()
+            .appendingPathComponent("fl05-quarantine-\(UUID().uuidString)")
+        tempDirs.append(externalRoot)
+        try FileManager.default.createDirectory(
+            at: externalRoot, withIntermediateDirectories: false)
+        let external = externalRoot.appendingPathComponent("sub", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: external, withIntermediateDirectories: false)
+        try "new nested bytes".write(
+            to: external.appendingPathComponent("new.md"),
+            atomically: true,
+            encoding: .utf8)
+        let vault = fixture.vault
+        state.importDestinationCreators = { _ in
+            SidebarImportDestinationCreators(
+                createFile: { path, data in
+                    try data.write(to: vault.appendingPathComponent(path))
+                },
+                createDirectory: { path in
+                    try FileManager.default.createDirectory(
+                        at: vault.appendingPathComponent(path),
+                        withIntermediateDirectories: false)
+                })
+        }
+        state.importInventoryRefreshRunner = { _, _ in }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(external)],
+            destinationFolder: "dest"))
+        await state.startImportBatch(owner).value
+
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: fixture.vault.appendingPathComponent("dest/sub").path))
+        XCTAssertEqual(
+            try String(
+                contentsOf: fixture.vault.appendingPathComponent(
+                    "dest/sub 2/new.md"),
+                encoding: .utf8),
+            "new nested bytes")
     }
 
     func testDuplicateQuarantineDoesNotSpendTheCreateRaceCollisionBudget()

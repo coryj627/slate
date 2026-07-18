@@ -19,10 +19,17 @@ extension AppState {
     }
 
     /// The canvas arm of `openFile` (single navigation entry point).
-    func openCanvasFile(_ path: String, target: OpenTarget) {
+    func openCanvasFile(
+        _ path: String,
+        target: OpenTarget,
+        advancesSidebarSelectionRevision: Bool = true
+    ) {
         if let reason = propertyEditNavigationDisabledReason {
             postMutationAnnouncement(reason)
             return
+        }
+        if advancesSidebarSelectionRevision {
+            recordExplicitSidebarNavigationIntent()
         }
         switch target {
         case .currentTab:
@@ -57,10 +64,16 @@ extension AppState {
             let paneCount = workspace.model.groupsInOrder.count
             splitActivePane(axis: axis)
             if workspace.model.groupsInOrder.count == paneCount {
-                openCanvasFile(path, target: .newTab)
+                openCanvasFile(
+                    path,
+                    target: .newTab,
+                    advancesSidebarSelectionRevision: false)
                 return
             }
-            openCanvasFile(path, target: .currentTab)
+            openCanvasFile(
+                path,
+                target: .currentTab,
+                advancesSidebarSelectionRevision: false)
         }
     }
 
