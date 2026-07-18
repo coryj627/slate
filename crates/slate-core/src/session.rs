@@ -10545,6 +10545,25 @@ impl VaultSession {
         })
     }
 
+    /// Create an empty folder without merging an occupied destination.
+    ///
+    /// Finder import owns the aggregate history boundary, so this primitive
+    /// intentionally does not append an independently undoable
+    /// `CreateFolder` structural-journal entry.
+    pub fn create_folder_exclusive(&self, path: &str) -> Result<(), VaultError> {
+        let _vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let _structural_operation = self.structural_operation_guard()?;
+        validate_save_path(path)?;
+        validate_leaf_component(leaf_name(path))?;
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        ensure_structural_batch_idle(&conn)?;
+        if let Some(existing) = index_entry_case_insensitive(&conn, path)? {
+            return Err(VaultError::DestinationExists { path: existing });
+        }
+        self.provider.create_dir_if_absent(path)?;
+        self.with_structural_tx(&mut conn, |tx| upsert_dir_row(tx, path))
+    }
+
     /// Rename a folder in place (same parent, new final component).
     pub fn rename_folder(
         &self,
