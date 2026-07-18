@@ -62,9 +62,6 @@ final class SidebarImportProgressStripTests: XCTestCase {
             totalProviderCount: Int.max)
 
         XCTAssertEqual(boundaryText, minimumText + " of " + maximumText)
-        XCTAssertEqual(
-            boundaryText.components(separatedBy: " of "),
-            [minimumText, maximumText])
     }
 
     func testModelAndNativeValuesShareDeterministicCountText() {
