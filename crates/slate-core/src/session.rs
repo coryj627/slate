@@ -725,6 +725,37 @@ struct OplogAppendState {
 /// growth rather than payload bytes alone. Deliberately generous.
 const OPLOG_ENTRY_FRAMING_OVERHEAD_ESTIMATE: u64 = 256;
 
+/// Physical identity of the filesystem root a session opened — one
+/// `(device, inode)` metadata observation made inside the open itself
+/// (FL-06 round-27). Hosts compare their own per-surface root
+/// observations against this anchor; a path that swapped A→B→A around
+/// the open cannot produce a matching pair of observations for two
+/// different directories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultRootIdentity {
+    pub device: u64,
+    pub inode: u64,
+}
+
+#[cfg(unix)]
+fn observe_root_identity(root: &std::path::Path) -> Option<VaultRootIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(root).ok()?;
+    Some(VaultRootIdentity {
+        device: meta.dev(),
+        inode: meta.ino(),
+    })
+}
+
+#[cfg(not(unix))]
+fn observe_root_identity(_root: &std::path::Path) -> Option<VaultRootIdentity> {
+    // Windows file identity needs the volume serial + file index pair,
+    // which std does not expose on stable — the Milestone W host will
+    // supply its own observation. An absent identity fails closed on
+    // the host side.
+    None
+}
+
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
@@ -834,6 +865,10 @@ pub struct VaultSession {
     compaction_dirty: Arc<Mutex<std::collections::HashSet<String>>>,
     compaction_shutdown: Arc<std::sync::atomic::AtomicBool>,
     compaction_join: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Physical root identity observed inside THIS session's open
+    /// (FL-06 round-27). `None` for non-filesystem providers or
+    /// platforms without a stable observation.
+    root_identity: Option<VaultRootIdentity>,
 }
 
 /// One annotation on a version row (O-3 #541): `kind` is the stable
@@ -1801,6 +1836,7 @@ impl VaultSession {
             bases_generation: AtomicU64::new(1),
             structural_history_valid: std::sync::atomic::AtomicBool::new(true),
             structural_operation: Mutex::new(()),
+            root_identity: None,
         };
         session.recover_structural_batch_inflight_on_open()?;
         drop(vault_structural_lock);
@@ -2072,6 +2108,15 @@ impl VaultSession {
             .count())
     }
 
+    /// The physical root identity observed inside this session's open,
+    /// or `None` when no filesystem root backs it (or the platform
+    /// cannot observe one). Hosts compare their own per-surface root
+    /// observations against this anchor and refuse to run surfaces
+    /// that cannot prove they share it (FL-06 round-27).
+    pub fn root_identity(&self) -> Option<VaultRootIdentity> {
+        self.root_identity
+    }
+
     /// Convenience: open a vault rooted at `root` using `FsVaultProvider`.
     /// Cache lives at `<root>/.slate` per the locked storage layout.
     ///
@@ -2110,6 +2155,10 @@ impl VaultSession {
                 reason: "vault root does not exist or is not a directory".into(),
             });
         }
+        // FL-06 round-27: observe the physical root identity INSIDE the
+        // open, so hosts can anchor their own per-surface root checks to
+        // what this session actually opened.
+        let root_identity = observe_root_identity(&root);
         let cache_dir = root.join(".slate");
         let mut config = SessionConfig::new(cache_dir);
         config.user_actor_id = user_actor_id.to_string();
@@ -2155,7 +2204,9 @@ impl VaultSession {
             config.oplog_retention_days = prefs.retention_days;
         }
         let provider = Arc::new(FsVaultProvider::new(root));
-        Self::open(provider, config)
+        let mut session = Self::open(provider, config)?;
+        session.root_identity = root_identity;
+        Ok(session)
     }
 
     /// Close the session and flush the database. Equivalent to dropping

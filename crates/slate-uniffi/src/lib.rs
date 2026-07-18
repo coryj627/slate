@@ -296,6 +296,18 @@ fn is_allowed_status_char(c: char) -> bool {
     // range doesn't accidentally re-admit it.
 }
 
+/// Physical `(device, inode)` identity of the vault root as observed
+/// by one metadata call inside a session's own open (FL-06 round-27).
+/// Hosts compare their per-surface root observations against this
+/// anchor so a path swapped A→B→A around the open cannot bind surfaces
+/// to different vaults. Nil when the platform cannot observe one;
+/// hosts fail closed.
+#[derive(uniffi::Record)]
+pub struct VaultRootIdentity {
+    pub device: u64,
+    pub inode: u64,
+}
+
 /// FFI-exposed vault session. Wraps `slate_core::VaultSession`.
 ///
 /// Constructed via `VaultSession.openFilesystem(rootPath:)` on the
@@ -315,6 +327,18 @@ impl VaultSession {
     pub fn open_filesystem(root_path: String) -> Result<Arc<Self>, VaultError> {
         let inner = core::VaultSession::from_filesystem(PathBuf::from(root_path))?;
         Ok(Arc::new(Self { inner }))
+    }
+
+    /// The physical root identity observed inside this session's open,
+    /// or nil when the platform cannot observe one. Hosts compare their
+    /// own per-surface root observations (e.g. the sidebar preference
+    /// store's descriptor-bound fstat) against this anchor and refuse
+    /// to run surfaces that cannot prove they share it.
+    pub fn root_identity(&self) -> Option<VaultRootIdentity> {
+        self.inner.root_identity().map(|id| VaultRootIdentity {
+            device: id.device,
+            inode: id.inode,
+        })
     }
 
     /// Walk the vault and index every file into the metadata cache.

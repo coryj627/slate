@@ -8257,10 +8257,6 @@ final class AppState: ObservableObject {
         // be cancelled first in every case.
         cancelCurrentImportBatchForVaultTransition()
         cancelStructuralMutationOwnership()
-        // Round-25: bracket the session's own path resolution with a physical
-        // pre-stat; the descriptor-bound sidebar admission below must observe
-        // the SAME root or the whole open aborts.
-        let preOpenIdentity = Self.vaultRootIdentity(of: url)
         do {
             let session = try VaultSession.openFilesystem(rootPath: url.path)
             // Audit #259: push the persisted math prefs into the
@@ -8333,15 +8329,20 @@ final class AppState: ObservableObject {
                 creationParent: "")
             lastError = nil
             loadSidebarVaultPreferences(at: url)
-            // Round-25: the admission identity (fstat on the sidebar store's
-            // own root descriptor) must match the pre-open observation that
-            // bracketed the session's path resolution. Divergence means the
-            // directory was swapped mid-open: abort the whole open (the
-            // catch below tears down everything installed so far) rather
-            // than run a session on one vault with sidebar writes bound to
-            // another. Both-nil stays open-but-write-disabled (degraded
-            // filesystems observe no identity at all).
-            if sidebarVaultRootIdentity != preOpenIdentity {
+            // Round-25, hardened round-27: the sidebar admission identity
+            // (fstat on the store's own root descriptor) must match the
+            // identity the SESSION itself observed inside its open, exposed
+            // through the FFI. Comparing against the session's own anchor —
+            // not another path resolution — closes the A→B→A replacement
+            // race a path bracket cannot see. A session or admission that
+            // observes no identity cannot prove the surfaces share one
+            // root: abort those too.
+            let sessionRootIdentity = session.rootIdentity().map {
+                SidebarVaultRootIdentity(device: $0.device, inode: $0.inode)
+            }
+            if sessionRootIdentity == nil
+                || sidebarVaultRootIdentity != sessionRootIdentity
+            {
                 tearDownVaultScopedStateForAbortedOpen()
                 throw VaultOpenIdentityRaceError()
             }

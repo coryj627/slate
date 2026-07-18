@@ -2451,6 +2451,47 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertNil(state.syncReport)
   }
 
+  // MARK: - Red-team regressions (adversarial review round 27)
+
+  func testOpenBindsSessionAndSidebarToOneObservedRoot() throws {
+    // Round-27: the session's own open observes the physical root
+    // (through the FFI) and the sidebar admission must match it exactly
+    // — one anchor, two surfaces.
+    let (state, _) = try openVault(named: "one-root", files: ["a.md"])
+    let session = try XCTUnwrap(state.currentSession)
+    let anchor = try XCTUnwrap(session.rootIdentity())
+    XCTAssertEqual(
+      state.sidebarVaultRootIdentity,
+      AppState.SidebarVaultRootIdentity(
+        device: anchor.device, inode: anchor.inode))
+  }
+
+  func testOpenSurvivesAMoveAwayAndBackOfTheSameDirectory() throws {
+    // Round-27: the anchor tracks PHYSICAL identity. A vault moved aside
+    // and back between the session open and sidebar admission is still
+    // the same directory — no false abort.
+    let vault = root.appendingPathComponent("wobble")
+    try FileManager.default.createDirectory(
+      at: vault, withIntermediateDirectories: true)
+    try "# a".write(
+      to: vault.appendingPathComponent("a.md"), atomically: true,
+      encoding: .utf8)
+    let state = AppState(
+      recentsStore: RecentVaultsStore(
+        fileURL: root.appendingPathComponent("wobble-recents.json")),
+      externalOpener: { _ in true },
+      announcer: AppKitAnnouncementPoster())
+    let aside = root.appendingPathComponent("wobble-aside")
+    state.sidebarVaultPrefsStoreFactoryForTesting = { vaultRoot in
+      try? FileManager.default.moveItem(at: vault, to: aside)
+      try? FileManager.default.moveItem(at: aside, to: vault)
+      return SidebarVaultPrefsStore(vaultRoot: vaultRoot)
+    }
+    state.openVault(at: vault)
+    XCTAssertNotNil(state.currentSession, "same physical root must not abort")
+    XCTAssertNil(state.lastError)
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
