@@ -1,0 +1,574 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import Foundation
+
+/// The metadata one file contributes to level organization. Extracted from
+/// `FileSummary` on the main actor so sorting and bucketing stay pure and
+/// testable without FFI or `MainActor` hops.
+struct SidebarOrganizerFile: Equatable {
+  let path: String
+  let name: String
+  let displayName: String?
+  let createdDate: String?
+  let createdMs: Int64?
+  let mtimeMs: Int64
+}
+
+enum SidebarSortField: String, CaseIterable, Equatable {
+  case name
+  case created
+  case modified
+}
+
+enum SidebarSortDirection: String, CaseIterable, Equatable {
+  case asc
+  case desc
+}
+
+struct SidebarSortOption: Equatable {
+  var field: SidebarSortField
+  var direction: SidebarSortDirection
+
+  static let defaults = SidebarSortOption(field: .name, direction: .asc)
+}
+
+enum SidebarGroupingOption: String, CaseIterable, Equatable {
+  case none
+  case dateBuckets
+}
+
+/// One folder's effective sort/grouping choice.
+struct SidebarOrganizationChoice: Equatable {
+  var sort: SidebarSortOption
+  var grouping: SidebarGroupingOption
+
+  static let defaults = SidebarOrganizationChoice(
+    sort: .defaults, grouping: .none)
+
+  /// Grouping forces the matching date sort descending; mixed name-sort +
+  /// grouping combinations are not offered (fl3 spec §FL3-1.3). A name sort
+  /// falls back to the modified date, the default date field.
+  var normalized: SidebarOrganizationChoice {
+    guard grouping == .dateBuckets else { return self }
+    let field: SidebarSortField = sort.field == .name ? .modified : sort.field
+    return SidebarOrganizationChoice(
+      sort: SidebarSortOption(field: field, direction: .desc),
+      grouping: .dateBuckets)
+  }
+
+  /// The polite announcement posted when organization changes. It always
+  /// describes the effective (normalized) state, never an impossible
+  /// combination like an ascending grouped sort.
+  var sortAnnouncement: String {
+    let effective = normalized
+    let fieldName: String
+    switch effective.sort.field {
+    case .name: fieldName = "name"
+    case .created: fieldName = "created"
+    case .modified: fieldName = "modified"
+    }
+    let directionName: String
+    if effective.sort.field == .name {
+      directionName = effective.sort.direction == .asc ? "A to Z" : "Z to A"
+    } else {
+      directionName =
+        effective.sort.direction == .desc ? "newest first" : "oldest first"
+    }
+    let grouped = effective.grouping == .dateBuckets ? ", grouped by date" : ""
+    return "Sorted by \(fieldName), \(directionName)\(grouped)."
+  }
+}
+
+/// A partial per-folder override; nil fields fall through to the vault choice.
+struct SidebarOrganizationOverride: Equatable {
+  var sort: SidebarSortOption?
+  var grouping: SidebarGroupingOption?
+
+  var isEmpty: Bool { sort == nil && grouping == nil }
+}
+
+/// Vault-wide default plus per-folder overrides (decision 5: overrides are UI
+/// prefs, not schema). Precedence: folder override > vault choice > defaults.
+struct SidebarOrganizationPrefs: Equatable {
+  var vaultChoice: SidebarOrganizationChoice = .defaults
+  var folderOverrides: [String: SidebarOrganizationOverride] = [:]
+
+  func effectiveChoice(forFolder folder: String) -> SidebarOrganizationChoice {
+    guard let override = folderOverrides[folder] else { return vaultChoice }
+    return SidebarOrganizationChoice(
+      sort: override.sort ?? vaultChoice.sort,
+      grouping: override.grouping ?? vaultChoice.grouping)
+  }
+}
+
+/// The organized presentation of one level's file portion.
+struct SidebarOrganizedLevel: Equatable {
+  struct Group: Equatable {
+    let key: String
+    let label: String
+    let firstPath: String
+    let fileCount: Int
+  }
+
+  let orderedPaths: [String]
+  let pinnedCount: Int
+  let stalePinnedPaths: [String]
+  let groups: [Group]
+}
+
+/// Pure sorting/bucketing engine for one level's files (decision 5: backend
+/// ships raw fields; the app sorts and groups per level). Keys are built once
+/// per file; the civil-date resolver is consulted at most once per file and
+/// only when the active field needs a created value.
+enum SidebarLevelOrganizer {
+
+  private struct Keyed {
+    let file: SidebarOrganizerFile
+    /// NFC form of the effective label (#459 convention): an authored title
+    /// beats the filename stem, and decomposed/precomposed spellings of the
+    /// same name build identical keys.
+    let nameKey: String
+    /// The created sort instant: the resolver's absolute local-day start for
+    /// a valid authored civil date, else the parsed datetime/birthtime
+    /// instant. Nil means "no created value at all" (NULL-last).
+    let created: Date?
+    let modified: Date
+  }
+
+  static func organize(
+    files: [SidebarOrganizerFile],
+    choice: SidebarOrganizationChoice,
+    pinnedPaths: [String],
+    now: Date,
+    calendar: Calendar,
+    locale: Locale = .current,
+    civilDateResolver: any SidebarCivilDateResolving
+  ) -> SidebarOrganizedLevel {
+    let effective = choice.normalized
+    let needsCreated =
+      effective.sort.field == .created
+    let keyed = files.map { file -> Keyed in
+      let label =
+        file.displayName ?? (file.name as NSString).deletingPathExtension
+      var created: Date?
+      if needsCreated {
+        if let civil = file.createdDate,
+          let resolved = civilDateResolver.resolve(civil, calendar: calendar)
+        {
+          created = resolved
+        } else if let createdMs = file.createdMs {
+          created = Self.date(fromMilliseconds: createdMs)
+        }
+      }
+      return Keyed(
+        file: file,
+        nameKey: label.precomposedStringWithCanonicalMapping,
+        created: created,
+        modified: Self.date(fromMilliseconds: file.mtimeMs))
+    }
+
+    var byPath: [String: Keyed] = [:]
+    byPath.reserveCapacity(keyed.count)
+    for entry in keyed { byPath[entry.file.path] = entry }
+
+    var pinned: [Keyed] = []
+    var stale: [String] = []
+    var pinnedSet: Set<String> = []
+    for path in pinnedPaths {
+      if let entry = byPath[path] {
+        // Defensive: a duplicated authored entry pins the row once.
+        if pinnedSet.insert(path).inserted { pinned.append(entry) }
+      } else {
+        stale.append(path)
+      }
+    }
+
+    let unpinned = keyed.filter { !pinnedSet.contains($0.file.path) }
+    let sorted = unpinned.sorted { Self.ordered($0, before: $1, by: effective.sort) }
+
+    var groups: [SidebarOrganizedLevel.Group] = []
+    if effective.grouping == .dateBuckets {
+      let classifier = BucketClassifier(now: now, calendar: calendar, locale: locale)
+      var currentKey: String?
+      var currentLabel = ""
+      var currentFirst = ""
+      var currentCount = 0
+      for entry in sorted {
+        let date = effective.sort.field == .created ? entry.created : entry.modified
+        let bucket = classifier.classify(date)
+        if bucket.key != currentKey {
+          if let key = currentKey {
+            groups.append(
+              SidebarOrganizedLevel.Group(
+                key: key, label: currentLabel,
+                firstPath: currentFirst, fileCount: currentCount))
+          }
+          currentKey = bucket.key
+          currentLabel = bucket.label
+          currentFirst = entry.file.path
+          currentCount = 0
+        }
+        currentCount += 1
+      }
+      if let key = currentKey {
+        groups.append(
+          SidebarOrganizedLevel.Group(
+            key: key, label: currentLabel,
+            firstPath: currentFirst, fileCount: currentCount))
+      }
+    }
+
+    return SidebarOrganizedLevel(
+      orderedPaths: pinned.map(\.file.path) + sorted.map(\.file.path),
+      pinnedCount: pinned.count,
+      stalePinnedPaths: stale,
+      groups: groups)
+  }
+
+  // MARK: - Comparator
+
+  /// Strict total order. The primary field honors direction; NULL created
+  /// values always sort last; ties always break name-ascending then path
+  /// (binary), regardless of direction (fl3 spec §FL3-1.1).
+  private static func ordered(
+    _ lhs: Keyed, before rhs: Keyed, by sort: SidebarSortOption
+  ) -> Bool {
+    switch sort.field {
+    case .name:
+      switch compareNames(lhs.nameKey, rhs.nameKey) {
+      case .orderedAscending: return sort.direction == .asc
+      case .orderedDescending: return sort.direction == .desc
+      case .orderedSame: return tieBreak(lhs, rhs)
+      }
+    case .created:
+      switch (lhs.created, rhs.created) {
+      case (nil, nil):
+        return tieBreak(lhs, rhs)
+      case (nil, _):
+        return false  // NULL-last regardless of direction
+      case (_, nil):
+        return true
+      case let (left?, right?):
+        if left == right { return tieBreak(lhs, rhs) }
+        return sort.direction == .asc ? left < right : left > right
+      }
+    case .modified:
+      if lhs.file.mtimeMs == rhs.file.mtimeMs { return tieBreak(lhs, rhs) }
+      return sort.direction == .asc
+        ? lhs.file.mtimeMs < rhs.file.mtimeMs
+        : lhs.file.mtimeMs > rhs.file.mtimeMs
+    }
+  }
+
+  private static func tieBreak(_ lhs: Keyed, _ rhs: Keyed) -> Bool {
+    switch compareNames(lhs.nameKey, rhs.nameKey) {
+    case .orderedAscending: return true
+    case .orderedDescending: return false
+    case .orderedSame:
+      return lhs.file.path.utf8.lexicographicallyPrecedes(rhs.file.path.utf8)
+    }
+  }
+
+  /// Case-insensitive, numeric-aware, locale-sensitive Finder-style compare
+  /// on the NFC keys (fl3 spec §FL3-1.1).
+  private static func compareNames(_ lhs: String, _ rhs: String) -> ComparisonResult {
+    lhs.localizedStandardCompare(rhs)
+  }
+
+  private static func date(fromMilliseconds value: Int64) -> Date {
+    Date(timeIntervalSince1970: TimeInterval(value) / 1_000)
+  }
+
+  // MARK: - Date buckets
+
+  /// Classifies an instant into the fl3 §FL3-1.3 bucket set with real
+  /// calendar arithmetic (no fixed offsets, no 86,400-second days). The
+  /// day-window buckets depend only on the calendar's time zone, so an
+  /// injected Buddhist/Hebrew/Islamic system calendar cannot shift which
+  /// civil day a note lands in; month/year buckets legitimately render in
+  /// the user's calendar (locked decision 4: presentation may localize
+  /// calendar rendering).
+  private struct BucketClassifier {
+    let calendar: Calendar
+    let locale: Locale
+    let startOfToday: Date
+    let nowEra: Int
+    let nowYear: Int
+
+    init(now: Date, calendar: Calendar, locale: Locale) {
+      self.calendar = calendar
+      self.locale = locale
+      self.startOfToday = calendar.startOfDay(for: now)
+      let components = calendar.dateComponents([.era, .year], from: now)
+      self.nowEra = components.era ?? 1
+      self.nowYear = components.year ?? 0
+    }
+
+    func classify(_ date: Date?) -> (key: String, label: String) {
+      guard let date else { return ("nodate", "No Date") }
+      let startOfDay = calendar.startOfDay(for: date)
+      if startOfDay == startOfToday { return ("today", "Today") }
+      let delta =
+        calendar.dateComponents([.day], from: startOfDay, to: startOfToday).day ?? 0
+      if delta == 1 { return ("yesterday", "Yesterday") }
+      if (2...7).contains(delta) { return ("previous7", "Previous 7 Days") }
+      if (8...30).contains(delta) { return ("previous30", "Previous 30 Days") }
+
+      let components = calendar.dateComponents([.era, .year, .month], from: date)
+      let era = components.era ?? 1
+      let year = components.year ?? 0
+      if era == nowEra && year == nowYear {
+        let label = date.formatted(
+          Date.FormatStyle(
+            locale: locale, calendar: calendar, timeZone: calendar.timeZone
+          )
+          .month(.wide).year())
+        return ("month-\(era)-\(year)-\(components.month ?? 0)", label)
+      }
+      let label = date.formatted(
+        Date.FormatStyle(
+          locale: locale, calendar: calendar, timeZone: calendar.timeZone
+        )
+        .year())
+      return ("year-\(era)-\(year)", label)
+    }
+  }
+}
+
+/// Pinned notes per folder: authored order is pin order, and pins are
+/// per-folder context — moving a note to another folder drops its pin
+/// (fl3 spec §FL3-2, Navigator semantics).
+struct SidebarPins: Equatable {
+  private(set) var byFolder: [String: [String]] = [:]
+
+  func paths(forFolder folder: String) -> [String] {
+    byFolder[folder] ?? []
+  }
+
+  func isPinned(_ path: String, inFolder folder: String) -> Bool {
+    byFolder[folder]?.contains(path) ?? false
+  }
+
+  var isEmpty: Bool { byFolder.isEmpty }
+
+  mutating func pin(_ path: String, inFolder folder: String) {
+    var paths = byFolder[folder] ?? []
+    guard !paths.contains(path) else { return }
+    paths.append(path)
+    byFolder[folder] = paths
+  }
+
+  mutating func unpin(_ path: String, inFolder folder: String) {
+    guard var paths = byFolder[folder] else { return }
+    paths.removeAll { $0 == path }
+    byFolder[folder] = paths.isEmpty ? nil : paths
+  }
+
+  mutating func unpinAll(inFolder folder: String) {
+    byFolder[folder] = nil
+  }
+
+  mutating func replacePaths(_ paths: [String], forFolder folder: String) {
+    byFolder[folder] = paths.isEmpty ? nil : paths
+  }
+
+  /// A file rename or move. A rename inside its folder retargets the pin in
+  /// place; a move to another folder drops it.
+  @discardableResult
+  mutating func applyRename(from oldPath: String, to newPath: String) -> Bool {
+    let oldFolder = Self.folder(of: oldPath)
+    guard var paths = byFolder[oldFolder],
+      let index = paths.firstIndex(of: oldPath)
+    else { return false }
+    if Self.folder(of: newPath) == oldFolder {
+      paths[index] = newPath
+    } else {
+      paths.remove(at: index)
+    }
+    byFolder[oldFolder] = paths.isEmpty ? nil : paths
+    return true
+  }
+
+  /// A folder rename/move retargets every pin key and member path under the
+  /// old folder, including nested subfolders.
+  @discardableResult
+  mutating func applyFolderRename(from oldFolder: String, to newFolder: String) -> Bool {
+    let oldPrefix = oldFolder + "/"
+    let newPrefix = newFolder + "/"
+    var changed = false
+    var next: [String: [String]] = [:]
+    next.reserveCapacity(byFolder.count)
+    for (folder, paths) in byFolder {
+      let newKey: String
+      if folder == oldFolder {
+        newKey = newFolder
+      } else if folder.hasPrefix(oldPrefix) {
+        newKey = newPrefix + folder.dropFirst(oldPrefix.count)
+      } else {
+        next[folder] = paths
+        continue
+      }
+      changed = true
+      next[newKey] = paths.map { path in
+        path.hasPrefix(oldPrefix)
+          ? newPrefix + path.dropFirst(oldPrefix.count)
+          : path
+      }
+    }
+    if changed { byFolder = next }
+    return changed
+  }
+
+  /// Deletions drop the affected file pins and every pin under a deleted
+  /// folder subtree.
+  @discardableResult
+  mutating func applyDelete(paths deletedPaths: [String], deletedFolders: [String]) -> Bool {
+    var changed = false
+    for path in deletedPaths {
+      let folder = Self.folder(of: path)
+      guard var paths = byFolder[folder], let index = paths.firstIndex(of: path)
+      else { continue }
+      paths.remove(at: index)
+      byFolder[folder] = paths.isEmpty ? nil : paths
+      changed = true
+    }
+    guard !deletedFolders.isEmpty else { return changed }
+    let prefixes = deletedFolders.map { $0 + "/" }
+    let doomed = byFolder.keys.filter { key in
+      deletedFolders.contains(key) || prefixes.contains { key.hasPrefix($0) }
+    }
+    for key in doomed {
+      byFolder[key] = nil
+      changed = true
+    }
+    return changed
+  }
+
+  static func folder(of path: String) -> String {
+    guard let separator = path.lastIndex(of: "/") else { return "" }
+    return String(path[..<separator])
+  }
+}
+
+/// At-most-one stale-prune rewrite per folder per session (fl3 spec
+/// §FL3-2.3). Reset when the vault changes.
+struct SidebarPinPruneLedger {
+  private var pruned: Set<String> = []
+
+  func shouldPrune(folder: String) -> Bool {
+    !pruned.contains(folder)
+  }
+
+  mutating func markPruned(folder: String) {
+    pruned.insert(folder)
+  }
+
+  mutating func reset() {
+    pruned.removeAll()
+  }
+}
+
+/// Reads and mutates the FL-06 sections of the generic `.slate/sidebar.json`
+/// root. Decoding is lenient per key — an unreadable value falls back to its
+/// default without discarding siblings — and mutators edit only their own
+/// keys so unknown data survives round trips untouched (DoD §FL-E).
+enum SidebarOrganizationSchema {
+  static let sortKey = "sort"
+  static let groupingKey = "grouping"
+  static let folderOverridesKey = "folderOverrides"
+  static let pinsKey = "pins"
+
+  static func decode(root: [String: Any]) -> (prefs: SidebarOrganizationPrefs, pins: SidebarPins) {
+    var prefs = SidebarOrganizationPrefs()
+    if let sort = decodeSort(root[sortKey]) {
+      prefs.vaultChoice.sort = sort
+    }
+    if let grouping = decodeGrouping(root[groupingKey]) {
+      prefs.vaultChoice.grouping = grouping
+    }
+    if let overrides = root[folderOverridesKey] as? [String: Any] {
+      for (folder, raw) in overrides {
+        guard let entry = raw as? [String: Any] else { continue }
+        let override = SidebarOrganizationOverride(
+          sort: decodeSort(entry[sortKey]),
+          grouping: decodeGrouping(entry[groupingKey]))
+        if !override.isEmpty {
+          prefs.folderOverrides[folder] = override
+        }
+      }
+    }
+
+    var pins = SidebarPins()
+    if let rawPins = root[pinsKey] as? [String: Any] {
+      for (folder, raw) in rawPins {
+        guard let paths = raw as? [String], !paths.isEmpty else { continue }
+        pins.replacePaths(paths, forFolder: folder)
+      }
+    }
+    return (prefs, pins)
+  }
+
+  private static func decodeSort(_ raw: Any?) -> SidebarSortOption? {
+    guard let entry = raw as? [String: Any],
+      let fieldRaw = entry["field"] as? String,
+      let field = SidebarSortField(rawValue: fieldRaw),
+      let directionRaw = entry["direction"] as? String,
+      let direction = SidebarSortDirection(rawValue: directionRaw)
+    else { return nil }
+    return SidebarSortOption(field: field, direction: direction)
+  }
+
+  private static func decodeGrouping(_ raw: Any?) -> SidebarGroupingOption? {
+    guard let value = raw as? String else { return nil }
+    return SidebarGroupingOption(rawValue: value)
+  }
+
+  private static func encodeSort(_ sort: SidebarSortOption) -> [String: Any] {
+    ["field": sort.field.rawValue, "direction": sort.direction.rawValue]
+  }
+
+  static func setVaultChoice(
+    _ root: inout [String: Any], _ choice: SidebarOrganizationChoice
+  ) {
+    root[sortKey] = encodeSort(choice.sort)
+    root[groupingKey] = choice.grouping.rawValue
+  }
+
+  static func setFolderOverride(
+    _ root: inout [String: Any],
+    folder: String,
+    override: SidebarOrganizationOverride
+  ) {
+    var overrides = root[folderOverridesKey] as? [String: Any] ?? [:]
+    var entry = overrides[folder] as? [String: Any] ?? [:]
+    if let sort = override.sort {
+      entry[sortKey] = encodeSort(sort)
+    } else {
+      entry[sortKey] = nil
+    }
+    if let grouping = override.grouping {
+      entry[groupingKey] = grouping.rawValue
+    } else {
+      entry[groupingKey] = nil
+    }
+    overrides[folder] = entry.isEmpty ? nil : entry
+    root[folderOverridesKey] = overrides.isEmpty ? nil : overrides
+  }
+
+  static func clearFolderOverride(_ root: inout [String: Any], folder: String) {
+    guard var overrides = root[folderOverridesKey] as? [String: Any],
+      var entry = overrides[folder] as? [String: Any]
+    else { return }
+    entry[sortKey] = nil
+    entry[groupingKey] = nil
+    overrides[folder] = entry.isEmpty ? nil : entry
+    root[folderOverridesKey] = overrides.isEmpty ? nil : overrides
+  }
+
+  static func setPins(_ root: inout [String: Any], folder: String, paths: [String]) {
+    var pins = root[pinsKey] as? [String: Any] ?? [:]
+    pins[folder] = paths.isEmpty ? nil : paths
+    root[pinsKey] = pins.isEmpty ? nil : pins
+  }
+}
