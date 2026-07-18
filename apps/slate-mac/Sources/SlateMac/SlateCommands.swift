@@ -27,6 +27,8 @@ enum SlateCommandID {
     // File management (U2-5, #463). Act on the tree's selected node.
     static let newNote = "slate.file.newNote"
     static let newFolder = "slate.file.newFolder"
+    static let importFilesAndFolders = "slate.file.importFilesAndFolders"
+    static let cancelImport = "slate.file.cancelImport"
     static let renameEntry = "slate.file.rename"
     static let moveTo = "slate.file.moveTo"
     static let deleteEntry = "slate.file.delete"
@@ -46,6 +48,7 @@ enum SlateCommandID {
         newFromTemplate,
         newNote,
         newFolder,
+        importFilesAndFolders,
         renameEntry,
         moveTo,
         deleteEntry,
@@ -372,6 +375,8 @@ enum SlateCommandID {
         newNote,
         newFolder,
         newFromTemplate,
+        importFilesAndFolders,
+        cancelImport,
         renameEntry,
         moveTo,
         duplicateEntry,
@@ -661,6 +666,27 @@ func registerCoreCommands(into registry: CommandRegistry, appState: AppState) {
     registerSidebarCommands(into: registry) { [weak appState] id in
         guard let appState else { return }
         _ = try appState.dispatchSidebarAction(id: id)
+    }
+
+    // FL05 lifecycle control is global rather than selection-scoped: it stays
+    // visible in the stable palette inventory and must remain invokable while
+    // the structural gate is occupied by the import it cancels.
+    register(
+        SlateCommandID.cancelImport,
+        label: "Cancel Import",
+        section: .sidebar,
+        hotkey: "⌘.",
+        hint: SidebarImportProgressStrip.cancelAccessibilityHint
+    ) { [weak appState] in
+        guard let appState else { return }
+        if let reason = appState.importCancellationDisabledReason {
+            throw CommandError.ActionFailed(message: reason)
+        }
+        guard appState.requestImportBatchCancellation() else {
+            throw CommandError.ActionFailed(
+                message: appState.importCancellationDisabledReason
+                    ?? SidebarImportProgressStrip.noImportInProgressHint)
+        }
     }
 
     // ----- Canvas (Milestone T, #369) -----

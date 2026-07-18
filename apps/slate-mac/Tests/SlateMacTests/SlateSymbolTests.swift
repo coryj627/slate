@@ -46,9 +46,9 @@ final class SlateSymbolTests: XCTestCase {
         // (folder.badge.plus / square.and.pencil / trash since v1;
         // arrow.turn.down.right since v1), so they're on the macOS 15 floor.
         "folder.badge.plus", "square.and.pencil", "arrow.turn.down.right", "trash",
-        // FL04-A shared sidebar actions. These familiar document, Finder,
-        // clipboard, and link metaphors all predate the macOS 15 floor.
-        "doc", "doc.on.doc", "doc.on.clipboard", "link",
+        // Shared sidebar actions. These familiar document, Finder, clipboard,
+        // link, and import metaphors all predate the macOS 15 floor.
+        "doc", "doc.on.doc", "doc.on.clipboard", "link", "tray.and.arrow.down",
         // Milestone T (#369): canvas tab glyph. rectangle.3.group is
         // SF Symbols 2 (macOS 11), comfortably on the macOS 15 floor.
         "rectangle.3.group",
@@ -170,6 +170,17 @@ final class SlateSymbolTests: XCTestCase {
                 "\(symbol) now renders a different glyph than before the migration."
             )
         }
+    }
+
+    func testImportFilesAndFoldersHasDedicatedAccessibleFloorSafeSymbol() throws {
+        let symbol = try XCTUnwrap(
+            SlateSymbol.allCases.first {
+                $0.title == "Import Files and Folders"
+            })
+        XCTAssertEqual(symbol.names.v7, "tray.and.arrow.down")
+        XCTAssertEqual(symbol.names.fallback, "tray.and.arrow.down")
+        XCTAssertTrue(
+            Self.knownMacOS15SafeSymbols.contains(symbol.names.fallback))
     }
 
     /// Every role's default label is a usable VoiceOver name: non-empty, no

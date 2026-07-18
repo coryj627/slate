@@ -2124,6 +2124,32 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(scrolledLine, 2)
     }
 
+    func testFL05SamePathSearchActivationStillRecordsExplicitNavigationIntent()
+        async throws
+    {
+        let vault = tempDir.appendingPathComponent("same-path-search-intent")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        try Data("alpha\nbeta\n".utf8)
+            .write(to: vault.appendingPathComponent("note.md"))
+
+        let state = try makeAppState()
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        state.openFile("note.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        state.searchQuery = "beta"
+        let revision = state.sidebarSelectionIntentRevision
+
+        state.openSearchResult(makeHit(path: "note.md"))
+
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision &+ 1,
+            "same-file search intent must invalidate an older deferred import landing")
+        XCTAssertEqual(state.selectedFilePath, "note.md")
+        _ = await waitForLineScroll(state)
+    }
+
     func testOpenSearchResultIgnoresScrollIfSelectionChangedMidLoad() async throws {
         // If the user switches files between activating a result
         // and the load finishing, the scroll request must not land

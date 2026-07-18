@@ -27,10 +27,13 @@ extension AppState {
     /// singleton: activate an existing `.graph` tab in ANY split group
     /// rather than opening a second (review round 1 finding 6 — the
     /// per-group `openTab` dedup alone let a split duplicate it).
-    func openGraphTab() {
+    func openGraphTab(advancesSidebarSelectionRevision: Bool = true) {
         if let reason = propertyEditNavigationDisabledReason {
             postMutationAnnouncement(reason)
             return
+        }
+        if advancesSidebarSelectionRevision {
+            recordExplicitSidebarNavigationIntent()
         }
         // Literal "opens/activates" (spec): a fresh tab shows the DEFAULT
         // view (transient filter/kind state is reset when a graph tab
@@ -296,10 +299,16 @@ extension AppState {
     /// The filter/kind are set BEFORE the tab's load so the first fetch is
     /// already correct, and the resting count/hub is announced once the
     /// fresh snapshot publishes (via `graphTablePendingPreset`).
-    func openGraphPreset(_ preset: GraphPreset) {
+    func openGraphPreset(
+        _ preset: GraphPreset,
+        advancesSidebarSelectionRevision: Bool = true
+    ) {
         if let reason = propertyEditNavigationDisabledReason {
             postMutationAnnouncement(reason)
             return
+        }
+        if advancesSidebarSelectionRevision {
+            recordExplicitSidebarNavigationIntent()
         }
         graphTableTextFilter = ""
         graphTableKindFilter = Self.graphPresetKind(preset)

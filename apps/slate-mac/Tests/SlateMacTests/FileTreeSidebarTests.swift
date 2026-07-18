@@ -384,6 +384,38 @@ final class FileTreeSidebarTests: XCTestCase {
 
     // MARK: - treeInvalidation seam (spec: drop level, refetch iff expanded)
 
+    func testFL05TargetedRootInvalidationPreservesUnaffectedExpandedCache() throws {
+        let spy = FetchSpy([
+            "": listing(
+                dirs: [dir(1, "notes", fileCount: 1)],
+                files: [file("root.md")]),
+            "notes": listing(dirs: [], files: [file("notes/keep.md")]),
+        ])
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(fetcher: spy.fetch)
+        vm.expand(try XCTUnwrap(vm.rootLevel.first))
+        XCTAssertEqual(spy.calls, ["", "notes"])
+
+        vm.rootLevelInvalidation()
+
+        XCTAssertEqual(spy.calls, ["", "notes", ""])
+        XCTAssertTrue(vm.expanded.contains(.dir(1)))
+        XCTAssertNotNil(vm.node(for: .file(path: "notes/keep.md")))
+        vm.collapse(try XCTUnwrap(vm.node(for: .dir(1))))
+        vm.expand(try XCTUnwrap(vm.node(for: .dir(1))))
+        XCTAssertEqual(
+            spy.calls,
+            ["", "notes", ""],
+            "a targeted root refresh must retain the unaffected child cache")
+
+        vm.authoritativeTreeInvalidation()
+        XCTAssertEqual(spy.calls.filter { $0 == "" }.count, 3)
+        XCTAssertGreaterThan(
+            spy.calls.filter { $0 == "notes" }.count,
+            1,
+            "an authoritative scan must refetch expanded descendants")
+    }
+
     func testTreeInvalidationOfCollapsedLevelDropsCacheAndDefersRefetch() {
         let spy = FetchSpy([
             "": listing(dirs: [dir(1, "a")], files: []),
@@ -1326,5 +1358,28 @@ final class FileTreeSidebarTests: XCTestCase {
         gate.arm()
         XCTAssertTrue(gate.consume(), "repeated mirrors still suppress only one list edge")
         XCTAssertFalse(gate.consume())
+    }
+
+    func testFL05SelectionRevisionCarrierGateMatchesOnceClearsMismatchAndRearms() {
+        var gate = FileTreeSidebar.SelectionRevisionGate()
+        let first = FileTreeSidebar.RowID.node(.file(path: "first.md"))
+        let second = FileTreeSidebar.RowID.node(.file(path: "second.md"))
+
+        XCTAssertFalse(gate.consume(if: first))
+        gate.arm(for: first)
+        XCTAssertTrue(gate.consume(if: first), "the exact carrier is neutral once")
+        XCTAssertFalse(gate.consume(if: first), "the next same-row user intent is newer")
+
+        gate.arm(for: first)
+        XCTAssertFalse(
+            gate.consume(if: second),
+            "a different user value must not inherit a stale programmatic origin")
+        XCTAssertFalse(gate.consume(if: first), "a mismatch clears the stale gate")
+
+        gate.arm(for: first)
+        gate.arm(for: second)
+        XCTAssertFalse(gate.consume(if: first), "re-arming overwrites a coalesced expectation")
+        gate.arm(for: second)
+        XCTAssertTrue(gate.consume(if: second))
     }
 }

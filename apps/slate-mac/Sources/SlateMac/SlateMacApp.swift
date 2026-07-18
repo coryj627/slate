@@ -31,6 +31,7 @@ struct SlateMacApp: App {
                 return [
                     SlateCommandID.newNote, SlateCommandID.newFolder,
                     SlateCommandID.newFromTemplate,
+                    SlateCommandID.importFilesAndFolders,
                 ]
             case .open:
                 return [SlateCommandID.sidebarOpen]
@@ -113,10 +114,22 @@ struct SlateMacApp: App {
                 let noteSaveDisabledReason = appState.activeNoteSaveDisabledReason
                 let sidebarEvaluations = appState.sidebarActionProjection(
                     surface: .menuBar)
+                let cancelImportDisabledReason =
+                    appState.importCancellationDisabledReason
+                let cancelImportHint = cancelImportDisabledReason
+                    ?? SidebarImportProgressStrip.cancelAccessibilityHint
 
                 // File starts with New-family commands, in the familiar macOS
                 // order, while every item still owns its live catalog state.
                 sidebarFileMenuActions(.creation, evaluations: sidebarEvaluations)
+
+                Button("Cancel Import") {
+                    _ = appState.requestImportBatchCancellation()
+                }
+                .keyboardShortcut(".", modifiers: [.command])
+                .disabled(cancelImportDisabledReason != nil)
+                .accessibilityHint(cancelImportHint)
+                .help(cancelImportHint)
 
                 Divider()
 

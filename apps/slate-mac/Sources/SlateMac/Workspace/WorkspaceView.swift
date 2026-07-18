@@ -135,7 +135,7 @@ private struct ParkedPaneView: View {
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            appState.activateTab(tab.id)
+                            appState.selectTab(id: tab.id)
                         }
                         .accessibilityLabel(
                             "Focus pane, \((document.path as NSString).lastPathComponent)")
@@ -154,7 +154,7 @@ private struct ParkedPaneView: View {
             .contentShape(Rectangle())
             .onTapGesture {
                 if let tab = group.activeTab {
-                    appState.activateTab(tab.id)
+                    appState.selectTab(id: tab.id)
                 }
             }
             .accessibilityLabel("Focus this pane")

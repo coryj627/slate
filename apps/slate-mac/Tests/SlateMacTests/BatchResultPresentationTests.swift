@@ -169,11 +169,74 @@ final class BatchResultPresentationTests: XCTestCase {
 
         XCTAssertTrue(attention.hasDetails)
         XCTAssertFalse(attention.hasOmittedDetails, "one inline detail is not truncated")
-        XCTAssertEqual(AppState.BatchTrashCopy.copyDetailsLabel, "Copy Details and Close")
+        XCTAssertEqual(AppState.BatchTrashCopy.copyDetailsLabel, "Copy Details")
         XCTAssertEqual(
             AppState.BatchTrashCopy.copyDetailsHint,
             "Copies the complete batch report, closes this report, and returns to the files sidebar."
         )
+    }
+
+    func testImportPreviewIsBoundedButCopyDetailsRetainsCompleteLedger() {
+        let report = AppState.ImportBatchFailureReport((0..<7).map { index in
+            AppState.ImportBatchFailureDetail(
+                providerIndex: index,
+                treeOrder: index,
+                item: "rejected-\(index).md",
+                reason: "reason \(index)")
+        })
+        let result = AppState.BatchStructuralResult(
+            payload: .importBatch(report),
+            requiresAttention: true)
+
+        let attention = AppState.BatchStructuralCopy.attention(for: result)
+        XCTAssertEqual(report.terminalFailureCount, 7)
+        XCTAssertEqual(report.totalDetailCount, 7)
+        XCTAssertEqual(report.details.count, 5)
+        XCTAssertEqual(report.allDetails.count, 7)
+        XCTAssertEqual(report.omittedCount, 2)
+        XCTAssertEqual(attention.previewWorkCount, 5)
+        XCTAssertTrue(attention.inlineMessage.contains("rejected-4.md"))
+        XCTAssertFalse(attention.inlineMessage.contains("rejected-6.md"))
+        XCTAssertTrue(attention.inlineMessage.contains("…and 2 more"))
+
+        let copied = AppState.BatchStructuralCopy.copiedDetails(for: result)
+        XCTAssertTrue(copied.contains("rejected-6.md"))
+        XCTAssertTrue(copied.contains("reason 6"))
+        XCTAssertFalse(copied.contains("…and"))
+    }
+
+    func testCheckAgainIsOfferedOnlyForTheOwningUnknownTrashReport() {
+        let uncertain = item("uncertain.md")
+        let trash = AppState.BatchStructuralResult(
+            payload: .trash(trashReport(
+                state: .failed,
+                unknown: [BatchTrashRemainder(
+                    item: uncertain,
+                    failure: BatchItemFailure(
+                        item: uncertain,
+                        stage: .reconciliation,
+                        message: "unknown"))],
+                requiresRescan: true)),
+            requiresAttention: true)
+        let unrelatedImport = AppState.BatchStructuralResult(
+            payload: .importBatch(AppState.ImportBatchFailureReport([
+                AppState.ImportBatchFailureDetail(
+                    providerIndex: 0,
+                    treeOrder: 0,
+                    item: "other.md",
+                    reason: "could not read")
+            ])),
+            requiresAttention: true)
+
+        XCTAssertTrue(AppState.BatchStructuralCopy.shouldOfferTrashReconciliation(
+            for: trash,
+            hasQuarantinedTrashItems: true))
+        XCTAssertFalse(AppState.BatchStructuralCopy.shouldOfferTrashReconciliation(
+            for: unrelatedImport,
+            hasQuarantinedTrashItems: true))
+        XCTAssertFalse(AppState.BatchStructuralCopy.shouldOfferTrashReconciliation(
+            for: trash,
+            hasQuarantinedTrashItems: false))
     }
 
     func testCopyAndCloseRejectsStaleUUIDThenPromotesDeferredOwnerAndFocusesOnce()

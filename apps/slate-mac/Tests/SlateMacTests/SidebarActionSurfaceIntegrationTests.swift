@@ -41,6 +41,11 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             hint: "Choose a template for a new note.",
             section: .sidebar, hotkey: "⇧⌘N"),
         .init(
+            id: "slate.file.importFilesAndFolders",
+            label: "Import Files and Folders…",
+            hint: "Choose files and folders. External items are copied into the selected location; items already in this vault are moved.",
+            section: .sidebar, hotkey: nil),
+        .init(
             id: "slate.file.rename", label: "Rename…",
             hint: "Rename the selected file or folder in place.",
             section: .sidebar, hotkey: "⌥⌘R"),
@@ -157,7 +162,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         XCTAssertEqual(
             sidebarCommands.count,
             Self.expectedActions.count,
-            "the registry must expose all 11 catalog actions even without a vault")
+            "the registry must expose every catalog action even without a vault")
 
         let grouped = Dictionary(grouping: sidebarCommands, by: \.id)
         for expected in Self.expectedActions {
@@ -186,8 +191,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         let sidebarSection = model.sections.first { $0.kind == .sidebar }
         XCTAssertEqual(
             sidebarSection?.commands.map(\.id),
-            catalogIDs,
-            "the Sidebar palette section must follow catalog order, not lexical ID order")
+            catalogIDs + [SlateCommandID.cancelImport],
+            "the Sidebar palette section must preserve catalog order before global lifecycle commands")
     }
 
     func testMenuAndPaletteKeepFullInventoryWithIdenticalCurrentReasons() {
@@ -221,6 +226,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 "Select no more than one item to choose a creation location.",
             SlateCommandID.newFromTemplate:
                 "Select no more than one item to choose a creation location.",
+            SlateCommandID.importFilesAndFolders:
+                "Select no more than one item to choose an import location.",
             SlateCommandID.renameEntry: "Select exactly one file or folder to rename.",
             SlateCommandID.duplicateEntry: "Select exactly one file to duplicate.",
             SlateCommandID.revealInFinder: "Select exactly one file or folder to reveal.",
@@ -497,6 +504,48 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 [expected.id],
                 "registered \(expected.id) must call the stable-ID dispatcher once")
         }
+    }
+
+    func testImportCommandUsesOneCatalogDefinitionAcrossFileMenuRegistryAndPalette() throws {
+        let id = "slate.file.importFilesAndFolders"
+        XCTAssertTrue(SlateCommandID.all.contains(id))
+        XCTAssertTrue(SlateCommandID.structuralMutationCommands.contains(id))
+        XCTAssertEqual(
+            SlateMacApp.SidebarFileMenuActionGroup.creation.actionIDs,
+            [
+                SlateCommandID.newNote,
+                SlateCommandID.newFolder,
+                SlateCommandID.newFromTemplate,
+                id,
+            ])
+
+        let root = snapshot([])
+        let menu = try XCTUnwrap(
+            SlateMacApp.sidebarFileMenuEvaluations(
+                for: .creation,
+                from: SidebarActionCatalog.project(
+                    surface: .menuBar,
+                    snapshot: root)
+            ).first { $0.id == id })
+        let palette = try XCTUnwrap(
+            SidebarActionCatalog.project(
+                surface: .commandPalette,
+                snapshot: root
+            ).first { $0.id == id })
+        XCTAssertEqual(menu, palette)
+
+        let registry = CommandRegistry()
+        var invoked: [String] = []
+        registerSidebarCommands(
+            into: registry,
+            invokeID: { invoked.append($0) })
+        let command = try XCTUnwrap(registry.findById(id: id))
+        XCTAssertEqual(command.label, "Import Files and Folders…")
+        XCTAssertEqual(command.accessibilityHint, menu.definition.accessibilityHint)
+        XCTAssertNil(command.hotkeyHint)
+        XCTAssertEqual(command.section, .sidebar)
+        try registry.invokeById(id: id)
+        XCTAssertEqual(invoked, [id])
     }
 
     func testSingleFolderSelectionPreservesTemplateDestinationThroughLiveRegistry()
@@ -868,7 +917,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         let semantic = try semanticSource("SlateMacApp.swift")
         let membership = try computedPropertyBody(named: "actionIDs", in: semantic)
         let expectedGroups = [
-            "case .creation: return [ SlateCommandID.newNote, SlateCommandID.newFolder, SlateCommandID.newFromTemplate ]",
+            "case .creation: return [ SlateCommandID.newNote, SlateCommandID.newFolder, SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders ]",
             "case .open: return [SlateCommandID.sidebarOpen]",
             "case .management: return [ SlateCommandID.renameEntry, SlateCommandID.moveTo, SlateCommandID.duplicateEntry ]",
             "case .inspection: return [ SlateCommandID.revealInFinder, SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink ]",
@@ -885,6 +934,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         for id in [
             "SlateCommandID.sidebarOpen", "SlateCommandID.newNote",
             "SlateCommandID.newFolder", "SlateCommandID.newFromTemplate",
+            "SlateCommandID.importFilesAndFolders",
             "SlateCommandID.renameEntry", "SlateCommandID.moveTo",
             "SlateCommandID.duplicateEntry", "SlateCommandID.revealInFinder",
             "SlateCommandID.copyPath", "SlateCommandID.sidebarCopyWikilink",
@@ -905,7 +955,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             grouped.map(\.id),
             [
                 SlateCommandID.newNote, SlateCommandID.newFolder,
-                SlateCommandID.newFromTemplate, SlateCommandID.sidebarOpen,
+                SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
+                SlateCommandID.sidebarOpen,
                 SlateCommandID.renameEntry, SlateCommandID.moveTo,
                 SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                 SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
@@ -948,6 +999,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         for idToken in [
             "SlateCommandID.sidebarOpen", "SlateCommandID.newNote",
             "SlateCommandID.newFolder", "SlateCommandID.newFromTemplate",
+            "SlateCommandID.importFilesAndFolders",
             "SlateCommandID.renameEntry", "SlateCommandID.moveTo",
             "SlateCommandID.duplicateEntry", "SlateCommandID.revealInFinder",
             "SlateCommandID.copyPath", "SlateCommandID.sidebarCopyWikilink",

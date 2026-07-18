@@ -23,7 +23,7 @@ final class FileTreeDragDropTests: XCTestCase {
     private var tempDir: URL!
 
     override func setUpWithError() throws {
-        tempDir = FileManager.default.temporaryDirectory
+        tempDir = URL(fileURLWithPath: "/private/tmp", isDirectory: true)
             .appendingPathComponent("dnd-fileurl-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
     }
@@ -41,6 +41,24 @@ final class FileTreeDragDropTests: XCTestCase {
                 at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try "# \((rel as NSString).lastPathComponent)\n".write(
                 to: url, atomically: true, encoding: .utf8)
+        }
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        state.openVault(at: vault)
+        await state.scanTask?.value
+        return (state, vault)
+    }
+
+    private func makeVault(contents: [String: String]) async throws -> (AppState, URL) {
+        let vault = tempDir.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        for (rel, contents) in contents {
+            let url = vault.appendingPathComponent(rel)
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try contents.write(to: url, atomically: true, encoding: .utf8)
         }
         let state = AppState(
             recentsStore: RecentVaultsStore(
@@ -106,6 +124,32 @@ final class FileTreeDragDropTests: XCTestCase {
         func entrantCount() -> Int { entrants }
     }
 
+    private final class SecondPreparationGate: @unchecked Sendable {
+        private let lock = NSLock()
+        private var rootAdmissionCount = 0
+        private let secondEntered = DispatchSemaphore(value: 0)
+        private let releaseSecond = DispatchSemaphore(value: 0)
+
+        func reach(_ boundary: SidebarImportSourceBoundary) {
+            guard case .beforeRootAdmission = boundary else { return }
+            lock.lock()
+            rootAdmissionCount += 1
+            let shouldBlock = rootAdmissionCount == 2
+            lock.unlock()
+            guard shouldBlock else { return }
+            secondEntered.signal()
+            releaseSecond.wait()
+        }
+
+        func waitForSecondRoot() async {
+            await Task.detached { self.secondEntered.wait() }.value
+        }
+
+        func release() {
+            releaseSecond.signal()
+        }
+    }
+
     private actor BatchMoveProbe {
         private(set) var requests: [BatchMoveRequest] = []
         let report: BatchMoveReport
@@ -123,6 +167,177 @@ final class FileTreeDragDropTests: XCTestCase {
         func callCount() -> Int { requests.count }
     }
 
+    private actor ImportRefreshProbe {
+        private(set) var listRefreshCount = 0
+        private(set) var scanCount = 0
+
+        func recordListRefresh() { listRefreshCount += 1 }
+        func recordScan() { scanCount += 1 }
+        func counts() -> (list: Int, scan: Int) {
+            (listRefreshCount, scanCount)
+        }
+    }
+
+    private final class ProviderLoadCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var counts: [Int: Int] = [:]
+
+        func record(_ index: Int) {
+            lock.lock()
+            counts[index, default: 0] += 1
+            lock.unlock()
+        }
+
+        func count(for index: Int) -> Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return counts[index, default: 0]
+        }
+    }
+
+    /// Drives the same two app-to-tree edges used by `FileTreeSidebar`: path
+    /// changes are neutral mirrors, while an explicit navigation revision is a
+    /// monotone user-intent edge. Applying the eventual import mutation through
+    /// this bridge makes the deferred-selection race deterministic without
+    /// depending on SwiftUI scheduling.
+    @MainActor
+    private final class ImportSelectionBridge {
+        typealias Model = SidebarSelectionModel<FileTreeSidebar.RowID>
+        typealias Row = Model.VisibleRow
+
+        private let state: AppState
+        private var rows: [Row] = []
+        private var cancellables = Set<AnyCancellable>()
+        private(set) var model = Model()
+
+        init(state: AppState, initialPath: String) {
+            self.state = state
+            mirror(path: initialPath)
+            state.$sidebarSelectionIntentRevision
+                .dropFirst()
+                .sink { [weak self] _ in self?.noteExplicitNavigation() }
+                .store(in: &cancellables)
+            state.$selectedFilePath
+                .dropFirst()
+                .sink { [weak self] path in self?.mirror(path: path) }
+                .store(in: &cancellables)
+        }
+
+        var focusedPath: String? {
+            model.focused.flatMap { focused in
+                rows.first(where: { $0.identity == focused })?.path
+            }
+        }
+
+        func applyImportMutation(_ mutation: AppState.TreeMutation) -> Bool {
+            guard let expectedRevision = mutation.selectionRevision,
+                case let .importBatch(materialized, _, _) = mutation.kind
+            else { return false }
+            let importedRows = materialized.map { row(path: $0.path) }
+            let outcome = model.selectImportedResults(
+                importedRows,
+                ifSelectionRevisionIs: expectedRevision)
+            if outcome.handled { publish() }
+            return outcome.handled
+        }
+
+        private func noteExplicitNavigation() {
+            model.noteExternalNavigationIntent()
+            publish()
+        }
+
+        private func mirror(path: String?) {
+            model.reveal(path.map(row(path:)))
+            publish()
+        }
+
+        private func row(path: String) -> Row {
+            if let existing = rows.first(where: { $0.path == path }) {
+                return existing
+            }
+            let row = Row(
+                identity: .node(.file(path: path)),
+                path: path,
+                isDirectory: false)
+            rows.append(row)
+            return row
+        }
+
+        private func publish() {
+            guard let session = state.currentSession else { return }
+            _ = state.publishSidebarSelectionSnapshot(
+                SidebarSelectionSnapshot.capture(
+                    sessionIdentity: ObjectIdentifier(session),
+                    model: model,
+                    visibleRows: rows))
+        }
+    }
+
+    private func assertRunningImportPreservesExplicitNavigation(
+        state: AppState,
+        initialPath: String,
+        expectedPath: String,
+        navigate: () -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        XCTAssertEqual(state.selectedFilePath, initialPath, file: file, line: line)
+        let bridge = ImportSelectionBridge(state: state, initialPath: initialPath)
+        let capturedSelectionRevision = bridge.model.selectionRevision
+        let appRevisionBeforeNavigation = state.sidebarSelectionIntentRevision
+        let source = tempDir.appendingPathComponent(
+            "source-\(UUID().uuidString).md")
+        try Data("# Imported\n".utf8).write(to: source)
+        let refreshGate = SuspensionGate()
+        state.importInventoryRefreshRunner = { _, _ in
+            await refreshGate.enter()
+        }
+        let owner = try XCTUnwrap(
+            state.beginImportBatch(
+                providers: [fileURLProvider(source)],
+                destinationFolder: "",
+                selectionRevision: capturedSelectionRevision),
+            file: file,
+            line: line)
+        let importTask = state.startImportBatch(owner)
+        await refreshGate.waitForEntrants(1)
+
+        navigate()
+
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            appRevisionBeforeNavigation &+ 1,
+            "each explicit navigation must advance exactly once",
+            file: file,
+            line: line)
+        XCTAssertEqual(state.selectedFilePath, expectedPath, file: file, line: line)
+        XCTAssertEqual(bridge.focusedPath, expectedPath, file: file, line: line)
+        XCTAssertEqual(state.treeSelectedNode?.path, expectedPath, file: file, line: line)
+
+        await refreshGate.releaseOne()
+        await importTask.value
+
+        let mutation = try XCTUnwrap(state.treeMutation, file: file, line: line)
+        XCTAssertEqual(
+            mutation.selectionRevision,
+            capturedSelectionRevision,
+            "the import must retain the selection revision captured at admission",
+            file: file,
+            line: line)
+        XCTAssertFalse(
+            bridge.applyImportMutation(mutation),
+            "completion must reject its whole deferred landing after newer navigation",
+            file: file,
+            line: line)
+        XCTAssertEqual(bridge.focusedPath, expectedPath, file: file, line: line)
+        XCTAssertEqual(
+            state.treeSelectedNode?.path,
+            expectedPath,
+            "the sidebar command target must remain on the newer navigation",
+            file: file,
+            line: line)
+    }
+
     private func batchItem(_ path: String, dir: Bool = false) -> StructuralBatchItem {
         StructuralBatchItem(path: path, isDirectory: dir)
     }
@@ -132,20 +347,64 @@ final class FileTreeDragDropTests: XCTestCase {
         planned: [StructuralBatchItem],
         opID: Int64? = nil,
         standing: [BatchPathChange] = [],
+        rolledBack: [BatchPathChange] = [],
+        skipped: [BatchSkippedItem] = [],
+        preflightFailures: [BatchItemFailure] = [],
+        failure: BatchItemFailure? = nil,
+        rollbackFailures: [BatchItemFailure] = [],
+        rewriteFailures: [RewriteFailure] = [],
         requiresRescan: Bool = false
     ) -> BatchMoveReport {
         BatchMoveReport(
             envelope: StructuralBatchEnvelope(
-                planned: planned, skipped: [], preflightFailures: []),
+                planned: planned,
+                skipped: skipped,
+                preflightFailures: preflightFailures),
             state: state,
             opId: opID,
             standing: standing,
-            rolledBack: [],
-            failure: nil,
-            rollbackFailures: [],
+            rolledBack: rolledBack,
+            failure: failure,
+            rollbackFailures: rollbackFailures,
             rewritten: [],
-            rewriteFailures: [],
+            rewriteFailures: rewriteFailures,
             requiresRescan: requiresRescan)
+    }
+
+    private func fileURLProvider(_ url: URL) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { completion in
+            completion(url.dataRepresentation, nil)
+            return nil
+        }
+        return provider
+    }
+
+    private func seedBatchMoveHistory(
+        in state: AppState,
+        path: String,
+        destination: String,
+        opID: Int64
+    ) async throws -> AppState.StructuralUndoOp {
+        let standing = [BatchPathChange(
+            oldPath: path,
+            newPath: destination + "/" + (path as NSString).lastPathComponent,
+            isDirectory: false)]
+        let report = batchMoveReport(
+            state: .succeeded,
+            planned: [batchItem(path)],
+            opID: opID,
+            standing: standing)
+        state.batchMoveRunner = { _, _ in report }
+        state.structuralBatchRefreshRunner = { _ in }
+        await state.batchMove(
+            [AppState.TreeSelection(path: path, isDirectory: false)],
+            to: destination,
+            preferredFocusPath: path)?.value
+        return try XCTUnwrap(state.structuralUndoStack.last)
     }
 
     private func parkStructuralMutation(
@@ -212,6 +471,1583 @@ final class FileTreeDragDropTests: XCTestCase {
         withExtendedLifetime(cancellable) {}
         await gate.releaseOne()
         await busyTask.value
+    }
+
+    // MARK: - FL-05 aggregate import ownership
+
+    func testFL05RunningImportCannotOverwriteExplicitExistingTabSelection()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: ["alpha.md", "beta.md"])
+        state.openFile("alpha.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        let alphaTab = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        state.openFile("beta.md", target: .newTab)
+        await state.noteLoadTask?.value
+
+        try await assertRunningImportPreservesExplicitNavigation(
+            state: state,
+            initialPath: "beta.md",
+            expectedPath: "alpha.md"
+        ) {
+            state.selectTab(id: alphaTab)
+        }
+    }
+
+    func testFL05RunningImportCannotOverwriteExplicitKeyboardPaneFocus()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: ["alpha.md", "beta.md"])
+        state.openFile("alpha.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        state.splitActivePane(axis: .horizontal)
+        state.openFile("beta.md", target: .currentTab)
+        await state.noteLoadTask?.value
+
+        try await assertRunningImportPreservesExplicitNavigation(
+            state: state,
+            initialPath: "beta.md",
+            expectedPath: "alpha.md"
+        ) {
+            state.focusPane(.left)
+        }
+    }
+
+    func testFL05RunningImportCannotOverwriteExplicitCloseSuccessor()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: ["alpha.md", "beta.md"])
+        state.openFile("alpha.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        state.openFile("beta.md", target: .newTab)
+        await state.noteLoadTask?.value
+
+        try await assertRunningImportPreservesExplicitNavigation(
+            state: state,
+            initialPath: "beta.md",
+            expectedPath: "alpha.md"
+        ) {
+            state.requestCloseTab()
+        }
+    }
+
+    func testFL05RunningImportCannotOverwriteDifferentPathTaskRowIntent()
+        async throws
+    {
+        let (state, _) = try await makeVault(contents: [
+            "alpha.md": "# Alpha\n",
+            "tasks.md": "# Tasks\n- [ ] Review import selection\n",
+        ])
+        state.openFile("alpha.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+        let row = try XCTUnwrap(
+            state.vaultTasks.first { $0.path == "tasks.md" })
+
+        try await assertRunningImportPreservesExplicitNavigation(
+            state: state,
+            initialPath: "alpha.md",
+            expectedPath: "tasks.md"
+        ) {
+            state.openTaskRowInEditor(row)
+        }
+        await state.noteLoadTask?.value
+        await state.taskRowActivationTask?.value
+    }
+
+    func testFL05RunningImportCannotOverwriteSamePathTaskRowIntent()
+        async throws
+    {
+        let (state, _) = try await makeVault(contents: [
+            "tasks.md": "# Tasks\n- [ ] Review import selection\n",
+        ])
+        state.openFile("tasks.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        state.openTasksReview()
+        await state.vaultTasksLoadTask?.value
+        let row = try XCTUnwrap(
+            state.vaultTasks.first { $0.path == "tasks.md" })
+
+        try await assertRunningImportPreservesExplicitNavigation(
+            state: state,
+            initialPath: "tasks.md",
+            expectedPath: "tasks.md"
+        ) {
+            state.openTaskRowInEditor(row)
+        }
+    }
+
+    func testFL05RunningImportCannotOverwriteSameRootConnectionsIntent()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: ["a.md"])
+        state.openFile("a.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        state.connectionsRootPath = "a.md"
+
+        try await assertRunningImportPreservesExplicitNavigation(
+            state: state,
+            initialPath: "a.md",
+            expectedPath: "a.md"
+        ) {
+            state.reRootConnections(on: "a.md")
+        }
+
+        XCTAssertEqual(
+            state.graphSelectedNodeKey,
+            GraphNodeKey.make(path: "a.md", label: ""),
+            "the explicit graph target must remain on the same-root command")
+        XCTAssertEqual(state.workspace.activeLeaf, .connections)
+    }
+
+    func testFL05ConnectionsIntentAdvancesExactlyOnceForSameAndDifferentRoots()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: ["a.md", "b.md"])
+        state.openFile("a.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        state.connectionsRootPath = "a.md"
+
+        var revision = state.sidebarSelectionIntentRevision
+        state.reRootConnections(on: "a.md")
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision &+ 1,
+            "same-root reassertion is still an explicit navigation intent")
+        XCTAssertEqual(state.selectedFilePath, "a.md")
+
+        revision = state.sidebarSelectionIntentRevision
+        state.reRootConnections(on: "b.md")
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision &+ 1,
+            "different-root intent must record once, not once plus nested openFile")
+        XCTAssertEqual(state.selectedFilePath, "b.md")
+        XCTAssertEqual(state.connectionsRootPath, "b.md")
+    }
+
+    func testFL05ExplicitTabIntentCoversCanvasAndBaseBeforeTypeDispatchExactlyOnce()
+        async throws
+    {
+        let (state, _) = try await makeVault(contents: [
+            "note.md": "# Note\n",
+            "board.canvas":
+                #"{"nodes":[],"edges":[]}"#,
+            "Queries/Reading.base":
+                "views:\n  - type: table\n    name: Reading\n",
+        ])
+        state.openFile("note.md", target: .currentTab)
+        await state.noteLoadTask?.value
+
+        var revision = state.sidebarSelectionIntentRevision
+        state.openCanvasFile("board.canvas", target: .newTab)
+        XCTAssertEqual(state.sidebarSelectionIntentRevision, revision &+ 1)
+        let canvasTab = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+
+        revision = state.sidebarSelectionIntentRevision
+        state.openBaseFile("Queries/Reading.base", target: .newTab)
+        XCTAssertEqual(state.sidebarSelectionIntentRevision, revision &+ 1)
+        let baseTab = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+
+        revision = state.sidebarSelectionIntentRevision
+        state.activateTab(canvasTab)
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision,
+            "the type-specific activation mechanism remains internal and neutral")
+
+        state.selectTab(id: baseTab)
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision &+ 1,
+            "the explicit wrapper records once before Base dispatch")
+
+        revision = state.sidebarSelectionIntentRevision
+        state.openFile("board.canvas", target: .newTab)
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision &+ 1,
+            "openFile plus nested Canvas activation must not double-advance")
+    }
+
+    func testFL05FileTreeAndInternalNavigationPathsRemainRevisionNeutral()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: ["alpha.md", "beta.md"])
+        state.openFile("alpha.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        let alphaTab = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        state.openFile("beta.md", target: .newTab)
+        await state.noteLoadTask?.value
+
+        let revision = state.sidebarSelectionIntentRevision
+        state.activateTab(alphaTab)
+        XCTAssertEqual(state.sidebarSelectionIntentRevision, revision)
+
+        state.openFile(
+            "beta.md",
+            target: .currentTab,
+            advancesSidebarSelectionRevision: false)
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision,
+            "FileTree owns its own model revision and must not double-advance AppState")
+
+        let activeTab = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        state.performCloseTab(activeTab)
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision,
+            "internal close/mutation/layout continuations remain neutral")
+        XCTAssertTrue(state.closeVault())
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision,
+            "vault teardown remains neutral")
+    }
+
+    func testFL05CloseIntentAdvancesOnceAcrossDirtyPromptCancelButInactiveCloseIsNeutral()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: ["alpha.md", "beta.md"])
+        state.openFile("alpha.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        let alphaTab = try XCTUnwrap(state.workspace.model.activeGroup.activeTabID)
+        state.openFile("beta.md", target: .newTab)
+        await state.noteLoadTask?.value
+        state.updateEditorText("# Beta\nDirty\n")
+
+        var revision = state.sidebarSelectionIntentRevision
+        state.requestCloseTab()
+        XCTAssertEqual(state.sidebarSelectionIntentRevision, revision &+ 1)
+        XCTAssertNotNil(state.pendingTabClose)
+        state.resolveTabCloseCancel()
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision &+ 1,
+            "rollback/cancel must not add a second navigation edge")
+
+        revision = state.sidebarSelectionIntentRevision
+        state.requestCloseTab(alphaTab)
+        XCTAssertEqual(
+            state.sidebarSelectionIntentRevision,
+            revision,
+            "closing an inactive clean tab does not change or reassert selection")
+    }
+
+    func testFL05InactivePanePointerAndModeToggleUseExplicitTabBoundaryByInspection()
+        throws
+    {
+        let sourceRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/SlateMac")
+        let workspaceView = try String(
+            contentsOf: sourceRoot.appendingPathComponent("Workspace/WorkspaceView.swift"),
+            encoding: .utf8)
+        let tabBar = try String(
+            contentsOf: sourceRoot.appendingPathComponent("Workspace/TabBarView.swift"),
+            encoding: .utf8)
+
+        XCTAssertFalse(workspaceView.contains("appState.activateTab(tab.id)"))
+        XCTAssertGreaterThanOrEqual(
+            workspaceView.components(separatedBy: "appState.selectTab(id: tab.id)").count - 1,
+            2,
+            "both loaded and placeholder inactive-pane pointer paths use the explicit seam")
+        XCTAssertTrue(tabBar.contains("appState.selectTab(id: activeTabID)"))
+        XCTAssertFalse(tabBar.contains("appState.activateTab(activeTabID)"))
+    }
+
+    func testFL05BeginImportBatchClaimsStructuralOwnershipBeforeProviderLoadAndRejectsSecondBatch()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: ["destination/keep.md"])
+        let session = try XCTUnwrap(state.currentSession)
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { _ in
+            XCTFail("beginImportBatch must not start provider loading synchronously")
+            return nil
+        }
+
+        let owner = try XCTUnwrap(
+            state.beginImportBatch(
+                providers: [provider],
+                destinationFolder: "destination"))
+
+        XCTAssertTrue(state.isMutatingStructure)
+        XCTAssertTrue(owner.session === session)
+        XCTAssertEqual(owner.destinationFolder, "destination")
+        XCTAssertEqual(owner.supportedProviderCount, 1)
+        XCTAssertTrue(state.currentImportBatchOwner === owner)
+
+        XCTAssertNil(
+            state.beginImportBatch(
+                providers: [provider],
+                destinationFolder: "other"),
+            "a second batch must lose admission during the old provider-load gap")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            AppState.structuralMutationBusyReason)
+
+        state.cancelImportBatch(owner)
+        XCTAssertFalse(state.isMutatingStructure)
+        XCTAssertNil(state.currentImportBatchOwner)
+    }
+
+    func testFL05ProviderLimitRejectsBeforeOwnershipOrAnyProviderLoad()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: [])
+        let counter = ProviderLoadCounter()
+        let limit = SidebarImportProviderIntake.maximumProviderCount
+        let providers = (0...limit).map { index in
+            let provider = NSItemProvider()
+            provider.registerDataRepresentation(
+                forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+                visibility: .all
+            ) { completion in
+                counter.record(index)
+                completion(
+                    URL(fileURLWithPath: "/private/tmp/item-\(index).md")
+                        .dataRepresentation,
+                    nil)
+                return nil
+            }
+            return provider
+        }
+
+        let accepted = try XCTUnwrap(state.beginImportBatch(
+            providers: Array(providers.prefix(limit)),
+            destinationFolder: ""))
+        state.cancelImportBatch(accepted)
+        XCTAssertNil(state.beginImportBatch(
+            providers: providers,
+            destinationFolder: ""))
+        XCTAssertNil(state.currentImportBatchOwner)
+        XCTAssertFalse(state.isMutatingStructure)
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            "Choose \(limit) or fewer files and folders to import at once.")
+        XCTAssertEqual(
+            state.sidebarActionBackgroundFailure,
+            AppState.importProviderLimitReason)
+        for index in 0...limit {
+            XCTAssertEqual(counter.count(for: index), 0)
+        }
+    }
+
+    func testFL05AcceptedCancellationPublishesCancellingPhaseOnce() async throws {
+        let (state, _) = try await makeVault(files: [])
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(tempDir.appendingPathComponent("pending.md"))],
+            destinationFolder: ""))
+
+        XCTAssertTrue(state.canRequestImportBatchCancellation)
+        XCTAssertEqual(owner.progress.phase, .importing)
+        XCTAssertTrue(state.requestImportBatchCancellation())
+        XCTAssertEqual(owner.progress.phase, .cancelling)
+        XCTAssertFalse(owner.progress.canRequestCancellation)
+        XCTAssertFalse(state.canRequestImportBatchCancellation)
+        XCTAssertFalse(state.requestImportBatchCancellation())
+        XCTAssertEqual(owner.progress.phase, .cancelling)
+
+        state.cancelImportBatch(owner)
+    }
+
+    func testFL05RegisteredCancelCommandUsesLiveLifecycleAvailability()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: [])
+        let command = try XCTUnwrap(state.commandRegistry.list().first {
+            $0.id == SlateCommandID.cancelImport
+        })
+        var pickerInvocationCount = 0
+        state.importSourcePicker = {
+            pickerInvocationCount += 1
+            return nil
+        }
+        func paletteReason() -> String? {
+            CommandPaletteView.disabledReason(
+                for: command,
+                structuralMutationDisabledReason:
+                    state.structuralMutationDisabledReason,
+                importCancellationDisabledReason:
+                    state.importCancellationDisabledReason)
+        }
+        func assertRegistryRejects(_ expectedReason: String) {
+            XCTAssertThrowsError(
+                try state.commandRegistry.invokeById(
+                    id: SlateCommandID.cancelImport)
+            ) { error in
+                XCTAssertEqual(
+                    error as? CommandError,
+                    .ActionFailed(message: expectedReason))
+            }
+        }
+
+        XCTAssertEqual(
+            state.importCancellationDisabledReason,
+            SidebarImportProgressStrip.noImportInProgressHint)
+        XCTAssertEqual(
+            paletteReason(),
+            SidebarImportProgressStrip.noImportInProgressHint)
+        assertRegistryRejects(SidebarImportProgressStrip.noImportInProgressHint)
+
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(tempDir.appendingPathComponent("pending.md"))],
+            destinationFolder: ""))
+        XCTAssertNil(state.importCancellationDisabledReason)
+        XCTAssertNil(paletteReason())
+
+        owner.installActivePhaseCancellation(
+            phase: .moving, cancellableByUser: false) {}
+        let movingReason = SidebarImportProgressStrip.cancellationHint(
+            phase: .moving, available: false)
+        XCTAssertEqual(state.importCancellationDisabledReason, movingReason)
+        XCTAssertEqual(paletteReason(), movingReason)
+        assertRegistryRejects(movingReason)
+        XCTAssertFalse(owner.isCancellationRequested)
+
+        owner.installActivePhaseCancellation(
+            phase: .finishing, cancellableByUser: false) {}
+        let finishingReason = SidebarImportProgressStrip.cancellationHint(
+            phase: .finishing, available: false)
+        XCTAssertEqual(state.importCancellationDisabledReason, finishingReason)
+        XCTAssertEqual(paletteReason(), finishingReason)
+        assertRegistryRejects(finishingReason)
+        XCTAssertFalse(owner.isCancellationRequested)
+
+        owner.installActivePhaseCancellation(
+            phase: .importing, cancellableByUser: true) {}
+        XCTAssertNil(state.importCancellationDisabledReason)
+        XCTAssertNil(paletteReason())
+        try state.commandRegistry.invokeById(id: SlateCommandID.cancelImport)
+
+        XCTAssertTrue(owner.isCancellationRequested)
+        XCTAssertEqual(owner.progress.phase, .cancelling)
+        XCTAssertEqual(pickerInvocationCount, 0)
+        let cancellingReason = SidebarImportProgressStrip.cancellationHint(
+            phase: .cancelling, available: false)
+        XCTAssertEqual(state.importCancellationDisabledReason, cancellingReason)
+        XCTAssertEqual(paletteReason(), cancellingReason)
+        assertRegistryRejects(cancellingReason)
+
+        state.cancelImportBatch(owner)
+        XCTAssertEqual(
+            state.importCancellationDisabledReason,
+            SidebarImportProgressStrip.noImportInProgressHint)
+        XCTAssertEqual(pickerInvocationCount, 0)
+    }
+
+    func testFL05StaleOwnerCancellationCannotClobberReplacementAvailability()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: [])
+        let stale = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(tempDir.appendingPathComponent("stale.md"))],
+            destinationFolder: ""))
+        state.finishImportBatch(stale)
+
+        let replacement = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(tempDir.appendingPathComponent("replacement.md"))],
+            destinationFolder: ""))
+        XCTAssertTrue(state.currentImportBatchOwner === replacement)
+        XCTAssertTrue(state.canRequestImportBatchCancellation)
+
+        state.cancelImportBatch(stale)
+
+        XCTAssertFalse(stale.isCancellationRequested)
+        XCTAssertTrue(state.currentImportBatchOwner === replacement)
+        XCTAssertTrue(state.canRequestImportBatchCancellation)
+        XCTAssertTrue(replacement.canRequestUserCancellation)
+        state.cancelImportBatch(replacement)
+    }
+
+    func testFL05StaleFinishingOwnerCannotClearReplacementAvailability()
+        async throws
+    {
+        let external = tempDir.appendingPathComponent("owner-a.md")
+        try Data("owner a".utf8).write(to: external)
+        let (state, _) = try await makeVault(files: [])
+        let refreshGate = SuspensionGate()
+        state.importInventoryRefreshRunner = { _, _ in
+            await refreshGate.enter()
+        }
+        let stale = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(external)],
+            destinationFolder: ""))
+        let staleTask = state.startImportBatch(stale)
+        await refreshGate.waitForEntrants(1)
+        XCTAssertEqual(stale.progress.phase, .finishing)
+
+        XCTAssertTrue(state.closeVault())
+        let replacementVault = tempDir.appendingPathComponent("replacement-vault")
+        try FileManager.default.createDirectory(
+            at: replacementVault, withIntermediateDirectories: true)
+        state.openVault(at: replacementVault)
+        await state.scanTask?.value
+        let replacement = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(tempDir.appendingPathComponent("owner-b.md"))],
+            destinationFolder: ""))
+        XCTAssertTrue(state.canRequestImportBatchCancellation)
+
+        await refreshGate.releaseOne()
+        await staleTask.value
+
+        XCTAssertTrue(state.currentImportBatchOwner === replacement)
+        XCTAssertTrue(state.canRequestImportBatchCancellation)
+        XCTAssertTrue(replacement.canRequestUserCancellation)
+        state.cancelImportBatch(replacement)
+    }
+
+    func testFL05PreparationFailureAdvancesProgressBeforeSecondRootFinishes()
+        async throws
+    {
+        let hidden = tempDir.appendingPathComponent(".hidden.md")
+        let slow = tempDir.appendingPathComponent("slow.md")
+        try Data("hidden".utf8).write(to: hidden)
+        try Data("slow".utf8).write(to: slow)
+        let (state, _) = try await makeVault(files: [])
+        let gate = SecondPreparationGate()
+        state.importSourceWalkerHooks = SidebarImportSourceWalkerHooks(
+            didReachBoundary: { gate.reach($0) })
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(hidden), fileURLProvider(slow)],
+            destinationFolder: ""))
+
+        let task = state.startImportBatch(owner)
+        await gate.waitForSecondRoot()
+        await Task.yield()
+
+        XCTAssertEqual(owner.completedProviderCount, 1)
+        XCTAssertEqual(owner.progress.accessibilityValue, "1 of 2")
+        XCTAssertTrue(state.currentImportBatchOwner === owner)
+
+        gate.release()
+        await task.value
+        XCTAssertEqual(owner.completedProviderCount, 2)
+    }
+
+    func testFL05FailedDirectVaultSwitchCancelsImportBeforeClearingSessionAndReleasesGate()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: [])
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { _ in nil }
+        let owner = try XCTUnwrap(
+            state.beginImportBatch(
+                providers: [provider],
+                destinationFolder: ""))
+
+        state.openVault(at: tempDir.appendingPathComponent("missing-vault"))
+
+        XCTAssertNil(state.currentSession)
+        XCTAssertTrue(
+            owner.isCancellationRequested,
+            "provider/engine cancellation must precede every session-clearing catch path")
+        XCTAssertNil(state.currentImportBatchOwner)
+        XCTAssertFalse(
+            state.isMutatingStructure,
+            "a failed direct switch must not leave the structural gate wedged")
+    }
+
+    func testFL05CloseVaultCancelsImportBeforeSessionTeardownAndReleasesGate()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: [])
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { _ in nil }
+        let owner = try XCTUnwrap(
+            state.beginImportBatch(
+                providers: [provider],
+                destinationFolder: ""))
+
+        XCTAssertTrue(state.closeVault())
+
+        XCTAssertTrue(owner.isCancellationRequested)
+        XCTAssertNil(state.currentSession)
+        XCTAssertNil(state.currentImportBatchOwner)
+        XCTAssertFalse(state.isMutatingStructure)
+    }
+
+    func testFL05AggregateExternalBatchLoadsEachProviderOnceAndPublishesOneLanding()
+        async throws
+    {
+        let firstURL = tempDir.appendingPathComponent("first.txt")
+        let secondURL = tempDir.appendingPathComponent("second.bin")
+        let firstBytes = Data("one".utf8)
+        let secondBytes = Data([0x00, 0xFF, 0x7F])
+        try firstBytes.write(to: firstURL)
+        try secondBytes.write(to: secondURL)
+        let (state, vault) = try await makeVault(files: [])
+        let counter = ProviderLoadCounter()
+
+        func provider(index: Int, url: URL) -> NSItemProvider {
+            let provider = NSItemProvider()
+            provider.registerDataRepresentation(
+                forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+                visibility: .all
+            ) { completion in
+                counter.record(index)
+                completion(url.dataRepresentation, nil)
+                return nil
+            }
+            return provider
+        }
+
+        let owner = try XCTUnwrap(
+            state.beginImportBatch(
+                providers: [
+                    provider(index: 0, url: firstURL),
+                    provider(index: 1, url: secondURL),
+                ],
+                destinationFolder: "",
+                selectionRevision: 41))
+        XCTAssertEqual(owner.vaultURL, vault)
+        XCTAssertEqual(owner.selectionRevision, 41)
+
+        let task = state.startImportBatch(owner)
+        await task.value
+
+        XCTAssertEqual(counter.count(for: 0), 1)
+        XCTAssertEqual(counter.count(for: 1), 1)
+        XCTAssertNil(state.lastError)
+        XCTAssertEqual(
+            try Data(contentsOf: vault.appendingPathComponent("first.txt")),
+            firstBytes)
+        XCTAssertEqual(
+            try Data(contentsOf: vault.appendingPathComponent("second.bin")),
+            secondBytes)
+        XCTAssertEqual(owner.completedProviderCount, 2)
+        XCTAssertNil(state.currentImportBatchOwner)
+        XCTAssertNil(state.importBatchProgress)
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            "Copied 2 files to the vault root.")
+        guard case let .importBatch(created, standing, touched)? = state.treeMutation?.kind else {
+            return XCTFail("one aggregate import mutation must own the final landing")
+        }
+        XCTAssertEqual(created.map(\.providerIndex), [0, 1])
+        XCTAssertTrue(standing.isEmpty)
+        XCTAssertTrue(touched.isEmpty)
+    }
+
+    func testFL05PureNativeImportRunsOneBatchRecordsOneInverseAndRefreshesOnce()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+        let planned = [batchItem("a.md")]
+        let standing = [
+            BatchPathChange(
+                oldPath: "a.md", newPath: "dest/a.md", isDirectory: false),
+        ]
+        let probe = BatchMoveProbe(report: batchMoveReport(
+            state: .succeeded,
+            planned: planned,
+            opID: 501,
+            standing: standing))
+        let refresh = ImportRefreshProbe()
+        state.batchMoveRunner = { _, request in await probe.run(request) }
+        state.importInventoryRefreshRunner = { _, _ in
+            await refresh.recordListRefresh()
+        }
+        state.importScanRefreshRunner = { _, _ in
+            await refresh.recordScan()
+        }
+
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: FileTreeSidebar.fileURLUTType,
+            visibility: .all
+        ) { completion in
+            completion(vault.appendingPathComponent("a.md").dataRepresentation, nil)
+            return nil
+        }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [provider],
+            destinationFolder: "dest",
+            selectionRevision: 7))
+
+        await state.startImportBatch(owner).value
+
+        let callCount = await probe.callCount()
+        let request = await probe.lastRequest()
+        let refreshCounts = await refresh.counts()
+        XCTAssertEqual(callCount, 1)
+        XCTAssertEqual(request?.items, planned)
+        XCTAssertEqual(refreshCounts.list, 1)
+        XCTAssertEqual(refreshCounts.scan, 0)
+        XCTAssertEqual(
+            state.structuralUndoStack,
+            [.batchMove(opId: 501, entries: standing)])
+        guard case let .importBatch(materialized, publishedStanding, touched)? =
+            state.treeMutation?.kind
+        else {
+            return XCTFail("pure move must use the aggregate import landing")
+        }
+        XCTAssertEqual(materialized.map(\.providerIndex), [0])
+        XCTAssertEqual(materialized.map(\.path), ["dest/a.md"])
+        XCTAssertEqual(publishedStanding, standing)
+        XCTAssertTrue(touched.isEmpty)
+        XCTAssertEqual(state.lastMutationAnnouncement, "Moved 1 item to dest.")
+    }
+
+    func testFL05MixedImportCopiesFirstReservesMoveNameAndLeavesOnlyNewInverse()
+        async throws
+    {
+        let external = tempDir.appendingPathComponent("a.md")
+        try Data("new".utf8).write(to: external)
+        let (state, vault) = try await makeVault(files: [
+            "a.md", "seed.md", "archive/keep.md", "dest/keep.md",
+        ])
+        _ = try await seedBatchMoveHistory(
+            in: state, path: "seed.md", destination: "archive", opID: 400)
+        let standing = [BatchPathChange(
+            oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)]
+        let probe = BatchMoveProbe(report: batchMoveReport(
+            state: .succeeded,
+            planned: [batchItem("a.md")],
+            opID: 401,
+            standing: standing))
+        let refresh = ImportRefreshProbe()
+        state.batchMoveRunner = { _, request in await probe.run(request) }
+        state.importInventoryRefreshRunner = { _, _ in
+            await refresh.recordListRefresh()
+        }
+        state.importScanRefreshRunner = { _, _ in await refresh.recordScan() }
+
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [
+                fileURLProvider(external),
+                fileURLProvider(vault.appendingPathComponent("a.md")),
+            ],
+            destinationFolder: "dest",
+            selectionRevision: 12))
+        await state.startImportBatch(owner).value
+
+        XCTAssertEqual(
+            try Data(contentsOf: vault.appendingPathComponent("dest/a 2.md")),
+            Data("new".utf8),
+            "external creates finish first while the move basename stays reserved")
+        let nativeRequest = await probe.lastRequest()
+        let refreshCounts = await refresh.counts()
+        XCTAssertEqual(nativeRequest?.items, [batchItem("a.md")])
+        XCTAssertEqual(refreshCounts.list, 1)
+        XCTAssertEqual(refreshCounts.scan, 0)
+        XCTAssertEqual(
+            state.structuralUndoStack,
+            [.batchMove(opId: 401, entries: standing)],
+            "the external barrier clears old history before the native inverse lands")
+        guard case let .importBatch(materialized, publishedStanding, _)? =
+            state.treeMutation?.kind
+        else { return XCTFail("mixed import needs one aggregate landing") }
+        XCTAssertEqual(materialized.map(\.providerIndex), [0, 1])
+        XCTAssertEqual(materialized.map(\.path), ["dest/a 2.md", "dest/a.md"])
+        XCTAssertEqual(publishedStanding, standing)
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            "Copied 1 file and moved 1 item to dest.")
+    }
+
+    func testFL05NativeNonSuccessHistoryMatrixPreservesOrClearsExactly()
+        async throws
+    {
+        struct Case {
+            let state: BatchMoveState
+            let standing: [BatchPathChange]
+            let rolledBack: [BatchPathChange]
+            let preservesOldHistory: Bool
+        }
+        let change = BatchPathChange(
+            oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)
+        let cases = [
+            Case(state: .rejected, standing: [], rolledBack: [], preservesOldHistory: true),
+            Case(state: .noOp, standing: [], rolledBack: [], preservesOldHistory: true),
+            Case(state: .rolledBack, standing: [], rolledBack: [change], preservesOldHistory: true),
+            Case(
+                state: .rollbackIncomplete,
+                standing: [change],
+                rolledBack: [],
+                preservesOldHistory: false),
+        ]
+
+        for testCase in cases {
+            let (state, vault) = try await makeVault(files: [
+                "a.md", "seed.md", "archive/keep.md", "dest/keep.md",
+            ])
+            let oldInverse = try await seedBatchMoveHistory(
+                in: state, path: "seed.md", destination: "archive", opID: 600)
+            let report = batchMoveReport(
+                state: testCase.state,
+                planned: [batchItem("a.md")],
+                standing: testCase.standing,
+                rolledBack: testCase.rolledBack)
+            state.batchMoveRunner = { _, _ in report }
+            state.importInventoryRefreshRunner = { _, _ in }
+            state.importScanRefreshRunner = { _, _ in }
+            let mutationTokenBeforeImport = state.treeMutation?.token
+            let owner = try XCTUnwrap(state.beginImportBatch(
+                providers: [fileURLProvider(vault.appendingPathComponent("a.md"))],
+                destinationFolder: "dest"))
+            await state.startImportBatch(owner).value
+
+            if testCase.preservesOldHistory {
+                XCTAssertEqual(
+                    state.structuralUndoStack, [oldInverse],
+                    "\(testCase.state) must preserve an unrelated inverse")
+            } else {
+                XCTAssertTrue(
+                    state.structuralUndoStack.isEmpty,
+                    "\(testCase.state) leaves unsafe standing state and must clear history")
+            }
+            if testCase.state == .rejected || testCase.state == .noOp {
+                XCTAssertEqual(
+                    state.treeMutation?.token,
+                    mutationTokenBeforeImport,
+                    "clean no-effect reports must not publish a fake root mutation")
+            }
+        }
+    }
+
+    func testFL05CleanExternalFailureStillPermitsNativeAndPreservesOldHistory()
+        async throws
+    {
+        let hidden = tempDir.appendingPathComponent(".hidden.md")
+        try Data("hidden".utf8).write(to: hidden)
+        let (state, vault) = try await makeVault(files: [
+            "a.md", "seed.md", "archive/keep.md", "dest/keep.md",
+        ])
+        let oldInverse = try await seedBatchMoveHistory(
+            in: state, path: "seed.md", destination: "archive", opID: 700)
+        let standing = [BatchPathChange(
+            oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)]
+        let report = batchMoveReport(
+            state: .succeeded,
+            planned: [batchItem("a.md")],
+            opID: 701,
+            standing: standing)
+        state.batchMoveRunner = { _, _ in report }
+        state.importInventoryRefreshRunner = { _, _ in }
+        state.importScanRefreshRunner = { _, _ in }
+
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [
+                fileURLProvider(hidden),
+                fileURLProvider(vault.appendingPathComponent("a.md")),
+            ],
+            destinationFolder: "dest"))
+        await state.startImportBatch(owner).value
+
+        XCTAssertEqual(
+            state.structuralUndoStack,
+            [oldInverse, .batchMove(opId: 701, entries: standing)],
+            "a clean walker rejection is not a physical history barrier")
+        guard case .result(let result)? = state.activeBatchAlertPresentation,
+            case .importBatch(let failureReport) = result.payload
+        else { return XCTFail("the walker rejection needs one mounted import alert") }
+        XCTAssertEqual(failureReport.terminalFailureCount, 1)
+        XCTAssertEqual(failureReport.totalDetailCount, 1)
+        XCTAssertEqual(failureReport.details.first?.scope, .provider(0))
+    }
+
+    func testFL05NativeInfrastructureFailureClearsHistoryAndRunsOneScan()
+        async throws
+    {
+        struct ExpectedFailure: LocalizedError {
+            var errorDescription: String? { "native unavailable" }
+        }
+        let (state, vault) = try await makeVault(files: [
+            "a.md", "seed.md", "archive/keep.md", "dest/keep.md",
+        ])
+        _ = try await seedBatchMoveHistory(
+            in: state, path: "seed.md", destination: "archive", opID: 800)
+        let refresh = ImportRefreshProbe()
+        state.batchMoveRunner = { _, _ in throw ExpectedFailure() }
+        state.importInventoryRefreshRunner = { _, _ in
+            await refresh.recordListRefresh()
+        }
+        state.importScanRefreshRunner = { _, _ in await refresh.recordScan() }
+
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(vault.appendingPathComponent("a.md"))],
+            destinationFolder: "dest"))
+        await state.startImportBatch(owner).value
+
+        let counts = await refresh.counts()
+        XCTAssertTrue(state.structuralUndoStack.isEmpty)
+        XCTAssertEqual(counts.list, 0)
+        XCTAssertEqual(counts.scan, 1)
+        XCTAssertEqual(state.treeMutation?.requiresRescan, true)
+    }
+
+    func testFL05PostScanMaterializationRequiresExpectedFileOrDirectoryKind()
+        async throws
+    {
+        let (state, _) = try await makeVault(files: ["file.md"])
+        let session = try XCTUnwrap(state.currentSession)
+        try session.createFolderExclusive(path: "empty")
+        let candidates = [
+            SidebarImportMaterializedResult(
+                providerIndex: 0, path: "file.md", isDirectory: true),
+            SidebarImportMaterializedResult(
+                providerIndex: 1, path: "empty", isDirectory: false),
+            SidebarImportMaterializedResult(
+                providerIndex: 2, path: "file.md", isDirectory: false),
+            SidebarImportMaterializedResult(
+                providerIndex: 3, path: "empty", isDirectory: true),
+        ]
+
+        let materialized = try await AppState.resolveImportMaterialization(
+            candidates, session: session)
+
+        XCTAssertEqual(materialized.map(\.providerIndex), [2, 3])
+        XCTAssertEqual(materialized.map(\.path), ["file.md", "empty"])
+    }
+
+    func testFL05FailedAuthoritativeScanNeverPromotesUnknownCopyCandidate()
+        async throws
+    {
+        struct UnknownCreate: LocalizedError {
+            var errorDescription: String? { "create outcome unknown" }
+        }
+        struct ScanFailure: LocalizedError {
+            var errorDescription: String? { "scan unavailable" }
+        }
+        let external = tempDir.appendingPathComponent("uncertain.bin")
+        try Data([0x01]).write(to: external)
+        let (state, _) = try await makeVault(files: [])
+        let refresh = ImportRefreshProbe()
+        state.importDestinationCreators = { _ in
+            SidebarImportDestinationCreators(
+                createFile: { _, _ in throw UnknownCreate() },
+                createDirectory: { _ in throw UnknownCreate() })
+        }
+        state.importScanRefreshRunner = { _, _ in
+            await refresh.recordScan()
+            throw ScanFailure()
+        }
+        state.importInventoryRefreshRunner = { _, _ in
+            await refresh.recordListRefresh()
+        }
+
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(external)],
+            destinationFolder: ""))
+        await state.startImportBatch(owner).value
+
+        let counts = await refresh.counts()
+        XCTAssertEqual(counts.scan, 1)
+        XCTAssertEqual(counts.list, 0)
+        guard case let .importBatch(materialized, standing, touched)? =
+            state.treeMutation?.kind
+        else { return XCTFail("uncertainty still needs one root reconcile") }
+        XCTAssertTrue(materialized.isEmpty)
+        XCTAssertTrue(standing.isEmpty)
+        XCTAssertTrue(touched.isEmpty)
+        XCTAssertEqual(state.treeMutation?.requiresRescan, true)
+    }
+
+    func testFL05CancelDuringUnknownCreateStillRunsMandatoryRealScan()
+        async throws
+    {
+        struct UnknownCreate: LocalizedError {
+            var errorDescription: String? { "create outcome unknown" }
+        }
+        let external = tempDir.appendingPathComponent("uncertain.md")
+        try Data("source".utf8).write(to: external)
+        let (state, vault) = try await makeVault(files: [])
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(external)],
+            destinationFolder: ""))
+        let cancellationSignal = owner.cancellationSignal
+        state.importDestinationCreators = { _ in
+            SidebarImportDestinationCreators(
+                createFile: { _, _ in
+                    try Data("marker".utf8).write(
+                        to: vault.appendingPathComponent("scan-marker.md"))
+                    cancellationSignal.requestCancellation()
+                    throw UnknownCreate()
+                },
+                createDirectory: { _ in throw UnknownCreate() })
+        }
+
+        await state.startImportBatch(owner).value
+
+        XCTAssertTrue(
+            state.files.contains(where: { $0.path == "scan-marker.md" }),
+            "the uncancelled aggregate owner must finish one real authoritative scan")
+        guard case let .importBatch(materialized, _, _)? = state.treeMutation?.kind else {
+            return XCTFail("unknown create cancellation needs one root reconcile")
+        }
+        XCTAssertFalse(
+            materialized.contains(where: { $0.path == "uncertain.md" }),
+            "a stale pre-scan candidate must never be promoted")
+        XCTAssertTrue(owner.cancellationSignal.isCancelled)
+    }
+
+    func testFL05SuccessfulNativeRewriteFailureIsWarningNotUnimported()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+        let standing = [BatchPathChange(
+            oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)]
+        let nativeReport = batchMoveReport(
+            state: .succeeded,
+            planned: [batchItem("a.md")],
+            opID: 910,
+            standing: standing,
+            rewriteFailures: [RewriteFailure(
+                path: "dest/a.md",
+                kind: RewriteFailureKind(
+                    kind: "write_conflict", detail: "changed on disk"))])
+        state.batchMoveRunner = { _, _ in nativeReport }
+        state.importInventoryRefreshRunner = { _, _ in }
+
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(vault.appendingPathComponent("a.md"))],
+            destinationFolder: "dest"))
+        await state.startImportBatch(owner).value
+
+        guard case .result(let result)? = state.activeBatchAlertPresentation,
+            case .importBatch(let report) = result.payload
+        else { return XCTFail("the link-update warning needs one bounded alert") }
+        XCTAssertEqual(report.terminalFailureCount, 0)
+        XCTAssertEqual(report.warningCount, 1)
+        XCTAssertEqual(report.details.first?.scope, .provider(0))
+        let attention = AppState.BatchStructuralCopy.attention(for: result)
+        XCTAssertEqual(attention.title, "Import Completed with Warnings")
+        XCTAssertFalse(attention.message.contains("could not be imported"))
+        XCTAssertFalse(state.lastMutationAnnouncement?.contains("not imported") == true)
+        XCTAssertTrue(
+            state.lastMutationAnnouncement?.contains("1 import warning needs attention") == true)
+    }
+
+    func testFL05NativeUncertaintyAndIncompleteRollbackAreBatchWarnings()
+        async throws
+    {
+        do {
+            let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+            let nativeReport = batchMoveReport(
+                state: .noOp,
+                planned: [batchItem("a.md")],
+                requiresRescan: true)
+            state.batchMoveRunner = { _, _ in nativeReport }
+            state.importScanRefreshRunner = { _, _ in }
+            let owner = try XCTUnwrap(state.beginImportBatch(
+                providers: [fileURLProvider(vault.appendingPathComponent("a.md"))],
+                destinationFolder: "dest"))
+            await state.startImportBatch(owner).value
+            guard case .result(let result)? = state.activeBatchAlertPresentation,
+                case .importBatch(let report) = result.payload
+            else { return XCTFail("native rescan uncertainty must surface") }
+            XCTAssertEqual(report.terminalFailureCount, 0)
+            XCTAssertEqual(report.warningCount, 1)
+            XCTAssertEqual(
+                report.details.first?.scope,
+                .batch(stage: "Move reconciliation"))
+        }
+
+        do {
+            let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+            let standing = [BatchPathChange(
+                oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)]
+            let nativeReport = batchMoveReport(
+                state: .rollbackIncomplete,
+                planned: [batchItem("a.md")],
+                standing: standing)
+            state.batchMoveRunner = { _, _ in nativeReport }
+            state.importInventoryRefreshRunner = { _, _ in }
+            let owner = try XCTUnwrap(state.beginImportBatch(
+                providers: [fileURLProvider(vault.appendingPathComponent("a.md"))],
+                destinationFolder: "dest"))
+            await state.startImportBatch(owner).value
+            guard case .result(let result)? = state.activeBatchAlertPresentation,
+                case .importBatch(let report) = result.payload
+            else { return XCTFail("incomplete rollback must surface") }
+            XCTAssertEqual(report.terminalFailureCount, 0)
+            XCTAssertEqual(report.warningCount, 1)
+            XCTAssertEqual(
+                report.details.first?.scope,
+                .batch(stage: "Move reconciliation"))
+        }
+    }
+
+    func testFL05DuplicateNativeProviderDiagnosticUsesSecondOccurrence()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+        let standing = [BatchPathChange(
+            oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)]
+        let nativeReport = batchMoveReport(
+            state: .succeeded,
+            planned: [batchItem("a.md")],
+            opID: 920,
+            standing: standing,
+            skipped: [BatchSkippedItem(
+                item: batchItem("a.md"),
+                reason: .duplicate,
+                detail: "the same path was selected twice")])
+        state.batchMoveRunner = { _, _ in nativeReport }
+        state.importInventoryRefreshRunner = { _, _ in }
+        let url = vault.appendingPathComponent("a.md")
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(url), fileURLProvider(url)],
+            destinationFolder: "dest"))
+        await state.startImportBatch(owner).value
+
+        guard case .result(let result)? = state.activeBatchAlertPresentation,
+            case .importBatch(let report) = result.payload
+        else { return XCTFail("duplicate provider skip must surface") }
+        XCTAssertEqual(report.details.first?.scope, .provider(1))
+        XCTAssertEqual(owner.completedProviderCount, 2)
+    }
+
+    func testFL05ListRefreshFallbackScanPreservesPureAndMixedNativeInverse()
+        async throws
+    {
+        struct ListFailure: LocalizedError {
+            var errorDescription: String? { "list refresh unavailable" }
+        }
+
+        do {
+            let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+            let standing = [BatchPathChange(
+                oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)]
+            let nativeReport = batchMoveReport(
+                state: .succeeded,
+                planned: [batchItem("a.md")],
+                opID: 930,
+                standing: standing)
+            state.batchMoveRunner = { _, _ in nativeReport }
+            state.importInventoryRefreshRunner = { _, _ in throw ListFailure() }
+            state.importScanRefreshRunner = { _, _ in }
+            let owner = try XCTUnwrap(state.beginImportBatch(
+                providers: [fileURLProvider(vault.appendingPathComponent("a.md"))],
+                destinationFolder: "dest"))
+            await state.startImportBatch(owner).value
+            XCTAssertEqual(
+                state.structuralUndoStack,
+                [.batchMove(opId: 930, entries: standing)])
+        }
+
+        do {
+            let external = tempDir.appendingPathComponent("external.md")
+            try Data("external".utf8).write(to: external)
+            let (state, vault) = try await makeVault(files: [
+                "a.md", "seed.md", "archive/keep.md", "dest/keep.md",
+            ])
+            _ = try await seedBatchMoveHistory(
+                in: state, path: "seed.md", destination: "archive", opID: 939)
+            let standing = [BatchPathChange(
+                oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)]
+            let nativeReport = batchMoveReport(
+                state: .succeeded,
+                planned: [batchItem("a.md")],
+                opID: 940,
+                standing: standing)
+            state.batchMoveRunner = { _, _ in nativeReport }
+            state.importInventoryRefreshRunner = { _, _ in throw ListFailure() }
+            state.importScanRefreshRunner = { _, _ in }
+            let owner = try XCTUnwrap(state.beginImportBatch(
+                providers: [
+                    fileURLProvider(external),
+                    fileURLProvider(vault.appendingPathComponent("a.md")),
+                ],
+                destinationFolder: "dest"))
+            await state.startImportBatch(owner).value
+            XCTAssertEqual(
+                state.structuralUndoStack,
+                [.batchMove(opId: 940, entries: standing)])
+        }
+    }
+
+    func testFL05NativeDiagnosticsCountDistinctFailedProviders() async throws {
+        let (state, vault) = try await makeVault(files: [
+            "a.md", "b.md", "c.md", "dest/keep.md",
+        ])
+        let a = batchItem("a.md")
+        let nativeReport = batchMoveReport(
+            state: .rejected,
+            planned: [a, batchItem("b.md"), batchItem("c.md")],
+            preflightFailures: [
+                BatchItemFailure(
+                    item: a,
+                    stage: .preflight,
+                    message: "destination already exists"),
+                BatchItemFailure(
+                    item: a,
+                    stage: .linkRewrite,
+                    message: "rename preflight failed"),
+            ])
+        state.batchMoveRunner = { _, _ in nativeReport }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: ["a.md", "b.md", "c.md"].map {
+                fileURLProvider(vault.appendingPathComponent($0))
+            },
+            destinationFolder: "dest"))
+
+        await state.startImportBatch(owner).value
+
+        guard case .result(let result)? = state.activeBatchAlertPresentation,
+            case .importBatch(let report) = result.payload
+        else { return XCTFail("rejected native providers need one aggregate alert") }
+        XCTAssertEqual(report.terminalFailureCount, 3)
+        XCTAssertEqual(
+            report.details.compactMap { detail -> Int? in
+                guard case .provider(let index) = detail.scope else { return nil }
+                return index
+            },
+            [0, 0, 1, 2])
+        XCTAssertTrue(
+            state.lastMutationAnnouncement?.contains("3 items were not imported") == true)
+    }
+
+    func testFL05RollbackIncompleteStandingProviderIsWarningNotFailure()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: [
+            "a.md", "b.md", "c.md", "dest/keep.md",
+        ])
+        let a = batchItem("a.md")
+        let b = batchItem("b.md")
+        let c = batchItem("c.md")
+        let standing = BatchPathChange(
+            oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)
+        let restored = BatchPathChange(
+            oldPath: "b.md", newPath: "dest/b.md", isDirectory: false)
+        let nativeReport = batchMoveReport(
+            state: .rollbackIncomplete,
+            planned: [a, b, c],
+            standing: [standing],
+            rolledBack: [restored],
+            failure: BatchItemFailure(
+                item: c,
+                stage: .move,
+                message: "forward move failed"),
+            rollbackFailures: [BatchItemFailure(
+                item: a,
+                stage: .rollback,
+                message: "restore failed; item remains at destination")])
+        state.batchMoveRunner = { _, _ in nativeReport }
+        state.importInventoryRefreshRunner = { _, _ in }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: ["a.md", "b.md", "c.md"].map {
+                fileURLProvider(vault.appendingPathComponent($0))
+            },
+            destinationFolder: "dest"))
+
+        await state.startImportBatch(owner).value
+
+        guard case .result(let result)? = state.activeBatchAlertPresentation,
+            case .importBatch(let report) = result.payload
+        else { return XCTFail("incomplete recovery needs one aggregate alert") }
+        XCTAssertEqual(report.terminalFailureCount, 2)
+        XCTAssertGreaterThanOrEqual(report.warningCount, 1)
+        XCTAssertTrue(report.allDetails.contains {
+            $0.scope == .provider(0) && $0.kind == .warning
+        })
+        XCTAssertTrue(
+            state.lastMutationAnnouncement?.contains("Moved 1 item") == true)
+        XCTAssertTrue(
+            state.lastMutationAnnouncement?.contains("2 items were not imported") == true)
+    }
+
+    func testFL05NativeRunnerThrowReportsEveryProvider() async throws {
+        struct NativeFailure: LocalizedError {
+            var errorDescription: String? { "native move unavailable" }
+        }
+        let (state, vault) = try await makeVault(files: [
+            "a.md", "b.md", "dest/keep.md",
+        ])
+        state.batchMoveRunner = { _, _ in throw NativeFailure() }
+        state.importScanRefreshRunner = { _, _ in }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: ["a.md", "b.md"].map {
+                fileURLProvider(vault.appendingPathComponent($0))
+            },
+            destinationFolder: "dest"))
+
+        await state.startImportBatch(owner).value
+
+        guard case .result(let result)? = state.activeBatchAlertPresentation,
+            case .importBatch(let report) = result.payload
+        else { return XCTFail("native infrastructure failure needs one aggregate alert") }
+        XCTAssertEqual(report.terminalFailureCount, 2)
+        XCTAssertEqual(report.details.map(\.scope), [.provider(0), .provider(1)])
+    }
+
+    func testFL05CancellationIsInertAfterAllProvidersCompleteDuringRefresh()
+        async throws
+    {
+        let external = tempDir.appendingPathComponent("finalizing.md")
+        try Data("done".utf8).write(to: external)
+        let (state, _) = try await makeVault(files: [])
+        let refreshGate = SuspensionGate()
+        state.importInventoryRefreshRunner = { _, _ in
+            await refreshGate.enter()
+        }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(external)],
+            destinationFolder: ""))
+        let task = state.startImportBatch(owner)
+        await refreshGate.waitForEntrants(1)
+
+        XCTAssertEqual(owner.completedProviderCount, 1)
+        XCTAssertFalse(state.requestImportBatchCancellation())
+        XCTAssertFalse(owner.isCancellationRequested)
+
+        await refreshGate.releaseOne()
+        await task.value
+        XCTAssertFalse(
+            state.lastMutationAnnouncement?.localizedCaseInsensitiveContains("cancel") == true)
+    }
+
+    func testFL05NativeMovePhaseDisablesCancellationAndBlocksVaultTransitions()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: ["a.md", "dest/keep.md"])
+        let originalSession = try XCTUnwrap(state.currentSession)
+        let gate = SuspensionGate()
+        let standing = BatchPathChange(
+            oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)
+        let report = batchMoveReport(
+            state: .succeeded,
+            planned: [batchItem("a.md")],
+            opID: 995,
+            standing: [standing])
+        state.batchMoveRunner = { _, _ in
+            await gate.enter()
+            return report
+        }
+        state.importInventoryRefreshRunner = { _, _ in }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(vault.appendingPathComponent("a.md"))],
+            destinationFolder: "dest"))
+
+        let task = state.startImportBatch(owner)
+        await gate.waitForEntrants(1)
+
+        XCTAssertEqual(owner.progress.phase, .moving)
+        XCTAssertFalse(owner.canRequestUserCancellation)
+        XCTAssertFalse(owner.progress.canRequestCancellation)
+        XCTAssertFalse(state.canRequestImportBatchCancellation)
+        XCTAssertFalse(state.requestImportBatchCancellation())
+        XCTAssertFalse(owner.isCancellationRequested)
+
+        let replacement = tempDir.appendingPathComponent("replacement-vault")
+        try FileManager.default.createDirectory(
+            at: replacement, withIntermediateDirectories: false)
+        state.openVault(at: replacement)
+        XCTAssertTrue(state.currentSession === originalSession)
+        XCTAssertFalse(state.closeVault())
+        XCTAssertTrue(state.currentSession === originalSession)
+        state.switchToRecent(RecentVault(url: replacement))
+        XCTAssertTrue(state.currentSession === originalSession)
+        XCTAssertEqual(
+            state.sidebarActionBackgroundFailure,
+            AppState.importNativeMoveVaultTransitionReason)
+        XCTAssertEqual(
+            state.lastMutationAnnouncement,
+            AppState.importNativeMoveVaultTransitionReason)
+
+        await gate.releaseOne()
+        await task.value
+
+        XCTAssertTrue(state.currentSession === originalSession)
+        XCTAssertNil(state.sidebarActionBackgroundFailure)
+        XCTAssertFalse(
+            state.lastMutationAnnouncement?.localizedCaseInsensitiveContains("cancel") == true)
+    }
+
+    func testFL05DirtySwitchParkedDuringImportCannotDiscardIntoNativeMove()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: [
+            "note.md", "a.md", "dest/keep.md",
+        ])
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        state.updateEditorText("dirty single note")
+        let replacement = tempDir.appendingPathComponent("single-switch-target")
+        try FileManager.default.createDirectory(
+            at: replacement, withIntermediateDirectories: false)
+
+        let gate = SuspensionGate()
+        let standing = BatchPathChange(
+            oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)
+        let report = batchMoveReport(
+            state: .succeeded,
+            planned: [batchItem("a.md")],
+            opID: 996,
+            standing: [standing])
+        state.batchMoveRunner = { _, _ in
+            await gate.enter()
+            return report
+        }
+        state.importInventoryRefreshRunner = { _, _ in }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(vault.appendingPathComponent("a.md"))],
+            destinationFolder: "dest"))
+        XCTAssertEqual(owner.progress.phase, .importing)
+
+        state.switchToRecent(RecentVault(url: replacement))
+        XCTAssertEqual(state.pendingNavigation, .closeVault)
+        XCTAssertEqual(state.pendingVaultSwitchTarget?.path, replacement.path)
+
+        let task = state.startImportBatch(owner)
+        await gate.waitForEntrants(1)
+        XCTAssertEqual(owner.progress.phase, .moving)
+        state.resolvePendingNavigationDiscard()
+
+        XCTAssertNil(state.pendingVaultSwitchTarget)
+        XCTAssertEqual(state.pendingNavigation, .closeVault)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertEqual(state.currentVaultURL?.path, vault.path)
+
+        await gate.releaseOne()
+        await task.value
+        state.resolvePendingNavigationDiscard()
+        XCTAssertNil(state.currentVaultURL)
+        XCTAssertNotEqual(state.currentVaultURL?.path, replacement.path)
+    }
+
+    func testFL05MultiDirtySwitchParkedDuringImportCannotDiscardAllIntoNativeMove()
+        async throws
+    {
+        let (state, vault) = try await makeVault(files: [
+            "note.md", "two.md", "a.md", "dest/keep.md",
+        ])
+        state.selectedFilePath = "two.md"
+        await state.noteLoadTask?.value
+        state.updateEditorText("dirty two")
+        state.newTab()
+        state.selectedFilePath = "note.md"
+        await state.noteLoadTask?.value
+        state.updateEditorText("dirty note")
+        XCTAssertEqual(state.workspace.dirtyParkedDocuments().count, 1)
+        let replacement = tempDir.appendingPathComponent("multi-switch-target")
+        try FileManager.default.createDirectory(
+            at: replacement, withIntermediateDirectories: false)
+
+        let gate = SuspensionGate()
+        let standing = BatchPathChange(
+            oldPath: "a.md", newPath: "dest/a.md", isDirectory: false)
+        let report = batchMoveReport(
+            state: .succeeded,
+            planned: [batchItem("a.md")],
+            opID: 997,
+            standing: [standing])
+        state.batchMoveRunner = { _, _ in
+            await gate.enter()
+            return report
+        }
+        state.importInventoryRefreshRunner = { _, _ in }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(vault.appendingPathComponent("a.md"))],
+            destinationFolder: "dest"))
+
+        state.switchToRecent(RecentVault(url: replacement))
+        XCTAssertEqual(state.pendingVaultClose, 2)
+        XCTAssertEqual(state.pendingVaultSwitchTarget?.path, replacement.path)
+
+        let task = state.startImportBatch(owner)
+        await gate.waitForEntrants(1)
+        state.resolveVaultCloseDiscardAll()
+
+        XCTAssertNil(state.pendingVaultSwitchTarget)
+        XCTAssertEqual(state.pendingVaultClose, 2)
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertEqual(state.workspace.dirtyParkedDocuments().count, 1)
+        XCTAssertEqual(state.currentVaultURL?.path, vault.path)
+
+        await gate.releaseOne()
+        await task.value
+        state.resolveVaultCloseDiscardAll()
+        XCTAssertNil(state.currentVaultURL)
+        XCTAssertNotEqual(state.currentVaultURL?.path, replacement.path)
+    }
+
+    func testFL05ScanConfirmedUnknownCopyIsWarningAndReconciliationResult()
+        async throws
+    {
+        struct UnknownCreate: LocalizedError {
+            var errorDescription: String? { "create outcome unknown" }
+        }
+        let external = tempDir.appendingPathComponent("uncertain.md")
+        let bytes = Data("confirmed".utf8)
+        try bytes.write(to: external)
+        let (state, vault) = try await makeVault(files: [])
+        state.importDestinationCreators = { _ in
+            SidebarImportDestinationCreators(
+                createFile: { path, data in
+                    try data.write(to: vault.appendingPathComponent(path))
+                    throw UnknownCreate()
+                },
+                createDirectory: { path in
+                    try FileManager.default.createDirectory(
+                        at: vault.appendingPathComponent(path),
+                        withIntermediateDirectories: false)
+                    throw UnknownCreate()
+                })
+        }
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(external)],
+            destinationFolder: ""))
+
+        await state.startImportBatch(owner).value
+
+        guard case .result(let result)? = state.activeBatchAlertPresentation,
+            case .importBatch(let report) = result.payload,
+            case .importBatch(let materialized, _, _)? = state.treeMutation?.kind
+        else { return XCTFail("reconciled uncertainty needs warning and tree landing") }
+        XCTAssertEqual(report.terminalFailureCount, 0)
+        XCTAssertEqual(report.warningCount, 1)
+        XCTAssertEqual(materialized.map(\.path), ["uncertain.md"])
+        XCTAssertTrue(
+            state.lastMutationAnnouncement?.contains(
+                "Found 1 destination item during reconciliation") == true)
+        XCTAssertFalse(
+            state.lastMutationAnnouncement?.contains("No items were imported") == true)
+    }
+
+    func testFL05RecursiveExternalFailuresCountDistinctEntriesWithinOneProvider()
+        async throws
+    {
+        let source = tempDir.appendingPathComponent("source", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: source,
+            withIntermediateDirectories: false)
+        try FileManager.default.createSymbolicLink(
+            at: source.appendingPathComponent("first-link"),
+            withDestinationURL: tempDir.appendingPathComponent("missing-first"))
+        try FileManager.default.createSymbolicLink(
+            at: source.appendingPathComponent("second-link"),
+            withDestinationURL: tempDir.appendingPathComponent("missing-second"))
+        let (state, _) = try await makeVault(files: [])
+        let owner = try XCTUnwrap(state.beginImportBatch(
+            providers: [fileURLProvider(source)],
+            destinationFolder: ""))
+
+        await state.startImportBatch(owner).value
+
+        guard case .result(let result)? = state.activeBatchAlertPresentation,
+            case .importBatch(let report) = result.payload
+        else { return XCTFail("recursive source failures need one bounded alert") }
+        XCTAssertEqual(report.terminalFailureCount, 2)
+        XCTAssertEqual(report.details.map(\.scope), [.provider(0), .provider(0)])
+        XCTAssertTrue(
+            state.lastMutationAnnouncement?.contains("2 items were not imported") == true)
     }
 
     // MARK: - Versioned private batch payload
@@ -675,7 +2511,9 @@ final class FileTreeDragDropTests: XCTestCase {
         // Already directly in "dest" → no-op (same guard as the private path).
         let action = AppState.fileURLDropAction(
             url: inside, vaultURL: vault, destinationFolder: "dest", isDirectory: false)
-        XCTAssertEqual(action, .none)
+        XCTAssertEqual(
+            action,
+            .none(reason: AppState.sameParentImportNoOpReason))
     }
 
     func testFolderDropIntoOwnSubtreeIsNoOp() {
@@ -684,7 +2522,9 @@ final class FileTreeDragDropTests: XCTestCase {
         // Dropping "parent" into "parent/child" is a folder-into-own-subtree.
         let action = AppState.fileURLDropAction(
             url: folder, vaultURL: vault, destinationFolder: "parent/child", isDirectory: true)
-        XCTAssertEqual(action, .none)
+        XCTAssertEqual(
+            action,
+            .none(reason: AppState.ownSubtreeImportNoOpReason))
     }
 
     func testVaultRelativePathClassification() {
@@ -748,6 +2588,45 @@ final class FileTreeDragDropTests: XCTestCase {
             "an external symlink file is external (import), not its vault target")
     }
 
+    func testFinalSymlinkInsideVaultStaysExternalForNoFollowWalker() throws {
+        let vault = tempDir.appendingPathComponent("final-link-vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        let target = vault.appendingPathComponent("target.md")
+        try "target".write(to: target, atomically: true, encoding: .utf8)
+        let link = vault.appendingPathComponent("shortcut.md")
+        try FileManager.default.createSymbolicLink(
+            at: link, withDestinationURL: target)
+
+        XCTAssertNil(AppState.vaultRelativePath(of: link, vaultURL: vault))
+        XCTAssertEqual(
+            AppState.fileURLDropAction(
+                url: link,
+                vaultURL: vault,
+                destinationFolder: "dest",
+                isDirectory: false),
+            .importFile(url: link, into: "dest"),
+            "a dropped final symlink must reach the no-follow import walker")
+    }
+
+    func testSymlinkToVaultRootIsNotMistakenForActualRootNoOp() throws {
+        let vault = tempDir.appendingPathComponent("actual-root")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        let rootLink = tempDir.appendingPathComponent("root-shortcut")
+        try FileManager.default.createSymbolicLink(
+            at: rootLink, withDestinationURL: vault)
+
+        XCTAssertEqual(
+            AppState.fileURLDropAction(
+                url: rootLink,
+                vaultURL: vault,
+                destinationFolder: "",
+                isDirectory: true),
+            .importFile(url: rootLink, into: ""),
+            "only the actual vault directory is the root no-op")
+    }
+
     /// #870 Codex round 3 (F3): dragging the CURRENT VAULT ROOT onto its own
     /// tree is a no-op, NOT an external import (both the root and an external
     /// URL map to a nil vault-relative path — `fileURLDropAction` must
@@ -760,7 +2639,7 @@ final class FileTreeDragDropTests: XCTestCase {
         XCTAssertEqual(
             AppState.fileURLDropAction(
                 url: vault, vaultURL: vault, destinationFolder: "", isDirectory: true),
-            .none,
+            .none(reason: AppState.vaultRootImportNoOpReason),
             "the vault root dropped onto itself is a no-op, not a text import")
     }
 

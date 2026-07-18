@@ -125,19 +125,24 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
     private(set) var selectionPathSnapshots: [Identity: String]
     private(set) var rangeAnchor: Identity?
     private(set) var rangeAnchorPathSnapshot: String?
+    /// Monotone user-intent generation captured by deferred import landing.
+    /// Structural reconciliation/focus deliberately does not advance it.
+    private(set) var selectionRevision: UInt64
 
     init(
         focused: Identity? = nil,
         selected: Set<Identity> = [],
         selectionPathSnapshots: [Identity: String] = [:],
         rangeAnchor: Identity? = nil,
-        rangeAnchorPathSnapshot: String? = nil
+        rangeAnchorPathSnapshot: String? = nil,
+        selectionRevision: UInt64 = 0
     ) {
         self.focused = focused
         self.selected = selected
         self.selectionPathSnapshots = selectionPathSnapshots
         self.rangeAnchor = rangeAnchor
         self.rangeAnchorPathSnapshot = rangeAnchorPathSnapshot
+        self.selectionRevision = selectionRevision
     }
 
     /// Fold the identity-only part of a pointer transition. The stateful API
@@ -233,7 +238,7 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
         } else {
             focused = outcome.focus
         }
-        return transition(from: previous)
+        return userIntentTransition(from: previous)
     }
 
     /// Programmatic reveal is an unconditional single-selection collapse. A nil
@@ -250,6 +255,27 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
         rangeAnchor = row.identity
         rangeAnchorPathSnapshot = row.path
         return transition(from: previous)
+    }
+
+    /// A List/type-select/navigation reveal originating from explicit user
+    /// input. Unlike the programmatic `reveal`, even a same-row intent advances
+    /// the generation so deferred import focus cannot overwrite newer agency.
+    @discardableResult
+    mutating func revealFromUserIntent(_ row: VisibleRow?) -> Transition {
+        let result = reveal(row)
+        selectionRevision &+= 1
+        return result
+    }
+
+    /// Record user navigation that originated outside the tree (for example a
+    /// search or graph result). The selected row may not have changed yet—or
+    /// may already be the same row—so this deliberately advances only the
+    /// intent generation. The selected-path mirror remains responsible for the
+    /// eventual single-row projection.
+    @discardableResult
+    mutating func noteExternalNavigationIntent() -> Transition {
+        selectionRevision &+= 1
+        return Transition(handled: true, changed: true, focusChanged: false)
     }
 
     /// Programmatic structural focus that preserves a surviving multi-selection
@@ -270,6 +296,42 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
         return transition(from: previous)
     }
 
+    /// Apply deferred structural focus only when no newer selection/focus
+    /// intent has occurred. The comparison and mutation are one value-semantic
+    /// operation, so returning to the captured path cannot fool path equality.
+    @discardableResult
+    mutating func focusAfterStructuralMutation(
+        _ row: VisibleRow,
+        ifSelectionRevisionIs expectedRevision: UInt64
+    ) -> Transition {
+        guard selectionRevision == expectedRevision else {
+            return Transition(handled: false, changed: false, focusChanged: false)
+        }
+        return focusAfterStructuralMutation(row)
+    }
+
+    /// Atomically install the exact provider-ordered imported-result set and
+    /// focus the first imported result. A newer user intent
+    /// rejects the complete landing; no partial selection may leak through.
+    @discardableResult
+    mutating func selectImportedResults(
+        _ rows: [VisibleRow],
+        ifSelectionRevisionIs expectedRevision: UInt64
+    ) -> Transition {
+        let previous = self
+        guard selectionRevision == expectedRevision else {
+            return Transition(handled: false, changed: false, focusChanged: false)
+        }
+        guard let first = rows.first else {
+            return transition(from: previous)
+        }
+        replaceSelection(with: rows)
+        focused = first.identity
+        rangeAnchor = first.identity
+        rangeAnchorPathSnapshot = first.path
+        return transition(from: previous)
+    }
+
     /// Shift-Up / Shift-Down recomputes one inclusive range between a fixed
     /// anchor and the next focus. Recomputing (rather than unioning) naturally
     /// grows, shrinks, and crosses the pivot. A list boundary is consumed while
@@ -286,12 +348,12 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
                 $0.identity == focused && isSelected($0.identity, currentPath: $0.path)
             })
         else {
-            return transition(from: previous)
+            return userIntentTransition(from: previous)
         }
 
         let nextIndex = direction == .up ? focusIndex - 1 : focusIndex + 1
         guard visibleRows.indices.contains(nextIndex) else {
-            return transition(from: previous)
+            return userIntentTransition(from: previous)
         }
 
         let anchorIndex: Int
@@ -308,7 +370,7 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
         let upperBound = max(anchorIndex, nextIndex)
         replaceSelection(with: Array(visibleRows[lowerBound...upperBound]))
         self.focused = visibleRows[nextIndex].identity
-        return transition(from: previous)
+        return userIntentTransition(from: previous)
     }
 
     /// Command-A selects exactly the flattened visible real rows provided by the
@@ -319,7 +381,7 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
         let previous = self
         guard let first = visibleRows.first else {
             clear()
-            return transition(from: previous)
+            return userIntentTransition(from: previous)
         }
 
         let retainedFocus = focused.flatMap { current in
@@ -334,7 +396,7 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
         focused = focusRow.identity
         rangeAnchor = focusRow.identity
         rangeAnchorPathSnapshot = focusRow.path
-        return transition(from: previous)
+        return userIntentTransition(from: previous)
     }
 
     /// Reconcile an unexplained tree refresh. A confirmed snapshot mismatch is a
@@ -596,6 +658,14 @@ struct SidebarSelectionModel<Identity: Hashable>: Equatable {
             handled: true,
             changed: previous != self,
             focusChanged: previous.focused != focused)
+    }
+
+    /// Every handled user intent supersedes deferred landing, including a
+    /// boundary arrow or same-row click whose value state does not change.
+    private mutating func userIntentTransition(from previous: Self) -> Transition {
+        let result = transition(from: previous)
+        selectionRevision &+= 1
+        return result
     }
 
     private static func isDescendant(_ candidate: String, of directory: String) -> Bool {

@@ -1187,6 +1187,28 @@ final class SlateCommandsTests: XCTestCase {
         XCTAssertEqual(claimants.map(\.id), [SlateCommandID.toggleSearch])
     }
 
+    @MainActor
+    func testCancelImportCommandIsRegisteredAsTheOnlyCommandPeriodOwner() throws {
+        let id = "slate.file.cancelImport"
+        let appState = AppState()
+        let command = try XCTUnwrap(
+            appState.commandRegistry.list().first { $0.id == id },
+            "Cancel Import must be a stable global command, not a menu-only shortcut")
+
+        XCTAssertEqual(command.label, "Cancel Import")
+        XCTAssertEqual(command.section, .sidebar)
+        XCTAssertEqual(command.hotkeyHint, "⌘.")
+        XCTAssertFalse(SlateCommandID.structuralMutationCommands.contains(id))
+        XCTAssertEqual(
+            appState.commandRegistry.list().filter { $0.hotkeyHint == "⌘." }.map(\.id),
+            [id])
+        XCTAssertThrowsError(try appState.commandRegistry.invokeById(id: id)) { error in
+            XCTAssertEqual(
+                error as? CommandError,
+                .ActionFailed(message: SidebarImportProgressStrip.noImportInProgressHint))
+        }
+    }
+
     /// Invoking `slate.editor.findInNote` through the registry routes to
     /// `requestFindInFocusedSurface()` → `showFindInNote()`. With NO note
     /// open AND no vault open (the welcome screen), the fallback runs the
