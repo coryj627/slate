@@ -483,6 +483,78 @@ final class SidebarOrganizationTreeTests: XCTestCase {
       "the merged order reflects the buffered mtime")
   }
 
+  func testRevokedDrainsBufferNeverLeaksIntoAReplacementDrain() async {
+    // Round-20 finding 2: a summary buffered under a revoked drain's token
+    // must not be consumed by the replacement drain, whose refetched pages
+    // already reflect (or supersede) that save.
+    final class GateBox: @unchecked Sendable {
+      private let lock = NSLock()
+      private let first = DispatchSemaphore(value: 0)
+      private var replaced = false
+      func holdFirst() { first.wait() }
+      func releaseFirst() { first.signal() }
+      func markReplaced() {
+        lock.lock()
+        replaced = true
+        lock.unlock()
+      }
+      var isReplaced: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return replaced
+      }
+    }
+    let box = GateBox()
+    let now = instant(2026, 7, 18)
+    let vm = FileTreeViewModel()
+    var prefs = SidebarOrganizationPrefs()
+    prefs.vaultChoice = SidebarOrganizationChoice(
+      sort: SidebarSortOption(field: .modified, direction: .desc), grouping: .none)
+    vm.applyOrganization(context(prefs: prefs, now: now))
+    vm.bindForTesting(pagedFetcher: { [self] _, cursor in
+      if cursor == nil {
+        return DirListing(
+          dirs: [],
+          files: FileSummaryPage(
+            items: [file("first.md", mtime: 5_000)],
+            nextCursor: "page-2", totalFiltered: 2))
+      }
+      if !box.isReplaced {
+        // The FIRST drain's page two blocks until after revocation.
+        box.holdFirst()
+        return DirListing(
+          dirs: [],
+          files: FileSummaryPage(
+            items: [file("late.md", mtime: 1_000)],
+            nextCursor: nil, totalFiltered: 2))
+      }
+      // The REPLACEMENT drain's page two carries the newest truth.
+      return DirListing(
+        dirs: [],
+        files: FileSummaryPage(
+          items: [file("late.md", mtime: 20_000, displayName: "Replacement Truth")],
+          nextCursor: nil, totalFiltered: 2))
+    })
+    let firstDrain = vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]
+
+    // A save buffers under the FIRST drain's token…
+    vm.replaceFileSummaries([
+      file("late.md", mtime: 9_000, displayName: "Stale Buffer")
+    ])
+    // …then the level reloads (fetch-start revocation) with newer pages.
+    box.markReplaced()
+    vm.loadRoot()
+    let replacementDrain = vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]
+    box.releaseFirst()
+    await firstDrain?.value
+    await replacementDrain?.value
+
+    XCTAssertEqual(
+      vm.fileSummary(forPath: "late.md")?.displayName, "Replacement Truth",
+      "the replacement drain's page wins; the revoked drain's buffer never leaks")
+    XCTAssertEqual(vm.fileSummary(forPath: "late.md")?.mtimeMs, 20_000)
+  }
+
   func testPartialLevelsNeverClassifyPinsAsStale() {
     // Round-5 finding 2: a paginated listing omits real files; a pinned
     // file on a later page must not be offered for pruning.

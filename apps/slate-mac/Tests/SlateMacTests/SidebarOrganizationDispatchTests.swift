@@ -1858,6 +1858,71 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertEqual(pins["Projects"] as? [String], ["Projects/real.md"])
   }
 
+  // MARK: - Red-team regressions (adversarial review round 20)
+
+  func testQueuedStructuralRenameSurvivesSameVaultReopenExactlyOnce() async throws {
+    // Round-20 finding 1: the committed-ID ledger — not the reset-prone
+    // live journal — is the at-most-once authority for a task's captured
+    // immutable backlog. A structural rename queued behind a blocker,
+    // carried across a same-vault close/reopen, still retargets the file's
+    // pins exactly once.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let (state, vault) = try openVault(
+      named: "reopen-structural",
+      files: ["Projects/note.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      root["blocker"] = true
+    }
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    let pending = state.sidebarOrganizationPersistTaskForTesting
+
+    _ = state.closeVault()
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+
+    gate.open()
+    await pending?.value
+    // Let the chained refresh publish the converged truth.
+    for _ in 0..<50 {
+      if state.sidebarOrganization.pins.isPinned(
+        "Archive/note.md", inFolder: "Archive")
+      {
+        break
+      }
+      try await Task.sleep(for: .milliseconds(20))
+    }
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Archive"] as? [String], ["Archive/note.md"],
+      "the queued rename lands despite the reopen clearing the live journal")
+    XCTAssertNil(pins["Projects"])
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Archive/note.md", inFolder: "Archive"))
+
+    // Exactly once: a later persist replays nothing extra.
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+    let after = try sidebarJSON(at: vault)
+    let afterPins = try XCTUnwrap(after["pins"] as? [String: Any])
+    XCTAssertEqual(afterPins["Archive"] as? [String], ["Archive/note.md"])
+    XCTAssertNil(afterPins["Projects"])
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

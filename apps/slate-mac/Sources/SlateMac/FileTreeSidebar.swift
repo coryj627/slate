@@ -468,12 +468,12 @@ final class FileTreeViewModel: ObservableObject {
     /// running drain as a silent permanent partial.
     private var levelDrainTokens: [NodeID: UUID] = [:]
     /// Newest summaries for paths NOT yet materialized while a continuation
-    /// drain is in flight (round-19 finding 2): a save landing for a
-    /// later-page file before its page lands would otherwise be dropped by
-    /// `replaceFileSummaries` and overwritten by the stale page snapshot.
-    /// Consumed (newest-wins) when the drained rows land; cleared when the
-    /// last drain settles or the tree rebinds.
-    private var pendingSummaryOverlay: [String: FileSummary] = [:]
+    /// drain is in flight (round-19 finding 2), KEYED BY DRAIN TOKEN
+    /// (round-20 finding 2): only the owning drain may consume its entries,
+    /// and every revocation path drops that token's map — a replacement
+    /// drain (whose pages already reflect the save) can never consume a
+    /// stale predecessor's buffer.
+    private var pendingSummaryOverlay: [UUID: [String: FileSummary]] = [:]
     private static let pendingSummaryOverlayCap = 4096
     private(set) var levelDrainTasksForTesting: [NodeID: Task<Void, Never>] = [:]
 
@@ -528,12 +528,9 @@ final class FileTreeViewModel: ObservableObject {
             else { return }
             self.levelDrainTokens[parentKey] = nil
             self.levelDrainTasksForTesting[parentKey] = nil
-            let isLastDrain = self.levelDrainTokens.isEmpty
             defer {
-                if isLastDrain {
-                    // No drain can consume leftovers anymore.
-                    self.pendingSummaryOverlay = [:]
-                }
+                // This drain's leftovers can never be consumed again.
+                self.pendingSummaryOverlay[token] = nil
             }
             guard case .success(let drained) = outcome else {
                 // Round-15 finding 2: a failed continuation keeps the
@@ -570,7 +567,8 @@ final class FileTreeViewModel: ObservableObject {
                 if let existing = self.fileStateByPath[summary.path] {
                     state = existing
                 } else if let buffered =
-                    self.pendingSummaryOverlay.removeValue(forKey: summary.path)
+                    self.pendingSummaryOverlay[token]?
+                        .removeValue(forKey: summary.path)
                 {
                     // A save landed for this later-page file mid-drain: the
                     // buffered newest summary wins over the page snapshot.
@@ -652,6 +650,9 @@ final class FileTreeViewModel: ObservableObject {
             presentationByParent[parent] = nil
             parentPathByKey[parent] = nil
             completeLevelByKey[parent] = nil
+            if let revoked = levelDrainTokens[parent] {
+                pendingSummaryOverlay[revoked] = nil
+            }
             levelDrainTokens[parent] = nil
             levelDrainTasksForTesting[parent] = nil
             rebuildMergedPresentation()
@@ -696,6 +697,9 @@ final class FileTreeViewModel: ObservableObject {
             removeFileStates(in: level)
         }
         children = [:]
+        for (key, revoked) in levelDrainTokens where key != Self.rootFetchKey {
+            pendingSummaryOverlay[revoked] = nil
+        }
         levelDrainTokens = levelDrainTokens.filter {
             $0.key == Self.rootFetchKey
         }
@@ -806,6 +810,9 @@ final class FileTreeViewModel: ObservableObject {
         // for it (level-scoped revocation, round-16): without this, a
         // complete new first page would leave the old token current and let
         // a stale continuation publish over the reload.
+        if let revoked = levelDrainTokens[Self.rootFetchKey] {
+            pendingSummaryOverlay[revoked] = nil
+        }
         levelDrainTokens[Self.rootFetchKey] = nil
         levelDrainTasksForTesting[Self.rootFetchKey] = nil
         fetchState[Self.rootFetchKey] = .loading
@@ -841,6 +848,9 @@ final class FileTreeViewModel: ObservableObject {
             // the whole level from page one (round-15 finding 2).
             guard case .failed = fetchState[node.nodeID] else { return }
             replaceChildLevel(nil, for: node.nodeID, parentPath: nil)
+        }
+        if let revoked = levelDrainTokens[node.nodeID] {
+            pendingSummaryOverlay[revoked] = nil
         }
         levelDrainTokens[node.nodeID] = nil
         levelDrainTasksForTesting[node.nodeID] = nil
@@ -1201,11 +1211,15 @@ final class FileTreeViewModel: ObservableObject {
             guard let state = fileStateByPath[summary.path] else {
                 // Round-19 finding 2: while a drain is in flight this path
                 // may be a later-page row that just hasn't landed — buffer
-                // the newest summary so the landing overlays it.
-                if !levelDrainTokens.isEmpty,
-                    pendingSummaryOverlay.count < Self.pendingSummaryOverlayCap
-                {
-                    pendingSummaryOverlay[summary.path] = summary
+                // the newest summary under every ACTIVE drain token so the
+                // owning landing overlays it (round-20 finding 2).
+                for token in levelDrainTokens.values {
+                    if pendingSummaryOverlay[token, default: [:]].count
+                        < Self.pendingSummaryOverlayCap
+                    {
+                        pendingSummaryOverlay[token, default: [:]][summary.path] =
+                            summary
+                    }
                 }
                 continue
             }

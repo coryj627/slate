@@ -4885,6 +4885,14 @@ final class AppState: ObservableObject {
     /// serialization slot, so the reopened session's writers — and its
     /// post-open refresh — queue behind it instead of interleaving.
     @MainActor private static var sidebarStoreWriterChains: [URL: Task<Void, Never>] = [:]
+    /// Tail token per file for chain-drain detection.
+    @MainActor private static var sidebarStoreWriterChainTokens: [URL: UUID] = [:]
+    /// Structural transform IDs already committed to each file. This ledger
+    /// — not the live journal, which a same-vault reopen resets — is the
+    /// at-most-once authority for a task's captured immutable backlog, so a
+    /// queued rename survives close/reopen and still commits exactly once
+    /// (round-20 finding 1). Cleared when a file's chain fully drains.
+    @MainActor private static var sidebarCommittedTransformIDs: [URL: Set<UUID>] = [:]
     /// Ownership generation for queued persists. Bumped on every vault
     /// teardown/switch; a queued task whose captured generation no longer
     /// matches skips its disk I/O and publishes nothing.
@@ -5164,16 +5172,19 @@ final class AppState: ObservableObject {
                 enqueueIdentity != nil,
                 self.sidebarVaultRootIdentity == enqueueIdentity
             else { return }
-            // Round-9 finding 1 (at-most-once): a predecessor in the chain
-            // may already have committed and acknowledged part of the
-            // enqueue-time snapshot. Replay only ids STILL pending in the
-            // live journal at run time. (If a pass is applied but its
-            // directory fsync fails, the id legitimately stays pending; a
-            // re-replay is safe because every transform is a no-op against
-            // its own committed effect — the source paths no longer exist.)
-            let pendingIDs = Set(
-                self.sidebarStructuralTransformJournal.map(\.id))
-            let effectiveBacklog = backlog.filter { pendingIDs.contains($0.id) }
+            // Round-9 finding 1 (at-most-once), rebased on the per-file
+            // committed ledger (round-20 finding 1): the captured backlog is
+            // immutable, and only ids NOT yet committed to this file replay.
+            // Unlike the live journal — which a same-vault reopen resets —
+            // the ledger survives, so a queued structural rename lands
+            // exactly once across close/reopen. (An applied-but-unsynced
+            // pass legitimately re-replays; every transform is a no-op
+            // against its own committed effect.)
+            let committed =
+                Self.sidebarCommittedTransformIDs[storeFileURL] ?? []
+            let effectiveBacklog = backlog.filter {
+                !committed.contains($0.id)
+            }
             let effectiveBacklogIDs = Set(effectiveBacklog.map(\.id))
             enum PersistOutcome {
                 case success([String: Any])
@@ -5238,6 +5249,8 @@ final class AppState: ObservableObject {
             @MainActor
             func handleCommit(_ finalRoot: [String: Any], durabilityWarning: String?) {
                 if !effectiveBacklogIDs.isEmpty {
+                    Self.sidebarCommittedTransformIDs[storeFileURL, default: []]
+                        .formUnion(effectiveBacklogIDs)
                     self.sidebarStructuralTransformJournal.removeAll {
                         effectiveBacklogIDs.contains($0.id)
                     }
@@ -5290,7 +5303,14 @@ final class AppState: ObservableObject {
                 }
             }
 
-            defer { onSettled?() }
+            defer {
+                onSettled?()
+                if Self.sidebarStoreWriterChainTokens[storeFileURL] == token {
+                    Self.sidebarStoreWriterChains[storeFileURL] = nil
+                    Self.sidebarStoreWriterChainTokens[storeFileURL] = nil
+                    Self.sidebarCommittedTransformIDs[storeFileURL] = nil
+                }
+            }
             switch outcome {
             case .failure(let error):
                 guard ownedForPublish else { return }
@@ -5339,9 +5359,17 @@ final class AppState: ObservableObject {
                         isBacklogDrain: true)
                 }
             case .success(let finalRoot):
+                if !effectiveBacklogIDs.isEmpty {
+                    Self.sidebarCommittedTransformIDs[storeFileURL, default: []]
+                        .formUnion(effectiveBacklogIDs)
+                }
                 guard ownedForPublish else { return }
                 handleCommit(finalRoot, durabilityWarning: nil)
             case .replacedButUnsynced(let finalRoot, let reason):
+                if !effectiveBacklogIDs.isEmpty {
+                    Self.sidebarCommittedTransformIDs[storeFileURL, default: []]
+                        .formUnion(effectiveBacklogIDs)
+                }
                 guard ownedForPublish else { return }
                 // Content committed; report only durability (round-10
                 // finding 1) — never leave the transform pending, or a later
@@ -5356,6 +5384,7 @@ final class AppState: ObservableObject {
         }
         sidebarOrganizationPersistChain = task
         Self.sidebarStoreWriterChains[storeFileURL] = task
+        Self.sidebarStoreWriterChainTokens[storeFileURL] = token
         sidebarOrganizationPersistTaskForTesting = task
     }
 
@@ -8416,7 +8445,22 @@ final class AppState: ObservableObject {
             // a command issued after reopen queues behind IT, so the refresh
             // can neither read past a newer writer nor republish stale state
             // over that writer's tail publish.
+            let refreshToken = UUID()
+            let refreshFileURL = store.fileURL
             let refreshTask = Task { [weak self] in
+                defer {
+                    Task { @MainActor in
+                        if AppState.sidebarStoreWriterChainTokens[refreshFileURL]
+                            == refreshToken
+                        {
+                            AppState.sidebarStoreWriterChains[refreshFileURL] = nil
+                            AppState.sidebarStoreWriterChainTokens[refreshFileURL] =
+                                nil
+                            AppState.sidebarCommittedTransformIDs[refreshFileURL] =
+                                nil
+                        }
+                    }
+                }
                 await priorWriter.value
                 guard let self,
                     self.sidebarOrganizationWriteGeneration == generation,
@@ -8453,6 +8497,7 @@ final class AppState: ObservableObject {
                 }
             }
             Self.sidebarStoreWriterChains[store.fileURL] = refreshTask
+            Self.sidebarStoreWriterChainTokens[store.fileURL] = refreshToken
         }
         // Adopt the vault's authored organization in the same step. Unsafe
         // input already resolved to the default root, so this can't
