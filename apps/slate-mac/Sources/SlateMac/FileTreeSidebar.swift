@@ -2763,7 +2763,13 @@ struct FileTreeSidebar: View {
             }
             batchTrashQuarantineRecovery
             if let notice = appState.sidebarVaultPrefsNotice {
-                sidebarPreferencesNotice(notice)
+                sidebarPreferencesNotice(notice.localizedDescription)
+            } else if appState.sidebarOrganizationJournalRecoveryPending {
+                // Round-26: unsaved structural transforms with a readable
+                // file — same banner and Retry, dedicated message.
+                sidebarPreferencesNotice(
+                    "Some sidebar organization changes aren't saved yet. "
+                        + "Retry to save them.")
             }
             Group {
                 if appState.currentImportBatchOwner != nil {
@@ -2930,12 +2936,12 @@ struct FileTreeSidebar: View {
     /// preferences. It stays visible while defaults are in use, uses a warning
     /// symbol plus text (never color alone), and shares the exact message spoken
     /// by the vault-open announcement.
-    private func sidebarPreferencesNotice(_ notice: SidebarVaultPrefsNotice) -> some View {
+    private func sidebarPreferencesNotice(_ message: String) -> some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
             HStack(alignment: .top, spacing: Tokens.Spacing.sm) {
                 SlateSymbol.warning.decorative
                     .foregroundStyle(Tokens.ColorRole.warningText)
-                Text(notice.localizedDescription)
+                Text(message)
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.warningText)
                     .fixedSize(horizontal: false, vertical: true)

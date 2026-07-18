@@ -2353,6 +2353,104 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertNil(state.sidebarVaultPrefsNotice)
   }
 
+  // MARK: - Red-team regressions (adversarial review round 26)
+
+  func testFailedBacklogDrainKeepsARecoverySurface() async throws {
+    // Round-26: a tail persist failure that leaves the file READABLE has no
+    // typed notice, so the Retry banner would vanish while transforms are
+    // still unsaved. The dedicated journal-recovery flag keeps the surface
+    // up until the journal actually drains.
+    let (state, vault) = try openVault(
+      named: "drain-fail", files: ["Projects/note.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+    let realIdentity = try XCTUnwrap(state.sidebarVaultRootIdentity)
+    // Journal a rename with persistence refused (identity withheld), so the
+    // transform is pending with no queued drain.
+    state.overrideSidebarVaultRootIdentityForTesting(nil)
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    XCTAssertEqual(state.sidebarStructuralTransformJournal.count, 1)
+    state.overrideSidebarVaultRootIdentityForTesting(realIdentity)
+
+    // Writes fail (lock/temp creation refused) while reads stay fine.
+    let slate = vault.appendingPathComponent(".slate")
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o500], ofItemAtPath: slate.path)
+    defer {
+      try? FileManager.default.setAttributes(
+        [.posixPermissions: 0o755], ofItemAtPath: slate.path)
+    }
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+    await awaitPersist(state)
+    var attempts = 0
+    while attempts < 1000, !state.sidebarOrganizationJournalRecoveryPending {
+      attempts += 1
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    XCTAssertNil(state.sidebarVaultPrefsNotice, "the file itself is readable")
+    XCTAssertEqual(
+      state.sidebarStructuralTransformJournal.count, 1,
+      "the rename stays journaled through the failed drains")
+    XCTAssertTrue(
+      state.sidebarOrganizationJournalRecoveryPending,
+      "an unsaved journal keeps a visible recovery surface")
+
+    // Repair (restore write permission) and Retry: the journal drains.
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755], ofItemAtPath: slate.path)
+    await state.retrySidebarVaultPreferences()?.value
+    XCTAssertTrue(state.sidebarStructuralTransformJournal.isEmpty)
+    XCTAssertFalse(state.sidebarOrganizationJournalRecoveryPending)
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(pins["Archive"] as? [String], ["Archive/note.md"])
+    XCTAssertNil(pins["Projects"])
+  }
+
+  func testIdentityRaceAbortTearsDownTheOldVaultState() throws {
+    // Round-26: an A→B switch that aborts on the mid-open identity race
+    // must still clear vault A's scoped state — no stale selection,
+    // expansion, or rows may survive into the Welcome screen.
+    let (state, _) = try openVault(
+      named: "race-old", files: ["Projects/note.md"], folders: ["Projects"])
+    state.treeExpandedDirPaths = ["Projects"]
+    state.selectedFilePath = "Projects/note.md"
+
+    let vaultB = root.appendingPathComponent("race-b")
+    try FileManager.default.createDirectory(
+      at: vaultB, withIntermediateDirectories: true)
+    try "# b".write(
+      to: vaultB.appendingPathComponent("b.md"), atomically: true,
+      encoding: .utf8)
+    let aside = root.appendingPathComponent("race-b-moved")
+    state.sidebarVaultPrefsStoreFactoryForTesting = { vaultRoot in
+      try? FileManager.default.moveItem(at: vaultB, to: aside)
+      try? FileManager.default.createDirectory(
+        at: vaultB, withIntermediateDirectories: true)
+      return SidebarVaultPrefsStore(vaultRoot: vaultRoot)
+    }
+    state.openVault(at: vaultB)
+
+    XCTAssertNil(state.currentSession, "the racy switch must abort")
+    XCTAssertNil(state.currentVaultURL)
+    XCTAssertNil(state.sidebarVaultPrefsStore)
+    XCTAssertEqual(
+      state.lastError,
+      "The folder changed while it was being opened. Try opening the "
+        + "vault again.")
+    XCTAssertNil(
+      state.selectedFilePath,
+      "vault A's selection must not survive the aborted switch")
+    XCTAssertTrue(state.treeExpandedDirPaths.isEmpty)
+    XCTAssertNil(state.treeSelectedNode)
+    XCTAssertTrue(state.files.isEmpty)
+    XCTAssertNil(state.syncReport)
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

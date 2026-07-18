@@ -4933,6 +4933,12 @@ final class AppState: ObservableObject {
     /// can deterministically interleave a structural append (round-5
     /// finding 1's race).
     var sidebarStructuralJournalReplayInterleaveHookForTesting: (() -> Void)?
+    /// Round-26: true while structural transforms remain unsaved after a
+    /// tail persist failure that left the file READABLE (no typed notice) —
+    /// the sidebar shows the journal-recovery banner whose Retry drains
+    /// them. Cleared when the journal commits, on Retry publish, and on
+    /// vault teardown.
+    @Published private(set) var sidebarOrganizationJournalRecoveryPending = false
     private static let sidebarStructuralTransformJournalCap = 1000
 
     private func resetSidebarOrganizationState() {
@@ -4946,6 +4952,9 @@ final class AppState: ObservableObject {
         sidebarStructuralTransformJournalOverflowed = false
         sidebarPinPruneInFlight = []
         sidebarPinPruneLedger.reset()
+        if sidebarOrganizationJournalRecoveryPending {
+            sidebarOrganizationJournalRecoveryPending = false
+        }
         if sidebarOrganization != SidebarOrganizationState() {
             sidebarOrganization = SidebarOrganizationState()
         }
@@ -4982,6 +4991,11 @@ final class AppState: ObservableObject {
         if sidebarVaultPrefsNotice != notice {
             sidebarVaultPrefsNotice = notice
         }
+        // Round-26: transforms still pending after a failure with a
+        // READABLE file have no notice-gated Retry — surface the dedicated
+        // journal-recovery banner instead (cleared when the journal drains).
+        sidebarOrganizationJournalRecoveryPending =
+            notice == nil && !sidebarStructuralTransformJournal.isEmpty
         lastMutationAnnouncement = failure
         announcer.post(failure, priority: .medium)
     }
@@ -5279,6 +5293,9 @@ final class AppState: ObservableObject {
                         self.sidebarStructuralReplayCountsForTesting[id, default: 0]
                             += 1
                     }
+                }
+                if self.sidebarStructuralTransformJournal.isEmpty {
+                    self.sidebarOrganizationJournalRecoveryPending = false
                 }
                 acknowledge?()
                 if let durabilityWarning {
@@ -8325,6 +8342,7 @@ final class AppState: ObservableObject {
             // another. Both-nil stays open-but-write-disabled (degraded
             // filesystems observe no identity at all).
             if sidebarVaultRootIdentity != preOpenIdentity {
+                tearDownVaultScopedStateForAbortedOpen()
                 throw VaultOpenIdentityRaceError()
             }
             // Load this vault's file-recents (#495) now that the store's
@@ -8497,6 +8515,46 @@ final class AppState: ObservableObject {
             sidebarSelectionSnapshot = nil
             lastError = error.localizedDescription
         }
+    }
+
+    /// Round-26: an aborted mid-open (identity race) has already torn the
+    /// previous vault's session handles down but has not yet run the
+    /// switch's old-state resets, which normally happen after admission.
+    /// Clear every vault-scoped surface the interrupted switch would have
+    /// cleared so no stale rows, selections, watchers, or scans survive
+    /// into the Welcome screen.
+    private func tearDownVaultScopedStateForAbortedOpen() {
+        scanTask?.cancel()
+        scanTask = nil
+        files = []
+        scanError = nil
+        stopSyncMarkerWatcher()
+        syncReport = nil
+        liveSyncConfig = nil
+        syncDiagnosticsError = nil
+        resetConnectionsState()
+        resetGraphTableState()
+        resetGraphDiagramState()
+        clearStructuralUndoStacks()
+        resetVaultTasksReviewState()
+        workspace.reset()
+        pendingTabClose = nil
+        pendingTabCloseAfterSave = nil
+        selectedFilePath = nil
+        treeSelectedNode = nil
+        treeExpandedDirPaths = []
+        pendingFolderDelete = nil
+        pendingMove = nil
+        pendingBatchMove = nil
+        pendingBatchDelete = nil
+        renamingNode = nil
+        structuralRenameError = nil
+        resetBatchAlertPresentations()
+        scanProgress = nil
+        scanAnnouncementCount = 0
+        scanAnnouncementLastMessage = nil
+        scanAnnouncementLastFiredAt = .distantPast
+        bibliographyLoadCount = 0
     }
 
     /// Round-25: the root observed just before the session opened and the
@@ -8832,6 +8890,9 @@ final class AppState: ObservableObject {
             }
 
             self.sidebarVaultPrefsNotice = adoptedNotice
+            self.sidebarOrganizationJournalRecoveryPending =
+                adoptedNotice == nil
+                && !self.sidebarStructuralTransformJournal.isEmpty
             self.sidebarOrganizationPendingAnnouncementVerifications = [:]
             // A successful repair re-adopts the file's authored organization
             // sections in the same publish; any standing notice publishes
@@ -9391,6 +9452,21 @@ final class AppState: ObservableObject {
             }
             postMutationAnnouncement(reason)
             return false
+        }
+        // Round-26: a close with unsaved structural transforms makes one
+        // final best-effort drain. The queued write survives teardown
+        // (round-21) and lands against the captured, identity-verified
+        // store; if the transient failure persists the transforms are lost
+        // with the session — the recovery banner has been saying exactly
+        // that since the failure.
+        if sidebarVaultPrefsNotice == nil,
+            !sidebarStructuralTransformJournal.isEmpty
+        {
+            try? mutateSidebarOrganization(
+                announce: nil,
+                apply: { _ in },
+                reflect: { _ in },
+                isBacklogDrain: true)
         }
         invalidateNoteAuthoringOwnership()
         cancelSaveOwnership()

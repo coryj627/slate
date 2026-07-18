@@ -843,7 +843,13 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     let sources = try appSources()
     XCTAssertTrue(
       sources.fileTree.contains("if let notice = appState.sidebarVaultPrefsNotice"))
-    XCTAssertTrue(sources.fileTree.contains("sidebarPreferencesNotice(notice)"))
+    XCTAssertTrue(
+      sources.fileTree.contains(
+        "sidebarPreferencesNotice(notice.localizedDescription)"))
+    // Round-26: the journal-recovery banner shares the notice surface.
+    XCTAssertTrue(
+      sources.fileTree.contains(
+        "appState.sidebarOrganizationJournalRecoveryPending"))
     XCTAssertTrue(sources.fileTree.contains("appState.retrySidebarVaultPreferences()"))
     XCTAssertTrue(
       sources.fileTree.contains(".disabled(appState.isRetryingSidebarVaultPreferences)"))
