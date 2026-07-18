@@ -24,6 +24,13 @@ on:
 permissions:
   contents: read
 
+# A manual workflow_dispatch must not overlap the nightly cron (they'd
+# race the shared cache volume commit for no benefit). Queue, never
+# cancel — a cancelled census run is a coverage hole.
+concurrency:
+  group: nightly-deep-verification
+  cancel-in-progress: false
+
 jobs:
   full-census:
     name: full-tier censuses (400 seeds)
