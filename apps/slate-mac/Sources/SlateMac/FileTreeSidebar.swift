@@ -463,6 +463,10 @@ final class FileTreeViewModel: ObservableObject {
     /// current for that level and the session identity is unchanged.
     private var levelDrainTokens: [NodeID: UUID] = [:]
     private(set) var levelDrainTasksForTesting: [NodeID: Task<Void, Never>] = [:]
+    /// Monotonic guard for every structural drop (round-15 finding 1): a
+    /// continuation captured under an older generation never publishes, even
+    /// when its per-level token survived a bulk clear.
+    private var treeContentGeneration = 0
 
     /// Round-13 finding 1 + round-14 finding 1: the FIRST page fetches
     /// synchronously (the shipped U2 behavior — content appears immediately
@@ -480,6 +484,7 @@ final class FileTreeViewModel: ObservableObject {
         let token = UUID()
         levelDrainTokens[parentKey] = token
         let capturedSession = sessionIdentity
+        let capturedGeneration = treeContentGeneration
         let startCursor = firstPage.files.nextCursor
         let baseCount = firstPage.files.items.count
         let task = Task { [weak self] in
@@ -510,13 +515,20 @@ final class FileTreeViewModel: ObservableObject {
                 }.value
             guard let self,
                 self.levelDrainTokens[parentKey] == token,
+                self.treeContentGeneration == capturedGeneration,
                 self.sessionIdentity == capturedSession
             else { return }
             self.levelDrainTokens[parentKey] = nil
             self.levelDrainTasksForTesting[parentKey] = nil
             guard case .success(let drained) = outcome else {
-                // A failed continuation keeps the already-published partial
-                // page; the level simply stays partial for this session.
+                // Round-15 finding 2: a failed continuation keeps the
+                // already-published partial page but surfaces the existing
+                // inline error + Retry instead of a silent permanent
+                // partial; Retry refetches the whole level.
+                if case .failure(let error) = outcome {
+                    self.fetchState[parentKey] = .failed(
+                        message: Self.message(for: error))
+                }
                 return
             }
             let merged = DirListing(
@@ -544,6 +556,7 @@ final class FileTreeViewModel: ObservableObject {
     private(set) var summaryReplacementLookupCountForTesting = 0
 
     private func clearMaterializedLevels() {
+        treeContentGeneration &+= 1
         rootLevel = []
         children = [:]
         fileStateByPath = [:]
@@ -631,10 +644,17 @@ final class FileTreeViewModel: ObservableObject {
     }
 
     private func clearChildLevels() {
+        treeContentGeneration &+= 1
         for level in children.values {
             removeFileStates(in: level)
         }
         children = [:]
+        levelDrainTokens = levelDrainTokens.filter {
+            $0.key == Self.rootFetchKey
+        }
+        levelDrainTasksForTesting = levelDrainTasksForTesting.filter {
+            $0.key == Self.rootFetchKey
+        }
     }
 
     /// Test seam: bind to an explicit fetcher instead of a live session. The
@@ -762,7 +782,13 @@ final class FileTreeViewModel: ObservableObject {
     func loadChildren(of node: TreeNode) {
         guard case .directory = node.kind else { return }
         guard let fetcher else { return }
-        if children[node.nodeID] != nil { return }  // already cached
+        if children[node.nodeID] != nil {
+            // Already cached — unless a continuation failure left the level
+            // partial with an inline error, in which case Retry refetches
+            // the whole level from page one (round-15 finding 2).
+            guard case .failed = fetchState[node.nodeID] else { return }
+            replaceChildLevel(nil, for: node.nodeID, parentPath: nil)
+        }
         fetchState[node.nodeID] = .loading
         do {
             let firstPage = try fetcher(node.path, nil)
@@ -1030,6 +1056,7 @@ final class FileTreeViewModel: ObservableObject {
         // Codex round 3: without this, a recycled child id inherited the
         // deleted sibling's expansion), then drop the cache and refetch iff
         // the parent is disclosed.
+        treeContentGeneration &+= 1
         let oldRows = children[parent] ?? []
         demoteExpandedSubtree(rows: oldRows)
         dropDescendantCaches(rows: oldRows)
@@ -1045,6 +1072,7 @@ final class FileTreeViewModel: ObservableObject {
     /// changed or disappeared are demoted and cleared after the refetch, so an
     /// SQLite id reused by a new root folder cannot inherit stale children.
     func rootLevelInvalidation() {
+        treeContentGeneration &+= 1
         let oldRoot = rootLevel
         loadRoot()
         let newPathByID = Dictionary(uniqueKeysWithValues: rootLevel.compactMap {

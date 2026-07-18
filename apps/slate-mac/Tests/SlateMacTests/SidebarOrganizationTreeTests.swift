@@ -326,6 +326,115 @@ final class SidebarOrganizationTreeTests: XCTestCase {
       "the first vault's late continuation never publishes into the new bind")
   }
 
+  func testAuthoritativeInvalidationRetiresAnInFlightDrain() async {
+    // Round-15 finding 1: a whole-tree invalidation while a continuation is
+    // in flight must retire it — the old drain never publishes over the
+    // reloaded content, even in the same session.
+    final class PagesBox: @unchecked Sendable {
+      private let lock = NSLock()
+      private var singlePage = false
+      func switchToSinglePage() {
+        lock.lock()
+        singlePage = true
+        lock.unlock()
+      }
+      var isSinglePage: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return singlePage
+      }
+    }
+    let box = PagesBox()
+    let now = instant(2026, 7, 18)
+    let vm = FileTreeViewModel()
+    vm.applyOrganization(context(now: now))
+    vm.bindForTesting(pagedFetcher: { [self] _, cursor in
+      if box.isSinglePage {
+        return DirListing(
+          dirs: [],
+          files: FileSummaryPage(
+            items: [file("fresh.md")], nextCursor: nil, totalFiltered: 1))
+      }
+      if cursor == nil {
+        return DirListing(
+          dirs: [],
+          files: FileSummaryPage(
+            items: [file("stale-a.md")], nextCursor: "page-2",
+            totalFiltered: 2))
+      }
+      return DirListing(
+        dirs: [],
+        files: FileSummaryPage(
+          items: [file("stale-late.md")], nextCursor: nil, totalFiltered: 2))
+    })
+    let staleDrain = vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]
+
+    // A rescan-style invalidation reloads the root from the new fixture.
+    box.switchToSinglePage()
+    vm.authoritativeTreeInvalidation()
+    await staleDrain?.value
+
+    XCTAssertEqual(
+      visiblePaths(vm), ["fresh.md"],
+      "the pre-invalidation continuation must never publish stale pages")
+  }
+
+  func testContinuationFailureSurfacesInlineErrorAndRetryRefetches() async {
+    // Round-15 finding 2: a page-two failure keeps the first page, surfaces
+    // the existing inline error + Retry, and Retry refetches the level.
+    final class FailBox: @unchecked Sendable {
+      private let lock = NSLock()
+      private var failing = true
+      func heal() {
+        lock.lock()
+        failing = false
+        lock.unlock()
+      }
+      var isFailing: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return failing
+      }
+    }
+    let box = FailBox()
+    let now = instant(2026, 7, 18)
+    let vm = FileTreeViewModel()
+    vm.applyOrganization(context(now: now))
+    vm.bindForTesting(pagedFetcher: { [self] _, cursor in
+      if cursor == nil {
+        return DirListing(
+          dirs: [],
+          files: FileSummaryPage(
+            items: [file("page-one.md")], nextCursor: "page-2",
+            totalFiltered: 2))
+      }
+      if box.isFailing {
+        throw VaultError.Db(message: "page two boom")
+      }
+      return DirListing(
+        dirs: [],
+        files: FileSummaryPage(
+          items: [file("page-two.md")], nextCursor: nil, totalFiltered: 2))
+    })
+    await vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]?.value
+
+    XCTAssertEqual(
+      visiblePaths(vm), ["page-one.md"],
+      "the published first page survives the continuation failure")
+    guard case .failed(let message)? = vm.fetchState[FileTreeViewModel.rootFetchKey]
+    else {
+      return XCTFail("a failed continuation must surface the inline error")
+    }
+    XCTAssertTrue(message.contains("page two boom"))
+
+    // Retry (the root error row calls loadRoot) refetches and completes.
+    box.heal()
+    vm.loadRoot()
+    await vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]?.value
+    XCTAssertEqual(visiblePaths(vm), ["page-one.md", "page-two.md"])
+    XCTAssertNil(vm.fetchState[FileTreeViewModel.rootFetchKey])
+  }
+
   func testPartialLevelsNeverClassifyPinsAsStale() {
     // Round-5 finding 2: a paginated listing omits real files; a pinned
     // file on a later page must not be offered for pruning.
