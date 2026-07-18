@@ -14,6 +14,7 @@ on:
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'crates/**/Cargo.toml'
       - '.github/workflows/audit.yml'
       # Re-run the gate when the ignore list changes, so a newly-added
@@ -24,6 +25,7 @@ on:
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'crates/**/Cargo.toml'
       - '.github/workflows/audit.yml'
       # Re-run the gate when the ignore list changes, so a newly-added

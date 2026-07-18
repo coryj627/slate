@@ -729,25 +729,40 @@ fn census_dir_tree_seed_chunks_are_contiguous() {
     }
 }
 
-#[test]
-fn census_dir_tree_matches_filesystem_seeds_000_125() {
-    dir_tree_matches_filesystem_for_seeds(DIR_TREE_SEED_CHUNKS[0]);
+/// Generates the per-chunk `#[test]` wrappers from ONE invocation and
+/// compile-time-checks the wiring (adversarial-review fix): the
+/// contiguity test above validates the TABLE, but couldn't catch a
+/// copy/paste wrapper calling the wrong index (running one chunk twice
+/// and another never). The const block below fails compilation unless
+/// the wrappers consume indices 0..len exactly once, in order.
+macro_rules! dir_tree_census_chunks {
+    ($(($idx:expr, $name:ident)),+ $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                dir_tree_matches_filesystem_for_seeds(DIR_TREE_SEED_CHUNKS[$idx]);
+            }
+        )+
+        const _: () = {
+            let mut expected = 0;
+            $(
+                assert!($idx == expected, "chunk wrappers must consume indices in order");
+                expected += 1;
+            )+
+            assert!(
+                expected == DIR_TREE_SEED_CHUNKS.len(),
+                "every seed chunk needs exactly one wrapper"
+            );
+        };
+    };
 }
 
-#[test]
-fn census_dir_tree_matches_filesystem_seeds_125_250() {
-    dir_tree_matches_filesystem_for_seeds(DIR_TREE_SEED_CHUNKS[1]);
-}
-
-#[test]
-fn census_dir_tree_matches_filesystem_seeds_250_375() {
-    dir_tree_matches_filesystem_for_seeds(DIR_TREE_SEED_CHUNKS[2]);
-}
-
-#[test]
-fn census_dir_tree_matches_filesystem_seeds_375_500() {
-    dir_tree_matches_filesystem_for_seeds(DIR_TREE_SEED_CHUNKS[3]);
-}
+dir_tree_census_chunks!(
+    (0, census_dir_tree_matches_filesystem_seeds_000_125),
+    (1, census_dir_tree_matches_filesystem_seeds_125_250),
+    (2, census_dir_tree_matches_filesystem_seeds_250_375),
+    (3, census_dir_tree_matches_filesystem_seeds_375_500),
+);
 
 fn dir_tree_matches_filesystem_for_seeds((lo, hi): (u64, u64)) {
     for seed in lo..hi {

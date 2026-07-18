@@ -24,9 +24,14 @@ on:
 permissions:
   contents: read
 
-# A manual workflow_dispatch must not overlap the nightly cron (they'd
-# race the shared cache volume commit for no benefit). Queue, never
-# cancel — a cancelled census run is a coverage hole.
+# A manual workflow_dispatch never overlaps the RUNNING cron (or vice
+# versa): the group serializes them, and cancel-in-progress: false means
+# an in-flight census is never cancelled. Honest limitation
+# (adversarial review): GitHub keeps at most ONE pending run per group —
+# a newer dispatch replaces an older *pending* one. Acceptable here:
+# dispatches take no inputs and always run the same content on the
+# default branch, so the newest pending run is equivalent to the one it
+# replaced.
 concurrency:
   group: nightly-deep-verification
   cancel-in-progress: false
@@ -65,19 +70,28 @@ jobs:
         with:
           tool: cargo-nextest@0.9.140
 
-      - name: cargo nextest run (ci profile, FULL census tier)
-        # Same sweep shape as the PR test lane (perf guard excluded — it
-        # runs isolated on every PR already and has no census dimension),
-        # with the 400-seed tier switched on. TMPDIR on tmpfs as in the
-        # PR lane; the dir-tree chunks are fixed at 500 seeds regardless
-        # of tier.
+      - name: cargo nextest run — censuses (FULL tier, tmpfs)
+        # Census half of the sweep with the 400-seed tier switched on
+        # (the dir-tree chunks are fixed at 500 seeds regardless of
+        # tier). Mirrors the PR test lane: tmpfs applies to the census
+        # subset ONLY; the perf guard is excluded (it runs isolated on
+        # every PR and has no census dimension).
         env:
           SLATE_CENSUS_FULL: '1'
           TMPDIR: /dev/shm
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "not test(${ROOT_LISTING_PERF_GUARD})"
+          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD})"
+
+      - name: cargo nextest run — non-census suite (real fs)
+        # Durability/persistence contracts and the rest of the suite on
+        # the persistent filesystem, exactly as the PR test lane runs
+        # them — tmpfs must never mask an fsync/rename regression here.
+        run: >-
+          cargo nextest run --workspace --cargo-profile ci --locked
+          --no-fail-fast --no-tests=fail
+          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD})"
 
       - name: cargo bench --no-run (full committed profile)
         # Thin-LTO bench compile — the rot class PR lanes skip.

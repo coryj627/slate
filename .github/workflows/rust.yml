@@ -13,11 +13,16 @@
 # volume. Volumes are fork-on-mount / commit-on-clean-exit /
 # last-write-wins (namespace.so/docs/architecture/storage/cache-volumes),
 # so concurrent lanes are safe: each gets a private fork. The longest
-# lane (test) commits last, so the big `target/ci` tree stays warm run
-# to run; the short lanes may re-do a little work from a stale fork —
-# that costs billed seconds off the critical path, not wall time. The
-# lanes write disjoint profile dirs anyway (lint → target/debug check
-# artifacts, test → target/ci, bench → target/release).
+# lane (test) USUALLY commits last, so the big `target/ci` tree stays
+# warm run to run; the short lanes may re-do a little work from a stale
+# fork — that costs billed seconds off the critical path, not wall time.
+# One inversion exists (adversarial review): a COLD bench lane can
+# outlast the test lane and commit an older fork, discarding that run's
+# freshly warmed target/ci — a one-run penalty that self-heals on the
+# next run. The lanes write disjoint profile dirs anyway (lint →
+# target/debug check artifacts, test → target/ci, bench →
+# target/release); the structural fix, per-lane cache volumes, is a
+# deferred dashboard experiment.
 
 name: Rust
 
@@ -26,6 +31,7 @@ on:
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'crates/**'
       - '.config/nextest.toml'
       - '.github/workflows/rust.yml'
@@ -34,6 +40,7 @@ on:
     paths:
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'rust-toolchain.toml'
       - 'crates/**'
       - '.config/nextest.toml'
       - '.github/workflows/rust.yml'
@@ -122,29 +129,40 @@ jobs:
         with:
           tool: cargo-nextest@0.9.140
 
-      - name: cargo nextest run (ci profile)
-        # The wall-clock perf guard is excluded here and run in isolation
-        # below — beside the long dir-tree censuses, scheduler contention
-        # is indistinguishable from a list_dir_children regression. If the
-        # guard is ever renamed, this filterset silently stops excluding
-        # it (harmless: it just runs twice), but the isolated step's
-        # exact-match filter + --no-tests=fail turns the rename into a
-        # loud CI failure, preserving the old `--list | grep` protection.
+      - name: cargo nextest run — censuses (ci profile, tmpfs)
+        # The wall-clock perf guard is excluded from both sweep halves and
+        # run in isolation below — beside the long dir-tree censuses,
+        # scheduler contention is indistinguishable from a
+        # list_dir_children regression. If the guard is ever renamed, the
+        # isolated step's exact-match filter + --no-tests=fail turns the
+        # rename into a loud CI failure, preserving the old
+        # `--list | grep` protection.
         #
-        # TMPDIR on tmpfs: the fs-heavy censuses spend their time churning
-        # tempdir vaults (create/scan/delete thousands of small files per
-        # run — the dir-tree census alone was 549s on ext4, run
-        # 29649179445). tmpfs keeps identical filesystem *semantics* for
-        # what these censuses assert (logical tree/scan equivalence) while
-        # dropping journal/flush cost. The perf guard below deliberately
-        # keeps the default on-disk TMPDIR — its wall-clock bound measures
-        # real-fs listing behavior.
+        # TMPDIR on tmpfs for the CENSUS SUBSET ONLY (adversarial-review
+        # fix): censuses assert logical equivalences and spend their time
+        # churning tempdir vaults (the dir-tree census alone was 549s on
+        # ext4, run 29649179445) — tmpfs drops the journal/flush cost
+        # without changing what they assert. Durability and persistence
+        # contracts (atomic write + sync_data, crash recovery) run in the
+        # NEXT step against the runner's real filesystem, so tmpfs's more
+        # forgiving semantics can't mask a regression there.
         env:
           TMPDIR: /dev/shm
         run: >-
           cargo nextest run --workspace --cargo-profile ci --locked
           --no-fail-fast --no-tests=fail
-          -E "not test(${ROOT_LISTING_PERF_GUARD})"
+          -E "test(census_) and not test(${ROOT_LISTING_PERF_GUARD})"
+
+      - name: cargo nextest run — non-census suite (ci profile, real fs)
+        # Everything that isn't a census (and isn't the isolated guard):
+        # unit + integration + the durability/persistence contracts, on
+        # the same persistent filesystem real vaults use. Shares the
+        # build with the census step, so this adds no compile time; the
+        # non-census suite runs in seconds.
+        run: >-
+          cargo nextest run --workspace --cargo-profile ci --locked
+          --no-fail-fast --no-tests=fail
+          -E "not test(census_) and not test(${ROOT_LISTING_PERF_GUARD})"
 
       - name: root-listing performance guard (isolated)
         # Same workspace-level package selection as the sweep above, so
@@ -209,3 +227,10 @@ jobs:
         # left to the next local bench run.
         if: github.event_name == 'push'
         run: cargo bench --workspace --no-run --locked
+
+      - name: Cache footprint report
+        # Twin of the test lane's report (adversarial review): under
+        # last-write-wins, whichever lane commits LAST defines the next
+        # run's volume — so the size trend must be visible from every
+        # lane that can win, not just the test lane.
+        run: du -sh target/* 2>/dev/null | sort -rh || true
