@@ -2100,6 +2100,95 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       "nothing writes into the unverified root")
   }
 
+  // MARK: - Red-team regressions (adversarial review round 24)
+
+  func testWriterChainOrderSurvivesAReopenThroughASymlinkAlias() async throws {
+    // Round-24: chains, tokens, and the committed ledger are keyed by the
+    // vault root's PHYSICAL identity, not URL spelling — reopening the same
+    // vault through a symlink must queue behind the previous session's
+    // still-draining writer, or two noncommutative renames land in reverse
+    // order and orphan the pins.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let (state, vault) = try openVault(
+      named: "alias-order", files: ["Projects/note.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      root["slow"] = true
+    }
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Middle"))
+    let firstChain = state.sidebarOrganizationPersistTaskForTesting
+    state.closeVault()
+
+    let alias = root.appendingPathComponent("alias-order-link")
+    try FileManager.default.createSymbolicLink(
+      at: alias, withDestinationURL: vault)
+    state.openVault(at: alias)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Middle", newPath: "Final"))
+    let secondChain = state.sidebarOrganizationPersistTaskForTesting
+
+    gate.open()
+    await firstChain?.value
+    await secondChain?.value
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Final"] as? [String], ["Final/note.md"],
+      "the two renames compose in enqueue order across the alias reopen")
+    XCTAssertNil(pins["Middle"], "the first rename must not land last")
+    XCTAssertNil(pins["Projects"])
+    XCTAssertEqual(json["slow"] as? Bool, true)
+  }
+
+  func testDispatchRefusesWhenAdmittedIdentityIsUnknown() async throws {
+    // Round-24: without a captured physical identity no write can be
+    // chained, ordered, or disk-verified — dispatch refuses up front,
+    // before any optimistic reflect or announcement.
+    let (state, vault) = try openVault(
+      named: "no-identity-dispatch", files: ["a.md"])
+    try publish(state, [])
+    state.overrideSidebarVaultRootIdentityForTesting(nil)
+    XCTAssertThrowsError(
+      try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc))
+    XCTAssertEqual(
+      state.sidebarOrganization, AppState.SidebarOrganizationState(),
+      "no optimistic mutation publishes for a refused write")
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath: vault.appendingPathComponent(".slate/sidebar.json").path))
+  }
+
+  func testRetryAdoptsDefaultsWhenTheMalformedSlateDirectoryIsRemoved()
+    async throws
+  {
+    // Round-24: deleting the whole broken `.slate` directory is a
+    // legitimate repair. With the root identity verified, Retry adopts the
+    // writable missing-file defaults instead of staying wedged in recovery.
+    let (state, vault) = try openVault(
+      named: "retry-slate-removed", files: ["a.md"],
+      sidebarJSON: "{not json")
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    try FileManager.default.removeItem(
+      at: vault.appendingPathComponent(".slate"))
+    await state.retrySidebarVaultPreferences()?.value
+    XCTAssertNil(
+      state.sidebarVaultPrefsNotice,
+      "a verified root with no .slate directory is the writable default state")
+    XCTAssertEqual(
+      state.sidebarOrganization, AppState.SidebarOrganizationState())
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

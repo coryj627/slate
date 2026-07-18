@@ -4880,19 +4880,25 @@ final class AppState: ObservableObject {
     /// predecessor, so two quick commands cannot interleave read-modify-write
     /// cycles even though each cycle also holds the cross-process lock.
     private var sidebarOrganizationPersistChain: Task<Void, Never>?
-    /// Per-FILE writer chains that survive vault teardown (round-16): a
-    /// persist detached before a close/reopen still holds the file's
-    /// serialization slot, so the reopened session's writers — and its
-    /// post-open refresh — queue behind it instead of interleaving.
-    @MainActor private static var sidebarStoreWriterChains: [URL: Task<Void, Never>] = [:]
-    /// Tail token per file for chain-drain detection.
-    @MainActor private static var sidebarStoreWriterChainTokens: [URL: UUID] = [:]
-    /// Structural transform IDs already committed to each file. This ledger
+    /// Writer chains that survive vault teardown (round-16), keyed by the
+    /// vault root's PHYSICAL identity — device and inode, not URL spelling
+    /// — so every alias of one vault (symlink, differently spelled path)
+    /// shares one ordered chain (round-24). A persist detached before a
+    /// close/reopen still holds the vault's serialization slot, so the
+    /// reopened session's writers — and its post-open refresh — queue
+    /// behind it instead of interleaving.
+    @MainActor private static var sidebarStoreWriterChains:
+        [SidebarVaultRootIdentity: Task<Void, Never>] = [:]
+    /// Tail token per vault identity for chain-drain detection.
+    @MainActor private static var sidebarStoreWriterChainTokens:
+        [SidebarVaultRootIdentity: UUID] = [:]
+    /// Structural transform IDs already committed to each vault. This ledger
     /// — not the live journal, which a same-vault reopen resets — is the
     /// at-most-once authority for a task's captured immutable backlog, so a
     /// queued rename survives close/reopen and still commits exactly once
-    /// (round-20 finding 1). Cleared when a file's chain fully drains.
-    @MainActor private static var sidebarCommittedTransformIDs: [URL: Set<UUID>] = [:]
+    /// (round-20 finding 1). Cleared when a vault's chain fully drains.
+    @MainActor private static var sidebarCommittedTransformIDs:
+        [SidebarVaultRootIdentity: Set<UUID>] = [:]
     /// Ownership generation for queued persists. Bumped on every vault
     /// teardown/switch; a queued task whose captured generation no longer
     /// matches skips its disk I/O and publishes nothing.
@@ -5138,6 +5144,16 @@ final class AppState: ObservableObject {
         guard let store = sidebarVaultPrefsStore else {
             throw sidebarActionFailure("Open a vault to use Sidebar actions.")
         }
+        // Round-24: chains, tokens, and the committed ledger are keyed by the
+        // admitted PHYSICAL identity (device, inode) — every path spelling of
+        // one vault shares one ordered chain. Without a captured identity no
+        // write can be ordered or disk-verified: refuse up front, before any
+        // optimistic reflect or announcement.
+        guard let enqueueIdentity = sidebarVaultRootIdentity else {
+            throw sidebarActionFailure(
+                "Sidebar settings can't change right now — this vault's "
+                    + "on-disk location could not be verified when it opened.")
+        }
 
         var next = sidebarOrganization
         reflect(&next)
@@ -5149,12 +5165,10 @@ final class AppState: ObservableObject {
             announcer.post(announcement, priority: .medium)
         }
 
-        let previous = Self.sidebarStoreWriterChains[store.fileURL]
+        let previous = Self.sidebarStoreWriterChains[enqueueIdentity]
         let session = currentSession
         let generation = sidebarOrganizationWriteGeneration
-        let storeFileURL = store.fileURL
         let vaultRootURL = store.vaultRoot
-        let enqueueIdentity = sidebarVaultRootIdentity
         let token = UUID()
         sidebarOrganizationPersistTailToken = token
         if let verifyAnnouncement {
@@ -5178,7 +5192,7 @@ final class AppState: ObservableObject {
             // descriptor-bound fstat refuse a replaced or deleted vault.
             // Publishes, acknowledgements, and announcements additionally
             // require the original generation/session ownership.
-            guard let self, enqueueIdentity != nil else { return }
+            guard let self else { return }
             // Round-9 finding 1 (at-most-once), rebased on the per-file
             // committed ledger (round-20 finding 1): the captured backlog is
             // immutable, and only ids NOT yet committed to this file replay.
@@ -5188,7 +5202,7 @@ final class AppState: ObservableObject {
             // pass legitimately re-replays; every transform is a no-op
             // against its own committed effect.)
             let committed =
-                Self.sidebarCommittedTransformIDs[storeFileURL] ?? []
+                Self.sidebarCommittedTransformIDs[enqueueIdentity] ?? []
             let effectiveBacklog = backlog.filter {
                 !committed.contains($0.id)
             }
@@ -5256,7 +5270,7 @@ final class AppState: ObservableObject {
             @MainActor
             func handleCommit(_ finalRoot: [String: Any], durabilityWarning: String?) {
                 if !effectiveBacklogIDs.isEmpty {
-                    Self.sidebarCommittedTransformIDs[storeFileURL, default: []]
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity, default: []]
                         .formUnion(effectiveBacklogIDs)
                     self.sidebarStructuralTransformJournal.removeAll {
                         effectiveBacklogIDs.contains($0.id)
@@ -5312,10 +5326,10 @@ final class AppState: ObservableObject {
 
             defer {
                 onSettled?()
-                if Self.sidebarStoreWriterChainTokens[storeFileURL] == token {
-                    Self.sidebarStoreWriterChains[storeFileURL] = nil
-                    Self.sidebarStoreWriterChainTokens[storeFileURL] = nil
-                    Self.sidebarCommittedTransformIDs[storeFileURL] = nil
+                if Self.sidebarStoreWriterChainTokens[enqueueIdentity] == token {
+                    Self.sidebarStoreWriterChains[enqueueIdentity] = nil
+                    Self.sidebarStoreWriterChainTokens[enqueueIdentity] = nil
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity] = nil
                 }
             }
             switch outcome {
@@ -5353,13 +5367,11 @@ final class AppState: ObservableObject {
                 }
                 // Round-23: disk truth must still BE this vault's disk.
                 // The reconcile read is bound to the enqueue identity; a
-                // mismatch (or a never-captured identity) is the replaced-
-                // vault case — keep current state and announce the discard.
+                // mismatch is the replaced-vault case — keep current state
+                // and announce the discard.
                 let reconcileIdentity = enqueueIdentity
                 let recovered = await Task.detached(priority: .utility) {
-                    reconcileIdentity.flatMap {
-                        store.read(expectedRootIdentity: $0)
-                    }
+                    store.read(expectedRootIdentity: reconcileIdentity)
                 }.value
                 guard self.sidebarOrganizationWriteGeneration == generation,
                     self.currentSession === session
@@ -5391,14 +5403,14 @@ final class AppState: ObservableObject {
                 }
             case .success(let finalRoot):
                 if !effectiveBacklogIDs.isEmpty {
-                    Self.sidebarCommittedTransformIDs[storeFileURL, default: []]
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity, default: []]
                         .formUnion(effectiveBacklogIDs)
                 }
                 guard ownedForPublish else { return }
                 handleCommit(finalRoot, durabilityWarning: nil)
             case .replacedButUnsynced(let finalRoot, let reason):
                 if !effectiveBacklogIDs.isEmpty {
-                    Self.sidebarCommittedTransformIDs[storeFileURL, default: []]
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity, default: []]
                         .formUnion(effectiveBacklogIDs)
                 }
                 guard ownedForPublish else { return }
@@ -5414,14 +5426,11 @@ final class AppState: ObservableObject {
             }
         }
         sidebarOrganizationPersistChain = task
-        Self.sidebarStoreWriterChains[storeFileURL] = task
-        Self.sidebarStoreWriterChainTokens[storeFileURL] = token
+        Self.sidebarStoreWriterChains[enqueueIdentity] = task
+        Self.sidebarStoreWriterChainTokens[enqueueIdentity] = token
         sidebarOrganizationPersistTaskForTesting = task
     }
 
-    /// Test seam: enqueue one raw write through the production persist chain
-    /// — ownership guards, tail bookkeeping, and failure reconcile included —
-    /// so chain-ordering behavior is testable without a second funnel.
     /// Round-23 test seam: simulate an open whose root-identity capture
     /// failed (fstat raced a deletion) so fail-closed paths are testable.
     func overrideSidebarVaultRootIdentityForTesting(
@@ -5430,6 +5439,9 @@ final class AppState: ObservableObject {
         sidebarVaultRootIdentity = identity
     }
 
+    /// Test seam: enqueue one raw write through the production persist chain
+    /// — ownership guards, tail bookkeeping, and failure reconcile included —
+    /// so chain-ordering behavior is testable without a second funnel.
     func enqueueSidebarOrganizationWriteForTesting(
         _ apply: @escaping @Sendable (inout [String: Any]) -> Void
     ) {
@@ -8479,9 +8491,13 @@ final class AppState: ObservableObject {
     private func loadSidebarVaultPreferences(at vaultRoot: URL) {
         let store = sidebarVaultPrefsStoreFactoryForTesting?(vaultRoot)
             ?? SidebarVaultPrefsStore(vaultRoot: vaultRoot)
-        let result = store.read()
+        // Round-24: content and root identity come from ONE root-descriptor
+        // resolution inside the store — a same-path swap during open can no
+        // longer pair one vault's preferences with another vault's identity.
+        let admission = store.readForAdmission()
+        let result = admission.result
         sidebarVaultPrefsStore = store
-        sidebarVaultRootIdentity = Self.vaultRootIdentity(of: vaultRoot)
+        sidebarVaultRootIdentity = admission.rootIdentity
         // FL-06 (round-5 finding 3): a KNOWN section with an unrecognized
         // top-level shape enters the same read-only recovery flow as
         // malformed JSON — a later write must never silently replace it.
@@ -8495,11 +8511,13 @@ final class AppState: ObservableObject {
         // Round-16: a writer detached before a close/reopen of the SAME
         // vault may still be completing. Queue a silent post-drain refresh
         // so published state converges on whatever that writer committed.
-        // Round-23: the refresh republishes disk content after the prior
-        // writer drains — bind its read to THIS open's admitted identity and
-        // skip entirely when identity was never captured (fail closed).
+        // Round-23/24: the refresh republishes disk content after the prior
+        // writer drains — bind its read to THIS open's admitted identity,
+        // look the prior chain up by that PHYSICAL identity (any alias of
+        // the same vault shares one chain), and skip entirely when identity
+        // was never captured (fail closed).
         if let refreshIdentity = sidebarVaultRootIdentity,
-            let priorWriter = Self.sidebarStoreWriterChains[store.fileURL]
+            let priorWriter = Self.sidebarStoreWriterChains[refreshIdentity]
         {
             let generation = sidebarOrganizationWriteGeneration
             let session = currentSession
@@ -8508,17 +8526,16 @@ final class AppState: ObservableObject {
             // can neither read past a newer writer nor republish stale state
             // over that writer's tail publish.
             let refreshToken = UUID()
-            let refreshFileURL = store.fileURL
             let refreshTask = Task { [weak self] in
                 defer {
                     Task { @MainActor in
-                        if AppState.sidebarStoreWriterChainTokens[refreshFileURL]
+                        if AppState.sidebarStoreWriterChainTokens[refreshIdentity]
                             == refreshToken
                         {
-                            AppState.sidebarStoreWriterChains[refreshFileURL] = nil
-                            AppState.sidebarStoreWriterChainTokens[refreshFileURL] =
+                            AppState.sidebarStoreWriterChains[refreshIdentity] = nil
+                            AppState.sidebarStoreWriterChainTokens[refreshIdentity] =
                                 nil
-                            AppState.sidebarCommittedTransformIDs[refreshFileURL] =
+                            AppState.sidebarCommittedTransformIDs[refreshIdentity] =
                                 nil
                         }
                     }
@@ -8560,8 +8577,8 @@ final class AppState: ObservableObject {
                     self.sidebarOrganization = organization
                 }
             }
-            Self.sidebarStoreWriterChains[store.fileURL] = refreshTask
-            Self.sidebarStoreWriterChainTokens[store.fileURL] = refreshToken
+            Self.sidebarStoreWriterChains[refreshIdentity] = refreshTask
+            Self.sidebarStoreWriterChainTokens[refreshIdentity] = refreshToken
         }
         // Adopt the vault's authored organization in the same step. Unsafe
         // input already resolved to the default root, so this can't
