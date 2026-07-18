@@ -4931,7 +4931,9 @@ final class AppState: ObservableObject {
         if container.isEmpty {
             reasons[SlateCommandID.sidebarUseVaultDefaultSort] =
                 "The vault default applies here."
-        } else if sidebarOrganization.prefs.folderOverrides[container] == nil {
+        } else if sidebarOrganization.prefs.folderOverrides[container]?.sort == nil {
+            // Availability tracks the SORT override specifically; a grouping-
+            // only override leaves nothing for this command to clear.
             reasons[SlateCommandID.sidebarUseVaultDefaultSort] =
                 "This folder uses the vault default."
         }
@@ -5128,17 +5130,27 @@ final class AppState: ObservableObject {
             guard !container.isEmpty else {
                 throw sidebarActionFailure("The vault default applies here.")
             }
-            guard sidebarOrganization.prefs.folderOverrides[container] != nil else {
+            // The command's label promises SORT only: a grouping override
+            // must survive it (round-2 finding 2).
+            guard sidebarOrganization.prefs.folderOverrides[container]?.sort != nil
+            else {
                 throw sidebarActionFailure("This folder uses the vault default.")
             }
-            let announced = sidebarOrganization.prefs.vaultChoice
+            var announced = sidebarOrganization.prefs.effectiveChoice(
+                forFolder: container)
+            announced.sort = sidebarOrganization.prefs.vaultChoice.sort
             try mutateSidebarOrganization(
                 announce: announced.sortAnnouncement
             ) { root in
-                SidebarOrganizationSchema.clearFolderOverride(
+                SidebarOrganizationSchema.clearFolderSortOverride(
                     &root, folder: container)
             } reflect: { state in
-                state.prefs.folderOverrides[container] = nil
+                guard var override = state.prefs.folderOverrides[container] else {
+                    return
+                }
+                override.sort = nil
+                state.prefs.folderOverrides[container] =
+                    override.isEmpty ? nil : override
             }
 
         case SlateCommandID.sidebarPinNote:
@@ -5262,63 +5274,112 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Keep pins consistent with every structural mutation (fl3 spec
-    /// §FL3-2.3): renames retarget in place, moves out of the folder and
-    /// deletions drop, and folder transforms carry their whole subtree.
-    /// Persistence is silent — the mutation's own announcement already spoke.
+    /// Keep pins AND path-keyed folder overrides consistent with every
+    /// structural mutation (fl3 spec §FL3-2.3 + round-2 finding 3): renames
+    /// retarget in place, moves out of the folder and deletions drop, and
+    /// folder transforms carry their whole subtree — for pins by rewriting
+    /// members, for overrides by rekeying the stored entries with their
+    /// unknown inner keys intact. Persistence replays the same pure mutation
+    /// against the decoded on-disk state inside the locked update, so a
+    /// concurrent writer's unrelated changes are never clobbered by a stale
+    /// snapshot (round-2 finding 1). Silent — the structural mutation's own
+    /// announcement already spoke.
     func applySidebarPinsMutation(_ kind: TreeMutation.Kind) {
-        guard !sidebarOrganization.pins.isEmpty else { return }
-        var pins = sidebarOrganization.pins
-        var changed = false
+        // Normalize the kind into plain path transforms so the disk replay
+        // closure is Sendable and identical to the in-memory application.
+        var renames: [(old: String, new: String, isDirectory: Bool?)] = []
+        var deletedFiles: [String] = []
+        var deletedFolders: [String] = []
         switch kind {
         case let .rename(oldPath, newPath),
             let .move(oldPath, newPath, _, _):
-            // File and folder transforms are disjoint on the pins model, so
-            // applying both is safe without knowing the node kind.
-            changed = pins.applyRename(from: oldPath, to: newPath)
-            changed = pins.applyFolderRename(from: oldPath, to: newPath) || changed
+            // The node kind is unknown here; pins/overrides transforms are
+            // disjoint on file vs folder paths, so both are applied.
+            renames.append((oldPath, newPath, nil))
         case let .delete(path, _, wasDirectory):
-            changed = pins.applyDelete(
-                paths: wasDirectory ? [] : [path],
-                deletedFolders: wasDirectory ? [path] : [])
-        case let .batchMove(standing, _):
+            if wasDirectory {
+                deletedFolders.append(path)
+            } else {
+                deletedFiles.append(path)
+            }
+        case let .batchMove(standing, _), let .importBatch(_, standing, _):
             for change in standing {
-                if change.isDirectory {
-                    changed =
-                        pins.applyFolderRename(
-                            from: change.oldPath, to: change.newPath) || changed
-                } else {
-                    changed =
-                        pins.applyRename(
-                            from: change.oldPath, to: change.newPath) || changed
-                }
+                renames.append((change.oldPath, change.newPath, change.isDirectory))
             }
         case let .batchTrash(trashed):
-            changed = pins.applyDelete(
-                paths: trashed.filter { !$0.isDirectory }.map(\.path),
-                deletedFolders: trashed.filter(\.isDirectory).map(\.path))
-        case let .importBatch(_, standing, _):
-            for change in standing {
-                if change.isDirectory {
-                    changed =
-                        pins.applyFolderRename(
-                            from: change.oldPath, to: change.newPath) || changed
-                } else {
-                    changed =
-                        pins.applyRename(
-                            from: change.oldPath, to: change.newPath) || changed
-                }
-            }
+            deletedFiles.append(
+                contentsOf: trashed.filter { !$0.isDirectory }.map(\.path))
+            deletedFolders.append(
+                contentsOf: trashed.filter(\.isDirectory).map(\.path))
         case .createFolder, .createNote, .batchReconcile:
             return
         }
-        guard changed else { return }
-        persistSidebarPinsSilently(pins)
+
+        let applyToPins: @Sendable (inout SidebarPins) -> Bool = { pins in
+            var changed = false
+            for rename in renames {
+                if rename.isDirectory != false {
+                    changed =
+                        pins.applyFolderRename(from: rename.old, to: rename.new)
+                        || changed
+                }
+                if rename.isDirectory != true {
+                    changed =
+                        pins.applyRename(from: rename.old, to: rename.new)
+                        || changed
+                }
+            }
+            changed =
+                pins.applyDelete(paths: deletedFiles, deletedFolders: deletedFolders)
+                || changed
+            return changed
+        }
+        let applyToOverrides: @Sendable (inout SidebarOrganizationPrefs) -> Bool = {
+            prefs in
+            var changed = false
+            for rename in renames where rename.isDirectory != false {
+                changed =
+                    prefs.applyFolderRename(from: rename.old, to: rename.new)
+                    || changed
+            }
+            changed = prefs.applyFolderDelete(folders: deletedFolders) || changed
+            return changed
+        }
+
+        var nextPins = sidebarOrganization.pins
+        var nextPrefs = sidebarOrganization.prefs
+        let pinsChanged = applyToPins(&nextPins)
+        let overridesChanged = applyToOverrides(&nextPrefs)
+        guard pinsChanged || overridesChanged else { return }
+
+        try? mutateSidebarOrganization(announce: nil) { root in
+            // Replay the exact mutation against what the file actually holds.
+            var storedPins = SidebarOrganizationSchema.decode(root: root).pins
+            let before = storedPins.byFolder
+            _ = applyToPins(&storedPins)
+            for folder in Set(before.keys).union(storedPins.byFolder.keys)
+            where before[folder] != storedPins.byFolder[folder] {
+                SidebarOrganizationSchema.setPins(
+                    &root, folder: folder, paths: storedPins.paths(forFolder: folder))
+            }
+            for rename in renames where rename.isDirectory != false {
+                SidebarOrganizationSchema.renameFolderOverrides(
+                    &root, from: rename.old, to: rename.new)
+            }
+            SidebarOrganizationSchema.deleteFolderOverrides(
+                &root, folders: deletedFolders)
+        } reflect: { state in
+            state.pins = nextPins
+            state.prefs.folderOverrides = nextPrefs.folderOverrides
+        }
     }
 
     /// Drop authored pin entries that no longer resolve to a real row —
     /// invoked lazily from level presentation, at most once per folder per
-    /// session, and never against a read-only preference file.
+    /// session, and never against a read-only preference file. The disk
+    /// replay filters the decoded folder list, so a concurrent writer's
+    /// additions to other folders (or fresh non-stale pins in this one)
+    /// survive.
     func pruneStaleSidebarPins(forFolder folder: String, stale: [String]) {
         guard !stale.isEmpty,
             sidebarVaultPrefsNotice == nil,
@@ -5326,29 +5387,19 @@ final class AppState: ObservableObject {
         else { return }
         sidebarPinPruneLedger.markPruned(folder: folder)
         let staleSet = Set(stale)
-        var pins = sidebarOrganization.pins
-        let remaining = pins.paths(forFolder: folder).filter {
-            !staleSet.contains($0)
-        }
-        guard remaining.count != pins.paths(forFolder: folder).count else { return }
-        pins.replacePaths(remaining, forFolder: folder)
-        persistSidebarPinsSilently(pins)
-    }
+        let currentPaths = sidebarOrganization.pins.paths(forFolder: folder)
+        let remaining = currentPaths.filter { !staleSet.contains($0) }
+        guard remaining.count != currentPaths.count else { return }
 
-    private func persistSidebarPinsSilently(_ pins: SidebarPins) {
-        let frozen = pins.byFolder
         try? mutateSidebarOrganization(announce: nil) { root in
-            for (folder, paths) in frozen {
-                SidebarOrganizationSchema.setPins(&root, folder: folder, paths: paths)
+            let storedPins = SidebarOrganizationSchema.decode(root: root).pins
+            let storedRemaining = storedPins.paths(forFolder: folder).filter {
+                !staleSet.contains($0)
             }
-            // Folders whose last pin vanished must clear their stored entry.
-            if let stored = root[SidebarOrganizationSchema.pinsKey] as? [String: Any] {
-                for folder in stored.keys where frozen[folder] == nil {
-                    SidebarOrganizationSchema.setPins(&root, folder: folder, paths: [])
-                }
-            }
+            SidebarOrganizationSchema.setPins(
+                &root, folder: folder, paths: storedRemaining)
         } reflect: { state in
-            state.pins = pins
+            state.pins.replacePaths(remaining, forFolder: folder)
         }
     }
 

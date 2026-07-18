@@ -100,6 +100,43 @@ struct SidebarOrganizationPrefs: Equatable {
       sort: override.sort ?? vaultChoice.sort,
       grouping: override.grouping ?? vaultChoice.grouping)
   }
+
+  /// A folder rename/move retargets every override keyed at or under the old
+  /// folder (path keys, so they follow the folder like pins do).
+  @discardableResult
+  mutating func applyFolderRename(from oldFolder: String, to newFolder: String) -> Bool {
+    let oldPrefix = oldFolder + "/"
+    let newPrefix = newFolder + "/"
+    var changed = false
+    var next: [String: SidebarOrganizationOverride] = [:]
+    next.reserveCapacity(folderOverrides.count)
+    for (folder, override) in folderOverrides {
+      if folder == oldFolder {
+        next[newFolder] = override
+        changed = true
+      } else if folder.hasPrefix(oldPrefix) {
+        next[newPrefix + folder.dropFirst(oldPrefix.count)] = override
+        changed = true
+      } else {
+        next[folder] = override
+      }
+    }
+    if changed { folderOverrides = next }
+    return changed
+  }
+
+  /// Deleted folders drop their own and every descendant override.
+  @discardableResult
+  mutating func applyFolderDelete(folders deletedFolders: [String]) -> Bool {
+    guard !deletedFolders.isEmpty else { return false }
+    let prefixes = deletedFolders.map { $0 + "/" }
+    let doomed = folderOverrides.keys.filter { key in
+      deletedFolders.contains(key) || prefixes.contains { key.hasPrefix($0) }
+    }
+    guard !doomed.isEmpty else { return false }
+    for key in doomed { folderOverrides[key] = nil }
+    return true
+  }
 }
 
 /// The production civil-date resolver behind the shared
@@ -566,14 +603,21 @@ enum SidebarOrganizationSchema {
     return SidebarGroupingOption(rawValue: value)
   }
 
-  private static func encodeSort(_ sort: SidebarSortOption) -> [String: Any] {
-    ["field": sort.field.rawValue, "direction": sort.direction.rawValue]
+  /// Merges field/direction into an existing sort object so an additive
+  /// unknown member inside `sort` survives every write (DoD §FL-E).
+  private static func mergeSort(
+    _ sort: SidebarSortOption, into existing: Any?
+  ) -> [String: Any] {
+    var entry = existing as? [String: Any] ?? [:]
+    entry["field"] = sort.field.rawValue
+    entry["direction"] = sort.direction.rawValue
+    return entry
   }
 
   static func setVaultChoice(
     _ root: inout [String: Any], _ choice: SidebarOrganizationChoice
   ) {
-    root[sortKey] = encodeSort(choice.sort)
+    root[sortKey] = mergeSort(choice.sort, into: root[sortKey])
     root[groupingKey] = choice.grouping.rawValue
   }
 
@@ -585,7 +629,7 @@ enum SidebarOrganizationSchema {
     var overrides = root[folderOverridesKey] as? [String: Any] ?? [:]
     var entry = overrides[folder] as? [String: Any] ?? [:]
     if let sort = override.sort {
-      entry[sortKey] = encodeSort(sort)
+      entry[sortKey] = mergeSort(sort, into: entry[sortKey])
     } else {
       entry[sortKey] = nil
     }
@@ -598,13 +642,57 @@ enum SidebarOrganizationSchema {
     root[folderOverridesKey] = overrides.isEmpty ? nil : overrides
   }
 
-  static func clearFolderOverride(_ root: inout [String: Any], folder: String) {
+  /// Removes only the folder's sort override, preserving a grouping override
+  /// and any unknown entry keys; the entry disappears only when empty.
+  static func clearFolderSortOverride(_ root: inout [String: Any], folder: String) {
     guard var overrides = root[folderOverridesKey] as? [String: Any],
       var entry = overrides[folder] as? [String: Any]
     else { return }
     entry[sortKey] = nil
-    entry[groupingKey] = nil
     overrides[folder] = entry.isEmpty ? nil : entry
+    root[folderOverridesKey] = overrides.isEmpty ? nil : overrides
+  }
+
+
+  /// Raw structural replay over `folderOverrides`: rekeys or drops the stored
+  /// entry dictionaries themselves so unknown inner keys ride along with the
+  /// folder they describe.
+  static func renameFolderOverrides(
+    _ root: inout [String: Any], from oldFolder: String, to newFolder: String
+  ) {
+    guard var overrides = root[folderOverridesKey] as? [String: Any] else { return }
+    let oldPrefix = oldFolder + "/"
+    let newPrefix = newFolder + "/"
+    var next: [String: Any] = [:]
+    next.reserveCapacity(overrides.count)
+    var changed = false
+    for (folder, entry) in overrides {
+      if folder == oldFolder {
+        next[newFolder] = entry
+        changed = true
+      } else if folder.hasPrefix(oldPrefix) {
+        next[newPrefix + folder.dropFirst(oldPrefix.count)] = entry
+        changed = true
+      } else {
+        next[folder] = entry
+      }
+    }
+    guard changed else { return }
+    root[folderOverridesKey] = next.isEmpty ? nil : next
+  }
+
+  static func deleteFolderOverrides(
+    _ root: inout [String: Any], folders deletedFolders: [String]
+  ) {
+    guard !deletedFolders.isEmpty,
+      var overrides = root[folderOverridesKey] as? [String: Any]
+    else { return }
+    let prefixes = deletedFolders.map { $0 + "/" }
+    let doomed = overrides.keys.filter { key in
+      deletedFolders.contains(key) || prefixes.contains { key.hasPrefix($0) }
+    }
+    guard !doomed.isEmpty else { return }
+    for key in doomed { overrides[key] = nil }
     root[folderOverridesKey] = overrides.isEmpty ? nil : overrides
   }
 

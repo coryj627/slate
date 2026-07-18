@@ -559,24 +559,83 @@ final class SidebarOrganizationTests: XCTestCase {
     XCTAssertEqual(decoded.pins.paths(forFolder: "Projects"), ["Projects/pin.md"])
   }
 
-  func testClearFolderOverrideRemovesOnlyOwnedKeysAndEmptyEntries() throws {
+  func testClearFolderSortOverridePreservesGroupingAndUnknownKeys() throws {
     var root: [String: Any] = [
       "folderOverrides": [
         "Mixed": [
           "sort": ["field": "name", "direction": "asc"],
+          "grouping": "dateBuckets",
           "future-inner": "keep",
         ],
         "Ours": ["sort": ["field": "created", "direction": "desc"]],
       ]
     ]
-    SidebarOrganizationSchema.clearFolderOverride(&root, folder: "Mixed")
-    SidebarOrganizationSchema.clearFolderOverride(&root, folder: "Ours")
+    SidebarOrganizationSchema.clearFolderSortOverride(&root, folder: "Mixed")
+    SidebarOrganizationSchema.clearFolderSortOverride(&root, folder: "Ours")
     let overrides = try XCTUnwrap(root["folderOverrides"] as? [String: Any])
-    // Unknown inner keys survive; an entry that becomes empty is removed.
+    // Only the sort key is owned by this clear: the grouping override and
+    // unknown inner keys survive; an entry that becomes empty is removed.
     let mixed = try XCTUnwrap(overrides["Mixed"] as? [String: Any])
     XCTAssertEqual(mixed["future-inner"] as? String, "keep")
+    XCTAssertEqual(mixed["grouping"] as? String, "dateBuckets")
     XCTAssertNil(mixed["sort"])
     XCTAssertNil(overrides["Ours"])
+  }
+
+  func testSortWritesMergeIntoExistingObjectsPreservingUnknownMembers() throws {
+    // Round-2 finding 4: an additive unknown member inside a stored sort
+    // object must survive vault and folder sort writes.
+    var root: [String: Any] = [
+      "sort": [
+        "field": "name", "direction": "asc", "future-member": true,
+      ],
+      "folderOverrides": [
+        "Projects": [
+          "sort": ["field": "created", "direction": "asc", "future-member": 7]
+        ]
+      ],
+    ]
+    SidebarOrganizationSchema.setVaultChoice(
+      &root,
+      SidebarOrganizationChoice(
+        sort: SidebarSortOption(field: .modified, direction: .desc),
+        grouping: .none))
+    SidebarOrganizationSchema.setFolderOverride(
+      &root, folder: "Projects",
+      override: SidebarOrganizationOverride(
+        sort: SidebarSortOption(field: .name, direction: .desc), grouping: nil))
+
+    let sort = try XCTUnwrap(root["sort"] as? [String: Any])
+    XCTAssertEqual(sort["field"] as? String, "modified")
+    XCTAssertEqual(sort["direction"] as? String, "desc")
+    XCTAssertEqual(sort["future-member"] as? Bool, true)
+    let overrides = try XCTUnwrap(root["folderOverrides"] as? [String: Any])
+    let projects = try XCTUnwrap(overrides["Projects"] as? [String: Any])
+    let projectsSort = try XCTUnwrap(projects["sort"] as? [String: Any])
+    XCTAssertEqual(projectsSort["field"] as? String, "name")
+    XCTAssertEqual(projectsSort["future-member"] as? Int, 7)
+  }
+
+  func testPrefsStructuralReplayRekeysAndDropsFolderOverrides() {
+    var prefs = SidebarOrganizationPrefs()
+    prefs.folderOverrides["Projects"] = SidebarOrganizationOverride(
+      sort: SidebarSortOption(field: .modified, direction: .desc), grouping: nil)
+    prefs.folderOverrides["Projects/sub"] = SidebarOrganizationOverride(
+      sort: nil, grouping: .dateBuckets)
+    prefs.folderOverrides["Projectile"] = SidebarOrganizationOverride(
+      sort: SidebarSortOption(field: .name, direction: .desc), grouping: nil)
+
+    XCTAssertTrue(prefs.applyFolderRename(from: "Projects", to: "Archive"))
+    XCTAssertNotNil(prefs.folderOverrides["Archive"])
+    XCTAssertNotNil(prefs.folderOverrides["Archive/sub"])
+    XCTAssertNil(prefs.folderOverrides["Projects"])
+    // Prefix safety: "Projectile" is untouched.
+    XCTAssertNotNil(prefs.folderOverrides["Projectile"])
+
+    XCTAssertTrue(prefs.applyFolderDelete(folders: ["Archive"]))
+    XCTAssertNil(prefs.folderOverrides["Archive"])
+    XCTAssertNil(prefs.folderOverrides["Archive/sub"])
+    XCTAssertFalse(prefs.applyFolderDelete(folders: ["Nothing"]))
   }
 
   // MARK: - Announcements

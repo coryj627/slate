@@ -510,6 +510,121 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     await awaitPersist(state)
   }
 
+  // MARK: - Red-team regressions (adversarial review round 2)
+
+  func testStructuralReplayPreservesAConcurrentWritersPins() async throws {
+    // Round-2 finding 1: the disk replay applies the exact mutation against
+    // the decoded on-disk state. Another writer's pins — added after this
+    // AppState loaded — must survive an unrelated structural replay here.
+    let (state, vault) = try openVault(
+      named: "interleaved", files: ["Projects/note.md"], folders: ["Projects"])
+    try publish(
+      state, [item("Projects/note.md")],
+      focusedPath: "Projects/note.md", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    await awaitPersist(state)
+
+    // A second window/process pins a note in another folder.
+    let otherWriter = SidebarVaultPrefsStore(vaultRoot: vault)
+    try otherWriter.update { root in
+      SidebarOrganizationSchema.setPins(
+        &root, folder: "Elsewhere", paths: ["Elsewhere/x.md"])
+    }
+
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects/note.md", newPath: "Projects/renamed.md"))
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Elsewhere"] as? [String], ["Elsewhere/x.md"],
+      "an unrelated concurrent pin must never be clobbered by a stale snapshot")
+    XCTAssertEqual(pins["Projects"] as? [String], ["Projects/renamed.md"])
+  }
+
+  func testUseVaultDefaultSortPreservesAGroupingOverride() async throws {
+    // Round-2 finding 2: the command's label promises sort only.
+    let (state, vault) = try openVault(
+      named: "sort-only-clear", files: ["Projects/a.md"], folders: ["Projects"])
+    try publish(
+      state, [item("Projects", directory: true)],
+      focusedPath: "Projects", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+
+    // A grouping-only override leaves nothing for the command to clear.
+    let groupingOnly = state.sidebarActionProjection(surface: .menuBar)
+      .first { $0.id == SlateCommandID.sidebarUseVaultDefaultSort }
+    XCTAssertEqual(
+      groupingOnly?.disabledReason, "This folder uses the vault default.")
+
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortCreatedDesc)
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarUseVaultDefaultSort)
+
+    let override = state.sidebarOrganization.prefs.folderOverrides["Projects"]
+    XCTAssertNil(override?.sort)
+    XCTAssertEqual(
+      override?.grouping, .dateBuckets,
+      "clearing the sort override must not erase the grouping override")
+
+    await awaitPersist(state)
+    let json = try sidebarJSON(at: vault)
+    let overrides = try XCTUnwrap(json["folderOverrides"] as? [String: Any])
+    let projects = try XCTUnwrap(overrides["Projects"] as? [String: Any])
+    XCTAssertNil(projects["sort"])
+    XCTAssertEqual(projects["grouping"] as? String, "dateBuckets")
+  }
+
+  func testFolderRenameRetargetsOverridesWithUnknownKeysAndDeleteDropsThem() async throws {
+    // Round-2 finding 3: path-keyed overrides follow their folder through
+    // renames (carrying unknown inner keys) and drop on deletion.
+    let (state, vault) = try openVault(
+      named: "override-replay", files: ["Projects/a.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1,
+         "folderOverrides": {
+           "Projects": {
+             "sort": {"field": "modified", "direction": "desc"},
+             "future-inner": "keep"
+           },
+           "Projects/sub": {"grouping": "dateBuckets"}
+         }}
+        """)
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.folderOverrides["Projects"]?.sort?.field,
+      .modified)
+
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.folderOverrides["Archive"]?.sort?.field,
+      .modified)
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.folderOverrides["Archive/sub"]?.grouping,
+      .dateBuckets)
+    XCTAssertNil(state.sidebarOrganization.prefs.folderOverrides["Projects"])
+
+    await awaitPersist(state)
+    var json = try sidebarJSON(at: vault)
+    var overrides = try XCTUnwrap(json["folderOverrides"] as? [String: Any])
+    let archive = try XCTUnwrap(overrides["Archive"] as? [String: Any])
+    XCTAssertEqual(
+      archive["future-inner"] as? String, "keep",
+      "unknown inner keys ride along with the rekeyed entry")
+    XCTAssertNotNil(overrides["Archive/sub"])
+    XCTAssertNil(overrides["Projects"])
+
+    state.applySidebarPinsMutation(
+      .delete(path: "Archive", parent: "", wasDirectory: true))
+    XCTAssertNil(state.sidebarOrganization.prefs.folderOverrides["Archive"])
+    XCTAssertNil(state.sidebarOrganization.prefs.folderOverrides["Archive/sub"])
+    await awaitPersist(state)
+    json = try sidebarJSON(at: vault)
+    overrides = (json["folderOverrides"] as? [String: Any]) ?? [:]
+    XCTAssertNil(overrides["Archive"])
+    XCTAssertNil(overrides["Archive/sub"])
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
