@@ -2799,10 +2799,13 @@ struct FileTreeSidebar: View {
         }
         .listStyle(.sidebar)
         // FL-06 §FL3-1.6: the container names any non-default organization so
-        // a VoiceOver user entering the list hears the active order.
+        // a VoiceOver user entering the list hears the active order. The
+        // summary follows the selected container's EFFECTIVE choice — the
+        // same source as the sort-menu radio state — so a per-folder
+        // override is reported truthfully (red-team finding 4).
         .accessibilityLabel(
             Self.treeAccessibilitySummary(
-                for: appState.sidebarOrganization.prefs.vaultChoice.normalized
+                for: appState.sidebarOrganizationMenuTargetChoice
             ) ?? "Files")
         // Tree folder glyphs (disclosure + open/closed folder) render
         // hierarchical so open and closed folders read as one family (U5-1,

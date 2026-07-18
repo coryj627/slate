@@ -380,6 +380,136 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertNil(pins["Projects"])
   }
 
+  // MARK: - Red-team regressions (adversarial review round 1)
+
+  func testQueuedPersistFromAClosedVaultNeverTouchesTheFile() async throws {
+    // Finding 1: a persist queued under an old session must revalidate its
+    // write generation on the main actor BEFORE disk I/O. Closing the vault
+    // immediately after dispatch — before the queued task has run — must
+    // leave the file untouched by that stale write.
+    let (state, vault) = try openVault(named: "stale-write", files: ["a.md"])
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    let staleTask = state.sidebarOrganizationPersistTaskForTesting
+    state.closeVault()
+    await staleTask?.value
+
+    let sidebarURL = vault.appendingPathComponent(".slate/sidebar.json")
+    if FileManager.default.fileExists(atPath: sidebarURL.path) {
+      let json = try sidebarJSON(at: vault)
+      XCTAssertNil(
+        json["sort"],
+        "a stale queued write must not land after vault teardown")
+    }
+    // And the reset state is defaults, not the rolled-back old vault's data.
+    XCTAssertEqual(state.sidebarOrganization, AppState.SidebarOrganizationState())
+  }
+
+  func testFailedPersistPublishesTheNewlyDetectedReadOnlyNotice() async throws {
+    // Finding 3: when a write fails because the file BECAME unsafe after
+    // vault open (synced-in corruption), the recovery must publish the
+    // notice so the banner appears and the command set disables.
+    let announcer = RecordingAnnouncer()
+    let (state, vault) = try openVault(
+      named: "became-unsafe", files: ["a.md"], announcer: announcer)
+    XCTAssertNil(state.sidebarVaultPrefsNotice)
+
+    // Corrupt the file out-of-band, as a sync client would.
+    let slate = vault.appendingPathComponent(".slate", isDirectory: true)
+    try FileManager.default.createDirectory(at: slate, withIntermediateDirectories: true)
+    try "{not json".write(
+      to: slate.appendingPathComponent("sidebar.json"), atomically: true,
+      encoding: .utf8)
+
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    XCTAssertEqual(state.sidebarOrganization, AppState.SidebarOrganizationState())
+    XCTAssertTrue(
+      announcer.messages.contains {
+        $0.hasPrefix("Sidebar organization could not be saved.")
+      })
+    let evaluation = state.sidebarActionProjection(surface: .menuBar)
+      .first { $0.id == SlateCommandID.sidebarSortNameAsc }
+    XCTAssertNotNil(evaluation?.disabledReason)
+    XCTAssertThrowsError(
+      try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortNameAsc))
+  }
+
+  func testGroupedContainerOffersOnlyTheNewestFirstDateSorts() async throws {
+    // Finding 2: while a container groups by date, name and oldest-first
+    // options are inert (normalization would hide them) — they disable with
+    // one deterministic reason and dispatch rejects them; the two
+    // newest-first date sorts stay live and switch the grouped field.
+    let (state, _) = try openVault(named: "grouped-radio", files: ["a.md"])
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+
+    let inert = "Date grouping sorts newest first. Turn off Group by Date to use this order."
+    let projection = state.sidebarActionProjection(surface: .menuBar)
+    for id in [
+      SlateCommandID.sidebarSortNameAsc, SlateCommandID.sidebarSortNameDesc,
+      SlateCommandID.sidebarSortCreatedAsc, SlateCommandID.sidebarSortModifiedAsc,
+    ] {
+      XCTAssertEqual(
+        projection.first { $0.id == id }?.disabledReason, inert, id)
+    }
+    for id in [
+      SlateCommandID.sidebarSortCreatedDesc, SlateCommandID.sidebarSortModifiedDesc,
+    ] {
+      XCTAssertNil(projection.first { $0.id == id }?.disabledReason, id)
+    }
+    XCTAssertThrowsError(
+      try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortNameAsc))
+
+    // Switching the grouped date field works without touching grouping.
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortCreatedDesc)
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.vaultChoice,
+      SidebarOrganizationChoice(
+        sort: SidebarSortOption(field: .created, direction: .desc),
+        grouping: .dateBuckets))
+
+    // Turning grouping off restores the full radio set.
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortNameAsc)
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.vaultChoice.sort,
+      SidebarSortOption(field: .name, direction: .asc))
+    await awaitPersist(state)
+  }
+
+  func testMenuTargetChoiceFollowsTheSelectedContainersOverride() async throws {
+    // Finding 4: the AX summary and radio state derive from the SELECTED
+    // container's effective (normalized) choice, not the vault default.
+    let (state, _) = try openVault(
+      named: "summary-target", files: ["Projects/a.md"], folders: ["Projects"])
+    try publish(
+      state, [item("Projects", directory: true)],
+      focusedPath: "Projects", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+
+    XCTAssertEqual(
+      state.sidebarOrganizationMenuTargetChoice,
+      SidebarOrganizationChoice(
+        sort: SidebarSortOption(field: .modified, direction: .desc),
+        grouping: .none))
+    XCTAssertEqual(
+      FileTreeSidebar.treeAccessibilitySummary(
+        for: state.sidebarOrganizationMenuTargetChoice),
+      "Files. Sorted by modified, newest first.")
+
+    // Deselecting (vault container) reports the untouched vault default.
+    try publish(state, [])
+    XCTAssertEqual(state.sidebarOrganizationMenuTargetChoice, .defaults)
+    XCTAssertNil(
+      FileTreeSidebar.treeAccessibilitySummary(
+        for: state.sidebarOrganizationMenuTargetChoice))
+    await awaitPersist(state)
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

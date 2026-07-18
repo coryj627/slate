@@ -4872,9 +4872,14 @@ final class AppState: ObservableObject {
     /// predecessor, so two quick commands cannot interleave read-modify-write
     /// cycles even though each cycle also holds the cross-process lock.
     private var sidebarOrganizationPersistChain: Task<Void, Never>?
+    /// Ownership generation for queued persists. Bumped on every vault
+    /// teardown/switch; a queued task whose captured generation no longer
+    /// matches skips its disk I/O and publishes nothing.
+    private(set) var sidebarOrganizationWriteGeneration = 0
     private(set) var sidebarOrganizationPersistTaskForTesting: Task<Void, Never>?
 
     private func resetSidebarOrganizationState() {
+        sidebarOrganizationWriteGeneration &+= 1
         sidebarOrganizationPersistChain = nil
         sidebarOrganizationPersistTaskForTesting = nil
         sidebarPinPruneLedger.reset()
@@ -4930,6 +4935,23 @@ final class AppState: ObservableObject {
             reasons[SlateCommandID.sidebarUseVaultDefaultSort] =
                 "This folder uses the vault default."
         }
+
+        // Grouping forces the matching date sort descending (fl3 §FL3-1.3
+        // "mixed sort+group combinations are not offered"): while the target
+        // container groups by date, only the two newest-first date sorts can
+        // take effect, so the rest disable with one deterministic reason —
+        // a menu choice must never write a hidden, inert preference
+        // (red-team finding 2).
+        let effective = sidebarOrganization.prefs.effectiveChoice(
+            forFolder: container)
+        if effective.grouping == .dateBuckets {
+            let inert = "Date grouping sorts newest first. Turn off Group by "
+                + "Date to use this order."
+            reasons[SlateCommandID.sidebarSortNameAsc] = inert
+            reasons[SlateCommandID.sidebarSortNameDesc] = inert
+            reasons[SlateCommandID.sidebarSortCreatedAsc] = inert
+            reasons[SlateCommandID.sidebarSortModifiedAsc] = inert
+        }
         return reasons
     }
 
@@ -4954,8 +4976,15 @@ final class AppState: ObservableObject {
     /// The one FL-06 mutation funnel: reflect the change into the published
     /// state synchronously (the tree re-sorts immediately), announce it, and
     /// persist through the store's locked read-modify-write on a serialized
-    /// background chain. A failed write reconciles the published state from
-    /// disk truth and reports honestly — it never leaves silent divergence.
+    /// background chain. A failed write reconciles the published state — and
+    /// any newly detected unsafe-file notice — from disk truth and reports
+    /// honestly; it never leaves silent divergence.
+    ///
+    /// Ownership: every queued persist carries the write generation captured
+    /// at enqueue. Vault teardown bumps the generation, so a stale task
+    /// revalidates on the main actor and skips its disk I/O entirely — a
+    /// write queued under an old session can neither touch the file after
+    /// reopen nor roll the UI back (red-team finding 1).
     private func mutateSidebarOrganization(
         announce announcement: String?,
         apply: @escaping @Sendable (inout [String: Any]) -> Void,
@@ -4982,8 +5011,18 @@ final class AppState: ObservableObject {
 
         let previous = sidebarOrganizationPersistChain
         let session = currentSession
+        let generation = sidebarOrganizationWriteGeneration
+        let storeFileURL = store.fileURL
         let task = Task { [weak self] in
             await previous?.value
+            // Main-actor ownership gate BEFORE any disk I/O: the captured
+            // generation, session, and store identity must all still be
+            // current, or this queued write belongs to a closed vault.
+            guard let self,
+                self.sidebarOrganizationWriteGeneration == generation,
+                self.currentSession === session,
+                self.sidebarVaultPrefsStore?.fileURL == storeFileURL
+            else { return }
             let outcome: Result<SidebarVaultPrefsReadResult?, Error> =
                 await Task.detached(priority: .utility) {
                     do {
@@ -4994,15 +5033,26 @@ final class AppState: ObservableObject {
                         return .failure(error)
                     }
                 }.value
-            guard let self, self.currentSession === session else { return }
+            guard self.sidebarOrganizationWriteGeneration == generation,
+                self.currentSession === session
+            else { return }
             if case let .failure(error) = outcome {
                 let recovered = await Task.detached(priority: .utility) {
                     store.read()
                 }.value
-                guard self.currentSession === session else { return }
+                guard self.sidebarOrganizationWriteGeneration == generation,
+                    self.currentSession === session
+                else { return }
                 let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
                 self.sidebarOrganization = SidebarOrganizationState(
                     prefs: decoded.prefs, pins: decoded.pins)
+                // A write can fail because the file BECAME unsafe (synced-in
+                // corruption, oversize, a newer version). Publish that notice
+                // so the banner appears and the whole organization set
+                // disables with its reason (red-team finding 3).
+                if self.sidebarVaultPrefsNotice != recovered.notice {
+                    self.sidebarVaultPrefsNotice = recovered.notice
+                }
                 let failure =
                     "Sidebar organization could not be saved. "
                     + error.localizedDescription
@@ -5168,6 +5218,18 @@ final class AppState: ObservableObject {
     ) throws {
         let container = try canonicalSidebarCreationParent(
             for: intent.snapshot, rejection: rejected)
+        // Dispatch-side twin of the availability rule: a grouped container
+        // accepts only the newest-first date sorts. Everything else would be
+        // an inert hidden write (red-team finding 2).
+        let effectiveBefore = sidebarOrganization.prefs.effectiveChoice(
+            forFolder: container)
+        if effectiveBefore.grouping == .dateBuckets,
+            option.direction == .asc || option.field == .name
+        {
+            throw sidebarActionFailure(
+                "Date grouping sorts newest first. Turn off Group by Date to "
+                    + "use this order.")
+        }
         if container.isEmpty {
             var announced = sidebarOrganization.prefs.vaultChoice
             announced.sort = option
