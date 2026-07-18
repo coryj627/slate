@@ -5002,8 +5002,7 @@ final class AppState: ObservableObject {
         let effective = sidebarOrganization.prefs.effectiveChoice(
             forFolder: container)
         if effective.grouping == .dateBuckets {
-            let inert = "Date grouping sorts newest first. Turn off Group by "
-                + "Date to use this order."
+            let inert = Self.sidebarGroupedSortInertReason
             reasons[SlateCommandID.sidebarSortNameAsc] = inert
             reasons[SlateCommandID.sidebarSortNameDesc] = inert
             reasons[SlateCommandID.sidebarSortCreatedAsc] = inert
@@ -5053,9 +5052,22 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Thrown from inside the locked update when the file's CURRENT state
+    /// makes the requested change semantically inert (round-7 finding 2):
+    /// the write is refused, published state reconciles to the merged disk
+    /// truth, and the reason is announced as-is (it is a user-facing rule,
+    /// not a save failure).
+    private struct SidebarOrganizationConflictError: LocalizedError {
+        let reason: String
+        var errorDescription: String? { reason }
+    }
+
+    static let sidebarGroupedSortInertReason =
+        "Date grouping sorts newest first. Turn off Group by Date to use this order."
+
     private func mutateSidebarOrganization(
         announce announcement: String?,
-        apply: @escaping @Sendable (inout [String: Any]) -> Void,
+        apply: @escaping @Sendable (inout [String: Any]) throws -> Void,
         reflect: (inout SidebarOrganizationState) -> Void,
         acknowledge: (() -> Void)? = nil
     ) throws {
@@ -5108,7 +5120,7 @@ final class AppState: ObservableObject {
                             else {
                                 throw SidebarOrganizationShapeError()
                             }
-                            apply(&root)
+                            try apply(&root)
                             finalRoot = root
                         }
                         return .success(finalRoot)
@@ -5124,9 +5136,14 @@ final class AppState: ObservableObject {
             let isTail = self.sidebarOrganizationPersistTailToken == token
             switch outcome {
             case .failure(let error):
-                let failure =
-                    "Sidebar organization could not be saved. "
-                    + error.localizedDescription
+                let failure: String
+                if let conflict = error as? SidebarOrganizationConflictError {
+                    failure = conflict.reason
+                } else {
+                    failure =
+                        "Sidebar organization could not be saved. "
+                        + error.localizedDescription
+                }
                 guard isTail else {
                     // A queued successor still holds an optimistic mutation
                     // the user was told about; let the tail publish disk
@@ -5229,33 +5246,39 @@ final class AppState: ObservableObject {
                 } reflect: { state in
                     state.prefs.vaultChoice.grouping = next
                 }
-            } else if next == sidebarOrganization.prefs.vaultChoice.grouping {
-                // Choosing the vault's current value returns the folder to
-                // inheritance instead of pinning an explicit copy that would
-                // ignore future vault changes (round-6 finding 3).
-                try mutateSidebarOrganization(
-                    announce: announced.sortAnnouncement
-                ) { root in
-                    SidebarOrganizationSchema.clearFolderGroupingOverride(
-                        &root, folder: container)
-                } reflect: { state in
-                    guard var override = state.prefs.folderOverrides[container]
-                    else { return }
-                    override.grouping = nil
-                    state.prefs.folderOverrides[container] =
-                        override.isEmpty ? nil : override
-                }
             } else {
+                // Choosing the vault's CURRENT value returns the folder to
+                // inheritance instead of pinning an explicit copy (round-6
+                // finding 3) — and that comparison happens under the store
+                // lock against the on-disk vault grouping, so a concurrent
+                // vault change cannot turn the toggle into a wrong-way
+                // no-op (round-7 finding 3). The intended `next` value is
+                // carried in; only the clear-vs-set decision is re-derived.
                 try mutateSidebarOrganization(
                     announce: announced.sortAnnouncement
                 ) { root in
-                    SidebarOrganizationSchema.setFolderGrouping(
-                        &root, folder: container, next)
+                    let vaultGrouping = SidebarOrganizationSchema.decode(root: root)
+                        .prefs.vaultChoice.grouping
+                    if next == vaultGrouping {
+                        SidebarOrganizationSchema.clearFolderGroupingOverride(
+                            &root, folder: container)
+                    } else {
+                        SidebarOrganizationSchema.setFolderGrouping(
+                            &root, folder: container, next)
+                    }
                 } reflect: { state in
-                    var override = state.prefs.folderOverrides[container]
-                        ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
-                    override.grouping = next
-                    state.prefs.folderOverrides[container] = override
+                    if next == state.prefs.vaultChoice.grouping {
+                        guard var override = state.prefs.folderOverrides[container]
+                        else { return }
+                        override.grouping = nil
+                        state.prefs.folderOverrides[container] =
+                            override.isEmpty ? nil : override
+                    } else {
+                        var override = state.prefs.folderOverrides[container]
+                            ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
+                        override.grouping = next
+                        state.prefs.folderOverrides[container] = override
+                    }
                 }
             }
 
@@ -5374,9 +5397,7 @@ final class AppState: ObservableObject {
         if effectiveBefore.grouping == .dateBuckets,
             option.direction == .asc || option.field == .name
         {
-            throw sidebarActionFailure(
-                "Date grouping sorts newest first. Turn off Group by Date to "
-                    + "use this order.")
+            throw sidebarActionFailure(Self.sidebarGroupedSortInertReason)
         }
         // Single-axis writes: only the sort object changes (merged in place,
         // unknown members preserved); a concurrent grouping change is never
@@ -5387,6 +5408,17 @@ final class AppState: ObservableObject {
             try mutateSidebarOrganization(
                 announce: announced.sortAnnouncement
             ) { root in
+                // Authoritative recheck under the lock: a concurrent writer
+                // may have enabled grouping since the pre-dispatch guard
+                // read this process's published state (round-7 finding 2).
+                let grouping = SidebarOrganizationSchema.decode(root: root)
+                    .prefs.effectiveChoice(forFolder: "").grouping
+                if grouping == .dateBuckets,
+                    option.direction == .asc || option.field == .name
+                {
+                    throw SidebarOrganizationConflictError(
+                        reason: Self.sidebarGroupedSortInertReason)
+                }
                 SidebarOrganizationSchema.setVaultSort(&root, option)
             } reflect: { state in
                 state.prefs.vaultChoice.sort = option
@@ -5398,6 +5430,14 @@ final class AppState: ObservableObject {
             try mutateSidebarOrganization(
                 announce: announced.sortAnnouncement
             ) { root in
+                let grouping = SidebarOrganizationSchema.decode(root: root)
+                    .prefs.effectiveChoice(forFolder: container).grouping
+                if grouping == .dateBuckets,
+                    option.direction == .asc || option.field == .name
+                {
+                    throw SidebarOrganizationConflictError(
+                        reason: Self.sidebarGroupedSortInertReason)
+                }
                 SidebarOrganizationSchema.setFolderSort(
                     &root, folder: container, option)
             } reflect: { state in

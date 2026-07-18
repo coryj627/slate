@@ -1056,6 +1056,93 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     await awaitPersist(state)
   }
 
+  // MARK: - Red-team regressions (adversarial review round 7)
+
+  func testNestedInvalidPinShapesEnterRecoveryAtOpen() throws {
+    // Round-7 finding 1: a pin list that is not purely strings would be
+    // truncated by decoding and destroyed by the next exact-op rewrite —
+    // it must enter recovery instead.
+    let (state, _) = try openVault(
+      named: "nested-shape", files: ["a.md"],
+      sidebarJSON: """
+        {"version": 1,
+         "pins": {"Projects": ["Projects/kept.md", {"future": true}]}}
+        """)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    XCTAssertEqual(state.sidebarOrganization, AppState.SidebarOrganizationState())
+  }
+
+  func testConcurrentGroupingWriteRejectsAStaleInertSortUnderTheLock() async throws {
+    // Round-7 finding 2: another writer enables grouping on disk after this
+    // process's pre-dispatch guard read stale state. The locked recheck
+    // refuses the inert Name sort, announces the rule, and converges
+    // published state on the merged disk truth.
+    let announcer = RecordingAnnouncer()
+    let (state, vault) = try openVault(
+      named: "grouped-race", files: ["a.md"], announcer: announcer)
+    try publish(state, [])
+
+    let otherWriter = SidebarVaultPrefsStore(vaultRoot: vault)
+    try otherWriter.update { root in
+      SidebarOrganizationSchema.setVaultGrouping(&root, .dateBuckets)
+    }
+
+    // Pre-dispatch guard sees stale grouping == none and admits the intent.
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortNameAsc)
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    XCTAssertNil(json["sort"], "the inert sort must not be written")
+    XCTAssertEqual(json["grouping"] as? String, "dateBuckets")
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs.vaultChoice.grouping, .dateBuckets,
+      "published state converges on the merged disk truth")
+    XCTAssertEqual(state.sidebarOrganization.prefs.vaultChoice.sort, .defaults)
+    XCTAssertTrue(
+      announcer.messages.contains(AppState.sidebarGroupedSortInertReason))
+    XCTAssertFalse(
+      announcer.messages.contains {
+        $0.hasPrefix("Sidebar organization could not be saved.")
+      },
+      "a semantic refusal is not reported as a save failure")
+  }
+
+  func testVaultGroupingChangeBeforeFolderToggleKeepsTheUsersIntent() async throws {
+    // Round-7 finding 3: folder explicitly groups by date; another writer
+    // flips the VAULT to dateBuckets; the user toggles the folder OFF. The
+    // under-lock decision must write an explicit `none` override (a real
+    // difference from the new vault value), not clear to inheritance and
+    // silently leave grouping ON.
+    let (state, vault) = try openVault(
+      named: "toggle-race", files: ["Projects/a.md"], folders: ["Projects"])
+    try publish(
+      state, [item("Projects", directory: true)],
+      focusedPath: "Projects", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    await awaitPersist(state)
+
+    let otherWriter = SidebarVaultPrefsStore(vaultRoot: vault)
+    try otherWriter.update { root in
+      SidebarOrganizationSchema.setVaultGrouping(&root, .dateBuckets)
+    }
+
+    // Stale in-memory vault grouping is .none, so the naive decision would
+    // be "clear to inheritance" — which would leave the folder grouped.
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarToggleDateGrouping)
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    let overrides = try XCTUnwrap(json["folderOverrides"] as? [String: Any])
+    let projects = try XCTUnwrap(overrides["Projects"] as? [String: Any])
+    XCTAssertEqual(
+      projects["grouping"] as? String, "none",
+      "the user's OFF intent persists as an explicit override against the new vault value")
+    XCTAssertEqual(
+      state.sidebarOrganization.prefs
+        .effectiveChoice(forFolder: "Projects").grouping,
+      SidebarGroupingOption.none)
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

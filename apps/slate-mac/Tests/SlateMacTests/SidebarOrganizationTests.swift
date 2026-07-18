@@ -508,8 +508,7 @@ final class SidebarOrganizationTests: XCTestCase {
         "Broken": ["sort": ["field": "no-such-field", "direction": 12]],
       ],
       "pins": [
-        "Projects": ["Projects/a.md", "Projects/b.md"],
-        "Bad": "not-an-array",
+        "Projects": ["Projects/a.md", "Projects/b.md"]
       ],
       "future-key": ["untouched": true],
     ]
@@ -520,7 +519,41 @@ final class SidebarOrganizationTests: XCTestCase {
     // A malformed override entry is dropped, not fatal.
     XCTAssertNil(decoded.prefs.folderOverrides["Broken"])
     XCTAssertEqual(decoded.pins.paths(forFolder: "Projects"), ["Projects/a.md", "Projects/b.md"])
-    XCTAssertEqual(decoded.pins.paths(forFolder: "Bad"), [])
+  }
+
+  func testNestedStructuralInvalidsFailShapeValidation() {
+    // Round-7 finding 1: nested values the mutators cannot merge into
+    // safely route to recovery — value-level invalids inside well-shaped
+    // structures stay lenient (the "Broken" entry above).
+    XCTAssertTrue(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(root: [
+        "pins": ["Projects": ["Projects/a.md"]],
+        "folderOverrides": [
+          "Projects": ["sort": ["field": "no-such-field", "direction": 12]]
+        ],
+      ]))
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(root: [
+        "pins": ["Projects": ["Projects/kept.md", ["future": true]]]
+      ]),
+      "a mixed pin array would be truncated then destroyed by an exact-op rewrite")
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(root: [
+        "pins": ["Bad": "not-an-array"]
+      ]))
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(root: [
+        "folderOverrides": ["Projects": "not-an-object"]
+      ]))
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(root: [
+        "folderOverrides": ["Projects": ["sort": "future-string-sort"]]
+      ]),
+      "a string sort would be replaced wholesale by mergeSort")
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(root: [
+        "folderOverrides": ["Projects": ["grouping": 12]]
+      ]))
   }
 
   func testSchemaMutatorsPreserveUnknownKeysEverywhere() throws {

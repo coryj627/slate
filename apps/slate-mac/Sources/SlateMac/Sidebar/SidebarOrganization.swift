@@ -647,10 +647,26 @@ enum SidebarOrganizationSchema {
   static func knownSectionShapesAreValid(root: [String: Any]) -> Bool {
     if let sort = root[sortKey], !(sort is [String: Any]) { return false }
     if let grouping = root[groupingKey], !(grouping is String) { return false }
-    if let overrides = root[folderOverridesKey], !(overrides is [String: Any]) {
-      return false
+    if let overrides = root[folderOverridesKey] {
+      guard let overrides = overrides as? [String: Any] else { return false }
+      // Round-7 finding 1: nested mergeability. Every entry must be an
+      // object, and its known child fields must have structural types the
+      // field-specific mutators can merge into without destroying data.
+      for value in overrides.values {
+        guard let entry = value as? [String: Any] else { return false }
+        if let sort = entry[sortKey], !(sort is [String: Any]) { return false }
+        if let grouping = entry[groupingKey], !(grouping is String) {
+          return false
+        }
+      }
     }
-    if let pins = root[pinsKey], !(pins is [String: Any]) { return false }
+    if let pins = root[pinsKey] {
+      guard let pins = pins as? [String: Any] else { return false }
+      // A pin list that is not purely strings would be truncated by decode
+      // and then destroyed by the next exact-op rewrite of that folder —
+      // route it into recovery instead.
+      for value in pins.values where !(value is [String]) { return false }
+    }
     return true
   }
 
