@@ -55,11 +55,16 @@ final class SidebarImportProgressStripTests: XCTestCase {
                 completedProviderCount: -12_345,
                 totalProviderCount: -67_890),
             "-12345 of -67890")
+        let minimumText = String(Int.min)
+        let maximumText = String(Int.max)
+        let boundaryText = SidebarImportProgressCountText.make(
+            completedProviderCount: Int.min,
+            totalProviderCount: Int.max)
+
+        XCTAssertEqual(boundaryText, minimumText + " of " + maximumText)
         XCTAssertEqual(
-            SidebarImportProgressCountText.make(
-                completedProviderCount: Int.min,
-                totalProviderCount: Int.max),
-            "-9223372036854775808 of 9223372036854775807")
+            boundaryText.components(separatedBy: " of "),
+            [minimumText, maximumText])
     }
 
     func testModelAndNativeValuesShareDeterministicCountText() {
