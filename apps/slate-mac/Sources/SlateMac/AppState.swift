@@ -4890,6 +4890,9 @@ final class AppState: ObservableObject {
     /// file's pins/overrides (round-4 finding 2). Bounded; overflow is
     /// reported honestly instead of replaying an incomplete journal.
     private(set) var sidebarStructuralTransformJournal: [SidebarStructuralTransform] = []
+    /// Test-only observability: how many committed persists replayed each
+    /// structural transform (at-most-once semantics, round-9 finding 1).
+    private(set) var sidebarStructuralReplayCountsForTesting: [UUID: Int] = [:]
     private var sidebarStructuralTransformJournalOverflowed = false
     /// One-shot test seam: runs on the main actor after a retry replay pass
     /// captures its journal prefix and before the pass completes, so tests
@@ -5101,8 +5104,9 @@ final class AppState: ObservableObject {
         // structural backlog under the lock, so a transform stranded by an
         // earlier readable-write failure (lock/temp/fsync) commits with the
         // next write of any kind instead of waiting for a notice-gated Retry.
+        // The snapshot is re-filtered against the LIVE journal after the
+        // predecessor completes (round-9 finding 1) — see below.
         let backlog = sidebarStructuralTransformJournal
-        let backlogIDs = Set(backlog.map(\.id))
         let task = Task { [weak self] in
             await previous?.value
             // Main-actor ownership gate BEFORE any disk I/O: the captured
@@ -5113,6 +5117,17 @@ final class AppState: ObservableObject {
                 self.currentSession === session,
                 self.sidebarVaultPrefsStore?.fileURL == storeFileURL
             else { return }
+            // Round-9 finding 1 (at-most-once): a predecessor in the chain
+            // may already have committed and acknowledged part of the
+            // enqueue-time snapshot. Replay only ids STILL pending in the
+            // live journal at run time. (If a pass is applied but its
+            // directory fsync fails, the id legitimately stays pending; a
+            // re-replay is safe because every transform is a no-op against
+            // its own committed effect — the source paths no longer exist.)
+            let pendingIDs = Set(
+                self.sidebarStructuralTransformJournal.map(\.id))
+            let effectiveBacklog = backlog.filter { pendingIDs.contains($0.id) }
+            let effectiveBacklogIDs = Set(effectiveBacklog.map(\.id))
             let outcome: Result<[String: Any], Error> =
                 await Task.detached(priority: .utility) {
                     do {
@@ -5127,7 +5142,7 @@ final class AppState: ObservableObject {
                             else {
                                 throw SidebarOrganizationShapeError()
                             }
-                            for transform in backlog {
+                            for transform in effectiveBacklog {
                                 transform.applyRaw(to: &root)
                             }
                             try apply(&root)
@@ -5191,9 +5206,13 @@ final class AppState: ObservableObject {
                         isBacklogDrain: true)
                 }
             case .success(let finalRoot):
-                if !backlogIDs.isEmpty {
+                if !effectiveBacklogIDs.isEmpty {
                     self.sidebarStructuralTransformJournal.removeAll {
-                        backlogIDs.contains($0.id)
+                        effectiveBacklogIDs.contains($0.id)
+                    }
+                    for id in effectiveBacklogIDs {
+                        self.sidebarStructuralReplayCountsForTesting[id, default: 0]
+                            += 1
                     }
                 }
                 acknowledge?()

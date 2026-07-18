@@ -1211,6 +1211,41 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       "Retry must not salvage the valid sort beside the invalid pins section")
   }
 
+  // MARK: - Red-team regressions (adversarial review round 9)
+
+  func testStructuralTransformsReplayAtMostOnceAcrossQueuedPersists() async throws {
+    // Round-9 finding 1: two persists enqueued back-to-back both snapshot
+    // the same pending transform; the successor must re-filter against the
+    // live journal after the predecessor commits and never replay it again.
+    let (state, vault) = try openVault(
+      named: "at-most-once",
+      files: ["Projects/note.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+    try publish(state, [])
+
+    // Enqueue the structural persist and a second persist synchronously,
+    // before either has run — both capture the same backlog snapshot.
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    let transformID = try XCTUnwrap(
+      state.sidebarStructuralTransformJournal.first?.id)
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+
+    XCTAssertEqual(
+      state.sidebarStructuralReplayCountsForTesting[transformID], 1,
+      "the committed transform replays exactly once across the queued chain")
+    XCTAssertTrue(state.sidebarStructuralTransformJournal.isEmpty)
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(pins["Archive"] as? [String], ["Archive/note.md"])
+    XCTAssertEqual(
+      json["sort"] as? [String: String],
+      ["field": "modified", "direction": "desc"])
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
