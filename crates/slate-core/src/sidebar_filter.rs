@@ -419,7 +419,7 @@ pub fn sidebar_filter_audio_summary(total: u64, scope_dir: Option<&str>) -> Stri
     }
 }
 
-fn group_thousands(value: u64) -> String {
+pub(crate) fn group_thousands(value: u64) -> String {
     let digits = value.to_string();
     let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, character) in digits.chars().enumerate() {

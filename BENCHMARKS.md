@@ -41,6 +41,7 @@ The first three groups run for three vault sizes: **1 000**, **10 000**, **50 00
 |---|---|---|---|
 | `sidebar_filter/10000` | ~42 ms | ≤ 50 ms | Name term (worst case): linear casefolded substring over every effective name via the `slate_tree_sort_key` UDF, one statement, set-based title join. |
 | `sidebar_filter/10000_mixed_terms` | ~49 ms | ≤ 50 ms | `note ext:md -has:task` — EXISTS joins narrow before the name scan. |
+| `tag_tree/10000` | ~8.3 ms | ≤ 25 ms | FL5-1: one `(tag_norm, file_id)` query + pure in-memory trie assembly with distinct-file nested counts; rebuilt per call (no caching in v1). |
 
 Per fl4_spec FL4-1 rule 7: if a regression pushes the name term past
 budget, the remedy is a casefolded effective-name column maintained at

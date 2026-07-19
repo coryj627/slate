@@ -327,6 +327,93 @@ pub struct SidebarFilterPage {
     pub audio_summary: String,
 }
 
+/// FL5-1 (#664): one pre-order entry of the nested tag tree. The core
+/// tree is recursive; the FFI carries a flattened pre-order projection
+/// (records cannot self-reference across the bindings) — `depth`
+/// reconstructs the hierarchy exactly, and pre-order matches the
+/// rendered outline order.
+#[derive(uniffi::Record)]
+pub struct TagTreeEntry {
+    /// Display segment, e.g. `reading`.
+    pub segment: String,
+    /// Normalized full tag, e.g. `projects/reading`.
+    pub full: String,
+    /// Distinct files with this tag OR any descendant.
+    pub file_count: u32,
+    /// Distinct files with exactly this tag.
+    pub direct_count: u32,
+    /// 0 for roots; parent is the nearest prior entry with depth-1.
+    pub depth: u32,
+}
+
+/// FL5-1 tag tree: flattened entries plus untagged count and the
+/// normative pre-rendered summary.
+#[derive(uniffi::Record)]
+pub struct TagTree {
+    pub entries: Vec<TagTreeEntry>,
+    pub untagged_count: u32,
+    pub audio_summary: String,
+}
+
+/// FL5-3a (refs #666): one refused file in a batch tag edit.
+#[derive(uniffi::Record)]
+pub struct SkippedFile {
+    pub path: String,
+    pub reason: String,
+}
+
+/// FL5-3a batch tag-edit report: `inline_remainder` counts processed
+/// files still carrying the tag inline after a remove (adds report 0).
+#[derive(uniffi::Record)]
+pub struct TagEditReport {
+    pub changed: u32,
+    pub skipped: Vec<SkippedFile>,
+    pub inline_remainder: u32,
+    pub audio_summary: String,
+}
+
+impl From<core::TagEditReport> for TagEditReport {
+    fn from(report: core::TagEditReport) -> Self {
+        TagEditReport {
+            changed: report.changed,
+            skipped: report
+                .skipped
+                .into_iter()
+                .map(|skip| SkippedFile {
+                    path: skip.path,
+                    reason: skip.reason,
+                })
+                .collect(),
+            inline_remainder: report.inline_remainder,
+            audio_summary: report.audio_summary,
+        }
+    }
+}
+
+fn flatten_tag_tree(tree: core::TagTree) -> TagTree {
+    fn walk(node: core::TagTreeNode, depth: u32, out: &mut Vec<TagTreeEntry>) {
+        out.push(TagTreeEntry {
+            segment: node.segment,
+            full: node.full,
+            file_count: node.file_count,
+            direct_count: node.direct_count,
+            depth,
+        });
+        for child in node.children {
+            walk(child, depth + 1, out);
+        }
+    }
+    let mut entries = Vec::new();
+    for root in tree.roots {
+        walk(root, 0, &mut entries);
+    }
+    TagTree {
+        entries,
+        untagged_count: tree.untagged_count,
+        audio_summary: tree.audio_summary,
+    }
+}
+
 /// FFI-exposed vault session. Wraps `slate_core::VaultSession`.
 ///
 /// Constructed via `VaultSession.openFilesystem(rootPath:)` on the
@@ -411,6 +498,34 @@ impl VaultSession {
             total: page.total,
             audio_summary: page.audio_summary,
         })
+    }
+
+    /// FL5-1 (#664): the nested tag tree over the honest tag dimension
+    /// (inline + frontmatter), flattened pre-order for the bindings.
+    pub fn tag_tree(&self) -> Result<TagTree, VaultError> {
+        Ok(flatten_tag_tree(self.inner.tag_tree()?))
+    }
+
+    /// FL5-3a (refs #666): add a tag to each file's frontmatter
+    /// `tags:` list through the shared serializer; conflict-checked per
+    /// file, one report for the whole batch.
+    pub fn add_tag_to_files(
+        &self,
+        paths: Vec<String>,
+        tag: String,
+    ) -> Result<TagEditReport, VaultError> {
+        Ok(self.inner.add_tag_to_files(paths, tag)?.into())
+    }
+
+    /// FL5-3a (refs #666): remove a tag (normalized compare) from each
+    /// file's frontmatter `tags:` list only; inline occurrences are
+    /// counted into `inline_remainder`, never edited.
+    pub fn remove_tag_from_files(
+        &self,
+        paths: Vec<String>,
+        tag: String,
+    ) -> Result<TagEditReport, VaultError> {
+        Ok(self.inner.remove_tag_from_files(paths, tag)?.into())
     }
 
     /// Return a page of indexed files matching `filter`.

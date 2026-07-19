@@ -5166,6 +5166,292 @@ impl VaultSession {
     /// Returns `MalformedFrontmatter` rather than overwriting a YAML
     /// block that doesn't parse: the user's source is still
     /// authoritative and we don't try to merge into broken YAML.
+    /// FL5-1 (#664): the nested tag tree over `file_tags` — one query,
+    /// pure in-memory assembly, no caching (rebuilt per call; the
+    /// sidebar refreshes on existing scoped-invalidation events).
+    pub fn tag_tree(&self) -> Result<crate::TagTree, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut stmt = conn.prepare("SELECT tag_norm, file_id FROM file_tags")?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let untagged: u32 = conn.query_row(
+            "SELECT COUNT(*) FROM files f
+             WHERE f.is_markdown = 1
+               AND NOT EXISTS (
+                   SELECT 1 FROM file_tags t WHERE t.file_id = f.id)",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(crate::tag_tree::build_tag_tree(&rows, untagged))
+    }
+
+    /// FL5-3a (refs #666): add `tag` to each file's frontmatter `tags:`
+    /// list. Validates once, conflict-checks each file against its
+    /// indexed hash, edits through the shared frontmatter serializer,
+    /// and rides the normal save path (one transaction per file).
+    /// Inline body tags are untouched.
+    pub fn add_tag_to_files(
+        &self,
+        paths: Vec<String>,
+        tag: String,
+    ) -> Result<TagEditReport, VaultError> {
+        self.batch_tag_edit(paths, &tag, TagEditKind::Add)
+    }
+
+    /// FL5-3a (refs #666): remove `tag` (normalized compare) from each
+    /// file's frontmatter `tags:` list ONLY. Inline `#tag` occurrences
+    /// are counted into `inline_remainder`, never edited — honest
+    /// partial semantics; body munging is deferred.
+    pub fn remove_tag_from_files(
+        &self,
+        paths: Vec<String>,
+        tag: String,
+    ) -> Result<TagEditReport, VaultError> {
+        self.batch_tag_edit(paths, &tag, TagEditKind::Remove)
+    }
+
+    fn batch_tag_edit(
+        &self,
+        paths: Vec<String>,
+        tag: &str,
+        kind: TagEditKind,
+    ) -> Result<TagEditReport, VaultError> {
+        // Rule 1: validate + normalize BEFORE touching any file.
+        let Some(norm) = crate::tags_db::normalize_tag(tag) else {
+            return Err(VaultError::InvalidQuery {
+                message: format!("\"{tag}\" is not a valid tag."),
+            });
+        };
+
+        let mut changed: u32 = 0;
+        let mut skipped: Vec<SkippedFile> = Vec::new();
+        let mut inline_remainder: u32 = 0;
+        for path in &paths {
+            match self.tag_edit_one(path, &norm, kind) {
+                Ok(outcome) => {
+                    if outcome.changed {
+                        changed += 1;
+                    }
+                    // Remainder counts every processed file still
+                    // carrying the tag inline after the edit —
+                    // including no-op files whose only carrier IS the
+                    // body (the user asked for the tag to be gone; the
+                    // honest report says it isn't).
+                    if kind == TagEditKind::Remove && outcome.carries_inline {
+                        inline_remainder += 1;
+                    }
+                }
+                Err(reason) => skipped.push(SkippedFile {
+                    path: path.clone(),
+                    reason,
+                }),
+            }
+        }
+
+        let grouped = crate::sidebar_filter::group_thousands(changed as u64);
+        let audio_summary = match kind {
+            TagEditKind::Add => format!("Tagged {grouped} files with #{norm}."),
+            TagEditKind::Remove => {
+                let mut message = format!("Removed #{norm} from {grouped} files.");
+                if inline_remainder > 0 {
+                    let inline = crate::sidebar_filter::group_thousands(inline_remainder as u64);
+                    message.push_str(&format!(" {inline} still have it inline."));
+                }
+                message
+            }
+        };
+        Ok(TagEditReport {
+            changed,
+            skipped,
+            inline_remainder,
+            audio_summary,
+        })
+    }
+
+    /// One file's edit: read under the session mutex, refuse when the
+    /// on-disk bytes no longer match the INDEXED hash (the selection
+    /// was built from indexed state — an unseen external edit must not
+    /// be overwritten), mutate the frontmatter `tags:` list through the
+    /// shared serializer, save through `save_text_locked` with the
+    /// just-read hash as the expected value (belt for the residual
+    /// read→write window).
+    fn tag_edit_one(
+        &self,
+        path: &str,
+        norm: &str,
+        kind: TagEditKind,
+    ) -> Result<TagEditOutcome, String> {
+        validate_save_path(path).map_err(|e| e.to_string())?;
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        // Review round (high): tag edits are a NOTES feature. Only an
+        // INDEXED MARKDOWN file may be edited — prepending YAML to a
+        // .canvas/.base/JSON/binary path would corrupt it while
+        // file_tags (markdown-derived) never even indexes the result.
+        let row: Option<(String, bool)> = conn
+            .query_row(
+                "SELECT content_hash, is_markdown FROM files WHERE path = ?1",
+                [path],
+                |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((indexed_hash, is_markdown)) = row else {
+            return Err("not an indexed file.".to_string());
+        };
+        if !is_markdown {
+            return Err("not a Markdown note.".to_string());
+        }
+        let contents = self.read_text(path).map_err(|e| e.to_string())?;
+        let disk_hash = crate::vault::content_hash(contents.as_bytes());
+        // The selection was built from INDEXED state: an unseen
+        // external edit refuses the file rather than being overwritten.
+        // (The residual read→write window below is the app-wide save
+        // semantics — save_text_locked's #641 cross-process critical
+        // section coordinates Slate processes; an arbitrary external
+        // editor racing INSIDE that window is out of scope for every
+        // save path in the app, not just this one.)
+        if indexed_hash != disk_hash {
+            return Err("changed on disk since it was indexed.".to_string());
+        }
+
+        let (props, _warnings) = crate::frontmatter::extract_frontmatter(&contents);
+        // Review round (high): the flattened property view must not
+        // hide hostile shapes. A `tags:` MAPPING flattens to `tags.*`
+        // dotted keys (no exact `tags` row), and case-variant
+        // duplicates (`tags:` + `Tags:`) would let one list be edited
+        // while the other keeps the tag indexed. Both refuse the file.
+        let has_nested_tags_mapping = props
+            .iter()
+            .any(|prop| prop.key.len() > 5 && prop.key[..5].eq_ignore_ascii_case("tags."));
+        if has_nested_tags_mapping {
+            return Err("the tags property is not a tag list.".to_string());
+        }
+        let tags_props: Vec<&crate::frontmatter::Property> = props
+            .iter()
+            .filter(|prop| prop.key.eq_ignore_ascii_case("tags"))
+            .collect();
+        if tags_props.len() > 1 {
+            return Err("multiple tags properties.".to_string());
+        }
+        let tags_prop = tags_props.first().copied();
+        if let Some(prop) = tags_prop
+            && !matches!(prop.value, crate::PropertyValue::TagList(_))
+        {
+            return Err("the tags property is not a tag list.".to_string());
+        }
+        let current: Vec<String> = tags_prop
+            .map(|prop| match &prop.value {
+                crate::PropertyValue::TagList(tags) => tags.clone(),
+                _ => unreachable!("non-list tags refused above"),
+            })
+            .unwrap_or_default();
+        let key_spelling = tags_prop
+            .map(|prop| prop.key.clone())
+            .unwrap_or_else(|| "tags".to_string());
+
+        let edit = match kind {
+            TagEditKind::Add => {
+                let already = current
+                    .iter()
+                    .any(|t| crate::tags_db::normalize_tag(t).as_deref() == Some(norm));
+                if already {
+                    None
+                } else {
+                    let mut next = current;
+                    next.push(norm.to_string());
+                    Some(TagListEdit::Set(next))
+                }
+            }
+            TagEditKind::Remove => {
+                if tags_prop.is_none() {
+                    None
+                } else {
+                    let next: Vec<String> = current
+                        .iter()
+                        .filter(|t| crate::tags_db::normalize_tag(t).as_deref() != Some(norm))
+                        .cloned()
+                        .collect();
+                    if next.len() == current.len() {
+                        None
+                    } else if next.is_empty() {
+                        // Emptied list: drop the key (and, via the
+                        // shared editor, an emptied frontmatter shell)
+                        // rather than leaving `tags: []` debris.
+                        Some(TagListEdit::DeleteKey)
+                    } else {
+                        Some(TagListEdit::Set(next))
+                    }
+                }
+            }
+        };
+
+        let Some(edit) = edit else {
+            return Ok(TagEditOutcome {
+                changed: false,
+                carries_inline: content_carries_tag_inline(&contents, norm),
+            });
+        };
+
+        let (new_contents, annotation) = match edit {
+            TagListEdit::Set(next) => {
+                let value = crate::PropertyValue::TagList(next);
+                let new_contents =
+                    crate::frontmatter::set_property_in_source(&contents, &key_spelling, &value)
+                        .map_err(|e| frontmatter_edit_error_to_vault_error(e, path).to_string())?;
+                let value_json = crate::properties_db::property_value_to_json(&value).to_string();
+                (
+                    new_contents,
+                    crate::oplog::OpAnnotation::SetProperty {
+                        key: key_spelling.clone(),
+                        value_json,
+                    },
+                )
+            }
+            TagListEdit::DeleteKey => {
+                let edit = crate::frontmatter::delete_property_in_source(&contents, &key_spelling)
+                    .map_err(|e| frontmatter_edit_error_to_vault_error(e, path).to_string())?;
+                let new_contents = match edit {
+                    crate::frontmatter::FrontmatterEdit::Changed(s) => s,
+                    crate::frontmatter::FrontmatterEdit::Unchanged => {
+                        unreachable!("key presence was established above")
+                    }
+                };
+                (
+                    new_contents,
+                    crate::oplog::OpAnnotation::RemoveProperty {
+                        key: key_spelling.clone(),
+                    },
+                )
+            }
+        };
+
+        if new_contents.len() as u64 > self.config.large_file_refuse_bytes {
+            return Err(format!(
+                "the edited file would exceed the size limit ({} bytes).",
+                new_contents.len()
+            ));
+        }
+
+        let carries_inline = content_carries_tag_inline(&new_contents, norm);
+        // Review round (medium): a failure past this point may have
+        // written the content while the index transaction failed — the
+        // reason says so instead of implying the file was untouched;
+        // the normal scan reconciles the derived state.
+        self.save_text_locked(&mut conn, path, &new_contents, Some(&disk_hash), &[annotation])
+            .map_err(|e| {
+                format!(
+                    "save failed and the edit may be partially applied; the next scan reconciles it ({e})."
+                )
+            })?;
+        Ok(TagEditOutcome {
+            changed: true,
+            carries_inline,
+        })
+    }
+
     pub fn set_property(
         &self,
         path: &str,
@@ -16088,4 +16374,57 @@ mod tests {
 
     #[path = "graph.rs"]
     mod graph;
+}
+
+/// FL5-3a: one refused file in a batch tag edit — deliberate skips
+/// (conflict, malformed frontmatter, read failure), never silent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkippedFile {
+    pub path: String,
+    pub reason: String,
+}
+
+/// FL5-3a: the whole-batch report. `inline_remainder` counts processed
+/// files still carrying the tag inline after the edit (remove only).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagEditReport {
+    pub changed: u32,
+    pub skipped: Vec<SkippedFile>,
+    pub inline_remainder: u32,
+    pub audio_summary: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TagEditKind {
+    Add,
+    Remove,
+}
+
+enum TagListEdit {
+    Set(Vec<String>),
+    DeleteKey,
+}
+
+struct TagEditOutcome {
+    changed: bool,
+    carries_inline: bool,
+}
+
+/// Exact-normalized inline carrier check: the same highlighter span
+/// classification the `file_tags` collector uses, restricted to body
+/// spans (frontmatter is suppressed by the highlighter already).
+fn content_carries_tag_inline(content: &str, norm: &str) -> bool {
+    crate::editor_spans::highlight_spans(content)
+        .iter()
+        .any(|span| {
+            if span.kind != crate::editor_spans::EditorSpanKind::Tag {
+                return false;
+            }
+            let start = span.start_byte as usize;
+            let end = span.end_byte as usize;
+            if end > content.len() || start > end {
+                return false;
+            }
+            crate::tags_db::normalize_tag(&content[start..end]).as_deref() == Some(norm)
+        })
 }
