@@ -1,14 +1,19 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// Shared recording listeners for the §W-E censuses. Ported from the W0-1
+// probe (examples/csharp-probe, retired by W0-3) so the census evidence
+// keeps the spike's instrumentation: thread-safe capture, a concurrency
+// gauge, and the callback-thread census.
 
 using uniffi.slate_uniffi;
 
-namespace SlateProbe;
+namespace SlateWindows.Tests.Support;
 
 /// <summary>
-/// Recording ScanProgressListener: thread-safe event capture plus a
-/// concurrency gauge (how many callbacks were in flight at once) and the
-/// set of managed thread ids the callbacks arrived on.
+/// Recording <see cref="ScanProgressListener"/>: thread-safe event capture
+/// plus a concurrency gauge and the set of managed thread ids the
+/// callbacks arrived on.
 /// </summary>
 internal sealed class ProgressRecorder : ScanProgressListener
 {
@@ -31,12 +36,16 @@ internal sealed class ProgressRecorder : ScanProgressListener
 
     public List<ScanProgress> Snapshot()
     {
-        lock (_lock) return new List<ScanProgress>(_events);
+        lock (_lock)
+        {
+            return new List<ScanProgress>(_events);
+        }
     }
 }
 
 /// <summary>
-/// Recording VaultEventListener capturing all three event kinds.
+/// Recording <see cref="VaultEventListener"/> capturing all three event
+/// kinds.
 /// </summary>
 internal sealed class EventRecorder : VaultEventListener
 {
@@ -49,7 +58,13 @@ internal sealed class EventRecorder : VaultEventListener
 
     public int TotalCount
     {
-        get { lock (_lock) return Errors.Count + FileChanges.Count + IndexPhases.Count; }
+        get
+        {
+            lock (_lock)
+            {
+                return Errors.Count + FileChanges.Count + IndexPhases.Count;
+            }
+        }
     }
 
     public void OnError(EventErrorCode @code, string @path, string @message)
@@ -84,24 +99,36 @@ internal sealed class EventRecorder : VaultEventListener
 
     public T Locked<T>(Func<EventRecorder, T> read)
     {
-        lock (_lock) return read(this);
+        lock (_lock)
+        {
+            return read(this);
+        }
     }
 }
 
 /// <summary>
-/// Foreign CommandAction with a scriptable body — success, typed failure,
-/// arbitrary .NET exception, or registry re-entry.
+/// Foreign <see cref="CommandAction"/> with a scriptable body — success,
+/// typed failure, arbitrary .NET exception, or registry re-entry.
 /// </summary>
-internal sealed class ProbeAction : CommandAction
+internal sealed class ScriptedAction : CommandAction
 {
     private readonly Action _body;
+    private readonly object _lock = new();
     public int InvocationCount;
+    public readonly HashSet<int> ThreadIds = new();
 
-    public ProbeAction(Action body) => _body = body;
+    public ScriptedAction(Action body)
+    {
+        _body = body;
+    }
 
     public void Invoke()
     {
         Interlocked.Increment(ref InvocationCount);
+        lock (_lock)
+        {
+            ThreadIds.Add(Environment.CurrentManagedThreadId);
+        }
         _body();
     }
 }
@@ -135,4 +162,35 @@ internal sealed class ConcurrencyGauge
 
         public void Dispose() => Interlocked.Decrement(ref _gauge._current);
     }
+}
+
+internal static class Waiting
+{
+    /// <summary>Poll <paramref name="condition"/> until true or timeout.</summary>
+    public static bool WaitFor(Func<bool> condition, int timeoutMs)
+    {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        while (sw.ElapsedMilliseconds < timeoutMs)
+        {
+            if (condition())
+            {
+                return true;
+            }
+            Thread.Sleep(25);
+        }
+        return condition();
+    }
+}
+
+/// <summary>
+/// Census sizing: moderate defaults for the per-PR lane, full tier under
+/// SLATE_CENSUS_FULL=1 (repo census convention — nightly runs the full
+/// tier).
+/// </summary>
+internal static class CensusTier
+{
+    public static bool Full { get; } =
+        Environment.GetEnvironmentVariable("SLATE_CENSUS_FULL") == "1";
+
+    public static int Scale(int prSize, int fullSize) => Full ? fullSize : prSize;
 }

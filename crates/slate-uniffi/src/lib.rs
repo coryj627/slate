@@ -267,6 +267,135 @@ pub fn init_host_logging(verbose: bool) {
     host_logging::init(verbose);
 }
 
+/// Census support (w0_spec §W0-3 item 2, #715): deterministically raise
+/// any `VaultError` arm so foreign-binding censuses can prove every
+/// discriminant's mapping end-to-end — native raise → typed foreign
+/// exception with structured fields — instead of trusting generated-code
+/// inspection. Field values are fixed by contract; censuses assert them
+/// exactly. An unknown arm name returns `Ok(())`, keeping the function
+/// inert outside census use. Not a product surface.
+#[uniffi::export]
+pub fn census_synthesize_vault_error(arm: String) -> Result<(), VaultError> {
+    Err(match arm.as_str() {
+        "Io" => VaultError::Io {
+            message: "census io".into(),
+        },
+        "Db" => VaultError::Db {
+            message: "census db".into(),
+        },
+        "InvalidPath" => VaultError::InvalidPath {
+            path: "census/path.md".into(),
+            reason: "census reason".into(),
+        },
+        "Trash" => VaultError::Trash {
+            message: "census trash".into(),
+        },
+        "Cancelled" => VaultError::Cancelled,
+        "InvalidUtf8" => VaultError::InvalidUtf8 {
+            path: "census/utf8.md".into(),
+        },
+        "FileTooLarge" => VaultError::FileTooLarge {
+            path: "census/large.md".into(),
+            size: 42,
+        },
+        "InvalidQuery" => VaultError::InvalidQuery {
+            message: "census query".into(),
+        },
+        "Unsupported" => VaultError::Unsupported {
+            feature: "census feature".into(),
+        },
+        "InvalidArgument" => VaultError::InvalidArgument {
+            message: "census argument".into(),
+        },
+        "DestinationExists" => VaultError::DestinationExists {
+            path: "census/dest.md".into(),
+        },
+        "WriteConflict" => VaultError::WriteConflict {
+            current_content_hash: "census-current".into(),
+            expected_content_hash: "census-expected".into(),
+            current_mtime_ms: 42,
+        },
+        "HistoryUnavailable" => VaultError::HistoryUnavailable {
+            path: "census/history.md".into(),
+            reason: "census reason".into(),
+        },
+        "MalformedFrontmatter" => VaultError::MalformedFrontmatter {
+            path: "census/frontmatter.md".into(),
+            reason: "census reason".into(),
+        },
+        "BibSourceUnreadable" => VaultError::BibSourceUnreadable {
+            path: "census/bib.json".into(),
+            reason: "census reason".into(),
+        },
+        "CslStyleUnreadable" => VaultError::CslStyleUnreadable {
+            path: "census/style.csl".into(),
+            reason: "census reason".into(),
+        },
+        "PrefsUnreadable" => VaultError::PrefsUnreadable {
+            path: "census/prefs.json".into(),
+            reason: "census reason".into(),
+        },
+        _ => return Ok(()),
+    })
+}
+
+/// Census live-object counters (w0_spec §W0-3 item 2, #715): every
+/// `uniffi::Object` carries an RAII [`census_live::Marker`] that counts
+/// it live from construction until its `Drop` — i.e. until the last
+/// foreign reference is released and the native allocation actually
+/// freed. [`census_live_object_counts`] exposes the counters so binding
+/// censuses can assert native release (a collected foreign wrapper with
+/// a broken finalizer would leave the counter high), not merely managed
+/// collection. Not a product surface.
+mod census_live {
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    pub static SESSIONS: AtomicI64 = AtomicI64::new(0);
+    pub static BUFFERS: AtomicI64 = AtomicI64::new(0);
+    pub static CANCEL_TOKENS: AtomicI64 = AtomicI64::new(0);
+    pub static REGISTRIES: AtomicI64 = AtomicI64::new(0);
+    pub static LAYOUT_SESSIONS: AtomicI64 = AtomicI64::new(0);
+
+    /// RAII marker: one live native object of its kind.
+    pub struct Marker(&'static AtomicI64);
+
+    impl Marker {
+        pub fn count(counter: &'static AtomicI64) -> Self {
+            counter.fetch_add(1, Ordering::AcqRel);
+            Marker(counter)
+        }
+    }
+
+    impl Drop for Marker {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// Live native object counts per bound `uniffi::Object` type.
+#[derive(uniffi::Record)]
+pub struct LiveObjectCounts {
+    pub sessions: i64,
+    pub buffers: i64,
+    pub cancel_tokens: i64,
+    pub registries: i64,
+    pub layout_sessions: i64,
+}
+
+/// Snapshot the census live-object counters (see [`census_live`]).
+#[uniffi::export]
+pub fn census_live_object_counts() -> LiveObjectCounts {
+    use std::sync::atomic::Ordering;
+    LiveObjectCounts {
+        sessions: census_live::SESSIONS.load(Ordering::Acquire),
+        buffers: census_live::BUFFERS.load(Ordering::Acquire),
+        cancel_tokens: census_live::CANCEL_TOKENS.load(Ordering::Acquire),
+        registries: census_live::REGISTRIES.load(Ordering::Acquire),
+        layout_sessions: census_live::LAYOUT_SESSIONS.load(Ordering::Acquire),
+    }
+}
+
 // =====================================================================
 // VaultSession FFI surface (Milestone A subset)
 // =====================================================================
@@ -430,6 +559,7 @@ fn flatten_tag_tree(tree: core::TagTree) -> TagTree {
 #[derive(uniffi::Object)]
 pub struct VaultSession {
     inner: core::VaultSession,
+    _census: census_live::Marker,
 }
 
 #[uniffi::export]
@@ -440,7 +570,10 @@ impl VaultSession {
     #[uniffi::constructor]
     pub fn open_filesystem(root_path: String) -> Result<Arc<Self>, VaultError> {
         let inner = core::VaultSession::from_filesystem(PathBuf::from(root_path))?;
-        Ok(Arc::new(Self { inner }))
+        Ok(Arc::new(Self {
+            inner,
+            _census: census_live::Marker::count(&census_live::SESSIONS),
+        }))
     }
 
     /// The physical root identity observed inside this session's open,
@@ -1056,6 +1189,7 @@ impl VaultSession {
             session: Arc::clone(&self),
             filter: core_filter,
             state: std::sync::Mutex::new(state),
+            _census: census_live::Marker::count(&census_live::LAYOUT_SESSIONS),
         }))
     }
 
@@ -1498,6 +1632,7 @@ impl VaultSession {
 #[derive(uniffi::Object)]
 pub struct CancelToken {
     inner: core::CancelToken,
+    _census: census_live::Marker,
 }
 
 #[uniffi::export]
@@ -1506,6 +1641,7 @@ impl CancelToken {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             inner: core::CancelToken::new(),
+            _census: census_live::Marker::count(&census_live::CANCEL_TOKENS),
         })
     }
 
@@ -2984,6 +3120,7 @@ pub struct LayoutSession {
     /// The projection this layout is bound to; re-applied on `refresh`.
     filter: core::graph::GraphFilter,
     state: std::sync::Mutex<LayoutState>,
+    _census: census_live::Marker,
 }
 
 /// Mutable layout state behind the session's mutex. `ids`/`edges`/
@@ -4614,6 +4751,7 @@ pub fn editor_highlight_spans_in_range(
 #[derive(uniffi::Object)]
 pub struct DocumentBuffer {
     inner: std::sync::Mutex<core::doc_buffer::DocBufferState>,
+    _census: census_live::Marker,
 }
 
 #[uniffi::export]
@@ -4623,6 +4761,7 @@ impl DocumentBuffer {
     pub fn new(text: String) -> Arc<Self> {
         Arc::new(Self {
             inner: std::sync::Mutex::new(core::doc_buffer::DocBufferState::new(&text)),
+            _census: census_live::Marker::count(&census_live::BUFFERS),
         })
     }
 
@@ -5479,6 +5618,7 @@ fn truncate_action_message(mut message: String) -> String {
 #[derive(uniffi::Object)]
 pub struct CommandRegistry {
     inner: core::CommandRegistry,
+    _census: census_live::Marker,
 }
 
 #[uniffi::export]
@@ -5487,6 +5627,7 @@ impl CommandRegistry {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             inner: core::CommandRegistry::new(),
+            _census: census_live::Marker::count(&census_live::REGISTRIES),
         })
     }
 

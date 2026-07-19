@@ -20,6 +20,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SlateUniffi\SlateUniffi.csproj" />
+    <ProjectReference Include="..\..\tools\ParityHarness\ParityHarness.csproj" />
   </ItemGroup>
 
 </Project>

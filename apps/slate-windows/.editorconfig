@@ -3,3 +3,9 @@
 # author. Hand-written C# in this tree is formatted by the same gate.
 [src/SlateUniffi/generated/**.cs]
 generated_code = true
+
+# The §W-E censuses use bounded Task.Wait as deadlock watchdogs — "did
+# this terminate within T" is the assertion, which await would erase.
+# xUnit runs without a synchronization context, so blocking is safe here.
+[tests/**.cs]
+dotnet_diagnostic.xUnit1031.severity = none
