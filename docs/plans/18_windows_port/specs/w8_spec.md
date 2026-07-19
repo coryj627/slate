@@ -12,7 +12,7 @@ Program: [00_program.md](../00_program.md) (decisions 10, 11, 15, 16, 20; DoD §
 
 ## W8-2 · Theming & contrast — PR 2
 
-1. Token-based dark/light theme plus reactive `SystemParameters.HighContrast` switching; system font-size respect (per-monitor DPI already in W1-1). Contrast-theme resources bind semantic roles to compatible dynamic Windows `SystemColors` pairs — no hard-coded Contrast-theme colors — and update while the app is running.
+1. Token-based dark/light theme plus reactive `SystemParameters.HighContrast` switching; system font-size respect (per-monitor DPI already in W1-1). Contrast-theme resources bind semantic roles to compatible dynamic Windows `SystemColors` pairs — no hard-coded Contrast-theme colors — and update while the app is running. **Mechanism (decision 2 addendum, 2026-07-19): the Fluent theme dictionaries** — dark/light via `Fluent.Light/Dark.xaml` driven by Slate theme state (seeded W1-1 item 8), Contrast via the automatic `Fluent.HC.xaml` switch; this issue finalizes the token values over that base, hardens the reactive-switching tests, and re-runs the Fluent currency check (experimental upstream — adopt `ThemeMode` here iff it has exited experimental).
 2. **APCA Lc ≥ 75 gate ported for Slate-owned dark/light pairs**: the shared contrast spec (R milestone's shared-spec artifact, or its Swift-test predecessor translated) runs over those WPF token pairs in CI. Contrast-theme acceptance instead verifies all four built-in Windows themes plus a user-customized theme, compatible system foreground/background pairings, selected/disabled states, visible boundaries, and no color-only meaning; user-controlled system colors are not an APCA gate.
 
 ## W8-3 · MSIX packaging + auto-update — PR 3
