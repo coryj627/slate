@@ -195,8 +195,8 @@ final class A11yCorpusCensusTests: XCTestCase {
         for (index, (event, entry)) in zip(corpus, entries).enumerated() {
             XCTAssertEqual(
                 a11yEventIdentity(event: event), entry.event,
-                "event identity mismatch at corpus[\(index)] — the mirror \
-                constructed a different variant or parameters than the artifact pins"
+                "event identity mismatch at corpus[\(index)] — the mirror "
+                    + "constructed a different variant or parameters than the artifact pins"
             )
             let rendered = a11yRender(event: event)
             XCTAssertEqual(
