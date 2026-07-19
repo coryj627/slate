@@ -5010,7 +5010,11 @@ final class AppState: ObservableObject {
         // READABLE file have no notice-gated Retry — surface the dedicated
         // journal-recovery banner instead (cleared when the journal drains).
         sidebarOrganizationJournalRecoveryPending =
-            notice == nil && !sidebarStructuralTransformJournal.isEmpty
+            notice == nil
+            && (!sidebarStructuralTransformJournal.isEmpty
+                || sidebarVaultRootIdentity.map({
+                    Self.sidebarUnflushedWriteRetries[$0]?.isEmpty == false
+                }) == true)
         lastMutationAnnouncement = failure
         announcer.post(failure, priority: .medium)
     }
@@ -5163,6 +5167,8 @@ final class AppState: ObservableObject {
         acknowledge: (() -> Void)? = nil,
         onSettled: (() -> Void)? = nil,
         isBacklogDrain: Bool = false,
+        isRetainedDrain: Bool = false,
+        prepare: (() -> Void)? = nil,
         verifyAnnouncement: (container: String, announced: SidebarOrganizationChoice)? = nil
     ) throws {
         if let notice = sidebarVaultPrefsNotice {
@@ -5236,6 +5242,44 @@ final class AppState: ObservableObject {
                 !committed.contains($0.id)
             }
             let effectiveBacklogIDs = Set(effectiveBacklog.map(\.id))
+            // Round-30 (review #1): an earlier same-identity write is
+            // parked for ordered replay — any non-drain write reaching its
+            // disk attempt now would commit AHEAD of it and invert the
+            // user's order. Park this write behind the registry instead;
+            // the drain settles everything in enqueue order. A live
+            // session immediately schedules that drain.
+            if !isRetainedDrain,
+                Self.sidebarUnflushedWriteRetries[enqueueIdentity]?.isEmpty
+                    == false
+            {
+                Self.sidebarUnflushedWriteRetries[enqueueIdentity, default: []]
+                    .append(
+                        SidebarUnflushedWrite(
+                            apply: apply, backlog: effectiveBacklog))
+                if let count = Self.sidebarUnflushedWriteRetries[
+                    enqueueIdentity]?.count,
+                    count > Self.sidebarUnflushedWriteRetriesCap
+                {
+                    Self.sidebarUnflushedWriteRetries[enqueueIdentity]?
+                        .removeFirst()
+                }
+                let ownedNow =
+                    self.sidebarOrganizationWriteGeneration == generation
+                    && self.currentSession === session
+                if ownedNow {
+                    self.scheduleSidebarRetainedWriteDrain()
+                }
+                onSettled?()
+                if Self.sidebarStoreWriterChainTokens[enqueueIdentity]
+                    == token
+                {
+                    Self.sidebarStoreWriterChains[enqueueIdentity] = nil
+                    Self.sidebarStoreWriterChainTokens[enqueueIdentity] = nil
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity] = nil
+                }
+                return
+            }
+            prepare?()
             enum PersistOutcome {
                 case success([String: Any])
                 /// The atomic rename landed (content committed) but the
@@ -5309,7 +5353,10 @@ final class AppState: ObservableObject {
                             += 1
                     }
                 }
-                if self.sidebarStructuralTransformJournal.isEmpty {
+                if self.sidebarStructuralTransformJournal.isEmpty,
+                    Self.sidebarUnflushedWriteRetries[enqueueIdentity]?.isEmpty
+                        != false
+                {
                     self.sidebarOrganizationJournalRecoveryPending = false
                 }
                 acknowledge?()
@@ -5493,6 +5540,61 @@ final class AppState: ObservableObject {
         sidebarOrganizationPersistTaskForTesting = task
     }
 
+    /// Written once on the main actor before the drain's detached update
+    /// is created; read only inside that update (task creation is the
+    /// happens-before edge).
+    private final class SidebarRetainedDrainSnapshot: @unchecked Sendable {
+        var entries: [SidebarUnflushedWrite] = []
+    }
+
+    /// Round-30: settle the identity-keyed retained writes in enqueue
+    /// order through the normal funnel. The snapshot is taken at RUN time
+    /// via `prepare` — after every predecessor in the chain has settled —
+    /// so a failure landing after this drain was scheduled is still
+    /// consumed. Inside the one locked update a per-entry FINAL refusal
+    /// (conflict) drops only that entry; any other throw aborts the whole
+    /// update and keeps the suffix parked. The registry shrinks only on
+    /// commit (acknowledge), so nothing is lost to a transient failure.
+    private func scheduleSidebarRetainedWriteDrain() {
+        guard sidebarVaultPrefsNotice == nil,
+            let drainIdentity = sidebarVaultRootIdentity
+        else { return }
+        let snapshot = SidebarRetainedDrainSnapshot()
+        try? mutateSidebarOrganization(
+            announce: nil,
+            apply: { root in
+                for entry in snapshot.entries {
+                    for transform in entry.backlog {
+                        transform.applyRaw(to: &root)
+                    }
+                    do {
+                        try entry.apply(&root)
+                    } catch is SidebarOrganizationConflictError {
+                        // Final refusal: dropped on commit; later entries
+                        // still settle.
+                    }
+                }
+            },
+            reflect: { _ in },
+            acknowledge: {
+                let count = snapshot.entries.count
+                guard count > 0 else { return }
+                if var entries = Self.sidebarUnflushedWriteRetries[
+                    drainIdentity]
+                {
+                    entries.removeFirst(min(count, entries.count))
+                    Self.sidebarUnflushedWriteRetries[drainIdentity] =
+                        entries.isEmpty ? nil : entries
+                }
+            },
+            isBacklogDrain: true,
+            isRetainedDrain: true,
+            prepare: {
+                snapshot.entries =
+                    Self.sidebarUnflushedWriteRetries[drainIdentity] ?? []
+            })
+    }
+
     /// Round-23 test seam: simulate an open whose root-identity capture
     /// failed (fstat raced a deletion) so fail-closed paths are testable.
     func overrideSidebarVaultRootIdentityForTesting(
@@ -5505,7 +5607,7 @@ final class AppState: ObservableObject {
     /// — ownership guards, tail bookkeeping, and failure reconcile included —
     /// so chain-ordering behavior is testable without a second funnel.
     func enqueueSidebarOrganizationWriteForTesting(
-        _ apply: @escaping @Sendable (inout [String: Any]) -> Void
+        _ apply: @escaping @Sendable (inout [String: Any]) throws -> Void
     ) {
         try? mutateSidebarOrganization(announce: nil, apply: apply) { _ in }
     }
@@ -8637,6 +8739,20 @@ final class AppState: ObservableObject {
         } else {
             sidebarVaultPrefsNotice = result.notice
         }
+        // Round-30 (review #2): writes parked by a previous same-vault
+        // session settle through a CHAINED drain whose snapshot is taken
+        // at run time — after any surviving writer has landed its failure
+        // — and before the refresh below republishes. Installed whenever
+        // a surviving chain OR parked entries exist, so a reopen that
+        // races the failing writer still consumes its parked intent.
+        if sidebarVaultPrefsNotice == nil,
+            let identity = sidebarVaultRootIdentity,
+            Self.sidebarStoreWriterChains[identity] != nil
+                || Self.sidebarUnflushedWriteRetries[identity]?.isEmpty
+                    == false
+        {
+            scheduleSidebarRetainedWriteDrain()
+        }
         // Round-16: a writer detached before a close/reopen of the SAME
         // vault may still be completing. Queue a silent post-drain refresh
         // so published state converges on whatever that writer committed.
@@ -8742,31 +8858,6 @@ final class AppState: ObservableObject {
         }
         if organization != sidebarOrganization {
             sidebarOrganization = organization
-        }
-        // Round-29: writes that failed after a previous same-vault session
-        // tore down replay now, through the normal funnel (chained behind
-        // any surviving writer, identity-verified, tail-published). Backlog
-        // transforms are id-deduped by the ledger where it survives and
-        // are no-ops against their own committed effect otherwise. A
-        // standing notice keeps them retained for a later clean open.
-        if sidebarVaultPrefsNotice == nil,
-            let identity = sidebarVaultRootIdentity,
-            let retained = Self.sidebarUnflushedWriteRetries[identity],
-            !retained.isEmpty
-        {
-            Self.sidebarUnflushedWriteRetries[identity] = nil
-            try? mutateSidebarOrganization(
-                announce: nil,
-                apply: { root in
-                    for entry in retained {
-                        for transform in entry.backlog {
-                            transform.applyRaw(to: &root)
-                        }
-                        try entry.apply(&root)
-                    }
-                },
-                reflect: { _ in },
-                isBacklogDrain: true)
         }
     }
 
@@ -8963,7 +9054,9 @@ final class AppState: ObservableObject {
             self.sidebarVaultPrefsNotice = adoptedNotice
             self.sidebarOrganizationJournalRecoveryPending =
                 adoptedNotice == nil
-                && !self.sidebarStructuralTransformJournal.isEmpty
+                && (!self.sidebarStructuralTransformJournal.isEmpty
+                    || Self.sidebarUnflushedWriteRetries[retryIdentity]?
+                        .isEmpty == false)
             self.sidebarOrganizationPendingAnnouncementVerifications = [:]
             // A successful repair re-adopts the file's authored organization
             // sections in the same publish; any standing notice publishes
@@ -8995,6 +9088,14 @@ final class AppState: ObservableObject {
             }
             if adoptedNotice == nil, let retryDurabilityWarning {
                 self.announcer.post(retryDurabilityWarning, priority: .medium)
+            }
+            // Round-30: retained writes parked behind the outage settle
+            // once the file is healthy, in their own chained slot.
+            if adoptedNotice == nil,
+                Self.sidebarUnflushedWriteRetries[retryIdentity]?.isEmpty
+                    == false
+            {
+                self.scheduleSidebarRetainedWriteDrain()
             }
         }
         sidebarVaultPrefsRetryTask = task

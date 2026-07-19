@@ -2566,6 +2566,175 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
         "Projects/note.md", inFolder: "Projects"))
   }
 
+  // MARK: - Red-team regressions (adversarial review round 30)
+
+  private final class FailOnceBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var failed = false
+    func consume() -> Bool {
+      lock.withLock {
+        if failed { return false }
+        failed = true
+        return true
+      }
+    }
+  }
+
+  private struct TransientWriteError: Error {}
+
+  func testParkedWritesReplayInEnqueueOrderNotFailureOrder() async throws {
+    // Round-30 finding 1: after an unowned transient failure parks a
+    // write, a SUCCESSOR must park behind it instead of committing ahead
+    // — otherwise replay reverses the user's final intent.
+    let failOnce = FailOnceBox()
+    let (state, vault) = try openVault(
+      named: "order-park", files: ["a.md"])
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      if failOnce.consume() { throw TransientWriteError() }
+      root["winner"] = "first"
+    }
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      root["winner"] = "second"
+    }
+    let tail = state.sidebarOrganizationPersistTaskForTesting
+    state.closeVault()
+    await tail?.value
+
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+    var attempts = 0
+    while attempts < 1000 {
+      if let json = try? sidebarJSON(at: vault),
+        json["winner"] as? String == "second"
+      {
+        break
+      }
+      attempts += 1
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    await awaitPersist(state)
+    let json = try sidebarJSON(at: vault)
+    XCTAssertEqual(
+      json["winner"] as? String, "second",
+      "replay preserves enqueue order — the failed first write must not "
+        + "override its successor")
+  }
+
+  func testReopenBeforeTheWriterFailsStillDrainsItsParkedIntent() async throws {
+    // Round-30 finding 2: reopening while the old writer is still gated
+    // must install a drain that snapshots AFTER that writer settles — a
+    // failure landing after the open is still consumed in this open.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let failOnce = FailOnceBox()
+    let (state, vault) = try openVault(
+      named: "reopen-race", files: ["a.md"])
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      if failOnce.consume() { throw TransientWriteError() }
+      root["landed"] = true
+    }
+    let writer = state.sidebarOrganizationPersistTaskForTesting
+    state.closeVault()
+
+    // Reopen FIRST — the writer is still gated, the registry still empty.
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+    // Now the old writer fails and parks its intent. The drain REPLAYS
+    // the same closure, so the gate needs a second signal.
+    gate.open()
+    gate.open()
+    await writer?.value
+
+    var attempts = 0
+    while attempts < 1000 {
+      if let json = try? sidebarJSON(at: vault), json["landed"] as? Bool == true {
+        break
+      }
+      attempts += 1
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    await awaitPersist(state)
+    let json = try sidebarJSON(at: vault)
+    XCTAssertEqual(
+      json["landed"] as? Bool, true,
+      "the drain chained behind the surviving writer consumes the intent "
+        + "parked AFTER this open began")
+  }
+
+  func testAReplayConflictDropsOnlyItsOwnEntry() async throws {
+    // Round-30 finding 3: one retained entry hitting a FINAL refusal at
+    // replay (grouped-sort conflict) is dropped alone; unrelated retained
+    // entries — including a later announced pin — still settle. The gate
+    // holds the head write across the close so all three entries park
+    // UNOWNED, before the conflicting grouping exists on disk.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let failOnce = FailOnceBox()
+    let (state, vault) = try openVault(
+      named: "conflict-park", files: ["Projects/note.md"],
+      folders: ["Projects"])
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      if failOnce.consume() { throw TransientWriteError() }
+      root["first"] = true
+    }
+    try publish(state, [])
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarSortCreatedAsc)
+    try publish(
+      state, [item("Projects/note.md")],
+      focusedPath: "Projects/note.md", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    let tail = state.sidebarOrganizationPersistTaskForTesting
+    state.closeVault()
+    // Head write fails post-close (one signal); the drain's replay needs
+    // the second.
+    gate.open()
+    gate.open()
+    await tail?.value
+
+    // While closed, the vault's file gains date grouping — the parked
+    // created-ascending sort now conflicts at replay time.
+    let slate = vault.appendingPathComponent(".slate")
+    try FileManager.default.createDirectory(
+      at: slate, withIntermediateDirectories: true)
+    try Data(#"{"version": 1, "grouping": "dateBuckets"}"#.utf8)
+      .write(to: slate.appendingPathComponent("sidebar.json"))
+
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+    var attempts = 0
+    while attempts < 1000 {
+      if state.sidebarOrganization.pins.isPinned(
+        "Projects/note.md", inFolder: "Projects")
+      {
+        break
+      }
+      attempts += 1
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Projects"] as? [String], ["Projects/note.md"],
+      "the pin parked behind the refused sort still lands")
+    XCTAssertEqual(json["first"] as? Bool, true)
+    XCTAssertEqual(json["grouping"] as? String, "dateBuckets")
+    XCTAssertNil(
+      json["sort"],
+      "the conflicting sort is dropped alone, not applied")
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {
