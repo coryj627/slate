@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-19 at `2ea76ff` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-07-19 at `1364804` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -209,8 +209,8 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.workspace.quickOpen` | Quick Open… | ⌘O | Command O | #723 (W1-4) | pending |
 | `slate.workspace.reopenClosedTab` | Reopen Closed Tab | ⇧⌘T | Shift Command T | #722 (W1-3) | pending |
 | `slate.workspace.shrinkPane` | Shrink Pane | ⌥⌘- | Option Command Minus | #722 (W1-3) | pending |
-| `slate.workspace.splitDown` | Split Down | ⌥⌘\\ | Option Command Backslash Backslash | #722 (W1-3) | pending |
-| `slate.workspace.splitRight` | Split Right | ⌘\\ | Command Backslash Backslash | #722 (W1-3) | pending |
+| `slate.workspace.splitDown` | Split Down | ⌥⌘\ | Option Command Backslash | #722 (W1-3) | pending |
+| `slate.workspace.splitRight` | Split Right | ⌘\ | Command Backslash | #722 (W1-3) | pending |
 
 The palette surface itself (ranking via the W0.5-1 core engine, sections, recents, chord display) is **#741 (W5-1)**; the quick switcher is **#723 (W1-4)**.
 

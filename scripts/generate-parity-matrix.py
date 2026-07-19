@@ -177,6 +177,13 @@ KEY_WORD = {
 }
 
 
+def unescape_swift(literal: str) -> str:
+    """Decode the Swift string-literal escapes chords/labels can carry
+    (`\\\\` and `\\"`) into their runtime characters — HotkeySpoken sees
+    runtime characters, so the mirror must too."""
+    return literal.replace('\\\\', '\\').replace('\\"', '"')
+
+
 def spoken(chord: str) -> str:
     return " ".join(GLYPH_WORD.get(c) or KEY_WORD.get(c, c) for c in chord)
 
@@ -212,11 +219,11 @@ def commands() -> list[tuple[str, str, str, str, str]]:
             continue
         name = id_match.group(1)
         if m := re.search(r'label:\s*"([^"]*)"', body):
-            labels.setdefault(name, m.group(1))
+            labels.setdefault(name, unescape_swift(m.group(1)))
         if m := re.search(r"section:\s*\.(\w+)", body):
             sections.setdefault(name, m.group(1))
         if m := re.search(r'hotkey:\s*"([^"]*)"', body):
-            chords.setdefault(name, m.group(1))
+            chords.setdefault(name, unescape_swift(m.group(1)))
             attributed_hotkeys += 1
 
     # Shape 2: command-contract types (static let id = SlateCommandID.x
@@ -225,17 +232,17 @@ def commands() -> list[tuple[str, str, str, str, str]]:
         name = m.group(1)
         window = text[m.end():m.end() + 600]
         if lm := re.search(r'static let label = "([^"]+)"', window):
-            labels.setdefault(name, lm.group(1))
+            labels.setdefault(name, unescape_swift(lm.group(1)))
         if sm := re.search(r"static let section: CommandSection = \.(\w+)", window):
             sections.setdefault(name, sm.group(1))
         if hm := re.search(r'static let hotkeyHint = "([^"]+)"', window):
-            chords.setdefault(name, hm.group(1))
+            chords.setdefault(name, unescape_swift(hm.group(1)))
             attributed_hotkeys += 1
 
     # Shape 3: the sidebar action catalog's positional factory calls
     # (SlateCommandID.x, "Label", …) — always section .sidebar.
     for name, label in re.findall(r'SlateCommandID\.(\w+),\s*\n?\s*"([^"]+)"', catalog):
-        labels.setdefault(name, label)
+        labels.setdefault(name, unescape_swift(label))
         sections.setdefault(name, "sidebar")
 
     # Shape 4: definition-table chord switches
@@ -245,7 +252,7 @@ def commands() -> list[tuple[str, str, str, str, str]]:
     )
     for name, chord in switch_entries:
         if name not in chords:
-            chords[name] = chord
+            chords[name] = unescape_swift(chord)
             attributed_hotkeys += 1
 
     # Fail-fast: every chord literal in every recognized shape must be
@@ -341,8 +348,17 @@ def cli_verbs() -> list[str]:
         out = ""
     verbs = re.findall(r"^  (\w[\w-]*)\s{2,}", out, re.MULTILINE)
     if not verbs:
+        # Fallback: clap derives kebab-case verb names from the enum
+        # variants by default; explicit name attributes would make this
+        # conversion ambiguous, so their presence aborts generation.
         main_rs = (REPO / "crates/slate-cli/src/main.rs").read_text(encoding="utf-8")
-        verbs = [v.lower() for v in re.findall(r"^\s{4}(\w+)\s*[({]", main_rs, re.MULTILINE)]
+        if re.search(r"#\[command\(\s*name\s*=", main_rs):
+            fail("slate-cli uses explicit #[command(name=...)] attributes; "
+                 "run with cargo available so verbs come from live --help")
+        verbs = [
+            re.sub(r"(?<!^)(?=[A-Z])", "-", v).lower()
+            for v in re.findall(r"^\s{4}(\w+)\s*[({]", main_rs, re.MULTILINE)
+        ]
     return [v for v in verbs if v not in ("help",)]
 
 
