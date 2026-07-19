@@ -31,6 +31,8 @@
 //! #264's scheme).
 
 use serde::Serialize;
+use unicode_normalization::UnicodeNormalization;
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::commands::{Command, CommandSection};
 
@@ -120,7 +122,7 @@ pub const RECENT_SECTION_TITLE: &str = "Recent";
 
 /// Subsequence-with-boost fuzzy matcher. Returns `None` when `query`
 /// does not subsequence-match `target`, otherwise the score plus the
-/// matched byte spans in `target` (merged over adjacent characters).
+/// matched byte spans in `target` (merged over adjacent clusters).
 ///
 /// Scoring (the mac palette's semantics, now the reference):
 /// - +10 per matched character
@@ -130,36 +132,39 @@ pub const RECENT_SECTION_TITLE: &str = "Recent";
 /// - +50 when the query is a strict case-insensitive prefix of the
 ///   target
 ///
-/// Comparison is case-insensitive over Unicode scalars using simple
-/// one-to-one folding (the first scalar of `char::to_lowercase`).
-/// Multi-scalar expansions (ß → ss) intentionally fold to their first
-/// scalar — a deliberate semantic pin now that core is the reference;
-/// the goldens below capture it. An empty query scores 0 with no spans.
+/// "Character" means what it meant in the Swift originals: an
+/// **extended grapheme cluster compared under canonical equivalence**
+/// (Swift `Character` equality), case-insensitively. Both sides are
+/// segmented into grapheme clusters and compared by NFC-normalized
+/// lowercase keys, so a precomposed `é` (U+00E9) matches a decomposed
+/// `e` + U+0301 in either direction, while a bare `e` matches neither —
+/// exactly as the mac scorers behaved. Spans index the ORIGINAL
+/// target's bytes. An empty query scores 0 with no spans.
 pub fn fuzzy_score(query: &str, target: &str) -> Option<(i32, Vec<MatchSpan>)> {
     if query.is_empty() {
         return Some((0, Vec::new()));
     }
-    let q: Vec<char> = query.chars().map(fold).collect();
+    let q: Vec<String> = query.graphemes(true).map(grapheme_key).collect();
 
     let mut qi = 0usize;
     let mut consecutive = 0u32;
     let mut score = 0i32;
     let mut spans: Vec<MatchSpan> = Vec::new();
-    let mut prev: Option<char> = None;
-    let mut target_chars = 0usize;
+    let mut prev_key: Option<String> = None;
+    let mut target_graphemes = 0usize;
     let mut folded_prefix_matches = true;
 
-    for (ti, (byte, ch)) in target.char_indices().enumerate() {
-        target_chars += 1;
-        let folded = fold(ch);
-        if ti < q.len() && folded_prefix_matches && folded != q[ti] {
+    for (ti, (byte, grapheme)) in target.grapheme_indices(true).enumerate() {
+        target_graphemes += 1;
+        let key = grapheme_key(grapheme);
+        if ti < q.len() && folded_prefix_matches && key != q[ti] {
             folded_prefix_matches = false;
         }
-        if qi < q.len() && folded == q[qi] {
+        if qi < q.len() && key == q[qi] {
             score += 10;
-            let boundary = match prev {
+            let boundary = match &prev_key {
                 None => true,
-                Some(p) => WORD_BOUNDARY.contains(&p),
+                Some(p) => WORD_BOUNDARY.contains(&p.as_str()),
             };
             if boundary {
                 score += 5;
@@ -170,7 +175,7 @@ pub fn fuzzy_score(query: &str, target: &str) -> Option<(i32, Vec<MatchSpan>)> {
             consecutive += 1;
             qi += 1;
 
-            let end = byte + ch.len_utf8();
+            let end = byte + grapheme.len();
             match spans.last_mut() {
                 Some(last) if last.end_byte as usize == byte => {
                     last.end_byte = end as u32;
@@ -183,26 +188,33 @@ pub fn fuzzy_score(query: &str, target: &str) -> Option<(i32, Vec<MatchSpan>)> {
         } else {
             consecutive = 0;
         }
-        prev = Some(ch);
+        prev_key = Some(key);
     }
 
     if qi != q.len() {
         return None;
     }
-    if folded_prefix_matches && q.len() <= target_chars {
+    if folded_prefix_matches && q.len() <= target_graphemes {
         score += 50;
     }
     Some((score, spans))
 }
 
-/// Word-boundary characters for the +5 bonus: the punctuation a command
-/// label or scraped hint id might reasonably use.
-const WORD_BOUNDARY: [char; 5] = [' ', '.', '-', ':', '_'];
+/// Word-boundary cluster keys for the +5 bonus: the punctuation a
+/// command label or scraped hint id might reasonably use.
+const WORD_BOUNDARY: [&str; 5] = [" ", ".", "-", ":", "_"];
 
-/// Simple one-to-one case fold (first scalar of the full lowercase
-/// expansion).
-fn fold(c: char) -> char {
-    c.to_lowercase().next().unwrap_or(c)
+/// Comparison key for one extended grapheme cluster: canonical (NFC)
+/// form, lowercased, re-normalized. Two clusters compare equal exactly
+/// when their keys do — the Rust spelling of Swift's canonical
+/// `Character` equality over `lowercased()` strings.
+fn grapheme_key(grapheme: &str) -> String {
+    grapheme
+        .chars()
+        .nfc()
+        .flat_map(char::to_lowercase)
+        .nfc()
+        .collect()
 }
 
 /// Rank and group `commands` for rendering.
@@ -531,6 +543,50 @@ mod tests {
                 end_byte: 4
             }]
         );
+    }
+
+    // --- canonical equivalence (Swift Character parity) ---
+
+    #[test]
+    fn composed_and_decomposed_forms_match_both_directions() {
+        // Precomposed é (U+00E9) vs decomposed e + U+0301: Swift
+        // Character equality treats them as equal; so does the key.
+        let composed = "caf\u{e9}.md";
+        let decomposed = "cafe\u{301}.md";
+        assert!(fuzzy_score("caf\u{e9}", decomposed).is_some());
+        assert!(fuzzy_score("cafe\u{301}", composed).is_some());
+        // Scores agree regardless of which side is decomposed.
+        assert_eq!(
+            fuzzy_score("caf\u{e9}", composed).map(|(s, _)| s),
+            fuzzy_score("caf\u{e9}", decomposed).map(|(s, _)| s),
+        );
+        // Case-insensitivity composes with canonical equivalence.
+        assert!(fuzzy_score("CAF\u{c9}", decomposed).is_some());
+    }
+
+    #[test]
+    fn decomposed_spans_cover_the_full_cluster_in_original_bytes() {
+        // "e" + U+0301 is one grapheme, 3 bytes in the original target;
+        // the span must cover all of it (bolding half a cluster would
+        // corrupt the rendered label).
+        let (_, spans) = fuzzy_score("\u{e9}", "e\u{301}x").unwrap();
+        assert_eq!(
+            spans,
+            vec![MatchSpan {
+                start_byte: 0,
+                end_byte: 3
+            }]
+        );
+    }
+
+    #[test]
+    fn bare_letter_does_not_match_an_accented_cluster() {
+        // Swift parity: Character "e" != "é" in either composed form.
+        assert_eq!(fuzzy_score("e", "\u{e9}"), None);
+        assert_eq!(fuzzy_score("e", "e\u{301}"), None);
+        // And the multi-scalar lowercase of İ (i + U+0307) is not a
+        // bare "i" — the pre-fix scalar fold got this wrong.
+        assert_eq!(fuzzy_score("i", "\u{130}"), None);
     }
 
     // --- exact-score goldens: the algorithm's arithmetic, pinned ---
