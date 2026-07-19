@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-19 at `34702d5` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-07-19 at `b691617` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -234,6 +234,19 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 | `queries` | #738 (W4-6) | pending |
 | `basesDock` | #738 (W4-6) | pending |
 | `syncDiagnostics` | #740 (W4-8) | pending |
+
+## Workspace persisted tab-content kinds (`enum EditorItem`)
+
+What `WorkspaceStore` round-trips — a **separate** inventory from the right-pane leaves above. Includes the U1-6 forward-compatibility contract: an unknown discriminator drops that tab, never the workspace (W1-3 mirrors it; cross-platform round-trip fixtures are W1-3 acceptance).
+
+| tab kind | consuming W issue | status |
+|---|---|---|
+| `markdown` | #722 (W1-3) | pending |
+| `canvas` | #722 (W1-3) | pending |
+| `base` | #722 (W1-3) | pending |
+| `savedQuery` | #722 (W1-3) | pending |
+| `dashboard` | #722 (W1-3) | pending |
+| `graph` | #722 (W1-3) | pending |
 
 ## Primary surfaces
 

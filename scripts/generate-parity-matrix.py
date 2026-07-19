@@ -50,6 +50,7 @@ COMMANDS_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/SlateCommands.swift"
 SIDEBAR_CATALOG = REPO / "apps/slate-mac/Sources/SlateMac/Sidebar/SidebarActionCatalog.swift"
 SETTINGS_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/SettingsView.swift"
 LEAF_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/Workspace/RightPaneView.swift"
+WORKSPACE_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceModel.swift"
 HELP_DIR = REPO / "docs/help"
 OUT = REPO / "docs/plans/18_windows_port/parity_matrix.md"
 
@@ -193,6 +194,20 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
+def swift_enum_cases(body: str) -> list[str]:
+    """Case names from a Swift enum body: handles payloads and
+    comma-separated declarations (`case a, b`) so a style change cannot
+    silently drop a case from the inventory."""
+    names: list[str] = []
+    for decl in re.findall(r"^[ \t]*case[ \t]+(.+)", body, re.MULTILINE):
+        decl = re.sub(r"\([^)]*\)", "", decl)  # strip payloads
+        for part in decl.split(","):
+            name = part.strip().rstrip(":")
+            if re.fullmatch(r"\w+", name):
+                names.append(name)
+    return names
+
+
 def commands() -> list[tuple[str, str, str, str, str]]:
     """(id, label, chord, spoken, issue) for every SlateCommandID."""
     text = COMMANDS_SWIFT.read_text(encoding="utf-8")
@@ -322,11 +337,25 @@ def leaves() -> list[tuple[str, str]]:
                           text, re.DOTALL)
     if not enum_body:
         fail("could not locate `enum Leaf` in RightPaneView.swift")
-    cases = re.findall(r"^\s*case (\w+)", enum_body.group(1), re.MULTILINE)
+    cases = swift_enum_cases(enum_body.group(1))
     unmapped = [c for c in cases if c not in LEAF_ISSUE]
     if unmapped:
         fail("unmapped Leaf cases (add to LEAF_ISSUE): " + ", ".join(unmapped))
     return [(c, LEAF_ISSUE[c]) for c in cases]
+
+
+def editor_item_kinds() -> list[str]:
+    """The persisted workspace tab-content kinds (`enum EditorItem`) —
+    what `WorkspaceStore` round-trips; distinct from the right-pane Leaf
+    registry. All rows consume #722 (W1-3)."""
+    text = WORKSPACE_SWIFT.read_text(encoding="utf-8")
+    body_match = re.search(r"enum EditorItem[^{]*\{(.*?)\n\}", text, re.DOTALL)
+    if not body_match:
+        fail("could not locate `enum EditorItem` in WorkspaceModel.swift")
+    kinds = swift_enum_cases(body_match.group(1))
+    if not kinds:
+        fail("`enum EditorItem` parsed empty — parser no longer matches")
+    return kinds
 
 
 def settings_tabs() -> list[str]:
@@ -469,6 +498,19 @@ def main() -> int:
     a("|---|---|---|")
     for leaf, issue in leaf_rows:
         a(f"| `{leaf}` | {issue} | pending |")
+    a("")
+    a("## Workspace persisted tab-content kinds (`enum EditorItem`)")
+    a("")
+    a("What `WorkspaceStore` round-trips — a **separate** inventory from the "
+      "right-pane leaves above. Includes the U1-6 forward-compatibility "
+      "contract: an unknown discriminator drops that tab, never the "
+      "workspace (W1-3 mirrors it; cross-platform round-trip fixtures are "
+      "W1-3 acceptance).")
+    a("")
+    a("| tab kind | consuming W issue | status |")
+    a("|---|---|---|")
+    for kind in editor_item_kinds():
+        a(f"| `{kind}` | #722 (W1-3) | pending |")
     a("")
     a("## Primary surfaces")
     a("")
