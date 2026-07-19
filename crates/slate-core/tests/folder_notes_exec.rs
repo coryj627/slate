@@ -175,26 +175,70 @@ fn compound_preflight_refuses_note_collision_before_any_mutation() {
 }
 
 #[test]
-fn compound_preflight_requires_an_indexed_folder_note() {
+fn compound_without_a_note_degrades_to_the_plain_rename() {
+    // Review round: presence is decided at OPERATION time inside the
+    // compound — a stale caller probe can never detach a fresh note or
+    // fail a note-less rename.
     let tmp = tempfile::tempdir().unwrap();
     write(tmp.path(), "P/other.md", "no folder note here\n");
     let session = open(tmp.path());
-    let err = session.rename_folder_with_note("P", "Q").unwrap_err();
-    assert!(matches!(err, VaultError::InvalidPath { .. }), "got {err:?}");
-    assert!(tmp.path().join("P/other.md").exists());
+    let report = session.rename_folder_with_note("P", "Q").unwrap();
+    assert!(
+        report
+            .moved
+            .contains(&("P/other.md".into(), "Q/other.md".into()))
+    );
+    assert_eq!(report.undo_op_ids, vec![report.op_id]);
+    assert!(tmp.path().join("Q/other.md").exists());
+    assert!(
+        !tmp.path().join("Q/Q.md").exists(),
+        "no phantom note appears"
+    );
 }
 
 #[test]
-fn compound_second_step_failure_rolls_the_folder_rename_back() {
+fn compound_preflight_stats_unindexed_note_collisions_before_step_one() {
+    // Review round: an UNINDEXED on-disk occupant of the post-rename
+    // note name refuses up front — no journaled folder move, no
+    // rollback window for the exact-name case.
     let tmp = tempfile::tempdir().unwrap();
     write(tmp.path(), "P/P.md", "folder note\n");
     let session = open(tmp.path());
-    // An UNINDEXED directory squatting on the post-rename note path:
-    // index-based preflight cannot see it, the note's os-level rename
-    // then fails (destination is a directory), and the compound rolls
-    // the folder rename back.
-    std::fs::create_dir_all(tmp.path().join("P/Q.md")).unwrap();
+    write(tmp.path(), "P/Q.md", "unindexed squatter\n");
     let err = session.rename_folder_with_note("P", "Q").unwrap_err();
+    assert!(
+        matches!(err, VaultError::DestinationExists { .. }),
+        "got {err:?}"
+    );
+    assert!(tmp.path().join("P/P.md").exists());
+    assert!(!tmp.path().join("Q").exists());
+}
+
+#[test]
+fn compound_report_carries_both_undo_rows() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "P/P.md", "folder note\n");
+    let session = open(tmp.path());
+    let report = session.rename_folder_with_note("P", "Q").unwrap();
+    assert_eq!(report.undo_op_ids.len(), 2, "two journal rows: {report:?}");
+    assert_eq!(report.undo_op_ids[0], report.op_id);
+    assert!(report.undo_op_ids[1] < report.undo_op_ids[0]);
+}
+
+#[test]
+#[cfg(unix)]
+fn compound_second_step_failure_rolls_the_folder_rename_back() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "P/P.md", "folder note\n");
+    let session = open(tmp.path());
+    // Deterministic second-step failure: a read-only DIRECTORY permits
+    // renaming the directory itself (the parent gates that) but
+    // refuses renames INSIDE it — step 1 succeeds, step 2 hits EACCES,
+    // and the compound rolls the folder rename back.
+    std::fs::set_permissions(tmp.path().join("P"), std::fs::Permissions::from_mode(0o555)).unwrap();
+    let err = session.rename_folder_with_note("P", "Q").unwrap_err();
+    std::fs::set_permissions(tmp.path().join("P"), std::fs::Permissions::from_mode(0o755)).unwrap();
     assert!(
         matches!(err, VaultError::InvalidArgument { ref message }
             if message.contains("rolled back")),

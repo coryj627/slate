@@ -18,7 +18,14 @@ use serde_json::{Value, json};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StructuralReport {
     /// Journal row id — the handle `undo_structural` takes.
+    ///
+    /// FL6-1: a COMPOUND operation journals more than one row; this
+    /// field alone cannot reverse it. `undo_op_ids` is the complete
+    /// ordered sequence (`undo_structural` each, in order) — a single
+    /// op reports `[op_id]`.
     pub op_id: i64,
+    /// Ordered ids that fully reverse this report (newest first).
+    pub undo_op_ids: Vec<i64>,
     /// Every path that changed, `(old, new)`, files only (a folder move
     /// lists each contained file; the folder itself is implied).
     pub moved: Vec<(String, String)>,

@@ -166,6 +166,14 @@ struct SidebarFolderRowContent: View {
                                         : 0))
                             .font(Tokens.Typography.caption)
                             .foregroundStyle(secondaryText)
+                            // #866 pointer-target floor: the glyph alone
+                            // is far under the 28pt accessible minimum —
+                            // the frame carries the hit area (height is
+                            // capped visually by the row; the shape
+                            // extends the tappable region).
+                            .frame(
+                                width: Tokens.Spacing.xl + Tokens.Spacing.xs,
+                                height: Tokens.Spacing.xl + Tokens.Spacing.xs)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)

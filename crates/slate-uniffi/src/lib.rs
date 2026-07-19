@@ -1960,6 +1960,10 @@ pub struct DirNodeSummary {
 #[derive(uniffi::Record)]
 pub struct StructuralReport {
     pub op_id: i64,
+    /// FL6-1: ordered ids that fully reverse this report (newest
+    /// first) — a compound folder+note rename journals two rows and
+    /// `op_id` alone cannot reverse it. Single ops carry `[op_id]`.
+    pub undo_op_ids: Vec<i64>,
     pub moved: Vec<MovedPath>,
     pub rewritten: Vec<RewriteOutcome>,
     pub failed: Vec<RewriteFailure>,
@@ -2113,6 +2117,7 @@ impl From<core::structural::StructuralReport> for StructuralReport {
     fn from(r: core::structural::StructuralReport) -> Self {
         Self {
             op_id: r.op_id,
+            undo_op_ids: r.undo_op_ids,
             moved: r
                 .moved
                 .into_iter()

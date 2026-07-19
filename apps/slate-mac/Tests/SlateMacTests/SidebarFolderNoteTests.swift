@@ -194,6 +194,32 @@ final class SidebarFolderNoteTests: XCTestCase {
         XCTAssertFalse(requested[0].isDirectory)
     }
 
+    // MARK: - Organization follows the compound (review round)
+
+    func testCompoundRenameRetargetsNoteShortcutsAndRecents() async throws {
+        let (state, _) = try openVault(
+            named: "org-follow", files: ["P/P.md", "P/other.md"])
+        // A file SHORTCUT and a recents entry pointing at the note.
+        state.addSidebarTagShortcutDirect(kind: .file, path: "P/P.md")
+        await state.sidebarOrganizationPersistTaskForTesting?.value
+        state.openFile("P/P.md", target: .currentTab)
+        await state.noteLoadTask?.value
+        XCTAssertTrue(state.fileRecents.contains("P/P.md"))
+
+        let task = try XCTUnwrap(
+            state.renameEntry(path: "P", isDirectory: true, to: "Q"))
+        await task.value
+
+        XCTAssertEqual(
+            state.sidebarOrganization.shortcuts,
+            [SidebarShortcut(kind: .file, path: "Q/Q.md")],
+            "the shortcut follows the note to its NEW stem, not Q/P.md")
+        XCTAssertTrue(
+            state.fileRecents.contains("Q/Q.md"),
+            "recents follow the compound mapping: \(state.fileRecents)")
+        XCTAssertFalse(state.fileRecents.contains("Q/P.md"))
+    }
+
     // MARK: - Compound rename routing
 
     func testFolderRenameRoutesThroughTheCompoundCoreOperation() async throws {

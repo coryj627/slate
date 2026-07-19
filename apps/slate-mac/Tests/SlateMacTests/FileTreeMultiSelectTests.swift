@@ -1152,7 +1152,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
             named: "rename-owner-a", files: ["a.md"])
         state.structuralRenameRunner = { _, _, _, _ in
             await gate.enter()
-            return StructuralReport(opId: 71, moved: [], rewritten: [], failed: [])
+            return StructuralReport(
+                opId: 71, undoOpIds: [71], moved: [], rewritten: [], failed: [])
         }
         XCTAssertTrue(state.requestRename(path: "a.md", isDirectory: false))
         let a = try XCTUnwrap(state.renamingNode)

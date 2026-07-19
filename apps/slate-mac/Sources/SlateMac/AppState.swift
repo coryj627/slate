@@ -1695,18 +1695,14 @@ final class AppState: ObservableObject {
             guard isDirectory else {
                 return try session.renameFile(path: path, newName: newName)
             }
-            // FL6-1 rule 5 (#667): a folder WITH a folder note renames
-            // as ONE core compound operation — Swift never sequences
-            // two renames. Presence probe = the exact-path indexed
-            // lookup of the convention (`<path>/<leaf>.md`). The
-            // inverse of a compound rename routes back through this
-            // same picker, so undo re-pairs naturally.
-            let leaf = (path as NSString).lastPathComponent
-            let hasNote =
-                (try session.getFileSummary(path: "\(path)/\(leaf).md")) != nil
-            return hasNote
-                ? try session.renameFolderWithNote(path: path, newName: newName)
-                : try session.renameFolder(path: path, newName: newName)
+            // FL6-1 rule 5 (#667): EVERY folder rename routes through
+            // the compound API — presence is decided in CORE at
+            // operation time under the structural lock (a Swift-side
+            // probe raced external creates; review round), and a
+            // note-less folder degrades to the plain rename inside the
+            // same call. Undo re-routes here and re-pairs naturally.
+            return try session.renameFolderWithNote(
+                path: path, newName: newName)
         }.value
     }
 
@@ -15769,7 +15765,9 @@ final class AppState: ObservableObject {
                     // (#796).
                     _ = try session.createExclusive(path: path, content: "")
                     return .success(
-                        StructuralReport(opId: 0, moved: [], rewritten: [], failed: []))
+                        StructuralReport(
+                            opId: 0, undoOpIds: [0], moved: [],
+                            rewritten: [], failed: []))
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
@@ -16053,6 +16051,28 @@ final class AppState: ObservableObject {
                     .rename(oldPath: path, newPath: newPath),
                     rewrittenCount: Self.distinctRewrittenCount(report),
                     mutatedNodeIsDirectory: isDirectory)
+                // FL6-1 (#667, review round): a compound folder rename
+                // maps the note to the NEW stem — the folder-level
+                // prefix transform above lands it at <new>/<oldLeaf>.md,
+                // so publish the exact fix-up (the transforms compose
+                // sequentially) or pins/shortcuts/recents/history keep
+                // a stale note path.
+                if isDirectory {
+                    let oldLeaf = (path as NSString).lastPathComponent
+                    let oldNote = "\(path)/\(oldLeaf).md"
+                    if let pair = report.moved.first(where: {
+                        $0.oldPath == oldNote
+                            && $0.newPath != "\(newPath)/\(oldLeaf).md"
+                    }) {
+                        // One composed transform step covers pins,
+                        // shortcuts, recents, AND the history ring.
+                        self.applySidebarPinsMutation(
+                            .rename(
+                                oldPath: "\(newPath)/\(oldLeaf).md",
+                                newPath: pair.newPath),
+                            isDirectory: false)
+                    }
+                }
                 if undoContext == .record {
                     self.postMutationAnnouncement(
                         self.mutationSentence(
