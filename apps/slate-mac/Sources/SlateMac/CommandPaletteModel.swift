@@ -87,70 +87,21 @@ final class CommandPaletteModel: ObservableObject {
         filterAnnouncement = nil
     }
 
-    // MARK: - Section grouping (#316)
+    // MARK: - Section grouping (#316; core-owned since W0.5-1 #717)
 
-    /// Renderable grouping of the filtered commands. Drives the
-    /// SwiftUI `Section` hierarchy in `CommandPaletteView`.
-    ///
-    /// **Empty query**: Recent section at top (most-recent-first,
-    /// commands also in their native section are EXCLUDED from
-    /// the native sections to avoid duplicate rows), followed by
-    /// the CommandSection enums in declared order.
-    ///
-    /// **Non-empty query**: fuzzy-filter results grouped by their
-    /// native section in declared order; no Recent section
-    /// (filter results are what the user asked for, not history).
+    /// Renderable grouping of the filtered commands, computed by
+    /// `slate-core`'s palette module through the FFI. Ranking, section
+    /// layout and titles, Recent blending, and the within-Sidebar
+    /// catalog placement all live core-side so the mac and Windows
+    /// palettes render identically from identical inputs — this model
+    /// only forwards its snapshot state.
     var sections: [PaletteSection] {
-        let filtered = filteredCommands
-
-        if query.isEmpty {
-            var result: [PaletteSection] = []
-
-            // Recent section first — preserves invocation order.
-            // Only includes recents that still exist in the
-            // registry (a command id may have been removed across
-            // app updates; we skip gracefully).
-            let recentSet = Set(recentIDs)
-            let recentCommands = recentIDs.compactMap { id in
-                commands.first(where: { $0.id == id })
-            }
-            if !recentCommands.isEmpty {
-                result.append(PaletteSection(
-                    title: "Recent",
-                    kind: nil,
-                    commands: recentCommands
-                ))
-            }
-
-            // Native sections — exclude commands already shown in
-            // Recent to keep the flat displayOrder de-duped.
-            let nativeOnly = filtered.filter { !recentSet.contains($0.id) }
-            let byType = Dictionary(grouping: nativeOnly, by: { $0.section })
-            for sec in Self.sectionOrder {
-                if let cmds = byType[sec], !cmds.isEmpty {
-                    result.append(PaletteSection(
-                        title: Self.title(for: sec),
-                        kind: sec,
-                        commands: sec == .sidebar
-                            ? Self.sidebarCatalogOrder(cmds)
-                            : cmds
-                    ))
-                }
-            }
-            return result
-        } else {
-            // With a query: group fuzzy-matched commands by their
-            // native section, in declared order. No Recent.
-            let byType = Dictionary(grouping: filtered, by: { $0.section })
-            return Self.sectionOrder.compactMap { sec -> PaletteSection? in
-                guard let cmds = byType[sec] else { return nil }
-                return PaletteSection(
-                    title: Self.title(for: sec),
-                    kind: sec,
-                    commands: cmds
-                )
-            }
-        }
+        paletteSections(
+            commands: commands,
+            query: query,
+            recentIds: recentIDs,
+            sidebarPinnedOrder: Self.sidebarPinnedOrder
+        )
     }
 
     /// Flat list of commands in display (section-flattened) order.
@@ -160,68 +111,23 @@ final class CommandPaletteModel: ObservableObject {
         sections.flatMap { $0.commands }
     }
 
-    /// Declared section order for the palette. Tracks
-    /// `CommandSection`'s `repr(u8)` order on the Rust side, but
-    /// stays explicit here so a Rust-side reorder doesn't silently
-    /// change the palette layout.
-    private nonisolated static let sectionOrder: [CommandSection] = [
-        .file, .navigation, .view, .vault, .editor, .canvas, .bases, .graph, .sidebar, .tasks,
-        .settings, .plugins,
-    ]
-
-    /// Rust's registry list is deterministic by section and stable ID, which
-    /// is correct for legacy sections but would alphabetize the Sidebar's
-    /// intentionally task-oriented catalog. Restore that one section's shared
-    /// action order while leaving any future non-catalog Sidebar commands in
-    /// their original deterministic registry order at the end.
-    private static func sidebarCatalogOrder(_ commands: [Command]) -> [Command] {
-        let byID = Dictionary(uniqueKeysWithValues: commands.map { ($0.id, $0) })
-        let catalogIDs = Set(SidebarActionCatalog.actions.map(\.id))
-        return SidebarActionCatalog.actions.compactMap { byID[$0.id] }
-            + commands.filter { !catalogIDs.contains($0.id) }
-    }
-
-    /// Human-readable header for a section. Plain en-US strings
-    /// in V1; localisation lands in V2 per #264.
-    nonisolated static func title(for section: CommandSection) -> String {
-        switch section {
-        case .file: return "File"
-        case .navigation: return "Navigation"
-        case .view: return "View"
-        case .vault: return "Vault"
-        case .editor: return "Editor"
-        case .tasks: return "Tasks"
-        case .settings: return "Settings"
-        case .plugins: return "Plugins"
-        case .canvas: return "Canvas"
-        case .bases: return "Bases"
-        case .graph: return "Graph"
-        case .sidebar: return "Sidebar"
-        }
+    /// The sidebar catalog's task-oriented id order, handed to core's
+    /// layout as data. The catalog itself — capability gating, undo
+    /// behavior, invocation — stays a host concern; core only places
+    /// the ids it is given.
+    private static var sidebarPinnedOrder: [String] {
+        SidebarActionCatalog.actions.map(\.id)
     }
 
     // MARK: - Filtering
 
-    /// Filtered, ranked command list. Empty query keeps the
-    /// registry's deterministic `(section, id)` order; non-empty
-    /// query sorts by descending fuzzy score with id as a stable
-    /// tiebreaker.
+    /// Commands matching the current query, in display order (the
+    /// core-ranked sections, flattened). Empty query returns the
+    /// snapshot unchanged. Feeds the filter-count announcement; the
+    /// ranking itself lives in `slate-core` (W0.5-1 #717).
     var filteredCommands: [Command] {
         guard !query.isEmpty else { return commands }
-        return commands
-            .compactMap { command -> (Command, Int)? in
-                let labelScore = Self.fuzzyScore(query: query, target: command.label)
-                let hintScore = command.accessibilityHint
-                    .flatMap { Self.fuzzyScore(query: query, target: $0) }
-                let scores = [labelScore, hintScore].compactMap { $0 }
-                guard let best = scores.max() else { return nil }
-                return (command, best)
-            }
-            .sorted { lhs, rhs in
-                if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
-                return lhs.0.id < rhs.0.id
-            }
-            .map { $0.0 }
+        return sections.flatMap { $0.commands }
     }
 
     /// Move selection to the next visible row, wrapping at the
@@ -302,64 +208,6 @@ final class CommandPaletteModel: ObservableObject {
         pendingAnnouncement = nil
     }
 
-    // MARK: - Fuzzy matcher
-
-    /// Subsequence-with-boost matcher. Returns `nil` if the query
-    /// doesn't subsequence-match the target, otherwise an integer
-    /// score (higher = better).
-    ///
-    /// Scoring:
-    /// - +10 per matched character
-    /// - +5 if the match lands at a word boundary (start of string
-    ///   or after space / `.` / `-` / `:` / `_`)
-    /// - +3 if the match is consecutive with the previous match
-    /// - +50 if the query is a strict (case-insensitive) prefix
-    ///   of the target
-    ///
-    /// All comparisons are case-insensitive.
-    ///
-    /// `nonisolated` because the function is pure — no actor state
-    /// touched. Lets non-main-actor test contexts call it directly
-    /// without `await`.
-    nonisolated static func fuzzyScore(query: String, target: String) -> Int? {
-        let q = Array(query.lowercased())
-        let t = Array(target.lowercased())
-        guard !q.isEmpty else { return 0 }
-
-        var qi = 0
-        var consecutive = 0
-        var score = 0
-
-        for (ti, ch) in t.enumerated() {
-            guard qi < q.count else { break }
-            if ch == q[qi] {
-                score += 10
-                let prev = ti > 0 ? t[ti - 1] : Character(" ")
-                if ti == 0 || Self.wordBoundary.contains(prev) {
-                    score += 5
-                }
-                if consecutive > 0 {
-                    score += 3
-                }
-                consecutive += 1
-                qi += 1
-            } else {
-                consecutive = 0
-            }
-        }
-
-        guard qi == q.count else { return nil }
-        if t.starts(with: q) {
-            score += 50
-        }
-        return score
-    }
-
-    /// Word-boundary characters considered for the +5 bonus.
-    /// Includes the punctuation a command label might reasonably
-    /// use (`Slate: Save…` future plugin labels, snake_case ids
-    /// scraped from `accessibilityHint`).
-    private nonisolated static let wordBoundary: Set<Character> = [" ", ".", "-", ":", "_"]
 }
 
 /// Outcome of a single `invoke` call. The view branches on this:
@@ -372,22 +220,26 @@ enum InvocationOutcome: Equatable {
     case noSelection
 }
 
-/// One renderable section in the palette. `kind == nil` is the
-/// synthetic "Recent" section; everything else maps 1:1 to a
+/// Display affordances for the core-computed `PaletteSection` record
+/// (`slate_core::palette` via the FFI; W0.5-1 #717). `kind == nil` is
+/// the synthetic "Recent" section; everything else maps 1:1 to a
 /// `CommandSection`.
-struct PaletteSection: Identifiable, Equatable {
-    let title: String
-    let kind: CommandSection?
-    let commands: [Command]
-
+extension PaletteSection: Identifiable {
     /// Stable identifier independent of the display title — a
     /// future plugin section titled "Recent" can't collide with
     /// the synthetic Recent section, and a localisation pass on
     /// `title` (V2 per #264) doesn't change `id`.
-    var id: String {
+    public var id: String {
         if let kind {
             return "kind.\(kind)"
         }
         return "recent"
+    }
+
+    /// Flat command list for rendering. `rows` additionally carry the
+    /// matched label byte ranges for per-platform bolding; the mac view
+    /// doesn't render bolding yet, so it reads the plain commands.
+    var commands: [Command] {
+        rows.map(\.command)
     }
 }

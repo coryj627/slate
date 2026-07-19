@@ -5276,6 +5276,112 @@ impl CommandRegistry {
 }
 
 // ---------------------------------------------------------------------------
+// Command-palette ranking + recents policy (W0.5-1, #717): thin mirrors of
+// `slate_core::palette`. Pure functions over an explicit command snapshot —
+// the palette ranks the list it OPENED with (and host tests inject synthetic
+// snapshots), so these deliberately don't read the live registry.
+
+/// One matched byte range inside a command label, for host-side bolding.
+/// Half-open `[start_byte, end_byte)` over the label's UTF-8 bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct MatchSpan {
+    pub start_byte: u32,
+    pub end_byte: u32,
+}
+
+impl From<core::palette::MatchSpan> for MatchSpan {
+    fn from(s: core::palette::MatchSpan) -> Self {
+        Self {
+            start_byte: s.start_byte,
+            end_byte: s.end_byte,
+        }
+    }
+}
+
+/// One ranked palette row: the command plus the label ranges the query
+/// matched (empty on an empty query or a hint-only match).
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct PaletteRow {
+    pub command: Command,
+    pub label_match_spans: Vec<MatchSpan>,
+}
+
+impl From<core::palette::PaletteRow> for PaletteRow {
+    fn from(r: core::palette::PaletteRow) -> Self {
+        Self {
+            command: r.command.into(),
+            label_match_spans: r.label_match_spans.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// One renderable palette section. `kind == None` is the synthetic Recent
+/// section; the `title` strings are canonical copy both hosts render
+/// verbatim.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct PaletteSection {
+    pub title: String,
+    pub kind: Option<CommandSection>,
+    pub rows: Vec<PaletteRow>,
+}
+
+impl From<core::palette::PaletteSection> for PaletteSection {
+    fn from(s: core::palette::PaletteSection) -> Self {
+        Self {
+            title: s.title,
+            kind: s.kind.map(Into::into),
+            rows: s.rows.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// Rank and group a command snapshot for palette rendering — ranking,
+/// section layout, Recent blending, and within-Sidebar catalog placement
+/// all live core-side (`slate_core::palette::palette_sections`).
+/// `sidebar_pinned_order` is the host's sidebar-catalog id order (data,
+/// not policy); pass an empty list to keep registry order.
+#[uniffi::export]
+pub fn palette_sections(
+    commands: Vec<Command>,
+    query: String,
+    recent_ids: Vec<String>,
+    sidebar_pinned_order: Vec<String>,
+) -> Vec<PaletteSection> {
+    let commands: Vec<core::Command> = commands.into_iter().map(Into::into).collect();
+    core::palette::palette_sections(&commands, &query, &recent_ids, &sidebar_pinned_order)
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+/// Decode a recents file's bytes into the normalized id list (malformed,
+/// oversized, or non-array input → empty; first-seen dedupe; capped).
+/// Hosts own the file path + atomic I/O; core owns the format.
+#[uniffi::export]
+pub fn palette_recents_decode(bytes: Vec<u8>) -> Vec<String> {
+    core::palette::recents_decode(&bytes)
+}
+
+/// Encode a recents id list in the on-disk format (v1: pretty JSON array,
+/// byte-compatible with what the mac store has always written).
+#[uniffi::export]
+pub fn palette_recents_encode(ids: Vec<String>) -> Vec<u8> {
+    core::palette::recents_encode(&ids)
+}
+
+/// LRU add: moves `id` to the front, dedupes, caps.
+#[uniffi::export]
+pub fn palette_recents_add(ids: Vec<String>, id: String) -> Vec<String> {
+    core::palette::recents_add(&ids, &id)
+}
+
+/// Remove every occurrence of `id` (no-op when absent).
+#[uniffi::export]
+pub fn palette_recents_remove(ids: Vec<String>, id: String) -> Vec<String> {
+    core::palette::recents_remove(&ids, &id)
+}
+
+// ---------------------------------------------------------------------------
 // Bases (Milestone N, #699): 1:1 mirrors of the handle-based session API.
 // No logic here -- every method delegates to core and converts shapes.
 
@@ -8291,6 +8397,53 @@ mod tests {
         let second = reg.register(cmd, Arc::new(NoOp));
         assert!(!first, "first registration is not a replacement");
         assert!(second, "second registration must signal replacement");
+    }
+
+    #[test]
+    fn palette_sections_ranks_and_blends_through_ffi_shapes() {
+        let commands = vec![
+            Command {
+                id: "test.save".into(),
+                label: "Save".into(),
+                accessibility_hint: None,
+                hotkey_hint: None,
+                section: CommandSection::File,
+            },
+            Command {
+                id: "test.scatter".into(),
+                label: "Slate Add Various Everythings".into(),
+                accessibility_hint: None,
+                hotkey_hint: None,
+                section: CommandSection::File,
+            },
+        ];
+
+        // Ranked: prefix match first, label spans carried for bolding.
+        let ranked = palette_sections(commands.clone(), "save".into(), vec![], vec![]);
+        assert_eq!(ranked.len(), 1);
+        assert_eq!(ranked[0].kind, Some(CommandSection::File));
+        assert_eq!(ranked[0].rows[0].command.id, "test.save");
+        assert_eq!(
+            ranked[0].rows[0].label_match_spans,
+            vec![MatchSpan {
+                start_byte: 0,
+                end_byte: 4
+            }]
+        );
+
+        // Empty query: Recent section synthesized, shown ids excluded
+        // from their native section.
+        let recents = palette_recents_add(vec![], "test.save".into());
+        let sections = palette_sections(commands, String::new(), recents, vec![]);
+        assert_eq!(sections[0].title, "Recent");
+        assert_eq!(sections[0].kind, None);
+        assert_eq!(sections[0].rows[0].command.id, "test.save");
+        assert_eq!(sections[1].rows[0].command.id, "test.scatter");
+
+        // Recents byte format round-trips through the FFI mirrors.
+        let bytes = palette_recents_encode(vec!["a".into(), "b".into()]);
+        assert_eq!(palette_recents_decode(bytes), vec!["a", "b"]);
+        assert!(palette_recents_remove(vec!["a".into(), "b".into()], "a".into()) == vec!["b"]);
     }
 
     #[test]

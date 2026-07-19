@@ -12,10 +12,12 @@ import Foundation
 /// are the domain (vault files, not commands) and the ranking
 /// (recency-weighted rather than section-grouped).
 ///
-/// Scoring **reuses** `CommandPaletteModel.fuzzyScore` — the
-/// subsequence-with-boost algorithm is single-source there and must
-/// not be duplicated. This model only adds the name-over-path bias and
-/// the recency ordering on top of it.
+/// Scoring uses an **interim copy** of the subsequence-with-boost
+/// matcher (see `fuzzyScore` below): the reference implementation moved
+/// to `slate_core::palette::fuzzy_score` with W0.5-1 (#717), and the
+/// switcher's own core migration is W0.5-2 (#718) — which also decides
+/// whether palette + switcher share one ranking engine. This model adds
+/// the name-over-path bias and the recency ordering on top.
 @MainActor
 final class QuickSwitcherModel: ObservableObject {
 
@@ -186,17 +188,17 @@ final class QuickSwitcherModel: ObservableObject {
     /// Score a file for `query`, biased toward name matches. Returns
     /// `nil` when neither the name nor the path subsequence-matches.
     ///
-    /// Reuses `CommandPaletteModel.fuzzyScore` (the shared matcher) on
-    /// three targets — the extension-stripped name, the full name, and
-    /// the full path — and takes the max. When a NAME target (either
-    /// form) matched, `nameMatchBonus` is added so a name hit outranks
-    /// a same-strength path-only hit. Path-only matches (`dir/foo`)
-    /// still score, just below an equivalent name hit.
+    /// Uses the interim `fuzzyScore` copy below on three targets — the
+    /// extension-stripped name, the full name, and the full path — and
+    /// takes the max. When a NAME target (either form) matched,
+    /// `nameMatchBonus` is added so a name hit outranks a same-strength
+    /// path-only hit. Path-only matches (`dir/foo`) still score, just
+    /// below an equivalent name hit.
     nonisolated static func score(query: String, row: FileRow) -> Int? {
         let nameScores = [row.displayName, row.name].compactMap {
-            CommandPaletteModel.fuzzyScore(query: query, target: $0)
+            Self.fuzzyScore(query: query, target: $0)
         }
-        let pathScore = CommandPaletteModel.fuzzyScore(query: query, target: row.path)
+        let pathScore = Self.fuzzyScore(query: query, target: row.path)
 
         let bestName = nameScores.max()
         let candidates: [Int] = [
@@ -205,6 +207,50 @@ final class QuickSwitcherModel: ObservableObject {
         ].compactMap { $0 }
         return candidates.max()
     }
+
+    /// **Interim copy** of the palette's subsequence-with-boost matcher,
+    /// pending W0.5-2 (#718). The reference implementation now lives in
+    /// `slate_core::palette::fuzzy_score` (W0.5-1 #717 moved the palette
+    /// onto it and deleted the Swift original); the switcher keeps this
+    /// verbatim copy so its ranking is bit-identical until its own
+    /// core migration decides the one-engine question. Do NOT add call
+    /// sites — new consumers use the FFI.
+    nonisolated static func fuzzyScore(query: String, target: String) -> Int? {
+        let q = Array(query.lowercased())
+        let t = Array(target.lowercased())
+        guard !q.isEmpty else { return 0 }
+
+        var qi = 0
+        var consecutive = 0
+        var score = 0
+
+        for (ti, ch) in t.enumerated() {
+            guard qi < q.count else { break }
+            if ch == q[qi] {
+                score += 10
+                let prev = ti > 0 ? t[ti - 1] : Character(" ")
+                if ti == 0 || Self.wordBoundary.contains(prev) {
+                    score += 5
+                }
+                if consecutive > 0 {
+                    score += 3
+                }
+                consecutive += 1
+                qi += 1
+            } else {
+                consecutive = 0
+            }
+        }
+
+        guard qi == q.count else { return nil }
+        if t.starts(with: q) {
+            score += 50
+        }
+        return score
+    }
+
+    /// Word-boundary characters for the interim matcher's +5 bonus.
+    private nonisolated static let wordBoundary: Set<Character> = [" ", ".", "-", ":", "_"]
 
     // MARK: - Selection navigation
 
