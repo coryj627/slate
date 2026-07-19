@@ -6828,7 +6828,7 @@ struct FileTreeSidebar: View {
 ///   local text isn't a `@Published` on AppState mutated during a view update
 ///   (#448 discipline) — the commit is the only mutation point that reaches
 ///   AppState.
-private struct RenameField: View {
+struct RenameField: View {
     let initialName: String
     let isDirectory: Bool
     /// The last commit error (collision / invalid name), if any — drives the

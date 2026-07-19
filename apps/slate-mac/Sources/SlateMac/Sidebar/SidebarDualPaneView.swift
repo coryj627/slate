@@ -306,8 +306,40 @@ struct SidebarDualPaneView: View {
         appState.announceSidebarPaneTransition("Files")
       }
     }
-    .onChange(of: appState.lastMutationAnnouncement) { _, _ in
+    // Review round (high): the selection handler lives on the SHARED
+    // pane — both the container list and the filter-results list bind
+    // the same selection, so filtered rows acquire snapshot ownership
+    // and open exactly like container rows.
+    .onChange(of: appState.sidebarDualPaneMultiSelection) { _, selection in
+      // Rule 5: single selection keeps the open-on-select behavior;
+      // a batch is a TARGET, not an open storm.
+      appState.sidebarDualPaneListSelection =
+        selection.count == 1 ? selection.first : nil
+      appState.publishDualPaneSelectionSnapshot()
+      // The already-open guard breaks the mirror echo: the editor→pane
+      // mirror selects the opened file's row, which must not dispatch
+      // a second open of the same note.
+      if selection.count == 1, let path = selection.first,
+        appState.selectedFilePath != path
+      {
+        appState.openFile(path, target: .currentTab)
+      }
+    }
+    // Review round (medium): value-typed event sources, not
+    // announcement copy — two mutations announcing identical text
+    // ("Pinned.") must both refresh. treeMutation tokens every
+    // structural transform; sidebarOrganization changes on every
+    // pin/sort/group/override edit.
+    .onChange(of: appState.treeMutation) { _, _ in
       listModel.refreshAfterStructuralMutation()
+    }
+    .onChange(of: appState.sidebarOrganization) { _, _ in
+      listModel.refreshAfterStructuralMutation()
+    }
+    // Review round (high): once a drain settles, selections must be a
+    // subset of the visible rows — republished if pruned.
+    .onChange(of: listModel.rows) { _, _ in
+      appState.reconcileDualPaneSelectionWithVisibleRows()
     }
   }
 
@@ -421,16 +453,6 @@ struct SidebarDualPaneView: View {
         navigationFocused = true
       }
     }
-    .onChange(of: appState.sidebarDualPaneMultiSelection) { _, selection in
-      // Rule 5: single selection keeps the open-on-select behavior;
-      // a batch is a TARGET, not an open storm.
-      appState.sidebarDualPaneListSelection =
-        selection.count == 1 ? selection.first : nil
-      appState.publishDualPaneSelectionSnapshot()
-      if selection.count == 1, let path = selection.first {
-        appState.openFile(path, target: .currentTab)
-      }
-    }
   }
 
   private var filterResults: some View {
@@ -470,6 +492,31 @@ struct SidebarDualPaneView: View {
 
   @ViewBuilder
   private func fileRow(_ summary: FileSummary) -> some View {
+    // Review round (medium): the shared menu exposes Rename, so this
+    // row must render the SAME visible editor the tree row swaps to —
+    // otherwise the rename owner strands invisibly (the FL-09 overlay
+    // lesson, dual-pane edition). New Note's inline-rename handoff
+    // rides the same mount.
+    if let rename = appState.renamingNode, rename.path == summary.path,
+      !rename.isDirectory
+    {
+      RenameField(
+        initialName: rename.name,
+        isDirectory: false,
+        error: appState.structuralRenameError,
+        onCommit: { newName in
+          appState.commitPendingRename(id: rename.id, to: newName)
+        },
+        onCancel: {
+          appState.cancelPendingRename(id: rename.id)
+        })
+    } else {
+      plainFileRow(summary)
+    }
+  }
+
+  @ViewBuilder
+  private func plainFileRow(_ summary: FileSummary) -> some View {
     let parent = (summary.path as NSString).deletingLastPathComponent
     let base = appState.sidebarPreferences.rowSnapshot
     let row = SidebarFileRow(

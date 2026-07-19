@@ -99,13 +99,27 @@ final class SidebarListPaneModel: ObservableObject {
     return snapshot
   }
 
-  /// Select (or clear) the container: cancels any stale drain, then
-  /// drains the scope to completion off the main actor and organizes
-  /// wholesale (VO stability — one replacement per settle).
+  /// Select (or clear) the container: supersedes any pending drain,
+  /// then drains the scope to completion as an awaitable main-actor
+  /// task — the filter model's pattern — and organizes wholesale (VO
+  /// stability — one replacement per settle). The drain yields between
+  /// pages (review round), so a superseding `show` cancels it
+  /// MID-drain — not just before it starts — and the main actor stays
+  /// responsive while large scopes page; any stale result that still
+  /// completes is dropped by the generation guard.
   func show(_ container: SidebarContainer?) {
     generation += 1
     let myGeneration = generation
     drainTaskForTesting?.cancel()
+    // Review round (high): a CONTAINER SWITCH clears the published
+    // content immediately — the old container's rows must never render
+    // under the new header while the drain runs. A same-container
+    // refresh keeps the wholesale-on-settle replacement (no flicker).
+    if container != self.container {
+      rows = []
+      fileCount = 0
+      truncated = false
+    }
     self.container = container
     guard let container, let dependencies else {
       rows = []
@@ -121,7 +135,7 @@ final class SidebarListPaneModel: ObservableObject {
     drainTaskForTesting = Task { [weak self] in
       let outcome: Result<(files: [FileSummary], truncated: Bool), Error>
       do {
-        let drained = try Self.drain(
+        let drained = try await Self.drain(
           container, descendants: descendants, dependencies: dependencies)
         outcome = .success(drained)
       } catch {
@@ -180,7 +194,7 @@ final class SidebarListPaneModel: ObservableObject {
     _ container: SidebarContainer,
     descendants: Bool,
     dependencies: Dependencies
-  ) throws -> (files: [FileSummary], truncated: Bool) {
+  ) async throws -> (files: [FileSummary], truncated: Bool) {
     var files: [FileSummary] = []
     var cursor: String?
     while files.count < drainCap {
@@ -205,6 +219,10 @@ final class SidebarListPaneModel: ObservableObject {
         return (files, false)
       }
       cursor = nextCursor
+      // The yield is what makes cancellation land MID-drain: a
+      // superseding show() runs during it, and checkCancellation
+      // throws before the next page is requested.
+      await Task.yield()
       try Task.checkCancellation()
     }
     return (files, true)
@@ -307,7 +325,13 @@ struct SidebarListPaneDisplayMenu: View {
   /// exactly the FL-06 dispatch semantics.
   @ViewBuilder
   private var sortAndGroupSection: some View {
-    let evaluations = appState.sidebarActionProjection(surface: .contextMenu)
+    // Review round (medium): Sort/Grouping act on the CONTAINER this
+    // menu is labeled with — never the ambient row snapshot, which may
+    // be a selected file (whose parent would silently take the
+    // override) or a batch (which would drop the controls).
+    let evaluations = appState.sidebarActionProjection(
+        surface: .contextMenu,
+        snapshot: appState.sidebarContainerActionSnapshot(for: container))
     let sortIDs = [
       SlateCommandID.sidebarSortNameAsc, SlateCommandID.sidebarSortNameDesc,
       SlateCommandID.sidebarSortCreatedDesc,

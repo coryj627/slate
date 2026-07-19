@@ -242,6 +242,107 @@ final class SidebarListPaneTests: XCTestCase {
         XCTAssertFalse(model.isLoading)
     }
 
+    func testContainerSwitchClearsRowsBeforeTheDrainSettles() async {
+        // Review round (high): stale rows must never render under the
+        // new container's header — the switch clears immediately.
+        let model = syntheticModel { _ in
+            ([self.summary("f/one.md")], nil)
+        }
+        model.show(.folder(path: "f"))
+        await model.drainTaskForTesting?.value
+        XCTAssertEqual(model.fileCount, 1)
+
+        model.show(.folder(path: "g"))
+        XCTAssertTrue(
+            model.fileSummaries.isEmpty,
+            "the old container's rows are gone BEFORE the new drain lands")
+        XCTAssertEqual(model.fileCount, 0)
+        XCTAssertFalse(model.truncated)
+        await model.drainTaskForTesting?.value
+        XCTAssertEqual(model.fileCount, 1)
+    }
+
+    func testSupersessionCancelsAStartedDrainMidFlight() async {
+        // Review round (medium): the per-page yield makes cancellation
+        // land MID-drain — a superseded endless drain must stop paging,
+        // not run to the 10k cap.
+        var pagesServed = 0
+        let model = syntheticModel { index in
+            pagesServed += 1
+            let files = (0..<500).map {
+                self.summary(String(format: "f/%d-%03d.md", index, $0))
+            }
+            return (files, String(index + 1))
+        }
+        model.show(.folder(path: "f"))
+        let started = model.drainTaskForTesting
+        await Task.yield()
+        model.show(nil)
+        await started?.value
+        XCTAssertLessThan(
+            pagesServed, 20,
+            "cancellation landed mid-drain, not after the full cap walk")
+        XCTAssertTrue(model.fileSummaries.isEmpty)
+        XCTAssertNil(model.container)
+    }
+
+    func testReconcilePrunesSelectionsToVisibleRows() async throws {
+        // Review round (high): after a refresh, selections must be a
+        // subset of the visible rows — pruned and republished.
+        let state = try openVault(
+            named: "reconcile", files: ["P/a.md": "# a", "P/b.md": "# b"])
+        state.setSidebarLayoutForInternalTesting(.dualPane)
+        state.sidebarSelectedContainer = .folder(path: "P")
+        _ = await shown(state, .folder(path: "P"))
+
+        state.sidebarDualPaneMultiSelection = ["P/a.md", "P/ghost.md"]
+        state.sidebarDualPaneListSelection = "P/ghost.md"
+        state.reconcileDualPaneSelectionWithVisibleRows()
+        XCTAssertEqual(state.sidebarDualPaneMultiSelection, ["P/a.md"])
+        XCTAssertNil(state.sidebarDualPaneListSelection)
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.map(\.path), ["P/a.md"],
+            "the republished snapshot matches the pruned selection")
+
+        state.sidebarDualPaneMultiSelection = ["P/gone.md"]
+        state.reconcileDualPaneSelectionWithVisibleRows()
+        XCTAssertTrue(state.sidebarDualPaneMultiSelection.isEmpty)
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.map(\.path), ["P"],
+            "a fully pruned selection falls back to the container target")
+    }
+
+    func testIdenticalAnnouncementCopyStillChangesOrganizationState() throws {
+        // Review round (medium): the refresh trigger is the VALUE of
+        // sidebarOrganization, never announcement copy — two pins with
+        // identical "Pinned." text must produce two distinct states.
+        let state = try openVault(
+            named: "org-token", files: ["P/a.md": "# a", "P/b.md": "# b"])
+        func pin(_ path: String) throws {
+            _ = state.publishSidebarSelectionSnapshot(
+                SidebarSelectionSnapshot(
+                    sessionIdentity: ObjectIdentifier(
+                        try XCTUnwrap(state.currentSession)),
+                    items: [
+                        SidebarSelectionItem(
+                            path: path, isDirectory: false, isMarkdown: true)
+                    ],
+                    focusedPath: path, creationParent: "P"))
+            _ = try state.dispatchSidebarAction(
+                id: SlateCommandID.sidebarPinNote)
+        }
+        try pin("P/a.md")
+        let afterFirst = state.sidebarOrganization
+        let firstCopy = state.lastMutationAnnouncement
+        try pin("P/b.md")
+        XCTAssertEqual(
+            state.lastMutationAnnouncement, firstCopy,
+            "identical copy is exactly the case the old trigger missed")
+        XCTAssertNotEqual(
+            state.sidebarOrganization, afterFirst,
+            "the Equatable state the view observes changed anyway")
+    }
+
     // MARK: - Organize projection (rule 3)
 
     func testPinnedNotesLeadWithAHeaderRow() async throws {
@@ -360,6 +461,29 @@ final class SidebarListPaneTests: XCTestCase {
         XCTAssertEqual(
             decoded.prefs.effectivePreviewLines(forFolder: "P", default: 1), 3)
         XCTAssertTrue(decoded.prefs.includesDescendants(forFolder: "P"))
+    }
+
+    func testActiveFilterOrdersBatchSnapshotByResultRows() async throws {
+        // Review round (high): filtered rows acquire snapshot
+        // ownership — the batch orders by the FILTER page while a
+        // committed filter owns the pane.
+        let state = try openVault(
+            named: "filter-order",
+            files: ["P/aa.md": "# aa", "P/ab.md": "# ab", "P/zz.md": "# z"])
+        state.setSidebarLayoutForInternalTesting(.dualPane)
+        state.sidebarFilterModel.fieldText = "a"
+        state.sidebarFilterModel.commitNow()
+        XCTAssertTrue(state.sidebarFilterModel.isActive)
+        XCTAssertEqual(
+            state.sidebarFilterModel.results?.files.map(\.path),
+            ["P/aa.md", "P/ab.md"])
+
+        state.sidebarDualPaneMultiSelection = ["P/ab.md", "P/aa.md"]
+        state.publishDualPaneSelectionSnapshot()
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.map(\.path),
+            ["P/aa.md", "P/ab.md"],
+            "batch order follows the visible FILTER rows")
     }
 
     // MARK: - Multi-select batch snapshot (rule 5)

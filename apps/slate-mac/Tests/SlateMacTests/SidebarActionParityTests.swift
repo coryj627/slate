@@ -98,18 +98,22 @@ final class SidebarActionParityTests: XCTestCase {
                     path: "P/b.md", isDirectory: false, isMarkdown: true),
             ],
         ] {
-            try publish(
-                state, items, focusedPath: items.first?.path,
+            let snapshot = SidebarSelectionSnapshot(
+                sessionIdentity: ObjectIdentifier(
+                    try XCTUnwrap(state.currentSession)),
+                items: items, focusedPath: items.first?.path,
                 creationParent: "P")
             state.setSidebarLayout(.tree)
-            let tree = state.sidebarActionProjection(surface: .contextMenu)
+            let tree = state.sidebarActionProjection(
+                surface: .contextMenu, snapshot: snapshot)
             state.setSidebarLayout(.dualPane)
-            let dual = state.sidebarActionProjection(surface: .contextMenu)
+            let dual = state.sidebarActionProjection(
+                surface: .contextMenu, snapshot: snapshot)
             XCTAssertEqual(
                 tree, dual,
-                "the projection is selection-driven; the layout gate must "
-                    + "never add, remove, or re-reason an action "
-                    + "(items: \(items.map(\.path)))")
+                "projecting a GIVEN snapshot is layout-independent "
+                    + "(items: \(items.map(\.path))); the transition's "
+                    + "ownership handoff is covered separately")
         }
     }
 
@@ -124,21 +128,23 @@ final class SidebarActionParityTests: XCTestCase {
                 "\(id) must be a catalog action — no second command dialect")
         }
 
-        // A selected folder container (the list-pane header's context).
-        // "Use Vault Default Sort" only projects once the folder HAS a
-        // sort override to clear (FL-06 availability), so set one first.
-        try publish(
-            state,
-            [SidebarSelectionItem(
-                path: "P", isDirectory: true, isMarkdown: false)],
-            focusedPath: "P", creationParent: "P")
-        _ = try state.dispatchSidebarAction(
-            id: SlateCommandID.sidebarSortNameDesc)
+        // The menu projects against its CONTAINER snapshot (review
+        // round). "Use Vault Default Sort" only projects once the
+        // folder HAS a sort override to clear (FL-06 availability), so
+        // set one through the same container-scoped intent first.
+        let containerSnapshot = try XCTUnwrap(
+            state.sidebarContainerActionSnapshot(for: .folder(path: "P")))
+        let sortDesc = try XCTUnwrap(
+            state.sidebarActionProjection(
+                surface: .contextMenu, snapshot: containerSnapshot
+            ).first { $0.id == SlateCommandID.sidebarSortNameDesc })
+        _ = try state.dispatchSidebarAction(try XCTUnwrap(sortDesc.intent))
         for layout in [SidebarLayoutMode.tree, .dualPane] {
             state.setSidebarLayout(layout)
             let projected = Set(
-                state.sidebarActionProjection(surface: .contextMenu)
-                    .map(\.id))
+                state.sidebarActionProjection(
+                    surface: .contextMenu, snapshot: containerSnapshot
+                ).map(\.id))
             for id in displayMenuSortIDs {
                 XCTAssertTrue(
                     projected.contains(id),
@@ -146,6 +152,81 @@ final class SidebarActionParityTests: XCTestCase {
                         + "the display menu would drift from the tree")
             }
         }
+    }
+
+    func testDisplayMenuTargetsTheContainerNotTheAmbientRow() throws {
+        // Review round (medium): with a file row owning the ambient
+        // snapshot, the display menu's Sort must override the shown
+        // CONTAINER's folder — never the ambient row's parent.
+        let state = try openVault(
+            named: "container-target", files: ["P/a.md", "Q/b.md"])
+        try publish(
+            state,
+            [SidebarSelectionItem(
+                path: "Q/b.md", isDirectory: false, isMarkdown: true)],
+            focusedPath: "Q/b.md", creationParent: "Q")
+
+        let snapshot = try XCTUnwrap(
+            state.sidebarContainerActionSnapshot(for: .folder(path: "P")))
+        let evaluations = state.sidebarActionProjection(
+            surface: .contextMenu, snapshot: snapshot)
+        let sort = try XCTUnwrap(
+            evaluations.first {
+                $0.id == SlateCommandID.sidebarSortNameDesc
+            })
+        _ = try state.dispatchSidebarAction(try XCTUnwrap(sort.intent))
+        XCTAssertNotNil(
+            state.sidebarOrganization.prefs.folderOverrides["P"]?.sort,
+            "the override lands on the container the menu is labeled with")
+        XCTAssertNil(
+            state.sidebarOrganization.prefs.folderOverrides["Q"]?.sort,
+            "the ambient row's folder is untouched")
+
+        // Tag/Untagged containers organize at the vault level.
+        let vaultScope = try XCTUnwrap(
+            state.sidebarContainerActionSnapshot(for: .untagged))
+        XCTAssertTrue(vaultScope.items.isEmpty)
+    }
+
+    func testDualPaneSourceMountsRenameEditorAndSharedSelectionHandler()
+        throws
+    {
+        // Review round (mediums): Rename must not be a dead verb — the
+        // pane renders the SAME RenameField the tree uses — and the
+        // selection handler must sit on the shared pane so filter
+        // results acquire ownership too. Value-typed refresh triggers
+        // replace announcement copy.
+        let source = try Self.dualPaneSource()
+        XCTAssertTrue(
+            source.contains("RenameField("),
+            "dual-pane rows render the shared rename editor")
+        XCTAssertTrue(source.contains("appState.commitPendingRename"))
+        XCTAssertEqual(
+            source.components(
+                separatedBy: "onChange(of: appState.sidebarDualPaneMultiSelection)"
+            ).count - 1,
+            1,
+            "ONE shared selection handler covers container and filter lists")
+        XCTAssertFalse(
+            source.contains("onChange(of: appState.lastMutationAnnouncement)"),
+            "refresh triggers are value-typed, never announcement copy")
+        XCTAssertTrue(source.contains("onChange(of: appState.treeMutation)"))
+        XCTAssertTrue(
+            source.contains("onChange(of: appState.sidebarOrganization)"))
+    }
+
+    private static func dualPaneSource() throws -> String {
+        var cursor = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+        for _ in 0..<8 {
+            let candidate = cursor.appendingPathComponent(
+                "Sources/SlateMac/Sidebar/SidebarDualPaneView.swift")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+            cursor = cursor.deletingLastPathComponent()
+        }
+        throw XCTSkip("SidebarDualPaneView.swift not found")
     }
 
     func testLayoutToggleProjectsOnEverySelectionShape() throws {

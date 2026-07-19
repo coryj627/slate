@@ -2534,11 +2534,39 @@ final class AppState: ObservableObject {
     /// One synchronous, side-effect-free projection feeds every Sidebar
     /// action surface. The catalog owns capability and ordering; AppState adds
     /// only current state that the pure catalog cannot own.
+    /// Pass `snapshot:` to project against an explicit target instead
+    /// of the ambient published selection (review round: the dual-pane
+    /// display menu organizes its CONTAINER, not whichever row happens
+    /// to own the ambient snapshot). Disabled-reason overlays still
+    /// come from live state either way.
     func sidebarActionProjection(
-        surface: SidebarActionSurface
+        surface: SidebarActionSurface,
+        snapshot explicitSnapshot: SidebarSelectionSnapshot? = nil
     ) -> [SidebarActionEvaluation] {
-        let capturedSnapshot = sidebarSelectionSnapshot
+        let capturedSnapshot = explicitSnapshot ?? sidebarSelectionSnapshot
         var actionDisabledReasons = sidebarActionDisabledReasons
+        if let explicitSnapshot {
+            // The organization overlay in the base dict was derived
+            // from the AMBIENT selection; swap in the overlay for the
+            // explicit target. Only the ambient-org contribution is
+            // dropped — availability-provider reasons (which won their
+            // merge) survive untouched.
+            let ambientTarget = sidebarSelectionSnapshot.flatMap {
+                $0.items.count == 1 ? $0.items.first : nil
+            }
+            let ambientOrg = sidebarOrganizationActionReasons(
+                target: ambientTarget)
+            for (id, reason) in ambientOrg
+            where actionDisabledReasons[id] == reason {
+                actionDisabledReasons[id] = nil
+            }
+            let explicitTarget =
+                explicitSnapshot.items.count == 1
+                ? explicitSnapshot.items.first : nil
+            actionDisabledReasons.merge(
+                sidebarOrganizationActionReasons(target: explicitTarget)
+            ) { existing, _ in existing }
+        }
         if let propertyEditNavigationDisabledReason {
             actionDisabledReasons[SlateCommandID.sidebarOpen] =
                 propertyEditNavigationDisabledReason
@@ -6137,6 +6165,22 @@ final class AppState: ObservableObject {
         sidebarLayout = layout
         sidebarSectionDefaults.set(
             layout.rawValue, forKey: Self.sidebarLayoutKey)
+        // Review round (high): the snapshot must never stay owned by
+        // the pane that just unmounted. Leaving dual-pane empties the
+        // dual-pane target (the tree republishes on its next
+        // selection); entering it republishes the pane's own state.
+        if layout == .tree {
+            sidebarDualPaneMultiSelection = []
+            sidebarDualPaneListSelection = nil
+            if let session = currentSession {
+                _ = publishSidebarSelectionSnapshot(
+                    SidebarSelectionSnapshot(
+                        sessionIdentity: ObjectIdentifier(session),
+                        items: [], focusedPath: nil, creationParent: ""))
+            }
+        } else {
+            publishDualPaneSelectionSnapshot()
+        }
     }
 
     /// FL-13-era test entry point; forwards to the public mutator.
@@ -6147,7 +6191,16 @@ final class AppState: ObservableObject {
     /// FL7-1 rule 3: the dual-pane navigation selection — the container
     /// whose contents the list pane shows. nil until the user selects
     /// one (the list pane renders its quiet empty state).
-    @Published var sidebarSelectedContainer: SidebarContainer?
+    /// Review round (high): switching containers clears BOTH pane
+    /// selections here at the owner — the follow-up snapshot publish
+    /// must target the new container, never rows of the old one.
+    @Published var sidebarSelectedContainer: SidebarContainer? {
+        didSet {
+            guard oldValue != sidebarSelectedContainer else { return }
+            sidebarDualPaneMultiSelection = []
+            sidebarDualPaneListSelection = nil
+        }
+    }
 
     /// The list pane's content model — bound with the filter model on
     /// vault open, reset with it on teardown. FL7-2 replaces FL-13's
@@ -6170,6 +6223,33 @@ final class AppState: ObservableObject {
     /// it (review round: view-local selection died on re-mount and
     /// never owned the snapshot).
     @Published var sidebarDualPaneListSelection: String?
+
+    /// The synthetic selection a dual-pane container stands for on the
+    /// display menu: a folder container is a single-folder target; tag
+    /// and Untagged containers organize at the vault level (empty
+    /// selection — the FL-06 zero-item convention).
+    func sidebarContainerActionSnapshot(
+        for container: SidebarContainer?
+    ) -> SidebarSelectionSnapshot? {
+        guard let session = currentSession else { return nil }
+        let items: [SidebarSelectionItem]
+        var focused: String?
+        var creationParent = ""
+        if case .folder(let path) = container, !path.isEmpty {
+            items = [
+                SidebarSelectionItem(
+                    path: path, isDirectory: true, isMarkdown: false)
+            ]
+            focused = path
+            creationParent = path
+        } else {
+            items = []
+        }
+        return SidebarSelectionSnapshot(
+            sessionIdentity: ObjectIdentifier(session),
+            items: items, focusedPath: focused,
+            creationParent: creationParent)
+    }
 
     /// FL7-2: the organization context the list pane's client-side
     /// projection consumes — the same prefs/pins the tree reads.
@@ -6196,10 +6276,19 @@ final class AppState: ObservableObject {
         let items: [SidebarSelectionItem]
         var focused: String?
         var creationParent = ""
-        if !sidebarDualPaneMultiSelection.isEmpty {
+        if sidebarDualPaneMultiSelection.count > 1 {
             // FL7-2 rule 5: pane multi-selection is the batch target,
-            // ordered by the visible rows.
-            let ordered = sidebarListPaneModel.fileSummaries.filter {
+            // ordered by the visible rows — the filter page while a
+            // committed filter owns the pane (review round: filtered
+            // rows must acquire ownership too), else container rows.
+            // Only true batches order this way; a lone selection takes
+            // the summary-lookup path below, which stays honest even
+            // before a drain settles (the mirror publishes mid-drain).
+            let visible: [FileSummary] =
+                sidebarFilterModel.isActive
+                ? (sidebarFilterModel.results?.files ?? [])
+                : sidebarListPaneModel.fileSummaries
+            let ordered = visible.filter {
                 sidebarDualPaneMultiSelection.contains($0.path)
             }
             items = ordered.map {
@@ -6212,7 +6301,9 @@ final class AppState: ObservableObject {
                 (focused.map { ($0 as NSString).deletingLastPathComponent }
                     ?? "")
             creationParent = parent == "." ? "" : parent
-        } else if let path = sidebarDualPaneListSelection {
+        } else if let path = sidebarDualPaneListSelection
+            ?? sidebarDualPaneMultiSelection.first
+        {
             let summary =
                 sidebarListPaneModel.summary(at: path)
                 ?? sidebarFilterModel.results?.files.first { $0.path == path }
@@ -6244,6 +6335,29 @@ final class AppState: ObservableObject {
                 creationParent: creationParent))
     }
 
+    /// Review round (high): after a drain settles (or the filter page
+    /// replaces), the selections must be a subset of the VISIBLE rows —
+    /// a structural refresh that dropped a selected file would leave
+    /// the snapshot targeting content that is no longer shown.
+    func reconcileDualPaneSelectionWithVisibleRows() {
+        guard sidebarLayout == .dualPane else { return }
+        let visible: Set<String> = Set(
+            (sidebarFilterModel.isActive
+                ? (sidebarFilterModel.results?.files ?? [])
+                : sidebarListPaneModel.fileSummaries
+            ).map(\.path))
+        let prunedMulti = sidebarDualPaneMultiSelection.intersection(visible)
+        let prunedSingle = sidebarDualPaneListSelection.flatMap {
+            visible.contains($0) ? $0 : nil
+        }
+        guard prunedMulti != sidebarDualPaneMultiSelection
+            || prunedSingle != sidebarDualPaneListSelection
+        else { return }
+        sidebarDualPaneMultiSelection = prunedMulti
+        sidebarDualPaneListSelection = prunedSingle
+        publishDualPaneSelectionSnapshot()
+    }
+
     /// FL7-1 rule 3: the editor→sidebar mirror. Any file becoming the
     /// active editor file (Recents, file shortcuts, search, quick
     /// open) selects its CONTAINING folder container and its list row.
@@ -6258,6 +6372,10 @@ final class AppState: ObservableObject {
                 sidebarListPaneModel.show(container)
             }
         }
+        // The mirrored row IS the pane selection (single-element set),
+        // so the row highlights and the shared selection handler sees
+        // a value consistent with the published snapshot.
+        sidebarDualPaneMultiSelection = [path]
         sidebarDualPaneListSelection = path
         publishDualPaneSelectionSnapshot()
     }

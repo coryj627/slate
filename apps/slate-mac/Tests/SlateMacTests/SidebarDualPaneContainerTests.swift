@@ -364,6 +364,61 @@ final class SidebarDualPaneContainerTests: XCTestCase {
             state.sidebarSelectionSnapshot?.items.map(\.path), ["P/note.md"])
     }
 
+    func testContainerSwitchClearsPaneSelectionsBeforePublish() throws {
+        // Review round (high): switching containers must clear both
+        // pane selections at the owner — the follow-up publish targets
+        // the NEW container, never rows of the old one.
+        let state = makeState()
+        try openVault(
+            state, named: "switch-clear", files: ["P/a.md", "Q/b.md"])
+        state.setSidebarLayoutForInternalTesting(.dualPane)
+        state.sidebarSelectedContainer = .folder(path: "P")
+        state.sidebarDualPaneMultiSelection = ["P/a.md"]
+        state.sidebarDualPaneListSelection = "P/a.md"
+
+        state.sidebarSelectedContainer = .folder(path: "Q")
+        XCTAssertTrue(state.sidebarDualPaneMultiSelection.isEmpty)
+        XCTAssertNil(state.sidebarDualPaneListSelection)
+        state.publishDualPaneSelectionSnapshot()
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.map(\.path), ["Q"],
+            "the snapshot follows the new container, not the old rows")
+    }
+
+    func testLeavingDualPaneReleasesSnapshotOwnership() async throws {
+        // Review round (high): a dual-pane batch must not stay the
+        // action target after the pane unmounts — leaving the layout
+        // empties the snapshot until the tree republishes.
+        let state = makeState()
+        try openVault(
+            state, named: "layout-handoff", files: ["P/a.md", "P/b.md"])
+        state.setSidebarLayoutForInternalTesting(.dualPane)
+        state.sidebarSelectedContainer = .folder(path: "P")
+        state.sidebarListPaneModel.show(.folder(path: "P"))
+        await state.sidebarListPaneModel.drainTaskForTesting?.value
+        state.sidebarDualPaneMultiSelection = ["P/a.md", "P/b.md"]
+        state.publishDualPaneSelectionSnapshot()
+        XCTAssertEqual(state.sidebarSelectionSnapshot?.items.count, 2)
+
+        state.setSidebarLayout(.tree)
+        XCTAssertTrue(state.sidebarDualPaneMultiSelection.isEmpty)
+        XCTAssertNil(state.sidebarDualPaneListSelection)
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.isEmpty, true,
+            "the unmounted pane's batch cannot remain the action target")
+    }
+
+    func testMirrorOwnsThePaneSelectionAsASingleElementSet() async throws {
+        let state = makeState()
+        try openVault(state, named: "mirror-set", files: ["P/note.md"])
+        state.setSidebarLayoutForInternalTesting(.dualPane)
+        state.mirrorOpenedFileIntoDualPane("P/note.md")
+        XCTAssertEqual(
+            state.sidebarDualPaneMultiSelection, ["P/note.md"],
+            "the mirrored row IS the pane selection")
+        XCTAssertEqual(state.sidebarDualPaneListSelection, "P/note.md")
+    }
+
     func testDividerDragMathIsAnchorBasedNotCumulative() {
         // Review round: translation is cumulative from gesture start —
         // three callbacks of 10/20/30pt must land at anchor+30pt, not

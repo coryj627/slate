@@ -976,7 +976,13 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         try assertClosedCallExpressions(
             owner: "AppState projection",
             body: body,
-            allowedExact: ["SidebarActionCatalog.project"])
+            allowedExact: ["SidebarActionCatalog.project"],
+            // FL-14 review round: the explicit-snapshot form re-derives
+            // the organization overlay for the explicit target — both
+            // calls are pure in-memory dictionary computation (the same
+            // function the sidebarActionDisabledReasons var composes),
+            // no render-time I/O.
+            allowedTerminal: ["sidebarOrganizationActionReasons", "merge"])
 
         let catalog = try semanticSource("Sidebar/SidebarActionCatalog.swift")
         let tree = try semanticSource("FileTreeSidebar.swift")
