@@ -5083,6 +5083,11 @@ final class AppState: ObservableObject {
         // and survives (it refetches lazily on the next expand).
         sidebarTagTree = nil
         sidebarTagEditorRequest = nil
+        // FL7-1: the container selection and list contents are
+        // vault-scoped; the layout gate itself is device-local.
+        sidebarSelectedContainer = nil
+        sidebarDualPaneListSelection = nil
+        sidebarContainerListModel.resetForVaultClose()
         if sidebarOrganizationJournalRecoveryPending {
             sidebarOrganizationJournalRecoveryPending = false
         }
@@ -6110,6 +6115,119 @@ final class AppState: ObservableObject {
         }
     }
 
+    // MARK: Dual-pane layout (FL7-1, #668 — INTERNAL gate)
+
+    /// Device-local sidebar layout. Default `.tree`, byte-for-byte the
+    /// shipped behavior. FL-13 keeps this behind an internal/test gate:
+    /// no Settings control, no palette command, no user-facing toggle
+    /// until FL-14's complete list pane and equivalence tests land.
+    @Published private(set) var sidebarLayout: SidebarLayoutMode
+    static let sidebarLayoutKey = "slate.sidebar.layout"
+
+    /// The internal gate's only mutator. Mode switches preserve state
+    /// both ways — nothing here tears down the tree VM, the filter
+    /// model, or selection; the views re-mount around the same models.
+    func setSidebarLayoutForInternalTesting(_ layout: SidebarLayoutMode) {
+        guard layout != sidebarLayout else { return }
+        sidebarLayout = layout
+        sidebarSectionDefaults.set(
+            layout.rawValue, forKey: Self.sidebarLayoutKey)
+    }
+
+    /// FL7-1 rule 3: the dual-pane navigation selection — the container
+    /// whose contents the list pane shows. nil until the user selects
+    /// one (the list pane renders its quiet empty state).
+    @Published var sidebarSelectedContainer: SidebarContainer?
+
+    /// The gated list pane's content model — bound with the filter
+    /// model on vault open, reset with it on teardown.
+    let sidebarContainerListModel = SidebarContainerListModel()
+
+    /// One-shot request: ↓ from the filter field enters the dual-pane
+    /// list at row 1 (the FL4-2 walk, dual-pane edition).
+    @Published private(set) var sidebarDualPaneListFocusRequest = 0
+    func requestDualPaneListFocus() {
+        sidebarDualPaneListFocusRequest &+= 1
+    }
+
+    /// The list pane's selected row. Hoisted here (not view @State) so
+    /// a mode switch preserves it and the action snapshot can follow
+    /// it (review round: view-local selection died on re-mount and
+    /// never owned the snapshot).
+    @Published var sidebarDualPaneListSelection: String?
+
+    /// FL7-1 rule 3: publish the dual-pane selection into the ONE
+    /// action-snapshot funnel — a visible list row is a single-file
+    /// target; a selected folder container is a single-folder target;
+    /// anything else is an empty selection. Menu/palette/keyboard
+    /// actions must never act on a stale tree-mode snapshot after the
+    /// user visibly selected something else here (the FL-09 lesson,
+    /// same funnel).
+    func publishDualPaneSelectionSnapshot() {
+        guard sidebarLayout == .dualPane, let session = currentSession else {
+            return
+        }
+        let items: [SidebarSelectionItem]
+        var focused: String?
+        var creationParent = ""
+        if let path = sidebarDualPaneListSelection {
+            let summary =
+                sidebarContainerListModel.page?.files.first {
+                    $0.path == path
+                }
+                ?? sidebarFilterModel.results?.files.first { $0.path == path }
+            items = [
+                SidebarSelectionItem(
+                    path: path, isDirectory: false,
+                    isMarkdown: summary?.isMarkdown ?? path.hasSuffix(".md"))
+            ]
+            focused = path
+            let parent = (path as NSString).deletingLastPathComponent
+            creationParent = parent == "." ? "" : parent
+        } else if case .folder(let path) = sidebarSelectedContainer,
+            !path.isEmpty
+        {
+            items = [
+                SidebarSelectionItem(
+                    path: path, isDirectory: true, isMarkdown: false)
+            ]
+            focused = path
+            creationParent = path
+        } else {
+            items = []
+        }
+        _ = publishSidebarSelectionSnapshot(
+            SidebarSelectionSnapshot(
+                sessionIdentity: ObjectIdentifier(session),
+                items: items,
+                focusedPath: focused,
+                creationParent: creationParent))
+    }
+
+    /// FL7-1 rule 3: the editor→sidebar mirror. Any file becoming the
+    /// active editor file (Recents, file shortcuts, search, quick
+    /// open) selects its CONTAINING folder container and its list row.
+    /// An active filter keeps its results (the row still highlights
+    /// when present).
+    func mirrorOpenedFileIntoDualPane(_ path: String) {
+        guard sidebarLayout == .dualPane else { return }
+        if !sidebarFilterModel.isActive {
+            let container = SidebarContainer.containing(filePath: path)
+            if sidebarSelectedContainer != container {
+                sidebarSelectedContainer = container
+                sidebarContainerListModel.show(container)
+            }
+        }
+        sidebarDualPaneListSelection = path
+        publishDualPaneSelectionSnapshot()
+    }
+
+    /// VO pane-transition announcements (rule 4): the pane header,
+    /// once per transition, through the one announce seam.
+    func announceSidebarPaneTransition(_ header: String) {
+        announcer.post(header, priority: .medium)
+    }
+
     /// FL5-3b: a pending Add/Remove Tag editor invocation. Set by the
     /// catalog dispatch with the frozen target snapshot; the sidebar
     /// presents the editor sheet bound to it.
@@ -6399,10 +6517,11 @@ final class AppState: ObservableObject {
     /// releases, so a nil session here is a benign race, surfaced as a
     /// transient inline message rather than a crash or a wrong-vault
     /// query.
+    struct SidebarFilterSessionClosedError: Error, LocalizedError {
+        var errorDescription: String? { "The vault is closed." }
+    }
+
     private func bindSidebarFilterModel(session: VaultSession) {
-        struct SidebarFilterSessionClosedError: Error, LocalizedError {
-            var errorDescription: String? { "The vault is closed." }
-        }
         sidebarFilterModel.bind(SidebarFilterModel.Dependencies(
             requirements: { [weak session] query in
                 guard let session else {
@@ -6410,13 +6529,30 @@ final class AppState: ObservableObject {
                 }
                 return try session.sidebarFilterDateRequirements(query: query)
             },
-            perform: { [weak session] query, windows, paging in
+            perform: { [weak self, weak session] query, windows, paging in
                 guard let session else {
                     throw SidebarFilterSessionClosedError()
                 }
+                // FL7-1 rule 5: in the gated dual-pane layout the field
+                // scopes to the selected container — folder scope
+                // composes as scope_dir, a tag container as an extra
+                // query term. (Untagged has no textual composition;
+                // its filter runs vault-wide — documented v1 boundary.)
+                var scopeDir: String?
+                var composed = query
+                if let self, self.sidebarLayout == .dualPane {
+                    switch self.sidebarSelectedContainer {
+                    case .folder(let path):
+                        scopeDir = path
+                    case .tag(let full):
+                        composed = "#\(full) \(query)"
+                    case .untagged, nil:
+                        break
+                    }
+                }
                 return try session.filterFiles(
-                    query: query, scopeDir: nil, dateWindows: windows,
-                    paging: paging)
+                    query: composed, scopeDir: scopeDir,
+                    dateWindows: windows, paging: paging)
             },
             performUntagged: { [weak session] paging in
                 guard let session else {
@@ -6483,6 +6619,16 @@ final class AppState: ObservableObject {
     /// through the normal file-open seam, after which the standard
     /// editor→sidebar mirror selects its containing folder and file.
     func activateSidebarShortcut(_ shortcut: SidebarShortcut) {
+        // FL7-1 rule 3: in the gated dual-pane layout, shortcuts that
+        // target a SCOPE select the container (the list pane follows);
+        // file shortcuts stay leaves and open through the normal seam
+        // in both layouts.
+        if sidebarLayout == .dualPane,
+            let container = SidebarContainer.forShortcut(shortcut)
+        {
+            sidebarSelectedContainer = container
+            return
+        }
         switch shortcut.kind {
         case .folder:
             requestSidebarReveal(path: shortcut.path, isDirectory: true)
@@ -6494,6 +6640,25 @@ final class AppState: ObservableObject {
             // (single-tree mode = the FL4 handoff).
             sidebarFilterModel.activateTagQuery("#\(shortcut.path)")
         case .untagged:
+            sidebarFilterModel.activateUntaggedScope()
+        }
+    }
+
+    /// FL7-1 rule 3: tag-row activation — container in dual-pane,
+    /// the FL5-2 filter handoff in single-tree mode.
+    func activateSidebarTagScope(full: String) {
+        if sidebarLayout == .dualPane {
+            sidebarSelectedContainer = .tag(full: full)
+        } else {
+            sidebarFilterModel.activateTagQuery("#\(full)")
+        }
+    }
+
+    /// FL7-1 rule 3: the Untagged row's layout-aware activation.
+    func activateSidebarUntaggedScope() {
+        if sidebarLayout == .dualPane {
+            sidebarSelectedContainer = .untagged
+        } else {
             sidebarFilterModel.activateUntaggedScope()
         }
     }
@@ -7754,6 +7919,11 @@ final class AppState: ObservableObject {
         // default collapsed (lazy — nothing fetches until first expand).
         self.sidebarTagsSectionExpanded =
             sidebarSectionDefaults.bool(forKey: Self.tagsSectionExpandedKey)
+        // FL7-1 rule 1: layout is device-local, default tree, and the
+        // stored value only matters to the internal gate in FL-13.
+        self.sidebarLayout =
+            sidebarSectionDefaults.string(forKey: Self.sidebarLayoutKey)
+            .flatMap(SidebarLayoutMode.init(rawValue:)) ?? .tree
         // Fall back to an in-memory-only store (writes go to a temp
         // path that's discarded on exit) if the standard Application
         // Support location can't be set up. Better degraded than crash
@@ -9237,6 +9407,24 @@ final class AppState: ObservableObject {
             // FL-09 (#663): bind the sidebar filter to this session,
             // restoring the persisted query into the field (not applied).
             bindSidebarFilterModel(session: session)
+            // FL7-1 (#668): the gated list pane binds to the same
+            // session contracts (scoped listing / tag query / untagged).
+            sidebarContainerListModel.bind(
+                SidebarContainerListModel.Dependencies(
+                    performQuery: { [weak session] query, scopeDir, paging in
+                        guard let session else {
+                            throw SidebarFilterSessionClosedError()
+                        }
+                        return try session.filterFiles(
+                            query: query, scopeDir: scopeDir,
+                            dateWindows: [], paging: paging)
+                    },
+                    performUntagged: { [weak session] paging in
+                        guard let session else {
+                            throw SidebarFilterSessionClosedError()
+                        }
+                        return try session.untaggedFiles(paging: paging)
+                    }))
             // FL5-2 review round (high): a device-restored EXPANDED Tags
             // section must fetch for THIS vault — didSet only fires on
             // toggles, and the teardown path cleared the previous tree.

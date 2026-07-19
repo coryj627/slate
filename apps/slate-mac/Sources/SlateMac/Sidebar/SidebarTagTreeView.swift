@@ -178,7 +178,7 @@ struct SidebarTagTreeView: View {
     }
     .contentShape(Rectangle())
     .onTapGesture {
-      appState.sidebarFilterModel.activateTagQuery("#\(row.entry.full)")
+      appState.activateSidebarTagScope(full: row.entry.full)
     }
     .padding(.horizontal, Tokens.Spacing.sm)
     .padding(.vertical, Tokens.Spacing.xxs)
@@ -229,7 +229,7 @@ struct SidebarTagTreeView: View {
     }
     .contentShape(Rectangle())
     .onTapGesture {
-      appState.sidebarFilterModel.activateUntaggedScope()
+      appState.activateSidebarUntaggedScope()
     }
     .padding(.horizontal, Tokens.Spacing.sm)
     .padding(.vertical, Tokens.Spacing.xxs)
