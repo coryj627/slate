@@ -8284,34 +8284,25 @@ fn list_dir_children_impl(
         );
         let query = format!(
             "WITH subtree_paths AS (
-                 SELECT id, path, name, is_markdown
+                 SELECT id, path, name
                  FROM files
                  WHERE (?1 IS NULL OR (path > ?1 AND path < ?2))
              ),
              folder_note_dirs AS (
-                 -- FL6-1 (#667): a markdown file whose stem equals its
-                 -- OWN directory's final segment marks that directory
-                 -- as having a folder note. Byte-exact suffix compare —
-                 -- never LIKE: names may contain metacharacters, and
-                 -- the convention is case-sensitive (exact stem).
-                 SELECT substr(path, 1, length(path) - length(name) - 1)
-                            AS dir_path
-                 FROM subtree_paths
-                 WHERE is_markdown = 1
-                   AND length(name) > 3
-                   AND substr(name, -3) = '.md'
-                   AND (
-                       path = substr(name, 1, length(name) - 3)
-                           || '/' || name
-                       OR (
-                           length(path) > 2 * length(name) - 1
-                           AND substr(
-                                   path,
-                                   -(2 * length(name) - 1)
-                               ) = '/' || substr(name, 1, length(name) - 3)
-                                   || '/' || name
-                       )
-                   )
+                 -- FL6-1 (#667): a directory has a folder note when the
+                 -- files index holds `<dir.path>/<dir.name>.md` as
+                 -- markdown. One EXACT probe per candidate directory
+                 -- through the files path index (byte compare — never
+                 -- LIKE; the convention is case-sensitive), scoped to
+                 -- the listed parent's immediate child dirs. Zero cost
+                 -- for levels without directories — the flat-root perf
+                 -- shape pays nothing.
+                 SELECT d.path AS dir_path
+                 FROM dirs d
+                 JOIN files f
+                     ON f.path = d.path || '/' || d.name || '.md'
+                     AND f.is_markdown = 1
+                 WHERE d.parent_path = ?3
              ),
              file_counts AS (
                  SELECT CASE

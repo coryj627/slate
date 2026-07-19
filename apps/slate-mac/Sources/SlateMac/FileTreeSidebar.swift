@@ -192,7 +192,9 @@ struct SidebarFolderRowContent: View {
                     // value's ", has folder note"; the glyph is the
                     // visual twin and stays out of the AX tree.
                     SlateSymbol.newNote.decorative
-                        .font(.system(size: 7, weight: .bold))
+                        .font(Tokens.Typography.caption)
+                        .imageScale(.small)
+                        .fontWeight(.bold)
                         .foregroundStyle(primaryText)
                         .padding(1)
                         .background(
