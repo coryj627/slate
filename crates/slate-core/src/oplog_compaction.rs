@@ -45,14 +45,17 @@
 //!
 //! # The rewrite
 //!
-//! Under the per-log exclusive lock (with the lock-then-verify-inode
-//! protocol shared with `append_entry`): new file = v2 header (path =
-//! the file's current vault path, **generation + 1** — this is where
-//! v1 logs upgrade and stale header paths heal) + anchor + retained
-//! entries, written to `<stem>.oplog.tmp`, `sync_data`, renamed over
-//! the log, `fsync_dir`, release. A torn trailing entry in the source
-//! log is healed by the rewrite (retained entries are re-framed from
-//! the parsed clean prefix).
+//! Under the per-log **sidecar** mutation lock (`lock_oplog`, shared
+//! with `append_entry` — #928: the log file itself is never OS-locked,
+//! because `File::lock` is mandatory on Windows and would fail
+//! lock-free readers): new file = v2 header (path = the file's current
+//! vault path, **generation + 1** — this is where v1 logs upgrade and
+//! stale header paths heal) + anchor + retained entries, written to
+//! `<stem>.oplog.tmp`, `sync_data`, renamed over the log (the source
+//! handle is closed before the rename — Windows refuses to replace a
+//! file the process holds open), `fsync_dir`, release. A torn trailing
+//! entry in the source log is healed by the rewrite (retained entries
+//! are re-framed from the parsed clean prefix).
 //!
 //! The anchor's reconstruction is **integrity-verified** before
 //! anything is written: its bytes must hash to entry P's `hash_after`,
@@ -191,10 +194,12 @@ fn synthesize_anchor(entries: &[OpLogEntry], p: usize) -> io::Result<OpLogEntry>
 ///
 /// `current_path` is the file's current vault-relative path (written
 /// into the rewritten v2 header — where stale creation paths heal).
-/// The whole read-fold-rewrite runs under the per-log exclusive lock
-/// with inode verification, so appenders and other compactors
-/// serialize with it; an appender blocked on the lock lands on the
-/// NEW inode via its own verify-retry.
+/// The whole read-fold-rewrite runs under the per-log **sidecar**
+/// mutation lock (`lock_oplog`, #928), so appenders, marker writers,
+/// the event-regeneration read, and other compactors serialize with
+/// it; an appender blocked on the lock opens the log only AFTER the
+/// rename-over lands, so it addresses the new file by construction —
+/// no inode verification needed, on any platform.
 pub fn compact_log(
     cache_dir: &Path,
     log_name: &str,
@@ -203,10 +208,15 @@ pub fn compact_log(
     now_ms: i64,
 ) -> io::Result<CompactionOutcome> {
     let path = oplog_path_for_name(cache_dir, log_name);
-    let mut opts = OpenOptions::new();
-    opts.read(true).append(true); // append mode: never truncates; lock interop with writers
-    let Some(mut file) = crate::oplog::open_locked_verified(&path, &opts)? else {
-        return Ok(CompactionOutcome::Missing);
+    let _lock = crate::oplog::lock_oplog(&path)?;
+    // Read-only: the rewrite goes through the tmp file, never this
+    // handle. A missing log is a no-op run.
+    let mut file = match OpenOptions::new().read(true).open(&path) {
+        Ok(f) => f,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok(CompactionOutcome::Missing);
+        }
+        Err(e) => return Err(e),
     };
 
     #[cfg(test)]
@@ -231,6 +241,12 @@ pub fn compact_log(
         None => return Ok(CompactionOutcome::Futile),
     };
     let entries = read_entries_stream(&mut file, log_name, &path)?;
+    // Everything below works from the parsed entries; close the source
+    // handle NOW so the rename-over further down never has to replace
+    // a file this process still holds open (a sharing-violation hazard
+    // on Windows, #928 — the sidecar lock is what keeps the log stable
+    // in between, not this handle).
+    drop(file);
     if entries.is_empty() {
         return Ok(CompactionOutcome::Futile);
     }
@@ -275,7 +291,7 @@ pub fn compact_log(
         }
     }
 
-    // Rewrite: tmp + rename-over, all while holding the source's lock.
+    // Rewrite: tmp + rename-over, all while holding the sidecar lock.
     let tmp_path = oplog_dir(cache_dir).join(format!("{log_name}.oplog.tmp"));
     let mut out = Vec::with_capacity(file_len as usize / 2);
     out.extend_from_slice(&v2_header_block(
@@ -299,7 +315,6 @@ pub fn compact_log(
         let _ = fs::remove_file(&tmp_path); // best-effort cleanup
         return Err(e);
     }
-    drop(file); // release the (now-orphaned) source inode's lock
 
     Ok(CompactionOutcome::Rewritten {
         folded: p + 1,
@@ -633,8 +648,16 @@ mod tests {
         assert_eq!(on_disk.len(), 3);
     }
 
+    /// `HOLD_LOCK_FOR` is a process-global last-writer-wins slot; the
+    /// tests that set it serialize through this so a plain
+    /// `cargo test` (threads in one process, unlike nextest's
+    /// process-per-test) can't have one test clear another's hold
+    /// mid-flight.
+    static HOLD_HOOK_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn append_during_held_compaction_completes() {
+        let _serial = HOLD_HOOK_SERIAL.lock().unwrap_or_else(|p| p.into_inner());
         // Editor-blocking gate: an append against a mid-flight
         // compaction waits on the per-log lock and completes.
         let tmp = tempfile::tempdir().unwrap();
@@ -673,10 +696,93 @@ mod tests {
             waited < std::time::Duration::from_secs(5),
             "append blocked too long: {waited:?}"
         );
-        // The appended entry landed on the POST-rewrite inode (the
-        // verify-retry) and the log reconstructs with it.
+        // The appended entry landed on the POST-rewrite file (the
+        // appender acquires the sidecar lock first and only then opens
+        // the path, so it addresses the new file by construction) and
+        // the log reconstructs with it.
         let final_entries = read_oplog(tmp.path(), "held").unwrap();
         assert_eq!(reconstruct_at_tail(&final_entries).unwrap(), newer);
+    }
+
+    /// #928 discipline pin: the per-log mutation lock lives on the
+    /// SIDECAR (`<stem>.oplog.lock`), never on the log itself.
+    /// `File::lock` is **mandatory** `LockFileEx` on Windows — a lock
+    /// on the log would make every lock-free reader (`read_oplog`,
+    /// history scans, the event-regeneration second handle) fail with
+    /// a lock violation mid-compaction, and the pre-#928
+    /// lock-then-verify-inode protocol silently lost appends through
+    /// its no-op non-unix inode check. On unix `try_lock` OBSERVES
+    /// `flock` state (independent opens contend, even in-process), so
+    /// this pins the load-bearing Windows property on every platform:
+    /// while a compaction holds the mutation lock, the sidecar is held
+    /// and the log file itself is unlocked and readable through an
+    /// independent handle.
+    #[test]
+    fn mutation_lock_lives_on_the_sidecar_not_the_log() {
+        use std::fs::TryLockError;
+        let _serial = HOLD_HOOK_SERIAL.lock().unwrap_or_else(|p| p.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let (entries, _) = chain(4);
+        write_log(tmp.path(), "sidecar", &entries);
+        let log_path = oplog_path_for_name(tmp.path(), "sidecar");
+        let sidecar_path = crate::oplog::sidecar_lock_path(&log_path);
+
+        *HOLD_LOCK_FOR.lock().unwrap() = Some((tmp.path().to_path_buf(), 2_000));
+        let cache = tmp.path().to_path_buf();
+        let compactor = std::thread::spawn(move || {
+            compact_log(
+                &cache,
+                "sidecar",
+                "n.md",
+                &limits(u64::MAX, u64::MAX, 6),
+                10 * DAY_MS,
+            )
+            .unwrap()
+        });
+
+        // Wait (bounded) until the compactor provably holds the
+        // sidecar: our own try_lock on it reports WouldBlock. A
+        // momentary Ok just means the compactor hasn't acquired yet —
+        // release and retry.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let probe = fs::OpenOptions::new()
+                .write(true)
+                .open(&sidecar_path)
+                .expect("lock_oplog created the sidecar");
+            match probe.try_lock() {
+                Err(TryLockError::WouldBlock) => break, // compactor holds it
+                Err(e) => panic!("sidecar try_lock probe errored: {e:?}"),
+                Ok(()) => {
+                    probe.unlock().unwrap();
+                    assert!(
+                        std::time::Instant::now() < deadline,
+                        "compactor never acquired the sidecar lock"
+                    );
+                    std::thread::yield_now();
+                }
+            }
+        }
+
+        // The mutation lock is held — yet the LOG file is not OS-locked
+        // (an independent handle can lock/unlock it freely)...
+        let log_probe = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&log_path)
+            .unwrap();
+        log_probe
+            .try_lock()
+            .expect("the log file must never be OS-locked while the mutation lock is held (#928)");
+        log_probe.unlock().unwrap();
+        // ...and lock-free reads proceed — the exact operation
+        // mandatory `LockFileEx` on the log would fail on Windows.
+        let read_mid_hold = read_oplog(tmp.path(), "sidecar").unwrap();
+        assert!(!read_mid_hold.is_empty());
+
+        *HOLD_LOCK_FOR.lock().unwrap() = None;
+        let outcome = compactor.join().unwrap();
+        assert!(matches!(outcome, CompactionOutcome::Rewritten { .. }));
     }
 
     // --- censuses ------------------------------------------------------
