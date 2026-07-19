@@ -76,6 +76,11 @@ final class SidebarFilterModel: ObservableObject {
     var perform:
       (_ query: String, _ windows: [SidebarFilterDateWindow], _ paging: Paging)
         throws -> SidebarFilterPage
+    /// FL5-2 (#665): the reserved Untagged scope — same page shape,
+    /// same presentation, dedicated core call.
+    var performUntagged: (_ paging: Paging) throws -> SidebarFilterPage = { _ in
+      SidebarFilterPage(files: [], nextCursor: nil, total: 0, audioSummary: "No results.")
+    }
     var announce: (String) -> Void
     var now: () -> Date
     var timeZone: () -> TimeZone
@@ -92,9 +97,18 @@ final class SidebarFilterModel: ObservableObject {
   @Published private(set) var committedQuery = ""
   @Published private(set) var results: SidebarFilterPage?
   @Published private(set) var inlineError: String?
+  /// FL5-2 (#665): true while the reserved Untagged scope owns the
+  /// overlay. Not persisted (restore-not-apply covers query TEXT only);
+  /// any field edit or Esc exits back to a normal query/tree.
+  @Published private(set) var untaggedScope = false
 
-  /// True while a committed non-empty query owns the result surface.
-  var isActive: Bool { !committedQuery.isEmpty }
+  /// Announce-dedup sentinel for the Untagged scope; NUL cannot appear
+  /// in a typed query, so it can never collide with one.
+  private static let untaggedAnnounceKey = "\u{0}untagged"
+
+  /// True while a committed non-empty query or the Untagged scope owns
+  /// the result surface.
+  var isActive: Bool { !committedQuery.isEmpty || untaggedScope }
 
   private var dependencies: Dependencies?
   private var lastAnnouncement: (query: String, total: UInt64)?
@@ -174,6 +188,9 @@ final class SidebarFilterModel: ObservableObject {
   /// that fails to parse never becomes the restored text.
   func commit() {
     guard let dependencies else { return }
+    // A text commit (or an emptied field) always exits the Untagged
+    // scope: the field is the single source of the overlay's mode.
+    untaggedScope = false
     let query = fieldText.trimmingCharacters(in: .whitespaces)
     guard !query.isEmpty else {
       committedQuery = ""
@@ -186,6 +203,49 @@ final class SidebarFilterModel: ObservableObject {
     runQuery(query, dependencies: dependencies)
   }
 
+  /// FL5-2 rule 3: a tag row (or tag shortcut) drives the overlay with
+  /// the query `#<full>` — shown in the field, editable, teaching the
+  /// grammar. Identical lifecycle to typing it.
+  func activateTagQuery(_ query: String) {
+    pendingCommitTaskForTesting?.cancel()
+    if fieldText != query {
+      pendingProgrammaticFieldText = query
+      fieldText = query
+    }
+    commitNow()
+  }
+
+  /// FL5-2 rule 3: the reserved Untagged scope — a dedicated core call,
+  /// the SAME flat-list presentation and announce seam. The field
+  /// empties (there is no textual grammar for untagged); editing it
+  /// exits the scope.
+  func activateUntaggedScope() {
+    guard let dependencies else { return }
+    pendingCommitTaskForTesting?.cancel()
+    if !fieldText.isEmpty {
+      pendingProgrammaticFieldText = ""
+      fieldText = ""
+    }
+    committedQuery = ""
+    do {
+      let page = try dependencies.performUntagged(
+        Paging(cursor: nil, limit: Self.pageLimit))
+      untaggedScope = true
+      results = page
+      inlineError = nil
+      lastErrorAnnouncement = nil
+      dependencies.defaults.set("", forKey: Self.persistedQueryKey)
+      if lastAnnouncement?.query != Self.untaggedAnnounceKey
+        || lastAnnouncement?.total != page.total
+      {
+        lastAnnouncement = (Self.untaggedAnnounceKey, page.total)
+        dependencies.announce(page.audioSummary)
+      }
+    } catch {
+      setInlineError(errorMessage(for: error), dependencies: dependencies)
+    }
+  }
+
   /// Fetch the next page for the committed query and extend the list.
   /// The published page is still swapped as one value; the announce
   /// dedup key (query, total) is unchanged by paging, so VoiceOver
@@ -195,10 +255,14 @@ final class SidebarFilterModel: ObservableObject {
       let current = results, let cursor = current.nextCursor
     else { return }
     do {
-      let page = try dependencies.perform(
-        committedQuery,
-        activeWindows,
-        Paging(cursor: cursor, limit: Self.pageLimit))
+      let page =
+        untaggedScope
+        ? try dependencies.performUntagged(
+          Paging(cursor: cursor, limit: Self.pageLimit))
+        : try dependencies.perform(
+          committedQuery,
+          activeWindows,
+          Paging(cursor: cursor, limit: Self.pageLimit))
       results = SidebarFilterPage(
         files: current.files + page.files,
         nextCursor: page.nextCursor,
@@ -275,6 +339,7 @@ final class SidebarFilterModel: ObservableObject {
       fieldText = ""
     }
     committedQuery = ""
+    untaggedScope = false
     results = nil
     inlineError = nil
     lastErrorAnnouncement = nil
@@ -292,6 +357,7 @@ final class SidebarFilterModel: ObservableObject {
       fieldText = ""
     }
     committedQuery = ""
+    untaggedScope = false
     results = nil
     inlineError = nil
     lastAnnouncement = nil
@@ -306,13 +372,21 @@ final class SidebarFilterModel: ObservableObject {
   /// (query, total), so an unchanged count stays silent.
   func refreshAfterStructuralMutation() {
     guard let dependencies, isActive else { return }
+    if untaggedScope {
+      if let page = try? dependencies.performUntagged(
+        Paging(cursor: nil, limit: Self.pageLimit))
+      {
+        results = page
+      }
+      return
+    }
     runQuery(committedQuery, dependencies: dependencies)
   }
 
   /// Local-day rollover / system time-zone change: recompute ONLY when a
   /// date term is active — never cache one offset across a DST change.
   func handleDayRolloverOrTimeZoneChange() {
-    guard let dependencies, isActive else { return }
+    guard let dependencies, isActive, !committedQuery.isEmpty else { return }
     let hasDateTerm =
       (try? dependencies.requirements(committedQuery))?.isEmpty == false
     guard hasDateTerm else { return }

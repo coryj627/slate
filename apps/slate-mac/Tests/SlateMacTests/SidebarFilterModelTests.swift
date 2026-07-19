@@ -110,6 +110,8 @@ final class SidebarFilterModelTests: XCTestCase {
         var errors: [String: Error] = [:]
         var requirementsByQuery: [String: [String]] = [:]
         var nowMs: Int64 = 1_772_949_600_000
+        var untaggedPages: [String?: SidebarFilterPage] = [:]
+        var untaggedCalls = 0
     }
 
     private func makeModel(
@@ -130,6 +132,15 @@ final class SidebarFilterModelTests: XCTestCase {
                     XCTFail("unexpected cursor \(cursor)")
                 }
                 if let page = recorder.pages[query] { return page }
+                return SidebarFilterPage(
+                    files: [], nextCursor: nil, total: 0,
+                    audioSummary: "No results.")
+            },
+            performUntagged: { paging in
+                recorder.untaggedCalls += 1
+                if let page = recorder.untaggedPages[paging.cursor] {
+                    return page
+                }
                 return SidebarFilterPage(
                     files: [], nextCursor: nil, total: 0,
                     audioSummary: "No results.")
@@ -479,6 +490,104 @@ final class SidebarFilterModelTests: XCTestCase {
         model.escapeInField()
         model.refreshAfterStructuralMutation()
         XCTAssertEqual(recorder.performCalls.count, 2)
+    }
+
+    // MARK: - Untagged scope (FL5-2, #665)
+
+    func testUntaggedScopeActivatesAnnouncesAndPages() {
+        let recorder = Recorder()
+        recorder.untaggedPages[nil] = SidebarFilterPage(
+            files: [file("plain.md")], nextCursor: "u1", total: 2,
+            audioSummary: "2 results.")
+        recorder.untaggedPages["u1"] = SidebarFilterPage(
+            files: [file("second.md")], nextCursor: nil, total: 2,
+            audioSummary: "2 results.")
+        let model = makeModel(recorder, defaults: freshDefaults())
+
+        model.activateUntaggedScope()
+        XCTAssertTrue(model.isActive)
+        XCTAssertTrue(model.untaggedScope)
+        XCTAssertEqual(model.fieldText, "", "no textual grammar for untagged")
+        XCTAssertEqual(model.results?.files.map(\.path), ["plain.md"])
+        XCTAssertEqual(recorder.announcements, ["2 results."])
+
+        // Re-activation with the same total stays silent (dedup).
+        model.activateUntaggedScope()
+        XCTAssertEqual(recorder.announcements, ["2 results."])
+
+        model.loadNextPage()
+        XCTAssertEqual(
+            model.results?.files.map(\.path), ["plain.md", "second.md"])
+        XCTAssertEqual(recorder.announcements.count, 1)
+        XCTAssertTrue(
+            recorder.performCalls.isEmpty,
+            "the untagged scope never routes through the query path")
+    }
+
+    func testFieldCommitAndEscapeExitTheUntaggedScope() {
+        let recorder = Recorder()
+        recorder.untaggedPages[nil] = page(["plain.md"])
+        recorder.pages["alpha"] = page(["a.md"])
+        let model = makeModel(recorder, defaults: freshDefaults())
+
+        model.activateUntaggedScope()
+        XCTAssertTrue(model.untaggedScope)
+        // Typing a query exits the scope into normal query mode.
+        model.fieldText = "alpha"
+        model.commit()
+        XCTAssertFalse(model.untaggedScope)
+        XCTAssertEqual(model.committedQuery, "alpha")
+
+        model.activateUntaggedScope()
+        XCTAssertTrue(model.untaggedScope)
+        model.escapeInField()
+        XCTAssertFalse(model.untaggedScope)
+        XCTAssertFalse(model.isActive)
+        XCTAssertNil(model.results)
+    }
+
+    func testUntaggedScopeIsNeverPersistedAndSkipsRollover() {
+        let recorder = Recorder()
+        recorder.untaggedPages[nil] = page(["plain.md"])
+        let defaults = freshDefaults()
+        defaults.set("has:task", forKey: SidebarFilterModel.persistedQueryKey)
+        let model = makeModel(recorder, defaults: defaults)
+
+        model.activateUntaggedScope()
+        XCTAssertEqual(
+            defaults.string(forKey: SidebarFilterModel.persistedQueryKey), "",
+            "entering the scope clears the persisted query rather than "
+                + "restoring into a mode that has no textual form")
+        let calls = recorder.untaggedCalls
+        model.handleDayRolloverOrTimeZoneChange()
+        XCTAssertEqual(
+            recorder.untaggedCalls, calls,
+            "no date terms in the untagged scope: rollover is a no-op")
+        model.refreshAfterStructuralMutation()
+        XCTAssertEqual(
+            recorder.untaggedCalls, calls + 1,
+            "structural mutations refresh the untagged list")
+    }
+
+    func testTagActivationDrivesTheFieldAndCommitsImmediately() {
+        let recorder = Recorder()
+        recorder.pages["#projects/reading"] = page(["r.md"])
+        let defaults = freshDefaults()
+        let model = makeModel(recorder, defaults: defaults)
+
+        model.activateTagQuery("#projects/reading")
+        XCTAssertEqual(model.fieldText, "#projects/reading")
+        XCTAssertEqual(model.committedQuery, "#projects/reading")
+        XCTAssertEqual(model.results?.files.map(\.path), ["r.md"])
+        XCTAssertEqual(
+            defaults.string(forKey: SidebarFilterModel.persistedQueryKey),
+            "#projects/reading",
+            "a tag activation is an ordinary committed query")
+        // The view's onChange for the programmatic field write must not
+        // double-commit through the debounce.
+        model.fieldTextChanged()
+        XCTAssertNil(model.pendingCommitTaskForTesting)
+        XCTAssertEqual(recorder.performCalls.count, 1)
     }
 
     // MARK: - Rollover / time-zone change (spec rule 7)

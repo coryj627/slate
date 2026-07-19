@@ -313,6 +313,22 @@ pub(crate) struct SidebarFilterPlan {
     pub(crate) name_params: Vec<rusqlite::types::Value>,
 }
 
+/// FL5-2 (#665): the reserved Untagged scope — markdown files with
+/// zero `file_tags` rows — as a hand-built plan through the SAME
+/// execution pipeline as every filter query (ordering, title join,
+/// cursors, summary; no second query path).
+pub(crate) fn untagged_plan() -> SidebarFilterPlan {
+    SidebarFilterPlan {
+        files_clauses: vec![
+            "f.is_markdown = 1".to_string(),
+            "NOT EXISTS (SELECT 1 FROM file_tags t WHERE t.file_id = f.id)".to_string(),
+        ],
+        files_params: Vec::new(),
+        name_clauses: Vec::new(),
+        name_params: Vec::new(),
+    }
+}
+
 pub(crate) fn plan(
     terms: &[SidebarFilterQueryTerm],
     scope_dir: Option<&str>,

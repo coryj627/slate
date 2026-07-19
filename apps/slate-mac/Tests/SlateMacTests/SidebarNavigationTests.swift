@@ -218,9 +218,18 @@ final class SidebarNavigationTests: XCTestCase {
     XCTAssertEqual(state.sidebarRevealRequest?.path, "Projects")
     XCTAssertEqual(state.sidebarRevealRequest?.isDirectory, true)
 
-    // Slot 2 is the FILE shortcut — the reserved tag entry is invisible.
+    // FL5-2: slot 2 is the TAG container — activation drives the
+    // shared flat list with the tag query, field showing it.
     _ = try state.dispatchSidebarAction(
       id: SlateCommandID.sidebarOpenShortcut(2))
+    XCTAssertEqual(state.sidebarFilterModel.fieldText, "#reserved")
+    XCTAssertEqual(state.sidebarFilterModel.committedQuery, "#reserved")
+    XCTAssertTrue(state.sidebarFilterModel.isActive)
+    state.sidebarFilterModel.escapeInField()
+
+    // Slot 3 is the FILE shortcut.
+    _ = try state.dispatchSidebarAction(
+      id: SlateCommandID.sidebarOpenShortcut(3))
     await state.noteLoadTask?.value
     XCTAssertEqual(
       state.selectedFilePath, "Projects/note.md",
@@ -231,7 +240,7 @@ final class SidebarNavigationTests: XCTestCase {
 
     XCTAssertThrowsError(
       try state.dispatchSidebarAction(
-        id: SlateCommandID.sidebarOpenShortcut(3)),
+        id: SlateCommandID.sidebarOpenShortcut(4)),
       "an empty slot is a typed failure")
   }
 
@@ -253,9 +262,13 @@ final class SidebarNavigationTests: XCTestCase {
         creationParent: "A"))
     _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
     await state.sidebarOrganizationPersistTaskForTesting?.value
+    // FL5-2: the tag entry is a first-class visible container now.
     XCTAssertEqual(
       state.sidebarOrganization.shortcuts,
-      [SidebarShortcut(kind: .folder, path: "A")])
+      [
+        SidebarShortcut(kind: .tag, path: "keep"),
+        SidebarShortcut(kind: .folder, path: "A"),
+      ])
     XCTAssertThrowsError(
       try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut),
       "adding twice is refused")
@@ -266,13 +279,16 @@ final class SidebarNavigationTests: XCTestCase {
       try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let raw = try XCTUnwrap(json["shortcuts"] as? [[String: Any]])
     XCTAssertEqual(raw.count, 2)
-    XCTAssertEqual(raw[0]["kind"] as? String, "tag", "reserved kinds survive")
+    XCTAssertEqual(raw[0]["kind"] as? String, "tag", "tag kinds survive in place")
     XCTAssertEqual(raw[1]["path"] as? String, "A")
 
     _ = try state.dispatchSidebarAction(
       id: SlateCommandID.sidebarRemoveShortcut)
     await state.sidebarOrganizationPersistTaskForTesting?.value
-    XCTAssertTrue(state.sidebarOrganization.shortcuts.isEmpty)
+    XCTAssertEqual(
+      state.sidebarOrganization.shortcuts,
+      [SidebarShortcut(kind: .tag, path: "keep")],
+      "removing the folder leaves the tag container")
     XCTAssertThrowsError(
       try state.dispatchSidebarAction(
         id: SlateCommandID.sidebarRemoveShortcut),
@@ -292,16 +308,18 @@ final class SidebarNavigationTests: XCTestCase {
     state.moveSidebarShortcut(
       SidebarShortcut(kind: .file, path: "b.md"), delta: -1)
     await state.sidebarOrganizationPersistTaskForTesting?.value
+    // FL5-2: the untagged entry is a visible row — b.md's nearest
+    // neighbor — so they swap directly.
     XCTAssertEqual(
-      state.sidebarOrganization.shortcuts.map(\.path), ["b.md", "a.md"])
+      state.sidebarOrganization.shortcuts.map(\.path), ["a.md", "b.md", ""])
     let data = try Data(
       contentsOf: vault.appendingPathComponent(".slate/sidebar.json"))
     let json =
       try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
     let raw = try XCTUnwrap(json["shortcuts"] as? [[String: Any]])
-    XCTAssertEqual(raw.map { $0["kind"] as? String }, ["file", "untagged", "file"])
-    XCTAssertEqual(raw[0]["path"] as? String, "b.md")
-    XCTAssertEqual(raw[2]["path"] as? String, "a.md")
+    XCTAssertEqual(raw.map { $0["kind"] as? String }, ["file", "file", "untagged"])
+    XCTAssertEqual(raw[0]["path"] as? String, "a.md")
+    XCTAssertEqual(raw[1]["path"] as? String, "b.md")
   }
 
   func testAddShortcutRefusesWhenRawEntriesAreAtTheCeiling() throws {

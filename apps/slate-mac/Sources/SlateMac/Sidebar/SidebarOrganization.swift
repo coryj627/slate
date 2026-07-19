@@ -576,6 +576,12 @@ struct SidebarShortcut: Hashable, Sendable {
   enum Kind: String, Sendable {
     case file
     case folder
+    /// FL5-2 (#665): a tag container — `path` carries the normalized
+    /// full tag, a namespace disjoint from file paths.
+    case tag
+    /// FL5-2: the reserved Untagged scope — `path` is empty by
+    /// convention and ignored.
+    case untagged
   }
 
   let kind: Kind
@@ -733,6 +739,15 @@ struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
     _ path: String, kind: String, renames: [Rename],
     deletedFiles: [String], deletedFolders: [String]
   ) -> String? {
+    // FL5-2: tag/untagged shortcuts live in the TAG namespace — a
+    // filesystem rename or delete must never rewrite or drop one whose
+    // text happens to collide with a file path ("projects/reading" the
+    // tag vs projects/ the folder).
+    if kind == SidebarShortcut.Kind.tag.rawValue
+      || kind == SidebarShortcut.Kind.untagged.rawValue
+    {
+      return path
+    }
     var current = path
     for rename in renames {
       if current == rename.oldPath {

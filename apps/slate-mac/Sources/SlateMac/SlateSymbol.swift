@@ -33,6 +33,7 @@ enum SlateSymbol: CaseIterable {
     // In-use roles (rendered today).
     case save
     case search
+    case tag
     case refresh
     case newFromTemplate
     case tasksReview
@@ -195,6 +196,7 @@ enum SlateSymbol: CaseIterable {
         switch self {
         case .save: return "Save"
         case .search: return "Search"
+        case .tag: return "Tag"
         case .refresh: return "Refresh"
         case .newFromTemplate: return "New from Template"
         case .tasksReview: return "Tasks Review"
@@ -280,6 +282,7 @@ enum SlateSymbol: CaseIterable {
         switch self {
         case .save: return ("square.and.arrow.down", "square.and.arrow.down")
         case .search: return ("magnifyingglass", "magnifyingglass")
+        case .tag: return ("number", "number")
         case .refresh: return ("arrow.clockwise", "arrow.clockwise")
         case .newFromTemplate: return ("doc.badge.plus", "doc.badge.plus")
         case .tasksReview: return ("checklist", "checklist")

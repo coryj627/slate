@@ -491,3 +491,77 @@ fn edits_refuse_hostile_tags_shapes_without_touching_content() {
     assert_eq!(report.skipped.len(), 1);
     assert_eq!(read(tmp.path(), "duplicate.md"), before_duplicate);
 }
+
+// MARK: FL5-2/3b · untagged scope + selection tags (FL-11 core support)
+
+#[test]
+fn untagged_files_shares_the_filter_pipeline_semantics() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "tagged.md", "#a body\n");
+    write(
+        tmp.path(),
+        "titled.md",
+        "---\ntitle: Zebra Title\n---\nplain\n",
+    );
+    write(tmp.path(), "alpha.md", "plain body\n");
+    write(tmp.path(), "asset.pdf", "%PDF-1.4 fake\n");
+    let session = open(tmp.path());
+    let page = session
+        .untagged_files(slate_core::Paging {
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    // Markdown-only, tagged excluded, effective-name order (alpha <
+    // Zebra Title), FL4-2 summary shape.
+    assert_eq!(
+        page.files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha.md", "titled.md"]
+    );
+    assert_eq!(page.total, 2);
+    assert_eq!(page.audio_summary, "2 results.");
+
+    // Pagination cursor round-trips like any filter page.
+    let first = session
+        .untagged_files(slate_core::Paging {
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(first.files[0].path, "alpha.md");
+    let rest = session
+        .untagged_files(slate_core::Paging {
+            cursor: first.next_cursor.clone(),
+            limit: 1,
+        })
+        .unwrap();
+    assert_eq!(rest.files[0].path, "titled.md");
+    assert!(rest.next_cursor.is_none());
+}
+
+#[test]
+fn tags_for_files_counts_distinct_files_alphabetically() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(
+        tmp.path(),
+        "one.md",
+        "---\ntags:\n  - beta\n---\n#alpha #alpha body\n",
+    );
+    write(tmp.path(), "two.md", "#alpha\n");
+    write(tmp.path(), "three.md", "#zulu\n");
+    let session = open(tmp.path());
+    let counts = session
+        .tags_for_files(vec!["one.md".into(), "two.md".into()])
+        .unwrap();
+    let shaped: Vec<(&str, u32)> = counts
+        .iter()
+        .map(|c| (c.tag.as_str(), c.file_count))
+        .collect();
+    // zulu excluded (three.md not selected); duplicate inline mentions
+    // count one file; alphabetical order.
+    assert_eq!(shaped, vec![("alpha", 2), ("beta", 1)]);
+    assert!(session.tags_for_files(vec![]).unwrap().is_empty());
+}

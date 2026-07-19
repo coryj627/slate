@@ -4636,6 +4636,51 @@ impl VaultSession {
         sidebar_filter_impl(&conn, plan, scope_dir, paging)
     }
 
+    /// FL5-2 (#665): the reserved Untagged scope — markdown files with
+    /// zero tag rows — through the one shared filter execution pipeline
+    /// (identical ordering, pagination, and summary semantics).
+    pub fn untagged_files(&self, paging: Paging) -> Result<SidebarFilterPage, VaultError> {
+        let plan = crate::sidebar_filter::untagged_plan();
+        let conn = self.conn.lock().expect("session connection mutex");
+        sidebar_filter_impl(&conn, plan, None, paging)
+    }
+
+    /// FL5-3b (#666): the distinct tags carried by the given files, with
+    /// distinct-file counts — the Remove Tag editor's honest choice list
+    /// (DB truth, never body parsing in the app). Alphabetical, like the
+    /// tag tree.
+    pub fn tags_for_files(&self, paths: Vec<String>) -> Result<Vec<TagCount>, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let mut counts: std::collections::BTreeMap<String, std::collections::BTreeSet<i64>> =
+            std::collections::BTreeMap::new();
+        // Chunked IN-lists keep parameter counts far under SQLite's
+        // host-parameter ceiling for arbitrarily large selections.
+        for chunk in paths.chunks(500) {
+            let placeholders = vec!["?"; chunk.len()].join(", ");
+            let sql = format!(
+                "SELECT t.tag_norm, t.file_id
+                 FROM file_tags t
+                 JOIN files f ON f.id = t.file_id
+                 WHERE f.path IN ({placeholders})"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk.iter()), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            for row in rows {
+                let (tag, file_id) = row?;
+                counts.entry(tag).or_default().insert(file_id);
+            }
+        }
+        Ok(counts
+            .into_iter()
+            .map(|(tag, files)| TagCount {
+                tag,
+                file_count: files.len() as u32,
+            })
+            .collect())
+    }
+
     /// Return the distinct normalized tag inventory from the tag index.
     pub fn list_tags(&self) -> Result<Vec<String>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
@@ -16427,4 +16472,12 @@ fn content_carries_tag_inline(content: &str, norm: &str) -> bool {
             }
             crate::tags_db::normalize_tag(&content[start..end]).as_deref() == Some(norm)
         })
+}
+
+/// FL5-3b: one tag carried by a file selection, with its distinct-file
+/// count — the Remove Tag editor's choice row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagCount {
+    pub tag: String,
+    pub file_count: u32,
 }

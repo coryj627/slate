@@ -182,6 +182,14 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             hint: "Move focus to the sidebar filter field.",
             section: .sidebar, hotkey: "⌥⌘F"),
         .init(
+            id: "slate.sidebar.addTag", label: "Add Tag…",
+            hint: "Add a tag to the selected files' frontmatter.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.removeTag", label: "Remove Tag…",
+            hint: "Remove a tag from the selected files' frontmatter.",
+            section: .sidebar, hotkey: nil),
+        .init(
             id: "slate.file.delete", label: "Move to Trash",
             hint: "Move the selected files or folders to the Trash.",
             section: .sidebar, hotkey: nil),
@@ -356,6 +364,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             SlateCommandID.copyPath: "Select exactly one file or folder to copy its path.",
             SlateCommandID.sidebarCopyWikilink:
                 "Select exactly one Markdown file to copy its wikilink.",
+            SlateCommandID.sidebarAddTag: "Open is available only for files.",
+            SlateCommandID.sidebarRemoveTag: "Open is available only for files.",
             SlateCommandID.sidebarPinNote: "Select exactly one note to pin.",
             SlateCommandID.sidebarUnpinNote: "Select exactly one note to unpin.",
             SlateCommandID.sidebarUnpinAll:
@@ -1119,6 +1129,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             "SlateCommandID.renameEntry", "SlateCommandID.moveTo",
             "SlateCommandID.duplicateEntry", "SlateCommandID.revealInFinder",
             "SlateCommandID.copyPath", "SlateCommandID.sidebarCopyWikilink",
+            "SlateCommandID.sidebarAddTag", "SlateCommandID.sidebarRemoveTag",
             "SlateCommandID.deleteEntry",
         ] {
             XCTAssertEqual(
@@ -1144,6 +1155,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 SlateCommandID.sidebarUnpinAll,
                 SlateCommandID.sidebarAddShortcut,
                 SlateCommandID.sidebarRemoveShortcut,
+                SlateCommandID.sidebarAddTag,
+                SlateCommandID.sidebarRemoveTag,
                 SlateCommandID.sidebarClearRecents,
                 SlateCommandID.revealInFinder,
                 SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
