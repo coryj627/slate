@@ -5,7 +5,14 @@ Program: [00_program.md](../00_program.md) (decisions 4, 8, 10, 15; DoD §W-A/§
 
 **Execution order: W2-1 → W2-2 → { W2-3 ∥ W2-4 ∥ W2-5 }.**
 
-Baseline facts:
+**W0/W1 execution baseline (2026-07-19 refresh — facts the original spec predates):**
+
+- **The buffer hot path is already proven through the shipped binding:** the W0 censuses exercise `DocumentBuffer` create → `apply_edit` → read-back, `LenUtf16`/`ByteToUtf16`, and `HighlightInRange` (applied-range sanity + span bounds) from C#; W0-1 measured the whole uniffi `apply_edit` round-trip at ~112 µs/edit in a debug build. `editor_highlight_spans(_in_range)` and the text offset free functions are bound and `public` in the `SlateUniffi` assembly.
+- **§W-B budgets are pinned, not pending** (W0-4 `parity_matrix.md` §W-B): p50 ≤ 0.5 ms (100 KB), ≤ 0.5 ms (1 MB), ≤ 1.0 ms (8 MB), flatness p50(8 MB) ≤ 4× p50(1 MB). W2-1's "first numbers" and W2-2's BenchmarkDotNet run are recorded **against those numbers**.
+- **The §W-A skeleton already serializes editor spans** (and headings/blocks/search/links) over the `tests/fixtures/markdown/` corpus — incl. CRLF and mixed-ending fixtures — with committed goldens both platforms diff (`parity_golden/`, W0-3). W2-2's §W-A span rows **extend that harness and corpus** (editor-scale fixtures, windowed-request coverage), they do not build a new mechanism; serialization rules live in `CanonicalJson.cs` + the Swift twin, changed only together.
+- **C# census conventions** (W0-3): `[Trait("census", …)]`, `CensusTier` moderate/full tiers, serialized test assembly, `Support/` recorders — W2-1's drift-guard and edit-storm censuses (§W-E) follow them.
+- **Fluent theme (program decision 2 addendum):** AvalonEdit draws its own text surface — Fluent restyles the *chrome around it* (scrollbars, context menus, find UI, the W2-4 completion window). Editor text colors come from the W1-1 Slate tokens (which own every text-bearing surface and carry the two-layer Contrast behavior); the Mica policy from W1-1 item 8 applies — the editor surface always sits on a solid token-backed background. §W-C editor-chrome assertions run against the Fluent templates.
+- **V/X status at the W0-4 snapshot:** unshipped (matrix dropped-rows table) — W2-4/W2-5 activate only if V/X ship before port start; re-run the matrix generator at wave start to re-check.
 
 - `DocumentBuffer` (slate-uniffi lib.rs:3422; anchor current 2026-07-12) is the stateful editor backend: edit deltas in, spans/structure out, O(edit) (BENCHMARKS: 8 MB keystroke ≈ 245 µs core-side). The mac consumers to mirror: `NoteEditorView` coordinator (delta feed + drift guard + windowed `applyHighlight`), `EditorSpanMapping` (UTF-16 ↔ byte offset mapping), `EditorTextConversions`.
 - The release guarantee is census-side, not assertion-side: buffer-vs-stateless, comment-index, and structure censuses — the C# host must not weaken this (its drift guard twin is §W-E).
@@ -27,8 +34,8 @@ Baseline facts:
 
 1. `DocumentColorizingTransformer` renders from windowed span requests to `DocumentBuffer` (visible range + margin; re-request on scroll/resize/edit — the mac windowing model). **Zero C# tokenization** (§W-G).
 2. Span kinds map to the editor theme palette (same role taxonomy as `EditorSyntaxPalette`); theme values come from the **provisional token set seeded in W1-1** — W8-2 finalizes and contrast-gates those tokens later, it does not first create them.
-3. Per-keystroke recompute stays inside the §W-B budget at all fixture sizes; BenchmarkDotNet run recorded.
-4. §W-A row: span streams for the fixture corpus byte-identical mac↔windows (serialized via the harness).
+3. Per-keystroke recompute stays inside the **pinned** §W-B budgets (0.5 / 0.5 / 1.0 ms p50 at 100 KB / 1 MB / 8 MB, flatness ≤ 4× — `parity_matrix.md` §W-B); BenchmarkDotNet run recorded against them.
+4. §W-A row: span streams for the fixture corpus byte-identical mac↔windows — extend the shipped W0-3 harness (its per-file `spans` artifact already covers the base corpus; add editor-scale fixtures and windowed-request coverage to both twins + goldens in the same PR).
 5. Semantic span data is retained on the host for W7-1 (the UIA peer consumes the same window the colorizer paints).
 
 - [ ] Colorizer over windowed spans; zero tokenization; budgets green
@@ -43,7 +50,7 @@ Baseline facts:
 
 ## W2-4 · Autocomplete (Milestone V parity)* — PR 4
 
-1. Consumes V's core completion engine (providers, ranking, trigger model) — the WPF completion window is chrome; V's acceptance semantics (incl. its a11y announcement contract, which V ships via the canonical vocabulary) hold verbatim. *(That premise is an obligation on Milestone V — recorded as gap row G15 and filed on V as [#888](https://github.com/coryj627/slate/issues/888).)*
+1. Consumes V's core completion engine (providers, ranking, trigger model) — the WPF completion window is chrome (Fluent-styled per decision 2 addendum; §W-C list/keyboard assertions run against the Fluent templates); V's acceptance semantics (incl. its a11y announcement contract, which V ships via the canonical vocabulary) hold verbatim. *(That premise is an obligation on Milestone V — recorded as gap row G15 and filed on V as [#888](https://github.com/coryj627/slate/issues/888). The W1-4 switcher-count correction, #963, is the cautionary precedent: verify V's announcements actually render through core before consuming them.)*
 
 ## W2-5 · LaTeX authoring aids (Milestone X parity)* — PR 5
 
