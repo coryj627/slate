@@ -70,6 +70,50 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             hint: "Copy a wikilink to the selected Markdown file.",
             section: .sidebar, hotkey: nil),
         .init(
+            id: "slate.sidebar.pinNote", label: "Pin to Top of Folder",
+            hint: "Pin the selected note to the top of its folder.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.unpinNote", label: "Unpin",
+            hint: "Remove the selected note from its folder's pinned section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.unpinAllInFolder", label: "Unpin All in Folder",
+            hint: "Remove every pinned note from the selected folder.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.sortNameAsc", label: "Sort by Name (A to Z)",
+            hint: "Sort the selected location's notes by name, A to Z.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.sortNameDesc", label: "Sort by Name (Z to A)",
+            hint: "Sort the selected location's notes by name, Z to A.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.sortCreatedDesc", label: "Sort by Created (Newest First)",
+            hint: "Sort the selected location's notes by created date, newest first.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.sortCreatedAsc", label: "Sort by Created (Oldest First)",
+            hint: "Sort the selected location's notes by created date, oldest first.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.sortModifiedDesc", label: "Sort by Modified (Newest First)",
+            hint: "Sort the selected location's notes by modified date, newest first.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.sortModifiedAsc", label: "Sort by Modified (Oldest First)",
+            hint: "Sort the selected location's notes by modified date, oldest first.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.toggleDateGrouping", label: "Group by Date",
+            hint: "Group the selected location's notes into date sections.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.useVaultDefaultSort", label: "Use Vault Default Sort",
+            hint: "Remove the selected folder's sort override.",
+            section: .sidebar, hotkey: nil),
+        .init(
             id: "slate.file.delete", label: "Move to Trash",
             hint: "Move the selected files or folders to the Trash.",
             section: .sidebar, hotkey: nil),
@@ -234,13 +278,33 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             SlateCommandID.copyPath: "Select exactly one file or folder to copy its path.",
             SlateCommandID.sidebarCopyWikilink:
                 "Select exactly one Markdown file to copy its wikilink.",
+            SlateCommandID.sidebarPinNote: "Select exactly one note to pin.",
+            SlateCommandID.sidebarUnpinNote: "Select exactly one note to unpin.",
+            SlateCommandID.sidebarUnpinAll:
+                "Select exactly one folder to unpin its notes.",
+            SlateCommandID.sidebarSortNameAsc:
+                "Select a single location to change how it's sorted.",
+            SlateCommandID.sidebarSortNameDesc:
+                "Select a single location to change how it's sorted.",
+            SlateCommandID.sidebarSortCreatedDesc:
+                "Select a single location to change how it's sorted.",
+            SlateCommandID.sidebarSortCreatedAsc:
+                "Select a single location to change how it's sorted.",
+            SlateCommandID.sidebarSortModifiedDesc:
+                "Select a single location to change how it's sorted.",
+            SlateCommandID.sidebarSortModifiedAsc:
+                "Select a single location to change how it's sorted.",
+            SlateCommandID.sidebarToggleDateGrouping:
+                "Select a single location to change how it's sorted.",
+            SlateCommandID.sidebarUseVaultDefaultSort:
+                "Select a single location to change how it's sorted.",
         ]
         XCTAssertEqual(
             Dictionary(uniqueKeysWithValues: menu.compactMap { evaluation in
                 evaluation.disabledReason.map { (evaluation.id, $0) }
             }),
             expectedDisabledReasons,
-            "the other nine mixed-selection actions expose deterministic capability reasons")
+            "every other mixed-selection action exposes its deterministic capability reason")
     }
 
     func testContextAndVoiceOverOmitEveryUnavailableAction() {
@@ -281,15 +345,18 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.renameEntry, SlateCommandID.moveTo,
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
+                    SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.deleteEntry,
                 ],
-                "context remains concise and VoiceOver omits default-owned Open")
+                "context remains concise and VoiceOver omits default-owned Open; AppState's live pin-state reason hides the inapplicable pin direction")
             XCTAssertEqual(
                 nonMarkdownIdle.map(\.id),
                 contextualOpen + [
                     SlateCommandID.renameEntry, SlateCommandID.moveTo,
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
-                    SlateCommandID.copyPath, SlateCommandID.deleteEntry,
+                    SlateCommandID.copyPath,
+                    SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.deleteEntry,
                 ],
                 "non-Markdown files omit Copy Wikilink")
             XCTAssertEqual(
@@ -301,14 +368,17 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 contextualOpen + [
                     SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
+                    SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                 ],
-                "busy contextual surfaces omit every structurally blocked action")
+                "busy contextual surfaces omit every structurally blocked action; preference edits never block on the structural gate")
             XCTAssertEqual(
                 actionLoading.map(\.id),
                 contextualOpen + [
                     SlateCommandID.renameEntry, SlateCommandID.moveTo,
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
-                    SlateCommandID.copyPath, SlateCommandID.deleteEntry,
+                    SlateCommandID.copyPath,
+                    SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.deleteEntry,
                 ],
                 "action-specific unavailable rows are omitted, not rendered disabled")
             XCTAssertEqual(
@@ -317,6 +387,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.renameEntry, SlateCommandID.moveTo,
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
+                    SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.deleteEntry,
                 ],
                 "property-edit navigation state omits contextual Open")
@@ -389,6 +460,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.renameEntry, SlateCommandID.moveTo,
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
+                    SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.deleteEntry,
                 ])
             XCTAssertTrue(outside.evaluations.allSatisfy {
@@ -405,6 +477,17 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 folder.targetSnapshot,
                 expectedOutsideFolder,
                 "\(surface): outside folder is its own canonical creation parent")
+            let folderSortSet: [String] = surface == .contextMenu
+                ? [
+                    SlateCommandID.sidebarSortNameAsc,
+                    SlateCommandID.sidebarSortNameDesc,
+                    SlateCommandID.sidebarSortCreatedDesc,
+                    SlateCommandID.sidebarSortCreatedAsc,
+                    SlateCommandID.sidebarSortModifiedDesc,
+                    SlateCommandID.sidebarSortModifiedAsc,
+                    SlateCommandID.sidebarToggleDateGrouping,
+                    SlateCommandID.sidebarUseVaultDefaultSort,
+                ] : []
             XCTAssertEqual(
                 folder.evaluations.map(\.id),
                 [
@@ -412,7 +495,9 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.newFromTemplate,
                     SlateCommandID.renameEntry, SlateCommandID.moveTo,
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
-                    SlateCommandID.deleteEntry,
+                    SlateCommandID.sidebarUnpinAll,
+                ] + folderSortSet + [
+                    SlateCommandID.deleteEntry
                 ])
             XCTAssertTrue(folder.evaluations.allSatisfy {
                 $0.disabledReason == nil && $0.intent?.snapshot == expectedOutsideFolder
@@ -958,15 +1043,42 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
                 SlateCommandID.sidebarOpen,
                 SlateCommandID.renameEntry, SlateCommandID.moveTo,
-                SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
+                SlateCommandID.duplicateEntry,
+                SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                SlateCommandID.sidebarUnpinAll,
+                SlateCommandID.revealInFinder,
                 SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
                 SlateCommandID.deleteEntry,
             ])
-        XCTAssertEqual(grouped.count, SidebarActionCatalog.actions.count)
-        XCTAssertEqual(Set(grouped.map(\.id)).count, SidebarActionCatalog.actions.count)
+        // FL-06: the sort/group command set's menu-bar home is the View menu
+        // ("Sort Sidebar By" — Finder's View ▸ Sort By convention), not a File
+        // group. Together the two homes cover the catalog exactly once.
+        let viewMenuSortIDs: Set<String> = [
+            SlateCommandID.sidebarSortNameAsc,
+            SlateCommandID.sidebarSortNameDesc,
+            SlateCommandID.sidebarSortCreatedDesc,
+            SlateCommandID.sidebarSortCreatedAsc,
+            SlateCommandID.sidebarSortModifiedDesc,
+            SlateCommandID.sidebarSortModifiedAsc,
+            SlateCommandID.sidebarToggleDateGrouping,
+            SlateCommandID.sidebarUseVaultDefaultSort,
+        ]
+        XCTAssertEqual(
+            grouped.count + viewMenuSortIDs.count,
+            SidebarActionCatalog.actions.count)
+        XCTAssertEqual(
+            Set(grouped.map(\.id)).union(viewMenuSortIDs),
+            Set(SidebarActionCatalog.actions.map(\.id)),
+            "File groups plus the View sort submenu cover the catalog exactly")
+        XCTAssertTrue(
+            Set(grouped.map(\.id)).isDisjoint(with: viewMenuSortIDs),
+            "no catalog action has two menu-bar homes")
         XCTAssertEqual(
             Dictionary(uniqueKeysWithValues: grouped.map { ($0.id, $0) }),
-            Dictionary(uniqueKeysWithValues: projection.map { ($0.id, $0) }),
+            Dictionary(
+                uniqueKeysWithValues: projection
+                    .filter { !viewMenuSortIDs.contains($0.id) }
+                    .map { ($0.id, $0) }),
             "File grouping must preserve every live evaluation without mutation")
     }
 

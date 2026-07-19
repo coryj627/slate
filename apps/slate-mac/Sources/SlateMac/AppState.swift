@@ -2136,6 +2136,20 @@ final class AppState: ObservableObject {
             guard admitted else { throw sidebarActionFailure(rejected) }
             return .completed(actionID: intent.actionID)
 
+        case SlateCommandID.sidebarSortNameAsc,
+            SlateCommandID.sidebarSortNameDesc,
+            SlateCommandID.sidebarSortCreatedDesc,
+            SlateCommandID.sidebarSortCreatedAsc,
+            SlateCommandID.sidebarSortModifiedDesc,
+            SlateCommandID.sidebarSortModifiedAsc,
+            SlateCommandID.sidebarToggleDateGrouping,
+            SlateCommandID.sidebarUseVaultDefaultSort,
+            SlateCommandID.sidebarPinNote,
+            SlateCommandID.sidebarUnpinNote,
+            SlateCommandID.sidebarUnpinAll:
+            try dispatchSidebarOrganizationAction(intent, rejected: rejected)
+            return .completed(actionID: intent.actionID)
+
         default:
             throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
         }
@@ -2416,6 +2430,15 @@ final class AppState: ObservableObject {
             reasons[SlateCommandID.sidebarCopyWikilink] =
                 Self.sidebarWikilinkCopyPendingReason
         }
+        // FL-06 organization availability follows the published selection's
+        // single target (nil covers both empty and multi selections; multi is
+        // already capability-disabled upstream of these reasons).
+        let organizationTarget = sidebarSelectionSnapshot.flatMap { snapshot in
+            snapshot.items.count == 1 ? snapshot.items.first : nil
+        }
+        reasons.merge(
+            sidebarOrganizationActionReasons(target: organizationTarget)
+        ) { existing, _ in existing }
         return reasons
     }
 
@@ -4828,10 +4851,1434 @@ final class AppState: ObservableObject {
     /// notice is published for the inline sidebar banner; unsafe input is kept
     /// read-only by the store and therefore can never be silently replaced.
     private(set) var sidebarVaultPrefsStore: SidebarVaultPrefsStore?
+    /// Stable identity (device, inode) of the vault root captured when the
+    /// store was installed. Pathname equality alone cannot gate queued
+    /// writes: a same-path replacement vault must never receive them
+    /// (round-18 finding 1).
+    private(set) var sidebarVaultRootIdentity: SidebarVaultRootIdentity?
+    /// Test seam: builds the per-vault store (e.g. with an injected failing
+    /// directory synchronizer) instead of the production initializer.
+    var sidebarVaultPrefsStoreFactoryForTesting: ((URL) -> SidebarVaultPrefsStore)?
     @Published private(set) var sidebarVaultPrefsNotice: SidebarVaultPrefsNotice?
     @Published private(set) var isRetryingSidebarVaultPreferences = false
     private var sidebarVaultPrefsRetryTask: Task<Void, Never>?
     private var sidebarVaultPrefsRetryGeneration = 0
+
+    // MARK: - Sidebar organization (FL-06, #658/#659)
+
+    /// One published value carries the vault's authored organization: the
+    /// sort/grouping preferences (vault default + per-folder overrides) and
+    /// per-folder pins. The tree derives every level order from this.
+    struct SidebarOrganizationState: Equatable {
+        var prefs = SidebarOrganizationPrefs()
+        var pins = SidebarPins()
+    }
+
+    @Published private(set) var sidebarOrganization = SidebarOrganizationState()
+    private var sidebarPinPruneLedger = SidebarPinPruneLedger()
+    /// Serializes `.slate/sidebar.json` writes: each persist awaits its
+    /// predecessor, so two quick commands cannot interleave read-modify-write
+    /// cycles even though each cycle also holds the cross-process lock.
+    private var sidebarOrganizationPersistChain: Task<Void, Never>?
+    /// Writer chains that survive vault teardown (round-16), keyed by the
+    /// vault root's PHYSICAL identity — device and inode, not URL spelling
+    /// — so every alias of one vault (symlink, differently spelled path)
+    /// shares one ordered chain (round-24). A persist detached before a
+    /// close/reopen still holds the vault's serialization slot, so the
+    /// reopened session's writers — and its post-open refresh — queue
+    /// behind it instead of interleaving.
+    @MainActor private static var sidebarStoreWriterChains:
+        [SidebarVaultRootIdentity: Task<Void, Never>] = [:]
+    /// Tail token per vault identity for chain-drain detection.
+    @MainActor private static var sidebarStoreWriterChainTokens:
+        [SidebarVaultRootIdentity: UUID] = [:]
+    /// Structural transform IDs already committed to each vault. This ledger
+    /// — not the live journal, which a same-vault reopen resets — is the
+    /// at-most-once authority for a task's captured immutable backlog, so a
+    /// queued rename survives close/reopen and still commits exactly once
+    /// (round-20 finding 1). Cleared when a vault's chain fully drains.
+    @MainActor private static var sidebarCommittedTransformIDs:
+        [SidebarVaultRootIdentity: Set<UUID>] = [:]
+    /// One write whose disk attempt failed AFTER its session was torn
+    /// down (round-29): the user was already told the change happened,
+    /// so the exact operation and its uncommitted structural backlog are
+    /// retained here, keyed by physical vault identity, and the next
+    /// same-vault open drains them through the normal funnel before its
+    /// state settles. Conflicts and replaced-vault refusals are final
+    /// and never retained.
+    private struct SidebarUnflushedWrite {
+        let apply: @Sendable (inout [String: Any]) throws -> Void
+        let backlog: [SidebarStructuralTransform]
+    }
+    @MainActor private static var sidebarUnflushedWriteRetries:
+        [SidebarVaultRootIdentity: [SidebarUnflushedWrite]] = [:]
+    /// Round-32: capacity gates NEW acknowledgements up front (mutate
+    /// refuses before any optimistic reflect); parking never evicts an
+    /// already-acknowledged intent. Var for cap-boundary tests.
+    static var sidebarUnflushedWriteRetriesCap = 64
+
+    /// Round-32: static mirror of `isMutatingStructure` for the
+    /// termination fence (didSet-maintained; production has exactly one
+    /// AppState).
+    @MainActor fileprivate(set) static var
+        structuralMutationInFlightForTermination = false
+
+    /// Rounds 31–32: termination fence. True while any identity's writer
+    /// chain still holds queued work OR a structural operation (rename /
+    /// move) is in flight — those commit on a worker and only then
+    /// publish their sidebar transform, so quitting between the two
+    /// would strand pins at the old path. Quit waits so an announced
+    /// change can't die mid-flight with the process.
+    @MainActor static var hasPendingSidebarWorkAtTermination: Bool {
+        !sidebarStoreWriterChains.isEmpty
+            || structuralMutationInFlightForTermination
+    }
+
+    /// Rounds 31–32: await quiescence with an unconditionally REAL
+    /// five-second bound. Deadline-based polling never awaits an
+    /// unbounded chain value (a writer wedged on the store's blocking
+    /// flock must not turn Quit into a hang) — chains retire their own
+    /// registry entries, so an empty registry IS settlement. Parked
+    /// retained writes whose vault is closed are not recoverable at
+    /// quit; durable cross-launch recovery is tracked in #944.
+    @MainActor
+    static func settleSidebarWriterChainsForTermination() async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while clock.now < deadline, hasPendingSidebarWorkAtTermination {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+    }
+
+    /// Ownership generation for queued persists. Bumped on every vault
+    /// teardown/switch; a queued task whose captured generation no longer
+    /// matches skips its disk I/O and publishes nothing.
+    private(set) var sidebarOrganizationWriteGeneration = 0
+    /// Token of the most recently enqueued persist. Only the chain's tail
+    /// may reconcile published state from disk: a mid-chain failure defers
+    /// to the queued successors (which still apply their exact mutations)
+    /// and stashes its message here for the tail to surface (round-3
+    /// finding 3).
+    private var sidebarOrganizationPersistTailToken: UUID?
+    private var sidebarOrganizationPendingPersistFailure: String?
+    /// Announcement-verification records awaiting the chain tail: container →
+    /// the effective choice the optimistic announcement described. The tail
+    /// verifies every record against decoded final disk truth; a later action
+    /// on the same container supersedes the earlier record (round-11
+    /// finding 2).
+    private var sidebarOrganizationPendingAnnouncementVerifications:
+        [String: SidebarOrganizationChoice] = [:]
+    private(set) var sidebarOrganizationPersistTaskForTesting: Task<Void, Never>?
+    /// Structural path transforms that arrived while `.slate/sidebar.json`
+    /// was read-only. Retry replays them under the store lock before it
+    /// republishes, so a rename made during the outage cannot orphan the
+    /// file's pins/overrides (round-4 finding 2). Bounded; overflow is
+    /// reported honestly instead of replaying an incomplete journal.
+    private(set) var sidebarStructuralTransformJournal: [SidebarStructuralTransform] = []
+    /// Test-only observability: how many committed persists replayed each
+    /// structural transform (at-most-once semantics, round-9 finding 1).
+    private(set) var sidebarStructuralReplayCountsForTesting: [UUID: Int] = [:]
+    private var sidebarStructuralTransformJournalOverflowed = false
+    /// One-shot test seam: runs on the main actor after a retry replay pass
+    /// captures its journal prefix and before the pass completes, so tests
+    /// can deterministically interleave a structural append (round-5
+    /// finding 1's race).
+    var sidebarStructuralJournalReplayInterleaveHookForTesting: (() -> Void)?
+    /// Round-26: true while structural transforms remain unsaved after a
+    /// tail persist failure that left the file READABLE (no typed notice) —
+    /// the sidebar shows the journal-recovery banner whose Retry drains
+    /// them. Cleared when the journal commits, on Retry publish, and on
+    /// vault teardown.
+    @Published private(set) var sidebarOrganizationJournalRecoveryPending = false
+    private static let sidebarStructuralTransformJournalCap = 1000
+
+    private func resetSidebarOrganizationState() {
+        sidebarOrganizationWriteGeneration &+= 1
+        sidebarOrganizationPersistChain = nil
+        sidebarOrganizationPersistTailToken = nil
+        sidebarOrganizationPendingPersistFailure = nil
+        sidebarOrganizationPendingAnnouncementVerifications = [:]
+        sidebarOrganizationPersistTaskForTesting = nil
+        sidebarStructuralTransformJournal = []
+        sidebarStructuralTransformJournalOverflowed = false
+        sidebarPinPruneInFlight = []
+        sidebarPinPruneLedger.reset()
+        if sidebarOrganizationJournalRecoveryPending {
+            sidebarOrganizationJournalRecoveryPending = false
+        }
+        if sidebarOrganization != SidebarOrganizationState() {
+            sidebarOrganization = SidebarOrganizationState()
+        }
+    }
+
+    /// Publish disk truth (state + any newly detected unsafe-file notice)
+    /// and announce one persist failure. Runs only at the chain tail with
+    /// ownership already validated by the caller.
+    private func reconcileSidebarOrganizationFromDisk(
+        _ recovered: SidebarVaultPrefsReadResult, failure: String
+    ) {
+        // Round-12 finding 3: the reconcile supersedes every optimistic
+        // announcement still awaiting verification — a later unrelated
+        // commit must not replay a stale sort correction.
+        sidebarOrganizationPendingAnnouncementVerifications = [:]
+        var notice = recovered.notice
+        if notice == nil,
+            !SidebarOrganizationSchema.knownSectionShapesAreValid(
+                root: recovered.root)
+        {
+            notice = .malformed
+        }
+        let organization: SidebarOrganizationState
+        if notice == nil {
+            let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
+            organization = SidebarOrganizationState(
+                prefs: decoded.prefs, pins: decoded.pins)
+        } else {
+            organization = SidebarOrganizationState()
+        }
+        if organization != sidebarOrganization {
+            sidebarOrganization = organization
+        }
+        if sidebarVaultPrefsNotice != notice {
+            sidebarVaultPrefsNotice = notice
+        }
+        // Round-26: transforms still pending after a failure with a
+        // READABLE file have no notice-gated Retry — surface the dedicated
+        // journal-recovery banner instead (cleared when the journal drains).
+        sidebarOrganizationJournalRecoveryPending =
+            notice == nil
+            && (!sidebarStructuralTransformJournal.isEmpty
+                || sidebarVaultRootIdentity.map({
+                    Self.sidebarUnflushedWriteRetries[$0]?.isEmpty == false
+                }) == true)
+        lastMutationAnnouncement = failure
+        announcer.post(failure, priority: .medium)
+    }
+
+    /// Round-23: the one announcement for any write or reconcile path that
+    /// refuses to touch a same-path replacement vault.
+    private func announceSidebarWriteDiscardedForReplacedVault() {
+        let message =
+            "The vault at this location changed, so a queued "
+            + "sidebar settings write was discarded."
+        lastMutationAnnouncement = message
+        announcer.post(message, priority: .medium)
+    }
+
+    /// Availability the pure catalog cannot own: read-only preference files
+    /// disable the whole organization set with the notice's reason, and the
+    /// pin/override verbs reflect the target's current state so contextual
+    /// surfaces show exactly the applicable direction.
+    func sidebarOrganizationActionReasons(
+        target: SidebarSelectionItem?
+    ) -> [String: String] {
+        var reasons: [String: String] = [:]
+        if let notice = sidebarVaultPrefsNotice {
+            let blocked =
+                "Sidebar organization can't change while its settings file is "
+                + "read-only. \(notice.localizedDescription)"
+            for id in SlateCommandID.sidebarOrganizationCommands {
+                reasons[id] = blocked
+            }
+            return reasons
+        }
+
+        if let target, !target.isDirectory {
+            let folder = SidebarPins.folder(of: target.path)
+            if sidebarOrganization.pins.isPinned(target.path, inFolder: folder) {
+                reasons[SlateCommandID.sidebarPinNote] = "This note is already pinned."
+            } else {
+                reasons[SlateCommandID.sidebarUnpinNote] = "This note isn't pinned."
+            }
+        }
+
+        if let target, target.isDirectory,
+            sidebarOrganization.pins.paths(forFolder: target.path).isEmpty
+        {
+            reasons[SlateCommandID.sidebarUnpinAll] = "No pinned notes in this folder."
+        }
+
+        let container: String
+        if let target {
+            container = target.isDirectory
+                ? target.path : SidebarPins.folder(of: target.path)
+        } else {
+            container = ""
+        }
+        if container.isEmpty {
+            reasons[SlateCommandID.sidebarUseVaultDefaultSort] =
+                "The vault default applies here."
+        } else if sidebarOrganization.prefs.folderOverrides[container]?.sort == nil {
+            // Availability tracks the SORT override specifically; a grouping-
+            // only override leaves nothing for this command to clear.
+            reasons[SlateCommandID.sidebarUseVaultDefaultSort] =
+                "This folder uses the vault default."
+        }
+
+        // Grouping forces the matching date sort descending (fl3 §FL3-1.3
+        // "mixed sort+group combinations are not offered"): while the target
+        // container groups by date, only the two newest-first date sorts can
+        // take effect, so the rest disable with one deterministic reason —
+        // a menu choice must never write a hidden, inert preference
+        // (red-team finding 2).
+        let effective = sidebarOrganization.prefs.effectiveChoice(
+            forFolder: container)
+        if effective.grouping == .dateBuckets {
+            let inert = Self.sidebarGroupedSortInertReason
+            reasons[SlateCommandID.sidebarSortNameAsc] = inert
+            reasons[SlateCommandID.sidebarSortNameDesc] = inert
+            reasons[SlateCommandID.sidebarSortCreatedAsc] = inert
+            reasons[SlateCommandID.sidebarSortModifiedAsc] = inert
+        }
+        return reasons
+    }
+
+    /// The published selection's organization container: a selected folder is
+    /// its own container, a selected file targets its parent, anything else
+    /// targets the vault default. Drives the menu-bar/toolbar radio state.
+    var sidebarOrganizationMenuTargetChoice: SidebarOrganizationChoice {
+        let target = sidebarSelectionSnapshot.flatMap { snapshot in
+            snapshot.items.count == 1 ? snapshot.items.first : nil
+        }
+        let container: String
+        if let target {
+            container = target.isDirectory
+                ? target.path : SidebarPins.folder(of: target.path)
+        } else {
+            container = ""
+        }
+        return sidebarOrganization.prefs
+            .effectiveChoice(forFolder: container).normalized
+    }
+
+    /// The one FL-06 mutation funnel: reflect the change into the published
+    /// state synchronously (the tree re-sorts immediately), announce it, and
+    /// persist through the store's locked read-modify-write on a serialized
+    /// background chain. A failed write reconciles the published state — and
+    /// any newly detected unsafe-file notice — from disk truth and reports
+    /// honestly; it never leaves silent divergence.
+    ///
+    /// Ownership: every queued persist carries the write generation captured
+    /// at enqueue. Vault teardown bumps the generation, so a stale task
+    /// revalidates on the main actor and skips its disk I/O entirely — a
+    /// write queued under an old session can neither touch the file after
+    /// reopen nor roll the UI back (red-team finding 1).
+    /// Thrown from inside the locked update when the file's known sections
+    /// no longer use shapes this build understands — a cooperating writer
+    /// may have replaced them after our open-time validation, and the write
+    /// must fail instead of clobbering that data (round-6 finding 2).
+    private struct SidebarOrganizationShapeError: LocalizedError {
+        var errorDescription: String? {
+            ".slate/sidebar.json uses an unrecognized layout for a sidebar "
+                + "section, so it was left untouched."
+        }
+    }
+
+    /// Thrown from inside the locked update when the file's CURRENT state
+    /// makes the requested change semantically inert (round-7 finding 2):
+    /// the write is refused, published state reconciles to the merged disk
+    /// truth, and the reason is announced as-is (it is a user-facing rule,
+    /// not a save failure).
+    /// The vault root no longer resolves to the identity this write was
+    /// enqueued for; the write is dropped without touching the newcomer.
+    private struct SidebarOrganizationVaultReplacedError: LocalizedError {
+        var errorDescription: String? {
+            "The vault at this location changed, so a queued sidebar "
+                + "settings write was discarded."
+        }
+    }
+
+    private struct SidebarOrganizationConflictError: LocalizedError {
+        let reason: String
+        var errorDescription: String? { reason }
+    }
+
+    static let sidebarPinCapacityReason =
+        "Pinned-note limit reached (\(SidebarOrganizationSchema.maxPinsPerFolder) "
+        + "per folder, \(SidebarOrganizationSchema.maxTotalPins) per vault). "
+        + "Unpin something to pin more."
+
+    static let sidebarGroupedSortInertReason =
+        "Date grouping sorts newest first. Turn off Group by Date to use this order."
+
+    private func mutateSidebarOrganization(
+        announce announcement: String?,
+        apply: @escaping @Sendable (inout [String: Any]) throws -> Void,
+        reflect: (inout SidebarOrganizationState) -> Void,
+        acknowledge: (() -> Void)? = nil,
+        onSettled: (() -> Void)? = nil,
+        isBacklogDrain: Bool = false,
+        isRetainedDrain: Bool = false,
+        prepare: (() -> Void)? = nil,
+        verifyAnnouncement: (container: String, announced: SidebarOrganizationChoice)? = nil
+    ) throws {
+        if let notice = sidebarVaultPrefsNotice {
+            throw sidebarActionFailure(
+                "Sidebar organization can't change while its settings file is "
+                    + "read-only. \(notice.localizedDescription)")
+        }
+        guard let store = sidebarVaultPrefsStore else {
+            throw sidebarActionFailure("Open a vault to use Sidebar actions.")
+        }
+        // Round-24: chains, tokens, and the committed ledger are keyed by the
+        // admitted PHYSICAL identity (device, inode) — every path spelling of
+        // one vault shares one ordered chain. Without a captured identity no
+        // write can be ordered or disk-verified: refuse up front, before any
+        // optimistic reflect or announcement.
+        guard let enqueueIdentity = sidebarVaultRootIdentity else {
+            throw sidebarActionFailure(
+                "Sidebar settings can't change right now — this vault's "
+                    + "on-disk location could not be verified when it opened.")
+        }
+        // Round-32, refined round-33: capacity gates NEW user-acknowledged
+        // work only — every dispatch command announces, and it is that
+        // acknowledgement the cap must not let us break. Internal persists
+        // (journal drains for structural transforms that ALREADY committed
+        // on the filesystem, retained-drain runs, prune maintenance) carry
+        // no announcement and must never be refused: refusing a committed
+        // rename's drain would strand its pins at the old path for the
+        // stale prune. Internal work that later fails simply parks
+        // (append-only, past the cap if need be).
+        if announcement != nil,
+            let parked = Self.sidebarUnflushedWriteRetries[enqueueIdentity],
+            parked.count >= Self.sidebarUnflushedWriteRetriesCap
+        {
+            throw sidebarActionFailure(
+                "Sidebar changes can't be saved right now — earlier changes "
+                    + "are still waiting to retry. Use Retry in the sidebar, "
+                    + "then try again.")
+        }
+
+        var next = sidebarOrganization
+        reflect(&next)
+        if next != sidebarOrganization {
+            sidebarOrganization = next
+        }
+        if let announcement {
+            lastMutationAnnouncement = announcement
+            announcer.post(announcement, priority: .medium)
+        }
+
+        let previous = Self.sidebarStoreWriterChains[enqueueIdentity]
+        let session = currentSession
+        let generation = sidebarOrganizationWriteGeneration
+        let vaultRootURL = store.vaultRoot
+        let token = UUID()
+        sidebarOrganizationPersistTailToken = token
+        if let verifyAnnouncement {
+            sidebarOrganizationPendingAnnouncementVerifications[
+                verifyAnnouncement.container] = verifyAnnouncement.announced
+        }
+        // Round-8 finding 1: EVERY persist first drains the pending
+        // structural backlog under the lock, so a transform stranded by an
+        // earlier readable-write failure (lock/temp/fsync) commits with the
+        // next write of any kind instead of waiting for a notice-gated Retry.
+        // The snapshot is re-filtered against the LIVE journal after the
+        // predecessor completes (round-9 finding 1) — see below.
+        let backlog = sidebarStructuralTransformJournal
+        let task = Task { [weak self] in
+            await previous?.value
+            // Round-1, refined rounds 17–21: a queued exact-op write is the
+            // user's committed intent and always finishes against its
+            // CAPTURED store — including after the vault closed without
+            // reopening. Safety lives in the identity checks bound to the
+            // actual disk: the fresh pre-stat below and the store's own
+            // descriptor-bound fstat refuse a replaced or deleted vault.
+            // Publishes, acknowledgements, and announcements additionally
+            // require the original generation/session ownership.
+            // The chain-registry entry belongs to this task even when its
+            // AppState is gone — retire it unconditionally, or the quit
+            // fence would wait on a stale completed task forever
+            // (round-31).
+            defer {
+                if Self.sidebarStoreWriterChainTokens[enqueueIdentity]
+                    == token
+                {
+                    Self.sidebarStoreWriterChains[enqueueIdentity] = nil
+                    Self.sidebarStoreWriterChainTokens[enqueueIdentity] = nil
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity] = nil
+                }
+            }
+            guard let self else { return }
+            // Round-9 finding 1 (at-most-once), rebased on the per-file
+            // committed ledger (round-20 finding 1): the captured backlog is
+            // immutable, and only ids NOT yet committed to this file replay.
+            // Unlike the live journal — which a same-vault reopen resets —
+            // the ledger survives, so a queued structural rename lands
+            // exactly once across close/reopen. (An applied-but-unsynced
+            // pass legitimately re-replays; every transform is a no-op
+            // against its own committed effect.)
+            let committed =
+                Self.sidebarCommittedTransformIDs[enqueueIdentity] ?? []
+            let effectiveBacklog = backlog.filter {
+                !committed.contains($0.id)
+            }
+            let effectiveBacklogIDs = Set(effectiveBacklog.map(\.id))
+            // Round-30 (review #1): an earlier same-identity write is
+            // parked for ordered replay — any non-drain write reaching its
+            // disk attempt now would commit AHEAD of it and invert the
+            // user's order. Park this write behind the registry instead;
+            // the drain settles everything in enqueue order. A live
+            // session immediately schedules that drain.
+            if !isRetainedDrain,
+                Self.sidebarUnflushedWriteRetries[enqueueIdentity]?.isEmpty
+                    == false
+            {
+                Self.sidebarUnflushedWriteRetries[enqueueIdentity, default: []]
+                    .append(
+                        SidebarUnflushedWrite(
+                            apply: apply, backlog: effectiveBacklog))
+                let ownedNow =
+                    self.sidebarOrganizationWriteGeneration == generation
+                    && self.currentSession === session
+                if ownedNow {
+                    self.scheduleSidebarRetainedWriteDrain()
+                }
+                onSettled?()
+                return
+            }
+            prepare?()
+            enum PersistOutcome {
+                case success([String: Any])
+                /// The atomic rename landed (content committed) but the
+                /// directory fsync failed — treat as success plus a
+                /// durability warning (round-10 finding 1).
+                case replacedButUnsynced([String: Any], reason: String)
+                case failure(Error)
+            }
+            let outcome: PersistOutcome =
+                await Task.detached(priority: .utility) {
+                    // Fresh on-disk revalidation immediately before the
+                    // locked write: the path must still resolve to the SAME
+                    // vault root the write was enqueued for (round-18
+                    // finding 1 — a same-path replacement never receives
+                    // queued writes).
+                    guard
+                        AppState.vaultRootIdentity(of: vaultRootURL)
+                            == enqueueIdentity
+                    else {
+                        return .failure(
+                            SidebarOrganizationVaultReplacedError())
+                    }
+                    var finalRoot: [String: Any] = [:]
+                    do {
+                        try store.update(
+                            expectedRootIdentity: enqueueIdentity
+                        ) { root in
+                            // Revalidate under the lock: shapes may have
+                            // changed since open-time validation (round-6
+                            // finding 2).
+                            guard
+                                SidebarOrganizationSchema
+                                    .knownSectionShapesAreValid(root: root)
+                            else {
+                                throw SidebarOrganizationShapeError()
+                            }
+                            for transform in effectiveBacklog {
+                                transform.applyRaw(to: &root)
+                            }
+                            try apply(&root)
+                            // Round-35: the write must never produce a file
+                            // its own admission would reject — validate the
+                            // RESULT before serialization. A capacity-
+                            // crossing operation is refused as a typed
+                            // user-facing rule, leaving the valid file
+                            // unchanged. (Backlog transforms rename or
+                            // delete; they cannot grow counts, and real
+                            // filesystem paths sit far under the length
+                            // ceiling — a post-state violation is the
+                            // requested mutation's doing.)
+                            guard
+                                SidebarOrganizationSchema
+                                    .knownSectionShapesAreValid(root: root)
+                            else {
+                                throw SidebarOrganizationConflictError(
+                                    reason: AppState
+                                        .sidebarPinCapacityReason)
+                            }
+                            finalRoot = root
+                        }
+                        return .success(finalRoot)
+                    } catch SidebarVaultPrefsStoreError.replacedButUnsynced(
+                        let reason)
+                    {
+                        // The mutation ran and the atomic rename landed:
+                        // `finalRoot` holds the file's committed content.
+                        return .replacedButUnsynced(finalRoot, reason: reason)
+                    } catch {
+                        // Reconcile candidate: what the file actually holds.
+                        return .failure(error)
+                    }
+                }.value
+            let ownedForPublish =
+                self.sidebarOrganizationWriteGeneration == generation
+                && self.currentSession === session
+
+            let isTail = self.sidebarOrganizationPersistTailToken == token
+
+            @MainActor
+            func handleCommit(_ finalRoot: [String: Any], durabilityWarning: String?) {
+                if !effectiveBacklogIDs.isEmpty {
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity, default: []]
+                        .formUnion(effectiveBacklogIDs)
+                    self.sidebarStructuralTransformJournal.removeAll {
+                        effectiveBacklogIDs.contains($0.id)
+                    }
+                    for id in effectiveBacklogIDs {
+                        self.sidebarStructuralReplayCountsForTesting[id, default: 0]
+                            += 1
+                    }
+                }
+                if self.sidebarStructuralTransformJournal.isEmpty,
+                    Self.sidebarUnflushedWriteRetries[enqueueIdentity]?.isEmpty
+                        != false
+                {
+                    self.sidebarOrganizationJournalRecoveryPending = false
+                }
+                acknowledge?()
+                if let durabilityWarning {
+                    self.lastMutationAnnouncement = durabilityWarning
+                    self.announcer.post(durabilityWarning, priority: .medium)
+                }
+                guard isTail else { return }
+                // The tail publishes decoded post-write disk truth: a locked
+                // read-modify-write can merge ANOTHER writer's changes, and
+                // the live tree and accessibility state must see that merge,
+                // not just this window's optimistic reflect (round-4
+                // finding 1). Queued optimistic successors are preserved
+                // because only the tail publishes.
+                let decoded = SidebarOrganizationSchema.decode(root: finalRoot)
+                let organization = SidebarOrganizationState(
+                    prefs: decoded.prefs, pins: decoded.pins)
+                if organization != self.sidebarOrganization {
+                    self.sidebarOrganization = organization
+                }
+                // Round-10 finding 2 + round-11 finding 2: the tail verifies
+                // EVERY pending record — including ones enqueued by earlier
+                // non-tail writes in this chain — against final disk truth,
+                // announcing each container whose merged effective choice
+                // differs from what its optimistic announcement described.
+                let pendingVerifications =
+                    self.sidebarOrganizationPendingAnnouncementVerifications
+                self.sidebarOrganizationPendingAnnouncementVerifications = [:]
+                for (container, announced) in pendingVerifications {
+                    let merged = organization.prefs
+                        .effectiveChoice(forFolder: container).normalized
+                    if merged != announced.normalized {
+                        let correction = merged.sortAnnouncement
+                        self.lastMutationAnnouncement = correction
+                        self.announcer.post(correction, priority: .medium)
+                    }
+                }
+                if let pending = self.sidebarOrganizationPendingPersistFailure {
+                    // An earlier queued write failed mid-chain; surface that
+                    // failure exactly once now that state matches the file.
+                    self.sidebarOrganizationPendingPersistFailure = nil
+                    self.lastMutationAnnouncement = pending
+                    self.announcer.post(pending, priority: .medium)
+                }
+            }
+
+            defer {
+                onSettled?()
+            }
+            switch outcome {
+            case .failure(let error):
+                guard ownedForPublish else {
+                    // Round-29: nobody is left to report to, and teardown
+                    // already reset the optimistic state — but the change
+                    // was announced when it was enqueued. Retain the exact
+                    // operation for the next same-vault open instead of
+                    // treating a failed write as completed. Conflicts and
+                    // replaced-vault refusals are final: never retried.
+                    let isFinalRefusal =
+                        error is SidebarOrganizationConflictError
+                        || error is SidebarOrganizationVaultReplacedError
+                        || (error as? SidebarVaultPrefsStoreError)
+                            .map({
+                                if case .vaultReplaced = $0 { return true }
+                                return false
+                            }) == true
+                    if !isFinalRefusal {
+                        // Round-32: append-only — capacity is enforced at
+                        // acknowledgement time, never by eviction here.
+                        Self.sidebarUnflushedWriteRetries[
+                            enqueueIdentity, default: []
+                        ].append(
+                            SidebarUnflushedWrite(
+                                apply: apply, backlog: effectiveBacklog))
+                    }
+                    return
+                }
+                // Round-22: a vault-replaced refusal must not reconcile from
+                // the NEWCOMER's file — the disk at this path is no longer
+                // ours to read. Announce and keep current published state.
+                if error is SidebarOrganizationVaultReplacedError
+                    || (error as? SidebarVaultPrefsStoreError)
+                        .map({
+                            if case .vaultReplaced = $0 { return true }
+                            return false
+                        }) == true
+                {
+                    self.announceSidebarWriteDiscardedForReplacedVault()
+                    return
+                }
+                let failure: String
+                if let conflict = error as? SidebarOrganizationConflictError {
+                    failure = conflict.reason
+                } else {
+                    failure =
+                        "Sidebar organization could not be saved. "
+                        + error.localizedDescription
+                }
+                guard isTail else {
+                    // A queued successor still holds an optimistic mutation
+                    // the user was told about; let the tail publish disk
+                    // truth once every queued write has run, instead of
+                    // rolling that successor back mid-chain (round-3
+                    // finding 3).
+                    self.sidebarOrganizationPendingPersistFailure = failure
+                    return
+                }
+                // Round-23: disk truth must still BE this vault's disk.
+                // The reconcile read is bound to the enqueue identity; a
+                // mismatch is the replaced-vault case — keep current state
+                // and announce the discard.
+                let reconcileIdentity = enqueueIdentity
+                let recovered = await Task.detached(priority: .utility) {
+                    store.read(expectedRootIdentity: reconcileIdentity)
+                }.value
+                guard self.sidebarOrganizationWriteGeneration == generation,
+                    self.currentSession === session
+                else { return }
+                self.sidebarOrganizationPendingPersistFailure = nil
+                guard let recovered else {
+                    self.announceSidebarWriteDiscardedForReplacedVault()
+                    return
+                }
+                // A write can fail because the file BECAME unsafe (synced-in
+                // corruption, oversize, a newer version). The reconcile
+                // publishes that notice so the banner appears and the whole
+                // organization set disables with its reason.
+                self.reconcileSidebarOrganizationFromDisk(
+                    recovered, failure: failure)
+                // Round-8 finding 1: a failure that leaves the file READABLE
+                // publishes no notice, so the notice-gated Retry never runs.
+                // Schedule one automatic drain for the surviving backlog;
+                // any later persist drains it again regardless.
+                if !isBacklogDrain,
+                    self.sidebarVaultPrefsNotice == nil,
+                    !self.sidebarStructuralTransformJournal.isEmpty
+                {
+                    try? self.mutateSidebarOrganization(
+                        announce: nil,
+                        apply: { _ in },
+                        reflect: { _ in },
+                        isBacklogDrain: true)
+                }
+            case .success(let finalRoot):
+                if !effectiveBacklogIDs.isEmpty {
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity, default: []]
+                        .formUnion(effectiveBacklogIDs)
+                }
+                guard ownedForPublish else { return }
+                handleCommit(finalRoot, durabilityWarning: nil)
+            case .replacedButUnsynced(let finalRoot, let reason):
+                if !effectiveBacklogIDs.isEmpty {
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity, default: []]
+                        .formUnion(effectiveBacklogIDs)
+                }
+                guard ownedForPublish else { return }
+                // Content committed; report only durability (round-10
+                // finding 1) — never leave the transform pending, or a later
+                // drain could wrongly transform paths another process
+                // recreated in between.
+                handleCommit(
+                    finalRoot,
+                    durabilityWarning:
+                        "Sidebar settings were saved, but the change may not "
+                        + "survive a sudden power loss: \(reason)")
+            }
+        }
+        sidebarOrganizationPersistChain = task
+        Self.sidebarStoreWriterChains[enqueueIdentity] = task
+        Self.sidebarStoreWriterChainTokens[enqueueIdentity] = token
+        sidebarOrganizationPersistTaskForTesting = task
+    }
+
+    /// Written once on the main actor before the drain's detached update
+    /// is created; read only inside that update (task creation is the
+    /// happens-before edge).
+    private final class SidebarRetainedDrainSnapshot: @unchecked Sendable {
+        var entries: [SidebarUnflushedWrite] = []
+    }
+
+    /// Round-30: settle the identity-keyed retained writes in enqueue
+    /// order through the normal funnel. The snapshot is taken at RUN time
+    /// via `prepare` — after every predecessor in the chain has settled —
+    /// so a failure landing after this drain was scheduled is still
+    /// consumed. Inside the one locked update a per-entry FINAL refusal
+    /// (conflict) drops only that entry; any other throw aborts the whole
+    /// update and keeps the suffix parked. The registry shrinks only on
+    /// commit (acknowledge), so nothing is lost to a transient failure.
+    private func scheduleSidebarRetainedWriteDrain() {
+        guard sidebarVaultPrefsNotice == nil,
+            let drainIdentity = sidebarVaultRootIdentity
+        else { return }
+        let snapshot = SidebarRetainedDrainSnapshot()
+        try? mutateSidebarOrganization(
+            announce: nil,
+            apply: { root in
+                for entry in snapshot.entries {
+                    for transform in entry.backlog {
+                        transform.applyRaw(to: &root)
+                    }
+                    do {
+                        try entry.apply(&root)
+                    } catch is SidebarOrganizationConflictError {
+                        // Final refusal: dropped on commit; later entries
+                        // still settle.
+                    }
+                }
+            },
+            reflect: { _ in },
+            acknowledge: {
+                let count = snapshot.entries.count
+                guard count > 0 else { return }
+                if var entries = Self.sidebarUnflushedWriteRetries[
+                    drainIdentity]
+                {
+                    entries.removeFirst(min(count, entries.count))
+                    Self.sidebarUnflushedWriteRetries[drainIdentity] =
+                        entries.isEmpty ? nil : entries
+                }
+            },
+            isBacklogDrain: true,
+            isRetainedDrain: true,
+            prepare: {
+                snapshot.entries =
+                    Self.sidebarUnflushedWriteRetries[drainIdentity] ?? []
+            })
+    }
+
+    /// Round-23 test seam: simulate an open whose root-identity capture
+    /// failed (fstat raced a deletion) so fail-closed paths are testable.
+    func overrideSidebarVaultRootIdentityForTesting(
+        _ identity: SidebarVaultRootIdentity?
+    ) {
+        sidebarVaultRootIdentity = identity
+    }
+
+    /// Test seam: enqueue one raw write through the production persist chain
+    /// — ownership guards, tail bookkeeping, and failure reconcile included —
+    /// so chain-ordering behavior is testable without a second funnel.
+    func enqueueSidebarOrganizationWriteForTesting(
+        _ apply: @escaping @Sendable (inout [String: Any]) throws -> Void
+    ) {
+        try? mutateSidebarOrganization(announce: nil, apply: apply) { _ in }
+    }
+
+    /// Dispatch seam for the eleven FL-06 organization commands. Container
+    /// resolution reuses the creation-parent contract: a selected folder is
+    /// its own container, a selected file targets its parent, and an empty
+    /// selection targets the vault default.
+    func dispatchSidebarOrganizationAction(
+        _ intent: SidebarActionInvocationIntent,
+        rejected: String
+    ) throws {
+        switch intent.actionID {
+        case SlateCommandID.sidebarSortNameAsc:
+            try setSidebarSort(.init(field: .name, direction: .asc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortNameDesc:
+            try setSidebarSort(.init(field: .name, direction: .desc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortCreatedDesc:
+            try setSidebarSort(.init(field: .created, direction: .desc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortCreatedAsc:
+            try setSidebarSort(.init(field: .created, direction: .asc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortModifiedDesc:
+            try setSidebarSort(.init(field: .modified, direction: .desc), intent: intent, rejected: rejected)
+        case SlateCommandID.sidebarSortModifiedAsc:
+            try setSidebarSort(.init(field: .modified, direction: .asc), intent: intent, rejected: rejected)
+
+        case SlateCommandID.sidebarToggleDateGrouping:
+            let container = try canonicalSidebarCreationParent(
+                for: intent.snapshot, rejection: rejected)
+            let effective = sidebarOrganization.prefs.effectiveChoice(
+                forFolder: container)
+            let next: SidebarGroupingOption =
+                effective.grouping == .dateBuckets ? .none : .dateBuckets
+            var announced = effective
+            announced.grouping = next
+            // Single-axis write: only the grouping key changes, so an
+            // interleaved writer's sort — or a raw sort object this build
+            // cannot decode — is never restored from a stale snapshot
+            // (round-3 finding 5).
+            if container.isEmpty {
+                try mutateSidebarOrganization(
+                    announce: announced.sortAnnouncement,
+                    apply: { root in
+                        SidebarOrganizationSchema.setVaultGrouping(&root, next)
+                    },
+                    reflect: { state in
+                        state.prefs.vaultChoice.grouping = next
+                    },
+                    verifyAnnouncement: (container: "", announced: announced))
+            } else {
+                // Choosing the vault's CURRENT value returns the folder to
+                // inheritance instead of pinning an explicit copy (round-6
+                // finding 3) — and that comparison happens under the store
+                // lock against the on-disk vault grouping, so a concurrent
+                // vault change cannot turn the toggle into a wrong-way
+                // no-op (round-7 finding 3). The intended `next` value is
+                // carried in; only the clear-vs-set decision is re-derived.
+                try mutateSidebarOrganization(
+                    announce: announced.sortAnnouncement,
+                    apply: { root in
+                    let vaultGrouping = SidebarOrganizationSchema.decode(root: root)
+                        .prefs.vaultChoice.grouping
+                    if next == vaultGrouping {
+                        SidebarOrganizationSchema.clearFolderGroupingOverride(
+                            &root, folder: container)
+                    } else {
+                        SidebarOrganizationSchema.setFolderGrouping(
+                            &root, folder: container, next)
+                    }
+                }, reflect: { state in
+                    if next == state.prefs.vaultChoice.grouping {
+                        guard var override = state.prefs.folderOverrides[container]
+                        else { return }
+                        override.grouping = nil
+                        state.prefs.folderOverrides[container] =
+                            override.isEmpty ? nil : override
+                    } else {
+                        var override = state.prefs.folderOverrides[container]
+                            ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
+                        override.grouping = next
+                        state.prefs.folderOverrides[container] = override
+                    }
+                },
+                    verifyAnnouncement: (container: container, announced: announced))
+            }
+
+        case SlateCommandID.sidebarUseVaultDefaultSort:
+            let container = try canonicalSidebarCreationParent(
+                for: intent.snapshot, rejection: rejected)
+            guard !container.isEmpty else {
+                throw sidebarActionFailure("The vault default applies here.")
+            }
+            // The command's label promises SORT only: a grouping override
+            // must survive it (round-2 finding 2).
+            guard sidebarOrganization.prefs.folderOverrides[container]?.sort != nil
+            else {
+                throw sidebarActionFailure("This folder uses the vault default.")
+            }
+            var announced = sidebarOrganization.prefs.effectiveChoice(
+                forFolder: container)
+            announced.sort = sidebarOrganization.prefs.vaultChoice.sort
+            try mutateSidebarOrganization(
+                announce: announced.sortAnnouncement,
+                apply: { root in
+                SidebarOrganizationSchema.clearFolderSortOverride(
+                    &root, folder: container)
+            }, reflect: { state in
+                guard var override = state.prefs.folderOverrides[container] else {
+                    return
+                }
+                override.sort = nil
+                state.prefs.folderOverrides[container] =
+                    override.isEmpty ? nil : override
+            },
+                verifyAnnouncement: (container: container, announced: announced))
+
+        case SlateCommandID.sidebarPinNote:
+            let target = try singleFileTarget(of: intent, rejected: rejected)
+            let folder = SidebarPins.folder(of: target)
+            guard
+                !sidebarOrganization.pins.isPinned(target, inFolder: folder)
+            else {
+                throw sidebarActionFailure("This note is already pinned.")
+            }
+            // Round-35: refuse a capacity-crossing pin up front with the
+            // published counts; the locked write's post-mutation shape
+            // guard is the race-safe backstop.
+            guard
+                sidebarOrganization.pins.paths(forFolder: folder).count
+                    < SidebarOrganizationSchema.maxPinsPerFolder
+            else {
+                throw sidebarActionFailure(Self.sidebarPinCapacityReason)
+            }
+            // Exact op against the decoded on-disk pins: a concurrent
+            // writer's pin in the same folder survives (round-3 finding 4).
+            try mutateSidebarOrganization(announce: "Pinned.") { root in
+                var stored = SidebarOrganizationSchema.decode(root: root).pins
+                stored.pin(target, inFolder: folder)
+                SidebarOrganizationSchema.setPins(
+                    &root, folder: folder, paths: stored.paths(forFolder: folder))
+            } reflect: { state in
+                state.pins.pin(target, inFolder: folder)
+            }
+
+        case SlateCommandID.sidebarUnpinNote:
+            let target = try singleFileTarget(of: intent, rejected: rejected)
+            let folder = SidebarPins.folder(of: target)
+            guard sidebarOrganization.pins.isPinned(target, inFolder: folder)
+            else {
+                throw sidebarActionFailure("This note isn't pinned.")
+            }
+            try mutateSidebarOrganization(announce: "Unpinned.") { root in
+                var stored = SidebarOrganizationSchema.decode(root: root).pins
+                stored.unpin(target, inFolder: folder)
+                SidebarOrganizationSchema.setPins(
+                    &root, folder: folder, paths: stored.paths(forFolder: folder))
+            } reflect: { state in
+                state.pins.unpin(target, inFolder: folder)
+            }
+
+        case SlateCommandID.sidebarUnpinAll:
+            guard intent.snapshot.items.count == 1,
+                let item = intent.snapshot.items.first, item.isDirectory
+            else {
+                throw sidebarActionFailure(rejected)
+            }
+            let folder = item.path
+            let count = sidebarOrganization.pins.paths(forFolder: folder).count
+            guard count > 0 else {
+                throw sidebarActionFailure("No pinned notes in this folder.")
+            }
+            let noun = count == 1 ? "note" : "notes"
+            try mutateSidebarOrganization(
+                announce: "Unpinned \(count) \(noun)."
+            ) { root in
+                SidebarOrganizationSchema.setPins(&root, folder: folder, paths: [])
+            } reflect: { state in
+                state.pins.unpinAll(inFolder: folder)
+            }
+
+        default:
+            throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
+        }
+    }
+
+    private func singleFileTarget(
+        of intent: SidebarActionInvocationIntent, rejected: String
+    ) throws -> String {
+        guard intent.snapshot.items.count == 1,
+            let item = intent.snapshot.items.first, !item.isDirectory
+        else {
+            throw sidebarActionFailure(rejected)
+        }
+        return item.path
+    }
+
+    private func setSidebarSort(
+        _ option: SidebarSortOption,
+        intent: SidebarActionInvocationIntent,
+        rejected: String
+    ) throws {
+        let container = try canonicalSidebarCreationParent(
+            for: intent.snapshot, rejection: rejected)
+        // Dispatch-side twin of the availability rule: a grouped container
+        // accepts only the newest-first date sorts. Everything else would be
+        // an inert hidden write (red-team finding 2).
+        let effectiveBefore = sidebarOrganization.prefs.effectiveChoice(
+            forFolder: container)
+        if effectiveBefore.grouping == .dateBuckets,
+            option.direction == .asc || option.field == .name
+        {
+            throw sidebarActionFailure(Self.sidebarGroupedSortInertReason)
+        }
+        // Single-axis writes: only the sort object changes (merged in place,
+        // unknown members preserved); a concurrent grouping change is never
+        // restored from a stale snapshot (round-3 finding 5).
+        if container.isEmpty {
+            var announced = sidebarOrganization.prefs.vaultChoice
+            announced.sort = option
+            try mutateSidebarOrganization(
+                announce: announced.sortAnnouncement,
+                apply: { root in
+                // Authoritative recheck under the lock: a concurrent writer
+                // may have enabled grouping since the pre-dispatch guard
+                // read this process's published state (round-7 finding 2).
+                let grouping = SidebarOrganizationSchema.decode(root: root)
+                    .prefs.effectiveChoice(forFolder: "").grouping
+                if grouping == .dateBuckets,
+                    option.direction == .asc || option.field == .name
+                {
+                    throw SidebarOrganizationConflictError(
+                        reason: Self.sidebarGroupedSortInertReason)
+                }
+                SidebarOrganizationSchema.setVaultSort(&root, option)
+            },
+                reflect: { state in
+                    state.prefs.vaultChoice.sort = option
+                },
+                verifyAnnouncement: (container: "", announced: announced))
+        } else {
+            var announced = sidebarOrganization.prefs.effectiveChoice(
+                forFolder: container)
+            announced.sort = option
+            try mutateSidebarOrganization(
+                announce: announced.sortAnnouncement,
+                apply: { root in
+                let grouping = SidebarOrganizationSchema.decode(root: root)
+                    .prefs.effectiveChoice(forFolder: container).grouping
+                if grouping == .dateBuckets,
+                    option.direction == .asc || option.field == .name
+                {
+                    throw SidebarOrganizationConflictError(
+                        reason: Self.sidebarGroupedSortInertReason)
+                }
+                SidebarOrganizationSchema.setFolderSort(
+                    &root, folder: container, option)
+            },
+                reflect: { state in
+                    var override = state.prefs.folderOverrides[container]
+                        ?? SidebarOrganizationOverride(sort: nil, grouping: nil)
+                    override.sort = option
+                    state.prefs.folderOverrides[container] = override
+                },
+                verifyAnnouncement: (container: container, announced: announced))
+        }
+    }
+
+    /// Keep pins AND path-keyed folder overrides consistent with every
+    /// structural mutation (fl3 spec §FL3-2.3 + round-2 finding 3): renames
+    /// retarget in place, moves out of the folder and deletions drop, and
+    /// folder transforms carry their whole subtree — for pins by rewriting
+    /// members, for overrides by rekeying the stored entries with their
+    /// unknown inner keys intact. Persistence replays the same pure mutation
+    /// against the decoded on-disk state inside the locked update, so a
+    /// concurrent writer's unrelated changes are never clobbered by a stale
+    /// snapshot (round-2 finding 1). Silent — the structural mutation's own
+    /// announcement already spoke.
+    func applySidebarPinsMutation(_ kind: TreeMutation.Kind) {
+        // Normalize the kind into one transform value so the in-memory
+        // application, the locked disk replay, and the read-only journal all
+        // consume the identical operation.
+        var transform = SidebarStructuralTransform()
+        switch kind {
+        case let .rename(oldPath, newPath),
+            let .move(oldPath, newPath, _, _):
+            // The node kind is unknown here; pins/overrides transforms are
+            // disjoint on file vs folder paths, so both are applied.
+            transform.renames.append(
+                .init(oldPath: oldPath, newPath: newPath, isDirectory: nil))
+        case let .delete(path, _, wasDirectory):
+            if wasDirectory {
+                transform.deletedFolders.append(path)
+            } else {
+                transform.deletedFiles.append(path)
+            }
+        case let .batchMove(standing, _), let .importBatch(_, standing, _):
+            for change in standing {
+                transform.renames.append(
+                    .init(
+                        oldPath: change.oldPath,
+                        newPath: change.newPath,
+                        isDirectory: change.isDirectory))
+            }
+        case let .batchTrash(trashed):
+            transform.deletedFiles.append(
+                contentsOf: trashed.filter { !$0.isDirectory }.map(\.path))
+            transform.deletedFolders.append(
+                contentsOf: trashed.filter(\.isDirectory).map(\.path))
+        case .createFolder, .createNote, .batchReconcile:
+            return
+        }
+        guard !transform.isEmpty else { return }
+        guard sidebarVaultPrefsStore != nil else { return }
+
+        // Every structural transform is journaled as PENDING first and only
+        // acknowledged (removed) after its locked replay commits. The vault
+        // mutation already happened on disk, so a replay that fails — even
+        // one whose failure is what first DETECTS silent corruption — must
+        // survive for Retry rather than vanish with the rollback (round-6
+        // finding 1; round-4 finding 2).
+        guard
+            sidebarStructuralTransformJournal.count
+                < Self.sidebarStructuralTransformJournalCap
+        else {
+            sidebarStructuralTransformJournalOverflowed = true
+            return
+        }
+        sidebarStructuralTransformJournal.append(transform)
+
+        // While the file is already known read-only, Retry owns the replay.
+        guard sidebarVaultPrefsNotice == nil else { return }
+
+        // The locked raw replay always runs for a path transform: the file
+        // can hold entries this build cannot decode (an unknown-only
+        // override) or that another writer added after load, so in-memory
+        // change flags must not gate the disk-side rekey (round-3 finding 1).
+        // The transform itself was journaled above, and every persist drains
+        // the journal backlog under the lock (round-8 finding 1), so the
+        // payload here is empty — the drain both replays and, on commit,
+        // acknowledges it.
+        let frozen = transform
+        try? mutateSidebarOrganization(
+            announce: nil,
+            apply: { _ in }
+        ) { state in
+            frozen.apply(to: &state.pins)
+            frozen.apply(to: &state.prefs)
+        }
+    }
+
+    /// Drop authored pin entries that no longer resolve to a real row —
+    /// invoked lazily from level presentation, at most once per folder per
+    /// session, and never against a read-only preference file. The disk
+    /// replay filters the decoded folder list, so a concurrent writer's
+    /// additions to other folders (or fresh non-stale pins in this one)
+    /// survive.
+    func pruneStaleSidebarPins(forFolder folder: String, stale: [String]) {
+        guard !stale.isEmpty,
+            sidebarVaultPrefsNotice == nil,
+            sidebarPinPruneLedger.shouldPrune(folder: folder),
+            !sidebarPinPruneInFlight.contains(folder),
+            let vaultRoot = currentVaultURL
+        else { return }
+        // Round-13 finding 2: one in-flight prune per folder — repeated
+        // stale reports while a prune is pending coalesce into the next
+        // report after it settles.
+        sidebarPinPruneInFlight.insert(folder)
+        // Round-12 finding 1: no filesystem work on the main actor, and a
+        // bounded, deduplicated candidate set — an adversarially repetitive
+        // authored list cannot freeze the sidebar. Surplus candidates simply
+        // wait for a later session's prune.
+        var seen: Set<String> = []
+        let candidates = Array(
+            stale.filter { seen.insert($0).inserted }
+                .prefix(Self.sidebarStalePruneCandidateCap))
+        guard !candidates.isEmpty else { return }
+        guard Self.sidebarVaultRelativePathIsAdmissible(folder) || folder.isEmpty
+        else { return }
+        let staleSet = Set(candidates)
+
+        // All validation and mutation happen under the store lock, off the
+        // main actor (round-11 finding 3's fresh exact-path rule): prune only
+        // candidates that are STILL a definite ENOENT at mutation time. The
+        // removal count reports back so the once-per-session slot is consumed
+        // only by a committed mutation that actually removed a pin (round-12
+        // finding 2). Published memory converges via the tail's decoded
+        // final-root publish; no optimistic reflect is needed.
+        final class RemovalCountBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var count = 0
+            func record(_ value: Int) {
+                lock.lock()
+                count = value
+                lock.unlock()
+            }
+            var value: Int {
+                lock.lock()
+                defer { lock.unlock() }
+                return count
+            }
+        }
+        let removals = RemovalCountBox()
+        let pruneIdentity = sidebarVaultRootIdentity
+        try? mutateSidebarOrganization(
+            announce: nil,
+            apply: { root in
+                let storedPins = SidebarOrganizationSchema.decode(root: root).pins
+                let storedPaths = storedPins.paths(forFolder: folder)
+                let definitelyMissing = Self.sidebarDefinitelyMissingPaths(
+                    vaultRoot: vaultRoot,
+                    expectedIdentity: pruneIdentity,
+                    candidates: storedPaths.filter { staleSet.contains($0) })
+                let storedRemaining = storedPaths.filter { path in
+                    !definitelyMissing.contains(path)
+                }
+                removals.record(storedPaths.count - storedRemaining.count)
+                guard storedRemaining.count != storedPaths.count else { return }
+                SidebarOrganizationSchema.setPins(
+                    &root, folder: folder, paths: storedRemaining)
+            },
+            reflect: { _ in },
+            acknowledge: { [weak self] in
+                guard let self, removals.value > 0 else { return }
+                self.sidebarPinPruneLedger.markPruned(folder: folder)
+            },
+            onSettled: { [weak self] in
+                self?.sidebarPinPruneInFlight.remove(folder)
+            })
+    }
+
+    private var sidebarPinPruneInFlight: Set<String> = []
+    private static let sidebarStalePruneCandidateCap = 128
+
+    typealias SidebarVaultRootIdentity = SidebarVaultPrefsStore.RootIdentity
+
+    /// The vault root's stable (device, inode) identity; nil when it cannot
+    /// be determined (in which case queued writes are dropped, never risked).
+    nonisolated static func vaultRootIdentity(
+        of vaultRoot: URL
+    ) -> SidebarVaultRootIdentity? {
+        var info = stat()
+        guard vaultRoot.path.withCString({ stat($0, &info) }) == 0 else {
+            return nil
+        }
+        return SidebarVaultRootIdentity(
+            device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+    }
+
+    /// A vault-relative path safe to join to the vault root: nonempty,
+    /// relative, forward-slash separated, with no empty, `.`, or `..`
+    /// components (the organizer/index canonical form).
+    nonisolated static func sidebarVaultRelativePathIsAdmissible(
+        _ path: String
+    ) -> Bool {
+        guard !path.isEmpty, !path.hasPrefix("/") else { return false }
+        return path.split(separator: "/", omittingEmptySubsequences: false)
+            .allSatisfy { component in
+                !component.isEmpty && component != "." && component != ".."
+            }
+    }
+
+    /// The subset of candidates that are DEFINITELY absent: their parent
+    /// directory is readable (or itself definitively gone) and contains no
+    /// byte-exact entry for the final path component. A plain `stat` is not
+    /// exact on the default case-insensitive APFS volume, follows symlinks,
+    /// and accepts directories (round-14 finding 2) — an entry of any type
+    /// with the exact name retains the pin (uncertainty never prunes), and
+    /// so does an unreadable parent.
+    nonisolated static func sidebarDefinitelyMissingPaths(
+        vaultRoot: URL,
+        expectedIdentity: SidebarVaultRootIdentity?,
+        candidates: [String]
+    ) -> Set<String> {
+        guard !candidates.isEmpty else { return [] }
+        var byParent: [String: [String]] = [:]
+        var missing: Set<String> = []
+        for candidate in candidates {
+            // Round-16: admission BEFORE any filesystem access. An authored
+            // pin that is absolute or traverses (`..`) can never be a real
+            // vault-relative entry — it is definitively invalid and prunes
+            // WITHOUT ever touching a path outside the vault.
+            guard sidebarVaultRelativePathIsAdmissible(candidate) else {
+                missing.insert(candidate)
+                continue
+            }
+            byParent[SidebarPins.folder(of: candidate), default: []]
+                .append(candidate)
+        }
+        guard !byParent.isEmpty else { return missing }
+
+        // Round-17: descriptor-walk each parent with O_NOFOLLOW so a
+        // component swapped to a symlink after stale detection can neither
+        // escape the vault nor prove absence — symlinked/unreadable
+        // components are uncertainty and retain their pins. The vault root
+        // itself resolves once (a user may legitimately open a vault via a
+        // symlink); every component below it refuses links.
+        let rootFD = open(vaultRoot.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
+        guard rootFD >= 0 else { return missing }
+        defer { close(rootFD) }
+
+        // Round-22: this open re-resolves the path independently of the
+        // store's pinned descriptors — verify it still IS the vault the
+        // prune was admitted for. A same-path replacement (or any stat
+        // failure) is uncertainty: nothing prunes on a newcomer's evidence.
+        if let expectedIdentity {
+            var info = stat()
+            guard fstat(rootFD, &info) == 0,
+                UInt64(info.st_dev) == expectedIdentity.device,
+                UInt64(info.st_ino) == expectedIdentity.inode
+            else { return missing }
+        } else {
+            return missing
+        }
+
+        for (parent, children) in byParent {
+            var parentFD = dup(rootFD)
+            guard parentFD >= 0 else { continue }
+            var walkOutcome: WalkOutcome = .opened
+            if !parent.isEmpty {
+                for component in parent.split(separator: "/") {
+                    let nextFD = String(component).withCString { name in
+                        openat(
+                            parentFD, name,
+                            O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
+                    }
+                    if nextFD >= 0 {
+                        close(parentFD)
+                        parentFD = nextFD
+                        continue
+                    }
+                    walkOutcome = errno == ENOENT ? .definitelyMissing : .uncertain
+                    break
+                }
+            }
+            switch walkOutcome {
+            case .definitelyMissing:
+                // The parent chain itself is definitively gone: so are its
+                // entries.
+                close(parentFD)
+                missing.formUnion(children)
+            case .uncertain:
+                // A symlinked, replaced, or unreadable component: retain.
+                close(parentFD)
+            case .opened:
+                // nil from the enumerator means "error mid-listing": an
+                // incomplete name set must retain, never prune (round-18
+                // finding 2).
+                guard
+                    let exactNames = sidebarExactDirectoryNames(parentFD)
+                else {
+                    continue
+                }
+                for candidate in children {
+                    let name = (candidate as NSString).lastPathComponent
+                    if !exactNames.contains(name) {
+                        missing.insert(candidate)
+                    }
+                }
+            }
+        }
+        return missing
+    }
+
+    private enum WalkOutcome {
+        case opened
+        case definitelyMissing
+        case uncertain
+    }
+
+    /// Test seam: replaces the readdir enumeration (return nil = failure).
+    /// The production path distinguishes end-of-directory from an error via
+    /// errno, per POSIX readdir semantics.
+    nonisolated(unsafe) static var sidebarDirectoryEnumeratorForTesting:
+        (@Sendable (Int32) -> Set<String>?)?
+
+    /// Byte-exact entry names of the directory the descriptor pins, or nil
+    /// when enumeration failed partway (round-18 finding 2: an incomplete
+    /// listing must read as uncertainty, not absence). Consumes the fd.
+    private nonisolated static func sidebarExactDirectoryNames(
+        _ parentFD: Int32
+    ) -> Set<String>? {
+        if let enumerator = sidebarDirectoryEnumeratorForTesting {
+            close(parentFD)
+            return enumerator(parentFD)
+        }
+        guard let dir = fdopendir(parentFD) else {
+            close(parentFD)
+            return nil
+        }
+        defer { closedir(dir) }  // closes parentFD too
+        var names: Set<String> = []
+        errno = 0
+        while let entry = readdir(dir) {
+            let name = withUnsafeBytes(of: entry.pointee.d_name) {
+                buffer -> String in
+                let pointer = buffer.baseAddress!
+                    .assumingMemoryBound(to: CChar.self)
+                return String(cString: pointer)
+            }
+            names.insert(name)
+            errno = 0
+        }
+        guard errno == 0 else { return nil }
+        return names
+    }
 
     /// Injectable targeted lookup for deterministic coalescing tests. The
     /// production closure uses the exact-path Rust projection and runs only
@@ -7025,6 +8472,7 @@ final class AppState: ObservableObject {
         // warnings or a writer targeting the previous root.
         sidebarVaultPrefsStore = nil
         sidebarVaultPrefsNotice = nil
+        resetSidebarOrganizationState()
         // Commit the old operation lifecycle before attempting the new open.
         // Both success and either catch path replace/clear `currentSession`, so
         // provider progress, Task 3 work, and structural-token ownership must
@@ -7103,6 +8551,23 @@ final class AppState: ObservableObject {
                 creationParent: "")
             lastError = nil
             loadSidebarVaultPreferences(at: url)
+            // Round-25, hardened round-27: the sidebar admission identity
+            // (fstat on the store's own root descriptor) must match the
+            // identity the SESSION itself observed inside its open, exposed
+            // through the FFI. Comparing against the session's own anchor —
+            // not another path resolution — closes the A→B→A replacement
+            // race a path bracket cannot see. A session or admission that
+            // observes no identity cannot prove the surfaces share one
+            // root: abort those too.
+            let sessionRootIdentity = session.rootIdentity().map {
+                SidebarVaultRootIdentity(device: $0.device, inode: $0.inode)
+            }
+            if sessionRootIdentity == nil
+                || sidebarVaultRootIdentity != sessionRootIdentity
+            {
+                tearDownVaultScopedStateForAbortedOpen()
+                throw VaultOpenIdentityRaceError()
+            }
             // Load this vault's file-recents (#495) now that the store's
             // vault path resolves. Per-vault, so it's repopulated on
             // every vault switch; a missing / malformed file loads empty.
@@ -7259,6 +8724,7 @@ final class AppState: ObservableObject {
         } catch let error as VaultError {
             sidebarVaultPrefsStore = nil
             sidebarVaultPrefsNotice = nil
+            resetSidebarOrganizationState()
             currentSession = nil
             currentVaultURL = nil
             sidebarSelectionSnapshot = nil
@@ -7266,6 +8732,7 @@ final class AppState: ObservableObject {
         } catch {
             sidebarVaultPrefsStore = nil
             sidebarVaultPrefsNotice = nil
+            resetSidebarOrganizationState()
             currentSession = nil
             currentVaultURL = nil
             sidebarSelectionSnapshot = nil
@@ -7273,15 +8740,200 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Round-26: an aborted mid-open (identity race) has already torn the
+    /// previous vault's session handles down but has not yet run the
+    /// switch's old-state resets, which normally happen after admission.
+    /// Clear every vault-scoped surface the interrupted switch would have
+    /// cleared so no stale rows, selections, watchers, or scans survive
+    /// into the Welcome screen.
+    private func tearDownVaultScopedStateForAbortedOpen() {
+        scanTask?.cancel()
+        scanTask = nil
+        files = []
+        scanError = nil
+        stopSyncMarkerWatcher()
+        syncReport = nil
+        liveSyncConfig = nil
+        syncDiagnosticsError = nil
+        resetConnectionsState()
+        resetGraphTableState()
+        resetGraphDiagramState()
+        clearStructuralUndoStacks()
+        resetVaultTasksReviewState()
+        workspace.reset()
+        pendingTabClose = nil
+        pendingTabCloseAfterSave = nil
+        selectedFilePath = nil
+        treeSelectedNode = nil
+        treeExpandedDirPaths = []
+        pendingFolderDelete = nil
+        pendingMove = nil
+        pendingBatchMove = nil
+        pendingBatchDelete = nil
+        renamingNode = nil
+        structuralRenameError = nil
+        resetBatchAlertPresentations()
+        scanProgress = nil
+        scanAnnouncementCount = 0
+        scanAnnouncementLastMessage = nil
+        scanAnnouncementLastFiredAt = .distantPast
+        bibliographyLoadCount = 0
+    }
+
+    /// Round-25: the root observed just before the session opened and the
+    /// root the sidebar store admitted (descriptor-bound) disagree — the
+    /// directory was swapped mid-open, so the open aborts as a whole.
+    private struct VaultOpenIdentityRaceError: LocalizedError {
+        var errorDescription: String? {
+            "The folder changed while it was being opened. Try opening the "
+                + "vault again."
+        }
+    }
+
     /// Install and inspect the per-vault store once per successful open. Reads
-    /// are bounded by the store's 16 MiB cap. The typed notice is included in
+    /// are bounded by the store's 2 MiB cap. The typed notice is included in
     /// whichever single open announcement owns this transition and remains
     /// visible in the sidebar until the vault closes.
     private func loadSidebarVaultPreferences(at vaultRoot: URL) {
-        let store = SidebarVaultPrefsStore(vaultRoot: vaultRoot)
-        let result = store.read()
+        let store = sidebarVaultPrefsStoreFactoryForTesting?(vaultRoot)
+            ?? SidebarVaultPrefsStore(vaultRoot: vaultRoot)
+        // Round-24: content and root identity come from ONE root-descriptor
+        // resolution inside the store — a same-path swap during open can no
+        // longer pair one vault's preferences with another vault's identity.
+        let admission = store.readForAdmission()
+        let result = admission.result
         sidebarVaultPrefsStore = store
-        sidebarVaultPrefsNotice = result.notice
+        sidebarVaultRootIdentity = admission.rootIdentity
+        // FL-06 (round-5 finding 3): a KNOWN section with an unrecognized
+        // top-level shape enters the same read-only recovery flow as
+        // malformed JSON — a later write must never silently replace it.
+        if result.notice == nil,
+            !SidebarOrganizationSchema.knownSectionShapesAreValid(root: result.root)
+        {
+            sidebarVaultPrefsNotice = .malformed
+        } else {
+            sidebarVaultPrefsNotice = result.notice
+        }
+        // Round-30 (review #2): writes parked by a previous same-vault
+        // session settle through a CHAINED drain whose snapshot is taken
+        // at run time — after any surviving writer has landed its failure
+        // — and before the refresh below republishes. Installed whenever
+        // a surviving chain OR parked entries exist, so a reopen that
+        // races the failing writer still consumes its parked intent.
+        if sidebarVaultPrefsNotice == nil,
+            let identity = sidebarVaultRootIdentity,
+            Self.sidebarStoreWriterChains[identity] != nil
+                || Self.sidebarUnflushedWriteRetries[identity]?.isEmpty
+                    == false
+        {
+            scheduleSidebarRetainedWriteDrain()
+        }
+        // Round-16: a writer detached before a close/reopen of the SAME
+        // vault may still be completing. Queue a silent post-drain refresh
+        // so published state converges on whatever that writer committed.
+        // Round-23/24: the refresh republishes disk content after the prior
+        // writer drains — bind its read to THIS open's admitted identity,
+        // look the prior chain up by that PHYSICAL identity (any alias of
+        // the same vault shares one chain), and skip entirely when identity
+        // was never captured (fail closed).
+        if let refreshIdentity = sidebarVaultRootIdentity,
+            let priorWriter = Self.sidebarStoreWriterChains[refreshIdentity]
+        {
+            let generation = sidebarOrganizationWriteGeneration
+            let session = currentSession
+            // The refresh is installed as the per-file chain TAIL (round-17):
+            // a command issued after reopen queues behind IT, so the refresh
+            // can neither read past a newer writer nor republish stale state
+            // over that writer's tail publish.
+            let refreshToken = UUID()
+            let refreshTask = Task { [weak self] in
+                defer {
+                    Task { @MainActor in
+                        if AppState.sidebarStoreWriterChainTokens[refreshIdentity]
+                            == refreshToken
+                        {
+                            AppState.sidebarStoreWriterChains[refreshIdentity] = nil
+                            AppState.sidebarStoreWriterChainTokens[refreshIdentity] =
+                                nil
+                            AppState.sidebarCommittedTransformIDs[refreshIdentity] =
+                                nil
+                        }
+                    }
+                }
+                await priorWriter.value
+                guard let self,
+                    self.sidebarOrganizationWriteGeneration == generation,
+                    self.currentSession === session,
+                    self.sidebarVaultPrefsStore?.fileURL == store.fileURL
+                else { return }
+                let refreshed = await Task.detached(priority: .utility) {
+                    store.read(expectedRootIdentity: refreshIdentity)
+                }.value
+                guard self.sidebarOrganizationWriteGeneration == generation,
+                    self.currentSession === session
+                else { return }
+                // A replaced root publishes nothing (round-23).
+                guard let refreshed else { return }
+                var notice = refreshed.notice
+                if notice == nil,
+                    !SidebarOrganizationSchema.knownSectionShapesAreValid(
+                        root: refreshed.root)
+                {
+                    notice = .malformed
+                }
+                if self.sidebarVaultPrefsNotice != notice {
+                    self.sidebarVaultPrefsNotice = notice
+                }
+                // Round-25: a writable refresh must not publish PAST the
+                // session's pending structural journal — a rename journaled
+                // while the file was read-only would be stranded (its Retry
+                // surface removed with the notice) and a later close would
+                // discard it. Route this publish through a backlog drain:
+                // it replays the journal under the store lock with
+                // committed-ID dedupe, and its tail publishes decoded
+                // post-replay disk truth. A standing notice keeps defaults
+                // published and the journal parked for Retry.
+                if notice == nil,
+                    !self.sidebarStructuralTransformJournal.isEmpty
+                {
+                    try? self.mutateSidebarOrganization(
+                        announce: nil,
+                        apply: { _ in },
+                        reflect: { _ in },
+                        isBacklogDrain: true)
+                    return
+                }
+                let organization: SidebarOrganizationState
+                if notice == nil {
+                    let decoded = SidebarOrganizationSchema.decode(
+                        root: refreshed.root)
+                    organization = SidebarOrganizationState(
+                        prefs: decoded.prefs, pins: decoded.pins)
+                } else {
+                    organization = SidebarOrganizationState()
+                }
+                if organization != self.sidebarOrganization {
+                    self.sidebarOrganization = organization
+                }
+            }
+            Self.sidebarStoreWriterChains[refreshIdentity] = refreshTask
+            Self.sidebarStoreWriterChainTokens[refreshIdentity] = refreshToken
+        }
+        // Adopt the vault's authored organization in the same step. Unsafe
+        // input already resolved to the default root, so this can't
+        // interpret unreadable data.
+        sidebarPinPruneLedger.reset()
+        let organization: SidebarOrganizationState
+        if sidebarVaultPrefsNotice == nil {
+            let decoded = SidebarOrganizationSchema.decode(root: result.root)
+            organization = SidebarOrganizationState(
+                prefs: decoded.prefs, pins: decoded.pins)
+        } else {
+            organization = SidebarOrganizationState()
+        }
+        if organization != sidebarOrganization {
+            sidebarOrganization = organization
+        }
     }
 
     /// Re-read a repaired `.slate/sidebar.json` without making the user close
@@ -7289,22 +8941,47 @@ final class AppState: ObservableObject {
     /// one owned task coalesces repeated activations, while its generation
     /// prevents a cancelled old-vault read from publishing or clearing the
     /// replacement vault's state. Unsafe input remains untouched and keeps its
-    /// typed recovery notice.
+    /// typed recovery notice. Round-25: the whole read/replay/publish
+    /// transaction holds the vault's ONE identity-keyed writer slot — a
+    /// queued writer surviving close/reopen commits first, and writes
+    /// issued after Retry queue behind it.
     @discardableResult
     func retrySidebarVaultPreferences() -> Task<Void, Never>? {
         guard sidebarVaultPrefsRetryTask == nil else {
             return nil
         }
-        guard let store = sidebarVaultPrefsStore, let session = currentSession else {
+        guard let store = sidebarVaultPrefsStore, let session = currentSession,
+            // Round-23: Retry reads, replays the journal, and republishes —
+            // all of which require PROVING the root is still the admitted
+            // vault. A never-captured identity is uncertainty: do nothing,
+            // keep the notice, the journal, and the published state.
+            let retryIdentity = sidebarVaultRootIdentity
+        else {
             return nil
         }
         sidebarVaultPrefsRetryGeneration &+= 1
         let generation = sidebarVaultPrefsRetryGeneration
         isRetryingSidebarVaultPreferences = true
+        let previousWriter = Self.sidebarStoreWriterChains[retryIdentity]
+        let chainToken = UUID()
         let task = Task { [weak self] in
-            let notice = await Task.detached(priority: .userInitiated) {
-                store.read().notice
+            await previousWriter?.value
+            let result = await Task.detached(priority: .userInitiated) {
+                store.read(expectedRootIdentity: retryIdentity)
             }.value
+            // The chain slot belongs to this task regardless of retry
+            // generation or session lifetime — release it (and the drained
+            // ledger) exactly as the mutate funnel does, BEFORE the self
+            // guard so a dead session still retires the entry (round-31).
+            defer {
+                if Self.sidebarStoreWriterChainTokens[retryIdentity]
+                    == chainToken
+                {
+                    Self.sidebarStoreWriterChains[retryIdentity] = nil
+                    Self.sidebarStoreWriterChainTokens[retryIdentity] = nil
+                    Self.sidebarCommittedTransformIDs[retryIdentity] = nil
+                }
+            }
             guard let self else { return }
             guard generation == self.sidebarVaultPrefsRetryGeneration else { return }
             defer {
@@ -7317,16 +8994,189 @@ final class AppState: ObservableObject {
                 self.currentSession === session,
                 self.sidebarVaultPrefsStore?.fileURL == store.fileURL
             else { return }
-            self.sidebarVaultPrefsNotice = notice
-            if let notice {
+            // Round-23: a same-path replacement vault's file is not ours —
+            // keep the notice, the journal, and the published state.
+            guard let result else { return }
+
+            // FL-06 (round-4 finding 2): structural transforms that happened
+            // while the file was read-only replay under the store lock BEFORE
+            // the repaired content republishes, so the outage cannot orphan
+            // the file's pins/overrides against their renamed folders.
+            var adoptedRoot = result.root
+            var adoptedNotice = result.notice
+            var retryDurabilityWarning: String?
+            // Round-5 finding 3: a repaired file whose known sections use an
+            // unrecognized top-level shape stays in recovery — the replay
+            // must not write into it either.
+            if adoptedNotice == nil,
+                !SidebarOrganizationSchema.knownSectionShapesAreValid(
+                    root: adoptedRoot)
+            {
+                adoptedNotice = .malformed
+            }
+            // Round-5 finding 1: the main actor is reentrant across the
+            // detached replay, and the read-only notice is still active, so
+            // completed structural mutations may APPEND to the journal while
+            // a pass is in flight. Acknowledge only each pass's captured
+            // prefix and loop until no suffix remains.
+            while adoptedNotice == nil,
+                !self.sidebarStructuralTransformJournal.isEmpty
+            {
+                let pass = self.sidebarStructuralTransformJournal
+                // Round-25: entries an earlier chained writer already
+                // committed to this vault replay nowhere — acknowledge them
+                // and continue (the mutate funnel's ledger filter, mirrored).
+                let committed =
+                    Self.sidebarCommittedTransformIDs[retryIdentity] ?? []
+                let effectivePass = pass.filter { !committed.contains($0.id) }
+                if effectivePass.isEmpty {
+                    let passIDs = Set(pass.map(\.id))
+                    self.sidebarStructuralTransformJournal.removeAll {
+                        passIDs.contains($0.id)
+                    }
+                    continue
+                }
+                enum RetryReplayOutcome {
+                    case success([String: Any])
+                    case replacedButUnsynced([String: Any], reason: String)
+                    case failure(Error)
+                }
+                let replayTask = Task.detached(priority: .userInitiated) {
+                    () -> RetryReplayOutcome in
+                    var finalRoot: [String: Any] = [:]
+                    do {
+                        try store.update(
+                            expectedRootIdentity: retryIdentity
+                        ) { root in
+                            guard
+                                SidebarOrganizationSchema
+                                    .knownSectionShapesAreValid(root: root)
+                            else {
+                                throw SidebarOrganizationShapeError()
+                            }
+                            for transform in effectivePass {
+                                transform.applyRaw(to: &root)
+                            }
+                            finalRoot = root
+                        }
+                        return .success(finalRoot)
+                    } catch SidebarVaultPrefsStoreError.replacedButUnsynced(
+                        let reason)
+                    {
+                        // The rename landed: the pass's content is committed
+                        // (round-11 finding 1) — only durability is at risk.
+                        return .replacedButUnsynced(finalRoot, reason: reason)
+                    } catch {
+                        return .failure(error)
+                    }
+                }
+                // Test seam: deterministically interleave a structural append
+                // between a pass's capture and its completion.
+                self.sidebarStructuralJournalReplayInterleaveHookForTesting?()
+                self.sidebarStructuralJournalReplayInterleaveHookForTesting = nil
+                let replay = await replayTask.value
+                guard generation == self.sidebarVaultPrefsRetryGeneration,
+                    self.currentSession === session,
+                    self.sidebarVaultPrefsStore?.fileURL == store.fileURL
+                else { return }
+                switch replay {
+                case .success(let finalRoot):
+                    adoptedRoot = finalRoot
+                    Self.sidebarCommittedTransformIDs[retryIdentity, default: []]
+                        .formUnion(effectivePass.map(\.id))
+                    let passIDs = Set(pass.map(\.id))
+                    self.sidebarStructuralTransformJournal.removeAll {
+                        passIDs.contains($0.id)
+                    }
+                case .replacedButUnsynced(let finalRoot, let reason):
+                    // Committed: adopt and acknowledge exactly this pass,
+                    // continue any suffix, and surface only the durability
+                    // warning after publish (round-11 finding 1).
+                    adoptedRoot = finalRoot
+                    Self.sidebarCommittedTransformIDs[retryIdentity, default: []]
+                        .formUnion(effectivePass.map(\.id))
+                    let passIDs = Set(pass.map(\.id))
+                    self.sidebarStructuralTransformJournal.removeAll {
+                        passIDs.contains($0.id)
+                    }
+                    retryDurabilityWarning =
+                        "Sidebar settings were saved, but the change may not "
+                        + "survive a sudden power loss: \(reason)"
+                case .failure:
+                    // The file regressed between the read and the replay;
+                    // keep the whole journal for the next Retry and report
+                    // the still-unsafe state honestly.
+                    let reread = await Task.detached(priority: .userInitiated) {
+                        store.read(expectedRootIdentity: retryIdentity)
+                    }.value
+                    guard generation == self.sidebarVaultPrefsRetryGeneration,
+                        self.currentSession === session
+                    else { return }
+                    // A replaced root adopts nothing (round-23).
+                    guard let reread else { return }
+                    adoptedRoot = reread.root
+                    if let notice = reread.notice {
+                        adoptedNotice = notice
+                    } else if !SidebarOrganizationSchema
+                        .knownSectionShapesAreValid(root: reread.root)
+                    {
+                        adoptedNotice = .malformed
+                    } else {
+                        adoptedNotice = .unreadable
+                    }
+                }
+            }
+
+            self.sidebarVaultPrefsNotice = adoptedNotice
+            self.sidebarOrganizationJournalRecoveryPending =
+                adoptedNotice == nil
+                && (!self.sidebarStructuralTransformJournal.isEmpty
+                    || Self.sidebarUnflushedWriteRetries[retryIdentity]?
+                        .isEmpty == false)
+            self.sidebarOrganizationPendingAnnouncementVerifications = [:]
+            // A successful repair re-adopts the file's authored organization
+            // sections in the same publish; any standing notice publishes
+            // defaults instead — partial salvage from an invalid file would
+            // misrepresent it (round-8 finding 2).
+            let organization: SidebarOrganizationState
+            if adoptedNotice == nil {
+                let decoded = SidebarOrganizationSchema.decode(root: adoptedRoot)
+                organization = SidebarOrganizationState(
+                    prefs: decoded.prefs, pins: decoded.pins)
+            } else {
+                organization = SidebarOrganizationState()
+            }
+            if organization != self.sidebarOrganization {
+                self.sidebarOrganization = organization
+            }
+            if let notice = adoptedNotice {
                 self.announcer.post(
                     "Sidebar settings still use defaults. \(notice.localizedDescription)",
+                    priority: .medium)
+            } else if self.sidebarStructuralTransformJournalOverflowed {
+                self.sidebarStructuralTransformJournalOverflowed = false
+                self.announcer.post(
+                    "Sidebar settings reloaded. Some pinned notes or sort "
+                        + "overrides may still reference old locations.",
                     priority: .medium)
             } else {
                 self.announcer.post("Sidebar settings reloaded.", priority: .medium)
             }
+            if adoptedNotice == nil, let retryDurabilityWarning {
+                self.announcer.post(retryDurabilityWarning, priority: .medium)
+            }
+            // Round-30: retained writes parked behind the outage settle
+            // once the file is healthy, in their own chained slot.
+            if adoptedNotice == nil,
+                Self.sidebarUnflushedWriteRetries[retryIdentity]?.isEmpty
+                    == false
+            {
+                self.scheduleSidebarRetainedWriteDrain()
+            }
         }
         sidebarVaultPrefsRetryTask = task
+        Self.sidebarStoreWriterChains[retryIdentity] = task
+        Self.sidebarStoreWriterChainTokens[retryIdentity] = chainToken
         return task
     }
 
@@ -7851,6 +9701,21 @@ final class AppState: ObservableObject {
             postMutationAnnouncement(reason)
             return false
         }
+        // Round-26: a close with unsaved structural transforms makes one
+        // final best-effort drain. The queued write survives teardown
+        // (round-21) and lands against the captured, identity-verified
+        // store; if the transient failure persists the transforms are lost
+        // with the session — the recovery banner has been saying exactly
+        // that since the failure.
+        if sidebarVaultPrefsNotice == nil,
+            !sidebarStructuralTransformJournal.isEmpty
+        {
+            try? mutateSidebarOrganization(
+                announce: nil,
+                apply: { _ in },
+                reflect: { _ in },
+                isBacklogDrain: true)
+        }
         invalidateNoteAuthoringOwnership()
         cancelSaveOwnership()
         cancelPendingNavigationSave()
@@ -7984,6 +9849,7 @@ final class AppState: ObservableObject {
         currentVaultURL = nil
         sidebarVaultPrefsStore = nil
         sidebarVaultPrefsNotice = nil
+        resetSidebarOrganizationState()
         files = []
         scanError = nil
         stopSyncMarkerWatcher()  // #638: no vault, no watch
@@ -11251,7 +13117,14 @@ final class AppState: ObservableObject {
     /// True while any structural mutation FFI call is in flight — serializes the
     /// commands (the session lock does too, but this stops the UI from firing a
     /// second mutation before the first's tree refresh lands).
-    @Published private(set) var isMutatingStructure = false
+    @Published private(set) var isMutatingStructure = false {
+        // Round-32: mirrored into a static the termination fence can read
+        // without an instance — every set/clear path (begin/end and the
+        // open/close invalidation) flows through this property.
+        didSet {
+            Self.structuralMutationInFlightForTermination = isMutatingStructure
+        }
+    }
 
     /// Aggregate Finder import ownership is claimed synchronously before any
     /// public item-provider load. The reference identity is the lifecycle
@@ -13036,6 +14909,9 @@ final class AppState: ObservableObject {
         structuralMutationToken: Int? = nil,
         importOwnedScanGeneration: Int? = nil
     ) {
+        // FL-06: pins follow every structural transform before the tree
+        // refetches, so the re-fetched levels already see consistent pins.
+        applySidebarPinsMutation(kind)
         treeMutationCounter += 1
         treeMutation = TreeMutation(
             token: treeMutationCounter,

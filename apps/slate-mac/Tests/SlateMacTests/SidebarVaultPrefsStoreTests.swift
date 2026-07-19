@@ -145,7 +145,7 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
   }
 
   func testMaximumReadIsSixteenMebibytes() {
-    XCTAssertEqual(SidebarVaultPrefsStore.maxReadBytes, 16 * 1_024 * 1_024)
+    XCTAssertEqual(SidebarVaultPrefsStore.maxReadBytes, 2 * 1_024 * 1_024)
   }
 
   func testUpdateCreatesOnlyTheVersionAndCallerKeysWithDeterministicJSON() throws {
@@ -190,6 +190,147 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     XCTAssertEqual(store.read().root["durable"] as? Bool, true)
   }
 
+  func testUpdateRejectsAMismatchedRootIdentityOnItsOwnDescriptor() throws {
+    // FL-06 round-19: identity verifies via fstat on the exact descriptor
+    // the locked write resolves through — a mismatch refuses the write and
+    // leaves the file untouched.
+    let store = makeStore()
+    try store.update { root in
+      root["original"] = true
+    }
+    let before = try Data(contentsOf: store.fileURL)
+
+    let wrongIdentity = SidebarVaultPrefsStore.RootIdentity(
+      device: 0xDEAD, inode: 0xBEEF)
+    XCTAssertThrowsError(
+      try store.update(expectedRootIdentity: wrongIdentity) { root in
+        root["intruder"] = true
+      }
+    ) { error in
+      guard case SidebarVaultPrefsStoreError.vaultReplaced = error else {
+        return XCTFail("expected vaultReplaced, got \(error)")
+      }
+    }
+    XCTAssertEqual(try Data(contentsOf: store.fileURL), before)
+
+    // The correct identity passes.
+    var info = stat()
+    XCTAssertEqual(vault.path.withCString { stat($0, &info) }, 0)
+    let rightIdentity = SidebarVaultPrefsStore.RootIdentity(
+      device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+    try store.update(expectedRootIdentity: rightIdentity) { root in
+      root["allowed"] = true
+    }
+    XCTAssertEqual(store.read().root["allowed"] as? Bool, true)
+  }
+
+  func testIdentityBoundReadRefusesAMismatchedRoot() throws {
+    // FL-06 round-23: post-admission re-reads must prove the root is still
+    // the admitted vault; a mismatch returns nil instead of the newcomer's
+    // content (or defaults that would clobber published state).
+    let store = makeStore()
+    try store.update { root in
+      root["ours"] = true
+    }
+    let wrongIdentity = SidebarVaultPrefsStore.RootIdentity(
+      device: 0xDEAD, inode: 0xBEEF)
+    XCTAssertNil(store.read(expectedRootIdentity: wrongIdentity))
+
+    var info = stat()
+    XCTAssertEqual(vault.path.withCString { stat($0, &info) }, 0)
+    let rightIdentity = SidebarVaultPrefsStore.RootIdentity(
+      device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+    XCTAssertEqual(
+      store.read(expectedRootIdentity: rightIdentity)?.root["ours"] as? Bool,
+      true)
+  }
+
+  func testAdmissionReadPairsContentWithItsRootIdentity() throws {
+    // FL-06 round-24: admission returns content and root identity from ONE
+    // descriptor resolution — after a same-path swap the pair is the
+    // newcomer's content WITH the newcomer's identity, never a mix.
+    let store = makeStore()
+    try store.update { root in
+      root["ours"] = true
+    }
+    var info = stat()
+    XCTAssertEqual(vault.path.withCString { stat($0, &info) }, 0)
+    let original = SidebarVaultPrefsStore.RootIdentity(
+      device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+
+    let first = store.readForAdmission()
+    XCTAssertEqual(first.result.root["ours"] as? Bool, true)
+    XCTAssertEqual(first.rootIdentity, original)
+
+    // Same-path replacement.
+    let aside = vault.deletingLastPathComponent()
+      .appendingPathComponent("admission-moved-\(UUID().uuidString)")
+    try FileManager.default.moveItem(at: vault, to: aside)
+    defer { try? FileManager.default.removeItem(at: aside) }
+    let slate = vault.appendingPathComponent(".slate", isDirectory: true)
+    try FileManager.default.createDirectory(
+      at: slate, withIntermediateDirectories: true)
+    try Data(#"{"version": 1, "theirs": true}"#.utf8)
+      .write(to: slate.appendingPathComponent("sidebar.json"))
+
+    let second = store.readForAdmission()
+    XCTAssertEqual(second.result.root["theirs"] as? Bool, true)
+    XCTAssertNil(second.result.root["ours"])
+    XCTAssertNotEqual(second.rootIdentity, original)
+    var replacementInfo = stat()
+    XCTAssertEqual(vault.path.withCString { stat($0, &replacementInfo) }, 0)
+    XCTAssertEqual(
+      second.rootIdentity,
+      SidebarVaultPrefsStore.RootIdentity(
+        device: UInt64(replacementInfo.st_dev),
+        inode: UInt64(replacementInfo.st_ino)))
+  }
+
+  func testIdentityBoundReadTreatsAMissingSlateChildAsDefaults() throws {
+    // FL-06 round-24: once the root descriptor matches the admitted
+    // identity, a missing `.slate` child is the writable default state —
+    // deleting the whole broken directory is a repair, not a replacement.
+    let store = makeStore()
+    try store.update { root in
+      root["ours"] = true
+    }
+    var info = stat()
+    XCTAssertEqual(vault.path.withCString { stat($0, &info) }, 0)
+    let identity = SidebarVaultPrefsStore.RootIdentity(
+      device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+
+    try FileManager.default.removeItem(
+      at: vault.appendingPathComponent(".slate"))
+    let result = try XCTUnwrap(store.read(expectedRootIdentity: identity))
+    XCTAssertNil(result.notice)
+    XCTAssertNil(result.root["ours"])
+
+    // A vanished root stays fail-closed.
+    try FileManager.default.removeItem(at: vault)
+    XCTAssertNil(store.read(expectedRootIdentity: identity))
+  }
+
+  func testNoOpUpdateSkipsThePhysicalReplacement() throws {
+    let synchronizer = DirectorySynchronizerSpy()
+    let store = makeStore(directorySynchronizer: { synchronizer.synchronize($0) })
+    try store.update { root in
+      root["value"] = "same"
+    }
+    XCTAssertEqual(synchronizer.callCount, 1)
+
+    let before = try Data(contentsOf: store.fileURL)
+    try store.update { _ in
+      // No change at all.
+    }
+    try store.update { root in
+      root["value"] = "same"  // identical value: still a no-op
+    }
+    XCTAssertEqual(
+      synchronizer.callCount, 1,
+      "an unchanged root performs no physical replacement")
+    XCTAssertEqual(try Data(contentsOf: store.fileURL), before)
+  }
+
   func testDirectorySyncFailureIsReportedAfterAtomicReplacement() throws {
     let synchronizer = DirectorySynchronizerSpy(shouldFail: true)
     let store = makeStore(directorySynchronizer: { synchronizer.synchronize($0) })
@@ -199,8 +340,10 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
         root["writtenBeforeSyncFailure"] = true
       }
     ) { error in
-      guard case SidebarVaultPrefsStoreError.writeFailed(let reason) = error else {
-        return XCTFail("expected writeFailed, got \(error)")
+      guard
+        case SidebarVaultPrefsStoreError.replacedButUnsynced(let reason) = error
+      else {
+        return XCTFail("expected replacedButUnsynced, got \(error)")
       }
       XCTAssertTrue(reason.contains("directory"))
       XCTAssertTrue(reason.contains("synchronized"))
@@ -276,8 +419,8 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     guard case .oversized(let limitBytes) = result.notice else {
       return XCTFail("expected oversized notice, got \(String(describing: result.notice))")
     }
-    XCTAssertEqual(limitBytes, 16 * 1_024 * 1_024)
-    XCTAssertTrue(result.notice?.localizedDescription.contains("16 MiB") == true)
+    XCTAssertEqual(limitBytes, 2 * 1_024 * 1_024)
+    XCTAssertTrue(result.notice?.localizedDescription.contains("2 MiB") == true)
     XCTAssertTrue(
       result.notice?.localizedDescription.contains("Slate won’t change this file") == true)
     assertReadOnlyUpdate(store, expectedNotice: result.notice)
@@ -700,7 +843,13 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     let sources = try appSources()
     XCTAssertTrue(
       sources.fileTree.contains("if let notice = appState.sidebarVaultPrefsNotice"))
-    XCTAssertTrue(sources.fileTree.contains("sidebarPreferencesNotice(notice)"))
+    XCTAssertTrue(
+      sources.fileTree.contains(
+        "sidebarPreferencesNotice(notice.localizedDescription)"))
+    // Round-26: the journal-recovery banner shares the notice surface.
+    XCTAssertTrue(
+      sources.fileTree.contains(
+        "appState.sidebarOrganizationJournalRecoveryPending"))
     XCTAssertTrue(sources.fileTree.contains("appState.retrySidebarVaultPreferences()"))
     XCTAssertTrue(
       sources.fileTree.contains(".disabled(appState.isRetryingSidebarVaultPreferences)"))

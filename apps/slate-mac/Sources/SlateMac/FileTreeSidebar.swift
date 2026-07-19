@@ -174,6 +174,7 @@ struct SidebarFolderRowContent: View {
 struct SidebarObservedFileRowContent: View {
     @ObservedObject var fileState: FileTreeFileState
     let preferences: SidebarRowPreferencesSnapshot
+    var isPinned = false
     let now: Date
     let depth: Int
     let isSelected: Bool
@@ -184,6 +185,7 @@ struct SidebarObservedFileRowContent: View {
             model: SidebarRowModel(
                 summary: fileState.summary,
                 preferences: preferences,
+                isPinned: isPinned,
                 now: now),
             depth: depth,
             isSelected: isSelected,
@@ -219,6 +221,220 @@ final class FileTreeViewModel: ObservableObject {
     /// The root level uses the `.dir(-1)` sentinel (no real dir has id -1).
     @Published private(set) var fetchState: [NodeID: FetchState] = [:]
 
+    // MARK: - Organization (FL-06, #658/#659)
+
+    /// Everything level organization consumes: effective sort/grouping
+    /// preferences, pins, and an injected clock/calendar/locale so bucket
+    /// boundaries never read wall time inside the model.
+    struct OrganizationContext {
+        var prefs = SidebarOrganizationPrefs()
+        var pins = SidebarPins()
+        var now = Date()
+        var calendar = Calendar.current
+        var locale = Locale.current
+        var civilDateResolver: any SidebarCivilDateResolving =
+            SidebarProductionCivilDateResolver()
+    }
+
+    /// Header/pin lookups for the rendered rows, merged across levels.
+    /// Published separately from the structural arrays so a label-only change
+    /// (a day rollover) still re-renders without republishing every level.
+    @Published private(set) var treePresentation = SidebarTreePresentation()
+
+    private var organization = OrganizationContext()
+    /// Stale-pin report seam: fired whenever an organized level carries
+    /// authored pin entries that no longer resolve to rows. The subscriber
+    /// (AppState's once-per-session prune) owns dedup and persistence.
+    var onStalePins: ((_ folder: String, _ stale: [String]) -> Void)?
+    private var presentationByParent: [NodeID: SidebarLevelPresentation] = [:]
+    private var parentPathByKey: [NodeID: String] = [:]
+    private var parentKeyByPath: [String: NodeID] = [:]
+    /// Whether a stored level's listing was complete (no next page). Stale
+    /// pins are only ever reported from complete levels.
+    private var completeLevelByKey: [NodeID: Bool] = [:]
+    private(set) var levelReorganizeCountForTesting = 0
+
+    /// Adopt new organization inputs. Cached levels re-sort only when the
+    /// preferences, pins, calendar/locale, or the local civil day actually
+    /// changed — the relative-date clock tick is a no-op here.
+    func applyOrganization(_ context: OrganizationContext) {
+        let previous = organization
+        organization = context
+        let inputsChanged =
+            previous.prefs != context.prefs
+            || previous.pins != context.pins
+            || previous.calendar.identifier != context.calendar.identifier
+            || previous.calendar.timeZone != context.calendar.timeZone
+            || previous.locale != context.locale
+        let dayChanged = !context.calendar.isDate(
+            previous.now, inSameDayAs: context.now)
+        guard inputsChanged || dayChanged else { return }
+        reorganizeCachedLevels()
+    }
+
+    /// The synthetic header rendered immediately above this file row, if any.
+    func headerRow(before id: NodeID) -> SidebarTreeHeaderRow? {
+        treePresentation.headersBefore[id]
+    }
+
+    func isPinnedRow(_ id: NodeID) -> Bool {
+        treePresentation.pinnedIDs.contains(id)
+    }
+
+    /// Authored pin entries that no longer resolve to a row in the folder's
+    /// materialized level. AppState consumes this for the lazy once-per-
+    /// session prune (fl3 spec §FL3-2.3).
+    func stalePins(forFolder folder: String) -> [String] {
+        for (key, path) in parentPathByKey where path == folder {
+            return presentationByParent[key]?.stalePinnedPaths ?? []
+        }
+        return []
+    }
+
+    /// Sort the file portion of a fetched level and derive its header/pin
+    /// presentation. Directories keep their backend order and always precede
+    /// files (fl3 spec §FL3-1.1).
+    private func organizedPresentation(
+        level: [TreeNode], parentPath: String
+    ) -> (nodes: [TreeNode], presentation: SidebarLevelPresentation) {
+        let fileNodes = level.filter { !$0.isDirectory }
+        let pinnedPaths = organization.pins.paths(forFolder: parentPath)
+        if fileNodes.isEmpty {
+            // Nothing to sort; every authored pin for this folder is stale.
+            return (level, SidebarLevelPresentation(stalePinnedPaths: pinnedPaths))
+        }
+
+        let files = fileNodes.map { node -> SidebarOrganizerFile in
+            let summary: FileSummary
+            if case let .file(state) = node.kind {
+                summary = state.summary
+            } else {
+                summary = FileSummary(
+                    path: node.path, name: node.name, mtimeMs: 0, sizeBytes: 0,
+                    isMarkdown: false, displayName: nil, createdDate: nil,
+                    createdMs: nil, wordCount: nil, preview: nil, taskTotal: 0,
+                    taskOpen: 0)
+            }
+            return SidebarOrganizerFile(
+                path: summary.path,
+                name: summary.name,
+                displayName: summary.displayName,
+                createdDate: summary.createdDate,
+                createdMs: summary.createdMs,
+                mtimeMs: summary.mtimeMs)
+        }
+
+        let organized = SidebarLevelOrganizer.organize(
+            files: files,
+            choice: organization.prefs.effectiveChoice(forFolder: parentPath),
+            pinnedPaths: pinnedPaths,
+            now: organization.now,
+            calendar: organization.calendar,
+            locale: organization.locale,
+            civilDateResolver: organization.civilDateResolver)
+
+        var nodeByPath: [String: TreeNode] = [:]
+        nodeByPath.reserveCapacity(fileNodes.count)
+        for node in fileNodes { nodeByPath[node.path] = node }
+        let orderedFiles = organized.orderedPaths.compactMap { nodeByPath[$0] }
+        let depth = fileNodes[0].depth
+
+        var headers: [NodeID: SidebarTreeHeaderRow] = [:]
+        if organized.pinnedCount > 0, let firstPinned = orderedFiles.first {
+            headers[firstPinned.nodeID] = SidebarTreeHeaderRow(
+                kind: .pinned,
+                key: "pinned",
+                label: "Pinned",
+                fileCount: organized.pinnedCount,
+                depth: depth)
+        }
+        for group in organized.groups {
+            headers[.file(path: group.firstPath)] = SidebarTreeHeaderRow(
+                kind: .group,
+                key: group.key,
+                label: group.label,
+                fileCount: group.fileCount,
+                depth: depth)
+        }
+
+        let presentation = SidebarLevelPresentation(
+            headersBefore: headers,
+            pinnedIDs: Set(orderedFiles.prefix(organized.pinnedCount).map(\.nodeID)),
+            stalePinnedPaths: organized.stalePinnedPaths)
+        let dirs = level.filter(\.isDirectory)
+        return (dirs + orderedFiles, presentation)
+    }
+
+    /// Re-run organization over every cached level, publishing only levels
+    /// whose order or presentation actually changed.
+    private func reorganizeCachedLevels() {
+        reorganizeLevel(key: Self.rootFetchKey)
+        for key in children.keys {
+            reorganizeLevel(key: key)
+        }
+        rebuildMergedPresentation()
+    }
+
+    private func reorganizeLevel(key: NodeID) {
+        let current: [TreeNode]
+        if key == Self.rootFetchKey {
+            current = rootLevel
+        } else {
+            guard let level = children[key] else { return }
+            current = level
+        }
+        guard !current.isEmpty, let parentPath = parentPathByKey[key] else { return }
+        let reorganizedResult = organizedPresentation(
+            level: current, parentPath: parentPath)
+        let organized = reorganizedResult.nodes
+        var presentation = reorganizedResult.presentation
+        if completeLevelByKey[key] != true {
+            presentation.stalePinnedPaths = []
+        }
+        let orderChanged = organized.map(\.nodeID) != current.map(\.nodeID)
+        let presentationChanged = presentationByParent[key] != presentation
+        guard orderChanged || presentationChanged else { return }
+        levelReorganizeCountForTesting += 1
+        presentationByParent[key] = presentation
+        reportStalePins(presentation, folder: parentPath)
+        guard orderChanged else { return }
+        // Membership is unchanged, so the path/state indexes stay valid.
+        if key == Self.rootFetchKey {
+            rootLevel = organized
+        } else {
+            children[key] = organized
+        }
+    }
+
+    private func reportStalePins(
+        _ presentation: SidebarLevelPresentation, folder: String
+    ) {
+        guard !presentation.stalePinnedPaths.isEmpty else { return }
+        onStalePins?(folder, presentation.stalePinnedPaths)
+    }
+
+    private func rebuildMergedPresentation() {
+        var merged = SidebarTreePresentation()
+        for presentation in presentationByParent.values {
+            merged.headersBefore.merge(presentation.headersBefore) { _, new in new }
+            merged.pinnedIDs.formUnion(presentation.pinnedIDs)
+        }
+        if merged != treePresentation {
+            treePresentation = merged
+        }
+    }
+
+    /// Fields whose change can move a row under some active sort or grouping.
+    private static func organizationKeyChanged(
+        _ old: FileSummary, _ new: FileSummary
+    ) -> Bool {
+        old.displayName != new.displayName
+            || old.name != new.name
+            || old.createdDate != new.createdDate
+            || old.createdMs != new.createdMs
+            || old.mtimeMs != new.mtimeMs
+    }
+
     /// The session the tree reads from. Swapped by `bind(to:)` when the vault
     /// changes; nil clears the tree.
     private var session: VaultSession?
@@ -231,7 +447,154 @@ final class FileTreeViewModel: ObservableObject {
     /// `session.listDirChildren`; tests inject a spy to assert *which* levels
     /// are fetched (the lazy-fetch guarantee) and to stand up large synthetic
     /// fixtures without an FFI round-trip. `nil` until `bind(to:)`.
-    private var fetcher: ((String) throws -> DirListing)?
+    private var fetcher: ((String, String?) throws -> DirListing)?
+
+    /// Sentinel thrown by the single-shot test wrapper for a continuation
+    /// cursor it cannot serve; the drain treats it as "incomplete level".
+    private struct LevelPageUnavailable: Error {}
+
+    /// Total-files safety bound for one level's drain. Levels beyond it are
+    /// stored partial (organization still applies to what is materialized,
+    /// stale pruning stays suppressed).
+    nonisolated static let levelTotalSafetyCap = 50_000
+
+    /// Ownership token per level for the asynchronous continuation drain
+    /// (round-14 finding 1): a drain publishes only if its token is still
+    /// current for that level and the session identity is unchanged.
+    /// Revocation is LEVEL-SCOPED (round-16): each drop path clears exactly
+    /// the affected levels' tokens (nil-clears per level; bulk child clears
+    /// purge child tokens; a root refetch overwrites the root token), so a
+    /// targeted invalidation of one folder never strands another folder's
+    /// running drain as a silent permanent partial.
+    private var levelDrainTokens: [NodeID: UUID] = [:]
+    /// Newest summaries for paths NOT yet materialized while a continuation
+    /// drain is in flight (round-19 finding 2), KEYED BY DRAIN TOKEN
+    /// (round-20 finding 2): only the owning drain may consume its entries,
+    /// and every revocation path drops that token's map — a replacement
+    /// drain (whose pages already reflect the save) can never consume a
+    /// stale predecessor's buffer.
+    private var pendingSummaryOverlay: [UUID: [String: FileSummary]] = [:]
+    private static let pendingSummaryOverlayCap = 4096
+    private(set) var levelDrainTasksForTesting: [NodeID: Task<Void, Never>] = [:]
+
+
+    /// Round-13 finding 1 + round-14 finding 1: the FIRST page fetches
+    /// synchronously (the shipped U2 behavior — content appears immediately
+    /// and every synchronous test seam holds), while any REMAINING pages
+    /// drain off the main actor and merge in one publish when they land.
+    /// Until the drain completes the level is stored partial, so stale-pin
+    /// pruning stays suppressed (round-5 finding 2).
+    private func scheduleContinuationDrain(
+        parentKey: NodeID,
+        parentPath: String,
+        depth: Int,
+        firstPage: DirListing
+    ) {
+        guard let fetcher else { return }
+        let token = UUID()
+        levelDrainTokens[parentKey] = token
+        let capturedSession = sessionIdentity
+        let startCursor = firstPage.files.nextCursor
+        let baseCount = firstPage.files.items.count
+        let task = Task { [weak self] in
+            let outcome: Result<(files: [FileSummary], isComplete: Bool), Error> =
+                await Task.detached(priority: .userInitiated) {
+                    var files: [FileSummary] = []
+                    var cursor = startCursor
+                    var isComplete = true
+                    do {
+                        while let next = cursor {
+                            let page = try fetcher(parentPath, next)
+                            files.append(contentsOf: page.files.items)
+                            cursor = page.files.nextCursor
+                            if cursor != nil,
+                                baseCount + files.count
+                                    >= FileTreeViewModel.levelTotalSafetyCap
+                            {
+                                isComplete = false
+                                break
+                            }
+                        }
+                        return .success((files, isComplete))
+                    } catch is LevelPageUnavailable {
+                        return .success(([], false))
+                    } catch {
+                        return .failure(error)
+                    }
+                }.value
+            guard let self,
+                self.levelDrainTokens[parentKey] == token,
+                self.sessionIdentity == capturedSession
+            else { return }
+            self.levelDrainTokens[parentKey] = nil
+            self.levelDrainTasksForTesting[parentKey] = nil
+            defer {
+                // This drain's leftovers can never be consumed again.
+                self.pendingSummaryOverlay[token] = nil
+            }
+            guard case .success(let drained) = outcome else {
+                // Round-15 finding 2: a failed continuation keeps the
+                // already-published partial page but surfaces the existing
+                // inline error + Retry instead of a silent permanent
+                // partial; Retry refetches the whole level.
+                if case .failure(let error) = outcome {
+                    self.fetchState[parentKey] = .failed(
+                        message: Self.message(for: error))
+                }
+                return
+            }
+            // Round-16: preserve LIVE metadata for already-materialized
+            // rows — a save that updated a first-page row's title/mtime while
+            // the drain was in flight must not be overwritten by the stale
+            // page snapshot. Reusing the state object also keeps SwiftUI row
+            // identity.
+            var level: [TreeNode] = []
+            level.reserveCapacity(
+                firstPage.dirs.count + baseCount + drained.files.count)
+            for dir in firstPage.dirs {
+                level.append(
+                    TreeNode(
+                        nodeID: .dir(dir.id),
+                        path: dir.path,
+                        name: dir.name,
+                        depth: depth,
+                        kind: .directory(
+                            childDirCount: Int(dir.childDirCount),
+                            childFileCount: Int(dir.childFileCount))))
+            }
+            for summary in firstPage.files.items + drained.files {
+                let state: FileTreeFileState
+                if let existing = self.fileStateByPath[summary.path] {
+                    state = existing
+                } else if let buffered =
+                    self.pendingSummaryOverlay[token]?
+                        .removeValue(forKey: summary.path)
+                {
+                    // A save landed for this later-page file mid-drain: the
+                    // buffered newest summary wins over the page snapshot.
+                    state = FileTreeFileState(summary: buffered)
+                } else {
+                    state = FileTreeFileState(summary: summary)
+                }
+                level.append(
+                    TreeNode(
+                        nodeID: .file(path: summary.path),
+                        path: summary.path,
+                        name: summary.name,
+                        depth: depth,
+                        kind: .file(state)))
+            }
+            if parentKey == Self.rootFetchKey {
+                self.replaceRootLevel(
+                    with: level, isCompleteLevel: drained.isComplete)
+            } else {
+                self.replaceChildLevel(
+                    level, for: parentKey, parentPath: parentPath,
+                    isCompleteLevel: drained.isComplete)
+            }
+        }
+        levelDrainTasksForTesting[parentKey] = task
+    }
 
     /// Exact path → the one observable owned by its materialized row. Rich
     /// metadata refreshes use this index and never mutate a published level.
@@ -242,21 +605,73 @@ final class FileTreeViewModel: ObservableObject {
         rootLevel = []
         children = [:]
         fileStateByPath = [:]
+        parentKeyByPath = [:]
+        presentationByParent = [:]
+        parentPathByKey = [:]
+        completeLevelByKey = [:]
+        levelDrainTokens = [:]
+        levelDrainTasksForTesting = [:]
+        pendingSummaryOverlay = [:]
+        if treePresentation != SidebarTreePresentation() {
+            treePresentation = SidebarTreePresentation()
+        }
     }
 
-    private func replaceRootLevel(with level: [TreeNode]) {
+    private func replaceRootLevel(with level: [TreeNode], isCompleteLevel: Bool = true) {
         removeFileStates(in: rootLevel)
-        rootLevel = level
-        indexFileStates(in: level)
+        let organizedResult = organizedPresentation(
+            level: level, parentPath: "")
+        let organized = organizedResult.nodes
+        var presentation = organizedResult.presentation
+        // Round-5 finding 2: a paginated level omits real files, so absent
+        // pinned paths are unknowable, not stale — never offer them for
+        // pruning from a partial listing.
+        if !isCompleteLevel {
+            presentation.stalePinnedPaths = []
+        }
+        completeLevelByKey[Self.rootFetchKey] = isCompleteLevel
+        rootLevel = organized
+        presentationByParent[Self.rootFetchKey] = presentation
+        parentPathByKey[Self.rootFetchKey] = ""
+        indexFileStates(in: organized, parentKey: Self.rootFetchKey)
+        rebuildMergedPresentation()
+        reportStalePins(presentation, folder: "")
     }
 
-    private func replaceChildLevel(_ level: [TreeNode]?, for parent: NodeID) {
+    private func replaceChildLevel(
+        _ level: [TreeNode]?, for parent: NodeID, parentPath: String?,
+        isCompleteLevel: Bool = true
+    ) {
         if let oldLevel = children[parent] {
             removeFileStates(in: oldLevel)
         }
-        children[parent] = level
-        guard let level else { return }
-        indexFileStates(in: level)
+        guard let level, let parentPath else {
+            children[parent] = level
+            presentationByParent[parent] = nil
+            parentPathByKey[parent] = nil
+            completeLevelByKey[parent] = nil
+            if let revoked = levelDrainTokens[parent] {
+                pendingSummaryOverlay[revoked] = nil
+            }
+            levelDrainTokens[parent] = nil
+            levelDrainTasksForTesting[parent] = nil
+            rebuildMergedPresentation()
+            return
+        }
+        let organizedResult = organizedPresentation(
+            level: level, parentPath: parentPath)
+        let organized = organizedResult.nodes
+        var presentation = organizedResult.presentation
+        if !isCompleteLevel {
+            presentation.stalePinnedPaths = []
+        }
+        completeLevelByKey[parent] = isCompleteLevel
+        children[parent] = organized
+        presentationByParent[parent] = presentation
+        parentPathByKey[parent] = parentPath
+        indexFileStates(in: organized, parentKey: parent)
+        rebuildMergedPresentation()
+        reportStalePins(presentation, folder: parentPath)
     }
 
     private func removeFileStates(in level: [TreeNode]) {
@@ -265,13 +680,15 @@ final class FileTreeViewModel: ObservableObject {
                 fileStateByPath[node.path] === state
             else { continue }
             fileStateByPath[node.path] = nil
+            parentKeyByPath[node.path] = nil
         }
     }
 
-    private func indexFileStates(in level: [TreeNode]) {
+    private func indexFileStates(in level: [TreeNode], parentKey: NodeID) {
         for node in level {
             guard case let .file(state) = node.kind else { continue }
             fileStateByPath[node.path] = state
+            parentKeyByPath[node.path] = parentKey
         }
     }
 
@@ -280,6 +697,15 @@ final class FileTreeViewModel: ObservableObject {
             removeFileStates(in: level)
         }
         children = [:]
+        for (key, revoked) in levelDrainTokens where key != Self.rootFetchKey {
+            pendingSummaryOverlay[revoked] = nil
+        }
+        levelDrainTokens = levelDrainTokens.filter {
+            $0.key == Self.rootFetchKey
+        }
+        levelDrainTasksForTesting = levelDrainTasksForTesting.filter {
+            $0.key == Self.rootFetchKey
+        }
     }
 
     /// Test seam: bind to an explicit fetcher instead of a live session. The
@@ -289,9 +715,21 @@ final class FileTreeViewModel: ObservableObject {
         fetcher: @escaping (String) throws -> DirListing,
         restoringExpandedDirPaths: [String] = []
     ) {
+        bindForTesting(
+            pagedFetcher: { parentPath, cursor in
+                guard cursor == nil else { throw LevelPageUnavailable() }
+                return try fetcher(parentPath)
+            },
+            restoringExpandedDirPaths: restoringExpandedDirPaths)
+    }
+
+    func bindForTesting(
+        pagedFetcher: @escaping (String, String?) throws -> DirListing,
+        restoringExpandedDirPaths: [String] = []
+    ) {
         self.session = nil
         sessionIdentity = nil
-        self.fetcher = fetcher
+        self.fetcher = pagedFetcher
         clearMaterializedLevels()
         expanded = []
         pendingExpandedPaths = Set(restoringExpandedDirPaths)
@@ -354,10 +792,10 @@ final class FileTreeViewModel: ObservableObject {
         // Route level fetches through the session. `Paging` with a nil cursor
         // and a generous limit takes the whole level in one call (see
         // `levelPageLimit`).
-        fetcher = { parentPath in
+        fetcher = { parentPath, cursor in
             try session.listDirChildren(
                 parentPath: parentPath,
-                paging: Paging(cursor: nil, limit: Self.levelPageLimit))
+                paging: Paging(cursor: cursor, limit: Self.levelPageLimit))
         }
         loadRoot()
     }
@@ -368,10 +806,27 @@ final class FileTreeViewModel: ObservableObject {
     /// flight so the view can show a spinner if the root is slow.
     func loadRoot() {
         guard let fetcher else { return }
+        // A fresh fetch of this level supersedes any prior in-flight drain
+        // for it (level-scoped revocation, round-16): without this, a
+        // complete new first page would leave the old token current and let
+        // a stale continuation publish over the reload.
+        if let revoked = levelDrainTokens[Self.rootFetchKey] {
+            pendingSummaryOverlay[revoked] = nil
+        }
+        levelDrainTokens[Self.rootFetchKey] = nil
+        levelDrainTasksForTesting[Self.rootFetchKey] = nil
         fetchState[Self.rootFetchKey] = .loading
         do {
-            let listing = try fetcher("")
-            replaceRootLevel(with: Self.nodes(from: listing, depth: 0))
+            let firstPage = try fetcher("", nil)
+            let isComplete = firstPage.files.nextCursor == nil
+            replaceRootLevel(
+                with: Self.nodes(from: firstPage, depth: 0),
+                isCompleteLevel: isComplete)
+            if !isComplete {
+                scheduleContinuationDrain(
+                    parentKey: Self.rootFetchKey, parentPath: "", depth: 0,
+                    firstPage: firstPage)
+            }
             fetchState[Self.rootFetchKey] = nil
             adoptPendingExpansions(in: rootLevel)
             materializeExpandedChildren(in: rootLevel)
@@ -387,12 +842,31 @@ final class FileTreeViewModel: ObservableObject {
     func loadChildren(of node: TreeNode) {
         guard case .directory = node.kind else { return }
         guard let fetcher else { return }
-        if children[node.nodeID] != nil { return }  // already cached
+        if children[node.nodeID] != nil {
+            // Already cached — unless a continuation failure left the level
+            // partial with an inline error, in which case Retry refetches
+            // the whole level from page one (round-15 finding 2).
+            guard case .failed = fetchState[node.nodeID] else { return }
+            replaceChildLevel(nil, for: node.nodeID, parentPath: nil)
+        }
+        if let revoked = levelDrainTokens[node.nodeID] {
+            pendingSummaryOverlay[revoked] = nil
+        }
+        levelDrainTokens[node.nodeID] = nil
+        levelDrainTasksForTesting[node.nodeID] = nil
         fetchState[node.nodeID] = .loading
         do {
-            let listing = try fetcher(node.path)
-            let level = Self.nodes(from: listing, depth: node.depth + 1)
-            replaceChildLevel(level, for: node.nodeID)
+            let firstPage = try fetcher(node.path, nil)
+            let isComplete = firstPage.files.nextCursor == nil
+            let level = Self.nodes(from: firstPage, depth: node.depth + 1)
+            replaceChildLevel(
+                level, for: node.nodeID, parentPath: node.path,
+                isCompleteLevel: isComplete)
+            if !isComplete {
+                scheduleContinuationDrain(
+                    parentKey: node.nodeID, parentPath: node.path,
+                    depth: node.depth + 1, firstPage: firstPage)
+            }
             fetchState[node.nodeID] = nil
             adoptPendingExpansions(in: level)
             materializeExpandedChildren(in: level)
@@ -556,7 +1030,7 @@ final class FileTreeViewModel: ObservableObject {
             if let kids = children[row.nodeID] {
                 dropDescendantCaches(rows: kids)
             }
-            replaceChildLevel(nil, for: row.nodeID)
+            replaceChildLevel(nil, for: row.nodeID, parentPath: nil)
             fetchState[row.nodeID] = nil
         }
     }
@@ -650,7 +1124,7 @@ final class FileTreeViewModel: ObservableObject {
         let oldRows = children[parent] ?? []
         demoteExpandedSubtree(rows: oldRows)
         dropDescendantCaches(rows: oldRows)
-        replaceChildLevel(nil, for: parent)
+        replaceChildLevel(nil, for: parent, parentPath: nil)
         fetchState[parent] = nil
         if expanded.contains(parent), let node = node(for: parent) {
             loadChildren(of: node)
@@ -677,7 +1151,7 @@ final class FileTreeViewModel: ObservableObject {
             let oldChildren = children[old.nodeID] ?? []
             demoteExpandedSubtree(rows: oldChildren)
             dropDescendantCaches(rows: oldChildren)
-            replaceChildLevel(nil, for: old.nodeID)
+            replaceChildLevel(nil, for: old.nodeID, parentPath: nil)
             fetchState[old.nodeID] = nil
         }
     }
@@ -730,11 +1204,44 @@ final class FileTreeViewModel: ObservableObject {
         summaryReplacementLookupCountForTesting = 0
         guard !summaries.isEmpty else { return 0 }
         var replacementCount = 0
+        var affectedParents: Set<NodeID> = []
 
         for summary in summaries {
             summaryReplacementLookupCountForTesting += 1
-            guard let state = fileStateByPath[summary.path] else { continue }
-            if state.replace(with: summary) { replacementCount += 1 }
+            guard let state = fileStateByPath[summary.path] else {
+                // Round-19 finding 2: while a drain is in flight this path
+                // may be a later-page row that just hasn't landed — buffer
+                // the newest summary under every ACTIVE drain token so the
+                // owning landing overlays it (round-20 finding 2).
+                for token in levelDrainTokens.values {
+                    if pendingSummaryOverlay[token, default: [:]].count
+                        < Self.pendingSummaryOverlayCap
+                    {
+                        pendingSummaryOverlay[token, default: [:]][summary.path] =
+                            summary
+                    }
+                }
+                continue
+            }
+            let previous = state.summary
+            if state.replace(with: summary) {
+                replacementCount += 1
+                // A save can move a row under the active sort (mtime, an
+                // authored title or created date). Re-sort only the levels
+                // that contain a key-relevant change; the reorganize itself
+                // publishes nothing when the order is already correct.
+                if Self.organizationKeyChanged(previous, summary),
+                    let parent = parentKeyByPath[summary.path]
+                {
+                    affectedParents.insert(parent)
+                }
+            }
+        }
+        if !affectedParents.isEmpty {
+            for parent in affectedParents {
+                reorganizeLevel(key: parent)
+            }
+            rebuildMergedPresentation()
         }
         return replacementCount
     }
@@ -1104,6 +1611,9 @@ struct FileTreeSidebar: View {
         case node(NodeID)
         case loading(parent: NodeID)
         case error(parent: NodeID)
+        /// A nonselectable FL-06 section header (Pinned or a date bucket),
+        /// stable per (containing folder, bucket key) across renders.
+        case header(parentPath: String, key: String)
     }
 
     // MARK: - Multi-select model (#852)
@@ -2253,7 +2763,13 @@ struct FileTreeSidebar: View {
             }
             batchTrashQuarantineRecovery
             if let notice = appState.sidebarVaultPrefsNotice {
-                sidebarPreferencesNotice(notice)
+                sidebarPreferencesNotice(notice.localizedDescription)
+            } else if appState.sidebarOrganizationJournalRecoveryPending {
+                // Round-26: unsaved structural transforms with a readable
+                // file — same banner and Retry, dedicated message.
+                sidebarPreferencesNotice(
+                    "Some sidebar organization changes aren't saved yet. "
+                        + "Retry to save them.")
             }
             Group {
                 if appState.currentImportBatchOwner != nil {
@@ -2301,6 +2817,15 @@ struct FileTreeSidebar: View {
             // #873: rehydrate the persisted expansion state instead of
             // resetting — `restoreWorkspaceLayout` filled the mirror before
             // any view update could run this.
+            // FL-06: adopt organization BEFORE the bind so the first level
+            // fetch already stores sorted levels; the stale-pin seam defers
+            // one turn so a bind-time prune cannot publish mid-update.
+            tree.onStalePins = { folder, stale in
+                Task { @MainActor in
+                    appState.pruneStaleSidebarPins(forFolder: folder, stale: stale)
+                }
+            }
+            tree.applyOrganization(currentOrganizationContext())
             tree.bind(
                 to: appState.currentSession,
                 restoringExpandedDirPaths: appState.treeExpandedDirPaths)
@@ -2312,9 +2837,18 @@ struct FileTreeSidebar: View {
             typeSelectBuffer = ""  // #850: a prefix never spans vaults
             pendingBatchFocus = nil
             Self.cancelPendingPostMutationFocus(&pendingPostMutationFocus)
+            tree.applyOrganization(currentOrganizationContext())
             tree.bind(
                 to: appState.currentSession,
                 restoringExpandedDirPaths: appState.treeExpandedDirPaths)
+        }
+        // FL-06: preference/pin changes re-sort cached levels in place; the
+        // clock tick re-buckets only when the local civil day changes.
+        .onChange(of: appState.sidebarOrganization) { _, _ in
+            tree.applyOrganization(currentOrganizationContext())
+        }
+        .onChange(of: sidebarNow) { _, _ in
+            tree.applyOrganization(currentOrganizationContext())
         }
         // #873: mirror every expansion change (user toggles, restores,
         // move-reveals, spring-loads) into AppState, whose debounced
@@ -2354,8 +2888,14 @@ struct FileTreeSidebar: View {
                 // refetch lands and resolution is fresh.
             }
         }
-        .task(id: rowPreferences.dateFormat) {
-            guard rowPreferences.dateFormat == .relative else { return }
+        .task(id: sidebarClockKey) {
+            // The shared sidebar clock: relative row dates need periodic
+            // refresh, and FL-06 date buckets need to observe local-midnight
+            // rollover. Same-day ticks are no-ops in the view model's
+            // organization gate, so the grouped case costs one comparison.
+            guard rowPreferences.dateFormat == .relative
+                || sidebarGroupingIsActive
+            else { return }
             sidebarNow = Date()
             while !Task.isCancelled {
                 do {
@@ -2368,18 +2908,40 @@ struct FileTreeSidebar: View {
         }
     }
 
+    /// One identity for the clock task: restarts when either consumer's need
+    /// appears or disappears.
+    private var sidebarClockKey: String {
+        "\(rowPreferences.dateFormat.rawValue)-\(sidebarGroupingIsActive)"
+    }
+
+    private var sidebarGroupingIsActive: Bool {
+        let prefs = appState.sidebarOrganization.prefs
+        return prefs.vaultChoice.grouping == .dateBuckets
+            || prefs.folderOverrides.values.contains { $0.grouping == .dateBuckets }
+    }
+
+    /// The complete FL-06 organization context handed to the view model.
+    private func currentOrganizationContext() -> FileTreeViewModel.OrganizationContext {
+        FileTreeViewModel.OrganizationContext(
+            prefs: appState.sidebarOrganization.prefs,
+            pins: appState.sidebarOrganization.pins,
+            now: sidebarNow,
+            calendar: .current,
+            locale: .current)
+    }
+
     // MARK: - States
 
     /// Persistent, non-modal recovery notice for unsafe vault-authored sidebar
     /// preferences. It stays visible while defaults are in use, uses a warning
     /// symbol plus text (never color alone), and shares the exact message spoken
     /// by the vault-open announcement.
-    private func sidebarPreferencesNotice(_ notice: SidebarVaultPrefsNotice) -> some View {
+    private func sidebarPreferencesNotice(_ message: String) -> some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
             HStack(alignment: .top, spacing: Tokens.Spacing.sm) {
                 SlateSymbol.warning.decorative
                     .foregroundStyle(Tokens.ColorRole.warningText)
-                Text(notice.localizedDescription)
+                Text(message)
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.warningText)
                     .fixedSize(horizontal: false, vertical: true)
@@ -2494,6 +3056,15 @@ struct FileTreeSidebar: View {
             }
         }
         .listStyle(.sidebar)
+        // FL-06 §FL3-1.6: the container names any non-default organization so
+        // a VoiceOver user entering the list hears the active order. The
+        // summary follows the selected container's EFFECTIVE choice — the
+        // same source as the sort-menu radio state — so a per-folder
+        // override is reported truthfully (red-team finding 4).
+        .accessibilityLabel(
+            Self.treeAccessibilitySummary(
+                for: appState.sidebarOrganizationMenuTargetChoice
+            ) ?? "Files")
         // Tree folder glyphs (disclosure + open/closed folder) render
         // hierarchical so open and closed folders read as one family (U5-1,
         // DoD §B rendering-mode consistency). Rendering-mode only — the sidebar
@@ -3786,6 +4357,7 @@ struct FileTreeSidebar: View {
         case node(TreeNode)
         case loading(parent: NodeID, depth: Int)
         case error(parent: NodeID?, depth: Int, message: String, node: TreeNode?)
+        case header(parentPath: String, header: SidebarTreeHeaderRow)
 
         var rowID: RowID {
             switch self {
@@ -3793,6 +4365,8 @@ struct FileTreeSidebar: View {
             case let .loading(parent, _): return .loading(parent: parent)
             case let .error(parent, _, _, _):
                 return .error(parent: parent ?? FileTreeViewModel.rootFetchKey)
+            case let .header(parentPath, header):
+                return .header(parentPath: parentPath, key: header.key)
             }
         }
 
@@ -3815,6 +4389,14 @@ struct FileTreeSidebar: View {
             break
         }
         for node in tree.visibleRows {
+            // FL-06: splice the Pinned/date-bucket header immediately above
+            // the first file row of its run (nonselectable; see headerRow).
+            if !node.isDirectory, let header = tree.headerRow(before: node.nodeID) {
+                out.append(
+                    .header(
+                        parentPath: SidebarPins.folder(of: node.path),
+                        header: header))
+            }
             out.append(.node(node))
             guard node.isDirectory, tree.expanded.contains(node.nodeID) else { continue }
             switch tree.fetchState[node.nodeID] {
@@ -3839,7 +4421,46 @@ struct FileTreeSidebar: View {
             loadingRow(depth: depth)
         case let .error(_, depth, message, node):
             errorRow(depth: depth, message: message, node: node)
+        case let .header(_, header):
+            sectionHeaderRow(header)
         }
+    }
+
+    /// One nonselectable FL-06 section header (Pinned or a date bucket).
+    /// A real AX header (VO rotor-navigable), never a focus stop: it is
+    /// absent from `visibleSelectionRows`, so arrow navigation skips it, and
+    /// `selectionDisabled` blocks pointer selection.
+    private func sectionHeaderRow(_ header: SidebarTreeHeaderRow) -> some View {
+        HStack(spacing: Tokens.Spacing.xs) {
+            Color.clear
+                .frame(width: Self.indentWidth(for: header.depth), height: 0)
+                .accessibilityHidden(true)
+            Text(header.label)
+                .font(Tokens.Typography.caption)
+                .fontWeight(.semibold)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+            Spacer(minLength: 0)
+        }
+        .padding(.top, Tokens.Spacing.xs)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(header.label)
+        .accessibilityValue(Self.headerAccessibilityValue(for: header))
+        .accessibilityAddTraits(.isHeader)
+        .selectionDisabled(true)
+    }
+
+    /// Spoken count for a section header ("3 notes").
+    static func headerAccessibilityValue(for header: SidebarTreeHeaderRow) -> String {
+        header.fileCount == 1 ? "1 note" : "\(header.fileCount) notes"
+    }
+
+    /// Container summary for the tree list. Default organization stays
+    /// silent; any non-default choice is named so a VO user hears the active
+    /// order when entering the list (fl3 spec §FL3-1.6).
+    static func treeAccessibilitySummary(
+        for choice: SidebarOrganizationChoice
+    ) -> String? {
+        choice == .defaults ? nil : "Files. \(choice.sortAnnouncement)"
     }
 
     // MARK: - Rows
@@ -3869,6 +4490,26 @@ struct FileTreeSidebar: View {
         if let propertyEditReason = appState.propertyEditNavigationDisabledReason {
             reasons[SlateCommandID.sidebarOpen] = propertyEditReason
         }
+        return reasons
+    }
+
+    /// Row-targeted variant: the FL-06 pin/override reasons depend on the
+    /// exact row a context menu or rotor targets, which may differ from the
+    /// published selection the shared dictionary describes. The published
+    /// selection's organization reasons are removed wholesale first — a
+    /// reason keyed to the selected row must never leak onto a different
+    /// right-clicked row and hide its applicable direction (round-3
+    /// finding 2).
+    private func sidebarRowActionDisabledReasons(
+        for row: SidebarSelectionItem
+    ) -> [String: String] {
+        var reasons = sidebarRowActionDisabledReasons
+        for id in SlateCommandID.sidebarOrganizationCommands {
+            reasons[id] = nil
+        }
+        reasons.merge(
+            appState.sidebarOrganizationActionReasons(target: row)
+        ) { _, rowSpecific in rowSpecific }
         return reasons
     }
 
@@ -4000,7 +4641,8 @@ struct FileTreeSidebar: View {
                         publishedSnapshot: publishedSnapshot,
                         structuralMutationDisabledReason:
                             appState.structuralMutationDisabledReason,
-                        actionDisabledReasons: sidebarRowActionDisabledReasons)
+                        actionDisabledReasons: sidebarRowActionDisabledReasons(
+                            for: sidebarSelectionItem(for: node)))
                     sidebarCatalogActions(projection.evaluations)
                 }
             }
@@ -4021,7 +4663,8 @@ struct FileTreeSidebar: View {
                         publishedSnapshot: publishedSnapshot,
                         structuralMutationDisabledReason:
                             appState.structuralMutationDisabledReason,
-                        actionDisabledReasons: sidebarRowActionDisabledReasons)
+                        actionDisabledReasons: sidebarRowActionDisabledReasons(
+                            for: sidebarSelectionItem(for: node)))
                     if projection.targetSnapshot.items.count == 1,
                         projection.targetSnapshot.items.first?.isDirectory == true
                     {
@@ -4032,6 +4675,17 @@ struct FileTreeSidebar: View {
                         let managementIDs = [
                             SlateCommandID.renameEntry, SlateCommandID.moveTo,
                         ]
+                        let sortIDs = [
+                            SlateCommandID.sidebarSortNameAsc,
+                            SlateCommandID.sidebarSortNameDesc,
+                            SlateCommandID.sidebarSortCreatedDesc,
+                            SlateCommandID.sidebarSortCreatedAsc,
+                            SlateCommandID.sidebarSortModifiedDesc,
+                            SlateCommandID.sidebarSortModifiedAsc,
+                            SlateCommandID.sidebarToggleDateGrouping,
+                            SlateCommandID.sidebarUseVaultDefaultSort,
+                        ]
+                        let pinIDs = [SlateCommandID.sidebarUnpinAll]
                         let inspectionIDs = [
                             SlateCommandID.revealInFinder, SlateCommandID.copyPath,
                         ]
@@ -4039,6 +4693,8 @@ struct FileTreeSidebar: View {
                         let availableIDs = Set(projection.evaluations.map(\.id))
                         let hasCreation = creationIDs.contains(where: availableIDs.contains)
                         let hasManagement = managementIDs.contains(where: availableIDs.contains)
+                        let hasSort = sortIDs.contains(where: availableIDs.contains)
+                        let hasPins = pinIDs.contains(where: availableIDs.contains)
                         let hasInspection = inspectionIDs.contains(where: availableIDs.contains)
                         let hasTrash = trashIDs.contains(where: availableIDs.contains)
 
@@ -4061,7 +4717,39 @@ struct FileTreeSidebar: View {
                                     SlateCommandID.renameEntry, SlateCommandID.moveTo
                                 ])
                         }
-                        if (hasCreation || hasManagement) && hasInspection {
+                        if (hasCreation || hasManagement) && (hasSort || hasPins) {
+                            Divider()
+                        }
+                        if hasSort {
+                            // FL-06 (#658): the per-folder Sort submenu — the
+                            // same catalog radio set the View menu and toolbar
+                            // project, targeting this exact folder.
+                            Menu {
+                                SidebarSortMenuItems(
+                                    evaluations: projection.evaluations,
+                                    effectiveChoice: appState.sidebarOrganization
+                                        .prefs.effectiveChoice(forFolder: node.path)
+                                        .normalized,
+                                    dispatch: { intent in
+                                        do {
+                                            _ = try appState.dispatchSidebarAction(intent)
+                                        } catch {
+                                            appState.postMutationAnnouncement(
+                                                error.sidebarActionAnnouncement)
+                                        }
+                                    })
+                            } label: {
+                                SlateSymbol.sortOrder.label("Sort")
+                            }
+                        }
+                        if hasPins {
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [SlateCommandID.sidebarUnpinAll])
+                        }
+                        if (hasCreation || hasManagement || hasSort || hasPins)
+                            && hasInspection
+                        {
                             Divider()
                         }
                         if hasInspection {
@@ -4072,7 +4760,9 @@ struct FileTreeSidebar: View {
                                     SlateCommandID.copyPath,
                                 ])
                         }
-                        if (hasCreation || hasManagement || hasInspection) && hasTrash {
+                        if (hasCreation || hasManagement || hasSort || hasPins
+                            || hasInspection) && hasTrash
+                        {
                             Divider()
                         }
                         if hasTrash {
@@ -4116,7 +4806,8 @@ struct FileTreeSidebar: View {
                     publishedSnapshot: $0,
                     structuralMutationDisabledReason:
                         appState.structuralMutationDisabledReason,
-                    actionDisabledReasons: sidebarRowActionDisabledReasons)
+                    actionDisabledReasons: sidebarRowActionDisabledReasons(
+                        for: sidebarSelectionItem(for: node)))
             }
             let openPresentation = Self.fileRowOpenAccessibilityPresentation(
                 openEvaluation: voiceOverProjection?.openEvaluation,
@@ -4137,6 +4828,7 @@ struct FileTreeSidebar: View {
             SidebarObservedFileRowContent(
                 fileState: fileState,
                 preferences: rowPreferences,
+                isPinned: tree.isPinnedRow(node.nodeID),
                 now: sidebarNow,
                 depth: node.depth,
                 isSelected: selected,
@@ -4216,7 +4908,8 @@ struct FileTreeSidebar: View {
                         publishedSnapshot: publishedSnapshot,
                         structuralMutationDisabledReason:
                             appState.structuralMutationDisabledReason,
-                        actionDisabledReasons: sidebarRowActionDisabledReasons)
+                        actionDisabledReasons: sidebarRowActionDisabledReasons(
+                            for: sidebarSelectionItem(for: node)))
                     if projection.targetSnapshot.items.count == 1,
                         projection.targetSnapshot.items.first?.isDirectory == false
                     {
@@ -4224,6 +4917,10 @@ struct FileTreeSidebar: View {
                             SlateCommandID.renameEntry,
                             SlateCommandID.moveTo,
                             SlateCommandID.duplicateEntry,
+                        ]
+                        let pinIDs = [
+                            SlateCommandID.sidebarPinNote,
+                            SlateCommandID.sidebarUnpinNote,
                         ]
                         let revealIDs = [SlateCommandID.revealInFinder]
                         let copyIDs = [
@@ -4236,6 +4933,7 @@ struct FileTreeSidebar: View {
                             SlateCommandID.sidebarOpen)
                         let hasManagement = managementIDs.contains(
                             where: availableIDs.contains)
+                        let hasPins = pinIDs.contains(where: availableIDs.contains)
                         let hasReveal = revealIDs.contains(where: availableIDs.contains)
                         let hasCopy = copyIDs.contains(where: availableIDs.contains)
                         let hasTrash = trashIDs.contains(where: availableIDs.contains)
@@ -4268,6 +4966,17 @@ struct FileTreeSidebar: View {
                                     SlateCommandID.renameEntry,
                                     SlateCommandID.moveTo,
                                     SlateCommandID.duplicateEntry,
+                                ])
+                        }
+                        if hasPins {
+                            // FL-06 (#659): the applicable pin direction only
+                            // — the row-targeted reasons omit the other one.
+                            Divider()
+                            sidebarCatalogActions(
+                                projection.evaluations,
+                                actionIDs: [
+                                    SlateCommandID.sidebarPinNote,
+                                    SlateCommandID.sidebarUnpinNote,
                                 ])
                         }
                         if hasReveal || hasCopy {
@@ -5305,6 +6014,7 @@ struct FileTreeSidebar: View {
         let model = SidebarRowModel(
             summary: fileState.summary,
             preferences: rowPreferences,
+            isPinned: tree.isPinnedRow(id),
             now: sidebarNow)
         postAccessibilityAnnouncement(
             Self.selectionAnnouncement(for: model),

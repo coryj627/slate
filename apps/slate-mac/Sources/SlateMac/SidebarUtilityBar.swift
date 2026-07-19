@@ -40,6 +40,7 @@ struct SidebarUtilityBar: View {
                 settingsButton
                 helpButton
                 vaultSwitcherMenu
+                sortMenu
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Tokens.Spacing.sm)
@@ -155,6 +156,37 @@ struct SidebarUtilityBar: View {
         .accessibilityLabel("Switch vault")
         .accessibilityHint("Opens a menu of recent vaults and vault actions.")
         .help("Switch vault")
+    }
+
+    // MARK: - Sort (FL-06, #658)
+
+    /// The toolbar home for the sort/group set: the same catalog items as the
+    /// View menu, targeting the published selection's container. Menu-bar
+    /// surface semantics — the full inventory stays visible, unavailable
+    /// verbs disabled with their one deterministic reason.
+    private var sortMenu: some View {
+        Menu {
+            SidebarSortMenuItems(
+                evaluations: appState.sidebarActionProjection(surface: .menuBar),
+                effectiveChoice: appState.sidebarOrganizationMenuTargetChoice,
+                dispatch: { intent in
+                    do {
+                        _ = try appState.dispatchSidebarAction(intent)
+                    } catch {
+                        appState.postMutationAnnouncement(
+                            error.sidebarActionAnnouncement)
+                    }
+                })
+        } label: {
+            utilityGlyph(.sortOrder)
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .frame(width: 40, height: 32)
+        .disabled(!appState.isVaultOpen)
+        .accessibilityLabel("Sort sidebar")
+        .accessibilityHint("Opens sorting and grouping options for the selected location.")
+        .help("Sort sidebar")
     }
 
     // MARK: - Shared glyph

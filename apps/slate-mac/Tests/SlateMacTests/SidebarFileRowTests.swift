@@ -279,6 +279,40 @@ final class SidebarFileRowTests: XCTestCase {
     XCTAssertGreaterThanOrEqual(SidebarFileRow.compactMinimumHeight, 28)
   }
 
+  func testPinnedRowAppendsPinnedToTheSpokenValueAndShowsTheBadge() {
+    let pinned = SidebarRowModel(
+      summary: summary(taskTotal: 2, taskOpen: 1),
+      preferences: .defaults,
+      isPinned: true,
+      formatter: FormatterSpy())
+    // ", pinned" is the last spoken component (fl3 spec §FL3-2.2) and the
+    // glyph renders in standard density.
+    XCTAssertEqual(
+      pinned.accessibilityValue,
+      "Modified RELATIVE, 1 of 2 tasks open, pinned")
+    XCTAssertTrue(pinned.isPinned)
+    XCTAssertTrue(pinned.visuallyShowsPinBadge)
+
+    let unpinned = SidebarRowModel(
+      summary: summary(),
+      preferences: .defaults,
+      formatter: FormatterSpy())
+    XCTAssertFalse(unpinned.isPinned)
+    XCTAssertFalse(unpinned.visuallyShowsPinBadge)
+    XCTAssertFalse(unpinned.accessibilityValue.contains("pinned"))
+  }
+
+  func testPinnedCompactRowStaysVisuallyCompactButSpeaksPinned() {
+    let model = SidebarRowModel(
+      summary: summary(),
+      preferences: preferences(density: .compact),
+      isPinned: true,
+      formatter: FormatterSpy())
+    // Compact hides secondary visuals but never reduces spoken information.
+    XCTAssertTrue(model.visuallyShowsPinBadge)
+    XCTAssertTrue(model.accessibilityValue.hasSuffix(", pinned"))
+  }
+
   func testKeyboardSelectionAnnouncementUsesTheCompleteCompactRowModel() {
     let model = SidebarRowModel(
       summary: summary(

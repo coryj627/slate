@@ -150,8 +150,8 @@ pub use session::{
     FileSummary, IndexPhase, NoteLoadBundle, NotePartsBundle, OpAnnotationSummary, Page, Paging,
     RemnantLog, RenameAffected, RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason,
     RenameSkipped, SaveReport, SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress,
-    ScanProgressListener, ScanReport, SessionConfig, VaultEventListener, VaultSession,
-    VersionSummary,
+    ScanProgressListener, ScanReport, SessionConfig, VaultEventListener, VaultRootIdentity,
+    VaultSession, VersionSummary,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,

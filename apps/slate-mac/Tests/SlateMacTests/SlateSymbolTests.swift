@@ -77,6 +77,10 @@ final class SlateSymbolTests: XCTestCase {
         // Milestone P (P2-4, #560): Graph inspector toggle. sidebar.trailing
         // is SF Symbols 1 (macOS 11), on the macOS 15 floor.
         "sidebar.trailing",
+        // FL-06 (#658/#659): Unpin, sidebar sort, and date grouping.
+        // pin.slash, arrow.up.arrow.down, and calendar are all SF Symbols 1
+        // (macOS 11), on the macOS 15 floor.
+        "pin.slash", "arrow.up.arrow.down", "calendar",
     ]
 
     /// Floor guarantee, OS-independent: every fallback is in the curated

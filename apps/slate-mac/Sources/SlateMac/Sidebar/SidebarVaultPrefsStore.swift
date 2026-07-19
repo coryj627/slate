@@ -50,6 +50,17 @@ enum SidebarVaultPrefsStoreError: Error, LocalizedError, Equatable {
   case lockUnavailable(reason: String)
   case encodingFailed(reason: String)
   case writeFailed(reason: String)
+  /// The pinned vault-root descriptor no longer matches the identity the
+  /// caller captured at enqueue: the vault at this path was replaced, and
+  /// the write is refused before touching the newcomer (FL-06 round-19).
+  case vaultReplaced
+  /// The atomic rename already took effect — the file's CONTENT is the new
+  /// value — but the parent-directory synchronization afterward failed, so
+  /// the replacement's durability across a crash is not guaranteed. Callers
+  /// must treat the content as committed and report only the durability
+  /// concern (FL-06 round-10 finding 1: replaying the mutation later could
+  /// wrongly transform paths another process recreated in between).
+  case replacedButUnsynced(reason: String)
 
   var errorDescription: String? {
     switch self {
@@ -62,6 +73,12 @@ enum SidebarVaultPrefsStoreError: Error, LocalizedError, Equatable {
       return "Sidebar settings could not be encoded: \(reason)"
     case .writeFailed(let reason):
       return "Sidebar settings could not be saved: \(reason)"
+    case .replacedButUnsynced(let reason):
+      return "Sidebar settings were saved, but the change may not survive a "
+        + "sudden power loss: \(reason)"
+    case .vaultReplaced:
+      return "The vault at this location changed, so a queued sidebar "
+        + "settings write was discarded."
     }
   }
 }
@@ -75,8 +92,22 @@ enum SidebarVaultPrefsStoreError: Error, LocalizedError, Equatable {
 /// directory descriptors, and writes use a same-directory temp + `renameat`, so
 /// neither a symlink swap nor a kill can expose a partial or out-of-vault file.
 struct SidebarVaultPrefsStore: Sendable {
+  /// Stable (device, inode) identity of a vault root. Callers capture it at
+  /// enqueue and `update` verifies it against an `fstat` of the exact
+  /// descriptor the locked write resolves through — no separate-stat TOCTOU
+  /// window exists (FL-06 round-19).
+  struct RootIdentity: Hashable, Sendable {
+    let device: UInt64
+    let inode: UInt64
+  }
+
   static let currentVersion = 1
-  static let maxReadBytes = 16 * 1_024 * 1_024
+  /// Round-34: 2 MiB. Sidebar preferences are sorts, per-folder
+  /// overrides, and pins — legitimate files are kilobytes. The cap
+  /// bounds the object graph a hostile vault-authored file can force
+  /// the open to materialize; the schema's cardinality ceilings bound
+  /// what survives decode.
+  static let maxReadBytes = 2 * 1_024 * 1_024
 
   private static let slateDirectoryName = ".slate"
   private static let sidebarFileName = "sidebar.json"
@@ -115,21 +146,76 @@ struct SidebarVaultPrefsStore: Sendable {
 
   /// Reads without creating `.slate`, the preference file, or its lock.
   /// Missing input is writable; every unsafe existing input is read-only.
+  /// This unchecked variant is for callers that need only content; vault
+  /// admission uses `readForAdmission()` and every post-admission re-read
+  /// uses `read(expectedRootIdentity:)`.
   func read() -> SidebarVaultPrefsReadResult {
+    readForAdmission().result
+  }
+
+  /// FL-06 round-24: the vault-open admission read. Content and root
+  /// identity come from ONE root-descriptor resolution — the identity is
+  /// observed by fstat on the very descriptor `.slate` resolves through —
+  /// so a same-path swap can never pair one vault's content with another
+  /// vault's identity. A nil identity (unopenable root, fstat failure)
+  /// leaves the session's writes disabled.
+  func readForAdmission()
+    -> (result: SidebarVaultPrefsReadResult, rootIdentity: RootIdentity?)
+  {
+    read(resolvingIdentity: nil)
+      ?? (
+        SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: .unreadable),
+        nil
+      )
+  }
+
+  /// FL-06 round-23, refined round-24: identity-bound re-read. Returns nil
+  /// when the vault root cannot be proven to still be the admitted vault
+  /// (identity mismatch, a vanished root, or an unopenable root) — the
+  /// file at this path may belong to a replacement vault and must not be
+  /// adopted; the caller keeps its current state. A VERIFIED root whose
+  /// `.slate` child is absent reads as the writable default state:
+  /// deleting the broken directory is a repair, not a replacement.
+  func read(
+    expectedRootIdentity: RootIdentity
+  ) -> SidebarVaultPrefsReadResult? {
+    read(resolvingIdentity: expectedRootIdentity)?.result
+  }
+
+  private func read(
+    resolvingIdentity expectedRootIdentity: RootIdentity?
+  ) -> (result: SidebarVaultPrefsReadResult, rootIdentity: RootIdentity?)? {
     let slateDirectoryFD: Int32
-    switch openSlateDirectory(createIfMissing: false) {
-    case .missing:
-      return SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: nil)
-    case .failed:
-      return SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: .unreadable)
-    case .opened(let fd):
+    let observedIdentity: RootIdentity?
+    switch openSlateDirectory(
+      createIfMissing: false, expectedRootIdentity: expectedRootIdentity)
+    {
+    case .missing(let rootIdentity):
+      if expectedRootIdentity != nil, rootIdentity == nil { return nil }
+      return (
+        SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: nil),
+        rootIdentity
+      )
+    case .failed(_, let rootIdentity):
+      if expectedRootIdentity != nil, rootIdentity == nil { return nil }
+      return (
+        SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: .unreadable),
+        rootIdentity
+      )
+    case .identityMismatch:
+      return nil
+    case .opened(let fd, let rootIdentity):
       slateDirectoryFD = fd
+      observedIdentity = rootIdentity
     }
     defer { close(slateDirectoryFD) }
 
     switch loadExisting(in: slateDirectoryFD) {
     case .missing:
-      return SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: nil)
+      return (
+        SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: nil),
+        observedIdentity
+      )
     case .loaded(var root):
       // An absent version is treated as the v1 generic shape, matching
       // the repository's other vault JSON stores. The next authored
@@ -137,9 +223,15 @@ struct SidebarVaultPrefsStore: Sendable {
       if root["version"] == nil {
         root["version"] = Self.currentVersion
       }
-      return SidebarVaultPrefsReadResult(root: root, notice: nil)
+      return (
+        SidebarVaultPrefsReadResult(root: root, notice: nil),
+        observedIdentity
+      )
     case .blocked(let notice):
-      return SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: notice)
+      return (
+        SidebarVaultPrefsReadResult(root: Self.defaultRoot, notice: notice),
+        observedIdentity
+      )
     }
   }
 
@@ -148,17 +240,24 @@ struct SidebarVaultPrefsStore: Sendable {
   ///
   /// Existing malformed, oversized, unreadable, or forward-version files are
   /// never overwritten. A missing file is created only by this write path.
-  func update(_ mutation: (inout [String: Any]) throws -> Void) throws {
+  func update(
+    expectedRootIdentity: RootIdentity? = nil,
+    _ mutation: (inout [String: Any]) throws -> Void
+  ) throws {
     let slateDirectoryFD: Int32
-    switch openSlateDirectory(createIfMissing: true) {
-    case .opened(let fd):
+    switch openSlateDirectory(
+      createIfMissing: true, expectedRootIdentity: expectedRootIdentity)
+    {
+    case .opened(let fd, _):
       slateDirectoryFD = fd
     case .missing:
       throw SidebarVaultPrefsStoreError.writeFailed(
         reason: "the vault root is unavailable"
       )
-    case .failed(let reason):
+    case .failed(let reason, _):
       throw SidebarVaultPrefsStoreError.writeFailed(reason: reason)
+    case .identityMismatch:
+      throw SidebarVaultPrefsStoreError.vaultReplaced
     }
     defer { close(slateDirectoryFD) }
 
@@ -199,10 +298,22 @@ struct SidebarVaultPrefsStore: Sendable {
       throw SidebarVaultPrefsStoreError.readOnly(notice)
     }
 
+    // Baseline for the no-op check below: what an unchanged root would look
+    // like after the store's own version stamp.
+    var unchangedBaseline = root
+    unchangedBaseline["version"] = Self.currentVersion
+
     try mutation(&root)
     // The store, not callers, owns the schema marker. This also prevents a
     // mutation from accidentally manufacturing a forward-version file.
     root["version"] = Self.currentVersion
+
+    // A mutation that leaves the root unchanged performs no physical
+    // replacement (FL-06 round-13): repeated no-op cycles must not churn the
+    // file's bytes, mtime, or sync state.
+    if (root as NSDictionary).isEqual(to: unchangedBaseline) {
+      return
+    }
 
     guard JSONSerialization.isValidJSONObject(root) else {
       throw SidebarVaultPrefsStoreError.encodingFailed(
@@ -221,7 +332,7 @@ struct SidebarVaultPrefsStore: Sendable {
     }
     guard output.count <= Self.maxReadBytes else {
       throw SidebarVaultPrefsStoreError.encodingFailed(
-        reason: "the update would exceed the 16 MiB safety limit"
+        reason: "the update would exceed the 2 MiB safety limit"
       )
     }
 
@@ -347,9 +458,10 @@ struct SidebarVaultPrefsStore: Sendable {
   // MARK: - Filesystem helpers
 
   private enum SlateDirectoryOpenResult {
-    case missing
-    case opened(Int32)
-    case failed(reason: String)
+    case missing(rootIdentity: RootIdentity?)
+    case opened(Int32, rootIdentity: RootIdentity?)
+    case failed(reason: String, rootIdentity: RootIdentity?)
+    case identityMismatch
   }
 
   private enum EntryState {
@@ -363,18 +475,39 @@ struct SidebarVaultPrefsStore: Sendable {
   /// Opens the vault root once, then resolves `.slate` exactly once relative
   /// to that descriptor with `O_NOFOLLOW | O_DIRECTORY`. The returned fd pins
   /// the validated directory for all later lock/read/temp/rename operations.
-  private func openSlateDirectory(createIfMissing: Bool) -> SlateDirectoryOpenResult {
+  private func openSlateDirectory(
+    createIfMissing: Bool,
+    expectedRootIdentity: RootIdentity? = nil
+  ) -> SlateDirectoryOpenResult {
     let rootFD = open(vaultRoot.path, O_RDONLY | O_DIRECTORY | O_CLOEXEC)
     guard rootFD >= 0 else {
       let code = errno
       if !createIfMissing, code == ENOENT {
-        return .missing
+        return .missing(rootIdentity: nil)
       }
       return .failed(
-        reason: "the vault root could not be opened: \(Self.posixReason(code))"
+        reason: "the vault root could not be opened: \(Self.posixReason(code))",
+        rootIdentity: nil
       )
     }
     defer { close(rootFD) }
+
+    // FL-06 round-19, extended round-24: identity is observed by fstat on
+    // the EXACT descriptor every later operation resolves through. With an
+    // expected identity any mismatch (or unobservable identity) refuses the
+    // operation; without one the observed identity is reported so admission
+    // binds content and identity from this single resolution.
+    var rootInfo = stat()
+    let observedIdentity: RootIdentity? =
+      fstat(rootFD, &rootInfo) == 0
+      ? RootIdentity(
+        device: UInt64(rootInfo.st_dev), inode: UInt64(rootInfo.st_ino))
+      : nil
+    if let expectedRootIdentity {
+      guard observedIdentity == expectedRootIdentity else {
+        return .identityMismatch
+      }
+    }
 
     func openPinnedSlateDirectory() -> Int32 {
       Self.slateDirectoryName.withCString { name in
@@ -388,7 +521,7 @@ struct SidebarVaultPrefsStore: Sendable {
 
     let firstFD = openPinnedSlateDirectory()
     if firstFD >= 0 {
-      return .opened(firstFD)
+      return .opened(firstFD, rootIdentity: observedIdentity)
     }
 
     switch Self.entryState(named: Self.slateDirectoryName, in: rootFD) {
@@ -398,18 +531,28 @@ struct SidebarVaultPrefsStore: Sendable {
       let retryFD = openPinnedSlateDirectory()
       guard retryFD >= 0 else {
         return .failed(
-          reason: ".slate could not be pinned: \(Self.posixReason())"
+          reason: ".slate could not be pinned: \(Self.posixReason())",
+          rootIdentity: observedIdentity
         )
       }
-      return .opened(retryFD)
+      return .opened(retryFD, rootIdentity: observedIdentity)
     case .regular, .other:
-      return .failed(reason: ".slate is not a directly contained directory")
+      return .failed(
+        reason: ".slate is not a directly contained directory",
+        rootIdentity: observedIdentity
+      )
     case .failed(let code):
       return .failed(
-        reason: ".slate could not be inspected: \(Self.posixReason(code))"
+        reason: ".slate could not be inspected: \(Self.posixReason(code))",
+        rootIdentity: observedIdentity
       )
     case .missing:
-      guard createIfMissing else { return .missing }
+      // Round-24: the root was just resolved (and, when expected, identity
+      // verified) — an absent `.slate` child is a state of THIS vault, not
+      // an unverifiable root.
+      guard createIfMissing else {
+        return .missing(rootIdentity: observedIdentity)
+      }
     }
 
     let createResult = Self.slateDirectoryName.withCString { name in
@@ -417,17 +560,19 @@ struct SidebarVaultPrefsStore: Sendable {
     }
     if createResult != 0, errno != EEXIST {
       return .failed(
-        reason: ".slate could not be created: \(Self.posixReason())"
+        reason: ".slate could not be created: \(Self.posixReason())",
+        rootIdentity: observedIdentity
       )
     }
 
     let createdFD = openPinnedSlateDirectory()
     guard createdFD >= 0 else {
       return .failed(
-        reason: ".slate could not be pinned after creation: \(Self.posixReason())"
+        reason: ".slate could not be pinned after creation: \(Self.posixReason())",
+        rootIdentity: observedIdentity
       )
     }
-    return .opened(createdFD)
+    return .opened(createdFD, rootIdentity: observedIdentity)
   }
 
   /// Writes a complete temp file and atomically renames it within the same
@@ -510,7 +655,7 @@ struct SidebarVaultPrefsStore: Sendable {
     // now makes the replacement directory entry durable as well. Report a
     // failure honestly even though the atomic rename has already taken effect.
     guard directorySynchronizer(slateDirectoryFD) == 0 else {
-      throw SidebarVaultPrefsStoreError.writeFailed(
+      throw SidebarVaultPrefsStoreError.replacedButUnsynced(
         reason: "the preference directory could not be synchronized after replacement: "
           + Self.posixReason()
       )

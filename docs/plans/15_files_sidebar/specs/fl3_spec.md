@@ -24,10 +24,10 @@ Baseline facts (verified 2026-07-14 at `origin/main` `6aa9fce`):
 
 Tests: comparator total-order property (incl. `created_date` precedence over simultaneous birthtime `created_ms`, datetime instants, NULL created, case/diacritic names); one Gregorian local-start sort/group value reused across injected Gregorian, Buddhist, and Hebrew (or Islamic) system calendars; bucket boundaries in timezones on both sides of UTC (DST, midnight, month/year rollover — injected clock, no wall-time in tests); override precedence (folder > vault > default); header AX traits; select-after-rename under date sort.
 
-- [ ] Comparators + per-folder override storage/menu
-- [ ] Bucket computation + section headers
-- [ ] Palette/menu/toolbar surfaces + announcements
-- [ ] Tests; a11y 100/100 on tip
+- [x] Comparators + per-folder override storage/menu
+- [x] Bucket computation + section headers
+- [x] Palette/menu/toolbar surfaces + announcements
+- [x] Tests; a11y 100/100 on tip
 
 ## FL3-2 · Pinned notes (#659) — closing PR FL-06
 
@@ -38,9 +38,9 @@ Tests: comparator total-order property (incl. `created_date` precedence over sim
 
 Tests: pin order stability; rename/move/delete integrity via mutation replay; stale-prune idempotence; AX value.
 
-- [ ] Pin storage + section rendering + glyph/AX
-- [ ] Mutation-stream integrity + lazy prune
-- [ ] Commands + tests; a11y 100/100
+- [x] Pin storage + section rendering + glyph/AX
+- [x] Mutation-stream integrity + lazy prune
+- [x] Commands + tests; a11y 100/100
 
 ## FL3-3 · Shortcuts + one Recents history (#660) — closing PR FL-07
 

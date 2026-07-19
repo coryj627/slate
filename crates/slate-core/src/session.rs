@@ -725,6 +725,65 @@ struct OplogAppendState {
 /// growth rather than payload bytes alone. Deliberately generous.
 const OPLOG_ENTRY_FRAMING_OVERHEAD_ESTIMATE: u64 = 256;
 
+/// Physical identity of the filesystem root a session opened — one
+/// `(device, inode)` metadata observation made inside the open itself
+/// (FL-06 round-27). Hosts compare their own per-surface root
+/// observations against this anchor; a path that swapped A→B→A around
+/// the open cannot produce a matching pair of observations for two
+/// different directories.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VaultRootIdentity {
+    pub device: u64,
+    pub inode: u64,
+}
+
+#[cfg(unix)]
+fn observe_root_identity(root: &std::path::Path) -> Option<VaultRootIdentity> {
+    use std::os::unix::fs::MetadataExt;
+    let meta = std::fs::metadata(root).ok()?;
+    Some(VaultRootIdentity {
+        device: meta.dev(),
+        inode: meta.ino(),
+    })
+}
+
+#[cfg(not(unix))]
+fn observe_root_identity(_root: &std::path::Path) -> Option<VaultRootIdentity> {
+    // Windows file identity needs the volume serial + file index pair,
+    // which std does not expose on stable — the Milestone W host will
+    // supply its own observation. An absent identity fails closed on
+    // the host side.
+    None
+}
+
+/// FL-06 round-28: pin the root as an open descriptor and derive the
+/// identity anchor by `fstat` on THAT descriptor — not a pathname
+/// sample. The returned handle is held across the whole filesystem
+/// open so the anchored inode stays alive, and the caller re-verifies
+/// the pathname against the anchor after the interior open completes.
+#[cfg(unix)]
+fn pin_root_identity(root: &std::path::Path) -> (Option<std::fs::File>, Option<VaultRootIdentity>) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(pinned) = std::fs::File::open(root) else {
+        return (None, None);
+    };
+    let Ok(meta) = pinned.metadata() else {
+        return (None, None);
+    };
+    let identity = VaultRootIdentity {
+        device: meta.dev(),
+        inode: meta.ino(),
+    };
+    (Some(pinned), Some(identity))
+}
+
+#[cfg(not(unix))]
+fn pin_root_identity(
+    _root: &std::path::Path,
+) -> (Option<std::fs::File>, Option<VaultRootIdentity>) {
+    (None, None)
+}
+
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
@@ -834,6 +893,10 @@ pub struct VaultSession {
     compaction_dirty: Arc<Mutex<std::collections::HashSet<String>>>,
     compaction_shutdown: Arc<std::sync::atomic::AtomicBool>,
     compaction_join: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Physical root identity observed inside THIS session's open
+    /// (FL-06 round-27). `None` for non-filesystem providers or
+    /// platforms without a stable observation.
+    root_identity: Option<VaultRootIdentity>,
 }
 
 /// One annotation on a version row (O-3 #541): `kind` is the stable
@@ -1801,6 +1864,7 @@ impl VaultSession {
             bases_generation: AtomicU64::new(1),
             structural_history_valid: std::sync::atomic::AtomicBool::new(true),
             structural_operation: Mutex::new(()),
+            root_identity: None,
         };
         session.recover_structural_batch_inflight_on_open()?;
         drop(vault_structural_lock);
@@ -2072,6 +2136,15 @@ impl VaultSession {
             .count())
     }
 
+    /// The physical root identity observed inside this session's open,
+    /// or `None` when no filesystem root backs it (or the platform
+    /// cannot observe one). Hosts compare their own per-surface root
+    /// observations against this anchor and refuse to run surfaces
+    /// that cannot prove they share it (FL-06 round-27).
+    pub fn root_identity(&self) -> Option<VaultRootIdentity> {
+        self.root_identity
+    }
+
     /// Convenience: open a vault rooted at `root` using `FsVaultProvider`.
     /// Cache lives at `<root>/.slate` per the locked storage layout.
     ///
@@ -2110,6 +2183,16 @@ impl VaultSession {
                 reason: "vault root does not exist or is not a directory".into(),
             });
         }
+        // FL-06 rounds 27–28: pin the root as an open descriptor for the
+        // duration of this constructor and anchor the identity by fstat on
+        // that descriptor. The interior reads and the cache open below
+        // still resolve by pathname (descriptor-relative interior
+        // resolution is tracked separately — see the round-28 audit
+        // issue), so after the interior open completes the pathname is
+        // re-verified against the anchor and any divergence fails the
+        // open: a root swapped during the open cannot yield a session.
+        let (pinned_root, root_identity) = pin_root_identity(&root);
+        let root_for_reverify = root.clone();
         let cache_dir = root.join(".slate");
         let mut config = SessionConfig::new(cache_dir);
         config.user_actor_id = user_actor_id.to_string();
@@ -2155,7 +2238,20 @@ impl VaultSession {
             config.oplog_retention_days = prefs.retention_days;
         }
         let provider = Arc::new(FsVaultProvider::new(root));
-        Self::open(provider, config)
+        let mut session = Self::open(provider, config)?;
+        // Round-28: the interior open resolved paths while the anchor was
+        // pinned — require the pathname to STILL resolve to the anchored
+        // root, so a swap-and-stay during the open fails loudly instead
+        // of yielding a session whose cache belongs to another vault.
+        if root_identity.is_some() && observe_root_identity(&root_for_reverify) != root_identity {
+            return Err(VaultError::InvalidPath {
+                path: root_for_reverify.display().to_string(),
+                reason: "vault root changed while the session was opening".into(),
+            });
+        }
+        drop(pinned_root);
+        session.root_identity = root_identity;
+        Ok(session)
     }
 
     /// Close the session and flush the database. Equivalent to dropping

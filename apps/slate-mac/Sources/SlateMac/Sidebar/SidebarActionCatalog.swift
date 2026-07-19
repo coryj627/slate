@@ -74,6 +74,7 @@ enum SidebarActionCapability: Equatable {
     case exactlyOneItem
     case oneOrMoreItems
     case exactlyOneFile
+    case exactlyOneFolder
     case exactlyOneMarkdownFile
 }
 
@@ -293,6 +294,52 @@ enum SidebarActionCatalog {
             SlateCommandID.sidebarCopyWikilink, "Copy Wikilink", .copyWikilink,
             .exactlyOneMarkdownFile, "Copy a wikilink to the selected Markdown file.",
             blocksDuringStructuralMutation: true),
+        // FL-06 organization (#658/#659). Preference edits, not vault content
+        // mutations: they never block on the structural gate and none is
+        // undoable — no label or hint may promise ⌘Z.
+        action(
+            SlateCommandID.sidebarPinNote, "Pin to Top of Folder", .pin,
+            .exactlyOneFile,
+            "Pin the selected note to the top of its folder."),
+        action(
+            SlateCommandID.sidebarUnpinNote, "Unpin", .unpin, .exactlyOneFile,
+            "Remove the selected note from its folder's pinned section."),
+        action(
+            SlateCommandID.sidebarUnpinAll, "Unpin All in Folder", .unpin,
+            .exactlyOneFolder,
+            "Remove every pinned note from the selected folder."),
+        action(
+            SlateCommandID.sidebarSortNameAsc, "Sort by Name (A to Z)",
+            .sortOrder, .zeroOrOneItem,
+            "Sort the selected location's notes by name, A to Z."),
+        action(
+            SlateCommandID.sidebarSortNameDesc, "Sort by Name (Z to A)",
+            .sortOrder, .zeroOrOneItem,
+            "Sort the selected location's notes by name, Z to A."),
+        action(
+            SlateCommandID.sidebarSortCreatedDesc, "Sort by Created (Newest First)",
+            .sortOrder, .zeroOrOneItem,
+            "Sort the selected location's notes by created date, newest first."),
+        action(
+            SlateCommandID.sidebarSortCreatedAsc, "Sort by Created (Oldest First)",
+            .sortOrder, .zeroOrOneItem,
+            "Sort the selected location's notes by created date, oldest first."),
+        action(
+            SlateCommandID.sidebarSortModifiedDesc, "Sort by Modified (Newest First)",
+            .sortOrder, .zeroOrOneItem,
+            "Sort the selected location's notes by modified date, newest first."),
+        action(
+            SlateCommandID.sidebarSortModifiedAsc, "Sort by Modified (Oldest First)",
+            .sortOrder, .zeroOrOneItem,
+            "Sort the selected location's notes by modified date, oldest first."),
+        action(
+            SlateCommandID.sidebarToggleDateGrouping, "Group by Date",
+            .dateGrouping, .zeroOrOneItem,
+            "Group the selected location's notes into date sections."),
+        action(
+            SlateCommandID.sidebarUseVaultDefaultSort, "Use Vault Default Sort",
+            .sortOrder, .zeroOrOneItem,
+            "Remove the selected folder's sort override."),
         action(
             SlateCommandID.deleteEntry, "Move to Trash", .trash, .oneOrMoreItems,
             "Move the selected files or folders to the Trash.",
@@ -408,6 +455,15 @@ enum SidebarActionCatalog {
                     SlateCommandID.newFromTemplate,
                     SlateCommandID.renameEntry,
                     SlateCommandID.moveTo,
+                    SlateCommandID.sidebarSortNameAsc,
+                    SlateCommandID.sidebarSortNameDesc,
+                    SlateCommandID.sidebarSortCreatedDesc,
+                    SlateCommandID.sidebarSortCreatedAsc,
+                    SlateCommandID.sidebarSortModifiedDesc,
+                    SlateCommandID.sidebarSortModifiedAsc,
+                    SlateCommandID.sidebarToggleDateGrouping,
+                    SlateCommandID.sidebarUseVaultDefaultSort,
+                    SlateCommandID.sidebarUnpinAll,
                     SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
                     SlateCommandID.deleteEntry,
@@ -418,6 +474,8 @@ enum SidebarActionCatalog {
                     SlateCommandID.renameEntry,
                     SlateCommandID.moveTo,
                     SlateCommandID.duplicateEntry,
+                    SlateCommandID.sidebarPinNote,
+                    SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
                     SlateCommandID.sidebarCopyWikilink,
@@ -434,8 +492,22 @@ enum SidebarActionCatalog {
             ids = [SlateCommandID.moveTo, SlateCommandID.deleteEntry]
         }
 
+        // The VoiceOver rotor stays concise and selection-relevant: Open is
+        // the row's activation action, and the sort/group radio set lives in
+        // the context menu, menu bar, palette, and toolbar instead.
+        let voiceOverExcluded: Set<String> = [
+            SlateCommandID.sidebarOpen,
+            SlateCommandID.sidebarSortNameAsc,
+            SlateCommandID.sidebarSortNameDesc,
+            SlateCommandID.sidebarSortCreatedDesc,
+            SlateCommandID.sidebarSortCreatedAsc,
+            SlateCommandID.sidebarSortModifiedDesc,
+            SlateCommandID.sidebarSortModifiedAsc,
+            SlateCommandID.sidebarToggleDateGrouping,
+            SlateCommandID.sidebarUseVaultDefaultSort,
+        ]
         let surfaceIDs = surface == .voiceOver
-            ? ids.filter { $0 != SlateCommandID.sidebarOpen }
+            ? ids.filter { !voiceOverExcluded.contains($0) }
             : ids
         let idSet = Set(surfaceIDs)
         return actions.filter { idSet.contains($0.id) }
@@ -456,6 +528,9 @@ enum SidebarActionCatalog {
             guard items.count <= 1 else {
                 if action.id == SlateCommandID.importFilesAndFolders {
                     return "Select no more than one item to choose an import location."
+                }
+                if SlateCommandID.sidebarOrganizationCommands.contains(action.id) {
+                    return "Select a single location to change how it's sorted."
                 }
                 return "Select no more than one item to choose a creation location."
             }
@@ -478,7 +553,18 @@ enum SidebarActionCatalog {
             }
         case .exactlyOneFile:
             guard items.count == 1, items[0].isDirectory == false else {
-                return "Select exactly one file to duplicate."
+                switch action.id {
+                case SlateCommandID.sidebarPinNote:
+                    return "Select exactly one note to pin."
+                case SlateCommandID.sidebarUnpinNote:
+                    return "Select exactly one note to unpin."
+                default:
+                    return "Select exactly one file to duplicate."
+                }
+            }
+        case .exactlyOneFolder:
+            guard items.count == 1, items[0].isDirectory else {
+                return "Select exactly one folder to unpin its notes."
             }
         case .exactlyOneMarkdownFile:
             guard items.count == 1, items[0].isDirectory == false, items[0].isMarkdown else {
