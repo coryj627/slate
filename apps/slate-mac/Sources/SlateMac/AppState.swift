@@ -2146,8 +2146,22 @@ final class AppState: ObservableObject {
             SlateCommandID.sidebarUseVaultDefaultSort,
             SlateCommandID.sidebarPinNote,
             SlateCommandID.sidebarUnpinNote,
-            SlateCommandID.sidebarUnpinAll:
+            SlateCommandID.sidebarUnpinAll,
+            SlateCommandID.sidebarAddShortcut,
+            SlateCommandID.sidebarRemoveShortcut:
             try dispatchSidebarOrganizationAction(intent, rejected: rejected)
+            return .completed(actionID: intent.actionID)
+
+        case SlateCommandID.sidebarClearRecents,
+            SlateCommandID.sidebarCollapseAll,
+            SlateCommandID.sidebarExpandLoaded,
+            SlateCommandID.sidebarHistoryBack,
+            SlateCommandID.sidebarHistoryForward:
+            try dispatchSidebarNavigationAction(intent, rejected: rejected)
+            return .completed(actionID: intent.actionID)
+
+        case let id where SlateCommandID.sidebarOpenShortcutSlots.contains(id):
+            try dispatchSidebarNavigationAction(intent, rejected: rejected)
             return .completed(actionID: intent.actionID)
 
         default:
@@ -5837,6 +5851,54 @@ final class AppState: ObservableObject {
                 state.pins.unpin(target, inFolder: folder)
             }
 
+        case SlateCommandID.sidebarAddShortcut:
+            let (kind, target) = try singleShortcutTarget(
+                of: intent, rejected: rejected)
+            guard
+                !sidebarOrganization.shortcuts.contains(
+                    SidebarShortcut(kind: kind, path: target))
+            else {
+                throw sidebarActionFailure("Already in Shortcuts.")
+            }
+            guard
+                sidebarOrganization.shortcuts.count
+                    < SidebarOrganizationSchema.maxShortcuts
+            else {
+                throw sidebarActionFailure(
+                    "Shortcut limit reached "
+                        + "(\(SidebarOrganizationSchema.maxShortcuts)). "
+                        + "Remove one to add another.")
+            }
+            try mutateSidebarOrganization(announce: "Added to Shortcuts.") {
+                root in
+                SidebarOrganizationSchema.addShortcut(
+                    &root, kind: kind.rawValue, path: target)
+            } reflect: { state in
+                let shortcut = SidebarShortcut(kind: kind, path: target)
+                if !state.shortcuts.contains(shortcut) {
+                    state.shortcuts.append(shortcut)
+                }
+            }
+
+        case SlateCommandID.sidebarRemoveShortcut:
+            let (kind, target) = try singleShortcutTarget(
+                of: intent, rejected: rejected)
+            guard
+                sidebarOrganization.shortcuts.contains(
+                    SidebarShortcut(kind: kind, path: target))
+            else {
+                throw sidebarActionFailure("Not in Shortcuts.")
+            }
+            try mutateSidebarOrganization(announce: "Removed from Shortcuts.") {
+                root in
+                SidebarOrganizationSchema.removeShortcut(
+                    &root, kind: kind.rawValue, path: target)
+            } reflect: { state in
+                state.shortcuts.removeAll {
+                    $0 == SidebarShortcut(kind: kind, path: target)
+                }
+            }
+
         case SlateCommandID.sidebarUnpinAll:
             guard intent.snapshot.items.count == 1,
                 let item = intent.snapshot.items.first, item.isDirectory
@@ -5871,6 +5933,181 @@ final class AppState: ObservableObject {
             throw sidebarActionFailure(rejected)
         }
         return item.path
+    }
+
+    private func singleShortcutTarget(
+        of intent: SidebarActionInvocationIntent, rejected: String
+    ) throws -> (SidebarShortcut.Kind, String) {
+        guard intent.snapshot.items.count == 1,
+            let item = intent.snapshot.items.first
+        else {
+            throw sidebarActionFailure(rejected)
+        }
+        return (item.isDirectory ? .folder : .file, item.path)
+    }
+
+    // MARK: - FL-07 navigation family (#660/#661)
+
+    /// One-shot tree reveal request (shortcut container activation and
+    /// history navigation). The tree observes the token, expands the
+    /// ancestor chain through the existing seam, and selects the target
+    /// WITHOUT pushing a history entry (programmatic selection).
+    struct SidebarRevealRequest: Equatable {
+        let token: Int
+        let path: String
+        let isDirectory: Bool
+    }
+    @Published private(set) var sidebarRevealRequest: SidebarRevealRequest?
+    private var sidebarRevealToken = 0
+
+    func requestSidebarReveal(path: String, isDirectory: Bool) {
+        sidebarRevealToken &+= 1
+        sidebarRevealRequest = SidebarRevealRequest(
+            token: sidebarRevealToken, path: path, isDirectory: isDirectory)
+    }
+
+    /// One-shot expand-loaded request; the tree expands every fetched
+    /// level and fetches at most one level deeper (FL3-4.1).
+    @Published private(set) var sidebarExpandLoadedRequest = 0
+
+    struct SidebarHistoryEntry: Equatable {
+        let path: String
+        let isDirectory: Bool
+    }
+    /// FL3-4.2: per-window selection-history ring, most recent last.
+    private(set) var sidebarSelectionHistory: [SidebarHistoryEntry] = []
+    private(set) var sidebarSelectionHistoryIndex = -1
+    private var sidebarHistoryNavigationInFlight = false
+    static let sidebarSelectionHistoryCap = 50
+
+    /// Push a USER selection. Programmatic reveals (editor mirror,
+    /// history navigation itself) don't push; consecutive duplicates
+    /// collapse; navigating then selecting truncates the forward tail.
+    func recordSidebarSelectionForHistory(path: String, isDirectory: Bool) {
+        guard !sidebarHistoryNavigationInFlight else { return }
+        let entry = SidebarHistoryEntry(path: path, isDirectory: isDirectory)
+        if sidebarSelectionHistoryIndex >= 0,
+            sidebarSelectionHistoryIndex < sidebarSelectionHistory.count,
+            sidebarSelectionHistory[sidebarSelectionHistoryIndex] == entry
+        {
+            return
+        }
+        if sidebarSelectionHistoryIndex < sidebarSelectionHistory.count - 1 {
+            sidebarSelectionHistory.removeSubrange(
+                (sidebarSelectionHistoryIndex + 1)...)
+        }
+        sidebarSelectionHistory.append(entry)
+        if sidebarSelectionHistory.count > Self.sidebarSelectionHistoryCap {
+            sidebarSelectionHistory.removeFirst(
+                sidebarSelectionHistory.count - Self.sidebarSelectionHistoryCap)
+        }
+        sidebarSelectionHistoryIndex = sidebarSelectionHistory.count - 1
+    }
+
+    private func sidebarHistoryEntryResolves(_ entry: SidebarHistoryEntry)
+        -> Bool
+    {
+        // Deletes purge entries via the structural transform; files are
+        // additionally validated against the live scan so an entry whose
+        // file vanished outside a tracked mutation is skipped, not shown.
+        guard !entry.isDirectory else { return true }
+        return files.contains { $0.path == entry.path }
+    }
+
+    private func navigateSidebarHistory(step: Int) throws {
+        var index = sidebarSelectionHistoryIndex + step
+        while index >= 0, index < sidebarSelectionHistory.count {
+            let entry = sidebarSelectionHistory[index]
+            if sidebarHistoryEntryResolves(entry) {
+                sidebarSelectionHistoryIndex = index
+                sidebarHistoryNavigationInFlight = true
+                defer { sidebarHistoryNavigationInFlight = false }
+                requestSidebarReveal(
+                    path: entry.path, isDirectory: entry.isDirectory)
+                return
+            }
+            index += step
+        }
+        throw sidebarActionFailure(
+            step < 0
+                ? "No earlier sidebar selection." : "No later sidebar selection.")
+    }
+
+    /// FL3-3/FL3-4 command dispatch that never writes the vault file —
+    /// device/view state only, so none of it gates on the read-only
+    /// notice the organization family honors.
+    func dispatchSidebarNavigationAction(
+        _ intent: SidebarActionInvocationIntent,
+        rejected: String
+    ) throws {
+        switch intent.actionID {
+        case SlateCommandID.sidebarClearRecents:
+            fileRecentsStore?.clear()
+            fileRecents = []
+            let message = "Recents cleared."
+            lastMutationAnnouncement = message
+            announcer.post(message, priority: .medium)
+
+        case SlateCommandID.sidebarCollapseAll:
+            let anchor = treeSelectedNode?.path ?? selectedFilePath
+            var ancestors: [String] = []
+            if let anchor {
+                let components = anchor.split(separator: "/").map(String.init)
+                var prefix = ""
+                for component in components.dropLast() {
+                    prefix = prefix.isEmpty ? component : "\(prefix)/\(component)"
+                    ancestors.append(prefix)
+                }
+                if let node = treeSelectedNode, node.isDirectory {
+                    ancestors.append(node.path)
+                }
+            }
+            treeExpandedDirPaths = ancestors
+            let message = "Collapsed all folders."
+            lastMutationAnnouncement = message
+            announcer.post(message, priority: .medium)
+
+        case SlateCommandID.sidebarExpandLoaded:
+            sidebarExpandLoadedRequest &+= 1
+            let message = "Expanded loaded folders."
+            lastMutationAnnouncement = message
+            announcer.post(message, priority: .medium)
+
+        case SlateCommandID.sidebarHistoryBack:
+            try navigateSidebarHistory(step: -1)
+
+        case SlateCommandID.sidebarHistoryForward:
+            try navigateSidebarHistory(step: 1)
+
+        case let id where SlateCommandID.sidebarOpenShortcutSlots.contains(id):
+            guard
+                let slot = Int(
+                    id.dropFirst("slate.sidebar.openShortcut".count))
+            else {
+                throw sidebarActionFailure(rejected)
+            }
+            let shortcuts = sidebarOrganization.shortcuts
+            guard slot >= 1, slot <= shortcuts.count else {
+                throw sidebarActionFailure("No shortcut \(slot).")
+            }
+            activateSidebarShortcut(shortcuts[slot - 1])
+
+        default:
+            throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
+        }
+    }
+
+    /// FL3-3.2 activation semantics: a folder shortcut is a navigation
+    /// CONTAINER (reveal + select); a file shortcut is a LEAF that opens
+    /// through the normal file-open seam, after which the standard
+    /// editor→sidebar mirror selects its containing folder and file.
+    func activateSidebarShortcut(_ shortcut: SidebarShortcut) {
+        switch shortcut.kind {
+        case .folder:
+            requestSidebarReveal(path: shortcut.path, isDirectory: true)
+        case .file:
+            openFile(shortcut.path, target: .currentTab)
+        }
     }
 
     private func setSidebarSort(
@@ -6011,6 +6248,28 @@ final class AppState: ObservableObject {
             fileRecents = retargetedRecents
             fileRecentsStore?.save(retargetedRecents)
         }
+        // FL3-4.2: the selection-history ring follows the same transform;
+        // dropped entries shift the cursor left so Back stays coherent.
+        let retargetedHistory: [SidebarHistoryEntry] =
+            sidebarSelectionHistory.enumerated().compactMap { index, entry in
+                let updated = SidebarStructuralTransform.transformedShortcutPath(
+                    entry.path,
+                    kind: entry.isDirectory ? "folder" : "file",
+                    renames: transform.renames,
+                    deletedFiles: transform.deletedFiles,
+                    deletedFolders: transform.deletedFolders)
+                guard let updated else {
+                    if index <= sidebarSelectionHistoryIndex {
+                        sidebarSelectionHistoryIndex -= 1
+                    }
+                    return nil
+                }
+                return SidebarHistoryEntry(
+                    path: updated, isDirectory: entry.isDirectory)
+            }
+        sidebarSelectionHistory = retargetedHistory
+        sidebarSelectionHistoryIndex = max(
+            -1, min(sidebarSelectionHistoryIndex, retargetedHistory.count - 1))
         guard sidebarVaultPrefsStore != nil else { return }
 
         // Every structural transform is journaled as PENDING first and only

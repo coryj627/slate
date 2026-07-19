@@ -71,6 +71,10 @@ struct SidebarSelectionSnapshot: Equatable {
 enum SidebarActionCapability: Equatable {
     case oneOrMoreFiles
     case zeroOrOneItem
+    /// FL-07: selection-independent — available with any selection shape
+    /// whenever a vault is open (collapse/expand, history, recents,
+    /// positional shortcut activation).
+    case anySelection
     case exactlyOneItem
     case oneOrMoreItems
     case exactlyOneFile
@@ -235,6 +239,12 @@ enum SidebarActionDispatchResult: Equatable {
 }
 
 enum SidebarActionCatalog {
+    /// FL-07: the nine positional palette commands are chord mirrors; the
+    /// Shortcuts section rows are the accessible path, so VoiceOver's
+    /// concise surfaces skip the numbered variants.
+    static let voiceOverExcludedOpenShortcutSlots: Set<String> =
+        Set(SlateCommandID.sidebarOpenShortcutSlots)
+
     typealias InvocationIntent = SidebarActionInvocationIntent
 
     static let noVaultReason = "Open a vault to use Sidebar actions."
@@ -340,6 +350,72 @@ enum SidebarActionCatalog {
             SlateCommandID.sidebarUseVaultDefaultSort, "Use Vault Default Sort",
             .sortOrder, .zeroOrOneItem,
             "Remove the selected folder's sort override."),
+        // FL-07 shortcuts/recents/navigation (#660/#661). Preference and
+        // view-state edits: never structural, never undoable.
+        action(
+            SlateCommandID.sidebarAddShortcut, "Add to Shortcuts", .pin,
+            .exactlyOneItem,
+            "Add the selected file or folder to the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarRemoveShortcut, "Remove from Shortcuts",
+            .unpin, .exactlyOneItem,
+            "Remove the selected file or folder from the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarClearRecents, "Clear Recents", .unpin,
+            .anySelection,
+            "Clear the shared recent-files history for this vault."),
+        action(
+            SlateCommandID.sidebarCollapseAll, "Collapse All Folders",
+            .sortOrder, .anySelection,
+            "Collapse every folder except the current selection's ancestors."),
+        action(
+            SlateCommandID.sidebarExpandLoaded, "Expand Loaded Folders",
+            .sortOrder, .anySelection,
+            "Expand already-loaded folders, fetching at most one level deeper."),
+        action(
+            SlateCommandID.sidebarHistoryBack, "Back in Sidebar History",
+            .sortOrder, .anySelection,
+            "Select the previous sidebar selection from this window's history."),
+        action(
+            SlateCommandID.sidebarHistoryForward, "Forward in Sidebar History",
+            .sortOrder, .anySelection,
+            "Select the next sidebar selection from this window's history."),
+        action(
+            SlateCommandID.sidebarOpenShortcut(1), "Open Shortcut 1",
+            .pin, .anySelection,
+            "Activate shortcut 1 in the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarOpenShortcut(2), "Open Shortcut 2",
+            .pin, .anySelection,
+            "Activate shortcut 2 in the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarOpenShortcut(3), "Open Shortcut 3",
+            .pin, .anySelection,
+            "Activate shortcut 3 in the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarOpenShortcut(4), "Open Shortcut 4",
+            .pin, .anySelection,
+            "Activate shortcut 4 in the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarOpenShortcut(5), "Open Shortcut 5",
+            .pin, .anySelection,
+            "Activate shortcut 5 in the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarOpenShortcut(6), "Open Shortcut 6",
+            .pin, .anySelection,
+            "Activate shortcut 6 in the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarOpenShortcut(7), "Open Shortcut 7",
+            .pin, .anySelection,
+            "Activate shortcut 7 in the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarOpenShortcut(8), "Open Shortcut 8",
+            .pin, .anySelection,
+            "Activate shortcut 8 in the Shortcuts section."),
+        action(
+            SlateCommandID.sidebarOpenShortcut(9), "Open Shortcut 9",
+            .pin, .anySelection,
+            "Activate shortcut 9 in the Shortcuts section."),
         action(
             SlateCommandID.deleteEntry, "Move to Trash", .trash, .oneOrMoreItems,
             "Move the selected files or folders to the Trash.",
@@ -464,6 +540,8 @@ enum SidebarActionCatalog {
                     SlateCommandID.sidebarToggleDateGrouping,
                     SlateCommandID.sidebarUseVaultDefaultSort,
                     SlateCommandID.sidebarUnpinAll,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
                     SlateCommandID.deleteEntry,
@@ -475,6 +553,8 @@ enum SidebarActionCatalog {
                     SlateCommandID.moveTo,
                     SlateCommandID.duplicateEntry,
                     SlateCommandID.sidebarPinNote,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
@@ -495,7 +575,8 @@ enum SidebarActionCatalog {
         // The VoiceOver rotor stays concise and selection-relevant: Open is
         // the row's activation action, and the sort/group radio set lives in
         // the context menu, menu bar, palette, and toolbar instead.
-        let voiceOverExcluded: Set<String> = [
+        let voiceOverExcluded: Set<String> = SidebarActionCatalog
+            .voiceOverExcludedOpenShortcutSlots.union([
             SlateCommandID.sidebarOpen,
             SlateCommandID.sidebarSortNameAsc,
             SlateCommandID.sidebarSortNameDesc,
@@ -505,7 +586,7 @@ enum SidebarActionCatalog {
             SlateCommandID.sidebarSortModifiedAsc,
             SlateCommandID.sidebarToggleDateGrouping,
             SlateCommandID.sidebarUseVaultDefaultSort,
-        ]
+        ])
         let surfaceIDs = surface == .voiceOver
             ? ids.filter { !voiceOverExcluded.contains($0) }
             : ids
@@ -534,6 +615,8 @@ enum SidebarActionCatalog {
                 }
                 return "Select no more than one item to choose a creation location."
             }
+        case .anySelection:
+            break
         case .exactlyOneItem:
             guard items.count == 1 else {
                 switch action.id {
@@ -541,6 +624,10 @@ enum SidebarActionCatalog {
                     return "Select exactly one file or folder to rename."
                 case SlateCommandID.revealInFinder:
                     return "Select exactly one file or folder to reveal."
+                case SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut:
+                    return "Select exactly one file or folder to change its "
+                        + "Shortcuts membership."
                 default:
                     return "Select exactly one file or folder to copy its path."
                 }

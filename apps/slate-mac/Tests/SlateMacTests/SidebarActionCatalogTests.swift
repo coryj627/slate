@@ -57,6 +57,22 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "slate.sidebar.sortModifiedAsc",
                 "slate.sidebar.toggleDateGrouping",
                 "slate.sidebar.useVaultDefaultSort",
+                "slate.sidebar.addShortcut",
+                "slate.sidebar.removeShortcut",
+                "slate.sidebar.clearRecents",
+                "slate.sidebar.collapseAll",
+                "slate.sidebar.expandLoaded",
+                "slate.sidebar.historyBack",
+                "slate.sidebar.historyForward",
+                "slate.sidebar.openShortcut1",
+                "slate.sidebar.openShortcut2",
+                "slate.sidebar.openShortcut3",
+                "slate.sidebar.openShortcut4",
+                "slate.sidebar.openShortcut5",
+                "slate.sidebar.openShortcut6",
+                "slate.sidebar.openShortcut7",
+                "slate.sidebar.openShortcut8",
+                "slate.sidebar.openShortcut9",
                 "slate.file.delete",
             ])
         XCTAssertEqual(
@@ -71,6 +87,12 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "Sort by Created (Newest First)", "Sort by Created (Oldest First)",
                 "Sort by Modified (Newest First)", "Sort by Modified (Oldest First)",
                 "Group by Date", "Use Vault Default Sort",
+                "Add to Shortcuts", "Remove from Shortcuts", "Clear Recents",
+                "Collapse All Folders", "Expand Loaded Folders",
+                "Back in Sidebar History", "Forward in Sidebar History",
+                "Open Shortcut 1", "Open Shortcut 2", "Open Shortcut 3",
+                "Open Shortcut 4", "Open Shortcut 5", "Open Shortcut 6",
+                "Open Shortcut 7", "Open Shortcut 8", "Open Shortcut 9",
                 "Move to Trash",
             ])
         XCTAssertEqual(
@@ -82,6 +104,9 @@ final class SidebarActionCatalogTests: XCTestCase {
                 .pin, .unpin, .unpin,
                 .sortOrder, .sortOrder, .sortOrder, .sortOrder, .sortOrder,
                 .sortOrder, .dateGrouping, .sortOrder,
+                .pin, .unpin, .unpin,
+                .sortOrder, .sortOrder, .sortOrder, .sortOrder,
+                .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin,
                 .trash,
             ])
         XCTAssertEqual(
@@ -190,12 +215,20 @@ final class SidebarActionCatalogTests: XCTestCase {
             SlateCommandID.sidebarToggleDateGrouping,
             SlateCommandID.sidebarUseVaultDefaultSort,
         ]
+        let navigationLocationIDs: [String] =
+            [
+                SlateCommandID.sidebarClearRecents,
+                SlateCommandID.sidebarCollapseAll,
+                SlateCommandID.sidebarExpandLoaded,
+                SlateCommandID.sidebarHistoryBack,
+                SlateCommandID.sidebarHistoryForward,
+            ] + SlateCommandID.sidebarOpenShortcutSlots
         XCTAssertEqual(
             ids(empty),
             [
                 SlateCommandID.newNote, SlateCommandID.newFolder,
                 SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
-            ] + organizationLocationIDs)
+            ] + organizationLocationIDs + navigationLocationIDs)
         // A single file takes every verb except the folder-only Unpin All.
         XCTAssertEqual(
             ids(markdown),
@@ -216,22 +249,30 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.renameEntry,
                 SlateCommandID.moveTo, SlateCommandID.revealInFinder,
                 SlateCommandID.copyPath, SlateCommandID.sidebarUnpinAll,
-            ] + organizationLocationIDs + [SlateCommandID.deleteEntry])
+            ] + organizationLocationIDs + [
+                SlateCommandID.sidebarAddShortcut,
+                SlateCommandID.sidebarRemoveShortcut,
+            ] + navigationLocationIDs + [SlateCommandID.deleteEntry])
         XCTAssertEqual(
             ids(files),
             [
                 SlateCommandID.sidebarOpen, SlateCommandID.moveTo,
+            ] + navigationLocationIDs + [
                 SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
             ids(mixed),
             [
-                SlateCommandID.moveTo, SlateCommandID.deleteEntry,
+                SlateCommandID.moveTo
+            ] + navigationLocationIDs + [
+                SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
             ids(folders),
             [
-                SlateCommandID.moveTo, SlateCommandID.deleteEntry,
+                SlateCommandID.moveTo
+            ] + navigationLocationIDs + [
+                SlateCommandID.deleteEntry,
             ])
     }
 
@@ -329,6 +370,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.revealInFinder, SlateCommandID.copyPath,
                 SlateCommandID.sidebarCopyWikilink,
                 SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                SlateCommandID.sidebarAddShortcut,
+                SlateCommandID.sidebarRemoveShortcut,
                 SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
@@ -338,6 +381,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                 SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
                 SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                SlateCommandID.sidebarAddShortcut,
+                SlateCommandID.sidebarRemoveShortcut,
                 SlateCommandID.deleteEntry,
             ],
             "VoiceOver Open belongs only to the conditional default action")
@@ -387,6 +432,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
                     SlateCommandID.sidebarCopyWikilink,
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -397,6 +444,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.moveTo, SlateCommandID.duplicateEntry,
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -416,6 +465,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarSortModifiedAsc,
                     SlateCommandID.sidebarToggleDateGrouping,
                     SlateCommandID.sidebarUseVaultDefaultSort,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -494,11 +545,15 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarSortModifiedAsc,
                     SlateCommandID.sidebarToggleDateGrouping,
                     SlateCommandID.sidebarUseVaultDefaultSort,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                 ]
             } else {
                 expected = [
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
                     SlateCommandID.sidebarUnpinAll,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                 ]
             }
             XCTAssertEqual(
