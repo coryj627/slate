@@ -35,6 +35,17 @@ Full-suite walltime is roughly **10–15 minutes** on a modern Apple Silicon lap
 
 The first three groups run for three vault sizes: **1 000**, **10 000**, **50 000** Markdown files. The Tasks groups run the single realistic 1 000-file distribution described above.
 
+## FL-08 baseline — 2026-07-19 (sidebar filter, #662)
+
+| Bench | Median | Budget | Notes |
+|---|---|---|---|
+| `sidebar_filter/10000` | ~45 ms | ≤ 50 ms | Name term (worst case): linear casefolded substring over every effective name via the `slate_tree_sort_key` UDF, one statement, set-based title join. |
+| `sidebar_filter/10000_mixed_terms` | ~43 ms | ≤ 50 ms | `note ext:md -has:task` — EXISTS joins narrow before the name scan. |
+
+Per fl4_spec FL4-1 rule 7: if a regression pushes the name term past
+budget, the remedy is a casefolded effective-name column maintained at
+scan time — not pre-built speculatively.
+
 ## V1 release-gate targets
 
 From `docs/plans/05_locked_architecture_decisions.md` §9.5. **Regressions below these thresholds are V1 release blockers.**

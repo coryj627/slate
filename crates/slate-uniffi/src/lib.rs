@@ -308,6 +308,25 @@ pub struct VaultRootIdentity {
     pub inode: u64,
 }
 
+/// FL4-1 (#662): one host-validated half-open UTC window for a required
+/// date term.
+#[derive(uniffi::Record)]
+pub struct SidebarFilterDateWindow {
+    pub term: String,
+    pub start_ms: i64,
+    pub end_ms: i64,
+}
+
+/// FL4-1 result page: shared file summaries plus the normative
+/// pre-rendered VoiceOver summary.
+#[derive(uniffi::Record)]
+pub struct SidebarFilterPage {
+    pub files: Vec<FileSummary>,
+    pub next_cursor: Option<String>,
+    pub total: u64,
+    pub audio_summary: String,
+}
+
 /// FFI-exposed vault session. Wraps `slate_core::VaultSession`.
 ///
 /// Constructed via `VaultSession.openFilesystem(rootPath:)` on the
@@ -350,6 +369,48 @@ impl VaultSession {
     pub fn scan_initial(&self, cancel: Arc<CancelToken>) -> Result<ScanReport, VaultError> {
         let report = self.inner.scan_initial(&cancel.inner)?;
         Ok(report.into())
+    }
+
+    /// FL4-1 (#662): the canonical unique date-term requirements for a
+    /// sidebar filter query, first-occurrence order. Parse errors carry
+    /// the offending term through `VaultError::InvalidQuery`.
+    pub fn sidebar_filter_date_requirements(
+        &self,
+        query: String,
+    ) -> Result<Vec<String>, VaultError> {
+        self.inner
+            .sidebar_filter_date_requirements(&query)
+            .map_err(Into::into)
+    }
+
+    /// FL4-1 (#662): one deterministic parameterized filter/scoped-listing
+    /// statement per page. Empty queries are valid only with a normalized
+    /// vault-contained `scope_dir`; date terms need exactly one validated
+    /// half-open UTC window each.
+    pub fn filter_files(
+        &self,
+        query: String,
+        scope_dir: Option<String>,
+        date_windows: Vec<SidebarFilterDateWindow>,
+        paging: Paging,
+    ) -> Result<SidebarFilterPage, VaultError> {
+        let windows: Vec<core::SidebarFilterDateWindow> = date_windows
+            .into_iter()
+            .map(|window| core::SidebarFilterDateWindow {
+                term: window.term,
+                start_ms: window.start_ms,
+                end_ms: window.end_ms,
+            })
+            .collect();
+        let page =
+            self.inner
+                .filter_files(&query, scope_dir.as_deref(), &windows, paging.into())?;
+        Ok(SidebarFilterPage {
+            files: page.files.into_iter().map(Into::into).collect(),
+            next_cursor: page.next_cursor,
+            total: page.total,
+            audio_summary: page.audio_summary,
+        })
     }
 
     /// Return a page of indexed files matching `filter`.
