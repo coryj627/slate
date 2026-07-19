@@ -302,8 +302,7 @@ extension ReadingLinkRouter {
                 else {
                     // Mid-transition (stale records) = record-less: the
                     // same announce the missing-record arm below gives.
-                    postAccessibilityAnnouncement(
-                        "\(target) is unresolved. Cannot open.")
+                    postAccessibilityAnnouncement(.linkUnresolved(target: target))
                     return
                 }
                 // Match the note's own outgoing-link record and reuse
@@ -328,8 +327,7 @@ extension ReadingLinkRouter {
                     // The live buffer can hold a link the saved-state link
                     // index hasn't seen (reading mode renders unsaved text).
                     // Same message shape as `openLink`'s unresolved branch.
-                    postAccessibilityAnnouncement(
-                        "\(target) is unresolved. Cannot open.")
+                    postAccessibilityAnnouncement(.linkUnresolved(target: target))
                 }
             },
             openEmbed: { [weak appState] target in
@@ -352,8 +350,7 @@ extension ReadingLinkRouter {
                     // navigates + announces "Opened embed source".
                     appState.openEmbedTarget(path)
                 } else {
-                    postAccessibilityAnnouncement(
-                        "\(target) is unresolved. Cannot open.")
+                    postAccessibilityAnnouncement(.linkUnresolved(target: target))
                 }
             },
             openTag: { [weak appState] tag in
@@ -385,8 +382,7 @@ extension ReadingLinkRouter {
                     let citation = appState.currentNoteCitations.first(
                         where: { $0.raw == raw })
                 else {
-                    postAccessibilityAnnouncement(
-                        "Citation is not loaded yet.")
+                    postAccessibilityAnnouncement(.citationNotLoaded)
                     return
                 }
                 appState.expandedCitationRowAnchored = false

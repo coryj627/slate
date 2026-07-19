@@ -1362,7 +1362,8 @@ struct BaseQueryBuilderSheet: View {
                 moveSort(index: index, delta: destination - index)
             },
             retainFocus: { focusedSortRow = $0 },
-            announce: { postAccessibilityAnnouncement($0, priority: .medium) })
+            // W0.5-3 residue: BaseRowReorderCommand.route
+            announce: { postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium)) })
         else { return .ignored }
         return .handled
     }
@@ -1385,7 +1386,8 @@ struct BaseQueryBuilderSheet: View {
                 moveColumn(property: property, delta: destination - index)
             },
             retainFocus: { _ in focusedColumnRowID = property.exactIdentityKey },
-            announce: { postAccessibilityAnnouncement($0, priority: .medium) })
+            // W0.5-3 residue: BaseRowReorderCommand.route
+            announce: { postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium)) })
         else { return .ignored }
         return .handled
     }

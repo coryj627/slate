@@ -717,7 +717,7 @@ extension AppState {
     func showHistoryPanel() {
         if workspace.activeLeaf != .history {
             workspace.activeLeaf = .history
-            postAccessibilityAnnouncement("History panel.", priority: .medium)
+            postAccessibilityAnnouncement(.historyPanelShown)
         }
         focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
     }
@@ -785,7 +785,8 @@ extension AppState {
                 // VoiceOver channel so o_spec §O-2's "never silent" contract
                 // holds — a screen-reader user still learns compaction failed;
                 // sighted users chose to stop the interruptions.
-                announcer.post(message, priority: .medium)
+                // W0.5-3 residue: core vault-event message (compaction failure, presented verbatim)
+                announcer.post(.hostComposed(text: message, priority: .medium))
             } else {
                 compactionFailure = CompactionFailure(path: path, message: message)
             }

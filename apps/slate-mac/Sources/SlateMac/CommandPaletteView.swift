@@ -132,16 +132,16 @@ struct CommandPaletteView: View {
             // #418 (F-A1): was .low — anything else speaking (typing
             // echoes, filter-count announcements) superseded it and
             // the VO test heard nothing while arrowing. Medium is
-            // the politeness floor that actually survives.
+            // the politeness floor that actually survives (pinned on
+            // the core event).
             postAccessibilityAnnouncement(
-                Self.selectionAnnouncement(
-                    for: command, disabledReason: disabledReason),
-                priority: .medium
-            )
+                .paletteCommandSelected(
+                    label: command.label, disabledReason: disabledReason))
         }
         .onChange(of: model.pendingAnnouncement) { _, announcement in
             guard let announcement, !announcement.isEmpty else { return }
-            postAccessibilityAnnouncement(announcement, priority: .high)
+            // W0.5-3 residue: palette model announcement strings (#717 core-rendered follow-up)
+            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .high))
             model.clearPendingAnnouncement()
         }
         .onChange(of: model.filterAnnouncement) { _, announcement in
@@ -153,7 +153,8 @@ struct CommandPaletteView: View {
             // garbage at typing speed. Matches the
             // `SearchOverlay.swift` precedent.
             guard let announcement, !announcement.isEmpty else { return }
-            postAccessibilityAnnouncement(announcement, priority: .medium)
+            // W0.5-3 residue: palette model announcement strings (#717 core-rendered follow-up)
+            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
             model.clearFilterAnnouncement()
         }
     }
@@ -376,12 +377,17 @@ struct CommandPaletteView: View {
         return nil
     }
 
+    /// Delegates to the core vocabulary (W0.5-3 #717/#719): the copy is
+    /// `slate_core::a11y`'s `PaletteCommandSelected` template; this
+    /// wrapper survives only for the tests that pin the rendered shape.
     static func selectionAnnouncement(
         for command: Command,
         disabledReason: String?
     ) -> String {
-        guard let disabledReason else { return "Selected: \(command.label)" }
-        return "Selected: \(command.label). Unavailable: \(disabledReason)"
+        a11yRender(
+            event: .paletteCommandSelected(
+                label: command.label, disabledReason: disabledReason)
+        ).text
     }
 
     /// View-layer Return/click gate. A disabled selection keeps search focus,
@@ -650,7 +656,8 @@ struct CommandPaletteView: View {
             disabledReason: disabledReason,
             restoreSearchFocus: { searchFocused = true },
             announceUnavailable: {
-                postAccessibilityAnnouncement($0, priority: .high)
+                // W0.5-3 residue: palette model announcement strings (#717 core-rendered follow-up)
+                postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .high))
             },
             invoke: {
                 model.invoke(command, via: appState.commandRegistry)

@@ -1290,7 +1290,8 @@ extension AppState {
     func basesWhereAmI() -> String? {
         guard let doc = activeBaseDocument else { return nil }
         let text = doc.whereAmIReadback
-        postAccessibilityAnnouncement(text, priority: .medium)
+        // W0.5-3 residue: BaseDocument.whereAmIReadback
+        postAccessibilityAnnouncement(.hostComposed(text: text, priority: .medium))
         return text
     }
 
@@ -1943,7 +1944,7 @@ extension AppState {
     private func setActiveBaseRendererOverride(_ mode: BaseRendererMode) {
         guard let tab = workspace.activeTab, BaseDocumentSource(item: tab.item) != nil else { return }
         baseRendererOverrides[tab.id] = mode
-        postAccessibilityAnnouncement("Base view as \(mode.rawValue).", priority: .medium)
+        postAccessibilityAnnouncement(.baseViewMode(mode: mode.rawValue))
     }
 
     private func clearBaseRendererOverride(for tabID: TabID) {
@@ -1952,15 +1953,13 @@ extension AppState {
 
     func basesOpenViewSwitcher() {
         guard let doc = activeBaseDocument else { return }
-        postAccessibilityAnnouncement(
-            "Base view switcher. \(doc.views.count) \(doc.views.count == 1 ? "view" : "views").",
-            priority: .medium)
+        postAccessibilityAnnouncement(.baseViewSwitcher(viewCount: UInt32(doc.views.count)))
     }
 
     func basesNewQuery() {
         guard currentSession != nil else { return }
         activeBaseQueryBuilder = BaseQueryBuilderModel()
-        postAccessibilityAnnouncement("New Bases query builder.", priority: .medium)
+        postAccessibilityAnnouncement(.basesNewQueryBuilder)
     }
 
     func basesEditViewFilters() {
@@ -1989,11 +1988,10 @@ extension AppState {
                     source: doc.source,
                     viewIndex: UInt32(doc.activeViewIndex)))
             let viewName = doc.activeViewName ?? "active view"
-            postAccessibilityAnnouncement("Editing filters for \(viewName).", priority: .medium)
+            postAccessibilityAnnouncement(.basesEditingFilters(viewName: viewName))
         } catch {
             postAccessibilityAnnouncement(
-                "Base filters could not be opened in the builder: \(error.localizedDescription)",
-                priority: .medium)
+                .basesFiltersOpenFailed(detail: error.localizedDescription))
         }
     }
 
@@ -2163,9 +2161,11 @@ extension AppState {
         } else {
             model.previewState = .ready(result)
         }
+        // W0.5-3 residue: BaseQueryPreviewState.accessibilityAnnouncement
         postAccessibilityAnnouncement(
-            model.previewState.accessibilityAnnouncement,
-            priority: .medium)
+            .hostComposed(
+                text: model.previewState.accessibilityAnnouncement,
+                priority: .medium))
     }
 
     func basesBuilderPublishPreviewFailure(
@@ -2182,9 +2182,7 @@ extension AppState {
             generation: generation)
         else { return }
         model.previewState = .failed(message)
-        postAccessibilityAnnouncement(
-            "Base preview failed: \(message)",
-            priority: .medium)
+        postAccessibilityAnnouncement(.basesPreviewFailed(detail: message))
     }
 
     private func currentBaseQueryBuilderPreviewModel(
@@ -2279,11 +2277,10 @@ extension AppState {
             refreshVisibleBasesAfterInAppWrite(
                 session: session,
                 changedPath: editingView.source.filePath ?? doc.selectionKey)
-            postAccessibilityAnnouncement("Saved builder changes to view.", priority: .medium)
+            postAccessibilityAnnouncement(.basesBuilderSaved)
         } catch {
             postAccessibilityAnnouncement(
-                "Base view could not be saved: \(error.localizedDescription)",
-                priority: .medium)
+                .basesViewSaveFailed(detail: error.localizedDescription))
         }
     }
 
@@ -2438,7 +2435,7 @@ extension AppState {
         guard let model = activeBaseQueryBuilder, let session = currentSession else { return }
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            postAccessibilityAnnouncement("Enter a saved query name before saving.", priority: .medium)
+            postAccessibilityAnnouncement(.basesSavedQueryNameNeeded)
             return
         }
         do {
@@ -2448,11 +2445,10 @@ extension AppState {
                 queryJson: model.draft.queryJSON(),
                 sourceSyntax: .builder)
             refreshBaseQueries()
-            postAccessibilityAnnouncement("Saved query \(trimmed).", priority: .medium)
+            postAccessibilityAnnouncement(.basesSavedQueryCreated(name: trimmed))
         } catch {
             postAccessibilityAnnouncement(
-                "Saved query could not be created: \(error.localizedDescription)",
-                priority: .medium)
+                .basesSavedQueryCreateFailed(detail: error.localizedDescription))
         }
     }
 
@@ -2472,8 +2468,7 @@ extension AppState {
             queryJSON = try model.draft.queryJSON()
         } catch {
             postAccessibilityAnnouncement(
-                "Saved query could not be updated: \(error.localizedDescription)",
-                priority: .medium)
+                .basesSavedQueryUpdateFailed(detail: error.localizedDescription))
             return nil
         }
         savedQueryUpdateGeneration &+= 1
@@ -2521,13 +2516,10 @@ extension AppState {
                     self.currentSession === session,
                     self.savedQueryUpdateGeneration == generation
                 else { return }
-                postAccessibilityAnnouncement(
-                    "Updated saved query \(name).",
-                    priority: .medium)
+                postAccessibilityAnnouncement(.basesSavedQueryUpdated(name: name))
             case .failure(let message):
                 postAccessibilityAnnouncement(
-                    "Saved query could not be updated: \(message)",
-                    priority: .medium)
+                    .basesSavedQueryUpdateFailed(detail: message))
             }
         }
         savedQueryUpdateTask = task
@@ -2629,7 +2621,7 @@ extension AppState {
         else { return }
         doc.selectNextView(session: session)
         if let name = doc.activeViewName {
-            postAccessibilityAnnouncement("Base view: \(name).", priority: .medium)
+            postAccessibilityAnnouncement(.basesViewSelected(name: name))
         }
     }
 
@@ -2640,7 +2632,7 @@ extension AppState {
         else { return }
         doc.selectPreviousView(session: session)
         if let name = doc.activeViewName {
-            postAccessibilityAnnouncement("Base view: \(name).", priority: .medium)
+            postAccessibilityAnnouncement(.basesViewSelected(name: name))
         }
     }
 
@@ -2650,7 +2642,8 @@ extension AppState {
             let session = currentSession,
             let text = doc.sortFocusedColumn(session: session)
         else { return }
-        postAccessibilityAnnouncement(text, priority: .medium)
+        // W0.5-3 residue: BaseDocument.sortFocusedColumn
+        postAccessibilityAnnouncement(.hostComposed(text: text, priority: .medium))
     }
 
     func basesSaveSortToView() {
@@ -2669,19 +2662,21 @@ extension AppState {
                     session: session,
                     changedPath: doc.source.filePath ?? doc.selectionKey,
                     alreadyRefreshedDefinitionOwner: doc)
-                postAccessibilityAnnouncement(text, priority: .medium)
+                // W0.5-3 residue: BaseDocument.saveSortToView
+                postAccessibilityAnnouncement(.hostComposed(text: text, priority: .medium))
             }
         } catch {
             postAccessibilityAnnouncement(
-                "Base sort could not be saved: \(error.localizedDescription)",
-                priority: .medium)
+                .basesSortSaveFailed(detail: error.localizedDescription))
         }
     }
 
     func basesResultsPopover() {
         guard let doc = activeBaseDocument, let result = doc.result else { return }
         let suffix = doc.quickFilterActive ? " \(doc.whereAmIReadback)." : ""
-        postAccessibilityAnnouncement("\(result.audioSummary)\(suffix)", priority: .medium)
+        // W0.5-3 residue: BasesResultSet.audioSummary + whereAmIReadback suffix
+        postAccessibilityAnnouncement(
+            .hostComposed(text: "\(result.audioSummary)\(suffix)", priority: .medium))
     }
 
     @discardableResult
@@ -2883,7 +2878,7 @@ extension AppState {
             return
         }
         guard loadBaseDocumentIfAllowed(doc, session: session) else { return }
-        postAccessibilityAnnouncement("Base refreshed.", priority: .medium)
+        postAccessibilityAnnouncement(.baseRefreshed)
     }
 
     @discardableResult
@@ -3341,7 +3336,8 @@ extension AppState {
 
     func postBaseActionAnnouncement(_ message: String) {
         lastBaseActionAnnouncement = message
-        postAccessibilityAnnouncement(message, priority: .medium)
+        // W0.5-3 residue: Bases action message builders (postBaseActionAnnouncement callers)
+        postAccessibilityAnnouncement(.hostComposed(text: message, priority: .medium))
     }
 
     private func activeBaseSelectedRowForCommand() -> BasesRow? {

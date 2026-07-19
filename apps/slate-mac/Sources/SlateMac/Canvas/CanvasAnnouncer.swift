@@ -101,7 +101,9 @@ final class CanvasAnnouncer: ObservableObject {
         verbosity: CanvasVerbosity = .standard,
         coalesceWindow: TimeInterval = 0.2,
         post: @escaping (String, NSAccessibilityPriorityLevel) -> Void = {
-            postAccessibilityAnnouncement($0, priority: $1)
+            // W0.5-3 residue: canvas announcer engine
+            postAccessibilityAnnouncement(
+                .hostComposed(text: $0, priority: $1 == .high ? .high : .medium))
         }
     ) {
         self.verbosity = verbosity

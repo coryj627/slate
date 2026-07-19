@@ -361,7 +361,7 @@ struct RightPaneView: View {
     private func activate(_ leaf: Leaf) {
         guard workspace.activeLeaf != leaf else { return }
         workspace.activeLeaf = leaf
-        postAccessibilityAnnouncement("\(leaf.title) panel.", priority: .medium)
+        postAccessibilityAnnouncement(.leafPanelShown(title: leaf.title))
     }
 }
 

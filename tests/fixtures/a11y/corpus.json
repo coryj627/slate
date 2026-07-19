@@ -90,6 +90,21 @@
     "text": "Removed Garden from recent vaults."
   },
   {
+    "event": "WelcomeShown { recent_vault_count: 0 }",
+    "priority": "medium",
+    "text": "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files."
+  },
+  {
+    "event": "WelcomeShown { recent_vault_count: 1 }",
+    "priority": "medium",
+    "text": "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files. 1 recent vault listed below."
+  },
+  {
+    "event": "WelcomeShown { recent_vault_count: 2 }",
+    "priority": "medium",
+    "text": "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files. 2 recent vaults listed below."
+  },
+  {
     "event": "CommandPaletteNeedsVault",
     "priority": "high",
     "text": "Open a vault to use the command palette."
@@ -325,6 +340,21 @@
     "text": "Rename failed: io error"
   },
   {
+    "event": "RenameSummary { applied: true, renamed: 3, skipped: 1, failed: 0 }",
+    "priority": "medium",
+    "text": "3 renamed, 1 skipped, 0 failed."
+  },
+  {
+    "event": "RenameSummary { applied: false, renamed: 1, skipped: 0, failed: 0 }",
+    "priority": "medium",
+    "text": "1 file will be renamed, 0 skipped, 0 errors."
+  },
+  {
+    "event": "RenameSummary { applied: false, renamed: 3, skipped: 2, failed: 0 }",
+    "priority": "medium",
+    "text": "3 files will be renamed, 2 skipped, 0 errors."
+  },
+  {
     "event": "DuplicateFilesOnly",
     "priority": "medium",
     "text": "Duplicate applies to files only."
@@ -418,6 +448,16 @@
     "event": "RowSelected { name: \"notes\" }",
     "priority": "medium",
     "text": "Selected: notes"
+  },
+  {
+    "event": "PaletteCommandSelected { label: \"Save\", disabled_reason: None }",
+    "priority": "medium",
+    "text": "Selected: Save"
+  },
+  {
+    "event": "PaletteCommandSelected { label: \"Save\", disabled_reason: Some(\"A structural operation is in progress.\") }",
+    "priority": "medium",
+    "text": "Selected: Save. Unavailable: A structural operation is in progress."
   },
   {
     "event": "RecentSearchFocused { query: \"fox\" }",

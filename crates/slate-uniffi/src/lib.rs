@@ -5635,6 +5635,9 @@ pub enum A11yEvent {
     RemovedRecentVault {
         display_name: String,
     },
+    WelcomeShown {
+        recent_vault_count: u32,
+    },
     CommandPaletteNeedsVault,
     SearchNeedsVault,
     SearchResultOpened {
@@ -5742,6 +5745,12 @@ pub enum A11yEvent {
     RenameFailed {
         detail: String,
     },
+    RenameSummary {
+        applied: bool,
+        renamed: u32,
+        skipped: u32,
+        failed: u32,
+    },
     DuplicateFilesOnly,
     MathSpeechStyle {
         name: String,
@@ -5782,6 +5791,10 @@ pub enum A11yEvent {
     },
     RowSelected {
         name: String,
+    },
+    PaletteCommandSelected {
+        label: String,
+        disabled_reason: Option<String>,
     },
     RecentSearchFocused {
         query: String,
@@ -5892,6 +5905,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 sidebar_notice,
             },
             F::RemovedRecentVault { display_name } => C::RemovedRecentVault { display_name },
+            F::WelcomeShown { recent_vault_count } => C::WelcomeShown { recent_vault_count },
             F::CommandPaletteNeedsVault => C::CommandPaletteNeedsVault,
             F::SearchNeedsVault => C::SearchNeedsVault,
             F::SearchResultOpened {
@@ -5949,6 +5963,17 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::BulkRenameSheetShown => C::BulkRenameSheetShown,
             F::RenameReloadFailed { detail } => C::RenameReloadFailed { detail },
             F::RenameFailed { detail } => C::RenameFailed { detail },
+            F::RenameSummary {
+                applied,
+                renamed,
+                skipped,
+                failed,
+            } => C::RenameSummary {
+                applied,
+                renamed,
+                skipped,
+                failed,
+            },
             F::DuplicateFilesOnly => C::DuplicateFilesOnly,
             F::MathSpeechStyle { name } => C::MathSpeechStyle { name },
             F::MathVerbosity { name } => C::MathVerbosity { name },
@@ -5964,6 +5989,13 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::NoItemsSelected => C::NoItemsSelected,
             F::TreeFolderSelected { name } => C::TreeFolderSelected { name },
             F::RowSelected { name } => C::RowSelected { name },
+            F::PaletteCommandSelected {
+                label,
+                disabled_reason,
+            } => C::PaletteCommandSelected {
+                label,
+                disabled_reason,
+            },
             F::RecentSearchFocused { query } => C::RecentSearchFocused { query },
             F::BaseViewMode { mode } => C::BaseViewMode { mode },
             F::BaseViewSwitcher { view_count } => C::BaseViewSwitcher { view_count },

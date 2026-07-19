@@ -154,7 +154,7 @@ struct BulkRenameSheet: View {
                 oldKey = appState.currentNoteProperties.first?.key ?? ""
             }
             focusedField = .oldKey
-            postAccessibilityAnnouncement("Bulk rename property", priority: .high)
+            postAccessibilityAnnouncement(.bulkRenameSheetShown)
         }
         .onDisappear {
             appState.cancelPendingRename()

@@ -117,14 +117,15 @@ struct AddPropertySheet: View {
         .onAppear {
             appState.ensureAddPropertySheetOwner()
             focusedField = .key
-            postAccessibilityAnnouncement("Add property", priority: .high)
+            postAccessibilityAnnouncement(.addPropertySheetShown)
         }
     }
 
     private func commit() {
         if let disabledReason {
             inlineError = disabledReason
-            postAccessibilityAnnouncement(disabledReason, priority: .high)
+            // W0.5-3 residue: add-property disabledReason (AppState availability copy)
+            postAccessibilityAnnouncement(.hostComposed(text: disabledReason, priority: .high))
             return
         }
         let trimmed = key.trimmingCharacters(in: .whitespaces)

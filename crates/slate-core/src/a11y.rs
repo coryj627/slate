@@ -107,6 +107,11 @@ pub enum A11yEvent {
     RemovedRecentVault {
         display_name: String,
     },
+    /// The welcome screen appeared (no vault open). The recent-vault
+    /// count appends its own sentence when nonzero.
+    WelcomeShown {
+        recent_vault_count: u32,
+    },
     CommandPaletteNeedsVault,
     SearchNeedsVault,
 
@@ -227,6 +232,16 @@ pub enum A11yEvent {
     RenameFailed {
         detail: String,
     },
+    /// One-line bulk-rename outcome (also the rename sheet's footer
+    /// copy — the mac builder delegates here so the two can't drift).
+    /// `applied == false` is the dry-run preview, where `renamed`
+    /// carries the will-rename count and `failed` is unused.
+    RenameSummary {
+        applied: bool,
+        renamed: u32,
+        skipped: u32,
+        failed: u32,
+    },
     DuplicateFilesOnly,
 
     // --- Settings / preference toggles ---
@@ -271,6 +286,13 @@ pub enum A11yEvent {
     },
     RowSelected {
         name: String,
+    },
+    /// Palette selection echo: the command label, plus its
+    /// unavailability reason when the row is disabled (the reason
+    /// copy is host availability logic, carried as data).
+    PaletteCommandSelected {
+        label: String,
+        disabled_reason: Option<String>,
     },
     RecentSearchFocused {
         query: String,
@@ -415,6 +437,18 @@ impl A11yEvent {
             RemovedRecentVault { display_name } => {
                 format!("Removed {display_name} from recent vaults.")
             }
+            WelcomeShown { recent_vault_count } => {
+                let base = "Welcome to Slate. Open Vault button focused. Press Return \
+                            or Command-O to choose a folder of Markdown files.";
+                if *recent_vault_count == 0 {
+                    base.to_owned()
+                } else {
+                    format!(
+                        "{base} {recent_vault_count} recent {} listed below.",
+                        plural(*recent_vault_count, "vault", "vaults")
+                    )
+                }
+            }
             CommandPaletteNeedsVault => "Open a vault to use the command palette.".to_owned(),
             SearchNeedsVault => "Open a vault first. Search works inside a vault.".to_owned(),
 
@@ -509,6 +543,21 @@ impl A11yEvent {
                 .clone()
                 .unwrap_or_else(|| "Some open notes could not be reloaded.".to_owned()),
             RenameFailed { detail } => format!("Rename failed: {detail}"),
+            RenameSummary {
+                applied,
+                renamed,
+                skipped,
+                failed,
+            } => {
+                if *applied {
+                    format!("{renamed} renamed, {skipped} skipped, {failed} failed.")
+                } else {
+                    format!(
+                        "{renamed} {} will be renamed, {skipped} skipped, 0 errors.",
+                        plural(*renamed, "file", "files")
+                    )
+                }
+            }
             DuplicateFilesOnly => "Duplicate applies to files only.".to_owned(),
 
             MathSpeechStyle { name } => format!("Math speech style: {name}."),
@@ -543,6 +592,13 @@ impl A11yEvent {
             NoItemsSelected => "No items selected".to_owned(),
             TreeFolderSelected { name } => format!("Selected: {name}, folder"),
             RowSelected { name } => format!("Selected: {name}"),
+            PaletteCommandSelected {
+                label,
+                disabled_reason,
+            } => match disabled_reason {
+                Some(reason) => format!("Selected: {label}. Unavailable: {reason}"),
+                None => format!("Selected: {label}"),
+            },
             RecentSearchFocused { query } => format!("Recent search: {query}"),
 
             BaseViewMode { mode } => format!("Base view as {mode}."),
@@ -649,6 +705,15 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         RemovedRecentVault {
             display_name: "Garden".into(),
+        },
+        WelcomeShown {
+            recent_vault_count: 0,
+        },
+        WelcomeShown {
+            recent_vault_count: 1,
+        },
+        WelcomeShown {
+            recent_vault_count: 2,
         },
         CommandPaletteNeedsVault,
         SearchNeedsVault,
@@ -758,6 +823,24 @@ pub fn corpus() -> Vec<A11yEvent> {
         RenameFailed {
             detail: "io error".into(),
         },
+        RenameSummary {
+            applied: true,
+            renamed: 3,
+            skipped: 1,
+            failed: 0,
+        },
+        RenameSummary {
+            applied: false,
+            renamed: 1,
+            skipped: 0,
+            failed: 0,
+        },
+        RenameSummary {
+            applied: false,
+            renamed: 3,
+            skipped: 2,
+            failed: 0,
+        },
         DuplicateFilesOnly,
         MathSpeechStyle {
             name: "ClearSpeak".into(),
@@ -790,6 +873,14 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         RowSelected {
             name: "notes".into(),
+        },
+        PaletteCommandSelected {
+            label: "Save".into(),
+            disabled_reason: None,
+        },
+        PaletteCommandSelected {
+            label: "Save".into(),
+            disabled_reason: Some("A structural operation is in progress.".into()),
         },
         RecentSearchFocused {
             query: "fox".into(),
@@ -882,6 +973,18 @@ mod tests {
                 "Vault Garden opened. Scanning files for the sidebar.",
             ),
             (Medium, "Removed Garden from recent vaults."),
+            (
+                Medium,
+                "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files.",
+            ),
+            (
+                Medium,
+                "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files. 1 recent vault listed below.",
+            ),
+            (
+                Medium,
+                "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files. 2 recent vaults listed below.",
+            ),
             (High, "Open a vault to use the command palette."),
             (Medium, "Open a vault first. Search works inside a vault."),
             (Medium, "Opened notes.md, line 12: the quick brown fox"),
@@ -962,6 +1065,9 @@ mod tests {
             (High, "Bulk rename property"),
             (High, "Some open notes could not be reloaded."),
             (High, "Rename failed: io error"),
+            (Medium, "3 renamed, 1 skipped, 0 failed."),
+            (Medium, "1 file will be renamed, 0 skipped, 0 errors."),
+            (Medium, "3 files will be renamed, 2 skipped, 0 errors."),
             (Medium, "Duplicate applies to files only."),
             (Medium, "Math speech style: ClearSpeak."),
             (Medium, "Math verbosity: Verbose."),
@@ -981,6 +1087,11 @@ mod tests {
             (Medium, "No items selected"),
             (Medium, "Selected: Archive, folder"),
             (Medium, "Selected: notes"),
+            (Medium, "Selected: Save"),
+            (
+                Medium,
+                "Selected: Save. Unavailable: A structural operation is in progress.",
+            ),
             (Medium, "Recent search: fox"),
             (Medium, "Base view as cards."),
             (Medium, "Base view switcher. 1 view."),
@@ -1046,8 +1157,7 @@ mod tests {
                 })
             })
             .collect();
-        let mut expected = serde_json::to_string_pretty(&rendered)
-            .expect("corpus serializes");
+        let mut expected = serde_json::to_string_pretty(&rendered).expect("corpus serializes");
         expected.push('\n');
 
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

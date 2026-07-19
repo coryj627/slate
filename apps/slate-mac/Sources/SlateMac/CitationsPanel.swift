@@ -251,8 +251,7 @@ struct CitationsPanel: View {
             !appState.currentNoteCitations.isEmpty
         else { return }
         announcedFilePath = path
-        let n = appState.currentNoteCitations.count
-        let suffix = n == 1 ? "citation" : "citations"
-        postAccessibilityAnnouncement("Citations, \(n) \(suffix).")
+        postAccessibilityAnnouncement(
+            .citationsCount(count: UInt32(appState.currentNoteCitations.count)))
     }
 }

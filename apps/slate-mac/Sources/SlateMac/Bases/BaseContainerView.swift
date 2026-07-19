@@ -416,7 +416,8 @@ struct BaseContainerView: View {
             guard !Task.isCancelled, let session = appState.currentSession else { return }
             let announcement = document.applyQuickFilter(document.quickFilterText, session: session)
             restoreSelection(previous: previousSelection)
-            postAccessibilityAnnouncement(announcement, priority: .medium)
+            // W0.5-3 residue: BaseDocument.applyQuickFilter
+            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
         }
     }
 
@@ -427,7 +428,8 @@ struct BaseContainerView: View {
         let announcement = document.clearQuickFilter(session: appState.currentSession)
         restoreSelection(previous: previousSelection)
         if let announcement {
-            postAccessibilityAnnouncement(announcement, priority: .medium)
+            // W0.5-3 residue: BaseDocument.clearQuickFilter
+            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
         }
         resultFocusToken &+= 1
     }
