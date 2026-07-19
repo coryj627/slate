@@ -1,0 +1,27 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SlateUniffi</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The generated [LibraryImport] marshalling requires unsafe blocks
+         (w0_spec §Decision consequences). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The generated code resolves the native library by name; copying it
+         here propagates to every referencing project's output directory. -->
+    <None Include="generated\slate_uniffi.dll" Link="slate_uniffi.dll" CopyToOutputDirectory="PreserveNewest" Condition="Exists('generated\slate_uniffi.dll')" />
+  </ItemGroup>
+
+  <!-- Fail with an actionable message instead of an empty assembly when the
+       git-ignored binding hasn't been generated yet. -->
+  <Target Name="EnsureBindingsGenerated" BeforeTargets="CoreCompile">
+    <Error Condition="!Exists('generated\slate_uniffi.cs')"
+           Text="C# bindings missing. Run apps/slate-windows/generate-bindings.ps1 first (see CONTRIBUTING 'The FFI bindings workflow')." />
+  </Target>
+
+</Project>

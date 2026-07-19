@@ -54,6 +54,45 @@ Because the bindings are git-ignored, **do not commit** `slate_uniffi.swift` or
 `slate_uniffiFFI.h`. If Swift fails to see an FFI change, stale staged bindings
 are the usual cause — rerun `make regenerate-bindings` (or `make clean` first).
 
+The Rust → C# binding for the Windows frontend
+(`apps/slate-windows/src/SlateUniffi/generated/slate_uniffi.cs`) follows the
+same rule: generated, git-ignored, never committed. Regenerate with
+`make regenerate-bindings-windows`, or without make (see below):
+
+```powershell
+./apps/slate-windows/generate-bindings.ps1
+```
+
+**If you change the FFI surface, both platforms' bindings must keep
+generating and compiling.** You don't need a Mac (or a Windows box) to prove
+the other platform: CI regenerates and compiles the Swift bindings in
+`swift-tests.yml` and the C# bindings in `windows.yml` — a generator or
+compile break on either side fails the PR.
+
+### Windows local development (no make required)
+
+The `Makefile` and `scripts/*.sh` assume a unix shell; on Windows, work in
+PowerShell with the `dotnet` CLI directly. Prerequisites: the repo-pinned
+Rust toolchain (`rustup` reads `rust-toolchain.toml` automatically), the
+.NET 10 SDK, and the pinned bindings generator:
+
+```powershell
+cargo install --git https://github.com/NordSecurity/uniffi-bindgen-cs --tag v0.11.0+v0.31.0 uniffi-bindgen-cs --locked
+```
+
+The daily loop, from the repo root:
+
+```powershell
+./apps/slate-windows/generate-bindings.ps1          # after any FFI change
+dotnet build apps/slate-windows/SlateWindows.slnx
+dotnet test apps/slate-windows/SlateWindows.slnx
+dotnet format apps/slate-windows/SlateWindows.slnx  # pre-push; CI enforces --verify-no-changes
+```
+
+Rust-side checks (`cargo fmt --all -- --check`, `cargo clippy --all-targets
+--workspace -- -D warnings`, `cargo test --workspace`) run the same commands
+as `make ci` and work unchanged in PowerShell.
+
 ## Before you open a PR
 
 CI mirrors these; running them locally avoids a round-trip
@@ -61,7 +100,7 @@ CI mirrors these; running them locally avoids a round-trip
 
 - **`make ci`** — `fmt-check` + `clippy` (warnings are errors) + `test` +
   `bench-check` + license-header check. Run this before every push.
-- **License headers.** Every tracked `.rs`/`.swift` file needs an
+- **License headers.** Every tracked `.rs`/`.swift`/`.cs` file needs an
   `SPDX-License-Identifier` header. Add them with
   `python3 scripts/apply-license-header.py`.
 - **Accessibility (Mac frontend).** SwiftUI changes are checked by

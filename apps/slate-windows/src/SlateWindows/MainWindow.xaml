@@ -1,0 +1,23 @@
+<Window x:Class="SlateWindows.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Slate"
+        Height="480" Width="720"
+        FocusManager.FocusedElement="{Binding ElementName=OpenVaultButton}">
+    <DockPanel Margin="12">
+        <StackPanel DockPanel.Dock="Top" Orientation="Horizontal">
+            <Button x:Name="OpenVaultButton"
+                    Content="_Open Vault…"
+                    Padding="8,4"
+                    Click="OpenVault_Click"
+                    AutomationProperties.HelpText="Choose a vault folder. Slate opens it through slate-core and runs the initial scan." />
+            <TextBlock x:Name="StatusText"
+                       Margin="12,4,0,0"
+                       Text="No vault open."
+                       AutomationProperties.LiveSetting="Polite" />
+        </StackPanel>
+        <ListBox x:Name="ProgressList"
+                 Margin="0,12,0,0"
+                 AutomationProperties.Name="Scan progress" />
+    </DockPanel>
+</Window>

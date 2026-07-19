@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Cory Joseph
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
-# Fails if any tracked .rs or .swift file is missing the
+# Fails if any tracked .rs, .swift, or .cs file is missing the
 # `SPDX-License-Identifier` line in its first 20 lines. Wired into
 # .github/workflows/license-headers.yml and `make ci`; see issue #266.
 #
@@ -17,7 +17,7 @@ while IFS= read -r path; do
     if ! head -n 20 -- "$path" | grep -qF 'SPDX-License-Identifier'; then
         missing+=("$path")
     fi
-done < <(git ls-files '*.rs' '*.swift')
+done < <(git ls-files '*.rs' '*.swift' '*.cs')
 
 if [[ ${#missing[@]} -gt 0 ]]; then
     printf 'Missing SPDX-License-Identifier header in %d file(s):\n' "${#missing[@]}" >&2
@@ -26,5 +26,5 @@ if [[ ${#missing[@]} -gt 0 ]]; then
     exit 1
 fi
 
-printf 'OK: all %d tracked .rs/.swift files carry an SPDX-License-Identifier header.\n' \
-    "$(git ls-files '*.rs' '*.swift' | wc -l | tr -d ' ')"
+printf 'OK: all %d tracked .rs/.swift/.cs files carry an SPDX-License-Identifier header.\n' \
+    "$(git ls-files '*.rs' '*.swift' '*.cs' | wc -l | tr -d ' ')"

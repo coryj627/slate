@@ -6,7 +6,7 @@
 # picks it up). If you hit "cargo: command not found", source
 # the rustup env once: `. "$HOME/.cargo/env"`.
 
-.PHONY: help check test test-fast fmt fmt-check clippy bench-check check-license-headers ci regenerate-bindings swift-cli mac-app mac-app-run mac-app-launch bench clean
+.PHONY: help check test test-fast fmt fmt-check clippy bench-check check-license-headers ci regenerate-bindings regenerate-bindings-windows swift-cli mac-app mac-app-run mac-app-launch bench clean
 
 help:
 	@echo "Slate — common commands"
@@ -20,6 +20,7 @@ help:
 	@echo "  make check-license-headers   verify every tracked .rs/.swift carries an SPDX header"
 	@echo "  make ci            fmt-check + clippy + test + bench-check + check-license-headers"
 	@echo "  make regenerate-bindings   rebuild slate-uniffi + regenerate/stage Swift FFI bindings"
+	@echo "  make regenerate-bindings-windows   rebuild slate-uniffi + regenerate the C# FFI bindings"
 	@echo "  make swift-cli     build + run the Swift command-line smoke test"
 	@echo "  make mac-app       build the SwiftUI smoke-test app"
 	@echo "  make mac-app-run   build + launch the SwiftUI smoke-test app"
@@ -76,6 +77,12 @@ ci: fmt-check clippy test bench-check check-license-headers
 # the new API. Reuses the canonical build pipeline (no duplicated commands).
 regenerate-bindings:
 	./scripts/build-mac-app.sh --bindings-only
+
+# Windows sibling (w0_spec §W0-2 item 5). Windows-only contributors
+# without make run the script directly — see CONTRIBUTING "The FFI
+# bindings workflow".
+regenerate-bindings-windows:
+	pwsh -NoProfile -File apps/slate-windows/generate-bindings.ps1
 
 swift-cli:
 	./scripts/build-swift-cli.sh
