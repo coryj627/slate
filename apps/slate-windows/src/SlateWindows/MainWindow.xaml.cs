@@ -32,7 +32,9 @@ public partial class MainWindow : Window
         StatusText.Text = $"Scanning {root}…";
         try
         {
-            var listener = new UiProgressListener(line => Dispatcher.Invoke(() => AppendLine(line)));
+            // InvokeAsync: progress callbacks arrive on the scanner's Rust
+            // thread — a blocking Invoke would stall the scan behind UI work.
+            var listener = new UiProgressListener(line => Dispatcher.InvokeAsync(() => AppendLine(line)));
             ScanReport report = await Task.Run(() =>
             {
                 using var session = VaultSession.OpenFilesystem(root);
@@ -44,6 +46,12 @@ public partial class MainWindow : Window
         catch (VaultException ex)
         {
             StatusText.Text = $"Vault error ({ex.GetType().Name}): {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            // async void handler: anything escaping here would take down the
+            // process via the WPF dispatcher — surface it instead.
+            StatusText.Text = $"Unexpected error ({ex.GetType().Name}): {ex.Message}";
         }
         finally
         {
