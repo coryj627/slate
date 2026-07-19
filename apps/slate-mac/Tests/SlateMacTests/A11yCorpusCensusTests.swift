@@ -31,14 +31,16 @@ final class A11yCorpusCensusTests: XCTestCase {
         let text: String
     }
 
-    /// Repo-root fixture path derived from this file's location
-    /// (apps/slate-mac/Tests/SlateMacTests → repo root is four up).
+    /// Repo-root fixture path derived from this file's location — the first
+    /// delete strips the filename, then four directory hops
+    /// (SlateMacTests → Tests → slate-mac → apps) reach the repo root.
     private static var corpusURL: URL {
         URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()  // SlateMacTests
+            .deletingLastPathComponent()  // strips the filename → SlateMacTests
             .deletingLastPathComponent()  // Tests
             .deletingLastPathComponent()  // slate-mac
             .deletingLastPathComponent()  // apps
+            .deletingLastPathComponent()  // repo root
             .appendingPathComponent("tests/fixtures/a11y/corpus.json")
     }
 

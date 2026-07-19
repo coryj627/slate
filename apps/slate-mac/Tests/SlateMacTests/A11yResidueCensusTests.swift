@@ -44,6 +44,10 @@ final class A11yResidueCensusTests: XCTestCase {
         }
         var sources: [SwiftSource] = []
         for case let url as URL in enumerator where url.pathExtension == "swift" {
+            // The uniffi-generated bindings (materialized into Sources by the
+            // build, not tracked in git) carry the enum's own constructor
+            // plumbing — machinery, not call sites.
+            if url.lastPathComponent == "slate_uniffi.swift" { continue }
             let text = try String(contentsOf: url, encoding: .utf8)
             let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
                 .map { line -> String in
@@ -76,6 +80,8 @@ final class A11yResidueCensusTests: XCTestCase {
         var sites = 0
         var unmarked: [String] = []
         for case let url as URL in enumerator where url.pathExtension == "swift" {
+            // Generated bindings (see productionSources) are machinery.
+            if url.lastPathComponent == "slate_uniffi.swift" { continue }
             let lines = try String(contentsOf: url, encoding: .utf8)
                 .split(separator: "\n", omittingEmptySubsequences: false)
                 .map(String.init)
@@ -127,6 +133,12 @@ final class A11yResidueCensusTests: XCTestCase {
                 range: searchStart..<source.endIndex)
             {
                 searchStart = call.upperBound
+                // The primitive's own DECLARATION (a `func` whose signature
+                // spells `priority:` at top level) is not a call site.
+                let lineStart =
+                    source[..<call.lowerBound].lastIndex(of: "\n").map(source.index(after:))
+                    ?? source.startIndex
+                if source[lineStart..<call.lowerBound].contains("func ") { continue }
                 var depth = 1
                 var cursor = call.upperBound
                 var topLevel = ""
