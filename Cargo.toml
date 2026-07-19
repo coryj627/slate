@@ -85,6 +85,13 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # of the same name land adjacent and in a stable order. Already resolved
 # transitively (via `idna`); pinning it as a direct dep is cheap.
 unicode-normalization = "0.1"
+# unicode-segmentation gives the palette/switcher fuzzy matcher its
+# grapheme-cluster iteration (W0.5-1 #717): the mac originals compared
+# Swift `Character`s (extended grapheme clusters under canonical
+# equivalence), so the core reference must segment the same way or
+# accented input ranks differently across hosts. Already resolved
+# transitively (via `hayagriva`); pinning it as a direct dep is cheap.
+unicode-segmentation = "1.13"
 regex = "1.12.4"
 memchr = "2.8.3"
 # petgraph backs Milestone P's GraphIndex (#550): StableDiGraph keeps

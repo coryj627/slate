@@ -449,47 +449,11 @@ final class CommandPaletteViewTests: XCTestCase {
         )
     }
 
-    // MARK: - Fuzzy matcher (#315)
-
-    func testFuzzyScoreReturnsNilForNonSubsequence() {
-        XCTAssertNil(
-            CommandPaletteModel.fuzzyScore(query: "xyz", target: "Save"),
-            "query with chars not in target must return nil"
-        )
-        XCTAssertNil(
-            CommandPaletteModel.fuzzyScore(query: "vault", target: "Save"),
-            "subsequence requires order — 'vault' chars aren't all in 'Save'"
-        )
-    }
-
-    func testFuzzyScoreIsCaseInsensitive() {
-        let a = CommandPaletteModel.fuzzyScore(query: "save", target: "Save")
-        let b = CommandPaletteModel.fuzzyScore(query: "SAVE", target: "save")
-        XCTAssertEqual(a, b)
-        XCTAssertNotNil(a)
-    }
-
-    func testFuzzyScoreReturnsHigherForPrefixThanSubsequence() {
-        let prefix = CommandPaletteModel.fuzzyScore(query: "save", target: "Save")!
-        let scattered = CommandPaletteModel.fuzzyScore(query: "save", target: "Citations Are Visible Embeds")!
-        XCTAssertGreaterThan(prefix, scattered)
-    }
-
-    func testFuzzyScoreRewardsConsecutiveMatches() {
-        let consecutive = CommandPaletteModel.fuzzyScore(query: "sa", target: "Save")!
-        let split = CommandPaletteModel.fuzzyScore(query: "sa", target: "Slate Add")!
-        XCTAssertGreaterThan(consecutive, split)
-    }
-
-    func testFuzzyScoreRewardsWordBoundaryHits() {
-        let boundary = CommandPaletteModel.fuzzyScore(query: "ts", target: "Tasks Review")!
-        let mid = CommandPaletteModel.fuzzyScore(query: "ts", target: "Citations Review")!
-        XCTAssertGreaterThan(boundary, mid)
-    }
-
-    func testFuzzyScoreEmptyQueryReturnsZero() {
-        XCTAssertEqual(CommandPaletteModel.fuzzyScore(query: "", target: "Anything"), 0)
-    }
+    // The fuzzy-matcher unit tests (#315) moved to Rust with the
+    // matcher itself (W0.5-1 #717): `slate_core::palette::tests`
+    // carries the same seven cases as goldens, plus exact-score and
+    // match-span pins. Ranking behavior through the model is still
+    // exercised end-to-end below and in MilestoneQIntegrationTests.
 
     // MARK: - Selection navigation (#315)
 
@@ -730,19 +694,36 @@ final class CommandPaletteViewTests: XCTestCase {
 
     // MARK: - Section title mapping
 
-    func testSectionTitleMapping() {
-        XCTAssertEqual(CommandPaletteModel.title(for: .file), "File")
-        XCTAssertEqual(CommandPaletteModel.title(for: .navigation), "Navigation")
-        XCTAssertEqual(CommandPaletteModel.title(for: .view), "View")
-        XCTAssertEqual(CommandPaletteModel.title(for: .vault), "Vault")
-        XCTAssertEqual(CommandPaletteModel.title(for: .editor), "Editor")
-        XCTAssertEqual(CommandPaletteModel.title(for: .tasks), "Tasks")
-        XCTAssertEqual(CommandPaletteModel.title(for: .settings), "Settings")
-        XCTAssertEqual(CommandPaletteModel.title(for: .plugins), "Plugins")
-        XCTAssertEqual(CommandPaletteModel.title(for: .canvas), "Canvas")
-        XCTAssertEqual(CommandPaletteModel.title(for: .bases), "Bases")
-        XCTAssertEqual(CommandPaletteModel.title(for: .graph), "Graph")
-        XCTAssertEqual(CommandPaletteModel.title(for: .sidebar), "Sidebar")
+    /// The canonical header strings now come from core
+    /// (`slate_core::palette::section_title`, W0.5-1 #717) — assert
+    /// them through the real sections pipe so a core-side copy change
+    /// can't slip past the mac suite.
+    @MainActor
+    func testSectionTitleMapping() async {
+        let allSections: [(CommandSection, String)] = [
+            (.file, "File"), (.navigation, "Navigation"), (.view, "View"),
+            (.vault, "Vault"), (.editor, "Editor"), (.tasks, "Tasks"),
+            (.settings, "Settings"), (.plugins, "Plugins"), (.canvas, "Canvas"),
+            (.bases, "Bases"), (.graph, "Graph"), (.sidebar, "Sidebar"),
+        ]
+        let model = CommandPaletteModel()
+        model.loadCommands(allSections.enumerated().map { index, entry in
+            Command(
+                id: "test.section.\(index)",
+                label: "Probe \(entry.1)",
+                accessibilityHint: nil,
+                hotkeyHint: nil,
+                section: entry.0
+            )
+        })
+        let titlesByKind = Dictionary(
+            uniqueKeysWithValues: model.sections.compactMap { section in
+                section.kind.map { ($0, section.title) }
+            }
+        )
+        for (kind, expected) in allSections {
+            XCTAssertEqual(titlesByKind[kind], expected)
+        }
     }
 
     // MARK: - Invoke (#315)

@@ -24,6 +24,7 @@ memchr = { workspace = true }
 ropey = { workspace = true }
 similar = { workspace = true }
 unicode-normalization = { workspace = true }
+unicode-segmentation = { workspace = true }
 # GraphIndex adjacency storage (Milestone P #550) — see the workspace
 # manifest for the StableDiGraph / page_rank-holes rationale.
 petgraph = { workspace = true }

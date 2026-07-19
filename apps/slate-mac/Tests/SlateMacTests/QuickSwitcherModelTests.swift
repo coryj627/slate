@@ -56,7 +56,7 @@ final class QuickSwitcherModelTests: XCTestCase {
     /// pins the constant so a silent change to it fails here.
     func testScoreAddsNameBonusOnTopOfNameFuzzyScore() {
         let r = row("dir/foo.md", "foo.md")
-        let bareName = CommandPaletteModel.fuzzyScore(query: "foo", target: "foo")!
+        let bareName = QuickSwitcherModel.fuzzyScore(query: "foo", target: "foo")!
         let score = QuickSwitcherModel.score(query: "foo", row: r)!
         // The name ("foo" after stripping) is a prefix hit; adding the
         // bonus is what the model does. The path also matches ("dir/foo.md"

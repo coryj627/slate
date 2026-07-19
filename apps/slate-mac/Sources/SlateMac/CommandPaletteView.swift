@@ -17,7 +17,8 @@ import SwiftUI
 /// - Opens via `⌘⇧P` (menu wiring in `SlateMacApp`, gated on
 ///   `isVaultOpen`); the search field auto-focuses on appear.
 /// - Typing filters the command list via a subsequence-with-boost
-///   fuzzy matcher (see `CommandPaletteModel.fuzzyScore`).
+///   fuzzy matcher (`slate_core::palette::fuzzy_score` behind the
+///   FFI since W0.5-1 #717).
 /// - Arrow ↑ / ↓ moves selection with wrap. Modified arrows
 ///   (`Shift+↓`, `Cmd+↓`, `Ctrl+Option+↓` for VoiceOver Quick Nav,
 ///   etc.) pass through so text-editing chords and VoiceOver

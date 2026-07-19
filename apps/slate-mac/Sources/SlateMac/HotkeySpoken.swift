@@ -25,8 +25,8 @@ import Foundation
 /// panel, plugin command help popups, or a "what does ⌘⇧X do?"
 /// speakable affordance would otherwise each re-derive the same
 /// walk and drift apart. Pure `static` members on a caseless enum
-/// (no actor isolation, like `CommandPaletteModel.fuzzyScore`) so
-/// callers can use it from any isolation context.
+/// (no actor isolation) so callers can use it from any isolation
+/// context.
 enum HotkeySpoken {
     /// Walk every character of `hint` in order. Modifier glyphs
     /// (⌘⇧⌥⌃) become their spoken word; punctuation keys become

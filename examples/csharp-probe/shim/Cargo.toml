@@ -5,6 +5,12 @@
 # csbindgen consumes. Deliberately NOT a workspace member — the spike is
 # throwaway evidence; slate-core resolves its own workspace-inherited
 # fields from the repo root regardless.
+#
+# Standalone workspace ⇒ standalone Cargo.lock: any change to the ROOT
+# workspace's dependency graph (a new slate-core dep edge, a version
+# bump) must be mirrored here by running `cargo build` in this directory
+# and committing the lockfile delta, or the CI probe lane's `--locked`
+# shim build fails on "cannot update the lock file".
 
 [package]
 name = "slate-csabi-shim"
