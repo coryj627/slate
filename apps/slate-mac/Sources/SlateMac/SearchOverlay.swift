@@ -110,7 +110,9 @@ struct SearchOverlay: View {
         // every keystroke past the 150ms debounce (#91 item 1).
         .onReceive(appState.$searchSummary.removeDuplicates()) { summary in
             if !summary.isEmpty {
-                postAccessibilityAnnouncement(summary)
+                // W0.5-3 residue: search-result summary builder
+                postAccessibilityAnnouncement(
+                    .hostComposed(text: summary, priority: .medium))
             }
         }
     }
@@ -540,18 +542,14 @@ struct SearchOverlay: View {
                 rows.indices.contains(idx)
             else { return }
             postAccessibilityAnnouncement(
-                "Selected: \(filename(for: rows[idx].path))",
-                priority: .medium
-            )
+                .rowSelected(name: filename(for: rows[idx].path)))
             return
         }
         if case .recent(let idx) = newFocus,
             appState.searchRecents.indices.contains(idx)
         {
             postAccessibilityAnnouncement(
-                "Recent search: \(appState.searchRecents[idx])",
-                priority: .medium
-            )
+                .recentSearchFocused(query: appState.searchRecents[idx]))
         }
     }
 

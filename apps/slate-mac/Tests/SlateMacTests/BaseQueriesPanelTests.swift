@@ -317,7 +317,8 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertTrue(source.contains("retainFocus: { _ in focusedSectionID = sectionID }"))
         XCTAssertTrue(
             source.contains(
-                "announce: { postAccessibilityAnnouncement($0, priority: .medium) }"))
+                "announce: { postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium)) }"
+            ))
     }
 
     func testOptionArrowReordersFocusedDashboardSectionOnceAndRetainsItsIdentity() throws {

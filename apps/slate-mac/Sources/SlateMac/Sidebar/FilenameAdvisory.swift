@@ -124,7 +124,9 @@ struct FilenameAdvisoryView: View {
         }
         .onChange(of: advisory) { _, newValue in
             if let accessibilityMessage = announcementGate.announcement(for: newValue) {
-                postAccessibilityAnnouncement(accessibilityMessage, priority: .medium)
+                // W0.5-3 residue: FilenameAdvisory.accessibilityMessage
+                postAccessibilityAnnouncement(
+                    .hostComposed(text: accessibilityMessage, priority: .medium))
             }
         }
     }

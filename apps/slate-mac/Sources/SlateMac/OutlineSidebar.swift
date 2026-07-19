@@ -160,8 +160,7 @@ struct OutlineSidebar: View {
             !appState.currentNoteHeadings.isEmpty
         else { return }
         announcedFilePath = path
-        let n = appState.currentNoteHeadings.count
-        let suffix = n == 1 ? "heading" : "headings"
-        postAccessibilityAnnouncement("Outline, \(n) \(suffix).")
+        postAccessibilityAnnouncement(
+            .outlineCount(count: UInt32(appState.currentNoteHeadings.count)))
     }
 }

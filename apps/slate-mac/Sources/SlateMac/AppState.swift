@@ -1503,7 +1503,8 @@ final class AppState: ObservableObject {
     ) -> SidebarOpenConfirmationOutcome {
         activeBatchAlertPresentation = nil
         promoteDeferredBatchAlert()
-        announcer.post(reason, priority: .medium)
+        // W0.5-3 residue: sidebar open-selection rejection copy (double duty with the returned outcome)
+        announcer.post(.hostComposed(text: reason, priority: .medium))
         return .rejected(reason)
     }
 
@@ -2294,8 +2295,11 @@ final class AppState: ObservableObject {
 
         let actionName = definition.label.replacingOccurrences(of: "…", with: "")
         announcer.post(
-            "Checking \(items.count.formatted()) selected items before \(actionName).",
-            priority: .medium)
+            .batchCheckStarted(
+                // Locale digit grouping is per-platform (decision 12's
+                // seam) — the host formats, core owns the sentence.
+                formattedCount: items.count.formatted(),
+                actionName: actionName))
         return task
     }
 
@@ -2316,7 +2320,8 @@ final class AppState: ObservableObject {
 
     private func surfaceSidebarActionBackgroundFailure(_ reason: String) {
         sidebarActionBackgroundFailure = reason
-        announcer.post(reason, priority: .medium)
+        // W0.5-3 residue: sidebar-action validation failure copy (double duty with the published banner)
+        announcer.post(.hostComposed(text: reason, priority: .medium))
     }
 
     func dismissSidebarActionBackgroundFailure() {
@@ -2409,7 +2414,7 @@ final class AppState: ObservableObject {
         guard sidebarPasteboard.setString(value) else {
             throw sidebarActionFailure(Self.sidebarCopyFailureReason)
         }
-        announcer.post("Copied.", priority: .medium)
+        announcer.post(.selectionCopied)
         return .completed(actionID: actionID)
     }
 
@@ -2512,7 +2517,8 @@ final class AppState: ObservableObject {
         guard let intent = evaluation.intent else {
             if let reason = evaluation.disabledReason {
                 lastMutationAnnouncement = reason
-                announcer.post(reason, priority: .medium)
+                // W0.5-3 residue: sidebar-action disabledReason (catalog availability copy)
+                announcer.post(.hostComposed(text: reason, priority: .medium))
             }
             return true
         }
@@ -2521,7 +2527,8 @@ final class AppState: ObservableObject {
         } catch {
             let message = error.sidebarActionAnnouncement
             lastMutationAnnouncement = message
-            announcer.post(message, priority: .medium)
+            // W0.5-3 residue: sidebarActionAnnouncement error copy (lastMutationAnnouncement channel)
+            announcer.post(.hostComposed(text: message, priority: .medium))
         }
         return true
     }
@@ -3412,9 +3419,7 @@ final class AppState: ObservableObject {
                 filename(of: workspace.tabPath($0))
             }
             postAccessibilityAnnouncement(
-                successor.map { "Closed \(closedTitle). \($0) is active." }
-                    ?? "Closed \(closedTitle).",
-                priority: .medium)
+                .tabClosed(closedTitle: closedTitle, successor: successor))
         }
     }
 
@@ -3468,8 +3473,7 @@ final class AppState: ObservableObject {
                     atPath: vaultURL.appendingPathComponent(path).path)
             {
                 postAccessibilityAnnouncement(
-                    "\(filename(of: path)) no longer exists.",
-                    priority: .medium)
+                    .reopenTargetMissing(filename: filename(of: path)))
                 continue
             }
             if workspace.model.group(record.groupID) != nil,
@@ -3485,18 +3489,16 @@ final class AppState: ObservableObject {
             case .markdown(let path), .canvas(let path), .base(let path):
                 openFile(path, target: .newTab)
                 postAccessibilityAnnouncement(
-                    "Reopened \(filename(of: path)).", priority: .medium)
+                    .reopenedFile(filename: filename(of: path)))
             case .savedQuery(let id, let name):
                 openSavedQuery(id: id, name: name, target: .newTab)
-                postAccessibilityAnnouncement(
-                    "Reopened \(name).", priority: .medium)
+                postAccessibilityAnnouncement(.reopenedNamed(name: name))
             case .dashboard(let id, let name):
                 openDashboard(id: id, name: name, target: .newTab)
-                postAccessibilityAnnouncement(
-                    "Reopened \(name).", priority: .medium)
+                postAccessibilityAnnouncement(.reopenedNamed(name: name))
             case .graph:
                 openGraphTab()
-                postAccessibilityAnnouncement("Reopened Graph.", priority: .medium)
+                postAccessibilityAnnouncement(.reopenedGraph)
             }
             return
         }
@@ -3773,7 +3775,9 @@ final class AppState: ObservableObject {
         if isActiveTab {
             let announcement = target == .reading ? "Reading mode." : "Editing mode."
             lastViewModeAnnouncement = announcement
-            postAccessibilityAnnouncement(announcement)
+            // W0.5-3 residue: mode-flip announcement builder (setViewMode)
+            postAccessibilityAnnouncement(
+                .hostComposed(text: announcement, priority: .medium))
         }
     }
 
@@ -4178,9 +4182,7 @@ final class AppState: ObservableObject {
         // `openFile(.newSplit)` for a real file falls back to a new tab
         // via its own capacity check.)
         if case .graph = workspace.activeTab?.item {
-            postAccessibilityAnnouncement(
-                "The graph opens in a single pane. Split from a note instead.",
-                priority: .medium)
+            postAccessibilityAnnouncement(.graphOpensSinglePane)
             return
         }
         // Park the outgoing pane's buffer FIRST: after the split the
@@ -4200,7 +4202,9 @@ final class AppState: ObservableObject {
                 workspace.isAtPaneCapacity
                 ? "Pane limit reached — a seventh pane could not stay visible."
                 : "Nothing to split — open a note first."
-            postAccessibilityAnnouncement(reason, priority: .medium)
+            // W0.5-3 residue: split-blocked reason (workspace split availability)
+            postAccessibilityAnnouncement(
+                .hostComposed(text: reason, priority: .medium))
             return
         }
         // A split focuses the new EDITOR pane — if focus had been parked in a
@@ -4242,12 +4246,11 @@ final class AppState: ObservableObject {
             enterEditorGroup(landed)
         case .enterTree:
             workspace.focusTreeRegion()
-            postAccessibilityAnnouncement(
-                Self.filesRegionAnnouncement, priority: .medium)
+            postAccessibilityAnnouncement(.filesRegionFocused)
         case .enterLeaf:
             focusLeafRegionRevealingPane()
             postAccessibilityAnnouncement(
-                Self.leafRegionAnnouncement(workspace.activeLeaf), priority: .medium)
+                .leafPanelShown(title: workspace.activeLeaf.title))
         case .none:
             return
         }
@@ -4271,14 +4274,13 @@ final class AppState: ObservableObject {
 
     private func adjustFocusedPane(by delta: Double) {
         guard workspace.hasSplits else {
-            postAccessibilityAnnouncement("No split panes to resize.", priority: .medium)
+            postAccessibilityAnnouncement(.noSplitPanesToResize)
             return
         }
         workspace.adjustFocusedPaneWeight(by: delta)
         if let fraction = workspace.focusedPaneFraction {
             postAccessibilityAnnouncement(
-                "Pane resized, \(Int((fraction * 100).rounded())) percent.",
-                priority: .medium)
+                .paneResized(percent: UInt32((fraction * 100).rounded())))
         }
     }
 
@@ -4307,43 +4309,19 @@ final class AppState: ObservableObject {
         let total = workspace.model.groupsInOrder.count
         let title = group.activeTab.map { filename(of: workspace.tabPath($0)) } ?? "empty"
         postAccessibilityAnnouncement(
-            Self.editorPaneAnnouncement(ordinal: ordinal, total: total, title: title, prefix: prefix),
-            priority: .medium)
+            .editorPaneFocused(
+                ordinal: UInt32(ordinal), total: UInt32(total),
+                title: title, prefix: prefix))
     }
-
-    // MARK: - Focus-routing announcement strings (U4-4, #473) — pure & testable
-    //
-    // Verbatim per u4_spec §U4-4. Factored out as pure builders so the
-    // announcement tests assert the exact string a VoiceOver user hears
-    // (the free `postAccessibilityAnnouncement` has no test spy — the string
-    // is the contract). The "Editor pane N of M, <title>." form is REUSED
-    // from U1-3 unchanged.
-
-    /// "Editor pane N of M, <title>." (U1-3 format, reused). `prefix` carries
-    /// the "Split. " lead on a fresh split; empty for a plain focus move.
-    static func editorPaneAnnouncement(
-        ordinal: Int, total: Int, title: String, prefix: String = ""
-    ) -> String {
-        "\(prefix)Editor pane \(ordinal) of \(total), \(title)."
-    }
-
-    /// "<leaf title> panel." — spoken when ⌘⌥→ enters the leaf region.
-    /// Matches the leaf-switch phrasing (`RightPaneView.activate`) so entering
-    /// the leaf and switching leaves read identically.
-    static func leafRegionAnnouncement(_ leaf: Leaf) -> String {
-        "\(leaf.title) panel."
-    }
-
-    /// "Files." — spoken when ⌘⌥← enters the file-tree region.
-    static let filesRegionAnnouncement = "Files."
 
     private func announceActiveTab(prefix: String) {
         guard let tab = workspace.activeTab else { return }
         let group = workspace.model.activeGroup
         let index = (group.tabs.firstIndex { $0.id == tab.id }).map { $0 + 1 } ?? 0
         postAccessibilityAnnouncement(
-            "\(prefix) \(filename(of: workspace.tabPath(tab))), tab \(index) of \(group.tabs.count).",
-            priority: .medium)
+            .tabFocused(
+                prefix: prefix, filename: filename(of: workspace.tabPath(tab)),
+                index: UInt32(index), count: UInt32(group.tabs.count)))
     }
 
     /// UTF-8 text of the currently-selected note. Nil while no note
@@ -5105,7 +5083,8 @@ final class AppState: ObservableObject {
                     Self.sidebarUnflushedWriteRetries[$0]?.isEmpty == false
                 }) == true)
         lastMutationAnnouncement = failure
-        announcer.post(failure, priority: .medium)
+        // W0.5-3 residue: sidebar persist-failure copy (lastMutationAnnouncement channel)
+        announcer.post(.hostComposed(text: failure, priority: .medium))
     }
 
     /// Round-23: the one announcement for any write or reconcile path that
@@ -5115,7 +5094,8 @@ final class AppState: ObservableObject {
             "The vault at this location changed, so a queued "
             + "sidebar settings write was discarded."
         lastMutationAnnouncement = message
-        announcer.post(message, priority: .medium)
+        // W0.5-3 residue: sidebar write-discard copy (lastMutationAnnouncement channel)
+        announcer.post(.hostComposed(text: message, priority: .medium))
     }
 
     /// Availability the pure catalog cannot own: read-only preference files
@@ -5309,7 +5289,8 @@ final class AppState: ObservableObject {
         }
         if let announcement {
             lastMutationAnnouncement = announcement
-            announcer.post(announcement, priority: .medium)
+            // W0.5-3 residue: sidebar-organization mutation announcements (caller-composed, §U2-6 channel)
+            announcer.post(.hostComposed(text: announcement, priority: .medium))
         }
 
         let previous = Self.sidebarStoreWriterChains[enqueueIdentity]
@@ -5491,7 +5472,9 @@ final class AppState: ObservableObject {
                 acknowledge?()
                 if let durabilityWarning {
                     self.lastMutationAnnouncement = durabilityWarning
-                    self.announcer.post(durabilityWarning, priority: .medium)
+                    // W0.5-3 residue: sidebar persist durability warning (lastMutationAnnouncement channel)
+                    self.announcer.post(
+                        .hostComposed(text: durabilityWarning, priority: .medium))
                 }
                 guard isTail else { return }
                 // The tail publishes decoded post-write disk truth: a locked
@@ -5522,7 +5505,9 @@ final class AppState: ObservableObject {
                     if merged != announced.normalized {
                         let correction = merged.sortAnnouncement
                         self.lastMutationAnnouncement = correction
-                        self.announcer.post(correction, priority: .medium)
+                        // W0.5-3 residue: sort-correction copy (sortAnnouncement builder, §U2-6 channel)
+                        self.announcer.post(
+                            .hostComposed(text: correction, priority: .medium))
                     }
                 }
                 if let pending = self.sidebarOrganizationPendingPersistFailure {
@@ -5530,7 +5515,9 @@ final class AppState: ObservableObject {
                     // failure exactly once now that state matches the file.
                     self.sidebarOrganizationPendingPersistFailure = nil
                     self.lastMutationAnnouncement = pending
-                    self.announcer.post(pending, priority: .medium)
+                    // W0.5-3 residue: pending persist-failure copy (lastMutationAnnouncement channel)
+                    self.announcer.post(
+                        .hostComposed(text: pending, priority: .medium))
                 }
             }
 
@@ -6300,7 +6287,8 @@ final class AppState: ObservableObject {
             fileRecents = []
             let message = "Recents cleared."
             lastMutationAnnouncement = message
-            announcer.post(message, priority: .medium)
+            // W0.5-3 residue: sidebar navigation mutation copy (§U2-6 lastMutationAnnouncement channel)
+            announcer.post(.hostComposed(text: message, priority: .medium))
 
         case SlateCommandID.sidebarCollapseAll:
             // Review round: the persistence mirror alone never reaches the
@@ -6311,13 +6299,15 @@ final class AppState: ObservableObject {
             sidebarCollapseAllRequest &+= 1
             let message = "Collapsed all folders."
             lastMutationAnnouncement = message
-            announcer.post(message, priority: .medium)
+            // W0.5-3 residue: sidebar navigation mutation copy (§U2-6 lastMutationAnnouncement channel)
+            announcer.post(.hostComposed(text: message, priority: .medium))
 
         case SlateCommandID.sidebarExpandLoaded:
             sidebarExpandLoadedRequest &+= 1
             let message = "Expanded loaded folders."
             lastMutationAnnouncement = message
-            announcer.post(message, priority: .medium)
+            // W0.5-3 residue: sidebar navigation mutation copy (§U2-6 lastMutationAnnouncement channel)
+            announcer.post(.hostComposed(text: message, priority: .medium))
 
         case SlateCommandID.sidebarFocusFilter:
             // No announcement: focus lands in the field and VoiceOver
@@ -6380,7 +6370,8 @@ final class AppState: ObservableObject {
                 return try session.untaggedFiles(paging: paging)
             },
             announce: { [announcer] message in
-                announcer.post(message, priority: .medium)
+                // W0.5-3 residue: SidebarFilterModel inline messages
+                announcer.post(.hostComposed(text: message, priority: .medium))
             },
             now: { Date() },
             timeZone: { TimeZone.current },
@@ -7011,19 +7002,13 @@ final class AppState: ObservableObject {
     private func announceMathPrefsDiff(from old: MathPrefs, to new: MathPrefs) {
         if old.speechStyle != new.speechStyle {
             postAccessibilityAnnouncement(
-                "Math speech style: \(new.speechStyle.displayName).",
-                priority: .medium
-            )
+                .mathSpeechStyle(name: new.speechStyle.displayName))
         } else if old.verbosity != new.verbosity {
             postAccessibilityAnnouncement(
-                "Math verbosity: \(new.verbosity.displayName).",
-                priority: .medium
-            )
+                .mathVerbosity(name: new.verbosity.displayName))
         } else if old.brailleCode != new.brailleCode {
             postAccessibilityAnnouncement(
-                "Math braille code: \(new.brailleCode.displayName).",
-                priority: .medium
-            )
+                .mathBrailleCode(name: new.brailleCode.displayName))
         }
     }
 
@@ -7038,9 +7023,7 @@ final class AppState: ObservableObject {
             preferencesStore.saveCodePrefs(codePrefs)
             if oldValue.verbosity != codePrefs.verbosity {
                 postAccessibilityAnnouncement(
-                    "Code preamble verbosity: \(codePrefs.verbosity.displayName).",
-                    priority: .medium
-                )
+                    .codePreambleVerbosity(name: codePrefs.verbosity.displayName))
             }
         }
     }
@@ -7114,8 +7097,7 @@ final class AppState: ObservableObject {
         // 100%): the keypress must never be silent feedback-wise —
         // the user hears the (unchanged) size instead of nothing.
         postAccessibilityAnnouncement(
-            "Editor text size \(Int((editorTextScale * 100).rounded())) percent.",
-            priority: .medium)
+            .editorTextSize(percent: UInt32((editorTextScale * 100).rounded())))
     }
 
     // MARK: Editor spell check (#855)
@@ -7137,10 +7119,7 @@ final class AppState: ObservableObject {
         editorSpellCheckEnabled.toggle()
         preferencesStore.saveEditorSpellCheck(editorSpellCheckEnabled)
         postAccessibilityAnnouncement(
-            editorSpellCheckEnabled
-                ? "Check spelling while typing on."
-                : "Check spelling while typing off.",
-            priority: .medium)
+            .spellCheckToggled(enabled: editorSpellCheckEnabled))
     }
 
     // MARK: Restore last vault on launch (#872)
@@ -7938,10 +7917,7 @@ final class AppState: ObservableObject {
     /// the keypress gives feedback) while preserving that invariant.
     func requestCommandPalette() {
         guard isVaultOpen else {
-            postAccessibilityAnnouncement(
-                "Open a vault to use the command palette.",
-                priority: .high
-            )
+            postAccessibilityAnnouncement(.commandPaletteNeedsVault)
             return
         }
         isCommandPaletteOpen = true
@@ -8108,9 +8084,7 @@ final class AppState: ObservableObject {
     /// Mirrors `requestCommandPalette()`'s guard + feedback pattern.
     func requestSearchOverlay() {
         guard isVaultOpen else {
-            postAccessibilityAnnouncement(
-                "Open a vault first. Search works inside a vault."
-            )
+            postAccessibilityAnnouncement(.searchNeedsVault)
             return
         }
         toggleSearchOverlay()
@@ -8231,8 +8205,7 @@ final class AppState: ObservableObject {
         // and needs on-device VoiceOver verification — deferred to the
         // region-focus-containment work, tracked separately.
         postAccessibilityAnnouncement(
-            isRightPaneVisible ? "Right pane shown." : "Right pane hidden.",
-            priority: .medium)
+            isRightPaneVisible ? .rightPaneShown : .rightPaneHidden)
     }
 
     /// Reveal the right pane and focus the leaf region — the single entry
@@ -8926,8 +8899,10 @@ final class AppState: ObservableObject {
             // U3-3: the buffer (and thus `line`) is body-space; humans and
             // on-disk tooling count whole-file lines — announce THOSE.
             postAccessibilityAnnouncement(
-                "Opened \(filename), line \(self.fileLine(fromBodyLine: line)): \(cleanSnippet)"
-            )
+                .searchResultOpened(
+                    filename: filename,
+                    line: UInt32(self.fileLine(fromBodyLine: line)),
+                    snippet: cleanSnippet))
             self.lastActivatedSearchResultLine = line
             self.lastActivatedSearchResultPath = hit.path
         }
@@ -8964,29 +8939,23 @@ final class AppState: ObservableObject {
                 ["http", "https", "mailto"].contains(scheme)
             else {
                 postAccessibilityAnnouncement(
-                    "Cannot open external link \(link.targetRaw). "
-                        + "Only web and mail links are supported."
-                )
+                    .externalLinkUnsupported(target: link.targetRaw))
                 lastActivatedLinkOutcome = .externalOpenFailed(link.targetRaw)
                 return
             }
             if externalOpener(url) {
-                postAccessibilityAnnouncement(
-                    "Opened external link in default browser."
-                )
+                postAccessibilityAnnouncement(.externalLinkOpened)
                 lastActivatedLinkOutcome = .openedExternal(link.targetRaw)
             } else {
                 postAccessibilityAnnouncement(
-                    "Could not open external link \(link.targetRaw)."
-                )
+                    .externalLinkFailed(target: link.targetRaw))
                 lastActivatedLinkOutcome = .externalOpenFailed(link.targetRaw)
             }
             return
         }
         if link.isUnresolved {
             postAccessibilityAnnouncement(
-                "\(link.targetRaw) is unresolved. Cannot open."
-            )
+                .linkUnresolved(target: link.targetRaw))
             lastActivatedLinkOutcome = .unresolved(link.targetRaw)
             return
         }
@@ -8996,8 +8965,7 @@ final class AppState: ObservableObject {
             // as unresolved so the user gets feedback instead of
             // silence.
             postAccessibilityAnnouncement(
-                "\(link.targetRaw) is unresolved. Cannot open."
-            )
+                .linkUnresolved(target: link.targetRaw))
             lastActivatedLinkOutcome = .unresolved(link.targetRaw)
             return
         }
@@ -9021,14 +8989,10 @@ final class AppState: ObservableObject {
     /// registry as `slate.help.open` — one implementation, two entry points.
     func openHelp() {
         if externalOpener(Self.helpURL) {
-            postAccessibilityAnnouncement(
-                "Opened Help in your default browser."
-            )
+            postAccessibilityAnnouncement(.helpOpened)
             lastActivatedLinkOutcome = .openedExternal(Self.helpURL.absoluteString)
         } else {
-            postAccessibilityAnnouncement(
-                "Could not open Help."
-            )
+            postAccessibilityAnnouncement(.helpFailed)
             lastActivatedLinkOutcome = .externalOpenFailed(Self.helpURL.absoluteString)
         }
     }
@@ -9059,7 +9023,7 @@ final class AppState: ObservableObject {
         // outline cue. High priority makes the activation
         // confirmation win; the outline count then follows with the
         // structure info.
-        postAccessibilityAnnouncement("\(kind) \(filename).", priority: .high)
+        postAccessibilityAnnouncement(.internalNavigated(kind: kind, filename: filename))
         lastActivatedLinkOutcome = .openedInternal(path)
     }
 
@@ -9805,19 +9769,17 @@ final class AppState: ObservableObject {
             }
             if let notice = adoptedNotice {
                 self.announcer.post(
-                    "Sidebar settings still use defaults. \(notice.localizedDescription)",
-                    priority: .medium)
+                    .sidebarSettingsStillDefaults(detail: notice.localizedDescription))
             } else if self.sidebarStructuralTransformJournalOverflowed {
                 self.sidebarStructuralTransformJournalOverflowed = false
-                self.announcer.post(
-                    "Sidebar settings reloaded. Some pinned notes or sort "
-                        + "overrides may still reference old locations.",
-                    priority: .medium)
+                self.announcer.post(.sidebarSettingsReloadedStaleRefs)
             } else {
-                self.announcer.post("Sidebar settings reloaded.", priority: .medium)
+                self.announcer.post(.sidebarSettingsReloaded)
             }
             if adoptedNotice == nil, let retryDurabilityWarning {
-                self.announcer.post(retryDurabilityWarning, priority: .medium)
+                // W0.5-3 residue: sidebar retry durability warning (persist machinery copy)
+                self.announcer.post(
+                    .hostComposed(text: retryDurabilityWarning, priority: .medium))
             }
             // Round-30: retained writes parked behind the outage settle
             // once the file is healthy, in their own chained slot.
@@ -9851,10 +9813,8 @@ final class AppState: ObservableObject {
         let notice = sidebarVaultPrefsNotice
             .map { " \($0.localizedDescription)" } ?? ""
         announcer.post(
-            "Vault \(vaultRoot.lastPathComponent) opened. Scanning files for the sidebar."
-                + notice,
-            priority: .medium
-        )
+            .vaultOpened(
+                vaultTitle: vaultRoot.lastPathComponent, sidebarNotice: notice))
     }
 
     /// The recent vault the user asked to switch to while the current vault
@@ -10140,10 +10100,7 @@ final class AppState: ObservableObject {
                 attemptCloseVault()
             } else {
                 if closeVault() {
-                    announcer.post(
-                        "Vault closed. Returned to the welcome screen.",
-                        priority: .medium
-                    )
+                    announcer.post(.vaultClosed)
                 }
             }
         } else {
@@ -10277,10 +10234,7 @@ final class AppState: ObservableObject {
             self.pendingVaultClose = nil
             let completesVaultSwitch = self.pendingVaultSwitchTarget != nil
             if self.closeVault(), !completesVaultSwitch {
-                self.announcer.post(
-                    "All changes saved. Vault closed. Returned to the welcome screen.",
-                    priority: .medium
-                )
+                self.announcer.post(.vaultClosedAllSaved)
             }
         }
         vaultCloseSaveAllTask = task
@@ -10303,10 +10257,7 @@ final class AppState: ObservableObject {
         hasUnsavedChanges = false
         let completesVaultSwitch = pendingVaultSwitchTarget != nil
         if closeVault(), !completesVaultSwitch {
-            announcer.post(
-                "Changes discarded. Vault closed. Returned to the welcome screen.",
-                priority: .medium
-            )
+            announcer.post(.vaultClosedChangesDiscarded)
         }
     }
 
@@ -11093,7 +11044,8 @@ final class AppState: ObservableObject {
         let hasHighRisk = report.providers.contains { $0.riskLevel == .high }
         guard report.multiSyncWarning != nil || hasHighRisk else { return }
         syncAnnouncedVaultPath = vaultPath
-        announcer.post(report.audioSummary, priority: .high)
+        // W0.5-3 residue: SyncDetectionReport.audioSummary (sync-detection engine)
+        announcer.post(.hostComposed(text: report.audioSummary, priority: .high))
     }
 
     /// Read the selected note's bytes + indexed headings off the main
@@ -11728,7 +11680,9 @@ final class AppState: ObservableObject {
             resolved
             ? "Jumped to bibliography entry: \(key)."
             : "Searching bibliography for: \(key)."
-        postAccessibilityAnnouncement(message, priority: .medium)
+        // W0.5-3 residue: bibliography-jump message builder (jumpToBibliographyFromExpandedCitation)
+        postAccessibilityAnnouncement(
+            .hostComposed(text: message, priority: .medium))
     }
 
     /// Update the active CSL style id (driven by Settings panel's
@@ -11741,10 +11695,7 @@ final class AppState: ObservableObject {
         activeStyleId = newId  // didSet triggers re-render
         let title =
             availableCslStyles.first(where: { $0.id == newId })?.title ?? newId
-        postAccessibilityAnnouncement(
-            "Citation style: \(title).",
-            priority: .medium
-        )
+        postAccessibilityAnnouncement(.citationStyleChanged(title: title))
     }
 
     /// Refresh `availableCslStyles` from the session — picks up
@@ -11971,10 +11922,7 @@ final class AppState: ObservableObject {
             return
         }
         guard let resolution = currentNoteEmbedResolutions[target] else {
-            postAccessibilityAnnouncement(
-                "No resolved embed at cursor.",
-                priority: .medium
-            )
+            postAccessibilityAnnouncement(.noResolvedEmbedAtCursor)
             return
         }
         pendingEmbedPreview = EmbedPreview(
@@ -12169,9 +12117,7 @@ final class AppState: ObservableObject {
         // here, prompt the user to save first.
         guard !hasUnsavedChanges else {
             postAccessibilityAnnouncement(
-                "Cannot toggle task. The editor has unsaved changes in \(filename(of: path)). Save the note first.",
-                priority: .high
-            )
+                .taskToggleUnsaved(filename: filename(of: path)))
             return nil
         }
         let newChar = task.completed ? " " : "x"
@@ -12269,9 +12215,7 @@ final class AppState: ObservableObject {
                 currentMtimeMs: currentMtimeMs
             )
             postAccessibilityAnnouncement(
-                "Toggle blocked. \(filename(of: path)) was modified externally. Resolve in the dialog.",
-                priority: .medium
-            )
+                .taskToggleConflict(filename: filename(of: path)))
         case .failure(let error):
             tasksLoadError = humanReadable(error)
         }
@@ -12330,9 +12274,7 @@ final class AppState: ObservableObject {
         }
         focusLeafRegionRevealingPane()  // #882: un-hide the pane on reveal
         postAccessibilityAnnouncement(
-            "Tasks review. \(taskReviewFilter.displayName).",
-            priority: .medium
-        )
+            .tasksReviewShown(filterName: taskReviewFilter.displayName))
     }
 
     /// #879 red-team: Tasks Review is now a first-class rail leaf, so it's
@@ -12411,9 +12353,7 @@ final class AppState: ObservableObject {
             await self?.loadVaultTasks()
         }
         postAccessibilityAnnouncement(
-            "Filter set to \(filter.displayName).",
-            priority: .medium
-        )
+            .tasksFilterSet(filterName: filter.displayName))
     }
 
     /// Page size for the vault-wide tasks query. Matches the
@@ -12617,9 +12557,7 @@ final class AppState: ObservableObject {
         // to lose, so we only block the loaded-file case.
         if BaseExactIdentity.matches(row.path, loadedFilePath), hasUnsavedChanges {
             postAccessibilityAnnouncement(
-                "Cannot toggle task. The editor has unsaved changes in \(filename(of: row.path)). Save the note first.",
-                priority: .high
-            )
+                .taskToggleUnsaved(filename: filename(of: row.path)))
             return nil
         }
         let newChar = row.task.completed ? " " : "x"
@@ -12709,9 +12647,7 @@ final class AppState: ObservableObject {
             // U3-3: task lines are whole-file; the editor buffer is body.
             lineScrollRequest.send(bodyLine(fromFileLine: line))
             postAccessibilityAnnouncement(
-                "Scrolled to \(filename(of: target)), line \(line).",
-                priority: .medium
-            )
+                .scrolledToLine(filename: filename(of: target), line: UInt32(line)))
             return
         }
 
@@ -12734,9 +12670,7 @@ final class AppState: ObservableObject {
             // Offsets are current here — the awaited load set them.
             self.lineScrollRequest.send(self.bodyLine(fromFileLine: line))
             postAccessibilityAnnouncement(
-                "Opened \(filename(of: target)), line \(line).",
-                priority: .medium
-            )
+                .openedAtLine(filename: filename(of: target), line: UInt32(line)))
         }
     }
 
@@ -13116,10 +13050,7 @@ final class AppState: ObservableObject {
             diagramBlocksRefreshTask = refreshDiagramBlocksAfterSave(
                 session: session, path: path
             )
-            postAccessibilityAnnouncement(
-                "Saved \(filename(of: path)).",
-                priority: .medium
-            )
+            postAccessibilityAnnouncement(.noteSaved(filename: filename(of: path)))
         case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
             // U1-2: a save-then-close chain aborts on conflict — the tab
             // must stay open while the user resolves the dialog.
@@ -13137,9 +13068,7 @@ final class AppState: ObservableObject {
             // is modal and will steal focus when SwiftUI presents
             // it.
             postAccessibilityAnnouncement(
-                "Save blocked. \(filename(of: path)) was modified externally. Resolve in the dialog.",
-                priority: .medium
-            )
+                .saveConflict(filename: filename(of: path)))
         case .failure(let error):
             pendingTabCloseAfterSave = nil
             saveError = humanReadable(error)
@@ -15624,7 +15553,9 @@ final class AppState: ObservableObject {
     /// / search precedent) and records it for the verbatim-string tests.
     func postMutationAnnouncement(_ message: String) {
         lastMutationAnnouncement = message
-        postAccessibilityAnnouncement(message, priority: .medium)
+        // W0.5-3 residue: structural-mutation announcement builders (U2-6 wrappers via postMutationAnnouncement)
+        postAccessibilityAnnouncement(
+            .hostComposed(text: message, priority: .medium))
     }
 
     // MARK: Create
@@ -19186,8 +19117,7 @@ final class AppState: ObservableObject {
             // The palette row can't gray out per-selection like the menu
             // items do — a silent no-op there reads as breakage, so the
             // folder case announces its scope (red-team).
-            postAccessibilityAnnouncement(
-                "Duplicate applies to files only.", priority: .medium)
+            postAccessibilityAnnouncement(.duplicateFilesOnly)
             return
         }
         pendingStructuralTaskForTesting = requestDuplicateEntry(path: node.path)
@@ -19699,8 +19629,7 @@ final class AppState: ObservableObject {
             for: path,
             among: authoredPropertyPublicationRecoveryPaths)
         postAccessibilityAnnouncement(
-            "The saved property update in \(displayName) could not be verified. Reopen the note to copy or resolve the retained update.",
-            priority: .high)
+            .propertyRecoveryUnverified(displayName: displayName))
     }
 
     private func authoredPropertyRecoveryDisplayName(
@@ -19853,7 +19782,7 @@ final class AppState: ObservableObject {
         guard let text = activePropertyPublicationRecoveryText else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        postAccessibilityAnnouncement("Retained property update copied.")
+        postAccessibilityAnnouncement(.propertyRetainedCopied)
     }
 
     private func clearPropertyPublicationUncertainty(
@@ -21008,8 +20937,7 @@ final class AppState: ObservableObject {
                     propertyEditError =
                         "The property update was saved, but the note changed again before Slate could verify it. Choose Keep Mine or Reload from Disk."
                     postAccessibilityAnnouncement(
-                        propertyEditError ?? "The note changed again.",
-                        priority: .high)
+                        .noteChangedAgain(detail: propertyEditError))
                 }
                 finishPropertyEditOwnership(generation)
                 return
@@ -21042,9 +20970,9 @@ final class AppState: ObservableObject {
                 if BaseExactIdentity.matches(loadedFilePath, path) {
                     propertyEditError =
                         "The property was saved, but Slate could not safely reload it. Choose Reload Properties to try again. \(reason)"
+                    // W0.5-3 residue: propertyEditError recovery copy (property publication reload)
                     postAccessibilityAnnouncement(
-                        propertyEditError ?? reason,
-                        priority: .high)
+                        .hostComposed(text: propertyEditError ?? reason, priority: .high))
                 }
                 finishPropertyEditOwnership(generation)
                 return
@@ -21082,13 +21010,10 @@ final class AppState: ObservableObject {
 
             if BaseExactIdentity.matches(loadedFilePath, path) {
                 if case .setSource = action {
-                    postAccessibilityAnnouncement(
-                        "Properties updated.", priority: .medium)
+                    postAccessibilityAnnouncement(.propertiesUpdated)
                 } else {
                     postAccessibilityAnnouncement(
-                        "Property \(key) \(action == .delete ? "deleted" : "updated").",
-                        priority: .medium
-                    )
+                        .propertyChanged(key: key, deleted: action == .delete))
                 }
             }
         case .failure(.WriteConflict(let currentHash, let expected, let currentMtimeMs)):
@@ -21105,9 +21030,7 @@ final class AppState: ObservableObject {
                 currentMtimeMs: currentMtimeMs
             )
             postAccessibilityAnnouncement(
-                "Property edit blocked. \(filename(of: path)) was modified externally. Resolve in the dialog.",
-                priority: .medium
-            )
+                .propertyEditConflict(filename: filename(of: path)))
         case .failure(let error):
             guard BaseExactIdentity.matches(loadedFilePath, path) else {
                 finishPropertyEditOwnership(generation)
@@ -21120,15 +21043,11 @@ final class AppState: ObservableObject {
                 // in the editor, focus stays put, nothing was written.
                 propertiesSourceError = reason
                 postAccessibilityAnnouncement(
-                    "Properties source not applied: \(reason)",
-                    priority: .high
-                )
+                    .propertiesSourceRejected(reason: reason))
             } else {
                 propertyEditError = humanReadable(error)
                 postAccessibilityAnnouncement(
-                    "Property edit failed: \(propertyEditError ?? "")",
-                    priority: .high
-                )
+                    .propertyEditFailed(detail: propertyEditError ?? ""))
             }
         }
         finishPropertyEditOwnership(generation)
@@ -21299,22 +21218,19 @@ final class AppState: ObservableObject {
                     }
                 }
                 if case .propertiesOnly = refresh {
-                    postAccessibilityAnnouncement(
-                        "Properties reloaded. The note body also changed externally; saving it will require conflict resolution.",
-                        priority: .high)
+                    postAccessibilityAnnouncement(.propertiesReloadedBodyChanged)
                 }
             case .changedAgain:
                 self.currentPropertyEditConflict = conflict
                 self.propertyEditError =
                     "The note changed again while Slate was reloading its properties."
                 postAccessibilityAnnouncement(
-                    self.propertyEditError ?? "The note changed again.",
-                    priority: .high)
+                    .noteChangedAgain(detail: self.propertyEditError))
             case .failed(let reason):
                 self.currentPropertyEditConflict = conflict
                 self.propertyEditError = reason
                 postAccessibilityAnnouncement(
-                    "Properties could not be reloaded: \(reason)", priority: .high)
+                    .propertiesReloadFailed(reason: reason))
             case .stale:
                 break
             }
@@ -21392,8 +21308,7 @@ final class AppState: ObservableObject {
                         }
                     }
                 }
-                postAccessibilityAnnouncement(
-                    "Properties reloaded.", priority: .medium)
+                postAccessibilityAnnouncement(.propertiesReloaded)
             case .changedAgain(let currentContentHash):
                 if let action = record.action {
                     self.currentPropertyEditConflict = PropertyEditConflict(
@@ -21410,13 +21325,12 @@ final class AppState: ObservableObject {
                         "The note changed again after the bulk rename. Reload the note to use its current properties."
                 }
                 postAccessibilityAnnouncement(
-                    self.propertyEditError ?? "The note changed again.",
-                    priority: .high)
+                    .noteChangedAgain(detail: self.propertyEditError))
             case .failed(let reason):
                 self.propertyEditError =
                     "Slate still could not reload the saved property update. \(reason)"
                 postAccessibilityAnnouncement(
-                    self.propertyEditError ?? reason, priority: .high)
+                    .propertyReloadStillFailed(reason: reason))
             case .stale:
                 break
             }
@@ -21473,8 +21387,7 @@ final class AppState: ObservableObject {
                 self.propertyEditError =
                     "Slate couldn’t read the current note before reapplying the retained property update. \(self.humanReadable(error))"
                 postAccessibilityAnnouncement(
-                    self.propertyEditError ?? "The retained property update could not be reapplied.",
-                    priority: .high)
+                    .propertyRetainedReapplyFailed(detail: self.propertyEditError))
                 self.finishPropertyEditOwnership(generation)
             }
         }
@@ -21515,21 +21428,18 @@ final class AppState: ObservableObject {
                     BaseExactIdentity.matches(self.loadedFilePath, record.path)
                 else { return }
                 self.acceptDiskVersion(for: record)
-                postAccessibilityAnnouncement(
-                    "Using the current saved properties. The retained update was discarded.",
-                    priority: .medium)
+                postAccessibilityAnnouncement(.propertyRetainedDiscarded)
             case .changedAgain:
                 // No expected hash was supplied, so this outcome is defensive.
                 self.propertyEditError =
                     "The note changed again while Slate was loading its current properties."
                 postAccessibilityAnnouncement(
-                    self.propertyEditError ?? "The note changed again.",
-                    priority: .high)
+                    .noteChangedAgain(detail: self.propertyEditError))
             case .failed(let reason):
                 self.propertyEditError =
                     "Slate couldn’t load the current properties. The retained update is still available. \(reason)"
                 postAccessibilityAnnouncement(
-                    self.propertyEditError ?? reason, priority: .high)
+                    .propertyLoadCurrentFailed(reason: reason))
             case .stale:
                 break
             }
@@ -21782,18 +21692,15 @@ final class AppState: ObservableObject {
                         "Rename applied, but some open notes could not be safely reloaded. "
                         + refreshFailures.joined(separator: " ")
                     postAccessibilityAnnouncement(
-                        renameError ?? "Some open notes could not be reloaded.",
-                        priority: .high)
+                        .renameReloadFailed(detail: renameError))
                 }
             }
-            let summary = renameSummary(report: report, applied: !dryRun)
-            postAccessibilityAnnouncement(summary, priority: .medium)
+            postAccessibilityAnnouncement(
+                renameSummaryEvent(report: report, applied: !dryRun))
         case .failure(let error):
             renameError = humanReadable(error)
             postAccessibilityAnnouncement(
-                "Rename failed: \(renameError ?? "")",
-                priority: .high
-            )
+                .renameFailed(detail: renameError ?? ""))
         }
         finishRenameAttempt(structuralToken: structuralToken, cancel: cancel)
     }
@@ -21814,19 +21721,22 @@ final class AppState: ObservableObject {
         renameTask = nil
     }
 
-    /// Render a one-line summary of a `RenameReport` for the
-    /// accessibility announcement + the sheet's footer.
+    /// The typed one-line summary of a `RenameReport` (W0.5-3 #719) —
+    /// the copy is `slate_core::a11y`'s `RenameSummary` template, shared
+    /// by the announcement and the sheet's footer so they can't drift.
+    private func renameSummaryEvent(report: RenameReport, applied: Bool) -> A11yEvent {
+        .renameSummary(
+            applied: applied,
+            renamed: UInt32(
+                applied ? report.affected.filter { $0.applied }.count : report.affected.count),
+            skipped: UInt32(report.skipped.count),
+            failed: UInt32(applied ? report.failed.count : 0)
+        )
+    }
+
+    /// Rendered form for the sheet footer (same event, same core copy).
     private func renameSummary(report: RenameReport, applied: Bool) -> String {
-        if applied {
-            let renamed = report.affected.filter { $0.applied }.count
-            let skipped = report.skipped.count
-            let failed = report.failed.count
-            return "\(renamed) renamed, \(skipped) skipped, \(failed) failed."
-        } else {
-            let will = report.affected.count
-            let skipped = report.skipped.count
-            return "\(will) \(will == 1 ? "file" : "files") will be renamed, \(skipped) skipped, 0 errors."
-        }
+        a11yRender(event: renameSummaryEvent(report: report, applied: applied)).text
     }
 
     /// "Save changes?" prompt: Save → run the save, then continue
@@ -22105,7 +22015,9 @@ final class AppState: ObservableObject {
         scanAnnouncementLastFiredAt = now
         scanAnnouncementCount += 1
         scanAnnouncementLastMessage = message
-        postAccessibilityAnnouncement(message)
+        // W0.5-3 residue: scan-progress announcement builder (announceScan)
+        postAccessibilityAnnouncement(
+            .hostComposed(text: message, priority: .medium))
     }
 
     // MARK: - Templates (Milestone H)
@@ -22826,7 +22738,10 @@ final class AppState: ObservableObject {
         priority: AnnouncementPriority = .medium
     ) {
         templateAnnouncementLastMessage = message
-        announcer.post(message, priority: priority)
+        // W0.5-3 residue: template-flow announcement builders (via announceTemplate)
+        announcer.post(
+            .hostComposed(
+                text: message, priority: priority == .high ? .high : .medium))
     }
 
     // MARK: - Private

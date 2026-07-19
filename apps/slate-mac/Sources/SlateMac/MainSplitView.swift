@@ -937,9 +937,7 @@ struct MainSplitView: View {
             let sidebarNotice = appState.sidebarVaultPrefsNotice
                 .map { " \($0.localizedDescription)" } ?? ""
             postAccessibilityAnnouncement(
-                "Vault \(vaultTitle) opened. Scanning files for the sidebar."
-                    + sidebarNotice
-            )
+                .vaultOpened(vaultTitle: vaultTitle, sidebarNotice: sidebarNotice))
         }
     }
 

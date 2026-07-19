@@ -47,7 +47,9 @@ struct WelcomeView: View {
             // The not-found and no-restore paths genuinely land here, so
             // they keep the announcement.
             if !appState.willRestoreVaultOnLaunch {
-                postAccessibilityAnnouncement(welcomeAnnouncement)
+                postAccessibilityAnnouncement(
+                    .welcomeShown(
+                        recentVaultCount: UInt32(appState.recentVaults.count)))
             }
         }
         .alert(
@@ -68,8 +70,7 @@ struct WelcomeView: View {
                 appState.removeRecent(path: entry.path)
                 appState.missingRecentVault = nil
                 postAccessibilityAnnouncement(
-                    "Removed \(entry.displayName) from recent vaults."
-                )
+                    .removedRecentVault(displayName: entry.displayName))
             }
             Button("Keep in List", role: .cancel) {
                 appState.missingRecentVault = nil
@@ -152,18 +153,6 @@ struct WelcomeView: View {
     }
 
     // MARK: - Helpers
-
-    private var welcomeAnnouncement: String {
-        let base =
-            "Welcome to Slate. Open Vault button focused. "
-            + "Press Return or Command-O to choose a folder of Markdown files."
-        let count = appState.recentVaults.count
-        if count == 0 {
-            return base
-        }
-        let noun = count == 1 ? "vault" : "vaults"
-        return base + " \(count) recent \(noun) listed below."
-    }
 
     private func accessibilityLabel(for entry: RecentVault) -> String {
         "\(entry.displayName), last opened \(relativeDate(for: entry.lastOpenedMs))"

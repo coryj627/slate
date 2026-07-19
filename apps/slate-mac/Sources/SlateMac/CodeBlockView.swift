@@ -162,7 +162,7 @@ struct CodeBlockView: View {
     /// suite can drive the button's action directly.
     func copyCode() {
         copyCodeToPasteboard()
-        postAccessibilityAnnouncement("Code copied.", priority: .medium)
+        postAccessibilityAnnouncement(.codeCopied)
     }
 
     /// Copy the raw (un-attributed) source to the pasteboard. Plain

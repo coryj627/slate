@@ -343,7 +343,8 @@ struct BaseEmbedView: View {
             let announcement = document.applyQuickFilter(filterText, session: session)
             restoreSelection(previous: preferredSelection)
             quickFilterSelection.finishAfterApplying(filterText: filterText)
-            postAccessibilityAnnouncement(announcement, priority: .medium)
+            // W0.5-3 residue: BaseEmbedDocument.applyQuickFilter
+            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
         }
     }
 
@@ -355,7 +356,8 @@ struct BaseEmbedView: View {
             currentRowID: interaction.selectedRowID)
         if let announcement = document.clearQuickFilter(session: session) {
             restoreSelection(previous: preferredSelection)
-            postAccessibilityAnnouncement(announcement, priority: .medium)
+            // W0.5-3 residue: BaseEmbedDocument.clearQuickFilter
+            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
         }
         resultFocusToken &+= 1
     }
@@ -417,9 +419,7 @@ struct BaseEmbedView: View {
                     }
                 }
             case .failure(let message):
-                postAccessibilityAnnouncement(
-                    "Dataview conversion failed: \(message)",
-                    priority: .medium)
+                postAccessibilityAnnouncement(.dataviewConversionFailed(detail: message))
             }
         }
     }

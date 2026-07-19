@@ -1046,10 +1046,7 @@ struct NoteEditorView: NSViewRepresentable {
                 callback(span.target, line)
                 return true
             }
-            postAccessibilityAnnouncement(
-                "No embed at cursor.",
-                priority: .medium
-            )
+            postAccessibilityAnnouncement(.noEmbedAtCursor)
             return false
         }
 
@@ -1196,10 +1193,7 @@ struct NoteEditorView: NSViewRepresentable {
                 // gone, a silent bail here would make the activation
                 // fully mute. Shouldn't occur (sidebar + coordinator
                 // share one headings source), but if it does, say so.
-                postAccessibilityAnnouncement(
-                    "Could not find that heading.",
-                    priority: .medium
-                )
+                postAccessibilityAnnouncement(.headingNotFound)
                 return false
             }
             let ns = textView.string as NSString
@@ -1254,17 +1248,13 @@ struct NoteEditorView: NSViewRepresentable {
             }
             guard range.location != NSNotFound else {
                 postAccessibilityAnnouncement(
-                    "Could not scroll to \(heading.text).",
-                    priority: .medium
-                )
+                    .headingScrollFailed(heading: heading.text))
                 return false
             }
             scrollRangeToVisibleRespectingReduceMotion(range)
             textView.setSelectedRange(range)
             postAccessibilityAnnouncement(
-                "Scrolled to \(heading.text).",
-                priority: .medium
-            )
+                .scrolledToHeading(heading: heading.text))
             return true
         }
 
@@ -1390,7 +1380,9 @@ final class SlateEditorTextView: NSTextView {
             key == "z" || key == "s"
         {
             if let readOnlyReason {
-                postAccessibilityAnnouncement(readOnlyReason, priority: .high)
+                // W0.5-3 residue: readOnlyReason availability copy
+                postAccessibilityAnnouncement(
+                    .hostComposed(text: readOnlyReason, priority: .high))
             }
             return true
         }
