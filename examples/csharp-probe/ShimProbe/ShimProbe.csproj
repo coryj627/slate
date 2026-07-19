@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SlateShimProbe</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Raw pointers + delegate* function pointers throughout. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Shared with the uniffi probe: identical fixture content keeps the
+         two candidates' measurements comparable. -->
+    <Compile Include="..\FixtureVault.cs" Link="FixtureVault.cs" />
+    <None Include="generated\slate_csabi_shim.dll" Link="slate_csabi_shim.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
