@@ -28,16 +28,30 @@ final class QuickSwitcherModel: ObservableObject {
         let path: String
         let name: String
 
+        /// The canonical extension-stripped row label
+        /// (`slate_core::switcher::display_name` — the derivation is
+        /// ranking vocabulary, shared verbatim with the Windows host).
+        /// Stored, not computed: one FFI call at construction; rows
+        /// coming back from the ranking already carry it for free.
+        let displayName: String
+
+        init(path: String, name: String) {
+            self.init(
+                path: path,
+                name: name,
+                displayName: switcherDisplayName(name: name)
+            )
+        }
+
+        init(path: String, name: String, displayName: String) {
+            self.path = path
+            self.name = name
+            self.displayName = displayName
+        }
+
         /// Row identity for SwiftUI + arrow nav: the vault-relative
         /// path is unique within a vault, so it's the stable id.
         var id: String { path }
-
-        /// The canonical extension-stripped row label, from core
-        /// (`slate_core::switcher::display_name` — the derivation is
-        /// ranking vocabulary, shared verbatim with the Windows host).
-        var displayName: String {
-            switcherDisplayName(name: name)
-        }
     }
 
     /// All candidate files, set once on `load` (matches the view's
@@ -81,6 +95,8 @@ final class QuickSwitcherModel: ObservableObject {
     func load(files: [FileRow], recents: [String]) {
         self.files = files
         self.recentPaths = recents
+        self.ffiFiles = files.map { SwitcherFile(path: $0.path, name: $0.name) }
+        self.rankedCacheQuery = nil
         self.selectedID = displayOrder.first?.id
     }
 
@@ -102,7 +118,7 @@ final class QuickSwitcherModel: ObservableObject {
     }
 
     private func refreshAnnouncement() {
-        let total = matches.count
+        let total = rankedRows().count
         if query.isEmpty {
             resultAnnouncement =
                 "\(total) recent file\(total == 1 ? "" : "s")"
@@ -122,26 +138,50 @@ final class QuickSwitcherModel: ObservableObject {
 
     // MARK: - Ranking (core-owned since W0.5-2 #718)
 
+    /// The file snapshot in FFI shape, built once per `load` so a
+    /// keystroke re-rank doesn't rebuild N input records first.
+    private var ffiFiles: [SwitcherFile] = []
+
+    /// Ranked-row cache: core ranks once per input change, not once
+    /// per property access — `displayOrder`, `matches`, selection
+    /// snapping, and the count announcement all read the same result.
+    /// Keyed by the query (files/recents invalidate via `load`).
+    private var rankedCache: [SwitcherRow] = []
+    private var rankedCacheQuery: String? = nil
+
     /// The full ranked match set BEFORE the display cap, computed by
     /// `slate_core::switcher::switcher_rank` through the FFI — the
     /// name-over-path score bias, recency blending, prune-on-rank, and
     /// every tie-break live core-side so both hosts rank identically.
-    /// `matches.count` is what the announcement reports.
-    var matches: [FileRow] {
-        switcherRank(
-            files: files.map { SwitcherFile(path: $0.path, name: $0.name) },
-            query: query,
-            recentPaths: recentPaths
-        )
-        .map { FileRow(path: $0.path, name: $0.name) }
+    private func rankedRows() -> [SwitcherRow] {
+        if rankedCacheQuery != query {
+            rankedCache = switcherRank(
+                files: ffiFiles,
+                query: query,
+                recentPaths: recentPaths
+            )
+            rankedCacheQuery = query
+        }
+        return rankedCache
     }
 
-    /// The rows the view renders — `matches` clipped to `displayCap`.
-    /// Arrow nav cycles this exact list so selection matches the
-    /// visible rows. The cap is view virtualization policy and stays
-    /// host-side; core returns the full ranked list.
+    /// The full ranked match set as `FileRow`s (display names carried
+    /// back from core — no per-row FFI). `matches.count` is what the
+    /// announcement reports.
+    var matches: [FileRow] {
+        rankedRows().map {
+            FileRow(path: $0.path, name: $0.name, displayName: $0.displayName)
+        }
+    }
+
+    /// The rows the view renders — the ranked set clipped to
+    /// `displayCap`. Arrow nav cycles this exact list so selection
+    /// matches the visible rows. The cap is view virtualization policy
+    /// and stays host-side; core returns the full ranked list.
     var displayOrder: [FileRow] {
-        Array(matches.prefix(Self.displayCap))
+        rankedRows().prefix(Self.displayCap).map {
+            FileRow(path: $0.path, name: $0.name, displayName: $0.displayName)
+        }
     }
 
     // MARK: - Selection navigation

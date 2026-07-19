@@ -128,18 +128,15 @@ pub fn switcher_rank(
     if query.is_empty() {
         let present: std::collections::HashSet<&str> =
             files.iter().map(|f| f.path.as_str()).collect();
-        let recent: Vec<&String> = recent_paths
+        let recent: Vec<&str> = recent_paths
             .iter()
-            .filter(|p| present.contains(p.as_str()))
+            .map(String::as_str)
+            .filter(|p| present.contains(p))
             .collect();
-        let recent_set: std::collections::HashSet<&str> =
-            recent.iter().map(|p| p.as_str()).collect();
-        let recent_rows = recent.iter().filter_map(|path| {
-            files
-                .iter()
-                .find(|f| &&f.path == path)
-                .map(|f| unranked_row(f))
-        });
+        let recent_set: std::collections::HashSet<&str> = recent.iter().copied().collect();
+        let recent_rows = recent
+            .iter()
+            .filter_map(|path| files.iter().find(|f| f.path == *path).map(unranked_row));
         let rest = files
             .iter()
             .filter(|f| !recent_set.contains(f.path.as_str()))
