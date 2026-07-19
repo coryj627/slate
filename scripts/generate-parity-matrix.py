@@ -50,6 +50,7 @@ COMMANDS_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/SlateCommands.swift"
 SIDEBAR_CATALOG = REPO / "apps/slate-mac/Sources/SlateMac/Sidebar/SidebarActionCatalog.swift"
 SETTINGS_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/SettingsView.swift"
 LEAF_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/Workspace/RightPaneView.swift"
+WORKSPACE_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceModel.swift"
 HELP_DIR = REPO / "docs/help"
 OUT = REPO / "docs/plans/18_windows_port/parity_matrix.md"
 
@@ -329,6 +330,20 @@ def leaves() -> list[tuple[str, str]]:
     return [(c, LEAF_ISSUE[c]) for c in cases]
 
 
+def editor_item_kinds() -> list[str]:
+    """The persisted workspace tab-content kinds (`enum EditorItem`) —
+    what `WorkspaceStore` round-trips; distinct from the right-pane Leaf
+    registry. All rows consume #722 (W1-3)."""
+    text = WORKSPACE_SWIFT.read_text(encoding="utf-8")
+    body_match = re.search(r"enum EditorItem[^{]*\{(.*?)\n\}", text, re.DOTALL)
+    if not body_match:
+        fail("could not locate `enum EditorItem` in WorkspaceModel.swift")
+    kinds = re.findall(r"^\s*case (\w+)", body_match.group(1), re.MULTILINE)
+    if not kinds:
+        fail("`enum EditorItem` parsed empty — parser no longer matches")
+    return kinds
+
+
 def settings_tabs() -> list[str]:
     text = SETTINGS_SWIFT.read_text(encoding="utf-8")
     return list(dict.fromkeys(re.findall(r"(\w+)SettingsTab\(\)", text)))
@@ -469,6 +484,19 @@ def main() -> int:
     a("|---|---|---|")
     for leaf, issue in leaf_rows:
         a(f"| `{leaf}` | {issue} | pending |")
+    a("")
+    a("## Workspace persisted tab-content kinds (`enum EditorItem`)")
+    a("")
+    a("What `WorkspaceStore` round-trips — a **separate** inventory from the "
+      "right-pane leaves above. Includes the U1-6 forward-compatibility "
+      "contract: an unknown discriminator drops that tab, never the "
+      "workspace (W1-3 mirrors it; cross-platform round-trip fixtures are "
+      "W1-3 acceptance).")
+    a("")
+    a("| tab kind | consuming W issue | status |")
+    a("|---|---|---|")
+    for kind in editor_item_kinds():
+        a(f"| `{kind}` | #722 (W1-3) | pending |")
     a("")
     a("## Primary surfaces")
     a("")
