@@ -377,10 +377,13 @@ mod tests {
     fn recents_match_canonically_equivalent_path_spellings() {
         // The recents file spells the path precomposed; the file list
         // enumerates it decomposed. Swift Set/Dictionary treated those
-        // as the same path — so must we, in both query modes.
+        // as the same path — so must we, in both query modes. The
+        // decomposed file deliberately comes SECOND in incoming order:
+        // a raw-byte impl that pruned the recent would fall through to
+        // incoming order and fail the recency-first assertion below.
         let files = [
-            file("e\u{301}/note.md", "note.md"),
             file("other/plain.md", "plain.md"),
+            file("e\u{301}/note.md", "note.md"),
         ];
         let recents = vec!["\u{e9}/note.md".to_owned()];
 
