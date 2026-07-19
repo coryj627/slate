@@ -12,7 +12,7 @@ use super::*;
 use std::collections::VecDeque;
 use std::path::{Component, Path, PathBuf};
 
-const RANDOM_WALK_OPERATIONS: [CensusOperation; 10] = [
+const RANDOM_WALK_OPERATIONS: [CensusOperation; 12] = [
     CensusOperation::Create,
     CensusOperation::ExternalEditAndScan,
     CensusOperation::CasSave,
@@ -20,6 +20,11 @@ const RANDOM_WALK_OPERATIONS: [CensusOperation; 10] = [
     CensusOperation::FrontmatterRemove,
     CensusOperation::FrontmatterRetype,
     CensusOperation::TaskEdit,
+    // FL5-3a: batch tag edits ride the same save/index path; the walk
+    // proves file_tags parity survives them interleaved with
+    // everything else.
+    CensusOperation::TagAdd,
+    CensusOperation::TagRemove,
     CensusOperation::Rename,
     CensusOperation::Move,
     CensusOperation::Delete,
@@ -192,6 +197,8 @@ enum CensusOperation {
     FrontmatterRemove,
     FrontmatterRetype,
     TaskEdit,
+    TagAdd,
+    TagRemove,
     Rename,
     Move,
     Delete,
@@ -412,6 +419,36 @@ fn apply_operation(
                 )
                 .unwrap_or_else(|error| panic!("{context}\nretype created path={path}: {error}"));
             applied_with_current_source(session, step, path, "frontmatter-retype", &context)
+        }
+        CensusOperation::TagAdd => {
+            let path = choose_path(session, true, rng, &context);
+            let context = operation_path_context(&context, session, &path);
+            let tag = format!("census/walk{}", step % 5);
+            let report = session
+                .add_tag_to_files(vec![path.clone()], tag)
+                .unwrap_or_else(|error| panic!("{context}\nadd tag path={path}: {error}"));
+            assert!(
+                report.skipped.is_empty(),
+                "{context}\nadd tag skipped: {:?}",
+                report.skipped
+            );
+            applied_with_current_source(session, step, path, "tag-add", &context)
+        }
+        CensusOperation::TagRemove => {
+            let path = choose_path(session, true, rng, &context);
+            let context = operation_path_context(&context, session, &path);
+            // Removing a possibly-absent tag is a legal no-op; the walk
+            // cares that the derived state stays parity-true either way.
+            let tag = format!("census/walk{}", step % 5);
+            let report = session
+                .remove_tag_from_files(vec![path.clone()], tag)
+                .unwrap_or_else(|error| panic!("{context}\nremove tag path={path}: {error}"));
+            assert!(
+                report.skipped.is_empty(),
+                "{context}\nremove tag skipped: {:?}",
+                report.skipped
+            );
+            applied_with_current_source(session, step, path, "tag-remove", &context)
         }
         CensusOperation::TaskEdit => {
             let path = choose_path(session, true, rng, &context);

@@ -720,6 +720,25 @@ fn bench_sidebar_filter(c: &mut Criterion) {
     group.finish();
 }
 
+/// FL5-1 (#664): the nested tag tree at the 10k scale — one query +
+/// in-memory assembly, rebuilt per call (no caching in v1). Budget
+/// <= 25 ms.
+fn bench_tag_tree(c: &mut Criterion) {
+    let mut group = c.benchmark_group("tag_tree");
+    group.bench_function("10000", |b| {
+        let vault = common::generate_vault(10_000);
+        let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
+        session.scan_initial(&CancelToken::new()).expect("prime");
+        b.iter(|| {
+            let tree = session.tag_tree().expect("tag tree");
+            black_box((tree.roots.len(), tree.untagged_count))
+        });
+        drop(session);
+        drop(vault);
+    });
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     // Runner-level defaults remain overridable from Criterion's CLI. Do not
@@ -733,6 +752,7 @@ criterion_group! {
         bench_save_path,
         bench_tasks_scan_and_query,
         bench_sidebar_filter,
+        bench_tag_tree,
         bench_parser_zero_task_overhead,
         bench_full_text_search,
         bench_files_with_property,

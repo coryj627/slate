@@ -76,6 +76,7 @@ pub mod structural_batch;
 pub mod structured_diff;
 pub mod switcher;
 pub mod sync_detect;
+pub mod tag_tree;
 pub mod tags_db;
 pub mod tasks;
 pub mod tasks_db;
@@ -156,11 +157,13 @@ pub use session::{
     ScanProgressListener, ScanReport, SessionConfig, VaultEventListener, VaultRootIdentity,
     VaultSession, VersionSummary,
 };
+pub use session::{SkippedFile, TagEditReport};
 pub use sidebar_filter::{
     FilterParseError, SidebarFilterDateWindow, SidebarFilterNamedWindow, SidebarFilterQueryTerm,
     SidebarFilterTerm, parse_sidebar_filter, sidebar_filter_audio_summary,
     sidebar_filter_date_requirements, validate_date_windows,
 };
+pub use tag_tree::{TagTree, TagTreeNode};
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,
     WatchHandle, content_hash,
