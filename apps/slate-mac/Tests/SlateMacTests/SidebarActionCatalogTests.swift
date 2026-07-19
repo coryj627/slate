@@ -388,7 +388,11 @@ final class SidebarActionCatalogTests: XCTestCase {
             "VoiceOver Open belongs only to the conditional default action")
         XCTAssertEqual(
             SidebarActionCatalog.project(surface: .toolbar, snapshot: markdown).map(\.id),
-            [SlateCommandID.newFromTemplate],
+            [
+                SlateCommandID.newFromTemplate,
+                SlateCommandID.sidebarCollapseAll,
+                SlateCommandID.sidebarExpandLoaded,
+            ],
             "FL04-A adds no toolbar items")
         XCTAssertEqual(
             SidebarActionCatalog.project(surface: .keyboard, snapshot: markdown).map(\.id),

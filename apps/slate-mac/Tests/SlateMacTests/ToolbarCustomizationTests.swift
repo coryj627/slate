@@ -23,7 +23,7 @@ final class ToolbarCustomizationTests: XCTestCase {
     /// the rest are the `.secondaryAction` reference cluster.
     private static let orderedItemIDs = [
         "saveStatus", "save",
-        "search", "template", "tasksReview", "citationSummary", "bibliography",
+        "search", "template", "collapseAll", "expandLoaded", "tasksReview", "citationSummary", "bibliography",
     ]
 
     // MARK: - Customizable form + stable ids
@@ -53,11 +53,12 @@ final class ToolbarCustomizationTests: XCTestCase {
                 raw.contains("ToolbarItem(id: \"\(id)\""),
                 "toolbar item id \"\(id)\" must be present and stable")
         }
-        // Exactly seven customizable items — the stable set, no more, no fewer.
+        // Exactly nine customizable items — the stable set, no more, no fewer
+        // (FL-07 adds collapseAll + expandLoaded).
         let stripped = try normalizedSource("MainSplitView.swift")
         XCTAssertEqual(
-            countOccurrences(of: "ToolbarItem(id: ", in: stripped), 7,
-            "exactly seven customizable toolbar items")
+            countOccurrences(of: "ToolbarItem(id: ", in: stripped), 9,
+            "exactly nine customizable toolbar items")
     }
 
     func testDefaultOrderIsPreservedLeadingToTrailing() throws {

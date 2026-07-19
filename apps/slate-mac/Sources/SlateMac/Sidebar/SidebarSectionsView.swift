@@ -45,6 +45,15 @@ struct SidebarSectionsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            shortcutsSection
+            recentsSection
+        }
+    }
+
+    /// FL3-3.1: each section is its own AX-labeled group landmark, so
+    /// VoiceOver reports "Shortcuts, group" / "Recents, group" context.
+    private var shortcutsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
             sectionHeader(
                 title: "Shortcuts",
                 collapsed: $shortcutsCollapsed,
@@ -61,6 +70,13 @@ struct SidebarSectionsView: View {
                     }
                 }
             }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Shortcuts")
+    }
+
+    private var recentsSection: some View {
+        VStack(alignment: .leading, spacing: 0) {
             sectionHeader(
                 title: "Recents",
                 collapsed: $recentsCollapsed,
@@ -77,6 +93,7 @@ struct SidebarSectionsView: View {
             }
         }
         .accessibilityElement(children: .contain)
+        .accessibilityLabel("Recents")
     }
 
     private func sectionHeader(

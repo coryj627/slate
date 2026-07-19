@@ -735,4 +735,57 @@ final class SidebarOrganizationTreeTests: XCTestCase {
     XCTAssertGreaterThan(vm.levelReorganizeCountForTesting, baseline)
     XCTAssertEqual(vm.headerRow(before: .file(path: "a.md"))?.label, "Yesterday")
   }
+
+  // MARK: - FL3-4.1 collapse/expand against the live model (FL-07 review)
+
+  func testCollapseAllPreservingAncestorsAgainstTheLiveTree() {
+    let spy = FetchSpy([
+      "": listing(dirs: [dir(1, "A"), dir(2, "C")], files: []),
+      "A": listing(dirs: [dir(3, "A/B")], files: [file("A/top.md")]),
+      "A/B": listing(dirs: [], files: [file("A/B/note.md")]),
+      "C": listing(dirs: [], files: [file("C/c.md")]),
+    ])
+    let vm = FileTreeViewModel()
+    vm.bindForTesting(fetcher: spy.fetch)
+    for node in vm.rootLevel where node.isDirectory {
+      vm.expand(node)
+    }
+    if let inner = vm.children.values.flatMap({ $0 }).first(where: {
+      $0.path == "A/B"
+    }) {
+      vm.expand(inner)
+    }
+    XCTAssertTrue(visiblePaths(vm).contains("A/B/note.md"))
+    XCTAssertTrue(visiblePaths(vm).contains("C/c.md"))
+
+    vm.collapseAllPreservingAncestors(ofPath: "A/B/note.md")
+
+    let visible = visiblePaths(vm)
+    XCTAssertTrue(
+      visible.contains("A/B"),
+      "the selection's ancestor chain stays expanded")
+    XCTAssertTrue(visible.contains("A/B/note.md"))
+    XCTAssertFalse(
+      visible.contains("C/c.md"),
+      "unrelated folders collapse")
+  }
+
+  func testExpandLoadedFetchesAtMostOneLevelDeeper() {
+    let spy = FetchSpy([
+      "": listing(dirs: [dir(1, "A")], files: []),
+      "A": listing(dirs: [dir(2, "A/B")], files: []),
+      "A/B": listing(dirs: [dir(3, "A/B/C")], files: []),
+      "A/B/C": listing(dirs: [], files: [file("A/B/C/deep.md")]),
+    ])
+    let vm = FileTreeViewModel()
+    vm.bindForTesting(fetcher: spy.fetch)
+    // Only the root is loaded; expand-loaded expands A (fetching A's
+    // level) but must NOT cascade into A/B's own expansion.
+    vm.expandLoadedLevels()
+    let visible = visiblePaths(vm)
+    XCTAssertTrue(visible.contains("A/B"), "one level deeper materializes")
+    XCTAssertFalse(
+      visible.contains("A/B/C"),
+      "newly fetched levels' folders stay unexpanded — no cascade")
+  }
 }

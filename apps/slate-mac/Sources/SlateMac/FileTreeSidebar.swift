@@ -1364,6 +1364,26 @@ final class FileTreeViewModel: ObservableObject {
         }
     }
 
+    /// FL3-4.1: collapse every materialized folder except the ancestor
+    /// chain of `path` (the current selection stays revealed, so
+    /// VoiceOver focus cannot land on a vanished row).
+    func collapseAllPreservingAncestors(ofPath path: String?) {
+        var keep: Set<String> = []
+        if let path {
+            let components = path.split(separator: "/").map(String.init)
+            var prefix = ""
+            for component in components.dropLast() {
+                prefix = prefix.isEmpty ? component : "\(prefix)/\(component)"
+                keep.insert(prefix)
+            }
+        }
+        let materialized =
+            (rootLevel + children.values.flatMap { $0 }).filter(\.isDirectory)
+        for node in materialized where !keep.contains(node.path) {
+            collapse(node)
+        }
+    }
+
     /// FL3-4.1: expand every already-materialized folder. Expanding an
     /// unfetched folder fetches its level — exactly one level deeper than
     /// what was loaded — and the newly fetched levels' own folders are NOT
@@ -2975,6 +2995,14 @@ struct FileTreeSidebar: View {
             // fetching at most one level deeper.
             .onChange(of: appState.sidebarExpandLoadedRequest) { _, _ in
                 tree.expandLoadedLevels()
+            }
+            // FL3-4.1: Collapse All against the LIVE tree, preserving the
+            // selected row's ancestors.
+            .onChange(of: appState.sidebarCollapseAllRequest) { _, _ in
+                let anchor = selectionModel.focused
+                    .flatMap { selectionRow(for: $0)?.path }
+                    ?? appState.selectedFilePath
+                tree.collapseAllPreservingAncestors(ofPath: anchor)
             }
             // FL3-3.2: ⌃1–⌃9 activate shortcuts 1–9 while the sidebar has
             // key focus (⌘1–9 belong to tabs; palette commands work

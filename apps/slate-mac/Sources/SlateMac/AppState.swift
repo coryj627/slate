@@ -4887,6 +4887,10 @@ final class AppState: ObservableObject {
         var prefs = SidebarOrganizationPrefs()
         var pins = SidebarPins()
         var shortcuts: [SidebarShortcut] = []
+        /// FL-07 review: the RAW authored entry count (reserved kinds and
+        /// duplicates included) — the shape guard's 200-entry ceiling
+        /// applies to this, so capacity refusal must too.
+        var shortcutRawEntryCount = 0
     }
 
     @Published private(set) var sidebarOrganization = SidebarOrganizationState()
@@ -5018,6 +5022,12 @@ final class AppState: ObservableObject {
         sidebarStructuralTransformJournalOverflowed = false
         sidebarPinPruneInFlight = []
         sidebarPinPruneLedger.reset()
+        // FL-07 review: history entries are vault-relative — a ring that
+        // survived an A→B switch could resolve a same-path entry against
+        // the WRONG vault. Every teardown/replacement path funnels here.
+        sidebarSelectionHistory = []
+        sidebarSelectionHistoryIndex = -1
+        sidebarRevealRequest = nil
         if sidebarOrganizationJournalRecoveryPending {
             sidebarOrganizationJournalRecoveryPending = false
         }
@@ -5048,7 +5058,8 @@ final class AppState: ObservableObject {
             let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
             organization = SidebarOrganizationState(
                 prefs: decoded.prefs, pins: decoded.pins,
-                shortcuts: decoded.shortcuts)
+                shortcuts: decoded.shortcuts,
+                shortcutRawEntryCount: decoded.shortcutRawCount)
         } else {
             organization = SidebarOrganizationState()
         }
@@ -5466,7 +5477,8 @@ final class AppState: ObservableObject {
                 let decoded = SidebarOrganizationSchema.decode(root: finalRoot)
                 let organization = SidebarOrganizationState(
                     prefs: decoded.prefs, pins: decoded.pins,
-                    shortcuts: decoded.shortcuts)
+                    shortcuts: decoded.shortcuts,
+                    shortcutRawEntryCount: decoded.shortcutRawCount)
                 if organization != self.sidebarOrganization {
                     self.sidebarOrganization = organization
                 }
@@ -5861,7 +5873,7 @@ final class AppState: ObservableObject {
                 throw sidebarActionFailure("Already in Shortcuts.")
             }
             guard
-                sidebarOrganization.shortcuts.count
+                sidebarOrganization.shortcutRawEntryCount
                     < SidebarOrganizationSchema.maxShortcuts
             else {
                 throw sidebarActionFailure(
@@ -5970,6 +5982,11 @@ final class AppState: ObservableObject {
     /// level and fetches at most one level deeper (FL3-4.1).
     @Published private(set) var sidebarExpandLoadedRequest = 0
 
+    /// One-shot collapse-all request; the tree collapses every
+    /// materialized folder except the current selection's ancestors
+    /// (FL3-4.1 — VoiceOver focus must not land on a vanished row).
+    @Published private(set) var sidebarCollapseAllRequest = 0
+
     struct SidebarHistoryEntry: Equatable {
         let path: String
         let isDirectory: Bool
@@ -6049,20 +6066,12 @@ final class AppState: ObservableObject {
             announcer.post(message, priority: .medium)
 
         case SlateCommandID.sidebarCollapseAll:
-            let anchor = treeSelectedNode?.path ?? selectedFilePath
-            var ancestors: [String] = []
-            if let anchor {
-                let components = anchor.split(separator: "/").map(String.init)
-                var prefix = ""
-                for component in components.dropLast() {
-                    prefix = prefix.isEmpty ? component : "\(prefix)/\(component)"
-                    ancestors.append(prefix)
-                }
-                if let node = treeSelectedNode, node.isDirectory {
-                    ancestors.append(node.path)
-                }
-            }
-            treeExpandedDirPaths = ancestors
+            // Review round: the persistence mirror alone never reaches the
+            // mounted tree — the LIVE view model consumes this one-shot
+            // request and collapses everything except the current
+            // selection's ancestors, then its normal sync updates the
+            // mirror.
+            sidebarCollapseAllRequest &+= 1
             let message = "Collapsed all folders."
             lastMutationAnnouncement = message
             announcer.post(message, priority: .medium)
@@ -6243,7 +6252,9 @@ final class AppState: ObservableObject {
         }.filter { seen.insert($0).inserted }
     }
 
-    func applySidebarPinsMutation(_ kind: TreeMutation.Kind) {
+    func applySidebarPinsMutation(
+        _ kind: TreeMutation.Kind, isDirectory: Bool? = nil
+    ) {
         // Normalize the kind into one transform value so the in-memory
         // application, the locked disk replay, and the read-only journal all
         // consume the identical operation.
@@ -6251,10 +6262,15 @@ final class AppState: ObservableObject {
         switch kind {
         case let .rename(oldPath, newPath),
             let .move(oldPath, newPath, _, _):
-            // The node kind is unknown here; pins/overrides transforms are
-            // disjoint on file vs folder paths, so both are applied.
+            // Pins/overrides are disjoint on file vs folder paths, but the
+            // FL-07 shortcuts array mixes both namespaces — carry the
+            // producer's node kind so a file rename can never rewrite a
+            // same-path FOLDER shortcut (review round). A nil kind (older
+            // callers) still applies both, matching the disjoint sections.
             transform.renames.append(
-                .init(oldPath: oldPath, newPath: newPath, isDirectory: nil))
+                .init(
+                    oldPath: oldPath, newPath: newPath,
+                    isDirectory: isDirectory))
         case let .delete(path, _, wasDirectory):
             if wasDirectory {
                 transform.deletedFolders.append(path)
@@ -9232,7 +9248,8 @@ final class AppState: ObservableObject {
                         root: refreshed.root)
                     organization = SidebarOrganizationState(
                         prefs: decoded.prefs, pins: decoded.pins,
-                        shortcuts: decoded.shortcuts)
+                        shortcuts: decoded.shortcuts,
+                        shortcutRawEntryCount: decoded.shortcutRawCount)
                 } else {
                     organization = SidebarOrganizationState()
                 }
@@ -9252,7 +9269,8 @@ final class AppState: ObservableObject {
             let decoded = SidebarOrganizationSchema.decode(root: result.root)
             organization = SidebarOrganizationState(
                 prefs: decoded.prefs, pins: decoded.pins,
-                shortcuts: decoded.shortcuts)
+                shortcuts: decoded.shortcuts,
+                shortcutRawEntryCount: decoded.shortcutRawCount)
         } else {
             organization = SidebarOrganizationState()
         }
@@ -9468,7 +9486,8 @@ final class AppState: ObservableObject {
                 let decoded = SidebarOrganizationSchema.decode(root: adoptedRoot)
                 organization = SidebarOrganizationState(
                     prefs: decoded.prefs, pins: decoded.pins,
-                    shortcuts: decoded.shortcuts)
+                    shortcuts: decoded.shortcuts,
+                    shortcutRawEntryCount: decoded.shortcutRawCount)
             } else {
                 organization = SidebarOrganizationState()
             }
@@ -15229,6 +15248,7 @@ final class AppState: ObservableObject {
     private func publishTreeMutation(
         _ kind: TreeMutation.Kind,
         rewrittenCount: Int,
+        mutatedNodeIsDirectory: Bool? = nil,
         requiresRescan: Bool = false,
         preferredFocusPath: String? = nil,
         selectionRevision: UInt64? = nil,
@@ -15237,7 +15257,7 @@ final class AppState: ObservableObject {
     ) {
         // FL-06: pins follow every structural transform before the tree
         // refetches, so the re-fetched levels already see consistent pins.
-        applySidebarPinsMutation(kind)
+        applySidebarPinsMutation(kind, isDirectory: mutatedNodeIsDirectory)
         treeMutationCounter += 1
         treeMutation = TreeMutation(
             token: treeMutationCounter,
@@ -15677,7 +15697,8 @@ final class AppState: ObservableObject {
                 }
                 self.publishTreeMutation(
                     .rename(oldPath: path, newPath: newPath),
-                    rewrittenCount: Self.distinctRewrittenCount(report))
+                    rewrittenCount: Self.distinctRewrittenCount(report),
+                    mutatedNodeIsDirectory: isDirectory)
                 if undoContext == .record {
                     self.postMutationAnnouncement(
                         self.mutationSentence(
@@ -15798,7 +15819,8 @@ final class AppState: ObservableObject {
                     .move(
                         oldPath: path, newPath: newPath,
                         oldParent: oldParent, newParent: newParent),
-                    rewrittenCount: Self.distinctRewrittenCount(report))
+                    rewrittenCount: Self.distinctRewrittenCount(report),
+                    mutatedNodeIsDirectory: isDirectory)
                 if announce {
                     if undoContext == .record {
                         self.postMutationAnnouncement(

@@ -139,18 +139,43 @@ final class SidebarNavigationTests: XCTestCase {
       try state.dispatchSidebarAction(id: SlateCommandID.sidebarHistoryForward))
   }
 
+  func testHistoryDiesWithTheVault() throws {
+    // Review round: entries are vault-relative — a ring surviving an A→B
+    // switch could resolve a same-path entry against the wrong vault.
+    let (state, vaultA) = try openVault(named: "hist-a", folders: ["Shared"])
+    state.recordSidebarSelectionForHistory(path: "Shared", isDirectory: true)
+    XCTAssertEqual(state.sidebarSelectionHistory.count, 1)
+    state.closeVault()
+    XCTAssertTrue(state.sidebarSelectionHistory.isEmpty)
+    XCTAssertEqual(state.sidebarSelectionHistoryIndex, -1)
+    XCTAssertNil(state.sidebarRevealRequest)
+
+    // Direct A→B switch clears too (no closeVault on that path).
+    state.openVault(at: vaultA)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+    state.recordSidebarSelectionForHistory(path: "Shared", isDirectory: true)
+    let vaultB = root.appendingPathComponent("hist-b")
+    try FileManager.default.createDirectory(
+      at: vaultB.appendingPathComponent("Shared"),
+      withIntermediateDirectories: true)
+    state.openVault(at: vaultB)
+    XCTAssertTrue(
+      state.sidebarSelectionHistory.isEmpty,
+      "a direct switch must not carry vault A's ring into vault B")
+  }
+
   // MARK: - Collapse / Expand (FL3-4.1)
 
-  func testCollapseAllKeepsAncestorsOfCurrentSelection() throws {
+  func testCollapseAllBumpsTheLiveTreeRequestAndAnnounces() throws {
+    // The mounted tree consumes the one-shot request (mirror writes alone
+    // never reach the live view model — review round); the view model's
+    // ancestor preservation is covered in SidebarOrganizationTreeTests.
     let (state, _) = try openVault(
       named: "collapse", files: ["A/B/note.md"], folders: ["A", "A/B", "C"])
-    state.treeExpandedDirPaths = ["A", "A/B", "C"]
-    state.selectedFilePath = "A/B/note.md"
     try publish(state)
+    let before = state.sidebarCollapseAllRequest
     _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarCollapseAll)
-    XCTAssertEqual(
-      state.treeExpandedDirPaths, ["A", "A/B"],
-      "ancestors of the selection stay expanded; everything else collapses")
+    XCTAssertEqual(state.sidebarCollapseAllRequest, before + 1)
     XCTAssertEqual(state.lastMutationAnnouncement, "Collapsed all folders.")
   }
 
@@ -266,6 +291,61 @@ final class SidebarNavigationTests: XCTestCase {
     XCTAssertEqual(raw.map { $0["kind"] as? String }, ["file", "untagged", "file"])
     XCTAssertEqual(raw[0]["path"] as? String, "b.md")
     XCTAssertEqual(raw[2]["path"] as? String, "a.md")
+  }
+
+  func testAddShortcutRefusesWhenRawEntriesAreAtTheCeiling() throws {
+    // Review round: the shape guard caps the RAW array (reserved kinds
+    // included) — acknowledgement must gate on the same count, not the
+    // decoded file/folder subset.
+    let reserved = (0..<199).map {
+      #"{"kind": "tag", "path": "t\#($0)"}"#
+    }.joined(separator: ",")
+    let (state, _) = try openVault(
+      named: "cap-raw", files: ["x.md"], folders: ["Y"],
+      sidebarJSON: """
+        {"version": 1,
+         "shortcuts": [\(reserved), {"kind": "file", "path": "x.md"}]}
+        """)
+    XCTAssertEqual(state.sidebarOrganization.shortcutRawEntryCount, 200)
+    _ = state.publishSidebarSelectionSnapshot(
+      SidebarSelectionSnapshot(
+        sessionIdentity: ObjectIdentifier(try XCTUnwrap(state.currentSession)),
+        items: [
+          SidebarSelectionItem(path: "Y", isDirectory: true, isMarkdown: false)
+        ],
+        focusedPath: "Y",
+        creationParent: "Y"))
+    XCTAssertThrowsError(
+      try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
+    ) { error in
+      XCTAssertTrue(
+        String(describing: error).contains("Shortcut limit reached"),
+        "unexpected refusal: \(error)")
+    }
+  }
+
+  func testProductionRenameRespectsShortcutKindNamespaces() async throws {
+    // Review round: single rename/move producers carry the node kind, so
+    // a FILE rename never rewrites a same-path FOLDER shortcut.
+    let (state, vault) = try openVault(
+      named: "namespace", files: ["Notes"], folders: [],
+      sidebarJSON: """
+        {"version": 1,
+         "shortcuts": [
+           {"kind": "folder", "path": "Notes"},
+           {"kind": "file", "path": "Notes"}]}
+        """)
+    _ = vault
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Notes", newPath: "Journal"), isDirectory: false)
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+    XCTAssertEqual(
+      state.sidebarOrganization.shortcuts,
+      [
+        SidebarShortcut(kind: .folder, path: "Notes"),
+        SidebarShortcut(kind: .file, path: "Journal"),
+      ],
+      "the folder shortcut sharing the string is untouched")
   }
 
   // MARK: - Recents (FL3-3.3)

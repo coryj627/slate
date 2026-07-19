@@ -845,7 +845,7 @@ enum SidebarOrganizationSchema {
     root: [String: Any]
   ) -> (
     prefs: SidebarOrganizationPrefs, pins: SidebarPins,
-    shortcuts: [SidebarShortcut]
+    shortcuts: [SidebarShortcut], shortcutRawCount: Int
   ) {
     var prefs = SidebarOrganizationPrefs()
     if let sort = decodeSort(root[sortKey]) {
@@ -878,7 +878,10 @@ enum SidebarOrganizationSchema {
         pins.replacePaths(deduped, forFolder: folder)
       }
     }
-    return (prefs, pins, decodeShortcuts(root: root))
+    return (
+      prefs, pins, decodeShortcuts(root: root),
+      (root[shortcutsKey] as? [Any])?.count ?? 0
+    )
   }
 
   /// FL3-3: decode the file|folder shortcuts the UI ships now. Reserved

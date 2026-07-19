@@ -1685,19 +1685,20 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         XCTAssertEqual(dispatched.count, 1, "mixed Return consumes without dispatch")
     }
 
-    func testToolbarKeepsExactSevenIDsAndRoutesOnlyTemplate() throws {
+    func testToolbarKeepsExactNineIDsAndRoutesCatalogActions() throws {
         let document = try sourceRegion("MainSplitView.swift")
         let toolbar = try pairedBlockBody(
             structuralAnchor: "private var mainToolbar", in: document)
         let expectedIDs = [
-            "saveStatus", "save", "search", "template", "tasksReview",
+            "saveStatus", "save", "search", "template",
+            "collapseAll", "expandLoaded", "tasksReview",
             "citationSummary", "bibliography",
         ]
         let allItems = try regexMatches(#"\bToolbarItem\s*\("#, in: toolbar.structural)
         let idItems = try regexMatches(
             #"\bToolbarItem\s*\(\s*id\s*:\s*\"([^\"]+)\""#,
             in: toolbar.literals)
-        XCTAssertEqual(allItems.count, 7, "the persisted toolbar has exactly seven items")
+        XCTAssertEqual(allItems.count, 9, "the persisted toolbar has exactly nine items")
         XCTAssertEqual(
             idItems.count,
             allItems.count,

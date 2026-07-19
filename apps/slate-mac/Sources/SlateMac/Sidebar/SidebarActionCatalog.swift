@@ -250,7 +250,10 @@ enum SidebarActionCatalog {
     static let noVaultReason = "Open a vault to use Sidebar actions."
 
     private static let toolbarActionIDs: Set<String> = [
-        SlateCommandID.newFromTemplate
+        SlateCommandID.newFromTemplate,
+        // FL3-4.1: collapse/expand's required toolbar surface.
+        SlateCommandID.sidebarCollapseAll,
+        SlateCommandID.sidebarExpandLoaded,
     ]
     private static let keyboardActionIDs: Set<String> = [
         SlateCommandID.sidebarOpen,
