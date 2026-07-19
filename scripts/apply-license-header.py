@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Insert the AGPL-3.0-or-later boilerplate header into first-party source files.
 
-Scope: tracked .rs and .swift files (per ``git ls-files``). Idempotent: files
+Scope: tracked .rs, .swift, and .cs files (per ``git ls-files``). Idempotent: files
 that already carry an SPDX-License-Identifier line in their first 20 lines are
 left untouched. Run from the repository root; exits non-zero if any file could
 not be written. See issue #266 for the rationale.
@@ -28,9 +28,9 @@ SWIFT_TOOLS_PREFIX = "// swift-tools-version"
 
 
 def tracked_source_files(repo_root: Path) -> list[Path]:
-    """Return tracked .rs / .swift files relative to repo_root."""
+    """Return tracked .rs / .swift / .cs files relative to repo_root."""
     out = subprocess.check_output(
-        ["git", "ls-files", "*.rs", "*.swift"],
+        ["git", "ls-files", "*.rs", "*.swift", "*.cs"],
         cwd=repo_root,
         text=True,
     )

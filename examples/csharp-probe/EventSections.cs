@@ -97,44 +97,55 @@ internal static class EventSections
             "Created then Modified for the saved path");
 
         // Kind 3: on_error from a real failed compaction. Grow one note's
-        // oplog past the 5 MiB threshold with snapshot-heavy saves, then
-        // flip the log read-only immediately after the threshold-crossing
-        // save: the background worker's rewrite (tmp + rename-over) hits
+        // oplog past the 5 MiB threshold with snapshot-heavy saves and flip
+        // the log read-only **immediately after the threshold-crossing
+        // save**: the background worker's rewrite (tmp + rename-over) hits
         // Windows read-only semantics and dispatches CompactionFailed.
-        // The worker needs tens of ms to fold a >5 MiB log, so the flag
-        // usually lands first; retry with more growth if a round loses
-        // the race to a completed compaction.
+        // The worker needs tens of ms to fold a >5 MiB log, but on a slow
+        // shared runner it can win if the flag lands a whole save-batch
+        // later — so the flag is set inside the growth loop, within the
+        // same iteration that crosses the threshold (observed race loss on
+        // the GitHub-hosted x64 lane, all 4 batch-then-flag rounds lost).
+        const long compactionThresholdBytes = 5 * 1024 * 1024;
         string bigBody = new StringBuilder(270_000)
             .Insert(0, "compaction ballast paragraph without structure\n", 5_700)
             .ToString();
+        var slateDir = new DirectoryInfo(Path.Combine(vault.Root, ".slate"));
         bool sawError = false;
         for (int round = 0; round < 4 && !sawError; round++)
         {
-            for (int i = 0; i < 22; i++)
+            FileInfo? flagged = null;
+            for (int i = 0; i < 22 && flagged == null; i++)
             {
                 session.SaveText("hot.md", bigBody + $"tail {round}/{i}\n", null);
+                var log = slateDir.Exists
+                    ? slateDir
+                        .EnumerateFiles("*.oplog", SearchOption.AllDirectories)
+                        .OrderByDescending(f => f.Length)
+                        .FirstOrDefault()
+                    : null;
+                if (log != null && log.Length > compactionThresholdBytes)
+                {
+                    File.SetAttributes(log.FullName, FileAttributes.ReadOnly);
+                    flagged = log;
+                }
             }
-            var log = new DirectoryInfo(Path.Combine(vault.Root, ".slate"))
-                .EnumerateFiles("*.oplog", SearchOption.AllDirectories)
-                .OrderByDescending(f => f.Length)
-                .FirstOrDefault();
-            if (log == null)
+            if (flagged == null)
             {
-                p.Note("MISS: no .oplog file materialized under .slate");
+                p.Note($"round {round}: oplog never crossed the {compactionThresholdBytes / 1024 / 1024} MiB threshold");
                 break;
             }
-            File.SetAttributes(log.FullName, FileAttributes.ReadOnly);
             try
             {
                 sawError = WaitFor(() => recorder.Locked(r => r.Errors.Count) > 0, 10_000);
             }
             finally
             {
-                File.SetAttributes(log.FullName, FileAttributes.Normal);
+                File.SetAttributes(flagged.FullName, FileAttributes.Normal);
             }
             if (!sawError)
             {
-                p.Note($"round {round}: compaction won the race (log {log.Length / 1024} KiB); regrowing");
+                p.Note($"round {round}: compaction won the race (log {flagged.Length / 1024} KiB); regrowing");
             }
         }
         ok &= p.Check(sawError, "failed compaction dispatched on_error");

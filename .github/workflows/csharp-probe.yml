@@ -1,7 +1,9 @@
 # THROWAWAY workflow (w0_spec §W0-1 rule 4, #714): keeps the binding-spike
-# probe compiling and passing on a GitHub-hosted x64 Windows runner until
-# W0-2's permanent windows.yml supersedes it — the spike machine is native
-# ARM64, so this lane is also the x64 data point. Delete at W0-2.
+# probe compiling and passing on a GitHub-hosted x64 Windows runner — the
+# spike machine is native ARM64, so this lane is also the x64 data point.
+# Delete at W0-3: the w0_spec §Decision preserves the losing candidate's
+# evidence (shim/ShimProbe), exercised here, until the full-surface §W-E
+# censuses supersede the probe. (W0-2's windows.yml owns the app lane.)
 #
 # Runner choice recorded per rule 4: GitHub-hosted default (no Namespace
 # Windows profiles exist as of 2026-07).

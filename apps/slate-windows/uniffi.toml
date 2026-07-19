@@ -1,0 +1,6 @@
+# uniffi-bindgen-cs configuration for the SlateUniffi binding assembly.
+# The generated types default to `internal`; the binding lives in its own
+# class library consumed by the app, tests, and future census/benchmark
+# projects, so they must be `public`.
+[bindings.csharp]
+access_modifier = "public"

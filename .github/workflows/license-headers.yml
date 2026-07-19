@@ -12,6 +12,7 @@ on:
     paths:
       - '**/*.rs'
       - '**/*.swift'
+      - '**/*.cs'
       - 'scripts/check-license-headers.sh'
       - 'scripts/apply-license-header.py'
       - '.github/workflows/license-headers.yml'
@@ -20,6 +21,7 @@ on:
     paths:
       - '**/*.rs'
       - '**/*.swift'
+      - '**/*.cs'
       - 'scripts/check-license-headers.sh'
       - 'scripts/apply-license-header.py'
       - '.github/workflows/license-headers.yml'

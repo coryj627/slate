@@ -62,9 +62,9 @@ Consequences for W0-2/W0-3: the binding assembly compiles the generated file wit
 5. `make regenerate-bindings` grows a platform dimension (e.g. `make regenerate-bindings PLATFORM=windows`) or a sibling target; `CONTRIBUTING.md` updated with the Windows local-dev path — including the **no-make story** (the Makefile and `scripts/*.sh` assume a unix shell; document the PowerShell/`dotnet` equivalents a Windows-only contributor actually runs). Contributors changing the FFI must regenerate **both** platforms' bindings-check in CI (a drift check that the generated C# compiles, mirroring the Swift bindings check).
 6. SPDX convention extended to C#: `license-headers.yml` paths + `apply-license-header.py` scope gain `*.cs` (or the exclusion is recorded here as a decision) — otherwise the repo's header discipline silently stops at the new language boundary.
 
-- [ ] Scaffold + hello-core app + xUnit harness
-- [ ] `windows.yml` green incl. ARM64 build; CODEOWNERS; CONTRIBUTING + Makefile updated
-- [ ] AvalonEdit + .NET pins recorded
+- [x] Scaffold + hello-core app + xUnit harness
+- [x] `windows.yml` green incl. ARM64 build; CODEOWNERS verified (`.github/CODEOWNERS:19`, pre-existing); CONTRIBUTING + Makefile updated *(lane added; first green run lands with this PR's CI)*
+- [x] AvalonEdit + .NET pins recorded *(2026-07-19: .NET 10 — current LTS — pinned via `apps/slate-windows/global.json` (`10.0.100`, rollForward latestFeature); AvalonEdit currency check: 6.3.1.120, released 2025-04-13 by icsharpcode/grunwald, targets net462 + net6.0-windows + net8.0-windows with computed net10.0-windows compatibility — actively maintained, no program-level alarm. SPDX convention extended to `.cs`; csharp-probe.yml retires at W0-3 per the §Decision evidence-preservation clause, not here.)*
 
 ## W0-3 · Full-surface binding + §W-E safety censuses — PR 3
 

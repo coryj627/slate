@@ -1,0 +1,5 @@
+# Marks the uniffi-bindgen-cs output as generated so `dotnet format
+# --verify-no-changes` (windows.yml gate) never fails on code we don't
+# author. Hand-written C# in this tree is formatted by the same gate.
+[src/SlateUniffi/generated/**.cs]
+generated_code = true
