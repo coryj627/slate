@@ -5889,6 +5889,11 @@ final class AppState: ObservableObject {
                 let shortcut = SidebarShortcut(kind: kind, path: target)
                 if !state.shortcuts.contains(shortcut) {
                     state.shortcuts.append(shortcut)
+                    // Codoki review: the raw counter gates capacity — keep
+                    // it in lockstep with optimistic membership so rapid
+                    // adds can't preflight against a stale count (the tail
+                    // publish recomputes truth from decode).
+                    state.shortcutRawEntryCount += 1
                 }
             }
 
@@ -5906,8 +5911,11 @@ final class AppState: ObservableObject {
                 SidebarOrganizationSchema.removeShortcut(
                     &root, kind: kind.rawValue, path: target)
             } reflect: { state in
-                state.shortcuts.removeAll {
-                    $0 == SidebarShortcut(kind: kind, path: target)
+                let shortcut = SidebarShortcut(kind: kind, path: target)
+                if state.shortcuts.contains(shortcut) {
+                    state.shortcuts.removeAll { $0 == shortcut }
+                    state.shortcutRawEntryCount =
+                        max(0, state.shortcutRawEntryCount - 1)
                 }
             }
 
@@ -6120,7 +6128,11 @@ final class AppState: ObservableObject {
             SidebarOrganizationSchema.removeShortcut(
                 &root, kind: shortcut.kind.rawValue, path: shortcut.path)
         } reflect: { state in
-            state.shortcuts.removeAll { $0 == shortcut }
+            if state.shortcuts.contains(shortcut) {
+                state.shortcuts.removeAll { $0 == shortcut }
+                state.shortcutRawEntryCount =
+                    max(0, state.shortcutRawEntryCount - 1)
+            }
         }
     }
 
@@ -6361,7 +6373,12 @@ final class AppState: ObservableObject {
         ) { state in
             frozen.apply(to: &state.pins)
             frozen.apply(to: &state.prefs)
+            let beforeCount = state.shortcuts.count
             frozen.apply(to: &state.shortcuts)
+            state.shortcutRawEntryCount = max(
+                0,
+                state.shortcutRawEntryCount
+                    - (beforeCount - state.shortcuts.count))
         }
     }
 

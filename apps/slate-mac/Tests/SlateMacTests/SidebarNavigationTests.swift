@@ -324,6 +324,60 @@ final class SidebarNavigationTests: XCTestCase {
     }
   }
 
+  func testRapidAddsCannotBypassTheRawCeiling() async throws {
+    // Codoki review: reflects keep the raw counter in lockstep, so a
+    // second add issued BEFORE the first persist settles still preflights
+    // against the incremented count.
+    let reserved = (0..<198).map {
+      #"{"kind": "tag", "path": "t\#($0)"}"#
+    }.joined(separator: ",")
+    let (state, _) = try openVault(
+      named: "cap-race", files: ["x.md"], folders: ["Y", "Z"],
+      sidebarJSON: """
+        {"version": 1,
+         "shortcuts": [\(reserved), {"kind": "file", "path": "x.md"}]}
+        """)
+    XCTAssertEqual(state.sidebarOrganization.shortcutRawEntryCount, 199)
+
+    func select(_ folder: String) throws {
+      _ = state.publishSidebarSelectionSnapshot(
+        SidebarSelectionSnapshot(
+          sessionIdentity: ObjectIdentifier(
+            try XCTUnwrap(state.currentSession)),
+          items: [
+            SidebarSelectionItem(
+              path: folder, isDirectory: true, isMarkdown: false)
+          ],
+          focusedPath: folder,
+          creationParent: folder))
+    }
+    try select("Y")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
+    XCTAssertEqual(state.sidebarOrganization.shortcutRawEntryCount, 200)
+    // No persist await: the second add must refuse against the LIVE count.
+    try select("Z")
+    XCTAssertThrowsError(
+      try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
+    ) { error in
+      XCTAssertTrue(
+        String(describing: error).contains("Shortcut limit reached"),
+        "unexpected: \(error)")
+    }
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+
+    // And a remove frees capacity immediately.
+    try select("Y")
+    _ = try state.dispatchSidebarAction(
+      id: SlateCommandID.sidebarRemoveShortcut)
+    XCTAssertEqual(state.sidebarOrganization.shortcutRawEntryCount, 199)
+    try select("Z")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddShortcut)
+    await state.sidebarOrganizationPersistTaskForTesting?.value
+    XCTAssertTrue(
+      state.sidebarOrganization.shortcuts.contains(
+        SidebarShortcut(kind: .folder, path: "Z")))
+  }
+
   func testProductionRenameRespectsShortcutKindNamespaces() async throws {
     // Review round: single rename/move producers carry the node kind, so
     // a FILE rename never rewrites a same-path FOLDER shortcut.
