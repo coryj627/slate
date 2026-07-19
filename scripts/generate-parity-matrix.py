@@ -47,6 +47,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 COMMANDS_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/SlateCommands.swift"
+SIDEBAR_CATALOG = REPO / "apps/slate-mac/Sources/SlateMac/Sidebar/SidebarActionCatalog.swift"
 SETTINGS_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/SettingsView.swift"
 LEAF_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/Workspace/RightPaneView.swift"
 HELP_DIR = REPO / "docs/help"
@@ -96,7 +97,31 @@ ID_ISSUE_OVERRIDES = {
     "slate.help.open": "#756 (W8-6)",
     "slate.settings.open": "#751 (W8-1)",
     "slate.navigation.jumpToBibliography": "#737 (W4-5)",
+    # Registered under .view (the reveal/refresh lives in the View menu)
+    # but owned by their feature surfaces:
+    "slate.history.showPanel": "#739 (W4-7)",
+    "slate.diagnostics.refreshSync": "#740 (W4-8)",
+    # Historical slate.file.* ids are projected into the .sidebar section
+    # (FL04-A); triaged per capability: the sidebar import engine is
+    # W1-2's, the file-management command set is W5-4's.
+    "slate.file.cancelImport": "#721 (W1-2)",
+    "slate.file.importFilesAndFolders": "#721 (W1-2)",
+    "slate.file.copyPath": "#744 (W5-4)",
+    "slate.file.delete": "#744 (W5-4)",
+    "slate.file.duplicate": "#744 (W5-4)",
+    "slate.file.moveTo": "#744 (W5-4)",
+    "slate.file.newFolder": "#744 (W5-4)",
+    "slate.file.newNote": "#744 (W5-4)",
+    "slate.file.rename": "#744 (W5-4)",
+    "slate.file.revealInFinder": "#744 (W5-4)",
 }
+
+# Ids whose labels are computed at runtime (numbered slot families,
+# dynamic-prefix families) — exempt from the metadata-completeness gate.
+DYNAMIC_LABEL_OK_PREFIXES = (
+    "slate.sidebar.openShortcut",
+    "slate.bases.savedQuery.run.",
+)
 
 # The authoritative Leaf registry (Workspace/RightPaneView.swift) -> W
 # issue. Generation fails on an unmapped case so a newly shipped leaf
@@ -139,17 +164,16 @@ DROPPED = [
      "S unstarted at snapshot (GH milestone 19 empty)"),
 ]
 
-# HotkeySpoken.swift mirrors (glyph walk; keep in lockstep — the mac
-# tables are private by design, so this is a reviewed copy, and chords
-# using glyphs outside it pass characters through unchanged exactly as
-# the mac walk does).
+# HotkeySpoken.swift mirrors — exact copies of the private glyphWord /
+# keyWord tables (keep in lockstep; anything outside them passes through
+# unchanged, exactly as the mac per-character walk does).
 GLYPH_WORD = {"⌘": "Command", "⇧": "Shift", "⌥": "Option", "⌃": "Control"}
 KEY_WORD = {
-    ",": "Comma", ".": "Period", ";": "Semicolon", "'": "Apostrophe",
-    "[": "Left Bracket", "]": "Right Bracket", "\\": "Backslash",
-    "/": "Slash", "-": "Minus", "=": "Equals", "`": "Backtick",
+    ",": "Comma", ".": "Period", "/": "Slash", "\\": "Backslash",
+    ";": "Semicolon", "'": "Quote", "[": "Left Bracket",
+    "]": "Right Bracket", "-": "Minus", "=": "Equals", "`": "Backtick",
+    " ": "Space",
     "↑": "Up Arrow", "↓": "Down Arrow", "←": "Left Arrow", "→": "Right Arrow",
-    "0": "Zero",
 }
 
 
@@ -165,6 +189,7 @@ def fail(msg: str) -> None:
 def commands() -> list[tuple[str, str, str, str, str]]:
     """(id, label, chord, spoken, issue) for every SlateCommandID."""
     text = COMMANDS_SWIFT.read_text(encoding="utf-8")
+    catalog = SIDEBAR_CATALOG.read_text(encoding="utf-8")
     ids: dict[str, str] = {}
     for name, cid in re.findall(
         r'static let (\w+)(?::\s*String)?\s*=\s*"(slate\.[a-zA-Z0-9.]+)"', text
@@ -174,61 +199,113 @@ def commands() -> list[tuple[str, str, str, str, str]]:
         for slot in range(1, 10):
             ids[f"sidebarOpenShortcut{slot}"] = f"slate.sidebar.openShortcut{slot}"
 
-    # register(SlateCommandID.x, label: "…", section: .y[, hotkey: "…"]…)
-    # blocks: chunk on `register(` and read fields up to the action
-    # closure. Definition-table registrations (no literal id) contribute
-    # via the chord switch below instead.
     labels: dict[str, str] = {}
     sections: dict[str, str] = {}
     chords: dict[str, str] = {}
-    block_hotkeys = 0
-    for chunk in re.split(r"\bregister\(", text)[1:]:
+    attributed_hotkeys = 0
+
+    # Shape 1: register(...) / registerStructural(...) blocks.
+    for chunk in re.split(r"\bregister(?:Structural)?\(", text)[1:]:
         body = chunk.split(") {", 1)[0]
         id_match = re.search(r"SlateCommandID\.(\w+)", body)
         if not id_match:
             continue
         name = id_match.group(1)
         if m := re.search(r'label:\s*"([^"]*)"', body):
-            labels[name] = m.group(1)
+            labels.setdefault(name, m.group(1))
         if m := re.search(r"section:\s*\.(\w+)", body):
-            sections[name] = m.group(1)
+            sections.setdefault(name, m.group(1))
         if m := re.search(r'hotkey:\s*"([^"]*)"', body):
-            chords[name] = m.group(1)
-            block_hotkeys += 1
+            chords.setdefault(name, m.group(1))
+            attributed_hotkeys += 1
 
-    # Definition-table chord switches: case SlateCommandID.x: hotkey = "…"
-    for name, chord in re.findall(
+    # Shape 2: command-contract types (static let id = SlateCommandID.x
+    # … label / section / hotkeyHint statics in the same block).
+    for m in re.finditer(r"static let id = SlateCommandID\.(\w+)", text):
+        name = m.group(1)
+        window = text[m.end():m.end() + 600]
+        if lm := re.search(r'static let label = "([^"]+)"', window):
+            labels.setdefault(name, lm.group(1))
+        if sm := re.search(r"static let section: CommandSection = \.(\w+)", window):
+            sections.setdefault(name, sm.group(1))
+        if hm := re.search(r'static let hotkeyHint = "([^"]+)"', window):
+            chords.setdefault(name, hm.group(1))
+            attributed_hotkeys += 1
+
+    # Shape 3: the sidebar action catalog's positional factory calls
+    # (SlateCommandID.x, "Label", …) — always section .sidebar.
+    for name, label in re.findall(r'SlateCommandID\.(\w+),\s*\n?\s*"([^"]+)"', catalog):
+        labels.setdefault(name, label)
+        sections.setdefault(name, "sidebar")
+
+    # Shape 4: definition-table chord switches
+    # (case SlateCommandID.x: hotkey = "…").
+    switch_entries = re.findall(
         r"case SlateCommandID\.(\w+):\s*hotkey(?:Hint)?\s*=\s*\"([^\"]+)\"", text
-    ):
-        chords.setdefault(name, chord)
+    )
+    for name, chord in switch_entries:
+        if name not in chords:
+            chords[name] = chord
+            attributed_hotkeys += 1
 
-    # Fail-fast: every `hotkey: "` literal in the file must have been
+    # Fail-fast: every chord literal in every recognized shape must be
     # attributed to a command id — a silent drop misreports chord parity.
-    literal_hotkeys = len(re.findall(r'hotkey:\s*"', text))
-    if block_hotkeys != literal_hotkeys:
+    expected_hotkeys = (
+        len(re.findall(r'hotkey:\s*"', text))
+        + len(re.findall(r'static let hotkeyHint = "', text))
+        + len(switch_entries)
+    )
+    if attributed_hotkeys != expected_hotkeys:
         fail(
-            f"attributed {block_hotkeys} of {literal_hotkeys} `hotkey:` "
-            "literals — the register-block parser no longer matches "
-            "SlateCommands.swift; fix the parser before regenerating"
+            f"attributed {attributed_hotkeys} of {expected_hotkeys} chord "
+            "literals — a registration shape no longer matches the parser; "
+            "fix the parser before regenerating"
         )
 
     rows = []
     unmapped: list[str] = []
+    missing_meta: list[str] = []
+    ownership_review: list[str] = []
     for name, cid in sorted(ids.items(), key=lambda kv: kv[1]):
         display = cid + "<dynamic>" if cid.endswith(".") else cid
-        section = sections.get(name) or (cid.split(".")[1] if cid.count(".") >= 2 else "")
+        dynamic = any(cid.startswith(p) for p in DYNAMIC_LABEL_OK_PREFIXES) or cid.endswith(".")
+        reg_section = sections.get(name, "")
+        ns_section = cid.split(".")[1] if cid.count(".") >= 2 else ""
+        section = reg_section or ns_section
         issue = ID_ISSUE_OVERRIDES.get(cid) or SECTION_ISSUE.get(section)
         if issue is None:
             unmapped.append(cid)
             continue
+        # Metadata-completeness gate: every non-dynamic id must resolve
+        # to a label and a registered/derived section.
+        label = labels.get(name, "")
+        if not dynamic and (not label or not section):
+            missing_meta.append(cid)
+        # Cross-ownership tripwire: when the registered section and the
+        # id namespace would map to different issues, the id must be
+        # explicitly triaged in ID_ISSUE_OVERRIDES — a valid-but-wrong
+        # default must not pass silently.
+        if (
+            cid not in ID_ISSUE_OVERRIDES
+            and reg_section
+            and ns_section
+            and SECTION_ISSUE.get(reg_section)
+            and SECTION_ISSUE.get(ns_section)
+            and SECTION_ISSUE[reg_section] != SECTION_ISSUE[ns_section]
+        ):
+            ownership_review.append(cid)
         chord = chords.get(name, "")
-        base = name[: -1] if False else name
-        label = labels.get(base, "")
         rows.append((display, label, chord, spoken(chord) if chord else "", issue))
-    # Numbered shortcut slots share the base definition's mapping.
     if unmapped:
         fail("unmapped command ids (add to SECTION_ISSUE/ID_ISSUE_OVERRIDES): "
              + ", ".join(unmapped))
+    if missing_meta:
+        fail("ids with no parsed label/section (extend the parser or the "
+             "dynamic whitelist): " + ", ".join(missing_meta))
+    if ownership_review:
+        fail("ids whose registered section and namespace map to different "
+             "issues — triage each into ID_ISSUE_OVERRIDES: "
+             + ", ".join(ownership_review))
     return rows
 
 

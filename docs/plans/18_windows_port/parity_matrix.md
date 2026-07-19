@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-19 at `d98d8d1` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-07-19 at `2ea76ff` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -26,7 +26,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 
 ## Command inventory
 
-181 stable command ids from the `SlateCommandID` catalog (drift-test-enforced), 51 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
+181 stable command ids from the `SlateCommandID` catalog (drift-test-enforced), 52 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
 
 | command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |
 |---|---|---|---|---|---|
@@ -38,8 +38,8 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.bases.copyMarkdown` | Bases: Copy View as Markdown | — | — | #738 (W4-6) | pending |
 | `slate.bases.editProperty` | Bases: Edit Property | — | — | #738 (W4-6) | pending |
 | `slate.bases.editViewFilters` | Bases: Edit View Filters | — | — | #738 (W4-6) | pending |
-| `slate.bases.exportCsv` | — | — | — | #738 (W4-6) | pending |
-| `slate.bases.exportMarkdown` | — | — | — | #738 (W4-6) | pending |
+| `slate.bases.exportCsv` | Bases: Export View as CSV | — | — | #738 (W4-6) | pending |
+| `slate.bases.exportMarkdown` | Bases: Export View as Markdown Table | — | — | #738 (W4-6) | pending |
 | `slate.bases.newQuery` | Bases: New Query | — | — | #738 (W4-6) | pending |
 | `slate.bases.nextView` | Bases: Next View | — | — | #738 (W4-6) | pending |
 | `slate.bases.openRow` | Bases: Open Row | — | — | #738 (W4-6) | pending |
@@ -55,7 +55,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.bases.viewAsList` | Bases: View as List | — | — | #738 (W4-6) | pending |
 | `slate.bases.viewAsTable` | Bases: View as Table | — | — | #738 (W4-6) | pending |
 | `slate.bases.whereAmI` | Bases: Where Am I? | — | — | #738 (W4-6) | pending |
-| `slate.canvas.actualSize` | Canvas: Actual Size | ⌘0 | Command Zero | #745 (W6-1) | pending |
+| `slate.canvas.actualSize` | Canvas: Actual Size | ⌘0 | Command 0 | #745 (W6-1) | pending |
 | `slate.canvas.addLink` | Canvas: Add Link Card… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.addMedia` | Canvas: Add Media… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.addNote` | Canvas: Add Note to Canvas… | — | — | #745 (W6-1) | pending |
@@ -67,7 +67,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.canvas.commitMode` | Canvas: Commit Mode | — | — | #745 (W6-1) | pending |
 | `slate.canvas.connectMode` | Canvas: Connect Mode | — | — | #745 (W6-1) | pending |
 | `slate.canvas.connectTo` | Canvas: Connect To… | ⌃⌘C | Control Command C | #745 (W6-1) | pending |
-| `slate.canvas.convertToNote` | — | — | — | #745 (W6-1) | pending |
+| `slate.canvas.convertToNote` | Canvas: Convert Card to Note… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.createConnectedCard` | Canvas: Create Connected Card | ⌃⌥⌘N | Control Option Command N | #745 (W6-1) | pending |
 | `slate.canvas.createConnectedCardDirectional` | Canvas: Create Connected Card (Choose Direction)… | — | — | #745 (W6-1) | pending |
 | `slate.canvas.delete` | Canvas: Delete Selection | — | — | #745 (W6-1) | pending |
@@ -111,7 +111,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.canvas.zoomIn` | Canvas: Zoom In | ⌘= | Command Equals | #745 (W6-1) | pending |
 | `slate.canvas.zoomOut` | Canvas: Zoom Out | ⌘- | Command Minus | #745 (W6-1) | pending |
 | `slate.canvas.zoomToSelection` | Canvas: Zoom to Selection | — | — | #745 (W6-1) | pending |
-| `slate.diagnostics.refreshSync` | Refresh Sync Diagnostics | — | — | #722 (W1-3) | pending |
+| `slate.diagnostics.refreshSync` | Refresh Sync Diagnostics | — | — | #740 (W4-8) | pending |
 | `slate.editor.actualSize` | Editor: Actual Size | — | — | #725 (W2-3) | pending |
 | `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | pending |
 | `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | pending |
@@ -123,23 +123,23 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.editor.toggleViewMode` | Toggle Reading Mode | ⇧⌘E | Shift Command E | #728 (W3-1) | pending |
 | `slate.editor.zoomIn` | Editor: Zoom In | — | — | #725 (W2-3) | pending |
 | `slate.editor.zoomOut` | Editor: Zoom Out | — | — | #725 (W2-3) | pending |
-| `slate.file.cancelImport` | — | — | — | #721 (W1-2) | pending |
-| `slate.file.copyPath` | — | — | — | #744 (W5-4) | pending |
-| `slate.file.delete` | — | — | — | #744 (W5-4) | pending |
-| `slate.file.duplicate` | — | — | — | #744 (W5-4) | pending |
-| `slate.file.importFilesAndFolders` | — | — | — | #744 (W5-4) | pending |
-| `slate.file.moveTo` | — | ⇧⌘M | Shift Command M | #744 (W5-4) | pending |
-| `slate.file.newCanvas` | — | — | — | #745 (W6-1) | pending |
-| `slate.file.newFolder` | — | — | — | #744 (W5-4) | pending |
-| `slate.file.newFromTemplate` | — | ⇧⌘N | Shift Command N | #743 (W5-3) | pending |
-| `slate.file.newNote` | — | ⌘N | Command N | #744 (W5-4) | pending |
+| `slate.file.cancelImport` | Cancel Import | ⌘. | Command Period | #721 (W1-2) | pending |
+| `slate.file.copyPath` | Copy Path | — | — | #744 (W5-4) | pending |
+| `slate.file.delete` | Move to Trash | — | — | #744 (W5-4) | pending |
+| `slate.file.duplicate` | Duplicate | — | — | #744 (W5-4) | pending |
+| `slate.file.importFilesAndFolders` | Import Files and Folders… | — | — | #721 (W1-2) | pending |
+| `slate.file.moveTo` | Move To… | ⇧⌘M | Shift Command M | #744 (W5-4) | pending |
+| `slate.file.newCanvas` | New Canvas | — | — | #745 (W6-1) | pending |
+| `slate.file.newFolder` | New Folder | — | — | #744 (W5-4) | pending |
+| `slate.file.newFromTemplate` | New Note from Template… | ⇧⌘N | Shift Command N | #743 (W5-3) | pending |
+| `slate.file.newNote` | New Note | ⌘N | Command N | #744 (W5-4) | pending |
 | `slate.file.printNote` | Print… | ⌘P | Command P | #728 (W3-1) | pending |
-| `slate.file.rename` | — | ⌥⌘R | Option Command R | #744 (W5-4) | pending |
-| `slate.file.revealInFinder` | — | — | — | #744 (W5-4) | pending |
-| `slate.graph.actualSize` | Graph: Actual Size | ⌘0 | Command Zero | #746 (W6-2) | pending |
+| `slate.file.rename` | Rename… | ⌥⌘R | Option Command R | #744 (W5-4) | pending |
+| `slate.file.revealInFinder` | Reveal in Finder | — | — | #744 (W5-4) | pending |
+| `slate.graph.actualSize` | Graph: Actual Size | ⌘0 | Command 0 | #746 (W6-2) | pending |
 | `slate.graph.connectionsDeeper` | Connections: Deeper | — | — | #746 (W6-2) | pending |
 | `slate.graph.connectionsShallower` | Connections: Shallower | — | — | #746 (W6-2) | pending |
-| `slate.graph.fitGraph` | Graph: Fit Graph | ⌥⌘0 | Option Command Zero | #746 (W6-2) | pending |
+| `slate.graph.fitGraph` | Graph: Fit Graph | ⌥⌘0 | Option Command 0 | #746 (W6-2) | pending |
 | `slate.graph.mostLinked` | Graph: Most Linked Notes | — | — | #746 (W6-2) | pending |
 | `slate.graph.openTab` | Open Graph | — | — | #746 (W6-2) | pending |
 | `slate.graph.orphans` | Graph: Orphaned Notes | — | — | #746 (W6-2) | pending |
@@ -149,22 +149,22 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.graph.zoomIn` | Graph: Zoom In | ⌘= | Command Equals | #746 (W6-2) | pending |
 | `slate.graph.zoomOut` | Graph: Zoom Out | ⌘- | Command Minus | #746 (W6-2) | pending |
 | `slate.help.open` | Help | — | — | #756 (W8-6) | pending |
-| `slate.history.showPanel` | Show History Panel | — | — | #722 (W1-3) | pending |
+| `slate.history.showPanel` | Show History Panel | — | — | #739 (W4-7) | pending |
 | `slate.navigation.jumpToBibliography` | Jump to Bibliography | ⌘J | Command J | #737 (W4-5) | pending |
 | `slate.settings.open` | Settings… | ⌘, | Command Comma | #751 (W8-1) | pending |
-| `slate.sidebar.addShortcut` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.addTag` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.clearRecents` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.collapseAll` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.copyWikilink` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.createFolderNote` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.deleteFolderNote` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.expandLoaded` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.focusFilter` | — | ⌥⌘F | Option Command F | #721 (W1-2) | pending |
-| `slate.sidebar.historyBack` | — | ⌃⌘[ | Control Command Left Bracket | #721 (W1-2) | pending |
-| `slate.sidebar.historyForward` | — | ⌃⌘] | Control Command Right Bracket | #721 (W1-2) | pending |
-| `slate.sidebar.open` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openFolderNote` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.addShortcut` | Add to Shortcuts | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.addTag` | Add Tag… | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.clearRecents` | Clear Recents | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.collapseAll` | Collapse All Folders | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.copyWikilink` | Copy Wikilink | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.createFolderNote` | Create Folder Note | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.deleteFolderNote` | Delete Folder Note | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.expandLoaded` | Expand Loaded Folders | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.focusFilter` | Focus Sidebar Filter | ⌥⌘F | Option Command F | #721 (W1-2) | pending |
+| `slate.sidebar.historyBack` | Back in Sidebar History | ⌃⌘[ | Control Command Left Bracket | #721 (W1-2) | pending |
+| `slate.sidebar.historyForward` | Forward in Sidebar History | ⌃⌘] | Control Command Right Bracket | #721 (W1-2) | pending |
+| `slate.sidebar.open` | Open | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openFolderNote` | Open Folder Note | — | — | #721 (W1-2) | pending |
 | `slate.sidebar.openShortcut1` | — | — | — | #721 (W1-2) | pending |
 | `slate.sidebar.openShortcut2` | — | — | — | #721 (W1-2) | pending |
 | `slate.sidebar.openShortcut3` | — | — | — | #721 (W1-2) | pending |
@@ -174,19 +174,19 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.sidebar.openShortcut7` | — | — | — | #721 (W1-2) | pending |
 | `slate.sidebar.openShortcut8` | — | — | — | #721 (W1-2) | pending |
 | `slate.sidebar.openShortcut9` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.pinNote` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.removeShortcut` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.removeTag` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortCreatedAsc` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortCreatedDesc` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortModifiedAsc` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortModifiedDesc` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortNameAsc` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortNameDesc` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.toggleDateGrouping` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.unpinAllInFolder` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.unpinNote` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.useVaultDefaultSort` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.pinNote` | Pin to Top of Folder | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.removeShortcut` | Remove from Shortcuts | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.removeTag` | Remove Tag… | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortCreatedAsc` | Sort by Created (Oldest First) | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortCreatedDesc` | Sort by Created (Newest First) | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortModifiedAsc` | Sort by Modified (Oldest First) | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortModifiedDesc` | Sort by Modified (Newest First) | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortNameAsc` | Sort by Name (A to Z) | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortNameDesc` | Sort by Name (Z to A) | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.toggleDateGrouping` | Group by Date | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.unpinAllInFolder` | Unpin All in Folder | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.unpinNote` | Unpin | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.useVaultDefaultSort` | Use Vault Default Sort | — | — | #721 (W1-2) | pending |
 | `slate.tasks.review` | Tasks Review | ⌘R | Command R | #735 (W4-3) | pending |
 | `slate.vault.close` | Close Vault | — | — | #720 (W1-1) | pending |
 | `slate.vault.open` | Open Vault… | ⇧⌘O | Shift Command O | #720 (W1-1) | pending |
