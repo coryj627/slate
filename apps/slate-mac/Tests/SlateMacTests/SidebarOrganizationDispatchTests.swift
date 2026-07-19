@@ -2492,6 +2492,80 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertNil(state.lastError)
   }
 
+  // MARK: - Red-team regressions (adversarial review round 29)
+
+  func testPostCloseWriteFailureReplaysOnTheNextSameVaultOpen() async throws {
+    // Round-29: a queued pin whose write fails AFTER vault teardown was
+    // already announced — the intent is retained keyed by vault identity
+    // and drained by the next same-vault open, so reopening shows the
+    // pinned note instead of silently losing it.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let (state, vault) = try openVault(
+      named: "post-close-fail", files: ["Projects/note.md"],
+      folders: ["Projects"])
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      root["slow"] = true
+    }
+    try publish(
+      state, [item("Projects/note.md")],
+      focusedPath: "Projects/note.md", creationParent: "Projects")
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    let queued = state.sidebarOrganizationPersistTaskForTesting
+    state.closeVault()
+
+    // `.slate` (already created by the close's layout save) becomes
+    // unwritable BEFORE the queued writes run: both fail post-teardown
+    // with nobody left to tell, and are retained.
+    let slate = vault.appendingPathComponent(".slate")
+    try? FileManager.default.createDirectory(
+      at: slate, withIntermediateDirectories: true)
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o500], ofItemAtPath: slate.path)
+    defer {
+      try? FileManager.default.setAttributes(
+        [.posixPermissions: 0o755], ofItemAtPath: slate.path)
+    }
+    gate.open()
+    await queued?.value
+    XCTAssertFalse(
+      FileManager.default.fileExists(
+        atPath: vault.appendingPathComponent(".slate/sidebar.json").path),
+      "the failed writes must not have landed")
+
+    // Repair and reopen the SAME vault: the retained intents drain.
+    try FileManager.default.setAttributes(
+      [.posixPermissions: 0o755], ofItemAtPath: slate.path)
+    gate.open()
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+
+    var attempts = 0
+    while attempts < 1000,
+      !state.sidebarOrganization.pins.isPinned(
+        "Projects/note.md", inFolder: "Projects")
+    {
+      attempts += 1
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Projects"] as? [String], ["Projects/note.md"],
+      "the announced pin lands on the next same-vault open")
+    XCTAssertEqual(json["slow"] as? Bool, true)
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Projects/note.md", inFolder: "Projects"))
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

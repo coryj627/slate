@@ -4899,6 +4899,21 @@ final class AppState: ObservableObject {
     /// (round-20 finding 1). Cleared when a vault's chain fully drains.
     @MainActor private static var sidebarCommittedTransformIDs:
         [SidebarVaultRootIdentity: Set<UUID>] = [:]
+    /// One write whose disk attempt failed AFTER its session was torn
+    /// down (round-29): the user was already told the change happened,
+    /// so the exact operation and its uncommitted structural backlog are
+    /// retained here, keyed by physical vault identity, and the next
+    /// same-vault open drains them through the normal funnel before its
+    /// state settles. Conflicts and replaced-vault refusals are final
+    /// and never retained.
+    private struct SidebarUnflushedWrite {
+        let apply: @Sendable (inout [String: Any]) throws -> Void
+        let backlog: [SidebarStructuralTransform]
+    }
+    @MainActor private static var sidebarUnflushedWriteRetries:
+        [SidebarVaultRootIdentity: [SidebarUnflushedWrite]] = [:]
+    private static let sidebarUnflushedWriteRetriesCap = 64
+
     /// Ownership generation for queued persists. Bumped on every vault
     /// teardown/switch; a queued task whose captured generation no longer
     /// matches skips its disk I/O and publishes nothing.
@@ -5351,7 +5366,37 @@ final class AppState: ObservableObject {
             }
             switch outcome {
             case .failure(let error):
-                guard ownedForPublish else { return }
+                guard ownedForPublish else {
+                    // Round-29: nobody is left to report to, and teardown
+                    // already reset the optimistic state — but the change
+                    // was announced when it was enqueued. Retain the exact
+                    // operation for the next same-vault open instead of
+                    // treating a failed write as completed. Conflicts and
+                    // replaced-vault refusals are final: never retried.
+                    let isFinalRefusal =
+                        error is SidebarOrganizationConflictError
+                        || error is SidebarOrganizationVaultReplacedError
+                        || (error as? SidebarVaultPrefsStoreError)
+                            .map({
+                                if case .vaultReplaced = $0 { return true }
+                                return false
+                            }) == true
+                    if !isFinalRefusal {
+                        Self.sidebarUnflushedWriteRetries[
+                            enqueueIdentity, default: []
+                        ].append(
+                            SidebarUnflushedWrite(
+                                apply: apply, backlog: effectiveBacklog))
+                        if let count = Self.sidebarUnflushedWriteRetries[
+                            enqueueIdentity]?.count,
+                            count > Self.sidebarUnflushedWriteRetriesCap
+                        {
+                            Self.sidebarUnflushedWriteRetries[enqueueIdentity]?
+                                .removeFirst()
+                        }
+                    }
+                    return
+                }
                 // Round-22: a vault-replaced refusal must not reconcile from
                 // the NEWCOMER's file — the disk at this path is no longer
                 // ours to read. Announce and keep current published state.
@@ -8697,6 +8742,31 @@ final class AppState: ObservableObject {
         }
         if organization != sidebarOrganization {
             sidebarOrganization = organization
+        }
+        // Round-29: writes that failed after a previous same-vault session
+        // tore down replay now, through the normal funnel (chained behind
+        // any surviving writer, identity-verified, tail-published). Backlog
+        // transforms are id-deduped by the ledger where it survives and
+        // are no-ops against their own committed effect otherwise. A
+        // standing notice keeps them retained for a later clean open.
+        if sidebarVaultPrefsNotice == nil,
+            let identity = sidebarVaultRootIdentity,
+            let retained = Self.sidebarUnflushedWriteRetries[identity],
+            !retained.isEmpty
+        {
+            Self.sidebarUnflushedWriteRetries[identity] = nil
+            try? mutateSidebarOrganization(
+                announce: nil,
+                apply: { root in
+                    for entry in retained {
+                        for transform in entry.backlog {
+                            transform.applyRaw(to: &root)
+                        }
+                        try entry.apply(&root)
+                    }
+                },
+                reflect: { _ in },
+                isBacklogDrain: true)
         }
     }
 
