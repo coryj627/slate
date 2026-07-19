@@ -2864,6 +2864,79 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       "capacity clears once the registry drains")
   }
 
+  // MARK: - Red-team regressions (adversarial review round 35)
+
+  func testPinningPastTheFolderCeilingIsRefusedAndTheFileStaysValid()
+    async throws
+  {
+    // Round-35: Slate must never persist a file its own admission would
+    // reject. The 1,001st pin is refused up front with a typed reason,
+    // and the valid at-ceiling file is untouched.
+    let full = (0..<1_000).map { "\"Projects/n\($0).md\"" }
+      .joined(separator: ",")
+    let (state, vault) = try openVault(
+      named: "pin-ceiling", files: ["Projects/extra.md"],
+      folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": [\(full)]}}
+        """)
+    XCTAssertNil(state.sidebarVaultPrefsNotice, "at-ceiling file is valid")
+    let before = try Data(
+      contentsOf: vault.appendingPathComponent(".slate/sidebar.json"))
+
+    try publish(
+      state, [item("Projects/extra.md")],
+      focusedPath: "Projects/extra.md", creationParent: "Projects")
+    XCTAssertThrowsError(
+      try state.dispatchSidebarAction(id: SlateCommandID.sidebarPinNote)
+    ) { error in
+      XCTAssertTrue(
+        String(describing: error).contains("limit reached"),
+        "the refusal names the capacity rule")
+    }
+    await awaitPersist(state)
+    XCTAssertEqual(
+      try Data(
+        contentsOf: vault.appendingPathComponent(".slate/sidebar.json")),
+      before, "the valid file is unchanged")
+    XCTAssertFalse(
+      state.sidebarOrganization.pins.isPinned(
+        "Projects/extra.md", inFolder: "Projects"))
+  }
+
+  func testLockedWriteRefusesToProduceAnOverCeilingFile() async throws {
+    // Round-35: the race-safe backstop — a write whose RESULT would
+    // violate the schema ceilings fails as a conflict inside the locked
+    // update, before serialization, leaving the valid file unchanged.
+    let full = (0..<1_000).map { "\"Projects/n\($0).md\"" }
+      .joined(separator: ",")
+    let (state, vault) = try openVault(
+      named: "locked-ceiling", files: ["Projects/extra.md"],
+      folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": [\(full)]}}
+        """)
+    let sidebarURL = vault.appendingPathComponent(".slate/sidebar.json")
+    let before = try Data(contentsOf: sidebarURL)
+
+    // Bypass the dispatch pre-guard: append the 1,001st entry directly.
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      var pins = root["pins"] as? [String: Any] ?? [:]
+      var paths = pins["Projects"] as? [String] ?? []
+      paths.append("Projects/extra.md")
+      pins["Projects"] = paths
+      root["pins"] = pins
+    }
+    await awaitPersist(state)
+
+    XCTAssertEqual(
+      try Data(contentsOf: sidebarURL), before,
+      "the over-ceiling result never serializes")
+    XCTAssertNil(
+      state.sidebarVaultPrefsNotice,
+      "the untouched file re-admits cleanly")
+  }
+
   // MARK: - Red-team regressions (adversarial review round 34)
 
   func testOverCeilingPinListEntersRecoveryInsteadOfTruncating() async throws {

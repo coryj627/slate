@@ -5193,6 +5193,11 @@ final class AppState: ObservableObject {
         var errorDescription: String? { reason }
     }
 
+    static let sidebarPinCapacityReason =
+        "Pinned-note limit reached (\(SidebarOrganizationSchema.maxPinsPerFolder) "
+        + "per folder, \(SidebarOrganizationSchema.maxTotalPins) per vault). "
+        + "Unpin something to pin more."
+
     static let sidebarGroupedSortInertReason =
         "Date grouping sorts newest first. Turn off Group by Date to use this order."
 
@@ -5373,6 +5378,24 @@ final class AppState: ObservableObject {
                                 transform.applyRaw(to: &root)
                             }
                             try apply(&root)
+                            // Round-35: the write must never produce a file
+                            // its own admission would reject — validate the
+                            // RESULT before serialization. A capacity-
+                            // crossing operation is refused as a typed
+                            // user-facing rule, leaving the valid file
+                            // unchanged. (Backlog transforms rename or
+                            // delete; they cannot grow counts, and real
+                            // filesystem paths sit far under the length
+                            // ceiling — a post-state violation is the
+                            // requested mutation's doing.)
+                            guard
+                                SidebarOrganizationSchema
+                                    .knownSectionShapesAreValid(root: root)
+                            else {
+                                throw SidebarOrganizationConflictError(
+                                    reason: AppState
+                                        .sidebarPinCapacityReason)
+                            }
                             finalRoot = root
                         }
                         return .success(finalRoot)
@@ -5774,6 +5797,15 @@ final class AppState: ObservableObject {
                 !sidebarOrganization.pins.isPinned(target, inFolder: folder)
             else {
                 throw sidebarActionFailure("This note is already pinned.")
+            }
+            // Round-35: refuse a capacity-crossing pin up front with the
+            // published counts; the locked write's post-mutation shape
+            // guard is the race-safe backstop.
+            guard
+                sidebarOrganization.pins.paths(forFolder: folder).count
+                    < SidebarOrganizationSchema.maxPinsPerFolder
+            else {
+                throw sidebarActionFailure(Self.sidebarPinCapacityReason)
             }
             // Exact op against the decoded on-disk pins: a concurrent
             // writer's pin in the same folder survives (round-3 finding 4).
