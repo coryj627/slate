@@ -23,6 +23,50 @@ namespace SlateWindows.Tests.Censuses;
 public class HostLoggingCensus
 {
     [Fact]
+    public void ProductionWinExeStartupPath_DiagnosticReachesTheAppLog()
+    {
+        // The real SlateWindows.exe, launched with --census-log-probe:
+        // OnStartup redirects native stderr into the app log (SLATE_LOG_DIR
+        // here), installs the sink, triggers the deterministic warn, and
+        // exits before any window shows — the exact production startup
+        // path, windowless so it runs on CI.
+        string exe = Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+            "src", "SlateWindows", "bin", BuildConfiguration(), "net10.0-windows", "SlateWindows.exe");
+        exe = Path.GetFullPath(exe);
+        Assert.True(File.Exists(exe), $"SlateWindows.exe not built at {exe} (build the solution first)");
+
+        string logDir = Path.Combine(Path.GetTempPath(), $"slate-log-census-{Guid.NewGuid():N}");
+        try
+        {
+            var psi = new ProcessStartInfo(exe, "--census-log-probe")
+            {
+                UseShellExecute = false,
+            };
+            psi.Environment["SLATE_LOG_DIR"] = logDir;
+            using var app = Process.Start(psi)!;
+            Assert.True(app.WaitForExit(60_000), "SlateWindows.exe log probe did not exit");
+            Assert.Equal(0, app.ExitCode);
+
+            string logFile = Path.Combine(logDir, "slate-windows.log");
+            Assert.True(File.Exists(logFile), "app log file was not created by the WinExe startup path");
+            string log = File.ReadAllText(logFile);
+            Assert.Contains("slate[warn]", log);
+            Assert.Contains("palette recents input exceeds", log);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(logDir, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    [Fact]
     public void NonFatalCoreDiagnostic_SurfacesThroughTheInstalledSink()
     {
         string probeDll = Path.Combine(
