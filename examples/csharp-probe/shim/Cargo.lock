@@ -1458,6 +1458,7 @@ dependencies = [
  "tree-sitter-typescript",
  "tree-sitter-yaml",
  "unicode-normalization",
+ "unicode-segmentation",
  "yaml-rust2",
 ]
 
