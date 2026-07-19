@@ -400,3 +400,94 @@ fn edits_reindex_so_the_tree_reflects_the_batch() {
     let tree = session.tag_tree().unwrap();
     assert_eq!(flatten(&tree), vec![("new".into(), 1, 1)]);
 }
+
+// MARK: FL5-3a · review-round hardening
+
+#[test]
+fn edits_refuse_non_markdown_and_unindexed_files() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "diagram.canvas", "{\"nodes\":[]}\n");
+    write(tmp.path(), "note.md", "body\n");
+    let session = open(tmp.path());
+    // Created AFTER the scan: not indexed yet.
+    write(tmp.path(), "late.md", "late body\n");
+    let report = session
+        .add_tag_to_files(
+            vec!["diagram.canvas".into(), "late.md".into(), "note.md".into()],
+            "t".into(),
+        )
+        .unwrap();
+    assert_eq!(report.changed, 1);
+    let reasons: Vec<(&str, &str)> = report
+        .skipped
+        .iter()
+        .map(|s| (s.path.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(
+        reasons,
+        vec![
+            ("diagram.canvas", "not a Markdown note."),
+            ("late.md", "not an indexed file."),
+        ]
+    );
+    assert_eq!(
+        read(tmp.path(), "diagram.canvas"),
+        "{\"nodes\":[]}\n",
+        "structured formats are never rewritten"
+    );
+    assert_eq!(read(tmp.path(), "late.md"), "late body\n");
+}
+
+#[test]
+fn edits_refuse_hostile_tags_shapes_without_touching_content() {
+    let tmp = tempfile::tempdir().unwrap();
+    write(
+        tmp.path(),
+        "mapping.md",
+        "---\ntags:\n  owner: alice\n---\nbody\n",
+    );
+    write(tmp.path(), "scalar.md", "---\ntags: solo\n---\nbody\n");
+    write(
+        tmp.path(),
+        "duplicate.md",
+        "---\ntags:\n  - one\nTags:\n  - two\n---\nbody\n",
+    );
+    let session = open(tmp.path());
+    let before_mapping = read(tmp.path(), "mapping.md");
+    let before_scalar = read(tmp.path(), "scalar.md");
+    let before_duplicate = read(tmp.path(), "duplicate.md");
+    let report = session
+        .add_tag_to_files(
+            vec![
+                "duplicate.md".into(),
+                "mapping.md".into(),
+                "scalar.md".into(),
+            ],
+            "t".into(),
+        )
+        .unwrap();
+    assert_eq!(report.changed, 0);
+    let reasons: Vec<(&str, &str)> = report
+        .skipped
+        .iter()
+        .map(|s| (s.path.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(
+        reasons,
+        vec![
+            ("duplicate.md", "multiple tags properties."),
+            ("mapping.md", "the tags property is not a tag list."),
+            ("scalar.md", "the tags property is not a tag list."),
+        ]
+    );
+    assert_eq!(read(tmp.path(), "mapping.md"), before_mapping);
+    assert_eq!(read(tmp.path(), "scalar.md"), before_scalar);
+    assert_eq!(read(tmp.path(), "duplicate.md"), before_duplicate);
+    // Remove refuses the same shapes.
+    let report = session
+        .remove_tag_from_files(vec!["duplicate.md".into()], "one".into())
+        .unwrap();
+    assert_eq!(report.changed, 0);
+    assert_eq!(report.skipped.len(), 1);
+    assert_eq!(read(tmp.path(), "duplicate.md"), before_duplicate);
+}

@@ -5244,9 +5244,9 @@ impl VaultSession {
                         inline_remainder += 1;
                     }
                 }
-                Err(error) => skipped.push(SkippedFile {
+                Err(reason) => skipped.push(SkippedFile {
                     path: path.clone(),
-                    reason: error.to_string(),
+                    reason,
                 }),
             }
         }
@@ -5283,46 +5283,69 @@ impl VaultSession {
         path: &str,
         norm: &str,
         kind: TagEditKind,
-    ) -> Result<TagEditOutcome, VaultError> {
-        validate_save_path(path)?;
+    ) -> Result<TagEditOutcome, String> {
+        validate_save_path(path).map_err(|e| e.to_string())?;
         let mut conn = self.conn.lock().expect("session connection mutex");
-        let contents = self.read_text(path)?;
-        let disk_hash = crate::vault::content_hash(contents.as_bytes());
-        let indexed_hash: Option<String> = conn
+        // Review round (high): tag edits are a NOTES feature. Only an
+        // INDEXED MARKDOWN file may be edited — prepending YAML to a
+        // .canvas/.base/JSON/binary path would corrupt it while
+        // file_tags (markdown-derived) never even indexes the result.
+        let row: Option<(String, bool)> = conn
             .query_row(
-                "SELECT content_hash FROM files WHERE path = ?1",
+                "SELECT content_hash, is_markdown FROM files WHERE path = ?1",
                 [path],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)),
             )
-            .optional()?;
-        if let Some(indexed) = indexed_hash
-            && indexed != disk_hash
-        {
-            return Err(VaultError::WriteConflict {
-                current_content_hash: disk_hash,
-                expected_content_hash: indexed,
-                current_mtime_ms: self.provider.stat(path).map(|s| s.mtime_ms).unwrap_or(0),
-            });
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((indexed_hash, is_markdown)) = row else {
+            return Err("not an indexed file.".to_string());
+        };
+        if !is_markdown {
+            return Err("not a Markdown note.".to_string());
+        }
+        let contents = self.read_text(path).map_err(|e| e.to_string())?;
+        let disk_hash = crate::vault::content_hash(contents.as_bytes());
+        // The selection was built from INDEXED state: an unseen
+        // external edit refuses the file rather than being overwritten.
+        // (The residual read→write window below is the app-wide save
+        // semantics — save_text_locked's #641 cross-process critical
+        // section coordinates Slate processes; an arbitrary external
+        // editor racing INSIDE that window is out of scope for every
+        // save path in the app, not just this one.)
+        if indexed_hash != disk_hash {
+            return Err("changed on disk since it was indexed.".to_string());
         }
 
         let (props, _warnings) = crate::frontmatter::extract_frontmatter(&contents);
-        let tags_prop = props.iter().find(|prop| {
-            prop.key.eq_ignore_ascii_case("tags")
-                && matches!(prop.value, crate::PropertyValue::TagList(_))
-        });
-        if tags_prop.is_none() && props.iter().any(|p| p.key.eq_ignore_ascii_case("tags")) {
-            // A scalar/other-shaped `tags` key: coercing it into a list
-            // would destroy authored data — refuse this file, not the
-            // batch.
-            return Err(VaultError::MalformedFrontmatter {
-                path: path.to_string(),
-                reason: "the tags property is not a tag list".to_string(),
-            });
+        // Review round (high): the flattened property view must not
+        // hide hostile shapes. A `tags:` MAPPING flattens to `tags.*`
+        // dotted keys (no exact `tags` row), and case-variant
+        // duplicates (`tags:` + `Tags:`) would let one list be edited
+        // while the other keeps the tag indexed. Both refuse the file.
+        let has_nested_tags_mapping = props
+            .iter()
+            .any(|prop| prop.key.len() > 5 && prop.key[..5].eq_ignore_ascii_case("tags."));
+        if has_nested_tags_mapping {
+            return Err("the tags property is not a tag list.".to_string());
+        }
+        let tags_props: Vec<&crate::frontmatter::Property> = props
+            .iter()
+            .filter(|prop| prop.key.eq_ignore_ascii_case("tags"))
+            .collect();
+        if tags_props.len() > 1 {
+            return Err("multiple tags properties.".to_string());
+        }
+        let tags_prop = tags_props.first().copied();
+        if let Some(prop) = tags_prop
+            && !matches!(prop.value, crate::PropertyValue::TagList(_))
+        {
+            return Err("the tags property is not a tag list.".to_string());
         }
         let current: Vec<String> = tags_prop
             .map(|prop| match &prop.value {
                 crate::PropertyValue::TagList(tags) => tags.clone(),
-                _ => unreachable!("filtered to TagList above"),
+                _ => unreachable!("non-list tags refused above"),
             })
             .unwrap_or_default();
         let key_spelling = tags_prop
@@ -5377,7 +5400,7 @@ impl VaultSession {
                 let value = crate::PropertyValue::TagList(next);
                 let new_contents =
                     crate::frontmatter::set_property_in_source(&contents, &key_spelling, &value)
-                        .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?;
+                        .map_err(|e| frontmatter_edit_error_to_vault_error(e, path).to_string())?;
                 let value_json = crate::properties_db::property_value_to_json(&value).to_string();
                 (
                     new_contents,
@@ -5389,7 +5412,7 @@ impl VaultSession {
             }
             TagListEdit::DeleteKey => {
                 let edit = crate::frontmatter::delete_property_in_source(&contents, &key_spelling)
-                    .map_err(|e| frontmatter_edit_error_to_vault_error(e, path))?;
+                    .map_err(|e| frontmatter_edit_error_to_vault_error(e, path).to_string())?;
                 let new_contents = match edit {
                     crate::frontmatter::FrontmatterEdit::Changed(s) => s,
                     crate::frontmatter::FrontmatterEdit::Unchanged => {
@@ -5406,20 +5429,23 @@ impl VaultSession {
         };
 
         if new_contents.len() as u64 > self.config.large_file_refuse_bytes {
-            return Err(VaultError::FileTooLarge {
-                path: path.to_string(),
-                size: new_contents.len() as u64,
-            });
+            return Err(format!(
+                "the edited file would exceed the size limit ({} bytes).",
+                new_contents.len()
+            ));
         }
 
         let carries_inline = content_carries_tag_inline(&new_contents, norm);
-        self.save_text_locked(
-            &mut conn,
-            path,
-            &new_contents,
-            Some(&disk_hash),
-            &[annotation],
-        )?;
+        // Review round (medium): a failure past this point may have
+        // written the content while the index transaction failed — the
+        // reason says so instead of implying the file was untouched;
+        // the normal scan reconciles the derived state.
+        self.save_text_locked(&mut conn, path, &new_contents, Some(&disk_hash), &[annotation])
+            .map_err(|e| {
+                format!(
+                    "save failed and the edit may be partially applied; the next scan reconciles it ({e})."
+                )
+            })?;
         Ok(TagEditOutcome {
             changed: true,
             carries_inline,
