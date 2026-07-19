@@ -24,6 +24,8 @@
 //! ranking — the full ranked list is what result-count announcements
 //! report).
 
+use unicode_normalization::UnicodeNormalization;
+
 use crate::palette::{MatchSpan, fuzzy_score};
 
 /// Bonus added to a row's score when the QUERY subsequence-matched the
@@ -125,58 +127,90 @@ pub fn switcher_rank(
     query: &str,
     recent_paths: &[String],
 ) -> Vec<SwitcherRow> {
+    // Path identity is canonical, not byte-wise: the deleted Swift used
+    // `Set`/`Dictionary`/`<` over `String`, which compare canonically
+    // equivalent forms as equal and order by normalized text. A recents
+    // file that spells a path precomposed must keep matching the same
+    // file enumerated decomposed (or vice versa), and tie-order must
+    // not depend on which spelling a filesystem happened to hand us.
+    let file_keys: Vec<String> = files.iter().map(|f| path_key(&f.path)).collect();
+
     if query.is_empty() {
         let present: std::collections::HashSet<&str> =
-            files.iter().map(|f| f.path.as_str()).collect();
-        let recent: Vec<&str> = recent_paths
+            file_keys.iter().map(String::as_str).collect();
+        let recent_keys: Vec<String> = recent_paths
             .iter()
-            .map(String::as_str)
-            .filter(|p| present.contains(p))
+            .map(|p| path_key(p))
+            .filter(|key| present.contains(key.as_str()))
             .collect();
-        let recent_set: std::collections::HashSet<&str> = recent.iter().copied().collect();
-        let recent_rows = recent
-            .iter()
-            .filter_map(|path| files.iter().find(|f| f.path == *path).map(unranked_row));
+        let recent_set: std::collections::HashSet<&str> =
+            recent_keys.iter().map(String::as_str).collect();
+        let recent_rows = recent_keys.iter().filter_map(|key| {
+            files
+                .iter()
+                .zip(&file_keys)
+                .find(|(_, file_key)| *file_key == key)
+                .map(|(file, _)| unranked_row(file))
+        });
         let rest = files
             .iter()
-            .filter(|f| !recent_set.contains(f.path.as_str()))
-            .map(unranked_row);
+            .zip(&file_keys)
+            .filter(|(_, key)| !recent_set.contains(key.as_str()))
+            .map(|(file, _)| unranked_row(file));
         return recent_rows.chain(rest).collect();
     }
 
     // Rank of each path in the (pruned) recency list; absent = never
     // opened, which sorts after every ranked entry.
-    let present: std::collections::HashSet<&str> = files.iter().map(|f| f.path.as_str()).collect();
-    let rank: std::collections::HashMap<&str, usize> = recent_paths
+    let present: std::collections::HashSet<&str> = file_keys.iter().map(String::as_str).collect();
+    let rank: std::collections::HashMap<String, usize> = recent_paths
         .iter()
-        .filter(|p| present.contains(p.as_str()))
+        .map(|p| path_key(p))
+        .filter(|key| present.contains(key.as_str()))
         .enumerate()
-        .map(|(i, p)| (p.as_str(), i))
+        .map(|(i, key)| (key, i))
         .collect();
 
-    let mut matched: Vec<SwitcherRow> = files
+    let mut matched: Vec<(SwitcherRow, String)> = files
         .iter()
-        .filter_map(|file| {
-            score(query, file).map(|(score, spans)| SwitcherRow {
-                path: file.path.clone(),
-                name: file.name.clone(),
-                display_name: display_name(&file.name),
-                score,
-                display_name_match_spans: spans,
+        .zip(&file_keys)
+        .filter_map(|(file, key)| {
+            score(query, file).map(|(score, spans)| {
+                (
+                    SwitcherRow {
+                        path: file.path.clone(),
+                        name: file.name.clone(),
+                        display_name: display_name(&file.name),
+                        score,
+                        display_name_match_spans: spans,
+                    },
+                    key.clone(),
+                )
             })
         })
         .collect();
-    matched.sort_by(|l, r| {
+    matched.sort_by(|(l, l_key), (r, r_key)| {
         r.score
             .cmp(&l.score)
             .then_with(|| {
-                let lr = rank.get(l.path.as_str()).copied().unwrap_or(usize::MAX);
-                let rr = rank.get(r.path.as_str()).copied().unwrap_or(usize::MAX);
+                let lr = rank.get(l_key).copied().unwrap_or(usize::MAX);
+                let rr = rank.get(r_key).copied().unwrap_or(usize::MAX);
                 lr.cmp(&rr)
             })
-            .then_with(|| l.path.cmp(&r.path))
+            // Canonical path order (the stable sort preserves incoming
+            // order for fully equivalent paths, like Swift's).
+            .then_with(|| l_key.cmp(r_key))
     });
-    matched
+    matched.into_iter().map(|(row, _)| row).collect()
+}
+
+/// Canonical (NFC) identity key for a vault-relative path — the Rust
+/// spelling of Swift `String` equality/hashing/ordering for the
+/// switcher's path bookkeeping. Case-SENSITIVE, unlike the matcher's
+/// grapheme keys: Swift compared paths canonically but never
+/// case-folded them.
+fn path_key(path: &str) -> String {
+    path.chars().nfc().collect()
 }
 
 fn unranked_row(file: &SwitcherFile) -> SwitcherRow {
@@ -335,6 +369,54 @@ mod tests {
         let files = [file("foo.md", "foo.md"), file("bar.md", "bar.md")];
         let rows = switcher_rank(&files, "foo", &[]);
         assert_eq!(paths(&rows), vec!["foo.md"]);
+    }
+
+    // --- canonical path identity (Swift String parity) ---
+
+    #[test]
+    fn recents_match_canonically_equivalent_path_spellings() {
+        // The recents file spells the path precomposed; the file list
+        // enumerates it decomposed. Swift Set/Dictionary treated those
+        // as the same path — so must we, in both query modes.
+        let files = [
+            file("e\u{301}/note.md", "note.md"),
+            file("other/plain.md", "plain.md"),
+        ];
+        let recents = vec!["\u{e9}/note.md".to_owned()];
+
+        let rows = switcher_rank(&files, "", &recents);
+        assert_eq!(
+            paths(&rows),
+            vec!["e\u{301}/note.md", "other/plain.md"],
+            "composed recent must recognize the decomposed file (recency-first), not be pruned",
+        );
+
+        // Ranked mode: the recency tie-break must see the same identity.
+        let files = [
+            file("alpha/note.md", "note.md"),
+            file("e\u{301}/note.md", "note.md"),
+        ];
+        let rows = switcher_rank(&files, "note", &recents);
+        assert_eq!(
+            paths(&rows),
+            vec!["e\u{301}/note.md", "alpha/note.md"],
+            "recency rank lookup is canonical, not byte-wise",
+        );
+    }
+
+    #[test]
+    fn ranked_path_tiebreak_orders_canonically() {
+        // Equal scores, no recency: Swift String's `<` orders by
+        // normalized text, so decomposed "e\u{301}" sorts as "é" —
+        // AFTER "f" — even though its raw bytes start with plain "e".
+        let files = [
+            file("f/note.md", "note.md"),
+            file("e\u{301}/note.md", "note.md"),
+        ];
+        let rows = switcher_rank(&files, "note", &[]);
+        assert_eq!(paths(&rows), vec!["f/note.md", "e\u{301}/note.md"]);
+        // Returned rows carry the ORIGINAL spelling, not the key.
+        assert_eq!(rows[1].path, "e\u{301}/note.md");
     }
 
     #[test]
