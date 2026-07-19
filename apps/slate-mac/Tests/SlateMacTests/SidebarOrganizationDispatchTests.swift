@@ -2735,6 +2735,39 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       "the conflicting sort is dropped alone, not applied")
   }
 
+  // MARK: - Red-team regressions (adversarial review round 31)
+
+  func testTerminationSettlementWaitsForQueuedWriters() async throws {
+    // Round-31: the quit fence waits (bounded) for the writer chains to
+    // settle, so an announced change can't die mid-flight with the
+    // process.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let (state, vault) = try openVault(
+      named: "quit-fence", files: ["a.md"])
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      root["landedBeforeQuit"] = true
+    }
+    XCTAssertTrue(
+      AppState.hasPendingSidebarWriterChains,
+      "a queued writer holds the chain slot the fence watches")
+    let settlement = Task { @MainActor in
+      await AppState.settleSidebarWriterChainsForTermination()
+    }
+    gate.open()
+    await settlement.value
+
+    let json = try sidebarJSON(at: vault)
+    XCTAssertEqual(
+      json["landedBeforeQuit"] as? Bool, true,
+      "termination waits for the queued write to land")
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

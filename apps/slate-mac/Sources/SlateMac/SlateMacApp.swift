@@ -20,8 +20,32 @@ extension CancelImportCommandContract {
 /// Open…" (the documents users open all day are notes; #863) — on the
 /// welcome screen it falls through to the vault picker, so the chord
 /// works globally; "Open Vault…" itself lives on ⇧⌘O.
+/// Round-31: quit fence. Queued sidebar-organization writes are the
+/// user's committed intent (round-21) — normal termination waits for the
+/// writer chains to settle (bounded at five seconds) instead of killing
+/// them mid-flight. Durable cross-launch recovery of writes that FAILED
+/// is tracked in #941.
+final class SlateAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        MainActor.assumeIsolated {
+            guard AppState.hasPendingSidebarWriterChains else {
+                return .terminateNow
+            }
+            Task { @MainActor in
+                await AppState.settleSidebarWriterChainsForTermination()
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
+        }
+    }
+}
+
 @main
 struct SlateMacApp: App {
+    @NSApplicationDelegateAdaptor(SlateAppDelegate.self)
+    private var appDelegate
     @StateObject private var appState = AppState()
 
     /// File owns familiar macOS grouping without changing the catalog's stable

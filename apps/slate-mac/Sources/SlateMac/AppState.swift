@@ -4914,6 +4914,38 @@ final class AppState: ObservableObject {
         [SidebarVaultRootIdentity: [SidebarUnflushedWrite]] = [:]
     private static let sidebarUnflushedWriteRetriesCap = 64
 
+    /// Round-31: termination fence. True while any identity's writer
+    /// chain still holds queued work — quit waits for settlement so an
+    /// announced change can't die mid-flight with the process.
+    @MainActor static var hasPendingSidebarWriterChains: Bool {
+        !sidebarStoreWriterChains.isEmpty
+    }
+
+    /// Round-31: await chain quiescence with a hard 5-second bound —
+    /// chains normally settle in milliseconds; a wedged filesystem must
+    /// not turn Quit into a hang. Successors installed while waiting
+    /// (parked-write drains) are awaited too. Parked retained writes
+    /// whose vault is closed are NOT recoverable at quit — durable
+    /// cross-launch recovery is tracked separately (#941).
+    @MainActor
+    static func settleSidebarWriterChainsForTermination() async {
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask { @MainActor in
+                while !Task.isCancelled,
+                    let task = sidebarStoreWriterChains.values.first
+                {
+                    await task.value
+                    await Task.yield()
+                }
+            }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 5_000_000_000)
+            }
+            await group.next()
+            group.cancelAll()
+        }
+    }
+
     /// Ownership generation for queued persists. Bumped on every vault
     /// teardown/switch; a queued task whose captured generation no longer
     /// matches skips its disk I/O and publishes nothing.
@@ -5227,6 +5259,19 @@ final class AppState: ObservableObject {
             // descriptor-bound fstat refuse a replaced or deleted vault.
             // Publishes, acknowledgements, and announcements additionally
             // require the original generation/session ownership.
+            // The chain-registry entry belongs to this task even when its
+            // AppState is gone — retire it unconditionally, or the quit
+            // fence would wait on a stale completed task forever
+            // (round-31).
+            defer {
+                if Self.sidebarStoreWriterChainTokens[enqueueIdentity]
+                    == token
+                {
+                    Self.sidebarStoreWriterChains[enqueueIdentity] = nil
+                    Self.sidebarStoreWriterChainTokens[enqueueIdentity] = nil
+                    Self.sidebarCommittedTransformIDs[enqueueIdentity] = nil
+                }
+            }
             guard let self else { return }
             // Round-9 finding 1 (at-most-once), rebased on the per-file
             // committed ledger (round-20 finding 1): the captured backlog is
@@ -5270,13 +5315,6 @@ final class AppState: ObservableObject {
                     self.scheduleSidebarRetainedWriteDrain()
                 }
                 onSettled?()
-                if Self.sidebarStoreWriterChainTokens[enqueueIdentity]
-                    == token
-                {
-                    Self.sidebarStoreWriterChains[enqueueIdentity] = nil
-                    Self.sidebarStoreWriterChainTokens[enqueueIdentity] = nil
-                    Self.sidebarCommittedTransformIDs[enqueueIdentity] = nil
-                }
                 return
             }
             prepare?()
@@ -5405,11 +5443,6 @@ final class AppState: ObservableObject {
 
             defer {
                 onSettled?()
-                if Self.sidebarStoreWriterChainTokens[enqueueIdentity] == token {
-                    Self.sidebarStoreWriterChains[enqueueIdentity] = nil
-                    Self.sidebarStoreWriterChainTokens[enqueueIdentity] = nil
-                    Self.sidebarCommittedTransformIDs[enqueueIdentity] = nil
-                }
             }
             switch outcome {
             case .failure(let error):
@@ -8894,10 +8927,10 @@ final class AppState: ObservableObject {
             let result = await Task.detached(priority: .userInitiated) {
                 store.read(expectedRootIdentity: retryIdentity)
             }.value
-            guard let self else { return }
             // The chain slot belongs to this task regardless of retry
-            // generation — release it (and the drained ledger) exactly as
-            // the mutate funnel does.
+            // generation or session lifetime — release it (and the drained
+            // ledger) exactly as the mutate funnel does, BEFORE the self
+            // guard so a dead session still retires the entry (round-31).
             defer {
                 if Self.sidebarStoreWriterChainTokens[retryIdentity]
                     == chainToken
@@ -8907,6 +8940,7 @@ final class AppState: ObservableObject {
                     Self.sidebarCommittedTransformIDs[retryIdentity] = nil
                 }
             }
+            guard let self else { return }
             guard generation == self.sidebarVaultPrefsRetryGeneration else { return }
             defer {
                 if generation == self.sidebarVaultPrefsRetryGeneration {
