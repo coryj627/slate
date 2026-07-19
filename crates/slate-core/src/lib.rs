@@ -73,6 +73,7 @@ pub mod session;
 pub mod structural;
 pub mod structural_batch;
 pub mod structured_diff;
+pub mod switcher;
 pub mod sync_detect;
 pub mod tags_db;
 pub mod tasks;

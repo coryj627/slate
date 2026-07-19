@@ -22,68 +22,12 @@ final class QuickSwitcherModelTests: XCTestCase {
         pairs.map { row($0.0, $0.1) }
     }
 
-    // MARK: - displayName
-
-    func testDisplayNameStripsMarkdownExtension() {
-        XCTAssertEqual(row("a/foo.md", "foo.md").displayName, "foo")
-        XCTAssertEqual(row("a/foo.markdown", "foo.markdown").displayName, "foo")
-    }
-
-    func testDisplayNameKeepsInteriorDots() {
-        // Only the final extension is stripped — a dotted stem survives.
-        XCTAssertEqual(row("x/2026.01.notes.md", "2026.01.notes.md").displayName, "2026.01.notes")
-    }
-
-    func testDisplayNameLeavesNonMarkdownUntouched() {
-        XCTAssertEqual(row("x/diagram.png", "diagram.png").displayName, "diagram.png")
-    }
-
-    // MARK: - Fuzzy scoring: name-over-path bias
-
-    /// The load-bearing rule: `foo` ranks `foo.md` (a name hit) above a
-    /// file whose only match is via its folder path.
-    func testScoreBiasesNameOverPathMatch() {
-        let name = QuickSwitcherModel.score(
-            query: "foo", row: row("foo.md", "foo.md"))!
-        let pathOnly = QuickSwitcherModel.score(
-            query: "foo", row: row("notes/foo-archive/bar.md", "bar.md"))!
-        XCTAssertGreaterThan(
-            name, pathOnly,
-            "a name match must outrank a path-only match for the same query")
-    }
-
-    /// The bias is exactly `nameMatchBonus` over the bare name score —
-    /// pins the constant so a silent change to it fails here.
-    func testScoreAddsNameBonusOnTopOfNameFuzzyScore() {
-        let r = row("dir/foo.md", "foo.md")
-        let bareName = QuickSwitcherModel.fuzzyScore(query: "foo", target: "foo")!
-        let score = QuickSwitcherModel.score(query: "foo", row: r)!
-        // The name ("foo" after stripping) is a prefix hit; adding the
-        // bonus is what the model does. The path also matches ("dir/foo.md"
-        // contains "foo"), but the boosted name score wins the max.
-        XCTAssertEqual(score, bareName + QuickSwitcherModel.nameMatchBonus)
-    }
-
-    // MARK: - Fuzzy scoring: path matching still works
-
-    func testScoreMatchesViaPathWhenNameDoesNot() {
-        // Query "dir" is nowhere in the name "bar.md" but is in the path.
-        let score = QuickSwitcherModel.score(query: "dir", row: row("dir/bar.md", "bar.md"))
-        XCTAssertNotNil(score, "a path-only subsequence match must still score")
-    }
-
-    func testScoreIsCaseInsensitive() {
-        let lower = QuickSwitcherModel.score(query: "foo", row: row("A/Foo.md", "Foo.md"))
-        let upper = QuickSwitcherModel.score(query: "FOO", row: row("A/Foo.md", "Foo.md"))
-        XCTAssertNotNil(lower)
-        XCTAssertEqual(lower, upper)
-    }
-
-    func testScoreReturnsNilForNonMatch() {
-        XCTAssertNil(
-            QuickSwitcherModel.score(query: "zzz", row: row("a/foo.md", "foo.md")),
-            "a query matching neither name nor path must return nil")
-    }
+    // The displayName + score unit tests moved to Rust with the logic
+    // itself (W0.5-2 #718): `slate_core::switcher::tests` carries the
+    // same cases as goldens — extension stripping, the name-over-path
+    // bias with the exact `NAME_MATCH_BONUS` pin, path-only matches,
+    // case-insensitivity, and the non-match `None`. Ranking behavior
+    // through the model is still exercised end-to-end below.
 
     // MARK: - Ordering: empty query = recency first
 

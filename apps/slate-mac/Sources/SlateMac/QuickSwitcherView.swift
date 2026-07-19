@@ -18,7 +18,8 @@ import SwiftUI
 ///   chord falls through to the vault picker instead — the sheet only
 ///   mounts inside a vault); the search field auto-focuses on appear.
 /// - Typing filters the file list via the shared fuzzy matcher with a
-///   name-over-path bias (`QuickSwitcherModel.score`).
+///   name-over-path bias (`slate_core::switcher` behind the FFI since
+///   W0.5-2 #718).
 /// - Arrow ↑ / ↓ moves selection with wrap. Modified arrows (Shift/Cmd/
 ///   Ctrl+Option/Fn) pass through so text-editing and VoiceOver chords
 ///   keep working — same mask as the palette.
