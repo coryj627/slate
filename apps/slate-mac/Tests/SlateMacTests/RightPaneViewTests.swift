@@ -608,14 +608,14 @@ final class RightPaneViewTests: XCTestCase {
             "the VoiceOver activate path stays")
     }
 
-    /// The leaf-switch announcement matches the spec phrasing ("<title>
-    /// panel.") — the medium-priority live region that replaces the picker's
-    /// native announcement.
+    /// The leaf switch posts the canonical typed event (W0.5-3) — core's
+    /// `LeafPanelShown` render owns the spec phrasing ("<title> panel."),
+    /// pinned by the corpus goldens and the a11y census.
     func testLeafSwitchAnnouncementPhrasing() throws {
         let source = try rightPaneSource()
         XCTAssertTrue(
-            source.contains(#"postAccessibilityAnnouncement("\(leaf.title) panel.""#),
-            "leaf switch must announce '<title> panel.'")
+            source.contains("postAccessibilityAnnouncement(.leafPanelShown(title: leaf.title))"),
+            "leaf switch must post the canonical .leafPanelShown event")
     }
 
     // MARK: - PresentationReady (§D contrast + §E render, both appearances)

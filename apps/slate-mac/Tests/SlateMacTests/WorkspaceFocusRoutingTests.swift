@@ -364,25 +364,33 @@ final class WorkspaceFocusRoutingTests: XCTestCase {
 
     /// "Files." on tree entry, "<leaf title> panel." on leaf entry, "Editor
     /// pane N of M, <title>." on an interior/return move — the exact strings a
-    /// VoiceOver user hears (pure builders; the free announcement post has no
-    /// test spy, so the string IS the contract).
+    /// VoiceOver user hears (rendered by core via `a11yRender`, W0.5-3; the
+    /// free announcement post has no test spy, so the string IS the contract).
     func testAnnouncementStringsAreVerbatim() {
-        XCTAssertEqual(AppState.filesRegionAnnouncement, "Files.")
+        XCTAssertEqual(a11yRender(event: .filesRegionFocused).text, "Files.")
 
         XCTAssertEqual(
-            AppState.leafRegionAnnouncement(.outline), "Outline panel.")
+            a11yRender(event: .leafPanelShown(title: Leaf.outline.title)).text,
+            "Outline panel.")
         XCTAssertEqual(
-            AppState.leafRegionAnnouncement(.backlinks), "Backlinks panel.")
+            a11yRender(event: .leafPanelShown(title: Leaf.backlinks.title)).text,
+            "Backlinks panel.")
         XCTAssertEqual(
-            AppState.leafRegionAnnouncement(.bibliography), "Bibliography panel.")
+            a11yRender(event: .leafPanelShown(title: Leaf.bibliography.title)).text,
+            "Bibliography panel.")
 
         XCTAssertEqual(
-            AppState.editorPaneAnnouncement(ordinal: 2, total: 3, title: "notes.md"),
+            a11yRender(
+                event: .editorPaneFocused(
+                    ordinal: 2, total: 3, title: "notes.md", prefix: "")
+            ).text,
             "Editor pane 2 of 3, notes.md.")
         // The "Split. " prefix path (reused from U1-3) is unchanged.
         XCTAssertEqual(
-            AppState.editorPaneAnnouncement(
-                ordinal: 1, total: 2, title: "a.md", prefix: "Split. "),
+            a11yRender(
+                event: .editorPaneFocused(
+                    ordinal: 1, total: 2, title: "a.md", prefix: "Split. ")
+            ).text,
             "Split. Editor pane 1 of 2, a.md.")
     }
 
@@ -392,7 +400,8 @@ final class WorkspaceFocusRoutingTests: XCTestCase {
     func testLeafEntryAnnouncementMatchesLeafSwitchPhrasing() {
         for leaf in Leaf.registered {
             XCTAssertEqual(
-                AppState.leafRegionAnnouncement(leaf), "\(leaf.title) panel.")
+                a11yRender(event: .leafPanelShown(title: leaf.title)).text,
+                "\(leaf.title) panel.")
         }
     }
 

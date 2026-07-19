@@ -5668,6 +5668,568 @@ pub fn switcher_display_name(name: String) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Canonical a11y-event vocabulary (W0.5-3, #719): thin mirror of
+// `slate_core::a11y`. Hosts CONSTRUCT events and call `a11y_render`; the
+// text + priority come back canonical, so both hosts speak identically
+// (§W-D). The mirror is intentionally one-directional — events never flow
+// core → host.
+
+/// How urgently a host should speak an announcement. `High` interrupts
+/// current speech (assertive); `Medium` queues politely.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum A11yPriority {
+    Medium,
+    High,
+}
+
+impl From<A11yPriority> for core::a11y::A11yPriority {
+    fn from(p: A11yPriority) -> Self {
+        match p {
+            A11yPriority::Medium => core::a11y::A11yPriority::Medium,
+            A11yPriority::High => core::a11y::A11yPriority::High,
+        }
+    }
+}
+
+impl From<core::a11y::A11yPriority> for A11yPriority {
+    fn from(p: core::a11y::A11yPriority) -> Self {
+        match p {
+            core::a11y::A11yPriority::Medium => A11yPriority::Medium,
+            core::a11y::A11yPriority::High => A11yPriority::High,
+        }
+    }
+}
+
+/// One announcement, as data — 1:1 mirror of `slate_core::a11y::A11yEvent`
+/// (see that module for per-variant docs, the copy rules, and the
+/// `HostComposed` residue contract).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum A11yEvent {
+    FilesRegionFocused,
+    LeafPanelShown {
+        title: String,
+    },
+    EditorPaneFocused {
+        ordinal: u32,
+        total: u32,
+        title: String,
+        prefix: String,
+    },
+    TabFocused {
+        prefix: String,
+        filename: String,
+        index: u32,
+        count: u32,
+    },
+    TabClosed {
+        closed_title: String,
+        successor: Option<String>,
+    },
+    NoSplitPanesToResize,
+    PaneResized {
+        percent: u32,
+    },
+    GraphOpensSinglePane,
+    RightPaneShown,
+    RightPaneHidden,
+    HistoryPanelShown,
+    ReopenTargetMissing {
+        filename: String,
+    },
+    ReopenedFile {
+        filename: String,
+    },
+    ReopenedNamed {
+        name: String,
+    },
+    ReopenedGraph,
+    VaultOpened {
+        vault_title: String,
+        sidebar_notice: String,
+    },
+    RemovedRecentVault {
+        display_name: String,
+    },
+    WelcomeShown {
+        recent_vault_count: u32,
+    },
+    CommandPaletteNeedsVault,
+    SearchNeedsVault,
+    SearchResultOpened {
+        filename: String,
+        line: u32,
+        snippet: String,
+    },
+    ExternalLinkUnsupported {
+        target: String,
+    },
+    ExternalLinkOpened,
+    ExternalLinkFailed {
+        target: String,
+    },
+    LinkUnresolved {
+        target: String,
+    },
+    HelpOpened,
+    HelpFailed,
+    InternalNavigated {
+        kind: String,
+        filename: String,
+    },
+    CitationNotLoaded,
+    NoResolvedEmbedAtCursor,
+    NoEmbedAtCursor,
+    HeadingNotFound,
+    HeadingScrollFailed {
+        heading: String,
+    },
+    ScrolledToHeading {
+        heading: String,
+    },
+    ScrolledToLine {
+        filename: String,
+        line: u32,
+    },
+    OpenedAtLine {
+        filename: String,
+        line: u32,
+    },
+    OpenedFile {
+        filename: String,
+    },
+    ShowingNote {
+        display_name: String,
+    },
+    TaskToggleUnsaved {
+        filename: String,
+    },
+    TaskToggleConflict {
+        filename: String,
+    },
+    TasksReviewShown {
+        filter_name: String,
+    },
+    TasksFilterSet {
+        filter_name: String,
+    },
+    NoteSaved {
+        filename: String,
+    },
+    SaveConflict {
+        filename: String,
+    },
+    RestoredVersionFrom {
+        formatted_date: String,
+    },
+    RestoredFile {
+        filename: String,
+    },
+    RestoredFileAs {
+        source_name: String,
+        filename: String,
+    },
+    PrintNeedsNote,
+    PrintDialogOpened {
+        name: String,
+    },
+    BatchCheckStarted {
+        formatted_count: String,
+        action_name: String,
+    },
+    SelectionCopied,
+    SidebarSettingsStillDefaults {
+        detail: String,
+    },
+    SidebarSettingsReloadedStaleRefs,
+    SidebarSettingsReloaded,
+    VaultClosed,
+    VaultClosedAllSaved,
+    VaultClosedChangesDiscarded,
+    PropertiesUpdated,
+    PropertyChanged {
+        key: String,
+        deleted: bool,
+    },
+    PropertyEditConflict {
+        filename: String,
+    },
+    PropertiesSourceRejected {
+        reason: String,
+    },
+    PropertyEditFailed {
+        detail: String,
+    },
+    PropertiesReloaded,
+    PropertiesReloadedBodyChanged,
+    NoteChangedAgain {
+        detail: Option<String>,
+    },
+    PropertiesReloadFailed {
+        reason: String,
+    },
+    PropertyRetainedCopied,
+    PropertyRecoveryUnverified {
+        display_name: String,
+    },
+    PropertyRetainedDiscarded,
+    PropertyRetainedReapplyFailed {
+        detail: Option<String>,
+    },
+    PropertyReloadStillFailed {
+        reason: String,
+    },
+    PropertyLoadCurrentFailed {
+        reason: String,
+    },
+    AddPropertySheetShown,
+    SourceChangesDiscarded,
+    BulkRenameSheetShown,
+    RenameReloadFailed {
+        detail: Option<String>,
+    },
+    RenameFailed {
+        detail: String,
+    },
+    RenameSummary {
+        applied: bool,
+        renamed: u32,
+        skipped: u32,
+        failed: u32,
+    },
+    DuplicateFilesOnly,
+    MathSpeechStyle {
+        name: String,
+    },
+    MathVerbosity {
+        name: String,
+    },
+    MathBrailleCode {
+        name: String,
+    },
+    CodePreambleVerbosity {
+        name: String,
+    },
+    EditorTextSize {
+        percent: u32,
+    },
+    SpellCheckToggled {
+        enabled: bool,
+    },
+    CitationStyleChanged {
+        title: String,
+    },
+    CitationsCount {
+        count: u32,
+    },
+    OutlineCount {
+        count: u32,
+    },
+    FileListCount {
+        count: u32,
+    },
+    ItemsSelected {
+        count: u32,
+    },
+    NoItemsSelected,
+    TreeFolderSelected {
+        name: String,
+    },
+    RowSelected {
+        name: String,
+    },
+    PaletteCommandSelected {
+        label: String,
+        disabled_reason: Option<String>,
+    },
+    RecentSearchFocused {
+        query: String,
+    },
+    BaseViewMode {
+        mode: String,
+    },
+    BaseViewSwitcher {
+        view_count: u32,
+    },
+    BasesNewQueryBuilder,
+    BasesEditingFilters {
+        view_name: String,
+    },
+    BasesFiltersOpenFailed {
+        detail: String,
+    },
+    BasesPreviewFailed {
+        detail: String,
+    },
+    BasesBuilderSaved,
+    BasesViewSaveFailed {
+        detail: String,
+    },
+    BasesSavedQueryNameNeeded,
+    BasesSavedQueryCreated {
+        name: String,
+    },
+    BasesSavedQueryCreateFailed {
+        detail: String,
+    },
+    BasesSavedQueryUpdated {
+        name: String,
+    },
+    BasesSavedQueryUpdateFailed {
+        detail: String,
+    },
+    BasesViewSelected {
+        name: String,
+    },
+    BasesSortSaveFailed {
+        detail: String,
+    },
+    BaseRefreshed,
+    DataviewConversionFailed {
+        detail: String,
+    },
+    CitationInsertUnavailable,
+    CitationWalkThrough,
+    CodeCopied,
+    HostComposed {
+        text: String,
+        priority: A11yPriority,
+    },
+}
+
+impl From<A11yEvent> for core::a11y::A11yEvent {
+    fn from(e: A11yEvent) -> Self {
+        use A11yEvent as F;
+        use core::a11y::A11yEvent as C;
+        match e {
+            F::FilesRegionFocused => C::FilesRegionFocused,
+            F::LeafPanelShown { title } => C::LeafPanelShown { title },
+            F::EditorPaneFocused {
+                ordinal,
+                total,
+                title,
+                prefix,
+            } => C::EditorPaneFocused {
+                ordinal,
+                total,
+                title,
+                prefix,
+            },
+            F::TabFocused {
+                prefix,
+                filename,
+                index,
+                count,
+            } => C::TabFocused {
+                prefix,
+                filename,
+                index,
+                count,
+            },
+            F::TabClosed {
+                closed_title,
+                successor,
+            } => C::TabClosed {
+                closed_title,
+                successor,
+            },
+            F::NoSplitPanesToResize => C::NoSplitPanesToResize,
+            F::PaneResized { percent } => C::PaneResized { percent },
+            F::GraphOpensSinglePane => C::GraphOpensSinglePane,
+            F::RightPaneShown => C::RightPaneShown,
+            F::RightPaneHidden => C::RightPaneHidden,
+            F::HistoryPanelShown => C::HistoryPanelShown,
+            F::ReopenTargetMissing { filename } => C::ReopenTargetMissing { filename },
+            F::ReopenedFile { filename } => C::ReopenedFile { filename },
+            F::ReopenedNamed { name } => C::ReopenedNamed { name },
+            F::ReopenedGraph => C::ReopenedGraph,
+            F::VaultOpened {
+                vault_title,
+                sidebar_notice,
+            } => C::VaultOpened {
+                vault_title,
+                sidebar_notice,
+            },
+            F::RemovedRecentVault { display_name } => C::RemovedRecentVault { display_name },
+            F::WelcomeShown { recent_vault_count } => C::WelcomeShown { recent_vault_count },
+            F::CommandPaletteNeedsVault => C::CommandPaletteNeedsVault,
+            F::SearchNeedsVault => C::SearchNeedsVault,
+            F::SearchResultOpened {
+                filename,
+                line,
+                snippet,
+            } => C::SearchResultOpened {
+                filename,
+                line,
+                snippet,
+            },
+            F::ExternalLinkUnsupported { target } => C::ExternalLinkUnsupported { target },
+            F::ExternalLinkOpened => C::ExternalLinkOpened,
+            F::ExternalLinkFailed { target } => C::ExternalLinkFailed { target },
+            F::LinkUnresolved { target } => C::LinkUnresolved { target },
+            F::HelpOpened => C::HelpOpened,
+            F::HelpFailed => C::HelpFailed,
+            F::InternalNavigated { kind, filename } => C::InternalNavigated { kind, filename },
+            F::CitationNotLoaded => C::CitationNotLoaded,
+            F::NoResolvedEmbedAtCursor => C::NoResolvedEmbedAtCursor,
+            F::NoEmbedAtCursor => C::NoEmbedAtCursor,
+            F::HeadingNotFound => C::HeadingNotFound,
+            F::HeadingScrollFailed { heading } => C::HeadingScrollFailed { heading },
+            F::ScrolledToHeading { heading } => C::ScrolledToHeading { heading },
+            F::ScrolledToLine { filename, line } => C::ScrolledToLine { filename, line },
+            F::OpenedAtLine { filename, line } => C::OpenedAtLine { filename, line },
+            F::OpenedFile { filename } => C::OpenedFile { filename },
+            F::ShowingNote { display_name } => C::ShowingNote { display_name },
+            F::TaskToggleUnsaved { filename } => C::TaskToggleUnsaved { filename },
+            F::TaskToggleConflict { filename } => C::TaskToggleConflict { filename },
+            F::TasksReviewShown { filter_name } => C::TasksReviewShown { filter_name },
+            F::TasksFilterSet { filter_name } => C::TasksFilterSet { filter_name },
+            F::NoteSaved { filename } => C::NoteSaved { filename },
+            F::SaveConflict { filename } => C::SaveConflict { filename },
+            F::RestoredVersionFrom { formatted_date } => C::RestoredVersionFrom { formatted_date },
+            F::RestoredFile { filename } => C::RestoredFile { filename },
+            F::RestoredFileAs {
+                source_name,
+                filename,
+            } => C::RestoredFileAs {
+                source_name,
+                filename,
+            },
+            F::PrintNeedsNote => C::PrintNeedsNote,
+            F::PrintDialogOpened { name } => C::PrintDialogOpened { name },
+            F::BatchCheckStarted {
+                formatted_count,
+                action_name,
+            } => C::BatchCheckStarted {
+                formatted_count,
+                action_name,
+            },
+            F::SelectionCopied => C::SelectionCopied,
+            F::SidebarSettingsStillDefaults { detail } => {
+                C::SidebarSettingsStillDefaults { detail }
+            }
+            F::SidebarSettingsReloadedStaleRefs => C::SidebarSettingsReloadedStaleRefs,
+            F::SidebarSettingsReloaded => C::SidebarSettingsReloaded,
+            F::VaultClosed => C::VaultClosed,
+            F::VaultClosedAllSaved => C::VaultClosedAllSaved,
+            F::VaultClosedChangesDiscarded => C::VaultClosedChangesDiscarded,
+            F::PropertiesUpdated => C::PropertiesUpdated,
+            F::PropertyChanged { key, deleted } => C::PropertyChanged { key, deleted },
+            F::PropertyEditConflict { filename } => C::PropertyEditConflict { filename },
+            F::PropertiesSourceRejected { reason } => C::PropertiesSourceRejected { reason },
+            F::PropertyEditFailed { detail } => C::PropertyEditFailed { detail },
+            F::PropertiesReloaded => C::PropertiesReloaded,
+            F::PropertiesReloadedBodyChanged => C::PropertiesReloadedBodyChanged,
+            F::NoteChangedAgain { detail } => C::NoteChangedAgain { detail },
+            F::PropertiesReloadFailed { reason } => C::PropertiesReloadFailed { reason },
+            F::PropertyRetainedCopied => C::PropertyRetainedCopied,
+            F::PropertyRecoveryUnverified { display_name } => {
+                C::PropertyRecoveryUnverified { display_name }
+            }
+            F::PropertyRetainedDiscarded => C::PropertyRetainedDiscarded,
+            F::PropertyRetainedReapplyFailed { detail } => {
+                C::PropertyRetainedReapplyFailed { detail }
+            }
+            F::PropertyReloadStillFailed { reason } => C::PropertyReloadStillFailed { reason },
+            F::PropertyLoadCurrentFailed { reason } => C::PropertyLoadCurrentFailed { reason },
+            F::AddPropertySheetShown => C::AddPropertySheetShown,
+            F::SourceChangesDiscarded => C::SourceChangesDiscarded,
+            F::BulkRenameSheetShown => C::BulkRenameSheetShown,
+            F::RenameReloadFailed { detail } => C::RenameReloadFailed { detail },
+            F::RenameFailed { detail } => C::RenameFailed { detail },
+            F::RenameSummary {
+                applied,
+                renamed,
+                skipped,
+                failed,
+            } => C::RenameSummary {
+                applied,
+                renamed,
+                skipped,
+                failed,
+            },
+            F::DuplicateFilesOnly => C::DuplicateFilesOnly,
+            F::MathSpeechStyle { name } => C::MathSpeechStyle { name },
+            F::MathVerbosity { name } => C::MathVerbosity { name },
+            F::MathBrailleCode { name } => C::MathBrailleCode { name },
+            F::CodePreambleVerbosity { name } => C::CodePreambleVerbosity { name },
+            F::EditorTextSize { percent } => C::EditorTextSize { percent },
+            F::SpellCheckToggled { enabled } => C::SpellCheckToggled { enabled },
+            F::CitationStyleChanged { title } => C::CitationStyleChanged { title },
+            F::CitationsCount { count } => C::CitationsCount { count },
+            F::OutlineCount { count } => C::OutlineCount { count },
+            F::FileListCount { count } => C::FileListCount { count },
+            F::ItemsSelected { count } => C::ItemsSelected { count },
+            F::NoItemsSelected => C::NoItemsSelected,
+            F::TreeFolderSelected { name } => C::TreeFolderSelected { name },
+            F::RowSelected { name } => C::RowSelected { name },
+            F::PaletteCommandSelected {
+                label,
+                disabled_reason,
+            } => C::PaletteCommandSelected {
+                label,
+                disabled_reason,
+            },
+            F::RecentSearchFocused { query } => C::RecentSearchFocused { query },
+            F::BaseViewMode { mode } => C::BaseViewMode { mode },
+            F::BaseViewSwitcher { view_count } => C::BaseViewSwitcher { view_count },
+            F::BasesNewQueryBuilder => C::BasesNewQueryBuilder,
+            F::BasesEditingFilters { view_name } => C::BasesEditingFilters { view_name },
+            F::BasesFiltersOpenFailed { detail } => C::BasesFiltersOpenFailed { detail },
+            F::BasesPreviewFailed { detail } => C::BasesPreviewFailed { detail },
+            F::BasesBuilderSaved => C::BasesBuilderSaved,
+            F::BasesViewSaveFailed { detail } => C::BasesViewSaveFailed { detail },
+            F::BasesSavedQueryNameNeeded => C::BasesSavedQueryNameNeeded,
+            F::BasesSavedQueryCreated { name } => C::BasesSavedQueryCreated { name },
+            F::BasesSavedQueryCreateFailed { detail } => C::BasesSavedQueryCreateFailed { detail },
+            F::BasesSavedQueryUpdated { name } => C::BasesSavedQueryUpdated { name },
+            F::BasesSavedQueryUpdateFailed { detail } => C::BasesSavedQueryUpdateFailed { detail },
+            F::BasesViewSelected { name } => C::BasesViewSelected { name },
+            F::BasesSortSaveFailed { detail } => C::BasesSortSaveFailed { detail },
+            F::BaseRefreshed => C::BaseRefreshed,
+            F::DataviewConversionFailed { detail } => C::DataviewConversionFailed { detail },
+            F::CitationInsertUnavailable => C::CitationInsertUnavailable,
+            F::CitationWalkThrough => C::CitationWalkThrough,
+            F::CodeCopied => C::CodeCopied,
+            F::HostComposed { text, priority } => C::HostComposed {
+                text,
+                priority: priority.into(),
+            },
+        }
+    }
+}
+
+/// A rendered announcement: canonical spoken text + urgency, ready for
+/// the platform notifier verbatim.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct RenderedAnnouncement {
+    pub text: String,
+    pub priority: A11yPriority,
+}
+
+/// Render an accessibility event to its canonical spoken form
+/// (`slate_core::a11y` owns every template and priority — hosts post
+/// the result verbatim and never compose announcement copy).
+#[uniffi::export]
+pub fn a11y_render(event: A11yEvent) -> RenderedAnnouncement {
+    let event: core::a11y::A11yEvent = event.into();
+    RenderedAnnouncement {
+        text: event.render(),
+        priority: event.priority().into(),
+    }
+}
+
+/// Core Debug identity of the event — the exact string the corpus artifact
+/// pins in its `event` field. Host censuses assert this to prove they
+/// constructed the SAME semantic event (variant + parameters), not merely
+/// one that happens to render identical text (e.g. `OpenedFile` vs an
+/// `InternalNavigated { kind: "Opened", .. }` both say "Opened notes.md.").
+#[uniffi::export]
+pub fn a11y_event_identity(event: A11yEvent) -> String {
+    let event: core::a11y::A11yEvent = event.into();
+    format!("{event:?}")
+}
+
+// ---------------------------------------------------------------------------
 // Bases (Milestone N, #699): 1:1 mirrors of the handle-based session API.
 // No logic here -- every method delegates to core and converts shapes.
 
@@ -7493,6 +8055,31 @@ mod tests {
         assert_eq!(properties[2].key, "tags");
         assert_eq!(properties[2].kind, "tag_list");
         assert_eq!(properties[2].value_json, "[\"one\",\"two\"]");
+    }
+
+    #[test]
+    fn a11y_event_identity_is_the_corpus_artifact_event_string() {
+        assert_eq!(
+            a11y_event_identity(A11yEvent::OpenedAtLine {
+                filename: "notes.md".into(),
+                line: 40,
+            }),
+            "OpenedAtLine { filename: \"notes.md\", line: 40 }"
+        );
+        assert_eq!(
+            a11y_event_identity(A11yEvent::NoItemsSelected),
+            "NoItemsSelected"
+        );
+        // Same rendered text, different identity — the census must be able
+        // to tell these apart (that is this accessor's whole job).
+        let file = a11y_event_identity(A11yEvent::OpenedFile {
+            filename: "notes.md".into(),
+        });
+        let nav = a11y_event_identity(A11yEvent::InternalNavigated {
+            kind: "Opened".into(),
+            filename: "notes.md".into(),
+        });
+        assert_ne!(file, nav);
     }
 
     fn ffi_batch_item(path: &str, is_directory: bool) -> StructuralBatchItem {

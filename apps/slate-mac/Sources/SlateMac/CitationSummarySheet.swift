@@ -43,10 +43,7 @@ struct CitationSummarySheet: View {
                         // is fiddly (each TabView reads its own
                         // .id); for V1 we rely on the user's tab
                         // muscle memory from the announcement.
-                        postAccessibilityAnnouncement(
-                            "Walk through citations. Switch to the Citations sidebar tab and arrow through the list.",
-                            priority: .medium
-                        )
+                        postAccessibilityAnnouncement(.citationWalkThrough)
                     }
                     .accessibilityHint("Closes this sheet and starts a walk-through.")
                 }

@@ -118,15 +118,15 @@ struct QuickSwitcherView: View {
             else { return }
             // `.medium` is the politeness floor that survives typing
             // echoes + count announcements (palette #418 F-A1 finding).
-            postAccessibilityAnnouncement(
-                "Selected: \(row.displayName)", priority: .medium)
+            postAccessibilityAnnouncement(.rowSelected(name: row.displayName))
         }
         .onChange(of: model.resultAnnouncement) { _, announcement in
             // `.medium` so per-keystroke count announcements coalesce
             // rather than interrupting mid-word — same as the palette's
             // filter-count announcement.
             guard let announcement, !announcement.isEmpty else { return }
-            postAccessibilityAnnouncement(announcement, priority: .medium)
+            // W0.5-3 residue: switcher model announcement strings (#718 core-rendered follow-up)
+            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
             model.clearAnnouncement()
         }
     }

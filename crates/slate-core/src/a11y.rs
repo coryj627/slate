@@ -1,0 +1,1351 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+//! Canonical accessibility-event vocabulary (W0.5-3, #719).
+//!
+//! Every screen-reader announcement Slate makes is a typed event here:
+//! kind, parameters, priority, and the **message template** all live
+//! core-side, so the mac (`postAccessibilityAnnouncement`) and Windows
+//! (`RaiseNotificationEvent`, §W-D) hosts speak the same rendered text
+//! from the same event. Hosts own *when* an event fires (trigger
+//! conditions stay at the interaction sites — WGA-7); this module owns
+//! *what it says* and *how urgently*.
+//!
+//! ## Scope and the `HostComposed` residue
+//!
+//! The W0.5-3 inventory (148 call expressions across 30 files at
+//! execution time) migrates in treatment classes. Literal, templated,
+//! and simple-builder announcements are typed variants below — their
+//! Swift string originals are deleted. A minority of sites relay text
+//! composed by dedicated engines (the canvas/graph announcers' verbosity
+//! machinery, Bases result summaries, filename advisories) or by
+//! availability logic whose copy serves double duty in dialogs/hints;
+//! those post [`A11yEvent::HostComposed`] carrying their text verbatim,
+//! each call site marked `// W0.5-3 residue:` with the owning engine.
+//! A source census (mac: `A11yResidueCensusTests`) pins the marker/site
+//! count so residue shrinks deliberately (engine-level vocabularies are
+//! follow-on batches) and keeps direct string-primitive calls at zero,
+//! so no NEW announcement can bypass the vocabulary.
+//!
+//! ## Copy rules
+//!
+//! Templates are the shipped mac strings, moved verbatim — this issue
+//! deliberately does not redesign wording or verbosity policy. Plain
+//! en-US in V1 (#264 owns localisation). Chord placeholders, when a
+//! template ever needs one, render per-platform (program decision 12);
+//! no current template carries a chord.
+
+/// How urgently a host should speak an event. `High` interrupts
+/// current speech (assertive); `Medium` queues politely — mirroring the
+/// two `NSAccessibilityPriorityLevel`s the mac app uses and the
+/// equivalent Windows notification processing levels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum A11yPriority {
+    Medium,
+    High,
+}
+
+/// One announcement, as data. Rendering ([`A11yEvent::render`]) and
+/// priority ([`A11yEvent::priority`]) are canonical; hosts post the
+/// rendered pair through their platform notifier verbatim.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum A11yEvent {
+    // --- Regions, panes, tabs, workspace (U4) ---
+    /// ⌘⌥← entered the file-tree region.
+    FilesRegionFocused,
+    /// A right-pane leaf was shown or the leaf region was entered —
+    /// entering and switching read identically by design.
+    LeafPanelShown {
+        title: String,
+    },
+    /// Focus moved to an editor pane (⌘⌥ arrows / pane cycling).
+    EditorPaneFocused {
+        ordinal: u32,
+        total: u32,
+        title: String,
+        /// Optional lead-in (e.g. `"Left pane. "`); empty for none.
+        prefix: String,
+    },
+    /// The active tab changed (⌘⇧] / ⌘⇧[ / ⌘1…9).
+    TabFocused {
+        prefix: String,
+        filename: String,
+        index: u32,
+        count: u32,
+    },
+    TabClosed {
+        closed_title: String,
+        successor: Option<String>,
+    },
+    NoSplitPanesToResize,
+    PaneResized {
+        percent: u32,
+    },
+    GraphOpensSinglePane,
+    RightPaneShown,
+    RightPaneHidden,
+    HistoryPanelShown,
+
+    // --- Reopen (⌘⇧T) ---
+    ReopenTargetMissing {
+        filename: String,
+    },
+    ReopenedFile {
+        filename: String,
+    },
+    ReopenedNamed {
+        name: String,
+    },
+    ReopenedGraph,
+
+    // --- Vault lifecycle, gates, welcome ---
+    VaultOpened {
+        vault_title: String,
+        /// Suffix notice about sidebar state; empty for none. Composed
+        /// by the host today (advisory copy) — refined in the sweep.
+        sidebar_notice: String,
+    },
+    RemovedRecentVault {
+        display_name: String,
+    },
+    /// The welcome screen appeared (no vault open). The recent-vault
+    /// count appends its own sentence when nonzero.
+    WelcomeShown {
+        recent_vault_count: u32,
+    },
+    CommandPaletteNeedsVault,
+    SearchNeedsVault,
+
+    // --- Links, search, embeds, headings, navigation ---
+    SearchResultOpened {
+        filename: String,
+        line: u32,
+        snippet: String,
+    },
+    ExternalLinkUnsupported {
+        target: String,
+    },
+    ExternalLinkOpened,
+    ExternalLinkFailed {
+        target: String,
+    },
+    LinkUnresolved {
+        target: String,
+    },
+    HelpOpened,
+    HelpFailed,
+    /// Internal navigation: `kind` is the verb the host chose
+    /// ("Opened", "Showing", …) — the observed set is pinned by the
+    /// census.
+    InternalNavigated {
+        kind: String,
+        filename: String,
+    },
+    CitationNotLoaded,
+    NoResolvedEmbedAtCursor,
+    NoEmbedAtCursor,
+    HeadingNotFound,
+    HeadingScrollFailed {
+        heading: String,
+    },
+    ScrolledToHeading {
+        heading: String,
+    },
+    ScrolledToLine {
+        filename: String,
+        line: u32,
+    },
+    OpenedAtLine {
+        filename: String,
+        line: u32,
+    },
+    /// Plain open echo (no line target). Renders the same words as an
+    /// `InternalNavigated { kind: "Opened", .. }` but stays Medium: this is
+    /// a routine action confirmation, not an interrupt-worthy navigation.
+    OpenedFile {
+        filename: String,
+    },
+    ShowingNote {
+        display_name: String,
+    },
+
+    // --- Tasks ---
+    TaskToggleUnsaved {
+        filename: String,
+    },
+    TaskToggleConflict {
+        filename: String,
+    },
+    TasksReviewShown {
+        filter_name: String,
+    },
+    TasksFilterSet {
+        filter_name: String,
+    },
+
+    // --- Saves ---
+    NoteSaved {
+        filename: String,
+    },
+    SaveConflict {
+        filename: String,
+    },
+
+    // --- History restore (O-3) ---
+    RestoredVersionFrom {
+        formatted_date: String,
+    },
+    RestoredFile {
+        filename: String,
+    },
+    RestoredFileAs {
+        source_name: String,
+        filename: String,
+    },
+
+    // --- Print (#869) ---
+    PrintNeedsNote,
+    PrintDialogOpened {
+        name: String,
+    },
+
+    // --- Sidebar batch actions + settings lifecycle ---
+    /// Preflight start for a multi-item sidebar action. The count is
+    /// pre-formatted by the host (locale digit grouping is a
+    /// per-platform concern, like chord rendering — decision 12).
+    BatchCheckStarted {
+        formatted_count: String,
+        action_name: String,
+    },
+    SelectionCopied,
+    SidebarSettingsStillDefaults {
+        detail: String,
+    },
+    SidebarSettingsReloadedStaleRefs,
+    SidebarSettingsReloaded,
+
+    // --- Vault close ---
+    VaultClosed,
+    VaultClosedAllSaved,
+    VaultClosedChangesDiscarded,
+
+    // --- Properties ---
+    PropertiesUpdated,
+    PropertyChanged {
+        key: String,
+        deleted: bool,
+    },
+    PropertyEditConflict {
+        filename: String,
+    },
+    PropertiesSourceRejected {
+        reason: String,
+    },
+    PropertyEditFailed {
+        detail: String,
+    },
+    PropertiesReloaded,
+    PropertiesReloadedBodyChanged,
+    /// The note changed again mid-edit; `detail` is the stored error
+    /// when one exists, else the canonical fallback renders.
+    NoteChangedAgain {
+        detail: Option<String>,
+    },
+    PropertiesReloadFailed {
+        reason: String,
+    },
+    PropertyRetainedCopied,
+    PropertyRecoveryUnverified {
+        display_name: String,
+    },
+    PropertyRetainedDiscarded,
+    PropertyRetainedReapplyFailed {
+        detail: Option<String>,
+    },
+    PropertyReloadStillFailed {
+        reason: String,
+    },
+    PropertyLoadCurrentFailed {
+        reason: String,
+    },
+    AddPropertySheetShown,
+    SourceChangesDiscarded,
+    BulkRenameSheetShown,
+    RenameReloadFailed {
+        detail: Option<String>,
+    },
+    RenameFailed {
+        detail: String,
+    },
+    /// One-line bulk-rename outcome (also the rename sheet's footer
+    /// copy — the mac builder delegates here so the two can't drift).
+    /// `applied == false` is the dry-run preview, where `renamed`
+    /// carries the will-rename count and `failed` is unused.
+    RenameSummary {
+        applied: bool,
+        renamed: u32,
+        skipped: u32,
+        failed: u32,
+    },
+    DuplicateFilesOnly,
+
+    // --- Settings / preference toggles ---
+    MathSpeechStyle {
+        name: String,
+    },
+    MathVerbosity {
+        name: String,
+    },
+    MathBrailleCode {
+        name: String,
+    },
+    CodePreambleVerbosity {
+        name: String,
+    },
+    EditorTextSize {
+        percent: u32,
+    },
+    SpellCheckToggled {
+        enabled: bool,
+    },
+    CitationStyleChanged {
+        title: String,
+    },
+
+    // --- Counts and selection echoes ---
+    CitationsCount {
+        count: u32,
+    },
+    OutlineCount {
+        count: u32,
+    },
+    FileListCount {
+        count: u32,
+    },
+    ItemsSelected {
+        count: u32,
+    },
+    NoItemsSelected,
+    TreeFolderSelected {
+        name: String,
+    },
+    RowSelected {
+        name: String,
+    },
+    /// Palette selection echo: the command label, plus its
+    /// unavailability reason when the row is disabled (the reason
+    /// copy is host availability logic, carried as data).
+    PaletteCommandSelected {
+        label: String,
+        disabled_reason: Option<String>,
+    },
+    RecentSearchFocused {
+        query: String,
+    },
+
+    // --- Bases ---
+    BaseViewMode {
+        mode: String,
+    },
+    BaseViewSwitcher {
+        view_count: u32,
+    },
+    BasesNewQueryBuilder,
+    BasesEditingFilters {
+        view_name: String,
+    },
+    BasesFiltersOpenFailed {
+        detail: String,
+    },
+    BasesPreviewFailed {
+        detail: String,
+    },
+    BasesBuilderSaved,
+    BasesViewSaveFailed {
+        detail: String,
+    },
+    BasesSavedQueryNameNeeded,
+    BasesSavedQueryCreated {
+        name: String,
+    },
+    BasesSavedQueryCreateFailed {
+        detail: String,
+    },
+    BasesSavedQueryUpdated {
+        name: String,
+    },
+    BasesSavedQueryUpdateFailed {
+        detail: String,
+    },
+    BasesViewSelected {
+        name: String,
+    },
+    BasesSortSaveFailed {
+        detail: String,
+    },
+    BaseRefreshed,
+    DataviewConversionFailed {
+        detail: String,
+    },
+
+    // --- One-offs ---
+    CitationInsertUnavailable,
+    CitationWalkThrough,
+    CodeCopied,
+
+    /// Text composed by a host-side engine that has not yet been given
+    /// its own vocabulary (see module docs). Carries its priority as
+    /// data because the composing engines post at differing levels.
+    /// Every producing call site is marked `// W0.5-3 residue:`.
+    HostComposed {
+        text: String,
+        priority: A11yPriority,
+    },
+}
+
+impl A11yEvent {
+    /// The urgency this event is spoken at — pinned per variant (the
+    /// shipped mac priorities, moved verbatim).
+    pub fn priority(&self) -> A11yPriority {
+        use A11yEvent::*;
+        match self {
+            CommandPaletteNeedsVault
+            | InternalNavigated { .. }
+            | TaskToggleUnsaved { .. }
+            | PropertiesSourceRejected { .. }
+            | PropertyEditFailed { .. }
+            | PropertiesReloadedBodyChanged
+            | NoteChangedAgain { .. }
+            | PropertiesReloadFailed { .. }
+            | PropertyRecoveryUnverified { .. }
+            | PropertyRetainedReapplyFailed { .. }
+            | PropertyReloadStillFailed { .. }
+            | PropertyLoadCurrentFailed { .. }
+            | AddPropertySheetShown
+            | BulkRenameSheetShown
+            | RenameReloadFailed { .. }
+            | RenameFailed { .. }
+            | RestoredVersionFrom { .. }
+            | RestoredFile { .. }
+            | RestoredFileAs { .. } => A11yPriority::High,
+            HostComposed { priority, .. } => *priority,
+            _ => A11yPriority::Medium,
+        }
+    }
+
+    /// The canonical spoken text — the shipped mac strings, verbatim.
+    pub fn render(&self) -> String {
+        use A11yEvent::*;
+        match self {
+            FilesRegionFocused => "Files.".to_owned(),
+            LeafPanelShown { title } => format!("{title} panel."),
+            EditorPaneFocused {
+                ordinal,
+                total,
+                title,
+                prefix,
+            } => {
+                format!("{prefix}Editor pane {ordinal} of {total}, {title}.")
+            }
+            TabFocused {
+                prefix,
+                filename,
+                index,
+                count,
+            } => {
+                format!("{prefix} {filename}, tab {index} of {count}.")
+            }
+            TabClosed {
+                closed_title,
+                successor,
+            } => match successor {
+                Some(successor) => format!("Closed {closed_title}. {successor} is active."),
+                None => format!("Closed {closed_title}."),
+            },
+            NoSplitPanesToResize => "No split panes to resize.".to_owned(),
+            PaneResized { percent } => format!("Pane resized, {percent} percent."),
+            GraphOpensSinglePane => {
+                "The graph opens in a single pane. Split from a note instead.".to_owned()
+            }
+            RightPaneShown => "Right pane shown.".to_owned(),
+            RightPaneHidden => "Right pane hidden.".to_owned(),
+            HistoryPanelShown => "History panel.".to_owned(),
+
+            ReopenTargetMissing { filename } => format!("{filename} no longer exists."),
+            ReopenedFile { filename } => format!("Reopened {filename}."),
+            ReopenedNamed { name } => format!("Reopened {name}."),
+            ReopenedGraph => "Reopened Graph.".to_owned(),
+
+            VaultOpened {
+                vault_title,
+                sidebar_notice,
+            } => format!(
+                "Vault {vault_title} opened. Scanning files for the sidebar.{sidebar_notice}"
+            ),
+            RemovedRecentVault { display_name } => {
+                format!("Removed {display_name} from recent vaults.")
+            }
+            WelcomeShown { recent_vault_count } => {
+                let base = "Welcome to Slate. Open Vault button focused. Press Return \
+                            or Command-O to choose a folder of Markdown files.";
+                if *recent_vault_count == 0 {
+                    base.to_owned()
+                } else {
+                    format!(
+                        "{base} {recent_vault_count} recent {} listed below.",
+                        plural(*recent_vault_count, "vault", "vaults")
+                    )
+                }
+            }
+            CommandPaletteNeedsVault => "Open a vault to use the command palette.".to_owned(),
+            SearchNeedsVault => "Open a vault first. Search works inside a vault.".to_owned(),
+
+            SearchResultOpened {
+                filename,
+                line,
+                snippet,
+            } => {
+                format!("Opened {filename}, line {line}: {snippet}")
+            }
+            ExternalLinkUnsupported { target } => format!(
+                "Cannot open external link {target}. Only web and mail links are supported."
+            ),
+            ExternalLinkOpened => "Opened external link in default browser.".to_owned(),
+            ExternalLinkFailed { target } => format!("Could not open external link {target}."),
+            LinkUnresolved { target } => format!("{target} is unresolved. Cannot open."),
+            HelpOpened => "Opened Help in your default browser.".to_owned(),
+            HelpFailed => "Could not open Help.".to_owned(),
+            InternalNavigated { kind, filename } => format!("{kind} {filename}."),
+            CitationNotLoaded => "Citation is not loaded yet.".to_owned(),
+            NoResolvedEmbedAtCursor => "No resolved embed at cursor.".to_owned(),
+            NoEmbedAtCursor => "No embed at cursor.".to_owned(),
+            HeadingNotFound => "Could not find that heading.".to_owned(),
+            HeadingScrollFailed { heading } => format!("Could not scroll to {heading}."),
+            ScrolledToHeading { heading } => format!("Scrolled to {heading}."),
+            ScrolledToLine { filename, line } => format!("Scrolled to {filename}, line {line}."),
+            OpenedAtLine { filename, line } => format!("Opened {filename}, line {line}."),
+            OpenedFile { filename } => format!("Opened {filename}."),
+            ShowingNote { display_name } => format!("Showing {display_name}."),
+
+            TaskToggleUnsaved { filename } => format!(
+                "Cannot toggle task. The editor has unsaved changes in {filename}. \
+                 Save the note first."
+            ),
+            TaskToggleConflict { filename } => format!(
+                "Toggle blocked. {filename} was modified externally. Resolve in the dialog."
+            ),
+            TasksReviewShown { filter_name } => format!("Tasks review. {filter_name}."),
+            TasksFilterSet { filter_name } => format!("Filter set to {filter_name}."),
+
+            NoteSaved { filename } => format!("Saved {filename}."),
+            SaveConflict { filename } => {
+                format!("Save blocked. {filename} was modified externally. Resolve in the dialog.")
+            }
+
+            RestoredVersionFrom { formatted_date } => {
+                format!("Restored version from {formatted_date}.")
+            }
+            RestoredFile { filename } => format!("Restored {filename}."),
+            RestoredFileAs {
+                source_name,
+                filename,
+            } => {
+                format!("Restored {source_name} as {filename}.")
+            }
+
+            PrintNeedsNote => "Open a note to print.".to_owned(),
+            PrintDialogOpened { name } => format!("Print dialog opened for {name}."),
+
+            BatchCheckStarted {
+                formatted_count,
+                action_name,
+            } => {
+                format!("Checking {formatted_count} selected items before {action_name}.")
+            }
+            SelectionCopied => "Copied.".to_owned(),
+            SidebarSettingsStillDefaults { detail } => {
+                format!("Sidebar settings still use defaults. {detail}")
+            }
+            SidebarSettingsReloadedStaleRefs => {
+                "Sidebar settings reloaded. Some pinned notes or sort overrides \
+                 may still reference old locations."
+                    .to_owned()
+            }
+            SidebarSettingsReloaded => "Sidebar settings reloaded.".to_owned(),
+
+            VaultClosed => "Vault closed. Returned to the welcome screen.".to_owned(),
+            VaultClosedAllSaved => {
+                "All changes saved. Vault closed. Returned to the welcome screen.".to_owned()
+            }
+            VaultClosedChangesDiscarded => {
+                "Changes discarded. Vault closed. Returned to the welcome screen.".to_owned()
+            }
+
+            PropertiesUpdated => "Properties updated.".to_owned(),
+            PropertyChanged { key, deleted } => {
+                let action = if *deleted { "deleted" } else { "updated" };
+                format!("Property {key} {action}.")
+            }
+            PropertyEditConflict { filename } => format!(
+                "Property edit blocked. {filename} was modified externally. \
+                 Resolve in the dialog."
+            ),
+            PropertiesSourceRejected { reason } => {
+                format!("Properties source not applied: {reason}")
+            }
+            PropertyEditFailed { detail } => format!("Property edit failed: {detail}"),
+            PropertiesReloaded => "Properties reloaded.".to_owned(),
+            PropertiesReloadedBodyChanged => {
+                "Properties reloaded. The note body also changed externally; \
+                 saving it will require conflict resolution."
+                    .to_owned()
+            }
+            NoteChangedAgain { detail } => detail
+                .clone()
+                .unwrap_or_else(|| "The note changed again.".to_owned()),
+            PropertiesReloadFailed { reason } => {
+                format!("Properties could not be reloaded: {reason}")
+            }
+            PropertyRetainedCopied => "Retained property update copied.".to_owned(),
+            PropertyRecoveryUnverified { display_name } => format!(
+                "The saved property update in {display_name} could not be verified. \
+                 Reopen the note to copy or resolve the retained update."
+            ),
+            PropertyRetainedDiscarded => {
+                "Using the current saved properties. The retained update was discarded.".to_owned()
+            }
+            PropertyRetainedReapplyFailed { detail } => detail.clone().unwrap_or_else(|| {
+                "The retained property update could not be reapplied.".to_owned()
+            }),
+            PropertyReloadStillFailed { reason } => {
+                format!("Slate still could not reload the saved property update. {reason}")
+            }
+            PropertyLoadCurrentFailed { reason } => format!(
+                "Slate couldn\u{2019}t load the current properties. \
+                 The retained update is still available. {reason}"
+            ),
+            AddPropertySheetShown => "Add property".to_owned(),
+            SourceChangesDiscarded => "Source changes discarded.".to_owned(),
+            BulkRenameSheetShown => "Bulk rename property".to_owned(),
+            RenameReloadFailed { detail } => detail
+                .clone()
+                .unwrap_or_else(|| "Some open notes could not be reloaded.".to_owned()),
+            RenameFailed { detail } => format!("Rename failed: {detail}"),
+            RenameSummary {
+                applied,
+                renamed,
+                skipped,
+                failed,
+            } => {
+                if *applied {
+                    format!("{renamed} renamed, {skipped} skipped, {failed} failed.")
+                } else {
+                    format!(
+                        "{renamed} {} will be renamed, {skipped} skipped, 0 errors.",
+                        plural(*renamed, "file", "files")
+                    )
+                }
+            }
+            DuplicateFilesOnly => "Duplicate applies to files only.".to_owned(),
+
+            MathSpeechStyle { name } => format!("Math speech style: {name}."),
+            MathVerbosity { name } => format!("Math verbosity: {name}."),
+            MathBrailleCode { name } => format!("Math braille code: {name}."),
+            CodePreambleVerbosity { name } => format!("Code preamble verbosity: {name}."),
+            EditorTextSize { percent } => format!("Editor text size {percent} percent."),
+            SpellCheckToggled { enabled } => if *enabled {
+                "Check spelling while typing on."
+            } else {
+                "Check spelling while typing off."
+            }
+            .to_owned(),
+            CitationStyleChanged { title } => format!("Citation style: {title}."),
+
+            CitationsCount { count } => {
+                format!(
+                    "Citations, {count} {}.",
+                    plural(*count, "citation", "citations")
+                )
+            }
+            OutlineCount { count } => {
+                format!(
+                    "Outline, {count} {}.",
+                    plural(*count, "heading", "headings")
+                )
+            }
+            FileListCount { count } => {
+                format!("File list, {count} {}", plural(*count, "item", "items"))
+            }
+            ItemsSelected { count } => {
+                format!("{count} {} selected", plural(*count, "item", "items"))
+            }
+            NoItemsSelected => "No items selected".to_owned(),
+            TreeFolderSelected { name } => format!("Selected: {name}, folder"),
+            RowSelected { name } => format!("Selected: {name}"),
+            PaletteCommandSelected {
+                label,
+                disabled_reason,
+            } => match disabled_reason {
+                Some(reason) => format!("Selected: {label}. Unavailable: {reason}"),
+                None => format!("Selected: {label}"),
+            },
+            RecentSearchFocused { query } => format!("Recent search: {query}"),
+
+            BaseViewMode { mode } => format!("Base view as {mode}."),
+            BaseViewSwitcher { view_count } => format!(
+                "Base view switcher. {view_count} {}.",
+                plural(*view_count, "view", "views")
+            ),
+            BasesNewQueryBuilder => "New Bases query builder.".to_owned(),
+            BasesEditingFilters { view_name } => format!("Editing filters for {view_name}."),
+            BasesFiltersOpenFailed { detail } => {
+                format!("Base filters could not be opened in the builder: {detail}")
+            }
+            BasesPreviewFailed { detail } => format!("Base preview failed: {detail}"),
+            BasesBuilderSaved => "Saved builder changes to view.".to_owned(),
+            BasesViewSaveFailed { detail } => format!("Base view could not be saved: {detail}"),
+            BasesSavedQueryNameNeeded => "Enter a saved query name before saving.".to_owned(),
+            BasesSavedQueryCreated { name } => format!("Saved query {name}."),
+            BasesSavedQueryCreateFailed { detail } => {
+                format!("Saved query could not be created: {detail}")
+            }
+            BasesSavedQueryUpdated { name } => format!("Updated saved query {name}."),
+            BasesSavedQueryUpdateFailed { detail } => {
+                format!("Saved query could not be updated: {detail}")
+            }
+            BasesViewSelected { name } => format!("Base view: {name}."),
+            BasesSortSaveFailed { detail } => format!("Base sort could not be saved: {detail}"),
+            BaseRefreshed => "Base refreshed.".to_owned(),
+            DataviewConversionFailed { detail } => {
+                format!("Dataview conversion failed: {detail}")
+            }
+
+            CitationInsertUnavailable => {
+                "Insert citation lands in V1.x. See Milestone L.".to_owned()
+            }
+            CitationWalkThrough => {
+                "Walk through citations. Switch to the Citations sidebar tab and \
+                 arrow through the list."
+                    .to_owned()
+            }
+            CodeCopied => "Code copied.".to_owned(),
+
+            HostComposed { text, .. } => text.clone(),
+        }
+    }
+}
+
+/// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
+fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
+    if count == 1 { one } else { many }
+}
+
+/// One representative event per variant (parameterized variants use
+/// fixed sample values). This is the seed of the §W-D canonical corpus:
+/// the goldens below pin every entry's (priority, text), and the
+/// committed corpus artifact is generated from the same list, so the
+/// Rust goldens, the fixture, and the Swift census can never drift
+/// apart.
+pub fn corpus() -> Vec<A11yEvent> {
+    use A11yEvent::*;
+    vec![
+        FilesRegionFocused,
+        LeafPanelShown {
+            title: "Outline".into(),
+        },
+        EditorPaneFocused {
+            ordinal: 2,
+            total: 3,
+            title: "notes.md".into(),
+            prefix: String::new(),
+        },
+        TabFocused {
+            prefix: "Now".into(),
+            filename: "notes.md".into(),
+            index: 1,
+            count: 4,
+        },
+        TabClosed {
+            closed_title: "draft.md".into(),
+            successor: Some("notes.md".into()),
+        },
+        TabClosed {
+            closed_title: "draft.md".into(),
+            successor: None,
+        },
+        NoSplitPanesToResize,
+        PaneResized { percent: 60 },
+        GraphOpensSinglePane,
+        RightPaneShown,
+        RightPaneHidden,
+        HistoryPanelShown,
+        ReopenTargetMissing {
+            filename: "gone.md".into(),
+        },
+        ReopenedFile {
+            filename: "notes.md".into(),
+        },
+        ReopenedNamed {
+            name: "Open tasks".into(),
+        },
+        ReopenedGraph,
+        VaultOpened {
+            vault_title: "Garden".into(),
+            sidebar_notice: String::new(),
+        },
+        RemovedRecentVault {
+            display_name: "Garden".into(),
+        },
+        WelcomeShown {
+            recent_vault_count: 0,
+        },
+        WelcomeShown {
+            recent_vault_count: 1,
+        },
+        WelcomeShown {
+            recent_vault_count: 2,
+        },
+        CommandPaletteNeedsVault,
+        SearchNeedsVault,
+        SearchResultOpened {
+            filename: "notes.md".into(),
+            line: 12,
+            snippet: "the quick brown fox".into(),
+        },
+        ExternalLinkUnsupported {
+            target: "ftp://example.com".into(),
+        },
+        ExternalLinkOpened,
+        ExternalLinkFailed {
+            target: "https://example.com".into(),
+        },
+        LinkUnresolved {
+            target: "Missing Note".into(),
+        },
+        HelpOpened,
+        HelpFailed,
+        InternalNavigated {
+            kind: "Opened".into(),
+            filename: "notes.md".into(),
+        },
+        CitationNotLoaded,
+        NoResolvedEmbedAtCursor,
+        NoEmbedAtCursor,
+        HeadingNotFound,
+        HeadingScrollFailed {
+            heading: "Roadmap".into(),
+        },
+        ScrolledToHeading {
+            heading: "Roadmap".into(),
+        },
+        ScrolledToLine {
+            filename: "notes.md".into(),
+            line: 40,
+        },
+        OpenedAtLine {
+            filename: "notes.md".into(),
+            line: 40,
+        },
+        OpenedFile {
+            filename: "notes.md".into(),
+        },
+        ShowingNote {
+            display_name: "notes".into(),
+        },
+        TaskToggleUnsaved {
+            filename: "notes.md".into(),
+        },
+        TaskToggleConflict {
+            filename: "notes.md".into(),
+        },
+        TasksReviewShown {
+            filter_name: "Open tasks".into(),
+        },
+        TasksFilterSet {
+            filter_name: "All tasks".into(),
+        },
+        NoteSaved {
+            filename: "notes.md".into(),
+        },
+        SaveConflict {
+            filename: "notes.md".into(),
+        },
+        RestoredVersionFrom {
+            formatted_date: "July 19, 2026 at 9:41 AM".into(),
+        },
+        RestoredFile {
+            filename: "notes.md".into(),
+        },
+        RestoredFileAs {
+            source_name: "notes.md".into(),
+            filename: "notes-restored.md".into(),
+        },
+        PrintNeedsNote,
+        PrintDialogOpened {
+            name: "notes.md".into(),
+        },
+        BatchCheckStarted {
+            formatted_count: "1,024".into(),
+            action_name: "Move".into(),
+        },
+        SelectionCopied,
+        SidebarSettingsStillDefaults {
+            detail: "the file is malformed.".into(),
+        },
+        SidebarSettingsReloadedStaleRefs,
+        SidebarSettingsReloaded,
+        VaultClosed,
+        VaultClosedAllSaved,
+        VaultClosedChangesDiscarded,
+        PropertiesUpdated,
+        PropertyChanged {
+            key: "tags".into(),
+            deleted: false,
+        },
+        PropertyChanged {
+            key: "tags".into(),
+            deleted: true,
+        },
+        PropertyEditConflict {
+            filename: "notes.md".into(),
+        },
+        PropertiesSourceRejected {
+            reason: "the YAML does not parse".into(),
+        },
+        PropertyEditFailed {
+            detail: "io error".into(),
+        },
+        PropertiesReloaded,
+        PropertiesReloadedBodyChanged,
+        NoteChangedAgain { detail: None },
+        NoteChangedAgain {
+            detail: Some("The note changed while saving.".into()),
+        },
+        PropertiesReloadFailed {
+            reason: "io error".into(),
+        },
+        PropertyRetainedCopied,
+        PropertyRecoveryUnverified {
+            display_name: "notes".into(),
+        },
+        PropertyRetainedDiscarded,
+        PropertyRetainedReapplyFailed { detail: None },
+        PropertyReloadStillFailed {
+            reason: "io error".into(),
+        },
+        PropertyLoadCurrentFailed {
+            reason: "io error".into(),
+        },
+        AddPropertySheetShown,
+        SourceChangesDiscarded,
+        BulkRenameSheetShown,
+        RenameReloadFailed { detail: None },
+        RenameFailed {
+            detail: "io error".into(),
+        },
+        RenameSummary {
+            applied: true,
+            renamed: 3,
+            skipped: 1,
+            failed: 0,
+        },
+        RenameSummary {
+            applied: false,
+            renamed: 1,
+            skipped: 0,
+            failed: 0,
+        },
+        RenameSummary {
+            applied: false,
+            renamed: 3,
+            skipped: 2,
+            failed: 0,
+        },
+        DuplicateFilesOnly,
+        MathSpeechStyle {
+            name: "ClearSpeak".into(),
+        },
+        MathVerbosity {
+            name: "Verbose".into(),
+        },
+        MathBrailleCode {
+            name: "Nemeth".into(),
+        },
+        CodePreambleVerbosity {
+            name: "Concise".into(),
+        },
+        EditorTextSize { percent: 110 },
+        SpellCheckToggled { enabled: true },
+        SpellCheckToggled { enabled: false },
+        CitationStyleChanged {
+            title: "APA".into(),
+        },
+        CitationsCount { count: 1 },
+        CitationsCount { count: 3 },
+        OutlineCount { count: 1 },
+        OutlineCount { count: 5 },
+        FileListCount { count: 1 },
+        FileListCount { count: 12 },
+        ItemsSelected { count: 4 },
+        ItemsSelected { count: 1 },
+        NoItemsSelected,
+        TreeFolderSelected {
+            name: "Archive".into(),
+        },
+        RowSelected {
+            name: "notes".into(),
+        },
+        PaletteCommandSelected {
+            label: "Save".into(),
+            disabled_reason: None,
+        },
+        PaletteCommandSelected {
+            label: "Save".into(),
+            disabled_reason: Some("A structural operation is in progress.".into()),
+        },
+        RecentSearchFocused {
+            query: "fox".into(),
+        },
+        BaseViewMode {
+            mode: "cards".into(),
+        },
+        BaseViewSwitcher { view_count: 1 },
+        BaseViewSwitcher { view_count: 2 },
+        BasesNewQueryBuilder,
+        BasesEditingFilters {
+            view_name: "Table".into(),
+        },
+        BasesFiltersOpenFailed {
+            detail: "io error".into(),
+        },
+        BasesPreviewFailed {
+            detail: "bad expression".into(),
+        },
+        BasesBuilderSaved,
+        BasesViewSaveFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryNameNeeded,
+        BasesSavedQueryCreated {
+            name: "Open tasks".into(),
+        },
+        BasesSavedQueryCreateFailed {
+            detail: "io error".into(),
+        },
+        BasesSavedQueryUpdated {
+            name: "Open tasks".into(),
+        },
+        BasesSavedQueryUpdateFailed {
+            detail: "io error".into(),
+        },
+        BasesViewSelected {
+            name: "Cards".into(),
+        },
+        BasesSortSaveFailed {
+            detail: "io error".into(),
+        },
+        BaseRefreshed,
+        DataviewConversionFailed {
+            detail: "unsupported query".into(),
+        },
+        CitationInsertUnavailable,
+        CitationWalkThrough,
+        CodeCopied,
+        HostComposed {
+            text: "Composed by a host engine.".into(),
+            priority: A11yPriority::High,
+        },
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use A11yPriority::{High, Medium};
+
+    /// The full corpus golden: every representative event's exact
+    /// (priority, text). THIS TABLE IS THE CONTRACT — a wording change
+    /// here is a product decision (and a §W-D parity change), never a
+    /// drive-by.
+    #[test]
+    fn corpus_renders_the_shipped_strings() {
+        let expected: Vec<(A11yPriority, &str)> = vec![
+            (Medium, "Files."),
+            (Medium, "Outline panel."),
+            (Medium, "Editor pane 2 of 3, notes.md."),
+            (Medium, "Now notes.md, tab 1 of 4."),
+            (Medium, "Closed draft.md. notes.md is active."),
+            (Medium, "Closed draft.md."),
+            (Medium, "No split panes to resize."),
+            (Medium, "Pane resized, 60 percent."),
+            (
+                Medium,
+                "The graph opens in a single pane. Split from a note instead.",
+            ),
+            (Medium, "Right pane shown."),
+            (Medium, "Right pane hidden."),
+            (Medium, "History panel."),
+            (Medium, "gone.md no longer exists."),
+            (Medium, "Reopened notes.md."),
+            (Medium, "Reopened Open tasks."),
+            (Medium, "Reopened Graph."),
+            (
+                Medium,
+                "Vault Garden opened. Scanning files for the sidebar.",
+            ),
+            (Medium, "Removed Garden from recent vaults."),
+            (
+                Medium,
+                "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files.",
+            ),
+            (
+                Medium,
+                "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files. 1 recent vault listed below.",
+            ),
+            (
+                Medium,
+                "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files. 2 recent vaults listed below.",
+            ),
+            (High, "Open a vault to use the command palette."),
+            (Medium, "Open a vault first. Search works inside a vault."),
+            (Medium, "Opened notes.md, line 12: the quick brown fox"),
+            (
+                Medium,
+                "Cannot open external link ftp://example.com. Only web and mail links are supported.",
+            ),
+            (Medium, "Opened external link in default browser."),
+            (Medium, "Could not open external link https://example.com."),
+            (Medium, "Missing Note is unresolved. Cannot open."),
+            (Medium, "Opened Help in your default browser."),
+            (Medium, "Could not open Help."),
+            (High, "Opened notes.md."),
+            (Medium, "Citation is not loaded yet."),
+            (Medium, "No resolved embed at cursor."),
+            (Medium, "No embed at cursor."),
+            (Medium, "Could not find that heading."),
+            (Medium, "Could not scroll to Roadmap."),
+            (Medium, "Scrolled to Roadmap."),
+            (Medium, "Scrolled to notes.md, line 40."),
+            (Medium, "Opened notes.md, line 40."),
+            (Medium, "Opened notes.md."),
+            (Medium, "Showing notes."),
+            (
+                High,
+                "Cannot toggle task. The editor has unsaved changes in notes.md. Save the note first.",
+            ),
+            (
+                Medium,
+                "Toggle blocked. notes.md was modified externally. Resolve in the dialog.",
+            ),
+            (Medium, "Tasks review. Open tasks."),
+            (Medium, "Filter set to All tasks."),
+            (Medium, "Saved notes.md."),
+            (
+                Medium,
+                "Save blocked. notes.md was modified externally. Resolve in the dialog.",
+            ),
+            (High, "Restored version from July 19, 2026 at 9:41 AM."),
+            (High, "Restored notes.md."),
+            (High, "Restored notes.md as notes-restored.md."),
+            (Medium, "Open a note to print."),
+            (Medium, "Print dialog opened for notes.md."),
+            (Medium, "Checking 1,024 selected items before Move."),
+            (Medium, "Copied."),
+            (
+                Medium,
+                "Sidebar settings still use defaults. the file is malformed.",
+            ),
+            (
+                Medium,
+                "Sidebar settings reloaded. Some pinned notes or sort overrides may still reference old locations.",
+            ),
+            (Medium, "Sidebar settings reloaded."),
+            (Medium, "Vault closed. Returned to the welcome screen."),
+            (
+                Medium,
+                "All changes saved. Vault closed. Returned to the welcome screen.",
+            ),
+            (
+                Medium,
+                "Changes discarded. Vault closed. Returned to the welcome screen.",
+            ),
+            (Medium, "Properties updated."),
+            (Medium, "Property tags updated."),
+            (Medium, "Property tags deleted."),
+            (
+                Medium,
+                "Property edit blocked. notes.md was modified externally. Resolve in the dialog.",
+            ),
+            (
+                High,
+                "Properties source not applied: the YAML does not parse",
+            ),
+            (High, "Property edit failed: io error"),
+            (Medium, "Properties reloaded."),
+            (
+                High,
+                "Properties reloaded. The note body also changed externally; saving it will require conflict resolution.",
+            ),
+            (High, "The note changed again."),
+            (High, "The note changed while saving."),
+            (High, "Properties could not be reloaded: io error"),
+            (Medium, "Retained property update copied."),
+            (
+                High,
+                "The saved property update in notes could not be verified. Reopen the note to copy or resolve the retained update.",
+            ),
+            (
+                Medium,
+                "Using the current saved properties. The retained update was discarded.",
+            ),
+            (High, "The retained property update could not be reapplied."),
+            (
+                High,
+                "Slate still could not reload the saved property update. io error",
+            ),
+            (
+                High,
+                "Slate couldn\u{2019}t load the current properties. The retained update is still available. io error",
+            ),
+            (High, "Add property"),
+            (Medium, "Source changes discarded."),
+            (High, "Bulk rename property"),
+            (High, "Some open notes could not be reloaded."),
+            (High, "Rename failed: io error"),
+            (Medium, "3 renamed, 1 skipped, 0 failed."),
+            (Medium, "1 file will be renamed, 0 skipped, 0 errors."),
+            (Medium, "3 files will be renamed, 2 skipped, 0 errors."),
+            (Medium, "Duplicate applies to files only."),
+            (Medium, "Math speech style: ClearSpeak."),
+            (Medium, "Math verbosity: Verbose."),
+            (Medium, "Math braille code: Nemeth."),
+            (Medium, "Code preamble verbosity: Concise."),
+            (Medium, "Editor text size 110 percent."),
+            (Medium, "Check spelling while typing on."),
+            (Medium, "Check spelling while typing off."),
+            (Medium, "Citation style: APA."),
+            (Medium, "Citations, 1 citation."),
+            (Medium, "Citations, 3 citations."),
+            (Medium, "Outline, 1 heading."),
+            (Medium, "Outline, 5 headings."),
+            (Medium, "File list, 1 item"),
+            (Medium, "File list, 12 items"),
+            (Medium, "4 items selected"),
+            (Medium, "1 item selected"),
+            (Medium, "No items selected"),
+            (Medium, "Selected: Archive, folder"),
+            (Medium, "Selected: notes"),
+            (Medium, "Selected: Save"),
+            (
+                Medium,
+                "Selected: Save. Unavailable: A structural operation is in progress.",
+            ),
+            (Medium, "Recent search: fox"),
+            (Medium, "Base view as cards."),
+            (Medium, "Base view switcher. 1 view."),
+            (Medium, "Base view switcher. 2 views."),
+            (Medium, "New Bases query builder."),
+            (Medium, "Editing filters for Table."),
+            (
+                Medium,
+                "Base filters could not be opened in the builder: io error",
+            ),
+            (Medium, "Base preview failed: bad expression"),
+            (Medium, "Saved builder changes to view."),
+            (Medium, "Base view could not be saved: io error"),
+            (Medium, "Enter a saved query name before saving."),
+            (Medium, "Saved query Open tasks."),
+            (Medium, "Saved query could not be created: io error"),
+            (Medium, "Updated saved query Open tasks."),
+            (Medium, "Saved query could not be updated: io error"),
+            (Medium, "Base view: Cards."),
+            (Medium, "Base sort could not be saved: io error"),
+            (Medium, "Base refreshed."),
+            (Medium, "Dataview conversion failed: unsupported query"),
+            (Medium, "Insert citation lands in V1.x. See Milestone L."),
+            (
+                Medium,
+                "Walk through citations. Switch to the Citations sidebar tab and arrow through the list.",
+            ),
+            (Medium, "Code copied."),
+            (High, "Composed by a host engine."),
+        ];
+
+        let corpus = corpus();
+        assert_eq!(
+            corpus.len(),
+            expected.len(),
+            "corpus and golden table must stay in lockstep",
+        );
+        for (event, (priority, text)) in corpus.iter().zip(&expected) {
+            assert_eq!(event.priority(), *priority, "priority for {event:?}");
+            assert_eq!(event.render(), *text, "render for {event:?}");
+        }
+    }
+
+    /// The committed §W-D corpus artifact (`tests/fixtures/a11y/corpus.json`)
+    /// is generated FROM [`corpus()`] and pinned here: every entry is
+    /// `{ "event": <Debug>, "priority": "medium"|"high", "text": <render> }`
+    /// in corpus order. Regenerate deliberately with
+    /// `SLATE_REGENERATE_FIXTURES=1 cargo test -p slate-core a11y` after a
+    /// vocabulary change — the regenerating run FAILS by design (so the
+    /// variable can never mask drift, even exported in CI); review the diff
+    /// as the §W-D delta, then re-run without the variable to prove the pin.
+    /// The Windows host consumes this same file for its parity census.
+    #[test]
+    fn committed_corpus_artifact_matches_the_vocabulary() {
+        let rendered: Vec<serde_json::Value> = corpus()
+            .iter()
+            .map(|event| {
+                serde_json::json!({
+                    "event": format!("{event:?}"),
+                    "priority": match event.priority() {
+                        A11yPriority::Medium => "medium",
+                        A11yPriority::High => "high",
+                    },
+                    "text": event.render(),
+                })
+            })
+            .collect();
+        let mut expected = serde_json::to_string_pretty(&rendered).expect("corpus serializes");
+        expected.push('\n');
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/a11y/corpus.json");
+        if std::env::var("SLATE_REGENERATE_FIXTURES").as_deref() == Ok("1") {
+            std::fs::create_dir_all(path.parent().unwrap()).expect("fixture dir");
+            std::fs::write(&path, &expected).expect("write corpus fixture");
+            // A regenerating run must never double as a passing pin: the
+            // comparison below would trivially succeed against the file just
+            // written, so exporting the variable (say, in CI) would silence
+            // this test forever. Fail loudly instead.
+            panic!(
+                "regenerated {path:?} — review the diff as a §W-D change, \
+                 then re-run without SLATE_REGENERATE_FIXTURES"
+            );
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+            panic!(
+                "missing {path:?} — run SLATE_REGENERATE_FIXTURES=1 \
+                 cargo test -p slate-core a11y"
+            )
+        });
+        assert_eq!(
+            committed.replace("\r\n", "\n"),
+            expected,
+            "corpus artifact drifted from the vocabulary — regenerate \
+             deliberately and review the diff as a §W-D change",
+        );
+    }
+
+    #[test]
+    fn multiline_templates_carry_no_stray_whitespace() {
+        // The templates written with line-continuation backslashes must
+        // render as single-space prose.
+        for event in corpus() {
+            let text = event.render();
+            assert!(!text.contains('\n'), "newline leaked into {event:?}");
+            assert!(!text.contains("  "), "double space leaked into {event:?}");
+        }
+    }
+}

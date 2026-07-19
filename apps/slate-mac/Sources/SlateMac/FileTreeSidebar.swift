@@ -2920,9 +2920,7 @@ struct FileTreeSidebar: View {
             if !scanning && !didAnnounceCount && appState.scanError == nil {
                 didAnnounceCount = true
                 postAccessibilityAnnouncement(
-                    "File list, \(appState.files.count) "
-                        + (appState.files.count == 1 ? "item" : "items")
-                )
+                    .fileListCount(count: UInt32(appState.files.count)))
             }
             // A finished (re)scan can add/remove files and folders anywhere in
             // the tree — invalidate so the root (and any expanded levels)
@@ -3831,10 +3829,8 @@ struct FileTreeSidebar: View {
         }
         if outcome.changed {
             let count = outcome.visibleSelectedCount
-            let message = count == 0
-                ? "No items selected"
-                : "\(count) \(count == 1 ? "item" : "items") selected"
-            postAccessibilityAnnouncement(message, priority: .medium)
+            postAccessibilityAnnouncement(
+                count == 0 ? .noItemsSelected : .itemsSelected(count: UInt32(count)))
         }
         return true
     }
@@ -4109,9 +4105,9 @@ struct FileTreeSidebar: View {
         let visibleCount = prunedSelectedNodes.count
         if visibleCount >= 2 {
             postAccessibilityAnnouncement(
-                "\(visibleCount) items selected", priority: .medium)
+                .itemsSelected(count: UInt32(visibleCount)))
         } else if selectionModel.selected.isEmpty {
-            postAccessibilityAnnouncement("No items selected", priority: .medium)
+            postAccessibilityAnnouncement(.noItemsSelected)
         }
     }
 
@@ -6362,9 +6358,11 @@ struct FileTreeSidebar: View {
             preferences: rowPreferences,
             isPinned: tree.isPinnedRow(id),
             now: sidebarNow)
+        // W0.5-3 residue: selectionAnnouncement builder
         postAccessibilityAnnouncement(
-            Self.selectionAnnouncement(for: model),
-            priority: .medium)
+            .hostComposed(
+                text: Self.selectionAnnouncement(for: model),
+                priority: .medium))
     }
 
     static func selectionIsActive(
@@ -6426,7 +6424,7 @@ struct FileTreeSidebar: View {
         // same row must not re-announce (Codex round 2: chatter).
         if moved, case .dir = target,
             let row = rows.first(where: { $0.nodeID == target }) {
-            postAccessibilityAnnouncement("Selected: \(row.name), folder", priority: .medium)
+            postAccessibilityAnnouncement(.treeFolderSelected(name: row.name))
         }
     }
 

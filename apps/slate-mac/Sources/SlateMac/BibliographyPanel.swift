@@ -194,10 +194,7 @@ struct BibliographyPanel: View {
                 // actually fires when activated — disabling it would
                 // make the menu item silent, defeating the discovery
                 // intent (Codoki PR #291).
-                postAccessibilityAnnouncement(
-                    "Insert citation lands in V1.x. See Milestone L.",
-                    priority: .medium
-                )
+                postAccessibilityAnnouncement(.citationInsertUnavailable)
             }
         }
     }

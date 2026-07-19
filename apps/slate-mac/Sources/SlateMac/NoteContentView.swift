@@ -595,7 +595,7 @@ struct NoteContentView: View {
             announcedFilePath != path
         else { return }
         announcedFilePath = path
-        postAccessibilityAnnouncement("Showing \(displayName).")
+        postAccessibilityAnnouncement(.showingNote(displayName: displayName))
     }
 
 }

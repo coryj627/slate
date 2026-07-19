@@ -246,7 +246,7 @@ final class FilenameAdvisoryTests: XCTestCase {
         XCTAssertTrue(source.contains("announcementGate.announcement(for: newValue)"))
         XCTAssertTrue(
             source.contains(
-                "postAccessibilityAnnouncement(accessibilityMessage, priority: .medium)"))
+                ".hostComposed(text: accessibilityMessage, priority: .medium)"))
     }
 
     func testRenameAndInlineCreateShareOneAdvisoryWithoutBreakingFieldContracts() throws {

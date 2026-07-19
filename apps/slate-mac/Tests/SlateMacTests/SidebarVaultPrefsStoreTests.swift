@@ -855,7 +855,9 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
       sources.fileTree.contains(".disabled(appState.isRetryingSidebarVaultPreferences)"))
     XCTAssertTrue(
       sources.mainSplit.contains("let sidebarNotice = appState.sidebarVaultPrefsNotice"))
-    XCTAssertTrue(sources.mainSplit.contains("+ sidebarNotice"))
+    // W0.5-3: the notice rides the typed event as a parameter; core's
+    // VaultOpened template appends it to the announcement.
+    XCTAssertTrue(sources.mainSplit.contains("sidebarNotice: sidebarNotice"))
   }
 
   // MARK: - Helpers

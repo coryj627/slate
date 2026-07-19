@@ -1880,8 +1880,10 @@ final class BaseQueryBuilderTests: XCTestCase {
                 "retainFocus: { _ in focusedColumnRowID = property.exactIdentityKey }"))
         XCTAssertGreaterThanOrEqual(
             source.components(
-                separatedBy: "announce: { postAccessibilityAnnouncement($0, priority: .medium) }")
-                .count - 1,
+                separatedBy:
+                    "announce: { postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium)) }"
+            )
+            .count - 1,
             2,
             "both builder reorder handlers must announce through the shared funnel")
     }

@@ -223,7 +223,8 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         rowActions: [RowAction] = [],
         focusRequest: Int = 0,
         announce: @escaping (String) -> Void = {
-            postAccessibilityAnnouncement($0, priority: .medium)
+            // W0.5-3 residue: AccessibleDataGrid announce relay
+            postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium))
         }
     ) {
         self.columns = columns

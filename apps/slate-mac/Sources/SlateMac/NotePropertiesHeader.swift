@@ -278,7 +278,7 @@ struct NotePropertiesHeader: View {
                         for: appState.propertiesSourceDraftPath,
                         owner: owner)
                     appState.clearPropertiesSourceError(owner: owner)
-                    postAccessibilityAnnouncement("Source changes discarded.")
+                    postAccessibilityAnnouncement(.sourceChangesDiscarded)
                     sourceToggleKeyboardFocused = true
                     sourceToggleAccessibilityFocused = true
                 }
@@ -502,7 +502,7 @@ struct NotePropertiesHeader: View {
                         for: appState.propertiesSourceDraftPath,
                         owner: owner)
                     appState.clearPropertiesSourceError(owner: owner)
-                    postAccessibilityAnnouncement("Source changes discarded.")
+                    postAccessibilityAnnouncement(.sourceChangesDiscarded)
                 }
                 .disabled(draftDiscardDisabledReason != nil)
                 .accessibilityHint(

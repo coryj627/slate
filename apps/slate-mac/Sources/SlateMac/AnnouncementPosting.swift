@@ -31,9 +31,42 @@ protocol AnnouncementPosting {
     func post(_ message: String, priority: AnnouncementPriority)
 }
 
+extension AnnouncementPosting {
+    /// Post a typed accessibility event (W0.5-3 #719): the canonical
+    /// text AND priority come from core (`slate_core::a11y` via the
+    /// FFI) — trigger sites decide *when*, never *what it says*.
+    func post(_ event: A11yEvent) {
+        let rendered = a11yRender(event: event)
+        post(rendered.text, priority: AnnouncementPriority(rendered.priority))
+    }
+}
+
+extension AnnouncementPriority {
+    /// Core → host priority bridge (the two levels map 1:1).
+    init(_ priority: A11yPriority) {
+        switch priority {
+        case .medium: self = .medium
+        case .high: self = .high
+        }
+    }
+}
+
 /// Production impl: forwards to the global AppKit-backed helper.
 struct AppKitAnnouncementPoster: AnnouncementPosting {
     func post(_ message: String, priority: AnnouncementPriority) {
         postAccessibilityAnnouncement(message, priority: priority.nsPriority)
     }
+}
+
+/// Post a typed accessibility event through the global AppKit helper —
+/// the event-first twin of `postAccessibilityAnnouncement(_:priority:)`
+/// (which remains the platform PRIMITIVE this renders into; every
+/// interaction-site caller posts events, and `A11yResidueCensusTests`
+/// keeps non-poster string-primitive calls at zero).
+func postAccessibilityAnnouncement(_ event: A11yEvent) {
+    let rendered = a11yRender(event: event)
+    postAccessibilityAnnouncement(
+        rendered.text,
+        priority: AnnouncementPriority(rendered.priority).nsPriority
+    )
 }

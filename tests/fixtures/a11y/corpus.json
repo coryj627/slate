@@ -1,0 +1,652 @@
+[
+  {
+    "event": "FilesRegionFocused",
+    "priority": "medium",
+    "text": "Files."
+  },
+  {
+    "event": "LeafPanelShown { title: \"Outline\" }",
+    "priority": "medium",
+    "text": "Outline panel."
+  },
+  {
+    "event": "EditorPaneFocused { ordinal: 2, total: 3, title: \"notes.md\", prefix: \"\" }",
+    "priority": "medium",
+    "text": "Editor pane 2 of 3, notes.md."
+  },
+  {
+    "event": "TabFocused { prefix: \"Now\", filename: \"notes.md\", index: 1, count: 4 }",
+    "priority": "medium",
+    "text": "Now notes.md, tab 1 of 4."
+  },
+  {
+    "event": "TabClosed { closed_title: \"draft.md\", successor: Some(\"notes.md\") }",
+    "priority": "medium",
+    "text": "Closed draft.md. notes.md is active."
+  },
+  {
+    "event": "TabClosed { closed_title: \"draft.md\", successor: None }",
+    "priority": "medium",
+    "text": "Closed draft.md."
+  },
+  {
+    "event": "NoSplitPanesToResize",
+    "priority": "medium",
+    "text": "No split panes to resize."
+  },
+  {
+    "event": "PaneResized { percent: 60 }",
+    "priority": "medium",
+    "text": "Pane resized, 60 percent."
+  },
+  {
+    "event": "GraphOpensSinglePane",
+    "priority": "medium",
+    "text": "The graph opens in a single pane. Split from a note instead."
+  },
+  {
+    "event": "RightPaneShown",
+    "priority": "medium",
+    "text": "Right pane shown."
+  },
+  {
+    "event": "RightPaneHidden",
+    "priority": "medium",
+    "text": "Right pane hidden."
+  },
+  {
+    "event": "HistoryPanelShown",
+    "priority": "medium",
+    "text": "History panel."
+  },
+  {
+    "event": "ReopenTargetMissing { filename: \"gone.md\" }",
+    "priority": "medium",
+    "text": "gone.md no longer exists."
+  },
+  {
+    "event": "ReopenedFile { filename: \"notes.md\" }",
+    "priority": "medium",
+    "text": "Reopened notes.md."
+  },
+  {
+    "event": "ReopenedNamed { name: \"Open tasks\" }",
+    "priority": "medium",
+    "text": "Reopened Open tasks."
+  },
+  {
+    "event": "ReopenedGraph",
+    "priority": "medium",
+    "text": "Reopened Graph."
+  },
+  {
+    "event": "VaultOpened { vault_title: \"Garden\", sidebar_notice: \"\" }",
+    "priority": "medium",
+    "text": "Vault Garden opened. Scanning files for the sidebar."
+  },
+  {
+    "event": "RemovedRecentVault { display_name: \"Garden\" }",
+    "priority": "medium",
+    "text": "Removed Garden from recent vaults."
+  },
+  {
+    "event": "WelcomeShown { recent_vault_count: 0 }",
+    "priority": "medium",
+    "text": "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files."
+  },
+  {
+    "event": "WelcomeShown { recent_vault_count: 1 }",
+    "priority": "medium",
+    "text": "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files. 1 recent vault listed below."
+  },
+  {
+    "event": "WelcomeShown { recent_vault_count: 2 }",
+    "priority": "medium",
+    "text": "Welcome to Slate. Open Vault button focused. Press Return or Command-O to choose a folder of Markdown files. 2 recent vaults listed below."
+  },
+  {
+    "event": "CommandPaletteNeedsVault",
+    "priority": "high",
+    "text": "Open a vault to use the command palette."
+  },
+  {
+    "event": "SearchNeedsVault",
+    "priority": "medium",
+    "text": "Open a vault first. Search works inside a vault."
+  },
+  {
+    "event": "SearchResultOpened { filename: \"notes.md\", line: 12, snippet: \"the quick brown fox\" }",
+    "priority": "medium",
+    "text": "Opened notes.md, line 12: the quick brown fox"
+  },
+  {
+    "event": "ExternalLinkUnsupported { target: \"ftp://example.com\" }",
+    "priority": "medium",
+    "text": "Cannot open external link ftp://example.com. Only web and mail links are supported."
+  },
+  {
+    "event": "ExternalLinkOpened",
+    "priority": "medium",
+    "text": "Opened external link in default browser."
+  },
+  {
+    "event": "ExternalLinkFailed { target: \"https://example.com\" }",
+    "priority": "medium",
+    "text": "Could not open external link https://example.com."
+  },
+  {
+    "event": "LinkUnresolved { target: \"Missing Note\" }",
+    "priority": "medium",
+    "text": "Missing Note is unresolved. Cannot open."
+  },
+  {
+    "event": "HelpOpened",
+    "priority": "medium",
+    "text": "Opened Help in your default browser."
+  },
+  {
+    "event": "HelpFailed",
+    "priority": "medium",
+    "text": "Could not open Help."
+  },
+  {
+    "event": "InternalNavigated { kind: \"Opened\", filename: \"notes.md\" }",
+    "priority": "high",
+    "text": "Opened notes.md."
+  },
+  {
+    "event": "CitationNotLoaded",
+    "priority": "medium",
+    "text": "Citation is not loaded yet."
+  },
+  {
+    "event": "NoResolvedEmbedAtCursor",
+    "priority": "medium",
+    "text": "No resolved embed at cursor."
+  },
+  {
+    "event": "NoEmbedAtCursor",
+    "priority": "medium",
+    "text": "No embed at cursor."
+  },
+  {
+    "event": "HeadingNotFound",
+    "priority": "medium",
+    "text": "Could not find that heading."
+  },
+  {
+    "event": "HeadingScrollFailed { heading: \"Roadmap\" }",
+    "priority": "medium",
+    "text": "Could not scroll to Roadmap."
+  },
+  {
+    "event": "ScrolledToHeading { heading: \"Roadmap\" }",
+    "priority": "medium",
+    "text": "Scrolled to Roadmap."
+  },
+  {
+    "event": "ScrolledToLine { filename: \"notes.md\", line: 40 }",
+    "priority": "medium",
+    "text": "Scrolled to notes.md, line 40."
+  },
+  {
+    "event": "OpenedAtLine { filename: \"notes.md\", line: 40 }",
+    "priority": "medium",
+    "text": "Opened notes.md, line 40."
+  },
+  {
+    "event": "OpenedFile { filename: \"notes.md\" }",
+    "priority": "medium",
+    "text": "Opened notes.md."
+  },
+  {
+    "event": "ShowingNote { display_name: \"notes\" }",
+    "priority": "medium",
+    "text": "Showing notes."
+  },
+  {
+    "event": "TaskToggleUnsaved { filename: \"notes.md\" }",
+    "priority": "high",
+    "text": "Cannot toggle task. The editor has unsaved changes in notes.md. Save the note first."
+  },
+  {
+    "event": "TaskToggleConflict { filename: \"notes.md\" }",
+    "priority": "medium",
+    "text": "Toggle blocked. notes.md was modified externally. Resolve in the dialog."
+  },
+  {
+    "event": "TasksReviewShown { filter_name: \"Open tasks\" }",
+    "priority": "medium",
+    "text": "Tasks review. Open tasks."
+  },
+  {
+    "event": "TasksFilterSet { filter_name: \"All tasks\" }",
+    "priority": "medium",
+    "text": "Filter set to All tasks."
+  },
+  {
+    "event": "NoteSaved { filename: \"notes.md\" }",
+    "priority": "medium",
+    "text": "Saved notes.md."
+  },
+  {
+    "event": "SaveConflict { filename: \"notes.md\" }",
+    "priority": "medium",
+    "text": "Save blocked. notes.md was modified externally. Resolve in the dialog."
+  },
+  {
+    "event": "RestoredVersionFrom { formatted_date: \"July 19, 2026 at 9:41 AM\" }",
+    "priority": "high",
+    "text": "Restored version from July 19, 2026 at 9:41 AM."
+  },
+  {
+    "event": "RestoredFile { filename: \"notes.md\" }",
+    "priority": "high",
+    "text": "Restored notes.md."
+  },
+  {
+    "event": "RestoredFileAs { source_name: \"notes.md\", filename: \"notes-restored.md\" }",
+    "priority": "high",
+    "text": "Restored notes.md as notes-restored.md."
+  },
+  {
+    "event": "PrintNeedsNote",
+    "priority": "medium",
+    "text": "Open a note to print."
+  },
+  {
+    "event": "PrintDialogOpened { name: \"notes.md\" }",
+    "priority": "medium",
+    "text": "Print dialog opened for notes.md."
+  },
+  {
+    "event": "BatchCheckStarted { formatted_count: \"1,024\", action_name: \"Move\" }",
+    "priority": "medium",
+    "text": "Checking 1,024 selected items before Move."
+  },
+  {
+    "event": "SelectionCopied",
+    "priority": "medium",
+    "text": "Copied."
+  },
+  {
+    "event": "SidebarSettingsStillDefaults { detail: \"the file is malformed.\" }",
+    "priority": "medium",
+    "text": "Sidebar settings still use defaults. the file is malformed."
+  },
+  {
+    "event": "SidebarSettingsReloadedStaleRefs",
+    "priority": "medium",
+    "text": "Sidebar settings reloaded. Some pinned notes or sort overrides may still reference old locations."
+  },
+  {
+    "event": "SidebarSettingsReloaded",
+    "priority": "medium",
+    "text": "Sidebar settings reloaded."
+  },
+  {
+    "event": "VaultClosed",
+    "priority": "medium",
+    "text": "Vault closed. Returned to the welcome screen."
+  },
+  {
+    "event": "VaultClosedAllSaved",
+    "priority": "medium",
+    "text": "All changes saved. Vault closed. Returned to the welcome screen."
+  },
+  {
+    "event": "VaultClosedChangesDiscarded",
+    "priority": "medium",
+    "text": "Changes discarded. Vault closed. Returned to the welcome screen."
+  },
+  {
+    "event": "PropertiesUpdated",
+    "priority": "medium",
+    "text": "Properties updated."
+  },
+  {
+    "event": "PropertyChanged { key: \"tags\", deleted: false }",
+    "priority": "medium",
+    "text": "Property tags updated."
+  },
+  {
+    "event": "PropertyChanged { key: \"tags\", deleted: true }",
+    "priority": "medium",
+    "text": "Property tags deleted."
+  },
+  {
+    "event": "PropertyEditConflict { filename: \"notes.md\" }",
+    "priority": "medium",
+    "text": "Property edit blocked. notes.md was modified externally. Resolve in the dialog."
+  },
+  {
+    "event": "PropertiesSourceRejected { reason: \"the YAML does not parse\" }",
+    "priority": "high",
+    "text": "Properties source not applied: the YAML does not parse"
+  },
+  {
+    "event": "PropertyEditFailed { detail: \"io error\" }",
+    "priority": "high",
+    "text": "Property edit failed: io error"
+  },
+  {
+    "event": "PropertiesReloaded",
+    "priority": "medium",
+    "text": "Properties reloaded."
+  },
+  {
+    "event": "PropertiesReloadedBodyChanged",
+    "priority": "high",
+    "text": "Properties reloaded. The note body also changed externally; saving it will require conflict resolution."
+  },
+  {
+    "event": "NoteChangedAgain { detail: None }",
+    "priority": "high",
+    "text": "The note changed again."
+  },
+  {
+    "event": "NoteChangedAgain { detail: Some(\"The note changed while saving.\") }",
+    "priority": "high",
+    "text": "The note changed while saving."
+  },
+  {
+    "event": "PropertiesReloadFailed { reason: \"io error\" }",
+    "priority": "high",
+    "text": "Properties could not be reloaded: io error"
+  },
+  {
+    "event": "PropertyRetainedCopied",
+    "priority": "medium",
+    "text": "Retained property update copied."
+  },
+  {
+    "event": "PropertyRecoveryUnverified { display_name: \"notes\" }",
+    "priority": "high",
+    "text": "The saved property update in notes could not be verified. Reopen the note to copy or resolve the retained update."
+  },
+  {
+    "event": "PropertyRetainedDiscarded",
+    "priority": "medium",
+    "text": "Using the current saved properties. The retained update was discarded."
+  },
+  {
+    "event": "PropertyRetainedReapplyFailed { detail: None }",
+    "priority": "high",
+    "text": "The retained property update could not be reapplied."
+  },
+  {
+    "event": "PropertyReloadStillFailed { reason: \"io error\" }",
+    "priority": "high",
+    "text": "Slate still could not reload the saved property update. io error"
+  },
+  {
+    "event": "PropertyLoadCurrentFailed { reason: \"io error\" }",
+    "priority": "high",
+    "text": "Slate couldn’t load the current properties. The retained update is still available. io error"
+  },
+  {
+    "event": "AddPropertySheetShown",
+    "priority": "high",
+    "text": "Add property"
+  },
+  {
+    "event": "SourceChangesDiscarded",
+    "priority": "medium",
+    "text": "Source changes discarded."
+  },
+  {
+    "event": "BulkRenameSheetShown",
+    "priority": "high",
+    "text": "Bulk rename property"
+  },
+  {
+    "event": "RenameReloadFailed { detail: None }",
+    "priority": "high",
+    "text": "Some open notes could not be reloaded."
+  },
+  {
+    "event": "RenameFailed { detail: \"io error\" }",
+    "priority": "high",
+    "text": "Rename failed: io error"
+  },
+  {
+    "event": "RenameSummary { applied: true, renamed: 3, skipped: 1, failed: 0 }",
+    "priority": "medium",
+    "text": "3 renamed, 1 skipped, 0 failed."
+  },
+  {
+    "event": "RenameSummary { applied: false, renamed: 1, skipped: 0, failed: 0 }",
+    "priority": "medium",
+    "text": "1 file will be renamed, 0 skipped, 0 errors."
+  },
+  {
+    "event": "RenameSummary { applied: false, renamed: 3, skipped: 2, failed: 0 }",
+    "priority": "medium",
+    "text": "3 files will be renamed, 2 skipped, 0 errors."
+  },
+  {
+    "event": "DuplicateFilesOnly",
+    "priority": "medium",
+    "text": "Duplicate applies to files only."
+  },
+  {
+    "event": "MathSpeechStyle { name: \"ClearSpeak\" }",
+    "priority": "medium",
+    "text": "Math speech style: ClearSpeak."
+  },
+  {
+    "event": "MathVerbosity { name: \"Verbose\" }",
+    "priority": "medium",
+    "text": "Math verbosity: Verbose."
+  },
+  {
+    "event": "MathBrailleCode { name: \"Nemeth\" }",
+    "priority": "medium",
+    "text": "Math braille code: Nemeth."
+  },
+  {
+    "event": "CodePreambleVerbosity { name: \"Concise\" }",
+    "priority": "medium",
+    "text": "Code preamble verbosity: Concise."
+  },
+  {
+    "event": "EditorTextSize { percent: 110 }",
+    "priority": "medium",
+    "text": "Editor text size 110 percent."
+  },
+  {
+    "event": "SpellCheckToggled { enabled: true }",
+    "priority": "medium",
+    "text": "Check spelling while typing on."
+  },
+  {
+    "event": "SpellCheckToggled { enabled: false }",
+    "priority": "medium",
+    "text": "Check spelling while typing off."
+  },
+  {
+    "event": "CitationStyleChanged { title: \"APA\" }",
+    "priority": "medium",
+    "text": "Citation style: APA."
+  },
+  {
+    "event": "CitationsCount { count: 1 }",
+    "priority": "medium",
+    "text": "Citations, 1 citation."
+  },
+  {
+    "event": "CitationsCount { count: 3 }",
+    "priority": "medium",
+    "text": "Citations, 3 citations."
+  },
+  {
+    "event": "OutlineCount { count: 1 }",
+    "priority": "medium",
+    "text": "Outline, 1 heading."
+  },
+  {
+    "event": "OutlineCount { count: 5 }",
+    "priority": "medium",
+    "text": "Outline, 5 headings."
+  },
+  {
+    "event": "FileListCount { count: 1 }",
+    "priority": "medium",
+    "text": "File list, 1 item"
+  },
+  {
+    "event": "FileListCount { count: 12 }",
+    "priority": "medium",
+    "text": "File list, 12 items"
+  },
+  {
+    "event": "ItemsSelected { count: 4 }",
+    "priority": "medium",
+    "text": "4 items selected"
+  },
+  {
+    "event": "ItemsSelected { count: 1 }",
+    "priority": "medium",
+    "text": "1 item selected"
+  },
+  {
+    "event": "NoItemsSelected",
+    "priority": "medium",
+    "text": "No items selected"
+  },
+  {
+    "event": "TreeFolderSelected { name: \"Archive\" }",
+    "priority": "medium",
+    "text": "Selected: Archive, folder"
+  },
+  {
+    "event": "RowSelected { name: \"notes\" }",
+    "priority": "medium",
+    "text": "Selected: notes"
+  },
+  {
+    "event": "PaletteCommandSelected { label: \"Save\", disabled_reason: None }",
+    "priority": "medium",
+    "text": "Selected: Save"
+  },
+  {
+    "event": "PaletteCommandSelected { label: \"Save\", disabled_reason: Some(\"A structural operation is in progress.\") }",
+    "priority": "medium",
+    "text": "Selected: Save. Unavailable: A structural operation is in progress."
+  },
+  {
+    "event": "RecentSearchFocused { query: \"fox\" }",
+    "priority": "medium",
+    "text": "Recent search: fox"
+  },
+  {
+    "event": "BaseViewMode { mode: \"cards\" }",
+    "priority": "medium",
+    "text": "Base view as cards."
+  },
+  {
+    "event": "BaseViewSwitcher { view_count: 1 }",
+    "priority": "medium",
+    "text": "Base view switcher. 1 view."
+  },
+  {
+    "event": "BaseViewSwitcher { view_count: 2 }",
+    "priority": "medium",
+    "text": "Base view switcher. 2 views."
+  },
+  {
+    "event": "BasesNewQueryBuilder",
+    "priority": "medium",
+    "text": "New Bases query builder."
+  },
+  {
+    "event": "BasesEditingFilters { view_name: \"Table\" }",
+    "priority": "medium",
+    "text": "Editing filters for Table."
+  },
+  {
+    "event": "BasesFiltersOpenFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Base filters could not be opened in the builder: io error"
+  },
+  {
+    "event": "BasesPreviewFailed { detail: \"bad expression\" }",
+    "priority": "medium",
+    "text": "Base preview failed: bad expression"
+  },
+  {
+    "event": "BasesBuilderSaved",
+    "priority": "medium",
+    "text": "Saved builder changes to view."
+  },
+  {
+    "event": "BasesViewSaveFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Base view could not be saved: io error"
+  },
+  {
+    "event": "BasesSavedQueryNameNeeded",
+    "priority": "medium",
+    "text": "Enter a saved query name before saving."
+  },
+  {
+    "event": "BasesSavedQueryCreated { name: \"Open tasks\" }",
+    "priority": "medium",
+    "text": "Saved query Open tasks."
+  },
+  {
+    "event": "BasesSavedQueryCreateFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Saved query could not be created: io error"
+  },
+  {
+    "event": "BasesSavedQueryUpdated { name: \"Open tasks\" }",
+    "priority": "medium",
+    "text": "Updated saved query Open tasks."
+  },
+  {
+    "event": "BasesSavedQueryUpdateFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Saved query could not be updated: io error"
+  },
+  {
+    "event": "BasesViewSelected { name: \"Cards\" }",
+    "priority": "medium",
+    "text": "Base view: Cards."
+  },
+  {
+    "event": "BasesSortSaveFailed { detail: \"io error\" }",
+    "priority": "medium",
+    "text": "Base sort could not be saved: io error"
+  },
+  {
+    "event": "BaseRefreshed",
+    "priority": "medium",
+    "text": "Base refreshed."
+  },
+  {
+    "event": "DataviewConversionFailed { detail: \"unsupported query\" }",
+    "priority": "medium",
+    "text": "Dataview conversion failed: unsupported query"
+  },
+  {
+    "event": "CitationInsertUnavailable",
+    "priority": "medium",
+    "text": "Insert citation lands in V1.x. See Milestone L."
+  },
+  {
+    "event": "CitationWalkThrough",
+    "priority": "medium",
+    "text": "Walk through citations. Switch to the Citations sidebar tab and arrow through the list."
+  },
+  {
+    "event": "CodeCopied",
+    "priority": "medium",
+    "text": "Code copied."
+  },
+  {
+    "event": "HostComposed { text: \"Composed by a host engine.\", priority: High }",
+    "priority": "high",
+    "text": "Composed by a host engine."
+  }
+]
