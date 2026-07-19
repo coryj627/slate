@@ -87,12 +87,14 @@ final class SidebarTagEditorTests: XCTestCase {
         XCTAssertEqual(state.sidebarTagEditorRequest?.kind, .remove)
     }
 
-    func testCommitRunsTheBatchAndAnnouncesOnceWithSkipClause() throws {
+    func testCommitRunsTheBatchOffMainAndAnnouncesOnceWithSkipClause()
+        async throws
+    {
         let state = try openVault(named: "commit", files: ["a.md", "b.md"])
         try publish(state, files: ["a.md", "b.md"])
         var invocations: [(paths: [String], tag: String)] = []
-        state.sidebarTagAddRunner = { paths, tag in
-            invocations.append((paths, tag))
+        state.sidebarTagAddRunner = { _, paths, tag in
+            await MainActor.run { invocations.append((paths, tag)) }
             return self.report(
                 changed: 1,
                 skipped: [SkippedFile(path: "b.md", reason: "changed on disk since it was indexed.")],
@@ -102,6 +104,10 @@ final class SidebarTagEditorTests: XCTestCase {
         let request = try XCTUnwrap(state.sidebarTagEditorRequest)
 
         state.commitSidebarTagEdit(request: request, tag: "project")
+        XCTAssertNil(
+            state.sidebarTagEditorRequest,
+            "the sheet dismisses immediately; the batch continues off-main")
+        await state.sidebarTagEditTaskForTesting?.value
         XCTAssertEqual(invocations.count, 1)
         XCTAssertEqual(invocations[0].paths, ["a.md", "b.md"])
         XCTAssertEqual(invocations[0].tag, "project")
@@ -109,14 +115,33 @@ final class SidebarTagEditorTests: XCTestCase {
             state.lastMutationAnnouncement,
             "Tagged 1 files with #project. 1 skipped.",
             "one consolidated announcement: core summary + skip clause")
-        XCTAssertNil(
-            state.sidebarTagEditorRequest, "commit dismisses the editor")
     }
 
-    func testRemoveCommitPreservesTheHonestInlineRemainderSummary() throws {
+    func testStaleCompletionAfterVaultSwitchStaysSilent() async throws {
+        let state = try openVault(named: "stale", files: ["a.md"])
+        try publish(state, files: ["a.md"])
+        let gate = AsyncGate()
+        state.sidebarTagAddRunner = { _, _, _ in
+            await gate.wait()
+            return self.report(changed: 1, summary: "Tagged 1 files with #x.")
+        }
+        _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddTag)
+        let request = try XCTUnwrap(state.sidebarTagEditorRequest)
+        state.commitSidebarTagEdit(request: request, tag: "x")
+        state.closeVault()
+        let before = state.lastMutationAnnouncement
+        await gate.open()
+        await state.sidebarTagEditTaskForTesting?.value
+        XCTAssertEqual(
+            state.lastMutationAnnouncement, before,
+            "a completion for the CLOSED session must not narrate into "
+                + "the next vault")
+    }
+
+    func testRemoveCommitPreservesTheHonestInlineRemainderSummary() async throws {
         let state = try openVault(named: "remove", files: ["a.md"])
         try publish(state, files: ["a.md"])
-        state.sidebarTagRemoveRunner = { _, _ in
+        state.sidebarTagRemoveRunner = { _, _, _ in
             self.report(
                 changed: 2, inline: 1,
                 summary: "Removed #project from 2 files. 1 still have it inline.")
@@ -124,23 +149,25 @@ final class SidebarTagEditorTests: XCTestCase {
         _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarRemoveTag)
         let request = try XCTUnwrap(state.sidebarTagEditorRequest)
         state.commitSidebarTagEdit(request: request, tag: "#Project")
+        await state.sidebarTagEditTaskForTesting?.value
         XCTAssertEqual(
             state.lastMutationAnnouncement,
             "Removed #project from 2 files. 1 still have it inline.",
             "the core summary passes through verbatim when nothing skipped")
     }
 
-    func testCommitNormalizesTheTypedTagBeforeTheRunner() throws {
+    func testCommitNormalizesTheTypedTagBeforeTheRunner() async throws {
         let state = try openVault(named: "norm", files: ["a.md"])
         try publish(state, files: ["a.md"])
         var seen: [String] = []
-        state.sidebarTagAddRunner = { _, tag in
-            seen.append(tag)
+        state.sidebarTagAddRunner = { _, _, tag in
+            await MainActor.run { seen.append(tag) }
             return self.report(changed: 1, summary: "Tagged 1 files with #x.")
         }
         _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddTag)
         let request = try XCTUnwrap(state.sidebarTagEditorRequest)
         state.commitSidebarTagEdit(request: request, tag: "  #x  ")
+        await state.sidebarTagEditTaskForTesting?.value
         XCTAssertEqual(seen, ["#x"], "trimmed; core owns hash/casefold normalization")
         // Empty input is inert — the editor stays up.
         state.sidebarTagEditorRequest = request
@@ -149,18 +176,33 @@ final class SidebarTagEditorTests: XCTestCase {
         XCTAssertNotNil(state.sidebarTagEditorRequest)
     }
 
-    func testSelectionTagsComeFromTheProviderSeam() throws {
+    func testSelectionTagsComeFromTheRunnerSeam() async throws {
         let state = try openVault(named: "picker", files: ["a.md"])
-        state.sidebarSelectionTagsProvider = { paths in
+        state.sidebarSelectionTagsRunner = { _, paths in
             XCTAssertEqual(paths, ["a.md"])
             return [
                 TagCount(tag: "alpha", fileCount: 2),
                 TagCount(tag: "beta", fileCount: 1),
             ]
         }
-        let counts = state.sidebarSelectionTags(for: ["a.md"])
+        let counts = await state.sidebarSelectionTags(for: ["a.md"])
         XCTAssertEqual(counts.map(\.tag), ["alpha", "beta"])
         XCTAssertEqual(counts.map(\.fileCount), [2, 1])
+    }
+
+    /// One-shot async gate for holding a runner mid-flight.
+    private actor AsyncGate {
+        private var opened = false
+        private var waiters: [CheckedContinuation<Void, Never>] = []
+        func wait() async {
+            if opened { return }
+            await withCheckedContinuation { waiters.append($0) }
+        }
+        func open() {
+            opened = true
+            for waiter in waiters { waiter.resume() }
+            waiters.removeAll()
+        }
     }
 
     func testEditorRequestDiesWithTheVault() throws {

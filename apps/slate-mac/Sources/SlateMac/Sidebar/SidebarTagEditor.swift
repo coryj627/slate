@@ -131,7 +131,10 @@ struct SidebarTagEditor: View {
         suggestions = appState.sidebarTagSuggestions()
         fieldFocused = true
       } else {
-        selectionTags = appState.sidebarSelectionTags(for: request.paths)
+        let paths = request.paths
+        Task { @MainActor in
+          selectionTags = await appState.sidebarSelectionTags(for: paths)
+        }
       }
     }
   }

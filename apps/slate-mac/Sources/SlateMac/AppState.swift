@@ -6083,57 +6083,72 @@ final class AppState: ObservableObject {
     }
     @Published var sidebarTagEditorRequest: SidebarTagEditorRequest?
 
-    /// FL5-3b runner seams (the batch-trash pattern): tests observe
-    /// invocations and inject reports without a real vault write.
-    var sidebarTagAddRunner: ((_ paths: [String], _ tag: String) throws -> TagEditReport)?
-    var sidebarTagRemoveRunner: ((_ paths: [String], _ tag: String) throws -> TagEditReport)?
-    /// Selection-tags provider for the Remove picker (DB truth).
-    var sidebarSelectionTagsProvider: ((_ paths: [String]) throws -> [TagCount])?
+    /// FL5-3b runner seams (the batch-trash pattern): production runs
+    /// the synchronous UniFFI batch OFF the main actor — an unbounded
+    /// selection must never beachball the app (review round, high) —
+    /// and tests inject reports without a real vault write.
+    var sidebarTagAddRunner:
+        (VaultSession, [String], String) async throws -> TagEditReport = {
+            session, paths, tag in
+            try await Task.detached(priority: .userInitiated) {
+                try session.addTagToFiles(paths: paths, tag: tag)
+            }.value
+        }
+    var sidebarTagRemoveRunner:
+        (VaultSession, [String], String) async throws -> TagEditReport = {
+            session, paths, tag in
+            try await Task.detached(priority: .userInitiated) {
+                try session.removeTagFromFiles(paths: paths, tag: tag)
+            }.value
+        }
+    /// Selection-tags runner for the Remove picker (DB truth), same
+    /// off-main discipline.
+    var sidebarSelectionTagsRunner:
+        (VaultSession, [String]) async throws -> [TagCount] = {
+            session, paths in
+            try await Task.detached(priority: .userInitiated) {
+                try session.tagsForFiles(paths: paths)
+            }.value
+        }
+    /// The in-flight commit, exposed for deterministic test awaits.
+    private(set) var sidebarTagEditTaskForTesting: Task<Void, Never>?
 
-    /// Commit a tag editor request: run the batch, announce ONE
-    /// consolidated result (core summary + a skip clause when files
-    /// were refused), refresh dependent surfaces through the one
-    /// mutation-announcement funnel.
+    /// Commit a tag editor request: dismiss the sheet, run the batch
+    /// OFF the main actor (an unbounded selection must never block the
+    /// UI — review round), then announce ONE consolidated result (core
+    /// summary + a skip clause when files were refused) through the
+    /// mutation-announcement funnel, which also refreshes dependent
+    /// surfaces. The completion is session-guarded: a vault switch
+    /// mid-batch drops the stale announcement instead of narrating the
+    /// previous vault's outcome into the new one.
     func commitSidebarTagEdit(
         request: SidebarTagEditorRequest, tag: String
     ) {
         let trimmed = tag.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty else { return }
-        do {
-            let report: TagEditReport
-            switch request.kind {
-            case .add:
-                if let runner = sidebarTagAddRunner {
-                    report = try runner(request.paths, trimmed)
-                } else if let session = currentSession {
-                    report = try session.addTagToFiles(
-                        paths: request.paths, tag: trimmed)
-                } else {
-                    return
-                }
-            case .remove:
-                if let runner = sidebarTagRemoveRunner {
-                    report = try runner(request.paths, trimmed)
-                } else if let session = currentSession {
-                    report = try session.removeTagFromFiles(
-                        paths: request.paths, tag: trimmed)
-                } else {
-                    return
-                }
-            }
-            var message = report.audioSummary
-            if !report.skipped.isEmpty {
-                message += " \(report.skipped.count) skipped."
-            }
-            // The one funnel: announces once AND (via the FL-09
-            // overlay's lastMutationAnnouncement observer) refreshes an
-            // active filter list; the tag tree refreshes below.
-            postMutationAnnouncement(message)
-            refreshSidebarTagTree()
-        } catch {
-            postMutationAnnouncement(error.localizedDescription)
-        }
+        guard let session = currentSession else { return }
         sidebarTagEditorRequest = nil
+        let runner =
+            request.kind == .add ? sidebarTagAddRunner : sidebarTagRemoveRunner
+        sidebarTagEditTaskForTesting = Task { @MainActor [weak self] in
+            do {
+                let report = try await runner(session, request.paths, trimmed)
+                guard let self, self.currentSession === session else { return }
+                var message = report.audioSummary
+                if !report.skipped.isEmpty {
+                    message += " \(report.skipped.count) skipped."
+                }
+                // The one funnel: announces once AND (via the FL-09
+                // overlay's lastMutationAnnouncement observer)
+                // refreshes an active filter list; the tag tree
+                // refreshes below.
+                self.postMutationAnnouncement(message)
+                self.refreshSidebarTagTree()
+            } catch {
+                guard let self, self.currentSession === session else { return }
+                self.postMutationAnnouncement(error.localizedDescription)
+            }
+        }
     }
 
     /// The Add editor's autocomplete inventory (free entry allowed):
@@ -6155,12 +6170,11 @@ final class AppState: ObservableObject {
 
     /// The Remove picker's choice list: tags carried by the frozen
     /// selection, distinct-file counts, alphabetical (DB truth — the
-    /// app never parses note bodies).
-    func sidebarSelectionTags(for paths: [String]) -> [TagCount] {
-        if let provider = sidebarSelectionTagsProvider {
-            return (try? provider(paths)) ?? []
-        }
-        return (try? currentSession?.tagsForFiles(paths: paths)) ?? []
+    /// app never parses note bodies). Async: the query runs off-main
+    /// like the batch itself.
+    func sidebarSelectionTags(for paths: [String]) async -> [TagCount] {
+        guard let session = currentSession else { return [] }
+        return (try? await sidebarSelectionTagsRunner(session, paths)) ?? []
     }
 
     /// FL5-2 rule 4: Add to Shortcuts from a tag row (or the Untagged
@@ -9202,6 +9216,10 @@ final class AppState: ObservableObject {
             // FL-09 (#663): bind the sidebar filter to this session,
             // restoring the persisted query into the field (not applied).
             bindSidebarFilterModel(session: session)
+            // FL5-2 review round (high): a device-restored EXPANDED Tags
+            // section must fetch for THIS vault — didSet only fires on
+            // toggles, and the teardown path cleared the previous tree.
+            refreshSidebarTagTree()
             // #876: likewise this vault's recent search queries — per-
             // vault, so the overlay's idle "Recent Searches" reflects the
             // vault the user is actually in.

@@ -386,6 +386,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                 SlateCommandID.sidebarAddShortcut,
                 SlateCommandID.sidebarRemoveShortcut,
+                SlateCommandID.sidebarAddTag,
+                SlateCommandID.sidebarRemoveTag,
                 SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
@@ -397,6 +399,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                 SlateCommandID.sidebarAddShortcut,
                 SlateCommandID.sidebarRemoveShortcut,
+                SlateCommandID.sidebarAddTag,
+                SlateCommandID.sidebarRemoveTag,
                 SlateCommandID.deleteEntry,
             ],
             "VoiceOver Open belongs only to the conditional default action")
@@ -452,6 +456,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -464,6 +470,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -492,6 +500,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 files,
                 [
                     SlateCommandID.sidebarOpen, SlateCommandID.moveTo,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ]
             ),

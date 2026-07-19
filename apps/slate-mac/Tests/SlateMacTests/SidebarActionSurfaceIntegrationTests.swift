@@ -440,6 +440,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ],
                 "context remains concise and VoiceOver omits default-owned Open; AppState's live pin-state reason hides the inapplicable pin direction")
@@ -452,6 +454,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ],
                 "non-Markdown files omit Copy Wikilink")
@@ -467,6 +471,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                 ],
                 "busy contextual surfaces omit every structurally blocked action; preference edits never block on the structural gate")
             XCTAssertEqual(
@@ -478,6 +484,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ],
                 "action-specific unavailable rows are omitted, not rendered disabled")
@@ -490,6 +498,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ],
                 "property-edit navigation state omits contextual Open")
@@ -565,6 +575,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ])
             XCTAssertTrue(outside.evaluations.allSatisfy {
@@ -2295,4 +2307,32 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         }
         return count
     }
+    func testTagEditorsAppearOnContextualAndVoiceOverSurfaces() {
+        // Review round (medium): the contextual allowlist gates the
+        // context-menu AND VoiceOver projections — catalog membership
+        // alone renders nowhere. Single markdown file and all-files
+        // selections must surface both editors.
+        let single = SidebarActionCatalog.project(
+            surface: .contextMenu,
+            snapshot: snapshot([item("Note.md")], focusedPath: "Note.md"))
+        XCTAssertTrue(single.contains { $0.id == SlateCommandID.sidebarAddTag })
+        XCTAssertTrue(single.contains { $0.id == SlateCommandID.sidebarRemoveTag })
+        let multi = SidebarActionCatalog.project(
+            surface: .contextMenu,
+            snapshot: snapshot(
+                [item("A.md"), item("B.md")], focusedPath: "B.md"))
+        XCTAssertTrue(multi.contains { $0.id == SlateCommandID.sidebarAddTag })
+        XCTAssertTrue(multi.contains { $0.id == SlateCommandID.sidebarRemoveTag })
+        let voiceOver = SidebarActionCatalog.project(
+            surface: .voiceOver,
+            snapshot: snapshot([item("Note.md")], focusedPath: "Note.md"))
+        XCTAssertTrue(voiceOver.contains { $0.id == SlateCommandID.sidebarAddTag })
+        // Folder-only selections stay clean of the editors.
+        let folder = SidebarActionCatalog.project(
+            surface: .contextMenu,
+            snapshot: snapshot(
+                [item("Folder", directory: true)], focusedPath: "Folder"))
+        XCTAssertFalse(folder.contains { $0.id == SlateCommandID.sidebarAddTag })
+    }
+
 }

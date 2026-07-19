@@ -246,4 +246,28 @@ final class SidebarShortcutsTests: XCTestCase {
     XCTAssertEqual(raw?.count, 1)
     XCTAssertEqual(raw?[0]["path"] as? String, "B/x.md")
   }
+  func testShortcutPresentationPerKind() {
+    // Review round: container kinds carry their own presentation — an
+    // empty-path untagged entry must never render as a blank file row.
+    let file = SidebarSectionsView.shortcutPresentation(
+      for: SidebarShortcut(kind: .file, path: "Projects/Note.md"))
+    XCTAssertEqual(file.label, "Note")
+    XCTAssertEqual(file.value, "file shortcut")
+    let folder = SidebarSectionsView.shortcutPresentation(
+      for: SidebarShortcut(kind: .folder, path: "Projects/Sub"))
+    XCTAssertEqual(folder.label, "Sub")
+    XCTAssertEqual(folder.value, "folder shortcut")
+    let tag = SidebarSectionsView.shortcutPresentation(
+      for: SidebarShortcut(kind: .tag, path: "projects/reading"))
+    XCTAssertEqual(tag.label, "#projects/reading")
+    XCTAssertEqual(tag.value, "tag shortcut")
+    XCTAssertEqual(tag.hint, "Filters the file list to this tag.")
+    XCTAssertEqual(tag.symbol, .tag)
+    let untagged = SidebarSectionsView.shortcutPresentation(
+      for: SidebarShortcut(kind: .untagged, path: ""))
+    XCTAssertEqual(untagged.label, "Untagged")
+    XCTAssertEqual(untagged.value, "untagged shortcut")
+    XCTAssertEqual(untagged.hint, "Shows notes with no tags.")
+  }
+
 }

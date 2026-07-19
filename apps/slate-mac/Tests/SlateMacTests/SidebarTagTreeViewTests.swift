@@ -120,6 +120,53 @@ final class SidebarTagTreeViewTests: XCTestCase {
             forKey: AppState.tagsSectionExpandedKey)
     }
 
+    func testVaultOpenRefreshesAnAlreadyExpandedSection() throws {
+        // Review round (high): didSet fires only on toggles — a
+        // device-restored EXPANDED section must still fetch for the
+        // newly opened vault (launch restore and A→B switches).
+        UserDefaults.standard.set(
+            true, forKey: AppState.tagsSectionExpandedKey)
+        defer {
+            UserDefaults.standard.removeObject(
+                forKey: AppState.tagsSectionExpandedKey)
+        }
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("tagtree-open-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let vault = root.appendingPathComponent("vault")
+        try FileManager.default.createDirectory(
+            at: vault, withIntermediateDirectories: true)
+        try "#seed\n".write(
+            to: vault.appendingPathComponent("a.md"),
+            atomically: true, encoding: .utf8)
+
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: root.appendingPathComponent("recents.json")))
+        XCTAssertTrue(state.sidebarTagsSectionExpanded, "restored expanded")
+        var fetches = 0
+        state.sidebarTagTreeProvider = {
+            fetches += 1
+            return TagTree(
+                entries: [], untaggedCount: 0, audioSummary: "0 tags.")
+        }
+        state.openVault(at: vault)
+        XCTAssertGreaterThanOrEqual(
+            fetches, 1, "the open path must fetch for the restored section")
+        XCTAssertNotNil(state.sidebarTagTree)
+
+        // A→B switch: teardown clears the tree; the next open refetches.
+        let vaultB = root.appendingPathComponent("vault-b")
+        try FileManager.default.createDirectory(
+            at: vaultB, withIntermediateDirectories: true)
+        let beforeSwitch = fetches
+        state.openVault(at: vaultB)
+        XCTAssertGreaterThan(
+            fetches, beforeSwitch, "a vault switch refetches the section")
+    }
+
     func testTransientFetchFailureKeepsThePreviousTree() {
         let state = makeState()
         var next: TagTree? = TagTree(

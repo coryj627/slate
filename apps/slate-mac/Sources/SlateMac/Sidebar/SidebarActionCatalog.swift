@@ -575,6 +575,8 @@ enum SidebarActionCatalog {
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
                     SlateCommandID.sidebarCopyWikilink,
@@ -585,6 +587,8 @@ enum SidebarActionCatalog {
             ids = [
                 SlateCommandID.sidebarOpen,
                 SlateCommandID.moveTo,
+                SlateCommandID.sidebarAddTag,
+                SlateCommandID.sidebarRemoveTag,
                 SlateCommandID.deleteEntry,
             ]
         } else {

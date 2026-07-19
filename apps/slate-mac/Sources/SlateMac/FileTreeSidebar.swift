@@ -3041,6 +3041,13 @@ struct FileTreeSidebar: View {
             // funnel while expanded (no-op otherwise).
             appState.refreshSidebarTagTree()
         }
+        // Scan completion re-derives file_tags wholesale; a tree
+        // fetched mid-scan would otherwise stay stale (review round).
+        .onChange(of: appState.isScanning) { _, scanning in
+            if !scanning {
+                appState.refreshSidebarTagTree()
+            }
+        }
         .sheet(
             item: Binding(
                 get: { appState.sidebarTagEditorRequest },
