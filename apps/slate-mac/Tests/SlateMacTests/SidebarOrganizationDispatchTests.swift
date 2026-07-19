@@ -2862,6 +2862,78 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       "capacity clears once the registry drains")
   }
 
+  // MARK: - Red-team regressions (adversarial review round 33)
+
+  func testACommittedRenameDrainBypassesTheCapacityGate() async throws {
+    // Round-33: capacity refuses NEW user acknowledgements only. The
+    // journal drain for a rename that ALREADY committed on the
+    // filesystem must be admitted even while the registry is full and
+    // its retained drain is blocked mid-replay — refusing it would
+    // strand pins at the old path for the stale prune.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let originalCap = AppState.sidebarUnflushedWriteRetriesCap
+    AppState.sidebarUnflushedWriteRetriesCap = 1
+    defer { AppState.sidebarUnflushedWriteRetriesCap = originalCap }
+    let failOnce = FailOnceBox()
+    let (state, vault) = try openVault(
+      named: "cap-rename", files: ["Projects/note.md"], folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": ["Projects/note.md"]}}
+        """)
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      if failOnce.consume() { throw TransientWriteError() }
+      root["first"] = true
+    }
+    let tail = state.sidebarOrganizationPersistTaskForTesting
+    state.closeVault()
+    gate.open()
+    await tail?.value
+
+    // Reopen: the retained drain replays the parked write and BLOCKS on
+    // the gate — the registry stays at capacity while it runs.
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+
+    // A rename commits on the filesystem NOW; its journal drain must be
+    // admitted past the full registry, and the optimistic retarget must
+    // publish immediately.
+    state.applySidebarPinsMutation(
+      .rename(oldPath: "Projects", newPath: "Archive"))
+    XCTAssertTrue(
+      state.sidebarOrganization.pins.isPinned(
+        "Archive/note.md", inFolder: "Archive"),
+      "the optimistic retarget publishes even while the registry is full")
+
+    gate.open()
+    var attempts = 0
+    while attempts < 1000 {
+      if let json = try? sidebarJSON(at: vault),
+        let pins = json["pins"] as? [String: Any],
+        pins["Archive"] != nil
+      {
+        break
+      }
+      attempts += 1
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    await awaitPersist(state)
+
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      pins["Archive"] as? [String], ["Archive/note.md"],
+      "the committed rename's retarget lands despite the full registry")
+    XCTAssertNil(pins["Projects"])
+    XCTAssertEqual(json["first"] as? Bool, true)
+    XCTAssertTrue(state.sidebarStructuralTransformJournal.isEmpty)
+  }
+
   // MARK: - Lazy stale prune
 
   func testStalePruneRewritesAtMostOncePerFolderPerSession() async throws {

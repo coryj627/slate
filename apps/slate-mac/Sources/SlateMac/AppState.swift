@@ -5225,12 +5225,16 @@ final class AppState: ObservableObject {
                 "Sidebar settings can't change right now — this vault's "
                     + "on-disk location could not be verified when it opened.")
         }
-        // Round-32: never silently evict an acknowledged intent — refuse
-        // NEW work up front, before any optimistic reflect or announce,
-        // while the retained-write registry is at capacity. Writes already
-        // in flight when the registry filled may still park past the cap;
-        // parking never evicts.
-        if !isRetainedDrain,
+        // Round-32, refined round-33: capacity gates NEW user-acknowledged
+        // work only — every dispatch command announces, and it is that
+        // acknowledgement the cap must not let us break. Internal persists
+        // (journal drains for structural transforms that ALREADY committed
+        // on the filesystem, retained-drain runs, prune maintenance) carry
+        // no announcement and must never be refused: refusing a committed
+        // rename's drain would strand its pins at the old path for the
+        // stale prune. Internal work that later fails simply parks
+        // (append-only, past the cap if need be).
+        if announcement != nil,
             let parked = Self.sidebarUnflushedWriteRetries[enqueueIdentity],
             parked.count >= Self.sidebarUnflushedWriteRetriesCap
         {
