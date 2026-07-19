@@ -267,6 +267,78 @@ pub fn init_host_logging(verbose: bool) {
     host_logging::init(verbose);
 }
 
+/// Census support (w0_spec §W0-3 item 2, #715): deterministically raise
+/// any `VaultError` arm so foreign-binding censuses can prove every
+/// discriminant's mapping end-to-end — native raise → typed foreign
+/// exception with structured fields — instead of trusting generated-code
+/// inspection. Field values are fixed by contract; censuses assert them
+/// exactly. An unknown arm name returns `Ok(())`, keeping the function
+/// inert outside census use. Not a product surface.
+#[uniffi::export]
+pub fn census_synthesize_vault_error(arm: String) -> Result<(), VaultError> {
+    Err(match arm.as_str() {
+        "Io" => VaultError::Io {
+            message: "census io".into(),
+        },
+        "Db" => VaultError::Db {
+            message: "census db".into(),
+        },
+        "InvalidPath" => VaultError::InvalidPath {
+            path: "census/path.md".into(),
+            reason: "census reason".into(),
+        },
+        "Trash" => VaultError::Trash {
+            message: "census trash".into(),
+        },
+        "Cancelled" => VaultError::Cancelled,
+        "InvalidUtf8" => VaultError::InvalidUtf8 {
+            path: "census/utf8.md".into(),
+        },
+        "FileTooLarge" => VaultError::FileTooLarge {
+            path: "census/large.md".into(),
+            size: 42,
+        },
+        "InvalidQuery" => VaultError::InvalidQuery {
+            message: "census query".into(),
+        },
+        "Unsupported" => VaultError::Unsupported {
+            feature: "census feature".into(),
+        },
+        "InvalidArgument" => VaultError::InvalidArgument {
+            message: "census argument".into(),
+        },
+        "DestinationExists" => VaultError::DestinationExists {
+            path: "census/dest.md".into(),
+        },
+        "WriteConflict" => VaultError::WriteConflict {
+            current_content_hash: "census-current".into(),
+            expected_content_hash: "census-expected".into(),
+            current_mtime_ms: 42,
+        },
+        "HistoryUnavailable" => VaultError::HistoryUnavailable {
+            path: "census/history.md".into(),
+            reason: "census reason".into(),
+        },
+        "MalformedFrontmatter" => VaultError::MalformedFrontmatter {
+            path: "census/frontmatter.md".into(),
+            reason: "census reason".into(),
+        },
+        "BibSourceUnreadable" => VaultError::BibSourceUnreadable {
+            path: "census/bib.json".into(),
+            reason: "census reason".into(),
+        },
+        "CslStyleUnreadable" => VaultError::CslStyleUnreadable {
+            path: "census/style.csl".into(),
+            reason: "census reason".into(),
+        },
+        "PrefsUnreadable" => VaultError::PrefsUnreadable {
+            path: "census/prefs.json".into(),
+            reason: "census reason".into(),
+        },
+        _ => return Ok(()),
+    })
+}
+
 // =====================================================================
 // VaultSession FFI surface (Milestone A subset)
 // =====================================================================

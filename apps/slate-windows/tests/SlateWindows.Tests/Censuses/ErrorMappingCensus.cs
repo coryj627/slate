@@ -45,6 +45,79 @@ public class ErrorMappingCensus
     };
 
     [Fact]
+    public void EveryArm_SynthesizedNativeRaise_LiftsToItsTypedSubclassWithFields()
+    {
+        // census_synthesize_vault_error (slate-uniffi) raises each arm with
+        // contract-fixed fields, proving every native discriminant lifts to
+        // its exact C# subclass with structured fields intact — end-to-end,
+        // not by generated-code inspection.
+        AssertArm<VaultException.Io>("Io", ex => Assert.Equal("census io", ex.message));
+        AssertArm<VaultException.Db>("Db", ex => Assert.Equal("census db", ex.message));
+        AssertArm<VaultException.InvalidPath>("InvalidPath", ex =>
+        {
+            Assert.Equal("census/path.md", ex.path);
+            Assert.Equal("census reason", ex.reason);
+        });
+        AssertArm<VaultException.Trash>("Trash", ex => Assert.Equal("census trash", ex.message));
+        AssertArm<VaultException.Cancelled>("Cancelled", _ => { });
+        AssertArm<VaultException.InvalidUtf8>("InvalidUtf8", ex => Assert.Equal("census/utf8.md", ex.path));
+        AssertArm<VaultException.FileTooLarge>("FileTooLarge", ex =>
+        {
+            Assert.Equal("census/large.md", ex.path);
+            Assert.Equal(42UL, ex.size);
+        });
+        AssertArm<VaultException.InvalidQuery>("InvalidQuery", ex => Assert.Equal("census query", ex.message));
+        AssertArm<VaultException.Unsupported>("Unsupported", ex => Assert.Equal("census feature", ex.feature));
+        AssertArm<VaultException.InvalidArgument>("InvalidArgument", ex => Assert.Equal("census argument", ex.message));
+        AssertArm<VaultException.DestinationExists>("DestinationExists", ex => Assert.Equal("census/dest.md", ex.path));
+        AssertArm<VaultException.WriteConflict>("WriteConflict", ex =>
+        {
+            Assert.Equal("census-current", ex.currentContentHash);
+            Assert.Equal("census-expected", ex.expectedContentHash);
+            Assert.Equal(42L, ex.currentMtimeMs);
+        });
+        AssertArm<VaultException.HistoryUnavailable>("HistoryUnavailable", ex =>
+        {
+            Assert.Equal("census/history.md", ex.path);
+            Assert.Equal("census reason", ex.reason);
+        });
+        AssertArm<VaultException.MalformedFrontmatter>("MalformedFrontmatter", ex =>
+        {
+            Assert.Equal("census/frontmatter.md", ex.path);
+            Assert.Equal("census reason", ex.reason);
+        });
+        AssertArm<VaultException.BibSourceUnreadable>("BibSourceUnreadable", ex =>
+        {
+            Assert.Equal("census/bib.json", ex.path);
+            Assert.Equal("census reason", ex.reason);
+        });
+        AssertArm<VaultException.CslStyleUnreadable>("CslStyleUnreadable", ex =>
+        {
+            Assert.Equal("census/style.csl", ex.path);
+            Assert.Equal("census reason", ex.reason);
+        });
+        AssertArm<VaultException.PrefsUnreadable>("PrefsUnreadable", ex =>
+        {
+            Assert.Equal("census/prefs.json", ex.path);
+            Assert.Equal("census reason", ex.reason);
+        });
+
+        // The pinned list and the synthesized coverage must not drift.
+        Assert.Equal(17, PinnedVaultErrorArms.Length);
+
+        // Unknown arm names are inert (the fn is a census tool, not a
+        // product surface).
+        SlateUniffiMethods.CensusSynthesizeVaultError("NotAnArm");
+    }
+
+    private static void AssertArm<T>(string arm, Action<T> assertFields)
+        where T : VaultException
+    {
+        var ex = Assert.Throws<T>(() => SlateUniffiMethods.CensusSynthesizeVaultError(arm));
+        assertFields(ex);
+    }
+
+    [Fact]
     public void GeneratedVaultExceptionSubclasses_MatchThePinnedArmSet()
     {
         var generated = typeof(VaultException)

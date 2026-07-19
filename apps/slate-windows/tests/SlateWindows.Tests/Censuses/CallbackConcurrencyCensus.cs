@@ -103,15 +103,61 @@ public class CallbackConcurrencyCensus
 
         Assert.True(scanDone && sideDone, "storm threads did not terminate (deadlock?)");
         Assert.Null(Volatile.Read(ref failure));
-        // Saves create churn*.md mid-walk so the census may exceed the
-        // fixture count; completion under load is the requirement here.
-        Assert.True(
-            progress.Snapshot().OfType<ScanProgress.FileIndexed>().Count() >= notes,
-            "scan progress incomplete under concurrent load");
+
+        // Full progress choreography must survive the load, not merely
+        // "some events": exactly one Started, a monotonic 1..N FileIndexed
+        // counter, exactly one terminal Finished, no spurious terminal.
+        // (Saves create churn*.md mid-walk so N may exceed the fixture
+        // count.)
+        var progressEvents = progress.Snapshot();
+        Assert.Equal(1, progressEvents.Count(e => e is ScanProgress.Started));
+        Assert.Equal(1, progressEvents.Count(e => e is ScanProgress.Finished));
+        Assert.IsType<ScanProgress.Finished>(progressEvents[^1]);
+        Assert.DoesNotContain(progressEvents, e => e is ScanProgress.Cancelled or ScanProgress.Failed);
+        var indexed = progressEvents.OfType<ScanProgress.FileIndexed>().ToList();
+        Assert.True(indexed.Count >= notes, "scan progress incomplete under concurrent load");
+        for (int i = 0; i < indexed.Count; i++)
+        {
+            Assert.Equal((ulong)(i + 1), indexed[i].Indexed);
+        }
+
         Assert.True(saveTask.Result > 0, "no saves progressed during the storm");
         Assert.True(invokeTask.Result > 0, "no command invokes progressed during the storm");
         Assert.Equal(invokeTask.Result, commandInvokes);
-        Assert.True(events.TotalCount > 0, "no vault events flowed during the storm");
+
+        // VaultEventListener multi-method delivery under load: the initial
+        // scan drives the index-phase choreography and the save churn
+        // drives file-change events. (on_error delivery is covered
+        // deterministically by EventKindsCensus.)
+        // Under churn extra phase events may interleave, so assert the
+        // scan's four-phase choreography as an in-order subsequence; the
+        // quiet-session exact sequence is EventKindsCensus's job.
+        var phases = events.Locked(r => r.IndexPhases.Select(p => p.Phase).ToList());
+        var expectedOrder = new[]
+        {
+            IndexPhase.ScanStarted, IndexPhase.ReconcileStarted,
+            IndexPhase.ReconcileFinished, IndexPhase.ScanFinished,
+        };
+        int cursor = 0;
+        foreach (var phase in phases)
+        {
+            if (cursor < expectedOrder.Length && phase == expectedOrder[cursor])
+            {
+                cursor++;
+            }
+        }
+        Assert.True(
+            cursor == expectedOrder.Length,
+            $"index-phase choreography incomplete under load (matched {cursor}/4: {string.Join(",", phases)})");
+        Assert.True(
+            events.Locked(r => r.FileChanges.Count) > 0,
+            "no file-change events flowed during the storm");
+
+        // The instrumentation is part of the census: callbacks must have
+        // arrived off the test thread (Rust dispatch threads).
+        int testThread = Environment.CurrentManagedThreadId;
+        Assert.Contains(progress.ThreadIds, id => id != testThread);
+        Assert.Contains(events.ThreadIds, id => id != testThread);
 
         session.UnregisterEventListener(registration);
     }
@@ -146,14 +192,7 @@ public class CallbackConcurrencyCensus
         var weakRefs = new List<WeakReference>();
         for (int i = 0; i < cycles; i++)
         {
-            var listener = new EventRecorder();
-            ulong reg = session.RegisterEventListener(listener);
-            if ((i & 3) == 0)
-            {
-                Thread.Sleep(1); // let some events land mid-registration
-            }
-            session.UnregisterEventListener(reg);
-            weakRefs.Add(new WeakReference(listener));
+            weakRefs.Add(RegisterUnregisterOnce(session, pauseMidRegistration: (i & 3) == 0));
         }
         stop.Cancel();
         Assert.True(saveTask.Wait(TimeSpan.FromSeconds(30)), "save churn did not terminate");
@@ -164,9 +203,32 @@ public class CallbackConcurrencyCensus
             GC.Collect();
             GC.WaitForPendingFinalizers();
         }
+        // Unregistration must release the foreign handle for every
+        // listener — a leak here is unbounded retention under real churn.
+        // Listener creation lives in a non-inlined helper so no JIT-held
+        // local can pin one; at most one straggler is tolerated for an
+        // in-flight dispatch that unregister raced with.
         int alive = weakRefs.Count(w => w.IsAlive);
-        Assert.True(alive < cycles, $"unregistration pins foreign handles ({alive}/{cycles} still alive)");
+        Assert.True(alive <= 1, $"unregistration pins foreign handles ({alive}/{cycles} still alive after GC)");
 
+        RunSurvivorCheck(session);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference RegisterUnregisterOnce(VaultSession session, bool pauseMidRegistration)
+    {
+        var listener = new EventRecorder();
+        ulong reg = session.RegisterEventListener(listener);
+        if (pauseMidRegistration)
+        {
+            Thread.Sleep(1); // let some events land mid-registration
+        }
+        session.UnregisterEventListener(reg);
+        return new WeakReference(listener);
+    }
+
+    private static void RunSurvivorCheck(VaultSession session)
+    {
         // A listener registered across the churn still hears its events,
         // and unregister seals the stream.
         var survivor = new EventRecorder();

@@ -58,20 +58,15 @@ public class HandleLifetimeCensus
     [Fact]
     public void GcPressure_ThousandsOfHandlesThroughDisposeAndFinalizerMix()
     {
+        // Finalizer-path wrappers are tracked as WeakReferences (created in
+        // a non-inlined helper so no JIT-held local pins them): the census
+        // proves the finalizer path actually collects — a broken finalizer
+        // would otherwise stay green until production resource exhaustion.
         int buffers = CensusTier.Scale(800, 4000);
+        var undisposed = new List<WeakReference>();
         for (int i = 0; i < buffers; i++)
         {
-            var buffer = new DocumentBuffer($"note {i} body with some text");
-            buffer.ApplyEdit(0, 0, "x");
-            if ((i & 1) == 0)
-            {
-                buffer.Dispose(); // odd ones ride the finalizer
-            }
-            var token = new CancelToken();
-            if ((i & 1) == 0)
-            {
-                token.Dispose();
-            }
+            undisposed.AddRange(TouchBufferAndToken(i, disposeEagerly: (i & 1) == 0));
             if (i % 250 == 0)
             {
                 GC.Collect();
@@ -83,20 +78,59 @@ public class HandleLifetimeCensus
         int sessions = CensusTier.Scale(30, 120);
         for (int i = 0; i < sessions; i++)
         {
-            var s = VaultSession.OpenFilesystem(vault.Root);
-            if (i % 3 != 2)
+            var weak = OpenSession(vault.Root, dispose: i % 3 != 2);
+            if (weak != null)
             {
-                s.Dispose(); // every third session finalizer-collected
+                undisposed.Add(weak); // every third session finalizer-collected
             }
         }
-        GC.Collect();
-        GC.WaitForPendingFinalizers();
-        GC.Collect();
+        for (int i = 0; i < 3; i++)
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+        }
+
+        int alive = undisposed.Count(w => w.IsAlive);
+        Assert.True(
+            alive <= 1,
+            $"finalizer path leaks wrappers: {alive}/{undisposed.Count} finalizer-path handles still alive after GC");
 
         using var reopened = VaultSession.OpenFilesystem(vault.Root);
         using var census = new CancelToken();
         reopened.ScanInitial(census);
         Assert.Equal(2UL, reopened.ListFiles(FileFilter.All, new Paging(null, 1)).TotalFiltered);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static List<WeakReference> TouchBufferAndToken(int i, bool disposeEagerly)
+    {
+        var tracked = new List<WeakReference>();
+        var buffer = new DocumentBuffer($"note {i} body with some text");
+        buffer.ApplyEdit(0, 0, "x");
+        var token = new CancelToken();
+        if (disposeEagerly)
+        {
+            buffer.Dispose();
+            token.Dispose();
+        }
+        else
+        {
+            tracked.Add(new WeakReference(buffer)); // rides the finalizer
+            tracked.Add(new WeakReference(token));
+        }
+        return tracked;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference? OpenSession(string root, bool dispose)
+    {
+        var s = VaultSession.OpenFilesystem(root);
+        if (dispose)
+        {
+            s.Dispose();
+            return null;
+        }
+        return new WeakReference(s);
     }
 
     [Fact]
@@ -105,11 +139,29 @@ public class HandleLifetimeCensus
         using var vault = FixtureVault.Create(CensusTier.Scale(200, 400));
         var racing = VaultSession.OpenFilesystem(vault.Root);
         using var token = new CancelToken();
+
+        // Synchronize on confirmed native entry: the first FileIndexed
+        // callback (dispatched from inside the native scan) signals
+        // `entered` and then blocks on `gate`, so Dispose provably races an
+        // in-flight native call — no sleep-based guessing.
+        using var entered = new ManualResetEventSlim(false);
+        using var gate = new ManualResetEventSlim(false);
+        var listener = new Support.ProgressRecorder
+        {
+            OnEvent = e =>
+            {
+                if (e is ScanProgress.FileIndexed && !entered.IsSet)
+                {
+                    entered.Set();
+                    gate.Wait(TimeSpan.FromSeconds(10));
+                }
+            },
+        };
         var scan = Task.Run(() =>
         {
             try
             {
-                racing.ScanInitial(token);
+                racing.ScanInitialWithProgress(token, listener);
                 return "completed";
             }
             catch (VaultException.Cancelled)
@@ -121,9 +173,11 @@ public class HandleLifetimeCensus
                 return $"managed:{ex.GetType().Name}";
             }
         });
-        Thread.Sleep(80); // let the scan get onto the native side
-        racing.Dispose();
+
+        Assert.True(entered.Wait(TimeSpan.FromSeconds(30)), "scan never entered native dispatch");
+        racing.Dispose(); // while the native call is provably in flight
         token.Cancel();
+        gate.Set();
 
         // uniffi's call counter must keep the native handle alive until the
         // in-flight call returns — any outcome is fine as long as it's a
