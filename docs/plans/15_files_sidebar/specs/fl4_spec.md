@@ -56,9 +56,9 @@ Rules:
 
 Tests: parser table-tests (every operator, negation, malformed forms) plus canonical date requirements; execution fixtures per term + combinations + negation; missing/extra/duplicate/reversed window rejection; SQL-injection strings; permutation of term order ⇒ identical results; exact `America/New_York` spring-forward 23-hour and fall-back 25-hour day windows (including named-relative and `@YYYY-MM-DD` terms); scoped empty listing and pagination; scope normalization/traversal rejection; property: `filter(q) ⊆ filter(drop_one_term(q))` for positive-term queries; bench recorded.
 
-- [ ] Parser + typed errors; execution joins; scoped listing; FFI record + method
-- [ ] Core date-requirement plan + validated exact-window FFI; ordering
-- [ ] Tests + bench baseline; fmt/clippy; host-independent
+- [x] Parser + typed errors; execution joins; scoped listing; FFI record + method
+- [x] Core date-requirement plan + validated exact-window FFI; ordering
+- [x] Tests + bench baseline; fmt/clippy; host-independent
 
 ## FL4-2 · Top-pinned sidebar filter UI (#663) — closing PR FL-09
 

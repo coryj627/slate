@@ -215,6 +215,23 @@ pub(crate) fn register_connection_functions(conn: &Connection) -> rusqlite::Resu
     use rusqlite::functions::FunctionFlags;
 
     conn.create_scalar_function(
+        "slate_effective_name_key",
+        4,
+        FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+        |context| {
+            let kind = context.get::<Option<String>>(0)?;
+            let json = context.get::<Option<String>>(1)?;
+            let name = context.get::<Option<String>>(2)?.unwrap_or_default();
+            let extension = context.get::<Option<String>>(3)?;
+            Ok(effective_name_key(
+                kind.as_deref(),
+                json.as_deref(),
+                &name,
+                extension.as_deref(),
+            ))
+        },
+    )?;
+    conn.create_scalar_function(
         "slate_tree_sort_key",
         1,
         FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
@@ -223,6 +240,39 @@ pub(crate) fn register_connection_functions(conn: &Connection) -> rusqlite::Resu
             Ok(name.map(|name| tree_sort_key(&name)))
         },
     )
+}
+
+/// FL4-1 review: ONE effective-name rule shared with the summary
+/// decoder — a `text`-kind title decodes from its JSON string, trims,
+/// and must be nonempty; everything else falls back to the stem. The
+/// result folds through `tree_sort_key`, so filter matching and result
+/// ordering can never disagree with `FileSummary.display_name`.
+pub(crate) fn effective_name_key(
+    title_kind: Option<&str>,
+    title_json: Option<&str>,
+    name: &str,
+    extension: Option<&str>,
+) -> String {
+    let title = match (title_kind, title_json) {
+        (Some("text"), Some(json)) => serde_json::from_str::<String>(json)
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
+        _ => None,
+    };
+    let effective = title.unwrap_or_else(|| match extension {
+        Some(extension)
+            if !extension.is_empty()
+                && name.len() > extension.len()
+                && name
+                    .to_lowercase()
+                    .ends_with(&format!(".{}", extension.to_lowercase())) =>
+        {
+            name[..name.len() - extension.len() - 1].to_string()
+        }
+        _ => name.to_string(),
+    });
+    tree_sort_key(&effective)
 }
 
 pub(crate) fn tree_sort_key(name: &str) -> String {

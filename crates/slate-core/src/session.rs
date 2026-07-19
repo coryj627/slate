@@ -482,6 +482,16 @@ impl Paging {
     }
 }
 
+/// FL4-1 result page: shared FL1 summaries plus the normative
+/// pre-rendered VoiceOver summary (`QueryResultSet` precedent).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SidebarFilterPage {
+    pub files: Vec<FileSummary>,
+    pub next_cursor: Option<String>,
+    pub total: u64,
+    pub audio_summary: String,
+}
+
 /// A page of results plus the cursor that fetches the next page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page<T> {
@@ -4590,6 +4600,42 @@ impl VaultSession {
         Ok(crate::format_wikilink_for_path(path, &index))
     }
 
+    /// FL4-1 (#662): the canonical unique date-term requirements for a
+    /// filter query, in first-occurrence order. The host supplies one
+    /// exact half-open UTC window per requirement to `filter_files`.
+    pub fn sidebar_filter_date_requirements(&self, query: &str) -> Result<Vec<String>, VaultError> {
+        let terms = crate::sidebar_filter::parse_sidebar_filter(query)
+            .map_err(|error| error.invalid_query())?;
+        Ok(crate::sidebar_filter::sidebar_filter_date_requirements(
+            &terms,
+        ))
+    }
+
+    /// FL4-1 (#662): one deterministic, parameterized filter/scoped-listing
+    /// statement per page. An empty query is valid only with a normalized,
+    /// vault-contained `scope_dir` (the FL7 dual-pane listing contract);
+    /// date terms execute against host-validated exact windows; results
+    /// order by the effective-name casefold key then path — a total order.
+    pub fn filter_files(
+        &self,
+        query: &str,
+        scope_dir: Option<&str>,
+        date_windows: &[crate::sidebar_filter::SidebarFilterDateWindow],
+        paging: Paging,
+    ) -> Result<SidebarFilterPage, VaultError> {
+        let terms = crate::sidebar_filter::parse_sidebar_filter(query)
+            .map_err(|error| error.invalid_query())?;
+        if terms.is_empty() && scope_dir.is_none() {
+            return Err(VaultError::InvalidQuery {
+                message: "an empty query is valid only with a folder scope".to_string(),
+            });
+        }
+        let windows = crate::sidebar_filter::validate_date_windows(&terms, date_windows)?;
+        let plan = crate::sidebar_filter::plan(&terms, scope_dir, &windows)?;
+        let conn = self.conn.lock().expect("session connection mutex");
+        sidebar_filter_impl(&conn, plan, scope_dir, paging)
+    }
+
     /// Return the distinct normalized tag inventory from the tag index.
     pub fn list_tags(&self) -> Result<Vec<String>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
@@ -7484,6 +7530,169 @@ pub(crate) fn decode_file_summary_query_row(
         }),
         total_filtered,
     ))
+}
+
+/// Cursor encoding for the filter's (casefold key, path) total order:
+/// an 8-hex-digit byte length prefixes the key, so keys and paths may
+/// contain ANY character (review round — titles are user-authored).
+/// Malformed cursors are rejected loudly, never silently restarted.
+fn encode_sidebar_filter_cursor(sort_key: &str, path: &str) -> String {
+    format!("{:08x}{sort_key}{path}", sort_key.len())
+}
+
+fn decode_sidebar_filter_cursor(cursor: &str) -> Result<(String, String), VaultError> {
+    let malformed = || VaultError::InvalidQuery {
+        message: "malformed pagination cursor".to_string(),
+    };
+    let bytes = cursor.as_bytes();
+    if bytes.len() < 8 {
+        return Err(malformed());
+    }
+    let key_len = usize::from_str_radix(
+        std::str::from_utf8(&bytes[..8]).map_err(|_| malformed())?,
+        16,
+    )
+    .map_err(|_| malformed())?;
+    let rest = &bytes[8..];
+    if key_len > rest.len() {
+        return Err(malformed());
+    }
+    let key = std::str::from_utf8(&rest[..key_len]).map_err(|_| malformed())?;
+    let path = std::str::from_utf8(&rest[key_len..]).map_err(|_| malformed())?;
+    Ok((key.to_string(), path.to_string()))
+}
+
+fn sidebar_filter_impl(
+    conn: &Connection,
+    plan: crate::sidebar_filter::SidebarFilterPlan,
+    scope_dir: Option<&str>,
+    paging: Paging,
+) -> Result<SidebarFilterPage, VaultError> {
+    let files_where = if plan.files_clauses.is_empty() {
+        "1=1".to_string()
+    } else {
+        plan.files_clauses.join(" AND ")
+    };
+    let name_where = if plan.name_clauses.is_empty() {
+        "1=1".to_string()
+    } else {
+        plan.name_clauses.join(" AND ")
+    };
+    let (cursor_key, cursor_path) = match paging.cursor.as_deref() {
+        Some(cursor) => {
+            let (key, path) = decode_sidebar_filter_cursor(cursor)?;
+            (Some(key), Some(path))
+        }
+        None => (None, None),
+    };
+    let fetch_n = paging.limit as i64 + 1;
+    let summary_projection = file_summary_query_projection(
+        "LEFT JOIN candidates c ON 1 = 1",
+        ", c.sort_key",
+        "ORDER BY c.sort_key ASC, c.path COLLATE BINARY ASC",
+    );
+    // ONE parameterized statement: user text travels only through the
+    // bound parameters collected below (spec rule 1).
+    let query = format!(
+        "WITH filtered AS (
+             SELECT f.id, f.path, f.name, f.extension, f.mtime_ms,
+                    f.size_bytes, f.is_markdown, f.birthtime_ms
+             FROM files f WHERE {files_where}
+         ),
+         titled AS (
+             -- Set-based title join (one window scan) instead of a
+             -- correlated subquery per row: the 10k budget hinges on it.
+             -- The FIRST title ordinal ranks regardless of kind, exactly
+             -- like the shared summary projection (review round).
+             SELECT f.*, tv.value_kind AS title_kind,
+                    tv.value_text AS title_json
+             FROM filtered f
+             LEFT JOIN (
+                 SELECT p.file_id, p.value_kind, p.value_text,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY p.file_id ORDER BY p.ordinal ASC
+                        ) AS title_rank
+                 FROM properties p
+                 WHERE p.key = 'title'
+             ) tv ON tv.file_id = f.id AND tv.title_rank = 1
+         ),
+         keyed AS (
+             -- ONE effective-name rule, shared with the summary decoder
+             -- via the registered UDF: text titles decode/trim/require
+             -- nonempty, everything else falls back to the stem.
+             SELECT id, path, name, mtime_ms, size_bytes, is_markdown,
+                    birthtime_ms,
+                    slate_effective_name_key(
+                        title_kind, title_json, name, extension) AS sort_key
+             FROM titled
+         ),
+         matched AS (
+             SELECT * FROM (SELECT k.* FROM keyed k) k WHERE {name_where}
+         ),
+         totals AS (SELECT COUNT(*) AS total_filtered FROM matched),
+         candidates AS (
+             SELECT id, path, name, mtime_ms, size_bytes, is_markdown,
+                    birthtime_ms, sort_key
+             FROM matched
+             WHERE (? IS NULL
+                    OR sort_key > ?
+                    OR (sort_key = ? AND path COLLATE BINARY > ?))
+             ORDER BY sort_key ASC, path COLLATE BINARY ASC
+             LIMIT ?
+         )
+         {summary_projection}"
+    );
+    let mut params: Vec<rusqlite::types::Value> = Vec::new();
+    params.extend(plan.files_params);
+    params.extend(plan.name_params);
+    let key_value: rusqlite::types::Value = match &cursor_key {
+        Some(key) => key.clone().into(),
+        None => rusqlite::types::Value::Null,
+    };
+    let path_value: rusqlite::types::Value = match &cursor_path {
+        Some(path) => path.clone().into(),
+        None => rusqlite::types::Value::Null,
+    };
+    params.push(key_value.clone());
+    params.push(key_value.clone());
+    params.push(key_value);
+    params.push(path_value);
+    params.push(fetch_n.into());
+
+    let mut stmt = conn.prepare_cached(&query)?;
+    let mut total: u64 = 0;
+    let mut rows_with_keys: Vec<(FileSummary, String)> = Vec::new();
+    let rows = stmt.query_map(rusqlite::params_from_iter(params), |row| {
+        let (summary, total) = decode_file_summary_query_row(row)?;
+        let sort_key: Option<String> = row.get("sort_key")?;
+        Ok((summary, total, sort_key))
+    })?;
+    for row in rows {
+        let (summary, row_total, sort_key) = row?;
+        total = row_total;
+        // The totals-only row (LEFT JOIN with zero candidates) carries no
+        // summary — same convention as `list_files_impl`.
+        if let (Some(summary), Some(sort_key)) = (summary, sort_key) {
+            rows_with_keys.push((summary, sort_key));
+        }
+    }
+    let mut next_cursor = None;
+    if rows_with_keys.len() > paging.limit as usize {
+        rows_with_keys.truncate(paging.limit as usize);
+        if let Some((summary, sort_key)) = rows_with_keys.last() {
+            next_cursor = Some(encode_sidebar_filter_cursor(sort_key, &summary.path));
+        }
+    }
+    let audio_summary = crate::sidebar_filter::sidebar_filter_audio_summary(total, scope_dir);
+    Ok(SidebarFilterPage {
+        files: rows_with_keys
+            .into_iter()
+            .map(|(summary, _)| summary)
+            .collect(),
+        next_cursor,
+        total,
+        audio_summary,
+    })
 }
 
 fn list_files_impl(

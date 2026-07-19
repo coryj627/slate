@@ -70,6 +70,7 @@ pub mod properties_db;
 pub mod reading;
 pub mod search_db;
 pub mod session;
+pub mod sidebar_filter;
 pub mod structural;
 pub mod structural_batch;
 pub mod structured_diff;
@@ -154,6 +155,11 @@ pub use session::{
     RenameSkipped, SaveReport, SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress,
     ScanProgressListener, ScanReport, SessionConfig, VaultEventListener, VaultRootIdentity,
     VaultSession, VersionSummary,
+};
+pub use sidebar_filter::{
+    FilterParseError, SidebarFilterDateWindow, SidebarFilterNamedWindow, SidebarFilterQueryTerm,
+    SidebarFilterTerm, parse_sidebar_filter, sidebar_filter_audio_summary,
+    sidebar_filter_date_requirements, validate_date_windows,
 };
 pub use vault::{
     DirEntry, EntryKind, FileEvent, FileEventSink, FileStat, FsVaultProvider, VaultProvider,

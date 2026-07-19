@@ -681,6 +681,45 @@ fn bench_dir_and_rewrite(c: &mut Criterion) {
     group.finish();
 }
 
+/// FL4-1 (#662): filter budget — ≤ 50 ms at 10k files. The name term is
+/// the worst case (linear casefolded substring over every effective
+/// name); the mixed query adds tag/task EXISTS joins on top.
+fn bench_sidebar_filter(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sidebar_filter");
+    group.bench_function("10000", |b| {
+        let vault = common::generate_vault(10_000);
+        let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
+        session.scan_initial(&CancelToken::new()).expect("prime");
+        b.iter(|| {
+            let page = session
+                .filter_files("note", None, &[], slate_core::Paging::first(50))
+                .expect("filter");
+            black_box((page.total, page.files.len()))
+        });
+        drop(session);
+        drop(vault);
+    });
+    group.bench_function("10000_mixed_terms", |b| {
+        let vault = common::generate_vault(10_000);
+        let session = VaultSession::from_filesystem(vault.path().to_path_buf()).expect("open");
+        session.scan_initial(&CancelToken::new()).expect("prime");
+        b.iter(|| {
+            let page = session
+                .filter_files(
+                    "note ext:md -has:task",
+                    None,
+                    &[],
+                    slate_core::Paging::first(50),
+                )
+                .expect("filter");
+            black_box((page.total, page.files.len()))
+        });
+        drop(session);
+        drop(vault);
+    });
+    group.finish();
+}
+
 criterion_group! {
     name = benches;
     // Runner-level defaults remain overridable from Criterion's CLI. Do not
@@ -693,6 +732,7 @@ criterion_group! {
         bench_list_dir_children_meta,
         bench_save_path,
         bench_tasks_scan_and_query,
+        bench_sidebar_filter,
         bench_parser_zero_task_overhead,
         bench_full_text_search,
         bench_files_with_property,
