@@ -917,16 +917,38 @@ pub(crate) struct OplogLock(#[allow(dead_code)] fs::File);
 /// once and never deleted while its log lives; reclamation removes it
 /// best-effort together with the log.
 pub(crate) fn lock_oplog(log_path: &Path) -> io::Result<OplogLock> {
+    let sidecar = open_sidecar(log_path)?;
+    sidecar.lock()?;
+    Ok(OplogLock(sidecar))
+}
+
+/// Non-blocking [`lock_oplog`]: `Ok(None)` when another holder has the
+/// lock right now. For callers that must not *wait* on the log lock —
+/// reclamation runs inside `reconcile_oplogs`' open DB transaction,
+/// and the O lock-order invariant (saves commit their tx BEFORE taking
+/// the log lock; the worker takes the log lock BEFORE its tx) only
+/// stays cycle-free if nothing blocks on a log lock while holding a
+/// tx. A try-acquire can't deadlock: contention means some mutator is
+/// live on that log, which is exactly when reclamation should stand
+/// down anyway (the log is reconsidered next open).
+pub(crate) fn try_lock_oplog(log_path: &Path) -> io::Result<Option<OplogLock>> {
+    let sidecar = open_sidecar(log_path)?;
+    match sidecar.try_lock() {
+        Ok(()) => Ok(Some(OplogLock(sidecar))),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
+        Err(fs::TryLockError::Error(e)) => Err(e),
+    }
+}
+
+fn open_sidecar(log_path: &Path) -> io::Result<fs::File> {
     if let Some(dir) = log_path.parent() {
         fs::create_dir_all(dir)?;
     }
-    let sidecar = fs::OpenOptions::new()
+    fs::OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
-        .open(sidecar_lock_path(log_path))?;
-    sidecar.lock()?;
-    Ok(OplogLock(sidecar))
+        .open(sidecar_lock_path(log_path))
 }
 
 /// Append a single entry to `<cache_dir>/oplog/<log_name>.oplog`.

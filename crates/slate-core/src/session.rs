@@ -2442,6 +2442,52 @@ impl VaultSession {
         }
     }
 
+    /// Delete a retention-expired unbound log and its #928 sidecar —
+    /// but only if the per-log mutation lock is free RIGHT NOW
+    /// (`try_lock_oplog`): contention means some mutator (another
+    /// process's appender or compactor) is live on this log, and
+    /// unlinking under it would re-create exactly the orphaned-file
+    /// class #928 closed. Non-blocking by necessity, not convenience:
+    /// reconcile holds an open DB transaction at every call site, and
+    /// the O lock-order invariant (saves commit their tx BEFORE the
+    /// log lock; the worker takes the log lock BEFORE its tx) only
+    /// stays cycle-free if nothing *waits* on a log lock while holding
+    /// a tx — a try-acquire cannot wait, so it cannot deadlock. A
+    /// skipped log is simply reconsidered at the next open.
+    ///
+    /// The sidecar is removed while its lock is held; a waiter landing
+    /// in that window would acquire the orphaned sidecar inode.
+    /// Accepted: that requires a mutator racing an unbound,
+    /// retention-expired log — double-anomalous — and it degrades to
+    /// the pre-#928 state (no serialization), never worse.
+    fn reclaim_log_and_sidecar(cache_dir: &std::path::Path, stem: &str) {
+        let log_path = crate::oplog::oplog_path_for_name(cache_dir, stem);
+        let _guard = match crate::oplog::try_lock_oplog(&log_path) {
+            Ok(Some(guard)) => guard,
+            Ok(None) => {
+                log::warn!("oplog reclamation skipped for {stem}: mutation lock contended");
+                return;
+            }
+            Err(e) => {
+                log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
+                log::debug!("oplog reclamation failure detail: {e}");
+                return;
+            }
+        };
+        match std::fs::remove_file(&log_path) {
+            // The log is gone; its sidecar has nothing left to guard.
+            // Best-effort — a leftover sidecar has the same junk
+            // profile as a crashed `.oplog.tmp`.
+            Ok(()) => {
+                let _ = std::fs::remove_file(crate::oplog::sidecar_lock_path(&log_path));
+            }
+            Err(e) => {
+                log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
+                log::debug!("oplog reclamation failure detail: {e}");
+            }
+        }
+    }
+
     fn reconcile_oplogs_inner(&self, conn: &mut Connection) -> Result<Vec<RemnantLog>, VaultError> {
         let dir = crate::oplog::oplog_dir(&self.config.cache_dir);
         let read_dir = match std::fs::read_dir(&dir) {
@@ -2554,23 +2600,7 @@ impl VaultSession {
                             .max()
                             .is_some_and(|ts| ts <= cutoff)
                     {
-                        let log_path =
-                            crate::oplog::oplog_path_for_name(&self.config.cache_dir, stem);
-                        match std::fs::remove_file(&log_path) {
-                            // The log is gone; its sidecar lock file
-                            // (#928) has nothing left to guard —
-                            // best-effort cleanup, same junk profile
-                            // as a crashed `.tmp` if it fails.
-                            Ok(()) => {
-                                let _ = std::fs::remove_file(crate::oplog::sidecar_lock_path(
-                                    &log_path,
-                                ));
-                            }
-                            Err(e) => {
-                                log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
-                                log::debug!("oplog reclamation failure detail: {e}");
-                            }
-                        }
+                        Self::reclaim_log_and_sidecar(&self.config.cache_dir, stem);
                     }
                 }
                 continue;
@@ -2620,19 +2650,7 @@ impl VaultSession {
             let newest_ts = entries.iter().map(|e| e.timestamp_ms).max();
             match (effective_path, entries.last()) {
                 (_, Some(_)) if newest_ts.is_some_and(|ts| ts <= cutoff) => {
-                    let log_path = crate::oplog::oplog_path_for_name(&self.config.cache_dir, stem);
-                    match std::fs::remove_file(&log_path) {
-                        // See the quarantine branch: reclaim the #928
-                        // sidecar alongside its log, best-effort.
-                        Ok(()) => {
-                            let _ =
-                                std::fs::remove_file(crate::oplog::sidecar_lock_path(&log_path));
-                        }
-                        Err(e) => {
-                            log::warn!("oplog reclamation failed for {stem}: {}", e.kind());
-                            log::debug!("oplog reclamation failure detail: {e}");
-                        }
-                    }
+                    Self::reclaim_log_and_sidecar(&self.config.cache_dir, stem);
                 }
                 (Some(eff), Some(tail)) => remnants.push(RemnantLog {
                     stem: stem.clone(),

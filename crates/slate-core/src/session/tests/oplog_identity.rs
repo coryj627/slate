@@ -777,3 +777,33 @@ fn census_reconcile_after_cache_rebuild() {
         }
     }
 }
+
+/// #928 (Codoki High on PR #941): reclamation acquires the per-log
+/// mutation lock **non-blockingly** and stands down when it's
+/// contended — unlinking a log under a live mutator would re-create
+/// the orphaned-file class the sidecar protocol closed, and a
+/// *blocking* acquire is forbidden at the call sites (reconcile holds
+/// an open DB transaction; the O lock-order invariant stays cycle-free
+/// only if nothing waits on a log lock while holding a tx).
+/// Deterministic: hold the sidecar, reclaim (must skip), release,
+/// reclaim (log and sidecar both go).
+#[test]
+fn reclamation_skips_contended_log_and_deletes_when_free() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache = tmp.path();
+    assert!(crate::oplog::try_create_log(cache, "expired", "gone/note.md").unwrap());
+    let log_path = crate::oplog::oplog_path_for_name(cache, "expired");
+    let sidecar = crate::oplog::sidecar_lock_path(&log_path);
+
+    let guard = crate::oplog::lock_oplog(&log_path).unwrap();
+    VaultSession::reclaim_log_and_sidecar(cache, "expired");
+    assert!(
+        log_path.exists(),
+        "a contended log must survive reclamation"
+    );
+
+    drop(guard);
+    VaultSession::reclaim_log_and_sidecar(cache, "expired");
+    assert!(!log_path.exists(), "a free expired log is reclaimed");
+    assert!(!sidecar.exists(), "the sidecar is reclaimed with its log");
+}
