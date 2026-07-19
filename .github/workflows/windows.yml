@@ -78,6 +78,12 @@ jobs:
           rustup target add aarch64-pc-windows-msvc
           cargo check -p slate-uniffi --target aarch64-pc-windows-msvc --locked
 
+      # Program decision 19 / w0_spec §W0-3 item 3: the CLI builds and its
+      # suite runs on the Windows runner — the full extent of Windows CLI
+      # scope (distribution reserved as W-E5).
+      - name: slate-cli test suite
+        run: cargo test -p slate-cli --locked
+
       - name: Generate C# bindings (builds slate_uniffi x64 cdylib)
         run: ./apps/slate-windows/generate-bindings.ps1 -Locked
 
