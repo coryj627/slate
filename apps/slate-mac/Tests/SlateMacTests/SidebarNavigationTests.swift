@@ -188,6 +188,17 @@ final class SidebarNavigationTests: XCTestCase {
     XCTAssertEqual(state.lastMutationAnnouncement, "Expanded loaded folders.")
   }
 
+  func testFocusFilterDispatchesThroughTheRouterAndBumpsTheRequest() throws {
+    // FL-09 regression: the router's navigation case must include
+    // focusFilter — membership in `sidebarNavigationCommands` alone
+    // doesn't route it, and a missed case throws at the menu/palette.
+    let (state, _) = try openVault(named: "focusFilter")
+    try publish(state)
+    let before = state.sidebarFilterFocusRequest
+    _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarFocusFilter)
+    XCTAssertEqual(state.sidebarFilterFocusRequest, before + 1)
+  }
+
   // MARK: - Shortcuts activation (FL3-3.2)
 
   func testOpenShortcutFolderRevealsAndFileOpens() async throws {

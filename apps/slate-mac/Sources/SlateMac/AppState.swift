@@ -2156,7 +2156,8 @@ final class AppState: ObservableObject {
             SlateCommandID.sidebarCollapseAll,
             SlateCommandID.sidebarExpandLoaded,
             SlateCommandID.sidebarHistoryBack,
-            SlateCommandID.sidebarHistoryForward:
+            SlateCommandID.sidebarHistoryForward,
+            SlateCommandID.sidebarFocusFilter:
             try dispatchSidebarNavigationAction(intent, rejected: rejected)
             return .completed(actionID: intent.actionID)
 
