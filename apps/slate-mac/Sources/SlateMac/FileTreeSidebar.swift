@@ -2906,6 +2906,22 @@ struct FileTreeSidebar: View {
                     "Some sidebar organization changes aren't saved yet. "
                         + "Retry to save them.")
             }
+            if appState.sidebarLayout == .dualPane {
+                // FL7-1 (#668): the internally gated dual-pane layout —
+                // filter field on top (always), then the split panes
+                // sharing the SAME tree VM and filter model, so a mode
+                // switch preserves expansion/selection/filter state and
+                // refetches nothing beyond lazy levels.
+                SidebarFilterField(
+                    model: filterModel,
+                    isFocused: $filterFieldFocused,
+                    moveFocusToResults: {})
+                SidebarDualPaneView(
+                    filterModel: filterModel,
+                    tree: tree,
+                    listModel: appState.sidebarContainerListModel)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
             sidebarSectionsMount
             Group {
                 if filterModel.isActive {
@@ -2932,6 +2948,7 @@ struct FileTreeSidebar: View {
             // with the rest while the filter overlay owns the surface.
             if !filterModel.isActive {
                 SidebarTagTreeView()
+            }
             }
 
             // U4-3 (#472): the bottom-left utility bar — Settings, Help, and
