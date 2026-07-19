@@ -2804,13 +2804,20 @@ final class SidebarImportCoordinatorTests: XCTestCase {
     intakeBox.store(intake)
 
     let result = await intake.load()
+    // Time-bounded, not yield-bounded (the retained-progress test
+    // above, hardened after the FL-06 PR run, is the precedent): the
+    // intake cancels this late-returned Progress before its continuation
+    // operation returns, but `Progress` invokes its cancellationHandler
+    // asynchronously on an arbitrary queue — and the release drains via
+    // ARC afterwards — so cooperative yields never synchronize with
+    // either, which flaked this test on the W0.5-1/W0.5-2 PR runs.
     for _ in 0..<1_000 {
       if first.progressCancellations() == 1,
         first.progressBox.load() == nil
       {
         break
       }
-      await Task.yield()
+      try? await Task.sleep(nanoseconds: 5_000_000)
     }
 
     XCTAssertEqual(
