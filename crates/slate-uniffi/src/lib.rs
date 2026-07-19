@@ -5298,12 +5298,15 @@ impl From<core::palette::MatchSpan> for MatchSpan {
     }
 }
 
-/// One ranked palette row: the command plus the label ranges the query
-/// matched (empty on an empty query or a hint-only match).
+/// One ranked palette row: the command, the label ranges the query
+/// matched (empty on an empty query or a hint-only match), and the
+/// winning fuzzy score (0 on an empty query) — hosts derive the global
+/// "strongest match overall" order from it without re-scoring.
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct PaletteRow {
     pub command: Command,
     pub label_match_spans: Vec<MatchSpan>,
+    pub score: i32,
 }
 
 impl From<core::palette::PaletteRow> for PaletteRow {
@@ -5311,6 +5314,7 @@ impl From<core::palette::PaletteRow> for PaletteRow {
         Self {
             command: r.command.into(),
             label_match_spans: r.label_match_spans.into_iter().map(Into::into).collect(),
+            score: r.score,
         }
     }
 }

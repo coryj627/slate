@@ -53,14 +53,17 @@ pub struct MatchSpan {
     pub end_byte: u32,
 }
 
-/// One ranked palette row: the command plus the label byte ranges the
-/// query matched. Spans are empty when the query is empty or when only
-/// the accessibility hint matched (there is nothing in the visible
-/// label to bold).
+/// One ranked palette row: the command, the label byte ranges the
+/// query matched, and the winning fuzzy score. Spans are empty when the
+/// query is empty or when only the accessibility hint matched (there is
+/// nothing in the visible label to bold); `score` is the max of the
+/// label and hint scores (0 on an empty query) so hosts can derive the
+/// global ranked order across sections without re-scoring.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PaletteRow {
     pub command: Command,
     pub label_match_spans: Vec<MatchSpan>,
+    pub score: i32,
 }
 
 /// One renderable palette section. `kind == None` is the synthetic
@@ -250,6 +253,7 @@ pub fn palette_sections(
                 PaletteRow {
                     command: command.clone(),
                     label_match_spans,
+                    score: best,
                 },
             ))
         })
@@ -295,6 +299,7 @@ fn empty_query_sections(
         .map(|command| PaletteRow {
             command: command.clone(),
             label_match_spans: Vec::new(),
+            score: 0,
         })
         .collect();
     if !recent_rows.is_empty() {
@@ -333,6 +338,7 @@ fn empty_query_sections(
                 .map(|command| PaletteRow {
                     command: command.clone(),
                     label_match_spans: Vec::new(),
+                    score: 0,
                 })
                 .collect(),
         });
@@ -625,6 +631,43 @@ mod tests {
                 start_byte: 0,
                 end_byte: 4
             }]
+        );
+    }
+
+    #[test]
+    fn scores_expose_the_global_ranked_order_across_sections() {
+        // The display is section-grouped, but hosts also need "strongest
+        // match overall" (the mac model's filteredCommands contract): a
+        // weak hint-only match in an early section must not outrank a
+        // strong label match in a later one once rows are re-sorted by
+        // the exposed score.
+        let commands = vec![
+            cmd_hint(
+                "a.file.print",
+                "Print Note",
+                "Print or save the note",
+                CommandSection::File,
+            ),
+            cmd("z.editor.save", "Save", CommandSection::Editor),
+        ];
+        let sections = palette_sections(&commands, "save", &[], &[]);
+        assert_eq!(
+            ids(&sections),
+            vec![vec!["a.file.print"], vec!["z.editor.save"]],
+            "display stays section-grouped",
+        );
+        let mut rows: Vec<&PaletteRow> = sections.iter().flat_map(|s| s.rows.iter()).collect();
+        rows.sort_by(|l, r| {
+            r.score
+                .cmp(&l.score)
+                .then_with(|| l.command.id.cmp(&r.command.id))
+        });
+        assert_eq!(rows[0].command.id, "z.editor.save");
+        assert!(
+            rows[0].score > rows[1].score,
+            "{} vs {}",
+            rows[0].score,
+            rows[1].score
         );
     }
 

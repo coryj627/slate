@@ -121,13 +121,21 @@ final class CommandPaletteModel: ObservableObject {
 
     // MARK: - Filtering
 
-    /// Commands matching the current query, in display order (the
-    /// core-ranked sections, flattened). Empty query returns the
-    /// snapshot unchanged. Feeds the filter-count announcement; the
-    /// ranking itself lives in `slate-core` (W0.5-1 #717).
+    /// Commands matching the current query in global ranked order —
+    /// descending score with id as the stable tiebreaker, the same
+    /// contract as before #717. The score is core-computed and carried
+    /// on each row; the host only orders by it (display stays the
+    /// section-grouped `sections`). Empty query returns the snapshot
+    /// unchanged. Feeds the filter-count announcement.
     var filteredCommands: [Command] {
         guard !query.isEmpty else { return commands }
-        return sections.flatMap { $0.commands }
+        return sections
+            .flatMap { $0.rows }
+            .sorted { lhs, rhs in
+                if lhs.score != rhs.score { return lhs.score > rhs.score }
+                return lhs.command.id < rhs.command.id
+            }
+            .map(\.command)
     }
 
     /// Move selection to the next visible row, wrapping at the
