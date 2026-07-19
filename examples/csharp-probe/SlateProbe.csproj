@@ -14,6 +14,8 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <!-- The csbindgen counter-candidate is its own project. -->
+    <Compile Remove="ShimProbe\**\*.cs" />
     <None Include="generated\slate_uniffi.dll" Link="slate_uniffi.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 

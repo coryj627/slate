@@ -38,4 +38,16 @@ if ($LASTEXITCODE -ne 0) { throw "uniffi-bindgen-cs failed ($LASTEXITCODE)" }
 # next to the binding source so the csproj can copy it to the output dir.
 Copy-Item $dll (Join-Path $genDir 'slate_uniffi.dll') -Force
 
-Write-Host "==> done: $genDir"
+Write-Host "==> cargo build (csbindgen shim; emits ShimProbe/generated/NativeMethods.g.cs)"
+Push-Location (Join-Path $probeDir 'shim')
+try {
+    cargo build
+    if ($LASTEXITCODE -ne 0) { throw "shim cargo build failed ($LASTEXITCODE)" }
+}
+finally { Pop-Location }
+
+$shimDll = Join-Path $targetDir 'debug\slate_csabi_shim.dll'
+if (-not (Test-Path $shimDll)) { throw "expected shim cdylib not found: $shimDll" }
+Copy-Item $shimDll (Join-Path $probeDir 'ShimProbe\generated\slate_csabi_shim.dll') -Force
+
+Write-Host "==> done: $genDir + ShimProbe/generated"
