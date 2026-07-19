@@ -339,6 +339,60 @@ pub fn census_synthesize_vault_error(arm: String) -> Result<(), VaultError> {
     })
 }
 
+/// Census live-object counters (w0_spec §W0-3 item 2, #715): every
+/// `uniffi::Object` carries an RAII [`census_live::Marker`] that counts
+/// it live from construction until its `Drop` — i.e. until the last
+/// foreign reference is released and the native allocation actually
+/// freed. [`census_live_object_counts`] exposes the counters so binding
+/// censuses can assert native release (a collected foreign wrapper with
+/// a broken finalizer would leave the counter high), not merely managed
+/// collection. Not a product surface.
+mod census_live {
+    use std::sync::atomic::{AtomicI64, Ordering};
+
+    pub static SESSIONS: AtomicI64 = AtomicI64::new(0);
+    pub static BUFFERS: AtomicI64 = AtomicI64::new(0);
+    pub static CANCEL_TOKENS: AtomicI64 = AtomicI64::new(0);
+    pub static REGISTRIES: AtomicI64 = AtomicI64::new(0);
+
+    /// RAII marker: one live native object of its kind.
+    pub struct Marker(&'static AtomicI64);
+
+    impl Marker {
+        pub fn count(counter: &'static AtomicI64) -> Self {
+            counter.fetch_add(1, Ordering::AcqRel);
+            Marker(counter)
+        }
+    }
+
+    impl Drop for Marker {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::AcqRel);
+        }
+    }
+}
+
+/// Live native object counts per bound `uniffi::Object` type.
+#[derive(uniffi::Record)]
+pub struct LiveObjectCounts {
+    pub sessions: i64,
+    pub buffers: i64,
+    pub cancel_tokens: i64,
+    pub registries: i64,
+}
+
+/// Snapshot the census live-object counters (see [`census_live`]).
+#[uniffi::export]
+pub fn census_live_object_counts() -> LiveObjectCounts {
+    use std::sync::atomic::Ordering;
+    LiveObjectCounts {
+        sessions: census_live::SESSIONS.load(Ordering::Acquire),
+        buffers: census_live::BUFFERS.load(Ordering::Acquire),
+        cancel_tokens: census_live::CANCEL_TOKENS.load(Ordering::Acquire),
+        registries: census_live::REGISTRIES.load(Ordering::Acquire),
+    }
+}
+
 // =====================================================================
 // VaultSession FFI surface (Milestone A subset)
 // =====================================================================
@@ -502,6 +556,7 @@ fn flatten_tag_tree(tree: core::TagTree) -> TagTree {
 #[derive(uniffi::Object)]
 pub struct VaultSession {
     inner: core::VaultSession,
+    _census: census_live::Marker,
 }
 
 #[uniffi::export]
@@ -512,7 +567,10 @@ impl VaultSession {
     #[uniffi::constructor]
     pub fn open_filesystem(root_path: String) -> Result<Arc<Self>, VaultError> {
         let inner = core::VaultSession::from_filesystem(PathBuf::from(root_path))?;
-        Ok(Arc::new(Self { inner }))
+        Ok(Arc::new(Self {
+            inner,
+            _census: census_live::Marker::count(&census_live::SESSIONS),
+        }))
     }
 
     /// The physical root identity observed inside this session's open,
@@ -1570,6 +1628,7 @@ impl VaultSession {
 #[derive(uniffi::Object)]
 pub struct CancelToken {
     inner: core::CancelToken,
+    _census: census_live::Marker,
 }
 
 #[uniffi::export]
@@ -1578,6 +1637,7 @@ impl CancelToken {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             inner: core::CancelToken::new(),
+            _census: census_live::Marker::count(&census_live::CANCEL_TOKENS),
         })
     }
 
@@ -4686,6 +4746,7 @@ pub fn editor_highlight_spans_in_range(
 #[derive(uniffi::Object)]
 pub struct DocumentBuffer {
     inner: std::sync::Mutex<core::doc_buffer::DocBufferState>,
+    _census: census_live::Marker,
 }
 
 #[uniffi::export]
@@ -4695,6 +4756,7 @@ impl DocumentBuffer {
     pub fn new(text: String) -> Arc<Self> {
         Arc::new(Self {
             inner: std::sync::Mutex::new(core::doc_buffer::DocBufferState::new(&text)),
+            _census: census_live::Marker::count(&census_live::BUFFERS),
         })
     }
 
@@ -5551,6 +5613,7 @@ fn truncate_action_message(mut message: String) -> String {
 #[derive(uniffi::Object)]
 pub struct CommandRegistry {
     inner: core::CommandRegistry,
+    _census: census_live::Marker,
 }
 
 #[uniffi::export]
@@ -5559,6 +5622,7 @@ impl CommandRegistry {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             inner: core::CommandRegistry::new(),
+            _census: census_live::Marker::count(&census_live::REGISTRIES),
         })
     }
 

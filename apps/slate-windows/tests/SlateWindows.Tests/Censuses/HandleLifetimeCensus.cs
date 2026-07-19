@@ -58,10 +58,17 @@ public class HandleLifetimeCensus
     [Fact]
     public void GcPressure_ThousandsOfHandlesThroughDisposeAndFinalizerMix()
     {
-        // Finalizer-path wrappers are tracked as WeakReferences (created in
-        // a non-inlined helper so no JIT-held local pins them): the census
-        // proves the finalizer path actually collects — a broken finalizer
-        // would otherwise stay green until production resource exhaustion.
+        // Native release is asserted against the FFI's census live-object
+        // counters (census_live_object_counts: each uniffi::Object counts
+        // itself live from construction until its Rust Drop). A collected
+        // managed wrapper whose finalizer failed to free the native handle
+        // leaves the counter high and fails this census — WeakReferences
+        // alone would go dead regardless. Wrappers are created in
+        // non-inlined helpers so no JIT-held local pins them; the test
+        // assembly runs serially (AssemblyInfo) so the process-global
+        // counters see only this test's objects.
+        var baseline = SlateUniffiMethods.CensusLiveObjectCounts();
+
         int buffers = CensusTier.Scale(800, 4000);
         var undisposed = new List<WeakReference>();
         for (int i = 0; i < buffers; i++)
@@ -84,16 +91,30 @@ public class HandleLifetimeCensus
                 undisposed.Add(weak); // every third session finalizer-collected
             }
         }
-        for (int i = 0; i < 3; i++)
+
+        bool settled = Waiting.WaitFor(() =>
         {
             GC.Collect();
             GC.WaitForPendingFinalizers();
-        }
+            var now = SlateUniffiMethods.CensusLiveObjectCounts();
+            return now.Sessions == baseline.Sessions
+                && now.Buffers == baseline.Buffers
+                && now.CancelTokens == baseline.CancelTokens;
+        }, 15_000);
+        var final = SlateUniffiMethods.CensusLiveObjectCounts();
+        Assert.True(
+            settled,
+            "native handles leaked through the finalizer path: live " +
+            $"sessions {final.Sessions} (baseline {baseline.Sessions}), " +
+            $"buffers {final.Buffers} (baseline {baseline.Buffers}), " +
+            $"tokens {final.CancelTokens} (baseline {baseline.CancelTokens})");
 
+        // Secondary managed-retention check: the wrappers themselves must
+        // also have collected.
         int alive = undisposed.Count(w => w.IsAlive);
         Assert.True(
             alive <= 1,
-            $"finalizer path leaks wrappers: {alive}/{undisposed.Count} finalizer-path handles still alive after GC");
+            $"managed wrappers pinned: {alive}/{undisposed.Count} finalizer-path wrappers still alive after GC");
 
         using var reopened = VaultSession.OpenFilesystem(vault.Root);
         using var census = new CancelToken();

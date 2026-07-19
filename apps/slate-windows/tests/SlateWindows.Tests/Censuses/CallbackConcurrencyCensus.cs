@@ -26,31 +26,24 @@ public class CallbackConcurrencyCensus
         ulong registration = session.RegisterEventListener(events);
         var progress = new ProgressRecorder();
         using var registry = new CommandRegistry();
-        int commandInvokes = 0;
+        var action = new ScriptedAction(() => { });
         _ = registry.Register(
-            new Command("census.spin", "Spin", null, null, CommandSection.File),
-            new ScriptedAction(() => Interlocked.Increment(ref commandInvokes)));
+            new Command("census.spin", "Spin", null, null, CommandSection.File), action);
 
-        // UI-thread simulation: a dedicated thread pumping short work items
-        // for the duration of the storm, the load pattern §W-E names.
+        // The "UI thread" is a real single-threaded work pump: command
+        // invocations execute as posted work items ON that thread while
+        // the scan and save storms run on background threads — the
+        // UI-thread-simulated load §W-E names, with thread identities
+        // recorded so per-trait dispatch affinity is asserted below.
+        using var pump = new WorkPump();
         var stop = new CancellationTokenSource();
-        var uiPump = Task.Factory.StartNew(() =>
-        {
-            var spin = new System.Diagnostics.Stopwatch();
-            while (!stop.IsCancellationRequested)
-            {
-                spin.Restart();
-                while (spin.ElapsedTicks < TimeSpan.TicksPerMillisecond)
-                {
-                }
-                Thread.Yield();
-            }
-        }, TaskCreationOptions.LongRunning);
 
         Exception? failure = null;
+        int scanThreadId = 0;
         using var scanToken = new CancelToken();
         var scanTask = Task.Run(() =>
         {
+            Volatile.Write(ref scanThreadId, Environment.CurrentManagedThreadId);
             try
             {
                 session.ScanInitialWithProgress(scanToken, progress);
@@ -60,8 +53,10 @@ public class CallbackConcurrencyCensus
                 Volatile.Write(ref failure, ex);
             }
         });
+        int saveThreadId = 0;
         var saveTask = Task.Run(() =>
         {
+            Volatile.Write(ref saveThreadId, Environment.CurrentManagedThreadId);
             try
             {
                 int n = 0;
@@ -85,7 +80,8 @@ public class CallbackConcurrencyCensus
                 int n = 0;
                 while (!stop.IsCancellationRequested)
                 {
-                    registry.InvokeById("census.spin");
+                    pump.Post(() => registry.InvokeById("census.spin"))
+                        .Wait(TimeSpan.FromSeconds(30));
                     n++;
                 }
                 return n;
@@ -99,7 +95,7 @@ public class CallbackConcurrencyCensus
 
         bool scanDone = scanTask.Wait(TimeSpan.FromSeconds(180));
         stop.Cancel();
-        bool sideDone = Task.WaitAll(new Task[] { saveTask, invokeTask, uiPump }, TimeSpan.FromSeconds(30));
+        bool sideDone = Task.WaitAll(new Task[] { saveTask, invokeTask }, TimeSpan.FromSeconds(30));
 
         Assert.True(scanDone && sideDone, "storm threads did not terminate (deadlock?)");
         Assert.Null(Volatile.Read(ref failure));
@@ -123,7 +119,7 @@ public class CallbackConcurrencyCensus
 
         Assert.True(saveTask.Result > 0, "no saves progressed during the storm");
         Assert.True(invokeTask.Result > 0, "no command invokes progressed during the storm");
-        Assert.Equal(invokeTask.Result, commandInvokes);
+        Assert.Equal(invokeTask.Result, action.InvocationCount);
 
         // VaultEventListener multi-method delivery under load: the initial
         // scan drives the index-phase choreography and the save churn
@@ -153,11 +149,19 @@ public class CallbackConcurrencyCensus
             events.Locked(r => r.FileChanges.Count) > 0,
             "no file-change events flowed during the storm");
 
-        // The instrumentation is part of the census: callbacks must have
-        // arrived off the test thread (Rust dispatch threads).
-        int testThread = Environment.CurrentManagedThreadId;
-        Assert.Contains(progress.ThreadIds, id => id != testThread);
-        Assert.Contains(events.ThreadIds, id => id != testThread);
+        // Per-trait dispatch affinity (the actual binding contract, from
+        // the W0-1 probe evidence):
+        // - ScanProgressListener dispatches inline on the thread that
+        //   called scan_initial_with_progress — nothing else.
+        // - CommandAction re-enters on its invoking thread, which here is
+        //   the pump ("UI") thread for every invocation.
+        // - VaultEventListener file-change dispatch reaches managed code
+        //   from the save-calling thread (background workers may add
+        //   more, e.g. compaction), and never from the pump thread.
+        Assert.Equal(new[] { Volatile.Read(ref scanThreadId) }, progress.ThreadIds.ToArray());
+        Assert.Equal(new[] { pump.ManagedThreadId }, action.ThreadIds.ToArray());
+        Assert.Contains(Volatile.Read(ref saveThreadId), events.ThreadIds);
+        Assert.DoesNotContain(pump.ManagedThreadId, events.ThreadIds);
 
         session.UnregisterEventListener(registration);
     }

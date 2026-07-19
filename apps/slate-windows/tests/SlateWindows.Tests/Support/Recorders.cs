@@ -113,7 +113,9 @@ internal sealed class EventRecorder : VaultEventListener
 internal sealed class ScriptedAction : CommandAction
 {
     private readonly Action _body;
+    private readonly object _lock = new();
     public int InvocationCount;
+    public readonly HashSet<int> ThreadIds = new();
 
     public ScriptedAction(Action body)
     {
@@ -123,6 +125,10 @@ internal sealed class ScriptedAction : CommandAction
     public void Invoke()
     {
         Interlocked.Increment(ref InvocationCount);
+        lock (_lock)
+        {
+            ThreadIds.Add(Environment.CurrentManagedThreadId);
+        }
         _body();
     }
 }
