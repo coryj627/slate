@@ -87,4 +87,15 @@ enum SidebarDualPaneDivider {
   static func store(_ fraction: Double, in defaults: UserDefaults) {
     defaults.set(clamp(fraction), forKey: defaultsKey)
   }
+
+  /// Anchor-based drag math (review round: `DragGesture` translation
+  /// is CUMULATIVE from gesture start — adding it to the live fraction
+  /// compounds every callback). The fraction is always derived from
+  /// the gesture's STARTING fraction plus the current translation.
+  static func dragged(
+    fromAnchor anchor: Double, translation: Double, totalHeight: Double
+  ) -> Double {
+    guard totalHeight > 0 else { return clamp(anchor) }
+    return clamp(anchor + translation / totalHeight)
+  }
 }

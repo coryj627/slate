@@ -5086,6 +5086,7 @@ final class AppState: ObservableObject {
         // FL7-1: the container selection and list contents are
         // vault-scoped; the layout gate itself is device-local.
         sidebarSelectedContainer = nil
+        sidebarDualPaneListSelection = nil
         sidebarContainerListModel.resetForVaultClose()
         if sidebarOrganizationJournalRecoveryPending {
             sidebarOrganizationJournalRecoveryPending = false
@@ -6141,6 +6142,85 @@ final class AppState: ObservableObject {
     /// The gated list pane's content model — bound with the filter
     /// model on vault open, reset with it on teardown.
     let sidebarContainerListModel = SidebarContainerListModel()
+
+    /// One-shot request: ↓ from the filter field enters the dual-pane
+    /// list at row 1 (the FL4-2 walk, dual-pane edition).
+    @Published private(set) var sidebarDualPaneListFocusRequest = 0
+    func requestDualPaneListFocus() {
+        sidebarDualPaneListFocusRequest &+= 1
+    }
+
+    /// The list pane's selected row. Hoisted here (not view @State) so
+    /// a mode switch preserves it and the action snapshot can follow
+    /// it (review round: view-local selection died on re-mount and
+    /// never owned the snapshot).
+    @Published var sidebarDualPaneListSelection: String?
+
+    /// FL7-1 rule 3: publish the dual-pane selection into the ONE
+    /// action-snapshot funnel — a visible list row is a single-file
+    /// target; a selected folder container is a single-folder target;
+    /// anything else is an empty selection. Menu/palette/keyboard
+    /// actions must never act on a stale tree-mode snapshot after the
+    /// user visibly selected something else here (the FL-09 lesson,
+    /// same funnel).
+    func publishDualPaneSelectionSnapshot() {
+        guard sidebarLayout == .dualPane, let session = currentSession else {
+            return
+        }
+        let items: [SidebarSelectionItem]
+        var focused: String?
+        var creationParent = ""
+        if let path = sidebarDualPaneListSelection {
+            let summary =
+                sidebarContainerListModel.page?.files.first {
+                    $0.path == path
+                }
+                ?? sidebarFilterModel.results?.files.first { $0.path == path }
+            items = [
+                SidebarSelectionItem(
+                    path: path, isDirectory: false,
+                    isMarkdown: summary?.isMarkdown ?? path.hasSuffix(".md"))
+            ]
+            focused = path
+            let parent = (path as NSString).deletingLastPathComponent
+            creationParent = parent == "." ? "" : parent
+        } else if case .folder(let path) = sidebarSelectedContainer,
+            !path.isEmpty
+        {
+            items = [
+                SidebarSelectionItem(
+                    path: path, isDirectory: true, isMarkdown: false)
+            ]
+            focused = path
+            creationParent = path
+        } else {
+            items = []
+        }
+        _ = publishSidebarSelectionSnapshot(
+            SidebarSelectionSnapshot(
+                sessionIdentity: ObjectIdentifier(session),
+                items: items,
+                focusedPath: focused,
+                creationParent: creationParent))
+    }
+
+    /// FL7-1 rule 3: the editor→sidebar mirror. Any file becoming the
+    /// active editor file (Recents, file shortcuts, search, quick
+    /// open) selects its CONTAINING folder container and its list row.
+    /// An active filter keeps its results (the row still highlights
+    /// when present).
+    func mirrorOpenedFileIntoDualPane(_ path: String) {
+        guard sidebarLayout == .dualPane else { return }
+        if !sidebarFilterModel.isActive {
+            let container = SidebarContainer.containing(filePath: path)
+            if sidebarSelectedContainer != container {
+                sidebarSelectedContainer = container
+                sidebarContainerListModel.show(container)
+            }
+        }
+        sidebarDualPaneListSelection = path
+        publishDualPaneSelectionSnapshot()
+    }
 
     /// VO pane-transition announcements (rule 4): the pane header,
     /// once per transition, through the one announce seam.

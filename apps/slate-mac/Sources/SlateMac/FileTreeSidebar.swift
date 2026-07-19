@@ -2915,7 +2915,9 @@ struct FileTreeSidebar: View {
                 SidebarFilterField(
                     model: filterModel,
                     isFocused: $filterFieldFocused,
-                    moveFocusToResults: {})
+                    moveFocusToResults: {
+                        appState.requestDualPaneListFocus()
+                    })
                 SidebarDualPaneView(
                     filterModel: filterModel,
                     tree: tree,

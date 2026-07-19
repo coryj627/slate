@@ -295,6 +295,69 @@ final class SidebarDualPaneContainerTests: XCTestCase {
         state.sidebarFilterModel.escapeInField()
     }
 
+    // MARK: - Review-round regressions
+
+    func testDualPaneSelectionOwnsTheActionSnapshot() throws {
+        let state = makeState()
+        try openVault(state, named: "snapshot", files: ["P/a.md", "P/b.md"])
+        state.setSidebarLayoutForInternalTesting(.dualPane)
+
+        state.sidebarSelectedContainer = .folder(path: "P")
+        state.publishDualPaneSelectionSnapshot()
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.map(\.path), ["P"],
+            "a selected folder container is a single-folder target")
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.first?.isDirectory, true)
+
+        state.sidebarContainerListModel.show(.folder(path: "P"))
+        state.sidebarDualPaneListSelection = "P/a.md"
+        state.publishDualPaneSelectionSnapshot()
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.map(\.path), ["P/a.md"],
+            "a selected list row is a single-file target")
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.first?.isMarkdown, true)
+    }
+
+    func testMirrorSelectsContainingFolderAndListRow() async throws {
+        let state = makeState()
+        try openVault(state, named: "mirror", files: ["P/note.md", "Q/x.md"])
+        state.setSidebarLayoutForInternalTesting(.dualPane)
+        state.sidebarSelectedContainer = .folder(path: "Q")
+        state.sidebarContainerListModel.show(.folder(path: "Q"))
+
+        state.mirrorOpenedFileIntoDualPane("P/note.md")
+        XCTAssertEqual(
+            state.sidebarSelectedContainer, .folder(path: "P"),
+            "the mirror selects the CONTAINING folder container")
+        XCTAssertEqual(state.sidebarDualPaneListSelection, "P/note.md")
+        XCTAssertEqual(
+            state.sidebarContainerListModel.page?.files.map(\.path),
+            ["P/note.md"],
+            "the list pane follows the mirrored container")
+        XCTAssertEqual(
+            state.sidebarSelectionSnapshot?.items.map(\.path), ["P/note.md"])
+    }
+
+    func testDividerDragMathIsAnchorBasedNotCumulative() {
+        // Review round: translation is cumulative from gesture start —
+        // three callbacks of 10/20/30pt must land at anchor+30pt, not
+        // anchor+60pt.
+        let anchor = 0.5
+        var fraction = anchor
+        for translation in [10.0, 20.0, 30.0] {
+            fraction = SidebarDualPaneDivider.dragged(
+                fromAnchor: anchor, translation: translation, totalHeight: 300)
+        }
+        XCTAssertEqual(fraction, 0.6, accuracy: 0.0001)
+        XCTAssertEqual(
+            SidebarDualPaneDivider.dragged(
+                fromAnchor: 0.5, translation: -1000, totalHeight: 300),
+            SidebarDualPaneDivider.minimumFraction,
+            "drag output clamps")
+    }
+
     // MARK: - Vault lifecycle
 
     func testContainerStateDiesWithTheVaultButLayoutSurvives() throws {
