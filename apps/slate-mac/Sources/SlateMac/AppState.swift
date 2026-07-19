@@ -4872,6 +4872,7 @@ final class AppState: ObservableObject {
     struct SidebarOrganizationState: Equatable {
         var prefs = SidebarOrganizationPrefs()
         var pins = SidebarPins()
+        var shortcuts: [SidebarShortcut] = []
     }
 
     @Published private(set) var sidebarOrganization = SidebarOrganizationState()
@@ -5032,7 +5033,8 @@ final class AppState: ObservableObject {
         if notice == nil {
             let decoded = SidebarOrganizationSchema.decode(root: recovered.root)
             organization = SidebarOrganizationState(
-                prefs: decoded.prefs, pins: decoded.pins)
+                prefs: decoded.prefs, pins: decoded.pins,
+                shortcuts: decoded.shortcuts)
         } else {
             organization = SidebarOrganizationState()
         }
@@ -5449,7 +5451,8 @@ final class AppState: ObservableObject {
                 // because only the tail publishes.
                 let decoded = SidebarOrganizationSchema.decode(root: finalRoot)
                 let organization = SidebarOrganizationState(
-                    prefs: decoded.prefs, pins: decoded.pins)
+                    prefs: decoded.prefs, pins: decoded.pins,
+                    shortcuts: decoded.shortcuts)
                 if organization != self.sidebarOrganization {
                     self.sidebarOrganization = organization
                 }
@@ -6021,6 +6024,7 @@ final class AppState: ObservableObject {
         ) { state in
             frozen.apply(to: &state.pins)
             frozen.apply(to: &state.prefs)
+            frozen.apply(to: &state.shortcuts)
         }
     }
 
@@ -8908,7 +8912,8 @@ final class AppState: ObservableObject {
                     let decoded = SidebarOrganizationSchema.decode(
                         root: refreshed.root)
                     organization = SidebarOrganizationState(
-                        prefs: decoded.prefs, pins: decoded.pins)
+                        prefs: decoded.prefs, pins: decoded.pins,
+                        shortcuts: decoded.shortcuts)
                 } else {
                     organization = SidebarOrganizationState()
                 }
@@ -8927,7 +8932,8 @@ final class AppState: ObservableObject {
         if sidebarVaultPrefsNotice == nil {
             let decoded = SidebarOrganizationSchema.decode(root: result.root)
             organization = SidebarOrganizationState(
-                prefs: decoded.prefs, pins: decoded.pins)
+                prefs: decoded.prefs, pins: decoded.pins,
+                shortcuts: decoded.shortcuts)
         } else {
             organization = SidebarOrganizationState()
         }
@@ -9142,7 +9148,8 @@ final class AppState: ObservableObject {
             if adoptedNotice == nil {
                 let decoded = SidebarOrganizationSchema.decode(root: adoptedRoot)
                 organization = SidebarOrganizationState(
-                    prefs: decoded.prefs, pins: decoded.pins)
+                    prefs: decoded.prefs, pins: decoded.pins,
+                    shortcuts: decoded.shortcuts)
             } else {
                 organization = SidebarOrganizationState()
             }

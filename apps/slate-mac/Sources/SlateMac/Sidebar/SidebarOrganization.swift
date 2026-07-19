@@ -569,6 +569,19 @@ struct SidebarPinPruneLedger {
 /// value drives the in-memory application, the locked raw disk replay, and —
 /// while the preference file is read-only — the deferred journal that Retry
 /// replays before republishing (round-4 finding 2).
+/// FL3-3 (#660): one vault-local shortcut. Storage keeps `kind` as a raw
+/// string — FL3-3 ships `file` and `folder`; `tag`/`untagged` are reserved
+/// for FL5-2 and must survive every rewrite untouched and in place.
+struct SidebarShortcut: Equatable, Sendable {
+  enum Kind: String, Sendable {
+    case file
+    case folder
+  }
+
+  let kind: Kind
+  let path: String
+}
+
 struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
   /// Journal identity: pending transforms are acknowledged (removed) only
   /// after their locked replay commits (round-6 finding 1).
@@ -642,6 +655,107 @@ struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
     }
     SidebarOrganizationSchema.deleteFolderOverrides(
       &root, folders: deletedFolders)
+    applyRawShortcuts(to: &root)
+  }
+
+  /// FL3-3: retarget/remove file|folder shortcut entries in the RAW
+  /// authored array. Reserved kinds keep their bytes and positions;
+  /// entries that converge on an existing target drop (source-wins,
+  /// like pins).
+  private func applyRawShortcuts(to root: inout [String: Any]) {
+    guard let raw = root[SidebarOrganizationSchema.shortcutsKey] as? [Any]
+    else { return }
+    var changed = false
+    var seen: Set<String> = []
+    var result: [Any] = []
+    for entry in raw {
+      guard var object = entry as? [String: Any],
+        let kindRaw = object["kind"] as? String,
+        SidebarShortcut.Kind(rawValue: kindRaw) != nil,
+        let path = object["path"] as? String
+      else {
+        result.append(entry)
+        continue
+      }
+      guard
+        let updated = Self.transformedShortcutPath(
+          path, kind: kindRaw, renames: renames,
+          deletedFiles: deletedFiles, deletedFolders: deletedFolders)
+      else {
+        changed = true
+        continue
+      }
+      if updated != path { changed = true }
+      object["path"] = updated
+      if seen.insert("\(kindRaw)\u{0}\(updated)").inserted {
+        result.append(object)
+      } else {
+        changed = true
+      }
+    }
+    if changed {
+      root[SidebarOrganizationSchema.shortcutsKey] = result
+    }
+  }
+
+  /// In-memory counterpart of `applyRawShortcuts` for published state.
+  @discardableResult
+  func apply(to shortcuts: inout [SidebarShortcut]) -> Bool {
+    var changed = false
+    var seen: Set<String> = []
+    var result: [SidebarShortcut] = []
+    for shortcut in shortcuts {
+      guard
+        let updated = Self.transformedShortcutPath(
+          shortcut.path, kind: shortcut.kind.rawValue, renames: renames,
+          deletedFiles: deletedFiles, deletedFolders: deletedFolders)
+      else {
+        changed = true
+        continue
+      }
+      if updated != shortcut.path { changed = true }
+      let next = SidebarShortcut(kind: shortcut.kind, path: updated)
+      if seen.insert("\(next.kind.rawValue)\u{0}\(next.path)").inserted {
+        result.append(next)
+      } else {
+        changed = true
+      }
+    }
+    if changed { shortcuts = result }
+    return changed
+  }
+
+  /// One shortcut path through this transform: nil means the target was
+  /// deleted. File and folder paths are disjoint namespaces, so exact
+  /// matches respect the entry's kind while descendant prefixes apply to
+  /// both kinds.
+  static func transformedShortcutPath(
+    _ path: String, kind: String, renames: [Rename],
+    deletedFiles: [String], deletedFolders: [String]
+  ) -> String? {
+    var current = path
+    for rename in renames {
+      if current == rename.oldPath {
+        let kindMatches =
+          rename.isDirectory == nil
+          || (rename.isDirectory == true && kind == "folder")
+          || (rename.isDirectory == false && kind == "file")
+        if kindMatches {
+          current = rename.newPath
+          continue
+        }
+      }
+      let prefix = rename.oldPath + "/"
+      if rename.isDirectory != false, current.hasPrefix(prefix) {
+        current = rename.newPath + "/" + String(current.dropFirst(prefix.count))
+      }
+    }
+    for folder in deletedFolders {
+      if kind == "folder", current == folder { return nil }
+      if current.hasPrefix(folder + "/") { return nil }
+    }
+    if kind == "file", deletedFiles.contains(current) { return nil }
+    return current
   }
 }
 
@@ -654,6 +768,7 @@ enum SidebarOrganizationSchema {
   static let groupingKey = "grouping"
   static let folderOverridesKey = "folderOverrides"
   static let pinsKey = "pins"
+  static let shortcutsKey = "shortcuts"
 
   /// Top-level shape validation for the FL-06 known sections. A file whose
   /// KNOWN section uses an unrecognized top-level shape (for example `pins`
@@ -670,6 +785,7 @@ enum SidebarOrganizationSchema {
   static let maxTotalPins = 10_000
   static let maxAuthoredEntries = 10_000
   static let maxAuthoredPathLength = 4_096
+  static let maxShortcuts = 200
 
   static func knownSectionShapesAreValid(root: [String: Any]) -> Bool {
     if let sort = root[sortKey], !(sort is [String: Any]) { return false }
@@ -685,6 +801,21 @@ enum SidebarOrganizationSchema {
         guard let entry = value as? [String: Any] else { return false }
         if let sort = entry[sortKey], !(sort is [String: Any]) { return false }
         if let grouping = entry[groupingKey], !(grouping is String) {
+          return false
+        }
+      }
+    }
+    if let shortcuts = root[shortcutsKey] {
+      guard let entries = shortcuts as? [Any] else { return false }
+      guard entries.count <= maxShortcuts else { return false }
+      for entry in entries {
+        guard let entry = entry as? [String: Any],
+          let kind = entry["kind"] as? String,
+          let path = entry["path"] as? String
+        else { return false }
+        // Reserved kinds (tag/untagged, FL5-2) are VALID shapes — kind is
+        // an open string here; only its size is bounded.
+        guard kind.count <= 64, path.count <= maxAuthoredPathLength else {
           return false
         }
       }
@@ -710,7 +841,12 @@ enum SidebarOrganizationSchema {
     return true
   }
 
-  static func decode(root: [String: Any]) -> (prefs: SidebarOrganizationPrefs, pins: SidebarPins) {
+  static func decode(
+    root: [String: Any]
+  ) -> (
+    prefs: SidebarOrganizationPrefs, pins: SidebarPins,
+    shortcuts: [SidebarShortcut]
+  ) {
     var prefs = SidebarOrganizationPrefs()
     if let sort = decodeSort(root[sortKey]) {
       prefs.vaultChoice.sort = sort
@@ -742,7 +878,83 @@ enum SidebarOrganizationSchema {
         pins.replacePaths(deduped, forFolder: folder)
       }
     }
-    return (prefs, pins)
+    return (prefs, pins, decodeShortcuts(root: root))
+  }
+
+  /// FL3-3: decode the file|folder shortcuts the UI ships now. Reserved
+  /// kinds stay only in the raw array (rewrites preserve them); duplicates
+  /// collapse first-occurrence-wins, like pins.
+  static func decodeShortcuts(root: [String: Any]) -> [SidebarShortcut] {
+    guard let raw = root[shortcutsKey] as? [Any] else { return [] }
+    var seen: Set<String> = []
+    var result: [SidebarShortcut] = []
+    for entry in raw {
+      guard let entry = entry as? [String: Any],
+        let kindRaw = entry["kind"] as? String,
+        let kind = SidebarShortcut.Kind(rawValue: kindRaw),
+        let path = entry["path"] as? String
+      else { continue }
+      if seen.insert("\(kindRaw)\u{0}\(path)").inserted {
+        result.append(SidebarShortcut(kind: kind, path: path))
+      }
+    }
+    return result
+  }
+
+  private static func shortcutEntryMatches(
+    _ entry: Any, kind: String, path: String
+  ) -> Bool {
+    guard let entry = entry as? [String: Any] else { return false }
+    return entry["kind"] as? String == kind && entry["path"] as? String == path
+  }
+
+  /// Exact-op shortcut mutations operate on the RAW authored array so
+  /// reserved kinds survive positionally and unknown entry keys survive
+  /// byte-for-byte.
+  static func addShortcut(
+    _ root: inout [String: Any], kind: String, path: String
+  ) {
+    var raw = (root[shortcutsKey] as? [Any]) ?? []
+    guard
+      !raw.contains(where: { shortcutEntryMatches($0, kind: kind, path: path) })
+    else { return }
+    raw.append(["kind": kind, "path": path] as [String: Any])
+    root[shortcutsKey] = raw
+  }
+
+  static func removeShortcut(
+    _ root: inout [String: Any], kind: String, path: String
+  ) {
+    guard var raw = root[shortcutsKey] as? [Any] else { return }
+    raw.removeAll { shortcutEntryMatches($0, kind: kind, path: path) }
+    root[shortcutsKey] = raw
+  }
+
+  /// Move a VISIBLE (file|folder) shortcut one visible slot: the swap
+  /// partner is the nearest decodable neighbor, skipping reserved
+  /// entries, and the two RAW positions exchange. Edges clamp to no-ops.
+  static func moveShortcut(
+    _ root: inout [String: Any], kind: String, path: String, delta: Int
+  ) {
+    guard delta == 1 || delta == -1,
+      var raw = root[shortcutsKey] as? [Any],
+      let index = raw.firstIndex(where: {
+        shortcutEntryMatches($0, kind: kind, path: path)
+      })
+    else { return }
+    var partner = index + delta
+    while partner >= 0, partner < raw.count {
+      if let entry = raw[partner] as? [String: Any],
+        let kindRaw = entry["kind"] as? String,
+        SidebarShortcut.Kind(rawValue: kindRaw) != nil,
+        entry["path"] is String
+      {
+        raw.swapAt(index, partner)
+        root[shortcutsKey] = raw
+        return
+      }
+      partner += delta
+    }
   }
 
   private static func decodeSort(_ raw: Any?) -> SidebarSortOption? {
