@@ -79,7 +79,9 @@ struct TreeNode: Identifiable, Equatable {
     enum Kind: Equatable {
         /// A directory; `childDirCount`/`childFileCount` are its immediate
         /// (non-recursive) child counts, straight from `DirNodeSummary`.
-        case directory(childDirCount: Int, childFileCount: Int)
+        /// `hasFolderNote` mirrors FL6-1's exact-stem convention flag.
+        case directory(
+            childDirCount: Int, childFileCount: Int, hasFolderNote: Bool)
         /// A file carries a stable keyed summary object. Rich metadata updates
         /// publish through that object without mutating the structural tree;
         /// identity/rename still use `path`/`name` on `TreeNode`.
@@ -101,10 +103,21 @@ struct TreeNode: Identifiable, Equatable {
     }
 
     /// Total immediate children (dirs + files) — the "N items" count a folder
-    /// row announces. Directories only; 0 for files.
+    /// row announces. Directories only; 0 for files. The represented
+    /// folder-note row is hidden from the expanded children but still
+    /// counts here (FL6-1 rule 2 — the phrase stays honest).
     var itemCount: Int {
-        if case let .directory(dirs, files) = kind { return dirs + files }
+        if case let .directory(dirs, files, _) = kind { return dirs + files }
         return 0
+    }
+
+    /// FL6-1: the folder's note path (`<path>/<leaf>.md`) when the
+    /// listing flagged one, nil otherwise (and always nil for files).
+    var folderNotePath: String? {
+        guard case let .directory(_, _, hasNote) = kind, hasNote else {
+            return nil
+        }
+        return "\(path)/\(name).md"
     }
 }
 
@@ -117,6 +130,11 @@ struct SidebarFolderRowContent: View {
     let isSelected: Bool
     let selectionIsActive: Bool
     var isDropTargeted = false
+    /// FL6-1 rule 3: when the folder has a note, the row's plain tap
+    /// opens it — the chevron keeps disclosure through this dedicated
+    /// target. nil (note-less folders) leaves the chevron decorative
+    /// and the whole row toggling, exactly today's behavior.
+    var onChevronTap: (() -> Void)? = nil
 
     @Environment(\.layoutDirection) private var layoutDirection
 
@@ -137,16 +155,62 @@ struct SidebarFolderRowContent: View {
             Color.clear
                 .frame(width: FileTreeSidebar.indentWidth(for: node.depth), height: 0)
                 .accessibilityHidden(true)
-            SlateSymbol.disclosure.decorative
-                .rotationEffect(
-                    .degrees(
-                        isExpanded
-                            ? (layoutDirection == .rightToLeft ? -90 : 90)
-                            : 0))
-                .font(Tokens.Typography.caption)
-                .foregroundStyle(secondaryText)
-            (isExpanded ? SlateSymbol.folderOpen : SlateSymbol.folder).decorative
-                .foregroundStyle(secondaryText)
+            Group {
+                if let onChevronTap {
+                    Button(action: onChevronTap) {
+                        SlateSymbol.disclosure.decorative
+                            .rotationEffect(
+                                .degrees(
+                                    isExpanded
+                                        ? (layoutDirection == .rightToLeft ? -90 : 90)
+                                        : 0))
+                            .font(Tokens.Typography.caption)
+                            .foregroundStyle(secondaryText)
+                            // #866 pointer-target floor: the glyph alone
+                            // is far under the 28pt accessible minimum —
+                            // the frame carries the hit area (height is
+                            // capped visually by the row; the shape
+                            // extends the tappable region).
+                            .frame(
+                                width: Tokens.Spacing.xl + Tokens.Spacing.xs,
+                                height: Tokens.Spacing.xl + Tokens.Spacing.xs)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    // VoiceOver keeps the row-level Expand/Collapse rotor
+                    // action; a second focusable control per row would
+                    // double every tree walk.
+                    .accessibilityHidden(true)
+                } else {
+                    SlateSymbol.disclosure.decorative
+                        .rotationEffect(
+                            .degrees(
+                                isExpanded
+                                    ? (layoutDirection == .rightToLeft ? -90 : 90)
+                                    : 0))
+                        .font(Tokens.Typography.caption)
+                        .foregroundStyle(secondaryText)
+                }
+            }
+            ZStack(alignment: .bottomTrailing) {
+                (isExpanded ? SlateSymbol.folderOpen : SlateSymbol.folder).decorative
+                    .foregroundStyle(secondaryText)
+                if node.folderNotePath != nil {
+                    // FL6-1 rule 7: the note badge. Spoken via the AX
+                    // value's ", has folder note"; the glyph is the
+                    // visual twin and stays out of the AX tree.
+                    SlateSymbol.newNote.decorative
+                        .font(Tokens.Typography.caption)
+                        .imageScale(.small)
+                        .fontWeight(.bold)
+                        .foregroundStyle(primaryText)
+                        .padding(1)
+                        .background(
+                            Circle().fill(Tokens.ColorRole.surface))
+                        .offset(x: 4, y: 3)
+                        .accessibilityHidden(true)
+                }
+            }
             Text(node.name)
                 .font(Tokens.Typography.body)
                 .foregroundStyle(primaryText)
@@ -560,9 +624,15 @@ final class FileTreeViewModel: ObservableObject {
                         depth: depth,
                         kind: .directory(
                             childDirCount: Int(dir.childDirCount),
-                            childFileCount: Int(dir.childFileCount))))
+                            childFileCount: Int(dir.childFileCount),
+                            hasFolderNote: dir.hasFolderNote)))
             }
             for summary in firstPage.files.items + drained.files {
+                if Self.isRepresentedFolderNote(
+                    path: summary.path, name: summary.name)
+                {
+                    continue
+                }
                 let state: FileTreeFileState
                 if let existing = self.fileStateByPath[summary.path] {
                     state = existing
@@ -1447,6 +1517,18 @@ final class FileTreeViewModel: ObservableObject {
 
     // MARK: - Helpers
 
+    /// FL6-1 rule 2: a file that IS its own folder's note (exact stem,
+    /// byte compare — core's convention mirrored) is represented by the
+    /// folder row and hidden from the expanded children. Counts stay
+    /// honest; only the duplicate row disappears (duplicate rows double
+    /// VoiceOver walks).
+    static func isRepresentedFolderNote(path: String, name: String) -> Bool {
+        guard name.count > 3, name.hasSuffix(".md") else { return false }
+        let stem = String(name.dropLast(3))
+        if path == "\(stem)/\(name)" { return true }
+        return path.hasSuffix("/\(stem)/\(name)")
+    }
+
     /// Build the `TreeNode`s for one level: dirs first (already sorted by the
     /// API), then files, at `depth`.
     static func nodes(from listing: DirListing, depth: Int) -> [TreeNode] {
@@ -1461,11 +1543,15 @@ final class FileTreeViewModel: ObservableObject {
                     depth: depth,
                     kind: .directory(
                         childDirCount: Int(dir.childDirCount),
-                        childFileCount: Int(dir.childFileCount)
+                        childFileCount: Int(dir.childFileCount),
+                        hasFolderNote: dir.hasFolderNote
                     )
                 ))
         }
         for file in listing.files.items {
+            if isRepresentedFolderNote(path: file.path, name: file.name) {
+                continue
+            }
             out.append(
                 TreeNode(
                     nodeID: .file(path: file.path),
@@ -3527,6 +3613,13 @@ struct FileTreeSidebar: View {
             guard press.modifiers.subtracting(.capsLock).isEmpty,
                 let node = selectedTreeNode, node.isDirectory
             else { return .ignored }
+            // FL6-1 rule 3: Return on a folder WITH a note opens the
+            // note; Space (handled above as plain disclosure) and the
+            // arrow keys keep disclosure for it.
+            if press.key == .return, let notePath = node.folderNotePath {
+                appState.openFile(notePath, target: .currentTab)
+                return .handled
+            }
             tree.toggle(node)
             return .handled
         }
@@ -4024,6 +4117,28 @@ struct FileTreeSidebar: View {
     /// pointing at an unrelated folder is NOT reported selected (Codex finding 4).
     private func isRowSelected(_ rowID: RowID, currentPath: String) -> Bool {
         selectionModel.isSelected(rowID, currentPath: currentPath)
+    }
+
+    /// FL6-1: the folder row representing `notePath`, when a
+    /// materialized directory node claims it as its folder note.
+    private func folderRowID(forNotePath notePath: String) -> RowID? {
+        for node in tree.rootLevel where node.folderNotePath == notePath {
+            return .node(node.nodeID)
+        }
+        for level in tree.children.values {
+            for node in level where node.folderNotePath == notePath {
+                return .node(node.nodeID)
+            }
+        }
+        return nil
+    }
+
+    /// FL6-1 rule 7: while the folder note is the ACTIVE editor file,
+    /// its (hidden) row is represented by the folder row — the
+    /// editor-to-sidebar highlight maps there.
+    private func folderRowMirrorsActiveNote(_ node: TreeNode) -> Bool {
+        guard let notePath = node.folderNotePath else { return false }
+        return appState.selectedFilePath == notePath
     }
 
     /// Whether `rowID` should paint the custom multi-select fill: a selected
@@ -4893,11 +5008,20 @@ struct FileTreeSidebar: View {
             renameFieldRow(node, rename: rename)
         } else {
             let selected = isRowSelected(.node(node.nodeID), currentPath: node.path)
+                || folderRowMirrorsActiveNote(node)
             let disabledReason = appState.structuralMutationDisabledReason
             let activate = {
                 fileTreeFocused = true
                 applyPlainSelection(.node(node.nodeID))
-                tree.toggle(node)
+                // FL6-1 rule 3: label activation on a folder WITH a note
+                // opens the note (existing open seam, tab rules
+                // unchanged); the chevron, Space, and ←/→ still
+                // disclose. Note-less folders keep today's behavior.
+                if let notePath = node.folderNotePath {
+                    appState.openFile(notePath, target: .currentTab)
+                } else {
+                    tree.toggle(node)
+                }
             }
             SidebarFolderRowContent(
                 node: node,
@@ -4906,7 +5030,13 @@ struct FileTreeSidebar: View {
                 selectionIsActive: nativeSelectionIsActive,
                 isDropTargeted: Self.dropTargetIsActive(
                     dropTargetedNodes.contains(node.nodeID),
-                    busy: appState.structuralMutationDisabledReason != nil))
+                    busy: appState.structuralMutationDisabledReason != nil),
+                onChevronTap: node.folderNotePath == nil
+                    ? nil
+                    : {
+                        fileTreeFocused = true
+                        tree.toggle(node)
+                    })
             .contentShape(Rectangle())
             // A folder row SELECTS and toggles disclosure on activation
             // (pointer tap; Space, or Return when no selected file needs
@@ -4990,7 +5120,9 @@ struct FileTreeSidebar: View {
             // does, not how to perform it.
             .accessibilityHint(
                 Self.rowAccessibilityHint(
-                    primaryAction: "Expands or collapses.",
+                    primaryAction: node.folderNotePath == nil
+                        ? "Expands or collapses."
+                        : "Opens the folder note. Expand or collapse with the rotor action.",
                     idleHint: "Expands or collapses. Drag to move within Slate or copy to another app; drop items on it to copy external items in or move vault items inside. Other available actions are in the context menu.",
                     structuralDisabledReason: disabledReason))
             .help(disabledReason ?? node.path)
@@ -6510,7 +6642,10 @@ struct FileTreeSidebar: View {
         let count = node.itemCount
         let items = count == 1 ? "1 item" : "\(count) items"
         // Depth is 0-based internally; VoiceOver parity wants 1-based levels.
-        return "\(state), \(items), level \(node.depth + 1)"
+        let base = "\(state), \(items), level \(node.depth + 1)"
+        // FL6-1 rule 7: presence is row identity, spoken in the value
+        // (the badge glyph is the visual twin).
+        return node.folderNotePath == nil ? base : "\(base), has folder note"
     }
 
     // MARK: - Helpers
@@ -6531,6 +6666,10 @@ struct FileTreeSidebar: View {
         }
         for level in tree.children.values where level.contains(where: { $0.nodeID == fileID }) {
             return .node(fileID)
+        }
+        // FL6-1: a hidden folder-note path maps to its folder row.
+        if let dirRow = folderRowID(forNotePath: path) {
+            return dirRow
         }
         return nil
     }

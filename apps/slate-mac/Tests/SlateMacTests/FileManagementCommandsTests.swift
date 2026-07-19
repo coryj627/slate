@@ -784,7 +784,7 @@ final class FileManagementCommandsTests: XCTestCase {
 
     func testDistinctRewrittenCount() {
         let report = StructuralReport(
-            opId: 1, moved: [],
+            opId: 1, undoOpIds: [1], moved: [],
             rewritten: [
                 RewriteOutcome(path: "x.md", hashBefore: "1", hashAfter: "2"),
                 RewriteOutcome(path: "x.md", hashBefore: "2", hashAfter: "3"),

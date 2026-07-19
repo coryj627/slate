@@ -44,6 +44,10 @@ enum SlateCommandID {
     /// FL5-3b (#666): batch tag editor invocations on the selection.
     static let sidebarAddTag = "slate.sidebar.addTag"
     static let sidebarRemoveTag = "slate.sidebar.removeTag"
+    /// FL6-1 (#667): folder-note lifecycle on a single selected folder.
+    static let createFolderNote = "slate.sidebar.createFolderNote"
+    static let openFolderNote = "slate.sidebar.openFolderNote"
+    static let deleteFolderNote = "slate.sidebar.deleteFolderNote"
     static let sidebarSortNameAsc = "slate.sidebar.sortNameAsc"
     static let sidebarSortNameDesc = "slate.sidebar.sortNameDesc"
     static let sidebarSortCreatedDesc = "slate.sidebar.sortCreatedDesc"
@@ -475,6 +479,9 @@ enum SlateCommandID {
         sidebarFocusFilter,
         sidebarAddTag,
         sidebarRemoveTag,
+        createFolderNote,
+        openFolderNote,
+        deleteFolderNote,
         deleteEntry,
         printNote,
         jumpToBibliography,

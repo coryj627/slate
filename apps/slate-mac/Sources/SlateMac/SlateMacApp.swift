@@ -113,6 +113,9 @@ struct SlateMacApp: App {
                 return [
                     SlateCommandID.renameEntry, SlateCommandID.moveTo,
                     SlateCommandID.duplicateEntry,
+                    SlateCommandID.createFolderNote,
+                    SlateCommandID.openFolderNote,
+                    SlateCommandID.deleteFolderNote,
                 ]
             case .organization:
                 return [

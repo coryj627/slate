@@ -76,6 +76,9 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "slate.sidebar.focusFilter",
                 "slate.sidebar.addTag",
                 "slate.sidebar.removeTag",
+                "slate.sidebar.createFolderNote",
+                "slate.sidebar.openFolderNote",
+                "slate.sidebar.deleteFolderNote",
                 "slate.file.delete",
             ])
         XCTAssertEqual(
@@ -98,6 +101,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "Open Shortcut 7", "Open Shortcut 8", "Open Shortcut 9",
                 "Focus Sidebar Filter",
                 "Add Tag…", "Remove Tag…",
+                "Create Folder Note", "Open Folder Note", "Delete Folder Note",
                 "Move to Trash",
             ])
         XCTAssertEqual(
@@ -114,6 +118,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin,
                 .search,
                 .pin, .unpin,
+                .newNote, .open, .trash,
                 .trash,
             ])
         XCTAssertEqual(
@@ -237,17 +242,24 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.newNote, SlateCommandID.newFolder,
                 SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
             ] + organizationLocationIDs + navigationLocationIDs)
-        // A single file takes every verb except the folder-only Unpin All.
+        // A single file takes every verb except the folder-only set
+        // (Unpin All and the FL6-1 folder-note trio).
+        let folderOnlyIDs: Set<String> = [
+            SlateCommandID.sidebarUnpinAll,
+            SlateCommandID.createFolderNote,
+            SlateCommandID.openFolderNote,
+            SlateCommandID.deleteFolderNote,
+        ]
         XCTAssertEqual(
             ids(markdown),
             SidebarActionCatalog.actions.map(\.id).filter {
-                $0 != SlateCommandID.sidebarUnpinAll
+                !folderOnlyIDs.contains($0)
             })
         XCTAssertEqual(
             ids(nonMarkdown),
             SidebarActionCatalog.actions.map(\.id).filter {
                 $0 != SlateCommandID.sidebarCopyWikilink
-                    && $0 != SlateCommandID.sidebarUnpinAll
+                    && !folderOnlyIDs.contains($0)
             })
         XCTAssertEqual(
             ids(folder),
@@ -260,7 +272,12 @@ final class SidebarActionCatalogTests: XCTestCase {
             ] + organizationLocationIDs + [
                 SlateCommandID.sidebarAddShortcut,
                 SlateCommandID.sidebarRemoveShortcut,
-            ] + navigationLocationIDs + [SlateCommandID.deleteEntry])
+            ] + navigationLocationIDs + [
+                SlateCommandID.createFolderNote,
+                SlateCommandID.openFolderNote,
+                SlateCommandID.deleteFolderNote,
+                SlateCommandID.deleteEntry,
+            ])
         XCTAssertEqual(
             ids(files),
             [
@@ -345,17 +362,24 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders,
                 SlateCommandID.renameEntry,
                 SlateCommandID.moveTo, SlateCommandID.duplicateEntry,
-                SlateCommandID.sidebarCopyWikilink, SlateCommandID.deleteEntry,
+                SlateCommandID.sidebarCopyWikilink,
+                SlateCommandID.createFolderNote,
+                SlateCommandID.deleteFolderNote,
+                SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
             blocked.map(\.undoBehavior),
             [
                 .historyBarrier, .historyBarrier, .historyBarrier,
                 .runtimeDetermined, .slateUndo, .slateUndo, .historyBarrier,
-                .noChange, .notUndoable,
+                .noChange,
+                .historyBarrier, .notUndoable,
+                .notUndoable,
             ],
             "blocking during native writes does not make Copy Wikilink a mutation")
-        XCTAssertEqual(blocked.filter(\.isDestructive).map(\.id), [SlateCommandID.deleteEntry])
+        XCTAssertEqual(
+            blocked.filter(\.isDestructive).map(\.id),
+            [SlateCommandID.deleteFolderNote, SlateCommandID.deleteEntry])
 
         let trash = try XCTUnwrap(
             SidebarActionCatalog.actions.first { $0.id == SlateCommandID.deleteEntry })
@@ -493,6 +517,9 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarUseVaultDefaultSort,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.createFolderNote,
+                    SlateCommandID.openFolderNote,
+                    SlateCommandID.deleteFolderNote,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -575,6 +602,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarUseVaultDefaultSort,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.openFolderNote,
                 ]
             } else {
                 expected = [
@@ -582,6 +610,9 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarUnpinAll,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    // FL6-1: Open Folder Note is non-structural — it
+                    // survives the busy gate like the inspection pair.
+                    SlateCommandID.openFolderNote,
                 ]
             }
             XCTAssertEqual(
