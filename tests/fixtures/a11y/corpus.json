@@ -230,6 +230,71 @@
     "text": "Save blocked. notes.md was modified externally. Resolve in the dialog."
   },
   {
+    "event": "RestoredVersionFrom { formatted_date: \"July 19, 2026 at 9:41 AM\" }",
+    "priority": "high",
+    "text": "Restored version from July 19, 2026 at 9:41 AM."
+  },
+  {
+    "event": "RestoredFile { filename: \"notes.md\" }",
+    "priority": "high",
+    "text": "Restored notes.md."
+  },
+  {
+    "event": "RestoredFileAs { source_name: \"notes.md\", filename: \"notes-restored.md\" }",
+    "priority": "high",
+    "text": "Restored notes.md as notes-restored.md."
+  },
+  {
+    "event": "PrintNeedsNote",
+    "priority": "medium",
+    "text": "Open a note to print."
+  },
+  {
+    "event": "PrintDialogOpened { name: \"notes.md\" }",
+    "priority": "medium",
+    "text": "Print dialog opened for notes.md."
+  },
+  {
+    "event": "BatchCheckStarted { formatted_count: \"1,024\", action_name: \"Move\" }",
+    "priority": "medium",
+    "text": "Checking 1,024 selected items before Move."
+  },
+  {
+    "event": "SelectionCopied",
+    "priority": "medium",
+    "text": "Copied."
+  },
+  {
+    "event": "SidebarSettingsStillDefaults { detail: \"the file is malformed.\" }",
+    "priority": "medium",
+    "text": "Sidebar settings still use defaults. the file is malformed."
+  },
+  {
+    "event": "SidebarSettingsReloadedStaleRefs",
+    "priority": "medium",
+    "text": "Sidebar settings reloaded. Some pinned notes or sort overrides may still reference old locations."
+  },
+  {
+    "event": "SidebarSettingsReloaded",
+    "priority": "medium",
+    "text": "Sidebar settings reloaded."
+  },
+  {
+    "event": "VaultClosed",
+    "priority": "medium",
+    "text": "Vault closed. Returned to the welcome screen."
+  },
+  {
+    "event": "VaultClosedAllSaved",
+    "priority": "medium",
+    "text": "All changes saved. Vault closed. Returned to the welcome screen."
+  },
+  {
+    "event": "VaultClosedChangesDiscarded",
+    "priority": "medium",
+    "text": "Changes discarded. Vault closed. Returned to the welcome screen."
+  },
+  {
     "event": "PropertiesUpdated",
     "priority": "medium",
     "text": "Properties updated."

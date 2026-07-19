@@ -2278,8 +2278,11 @@ final class AppState: ObservableObject {
 
         let actionName = definition.label.replacingOccurrences(of: "…", with: "")
         announcer.post(
-            "Checking \(items.count.formatted()) selected items before \(actionName).",
-            priority: .medium)
+            .batchCheckStarted(
+                // Locale digit grouping is per-platform (decision 12's
+                // seam) — the host formats, core owns the sentence.
+                formattedCount: items.count.formatted(),
+                actionName: actionName))
         return task
     }
 
@@ -2394,7 +2397,7 @@ final class AppState: ObservableObject {
         guard sidebarPasteboard.setString(value) else {
             throw sidebarActionFailure(Self.sidebarCopyFailureReason)
         }
-        announcer.post("Copied.", priority: .medium)
+        announcer.post(.selectionCopied)
         return .completed(actionID: actionID)
     }
 
@@ -9530,16 +9533,12 @@ final class AppState: ObservableObject {
             }
             if let notice = adoptedNotice {
                 self.announcer.post(
-                    "Sidebar settings still use defaults. \(notice.localizedDescription)",
-                    priority: .medium)
+                    .sidebarSettingsStillDefaults(detail: notice.localizedDescription))
             } else if self.sidebarStructuralTransformJournalOverflowed {
                 self.sidebarStructuralTransformJournalOverflowed = false
-                self.announcer.post(
-                    "Sidebar settings reloaded. Some pinned notes or sort "
-                        + "overrides may still reference old locations.",
-                    priority: .medium)
+                self.announcer.post(.sidebarSettingsReloadedStaleRefs)
             } else {
-                self.announcer.post("Sidebar settings reloaded.", priority: .medium)
+                self.announcer.post(.sidebarSettingsReloaded)
             }
             if adoptedNotice == nil, let retryDurabilityWarning {
                 // W0.5-3 residue: sidebar retry durability warning (persist machinery copy)
@@ -9865,10 +9864,7 @@ final class AppState: ObservableObject {
                 attemptCloseVault()
             } else {
                 if closeVault() {
-                    announcer.post(
-                        "Vault closed. Returned to the welcome screen.",
-                        priority: .medium
-                    )
+                    announcer.post(.vaultClosed)
                 }
             }
         } else {
@@ -10002,10 +9998,7 @@ final class AppState: ObservableObject {
             self.pendingVaultClose = nil
             let completesVaultSwitch = self.pendingVaultSwitchTarget != nil
             if self.closeVault(), !completesVaultSwitch {
-                self.announcer.post(
-                    "All changes saved. Vault closed. Returned to the welcome screen.",
-                    priority: .medium
-                )
+                self.announcer.post(.vaultClosedAllSaved)
             }
         }
         vaultCloseSaveAllTask = task
@@ -10028,10 +10021,7 @@ final class AppState: ObservableObject {
         hasUnsavedChanges = false
         let completesVaultSwitch = pendingVaultSwitchTarget != nil
         if closeVault(), !completesVaultSwitch {
-            announcer.post(
-                "Changes discarded. Vault closed. Returned to the welcome screen.",
-                priority: .medium
-            )
+            announcer.post(.vaultClosedChangesDiscarded)
         }
     }
 

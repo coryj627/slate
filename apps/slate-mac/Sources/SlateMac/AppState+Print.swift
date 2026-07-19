@@ -22,7 +22,7 @@ extension AppState {
     /// the belt-and-braces path for the palette row and the raw chord.
     func printCurrentNote() {
         guard let text = currentNoteText, let path = loadedFilePath else {
-            announcer.post("Open a note to print.", priority: .medium)
+            announcer.post(.printNeedsNote)
             return
         }
         let name = (path as NSString).lastPathComponent
@@ -47,7 +47,7 @@ extension AppState {
         // tell a VoiceOver user the document already printed.
         DispatchQueue.main.async { [announcer] in
             ReadingPrintComposer.present(document, jobName: name, on: window)
-            announcer.post("Print dialog opened for \(name).", priority: .medium)
+            announcer.post(.printDialogOpened(name: name))
         }
     }
 }

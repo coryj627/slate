@@ -184,6 +184,44 @@ pub enum A11yEvent {
         filename: String,
     },
 
+    // --- History restore (O-3) ---
+    RestoredVersionFrom {
+        formatted_date: String,
+    },
+    RestoredFile {
+        filename: String,
+    },
+    RestoredFileAs {
+        source_name: String,
+        filename: String,
+    },
+
+    // --- Print (#869) ---
+    PrintNeedsNote,
+    PrintDialogOpened {
+        name: String,
+    },
+
+    // --- Sidebar batch actions + settings lifecycle ---
+    /// Preflight start for a multi-item sidebar action. The count is
+    /// pre-formatted by the host (locale digit grouping is a
+    /// per-platform concern, like chord rendering — decision 12).
+    BatchCheckStarted {
+        formatted_count: String,
+        action_name: String,
+    },
+    SelectionCopied,
+    SidebarSettingsStillDefaults {
+        detail: String,
+    },
+    SidebarSettingsReloadedStaleRefs,
+    SidebarSettingsReloaded,
+
+    // --- Vault close ---
+    VaultClosed,
+    VaultClosedAllSaved,
+    VaultClosedChangesDiscarded,
+
     // --- Properties ---
     PropertiesUpdated,
     PropertyChanged {
@@ -379,7 +417,10 @@ impl A11yEvent {
             | AddPropertySheetShown
             | BulkRenameSheetShown
             | RenameReloadFailed { .. }
-            | RenameFailed { .. } => A11yPriority::High,
+            | RenameFailed { .. }
+            | RestoredVersionFrom { .. }
+            | RestoredFile { .. }
+            | RestoredFileAs { .. } => A11yPriority::High,
             HostComposed { priority, .. } => *priority,
             _ => A11yPriority::Medium,
         }
@@ -491,6 +532,45 @@ impl A11yEvent {
             NoteSaved { filename } => format!("Saved {filename}."),
             SaveConflict { filename } => {
                 format!("Save blocked. {filename} was modified externally. Resolve in the dialog.")
+            }
+
+            RestoredVersionFrom { formatted_date } => {
+                format!("Restored version from {formatted_date}.")
+            }
+            RestoredFile { filename } => format!("Restored {filename}."),
+            RestoredFileAs {
+                source_name,
+                filename,
+            } => {
+                format!("Restored {source_name} as {filename}.")
+            }
+
+            PrintNeedsNote => "Open a note to print.".to_owned(),
+            PrintDialogOpened { name } => format!("Print dialog opened for {name}."),
+
+            BatchCheckStarted {
+                formatted_count,
+                action_name,
+            } => {
+                format!("Checking {formatted_count} selected items before {action_name}.")
+            }
+            SelectionCopied => "Copied.".to_owned(),
+            SidebarSettingsStillDefaults { detail } => {
+                format!("Sidebar settings still use defaults. {detail}")
+            }
+            SidebarSettingsReloadedStaleRefs => {
+                "Sidebar settings reloaded. Some pinned notes or sort overrides \
+                 may still reference old locations."
+                    .to_owned()
+            }
+            SidebarSettingsReloaded => "Sidebar settings reloaded.".to_owned(),
+
+            VaultClosed => "Vault closed. Returned to the welcome screen.".to_owned(),
+            VaultClosedAllSaved => {
+                "All changes saved. Vault closed. Returned to the welcome screen.".to_owned()
+            }
+            VaultClosedChangesDiscarded => {
+                "Changes discarded. Vault closed. Returned to the welcome screen.".to_owned()
             }
 
             PropertiesUpdated => "Properties updated.".to_owned(),
@@ -777,6 +857,33 @@ pub fn corpus() -> Vec<A11yEvent> {
         SaveConflict {
             filename: "notes.md".into(),
         },
+        RestoredVersionFrom {
+            formatted_date: "July 19, 2026 at 9:41 AM".into(),
+        },
+        RestoredFile {
+            filename: "notes.md".into(),
+        },
+        RestoredFileAs {
+            source_name: "notes.md".into(),
+            filename: "notes-restored.md".into(),
+        },
+        PrintNeedsNote,
+        PrintDialogOpened {
+            name: "notes.md".into(),
+        },
+        BatchCheckStarted {
+            formatted_count: "1,024".into(),
+            action_name: "Move".into(),
+        },
+        SelectionCopied,
+        SidebarSettingsStillDefaults {
+            detail: "the file is malformed.".into(),
+        },
+        SidebarSettingsReloadedStaleRefs,
+        SidebarSettingsReloaded,
+        VaultClosed,
+        VaultClosedAllSaved,
+        VaultClosedChangesDiscarded,
         PropertiesUpdated,
         PropertyChanged {
             key: "tags".into(),
@@ -1021,6 +1128,31 @@ mod tests {
             (
                 Medium,
                 "Save blocked. notes.md was modified externally. Resolve in the dialog.",
+            ),
+            (High, "Restored version from July 19, 2026 at 9:41 AM."),
+            (High, "Restored notes.md."),
+            (High, "Restored notes.md as notes-restored.md."),
+            (Medium, "Open a note to print."),
+            (Medium, "Print dialog opened for notes.md."),
+            (Medium, "Checking 1,024 selected items before Move."),
+            (Medium, "Copied."),
+            (
+                Medium,
+                "Sidebar settings still use defaults. the file is malformed.",
+            ),
+            (
+                Medium,
+                "Sidebar settings reloaded. Some pinned notes or sort overrides may still reference old locations.",
+            ),
+            (Medium, "Sidebar settings reloaded."),
+            (Medium, "Vault closed. Returned to the welcome screen."),
+            (
+                Medium,
+                "All changes saved. Vault closed. Returned to the welcome screen.",
+            ),
+            (
+                Medium,
+                "Changes discarded. Vault closed. Returned to the welcome screen.",
             ),
             (Medium, "Properties updated."),
             (Medium, "Property tags updated."),

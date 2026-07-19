@@ -394,8 +394,7 @@ extension AppState {
 
         switch result {
         case .success:
-            announcer.post(
-                "Restored version from \(request.formattedDate).", priority: .high)
+            announcer.post(.restoredVersionFrom(formattedDate: request.formattedDate))
             if BaseExactIdentity.matches(selectedFilePath, request.path) {
                 await loadCurrentNote(path: request.path)
                 await scheduleHistoryLoad(path: request.path).value
@@ -506,8 +505,7 @@ extension AppState {
                 // guarded refreshes settle while this operation still owns the
                 // structural gate. No competing mutation can lose its undo here.
                 self.clearStructuralUndoStacks()
-                self.announcer.post(
-                    "Restored \(self.filename(of: path)).", priority: .high)
+                self.announcer.post(.restoredFile(filename: self.filename(of: path)))
             case .failure(.DestinationExists):
                 // #795: offer Restore As… straight from the collision —
                 // the alert copy names the block, the prompt takes a new
@@ -618,8 +616,9 @@ extension AppState {
                 case .version(_, _, let date): sourceName = "version from \(date)"
                 }
                 self.announcer.post(
-                    "Restored \(sourceName) as \(self.filename(of: trimmed)).",
-                    priority: .high)
+                    .restoredFileAs(
+                        sourceName: sourceName,
+                        filename: self.filename(of: trimmed)))
                 // #871 Codex round 2: Restore As creates a file outside the
                 // `publishTreeMutation` barrier — clear the structural undo history
                 // so a stale inverse can't target the restored path.

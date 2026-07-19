@@ -5700,6 +5700,33 @@ pub enum A11yEvent {
     SaveConflict {
         filename: String,
     },
+    RestoredVersionFrom {
+        formatted_date: String,
+    },
+    RestoredFile {
+        filename: String,
+    },
+    RestoredFileAs {
+        source_name: String,
+        filename: String,
+    },
+    PrintNeedsNote,
+    PrintDialogOpened {
+        name: String,
+    },
+    BatchCheckStarted {
+        formatted_count: String,
+        action_name: String,
+    },
+    SelectionCopied,
+    SidebarSettingsStillDefaults {
+        detail: String,
+    },
+    SidebarSettingsReloadedStaleRefs,
+    SidebarSettingsReloaded,
+    VaultClosed,
+    VaultClosedAllSaved,
+    VaultClosedChangesDiscarded,
     PropertiesUpdated,
     PropertyChanged {
         key: String,
@@ -5939,6 +5966,33 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::TasksFilterSet { filter_name } => C::TasksFilterSet { filter_name },
             F::NoteSaved { filename } => C::NoteSaved { filename },
             F::SaveConflict { filename } => C::SaveConflict { filename },
+            F::RestoredVersionFrom { formatted_date } => C::RestoredVersionFrom { formatted_date },
+            F::RestoredFile { filename } => C::RestoredFile { filename },
+            F::RestoredFileAs {
+                source_name,
+                filename,
+            } => C::RestoredFileAs {
+                source_name,
+                filename,
+            },
+            F::PrintNeedsNote => C::PrintNeedsNote,
+            F::PrintDialogOpened { name } => C::PrintDialogOpened { name },
+            F::BatchCheckStarted {
+                formatted_count,
+                action_name,
+            } => C::BatchCheckStarted {
+                formatted_count,
+                action_name,
+            },
+            F::SelectionCopied => C::SelectionCopied,
+            F::SidebarSettingsStillDefaults { detail } => {
+                C::SidebarSettingsStillDefaults { detail }
+            }
+            F::SidebarSettingsReloadedStaleRefs => C::SidebarSettingsReloadedStaleRefs,
+            F::SidebarSettingsReloaded => C::SidebarSettingsReloaded,
+            F::VaultClosed => C::VaultClosed,
+            F::VaultClosedAllSaved => C::VaultClosedAllSaved,
+            F::VaultClosedChangesDiscarded => C::VaultClosedChangesDiscarded,
             F::PropertiesUpdated => C::PropertiesUpdated,
             F::PropertyChanged { key, deleted } => C::PropertyChanged { key, deleted },
             F::PropertyEditConflict { filename } => C::PropertyEditConflict { filename },
