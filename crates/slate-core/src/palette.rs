@@ -589,6 +589,58 @@ mod tests {
         assert_eq!(fuzzy_score("i", "\u{130}"), None);
     }
 
+    /// One segment of a random query/target, in canonically equivalent
+    /// composed and decomposed spellings (identical for the ASCII arms).
+    fn canonical_segment() -> impl proptest::strategy::Strategy<Value = (&'static str, &'static str)>
+    {
+        use proptest::prelude::*;
+        prop_oneof![
+            Just(("a", "a")),
+            Just(("B", "B")),
+            Just((" ", " ")),
+            Just((".", ".")),
+            Just(("_", "_")),
+            Just(("\u{e9}", "e\u{301}")), // é composed / decomposed
+            Just(("\u{c9}", "E\u{301}")), // É composed / decomposed
+            Just(("\u{f1}", "n\u{303}")), // ñ composed / decomposed
+            Just(("写", "写")),
+        ]
+    }
+
+    /// A random string in both canonical spellings simultaneously.
+    fn canonical_pair() -> impl proptest::strategy::Strategy<Value = (String, String)> {
+        use proptest::prelude::*;
+        proptest::collection::vec(canonical_segment(), 0..10).prop_map(|segments| {
+            (
+                segments.iter().map(|(c, _)| *c).collect(),
+                segments.iter().map(|(_, d)| *d).collect(),
+            )
+        })
+    }
+
+    proptest::proptest! {
+        #![proptest_config(proptest::prelude::ProptestConfig::with_cases(512))]
+
+        /// Canonical equivalence is total for the matcher: any mix of
+        /// composed/decomposed spellings on either side scores
+        /// identically (match or non-match alike) — the property behind
+        /// the Swift-parity goldens above.
+        #[test]
+        fn canonical_spellings_score_identically(
+            (query_composed, query_decomposed) in canonical_pair(),
+            (target_composed, target_decomposed) in canonical_pair(),
+        ) {
+            let reference = fuzzy_score(&query_composed, &target_composed).map(|(s, _)| s);
+            for (q, t) in [
+                (&query_composed, &target_decomposed),
+                (&query_decomposed, &target_composed),
+                (&query_decomposed, &target_decomposed),
+            ] {
+                proptest::prop_assert_eq!(fuzzy_score(q, t).map(|(s, _)| s), reference);
+            }
+        }
+    }
+
     // --- exact-score goldens: the algorithm's arithmetic, pinned ---
 
     #[test]
