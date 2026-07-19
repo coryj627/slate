@@ -158,7 +158,7 @@ pub use session::{
     ScanProgressListener, ScanReport, SessionConfig, VaultEventListener, VaultRootIdentity,
     VaultSession, VersionSummary,
 };
-pub use session::{SkippedFile, TagEditReport};
+pub use session::{SkippedFile, TagCount, TagEditReport};
 pub use sidebar_filter::{
     FilterParseError, SidebarFilterDateWindow, SidebarFilterNamedWindow, SidebarFilterQueryTerm,
     SidebarFilterTerm, parse_sidebar_filter, sidebar_filter_audio_summary,

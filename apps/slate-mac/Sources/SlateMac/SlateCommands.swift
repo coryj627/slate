@@ -41,6 +41,9 @@ enum SlateCommandID {
         (1...9).map { sidebarOpenShortcut($0) }
     /// FL-09 (#663): move focus into the top-pinned sidebar filter field.
     static let sidebarFocusFilter = "slate.sidebar.focusFilter"
+    /// FL5-3b (#666): batch tag editor invocations on the selection.
+    static let sidebarAddTag = "slate.sidebar.addTag"
+    static let sidebarRemoveTag = "slate.sidebar.removeTag"
     static let sidebarSortNameAsc = "slate.sidebar.sortNameAsc"
     static let sidebarSortNameDesc = "slate.sidebar.sortNameDesc"
     static let sidebarSortCreatedDesc = "slate.sidebar.sortCreatedDesc"
@@ -470,6 +473,8 @@ enum SlateCommandID {
         sidebarOpenShortcut(8),
         sidebarOpenShortcut(9),
         sidebarFocusFilter,
+        sidebarAddTag,
+        sidebarRemoveTag,
         deleteEntry,
         printNote,
         jumpToBibliography,

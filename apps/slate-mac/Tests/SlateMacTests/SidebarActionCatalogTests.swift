@@ -74,6 +74,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "slate.sidebar.openShortcut8",
                 "slate.sidebar.openShortcut9",
                 "slate.sidebar.focusFilter",
+                "slate.sidebar.addTag",
+                "slate.sidebar.removeTag",
                 "slate.file.delete",
             ])
         XCTAssertEqual(
@@ -95,6 +97,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "Open Shortcut 4", "Open Shortcut 5", "Open Shortcut 6",
                 "Open Shortcut 7", "Open Shortcut 8", "Open Shortcut 9",
                 "Focus Sidebar Filter",
+                "Add Tag…", "Remove Tag…",
                 "Move to Trash",
             ])
         XCTAssertEqual(
@@ -110,6 +113,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 .sortOrder, .sortOrder, .sortOrder, .sortOrder,
                 .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin,
                 .search,
+                .pin, .unpin,
                 .trash,
             ])
         XCTAssertEqual(
@@ -262,8 +266,14 @@ final class SidebarActionCatalogTests: XCTestCase {
             [
                 SlateCommandID.sidebarOpen, SlateCommandID.moveTo,
             ] + navigationLocationIDs + [
+                SlateCommandID.sidebarAddTag,
+                SlateCommandID.sidebarRemoveTag,
                 SlateCommandID.deleteEntry,
             ])
+        // Mixed selections exclude the tag editors: `.oneOrMoreFiles`
+        // is ALL-files (the Open convention) — the menu shows the
+        // files-only reason instead of running a batch guaranteed to
+        // skip its folders.
         XCTAssertEqual(
             ids(mixed),
             [
@@ -376,6 +386,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                 SlateCommandID.sidebarAddShortcut,
                 SlateCommandID.sidebarRemoveShortcut,
+                SlateCommandID.sidebarAddTag,
+                SlateCommandID.sidebarRemoveTag,
                 SlateCommandID.deleteEntry,
             ])
         XCTAssertEqual(
@@ -387,6 +399,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                 SlateCommandID.sidebarAddShortcut,
                 SlateCommandID.sidebarRemoveShortcut,
+                SlateCommandID.sidebarAddTag,
+                SlateCommandID.sidebarRemoveTag,
                 SlateCommandID.deleteEntry,
             ],
             "VoiceOver Open belongs only to the conditional default action")
@@ -442,6 +456,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -454,6 +470,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ]
             ),
@@ -482,6 +500,8 @@ final class SidebarActionCatalogTests: XCTestCase {
                 files,
                 [
                     SlateCommandID.sidebarOpen, SlateCommandID.moveTo,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.deleteEntry,
                 ]
             ),

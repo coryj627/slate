@@ -13,7 +13,9 @@ final class SidebarShortcutsTests: XCTestCase {
     ["kind": kind, "path": path]
   }
 
-  func testDecodeKeepsKnownKindsSkipsReservedAndDedupes() {
+  func testDecodeKeepsEveryKnownKindIncludingTagContainersAndDedupes() {
+    // FL5-2: tag/untagged graduated from reserved-opaque to first-class
+    // container kinds — they decode as visible rows now.
     let root: [String: Any] = [
       "shortcuts": [
         entry("file", "Projects/a.md"),
@@ -28,7 +30,35 @@ final class SidebarShortcutsTests: XCTestCase {
       SidebarOrganizationSchema.decodeShortcuts(root: root),
       [
         SidebarShortcut(kind: .file, path: "Projects/a.md"),
+        SidebarShortcut(kind: .tag, path: "research"),
         SidebarShortcut(kind: .folder, path: "Projects"),
+        SidebarShortcut(kind: .untagged, path: ""),
+      ])
+  }
+
+  func testTransformsNeverRewriteOrDropTagNamespaceShortcuts() {
+    // FL5-2: a tag whose TEXT collides with a file path lives in a
+    // disjoint namespace — folder renames and deletes must not touch it.
+    var transform = SidebarStructuralTransform()
+    transform.renames = [
+      SidebarStructuralTransform.Rename(
+        oldPath: "projects", newPath: "work", isDirectory: true)
+    ]
+    transform.deletedFolders = ["archive"]
+    var shortcuts = [
+      SidebarShortcut(kind: .tag, path: "projects/reading"),
+      SidebarShortcut(kind: .tag, path: "archive/old"),
+      SidebarShortcut(kind: .untagged, path: ""),
+      SidebarShortcut(kind: .folder, path: "projects/sub"),
+    ]
+    XCTAssertTrue(transform.apply(to: &shortcuts))
+    XCTAssertEqual(
+      shortcuts,
+      [
+        SidebarShortcut(kind: .tag, path: "projects/reading"),
+        SidebarShortcut(kind: .tag, path: "archive/old"),
+        SidebarShortcut(kind: .untagged, path: ""),
+        SidebarShortcut(kind: .folder, path: "work/sub"),
       ])
   }
 
@@ -111,22 +141,28 @@ final class SidebarShortcutsTests: XCTestCase {
         entry("folder", "F"),
       ]
     ]
-    // b.md moves up: swaps with a.md, hopping the reserved tag entry,
-    // which keeps its raw position.
+    // FL5-2: tag entries are visible rows now — b.md's nearest visible
+    // neighbor IS the tag entry, and they swap directly.
     SidebarOrganizationSchema.moveShortcut(
       &root, kind: "file", path: "b.md", delta: -1)
     var paths = (root["shortcuts"] as? [Any])?.compactMap {
       ($0 as? [String: Any])?["path"] as? String
     }
-    XCTAssertEqual(paths, ["b.md", "research", "a.md", "F"])
+    XCTAssertEqual(paths, ["a.md", "b.md", "research", "F"])
 
-    // Top edge clamps.
+    // A second move-up swaps with a.md; the top edge then clamps.
     SidebarOrganizationSchema.moveShortcut(
       &root, kind: "file", path: "b.md", delta: -1)
     paths = (root["shortcuts"] as? [Any])?.compactMap {
       ($0 as? [String: Any])?["path"] as? String
     }
-    XCTAssertEqual(paths, ["b.md", "research", "a.md", "F"])
+    XCTAssertEqual(paths, ["b.md", "a.md", "research", "F"])
+    SidebarOrganizationSchema.moveShortcut(
+      &root, kind: "file", path: "b.md", delta: -1)
+    paths = (root["shortcuts"] as? [Any])?.compactMap {
+      ($0 as? [String: Any])?["path"] as? String
+    }
+    XCTAssertEqual(paths, ["b.md", "a.md", "research", "F"])
 
     // Bottom edge clamps.
     SidebarOrganizationSchema.moveShortcut(
@@ -134,7 +170,7 @@ final class SidebarShortcutsTests: XCTestCase {
     paths = (root["shortcuts"] as? [Any])?.compactMap {
       ($0 as? [String: Any])?["path"] as? String
     }
-    XCTAssertEqual(paths, ["b.md", "research", "a.md", "F"])
+    XCTAssertEqual(paths, ["b.md", "a.md", "research", "F"])
   }
 
   func testTransformRetargetsRenamesRespectingKindNamespaces() {
@@ -210,4 +246,28 @@ final class SidebarShortcutsTests: XCTestCase {
     XCTAssertEqual(raw?.count, 1)
     XCTAssertEqual(raw?[0]["path"] as? String, "B/x.md")
   }
+  func testShortcutPresentationPerKind() {
+    // Review round: container kinds carry their own presentation — an
+    // empty-path untagged entry must never render as a blank file row.
+    let file = SidebarSectionsView.shortcutPresentation(
+      for: SidebarShortcut(kind: .file, path: "Projects/Note.md"))
+    XCTAssertEqual(file.label, "Note")
+    XCTAssertEqual(file.value, "file shortcut")
+    let folder = SidebarSectionsView.shortcutPresentation(
+      for: SidebarShortcut(kind: .folder, path: "Projects/Sub"))
+    XCTAssertEqual(folder.label, "Sub")
+    XCTAssertEqual(folder.value, "folder shortcut")
+    let tag = SidebarSectionsView.shortcutPresentation(
+      for: SidebarShortcut(kind: .tag, path: "projects/reading"))
+    XCTAssertEqual(tag.label, "#projects/reading")
+    XCTAssertEqual(tag.value, "tag shortcut")
+    XCTAssertEqual(tag.hint, "Filters the file list to this tag.")
+    XCTAssertEqual(tag.symbol, .tag)
+    let untagged = SidebarSectionsView.shortcutPresentation(
+      for: SidebarShortcut(kind: .untagged, path: ""))
+    XCTAssertEqual(untagged.label, "Untagged")
+    XCTAssertEqual(untagged.value, "untagged shortcut")
+    XCTAssertEqual(untagged.hint, "Shows notes with no tags.")
+  }
+
 }

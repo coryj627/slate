@@ -121,6 +121,8 @@ struct SlateMacApp: App {
                     SlateCommandID.sidebarUnpinAll,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.sidebarClearRecents,
                 ]
             case .inspection:

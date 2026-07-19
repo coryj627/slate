@@ -355,6 +355,14 @@ pub struct TagTree {
     pub audio_summary: String,
 }
 
+/// FL5-3b (#666): one tag carried by a file selection, with its
+/// distinct-file count — the Remove Tag editor's choice row.
+#[derive(uniffi::Record)]
+pub struct TagCount {
+    pub tag: String,
+    pub file_count: u32,
+}
+
 /// FL5-3a (refs #666): one refused file in a batch tag edit.
 #[derive(uniffi::Record)]
 pub struct SkippedFile {
@@ -504,6 +512,33 @@ impl VaultSession {
     /// (inline + frontmatter), flattened pre-order for the bindings.
     pub fn tag_tree(&self) -> Result<TagTree, VaultError> {
         Ok(flatten_tag_tree(self.inner.tag_tree()?))
+    }
+
+    /// FL5-2 (#665): the reserved Untagged scope through the one shared
+    /// filter execution pipeline (identical ordering, pagination, and
+    /// summary semantics).
+    pub fn untagged_files(&self, paging: Paging) -> Result<SidebarFilterPage, VaultError> {
+        let page = self.inner.untagged_files(paging.into())?;
+        Ok(SidebarFilterPage {
+            files: page.files.into_iter().map(Into::into).collect(),
+            next_cursor: page.next_cursor,
+            total: page.total,
+            audio_summary: page.audio_summary,
+        })
+    }
+
+    /// FL5-3b (#666): the distinct tags carried by the given files with
+    /// distinct-file counts, alphabetical.
+    pub fn tags_for_files(&self, paths: Vec<String>) -> Result<Vec<TagCount>, VaultError> {
+        Ok(self
+            .inner
+            .tags_for_files(paths)?
+            .into_iter()
+            .map(|count| TagCount {
+                tag: count.tag,
+                file_count: count.file_count,
+            })
+            .collect())
     }
 
     /// FL5-3a (refs #666): add a tag to each file's frontmatter

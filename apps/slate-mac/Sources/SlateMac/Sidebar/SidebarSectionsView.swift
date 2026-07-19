@@ -139,16 +139,45 @@ struct SidebarSectionsView: View {
             .accessibilityLabel(text)
     }
 
+    /// FL5-2 review round: tag/untagged shortcuts are CONTAINERS with
+    /// their own presentation — a blank "file" row for an empty-path
+    /// untagged entry would be wrong visually and in the AX tree.
+    /// Static so tests pin the exact strings per kind.
+    static func shortcutPresentation(
+        for shortcut: SidebarShortcut
+    ) -> (label: String, value: String, hint: String, symbol: SlateSymbol) {
+        switch shortcut.kind {
+        case .folder:
+            let name = (shortcut.path as NSString).lastPathComponent
+            return (
+                name, "folder shortcut",
+                "Reveals and selects this folder in the file tree.",
+                .folder)
+        case .file:
+            let name =
+                ((shortcut.path as NSString).lastPathComponent as NSString)
+                .deletingPathExtension
+            return (name, "file shortcut", "Opens this note.", .newNote)
+        case .tag:
+            return (
+                "#\(shortcut.path)", "tag shortcut",
+                "Filters the file list to this tag.", .tag)
+        case .untagged:
+            return (
+                "Untagged", "untagged shortcut",
+                "Shows notes with no tags.", .tag)
+        }
+    }
+
     private func shortcutRow(_ shortcut: SidebarShortcut, slot: Int) -> some View {
-        Button {
+        let presentation = Self.shortcutPresentation(for: shortcut)
+        return Button {
             activateShortcut(shortcut)
         } label: {
             HStack(spacing: Tokens.Spacing.sm) {
-                (shortcut.kind == .folder
-                    ? SlateSymbol.folder.decorative
-                    : SlateSymbol.newNote.decorative)
+                presentation.symbol.decorative
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(displayName(for: shortcut.path))
+                    Text(presentation.label)
                         .font(Tokens.Typography.body)
                         .lineLimit(2)
                     if let subtitle = folderSubtitle(for: shortcut) {
@@ -165,13 +194,9 @@ struct SidebarSectionsView: View {
         .buttonStyle(.plain)
         .padding(.horizontal, Tokens.Spacing.lg)
         .padding(.vertical, Tokens.Spacing.xs)
-        .accessibilityLabel(displayName(for: shortcut.path))
-        .accessibilityValue(
-            shortcut.kind == .folder ? "folder shortcut" : "file shortcut")
-        .accessibilityHint(
-            shortcut.kind == .folder
-                ? "Reveals and selects this folder in the file tree."
-                : "Opens this note.")
+        .accessibilityLabel(presentation.label)
+        .accessibilityValue(presentation.value)
+        .accessibilityHint(presentation.hint)
         .contextMenu {
             Button("Move Up") {
                 appState.moveSidebarShortcut(shortcut, delta: -1)

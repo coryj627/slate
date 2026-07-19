@@ -2841,6 +2841,13 @@ struct FileTreeSidebar: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
 
+            // FL5-2 (#665): the Tags section renders below the tree
+            // (final order: Shortcuts, Recents, tree, Tags) and hides
+            // with the rest while the filter overlay owns the surface.
+            if !filterModel.isActive {
+                SidebarTagTreeView()
+            }
+
             // U4-3 (#472): the bottom-left utility bar — Settings, Help, and
             // the vault switcher — pinned at the sidebar's bottom edge. Last
             // child of the column (U3-3 moved Properties into the in-note
@@ -3028,6 +3035,24 @@ struct FileTreeSidebar: View {
         // structural completion already passes through.
         .onChange(of: appState.lastMutationAnnouncement) { _, _ in
             filterModel.refreshAfterStructuralMutation()
+            // FL5-2 rule 1: the Tags section refreshes on the same
+            // funnel while expanded (no-op otherwise).
+            appState.refreshSidebarTagTree()
+        }
+        // Scan completion re-derives file_tags wholesale; a tree
+        // fetched mid-scan would otherwise stay stale (review round).
+        .onChange(of: appState.isScanning) { _, scanning in
+            if !scanning {
+                appState.refreshSidebarTagTree()
+            }
+        }
+        .sheet(
+            item: Binding(
+                get: { appState.sidebarTagEditorRequest },
+                set: { appState.sidebarTagEditorRequest = $0 })
+        ) { request in
+            SidebarTagEditor(request: request)
+                .environmentObject(appState)
         }
         .onChange(of: filterFieldFocused) { _, _ in
             syncSidebarRegionFocus()
@@ -5316,6 +5341,20 @@ struct FileTreeSidebar: View {
                 actionIDs: [
                     SlateCommandID.sidebarPinNote,
                     SlateCommandID.sidebarUnpinNote,
+                ])
+        }
+        if availableIDs.contains(SlateCommandID.sidebarAddTag)
+            || availableIDs.contains(SlateCommandID.sidebarRemoveTag)
+        {
+            // FL5-3b (#666): the tag editors ride the same canonical
+            // renderer, one shared single-file menu for tree and
+            // filter rows alike.
+            Divider()
+            sidebarCatalogActions(
+                projection.evaluations,
+                actionIDs: [
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                 ])
         }
         if hasReveal || hasCopy {

@@ -2162,6 +2162,23 @@ final class AppState: ObservableObject {
             try dispatchSidebarNavigationAction(intent, rejected: rejected)
             return .completed(actionID: intent.actionID)
 
+        case SlateCommandID.sidebarAddTag, SlateCommandID.sidebarRemoveTag:
+            // FL5-3b: freeze the target selection into an editor
+            // request; the sheet collects the tag and commits through
+            // the batch APIs with one consolidated announcement.
+            let paths = intent.snapshot.items
+                .filter { !$0.isDirectory }
+                .map(\.path)
+            guard !paths.isEmpty else {
+                throw sidebarActionFailure(
+                    "Select at least one file to edit tags.")
+            }
+            sidebarTagEditorRequest = SidebarTagEditorRequest(
+                kind: intent.actionID == SlateCommandID.sidebarAddTag
+                    ? .add : .remove,
+                paths: paths)
+            return .completed(actionID: intent.actionID)
+
         case let id where SlateCommandID.sidebarOpenShortcutSlots.contains(id):
             try dispatchSidebarNavigationAction(intent, rejected: rejected)
             return .completed(actionID: intent.actionID)
@@ -5010,6 +5027,11 @@ final class AppState: ObservableObject {
         // FL-09: filter results are vault-content; the device-local
         // persisted query survives (restore-not-apply on the next bind).
         sidebarFilterModel.resetForVaultClose()
+        // FL5-2/3b: tag-tree content and any pending editor are
+        // vault-scoped; the section's collapsed state is device-local
+        // and survives (it refetches lazily on the next expand).
+        sidebarTagTree = nil
+        sidebarTagEditorRequest = nil
         if sidebarOrganizationJournalRecoveryPending {
             sidebarOrganizationJournalRecoveryPending = false
         }
@@ -5996,6 +6018,203 @@ final class AppState: ObservableObject {
     /// `sidebarCollapseAllRequest`.
     @Published private(set) var sidebarFilterFocusRequest = 0
 
+    // MARK: Tags section (FL5-2, #665) + batch tag UI (FL5-3b, #666)
+
+    /// The Tags section's fetched tree, nil until the first expand
+    /// (lazy — rule 1: zero cost until opened) and after every vault
+    /// transition.
+    @Published private(set) var sidebarTagTree: TagTree?
+    /// Section collapsed state, device-local, default collapsed.
+    @Published var sidebarTagsSectionExpanded: Bool {
+        didSet {
+            sidebarSectionDefaults.set(
+                sidebarTagsSectionExpanded, forKey: Self.tagsSectionExpandedKey)
+            if sidebarTagsSectionExpanded && sidebarTagTree == nil {
+                refreshSidebarTagTree()
+            }
+        }
+    }
+    static let tagsSectionExpandedKey = "slate.sidebar.tagsSectionExpanded"
+    /// Device-local section-state store. Injectable (Codoki review):
+    /// parallel test cases sharing `UserDefaults.standard` raced on the
+    /// expanded flag; production uses standard, tests inject a suite.
+    private let sidebarSectionDefaults: UserDefaults
+    /// Fetch seam: tests inject a recorded tree; production reads the
+    /// session. nil result leaves the previous tree (transient failure
+    /// must not blank an expanded section).
+    var sidebarTagTreeProvider: (() -> TagTree?)?
+
+    /// Rebuild the Tags section content. Called on first expand and on
+    /// structural/index changes WHILE expanded (rule 1's refresh).
+    func refreshSidebarTagTree() {
+        guard sidebarTagsSectionExpanded else { return }
+        let fetched: TagTree?
+        if let provider = sidebarTagTreeProvider {
+            fetched = provider()
+        } else {
+            fetched = try? currentSession?.tagTree()
+        }
+        if let fetched {
+            sidebarTagTree = fetched
+        }
+    }
+
+    /// FL5-3b: a pending Add/Remove Tag editor invocation. Set by the
+    /// catalog dispatch with the frozen target snapshot; the sidebar
+    /// presents the editor sheet bound to it.
+    struct SidebarTagEditorRequest: Identifiable, Equatable {
+        enum Kind: Equatable {
+            case add
+            case remove
+        }
+        let id = UUID()
+        let kind: Kind
+        /// Vault-relative paths frozen at invocation, FL2 snapshot rules.
+        let paths: [String]
+    }
+    @Published var sidebarTagEditorRequest: SidebarTagEditorRequest?
+
+    /// FL5-3b runner seams (the batch-trash pattern): production runs
+    /// the synchronous UniFFI batch OFF the main actor — an unbounded
+    /// selection must never beachball the app (review round, high) —
+    /// and tests inject reports without a real vault write.
+    var sidebarTagAddRunner:
+        (VaultSession, [String], String) async throws -> TagEditReport = {
+            session, paths, tag in
+            try await Task.detached(priority: .userInitiated) {
+                try session.addTagToFiles(paths: paths, tag: tag)
+            }.value
+        }
+    var sidebarTagRemoveRunner:
+        (VaultSession, [String], String) async throws -> TagEditReport = {
+            session, paths, tag in
+            try await Task.detached(priority: .userInitiated) {
+                try session.removeTagFromFiles(paths: paths, tag: tag)
+            }.value
+        }
+    /// Selection-tags runner for the Remove picker (DB truth), same
+    /// off-main discipline.
+    var sidebarSelectionTagsRunner:
+        (VaultSession, [String]) async throws -> [TagCount] = {
+            session, paths in
+            try await Task.detached(priority: .userInitiated) {
+                try session.tagsForFiles(paths: paths)
+            }.value
+        }
+    /// The in-flight commit, exposed for deterministic test awaits.
+    private(set) var sidebarTagEditTaskForTesting: Task<Void, Never>?
+
+    /// Commit a tag editor request: dismiss the sheet, run the batch
+    /// OFF the main actor (an unbounded selection must never block the
+    /// UI — review round), then announce ONE consolidated result (core
+    /// summary + a skip clause when files were refused) through the
+    /// mutation-announcement funnel, which also refreshes dependent
+    /// surfaces. The completion is session-guarded: a vault switch
+    /// mid-batch drops the stale announcement instead of narrating the
+    /// previous vault's outcome into the new one.
+    func commitSidebarTagEdit(
+        request: SidebarTagEditorRequest, tag: String
+    ) {
+        let trimmed = tag.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty else { return }
+        guard let session = currentSession else { return }
+        sidebarTagEditorRequest = nil
+        let runner =
+            request.kind == .add ? sidebarTagAddRunner : sidebarTagRemoveRunner
+        sidebarTagEditTaskForTesting = Task { @MainActor [weak self] in
+            do {
+                let report = try await runner(session, request.paths, trimmed)
+                guard let self, self.currentSession === session else { return }
+                var message = report.audioSummary
+                if !report.skipped.isEmpty {
+                    message += " \(report.skipped.count) skipped."
+                }
+                // The one funnel: announces once AND (via the FL-09
+                // overlay's lastMutationAnnouncement observer)
+                // refreshes an active filter list; the tag tree
+                // refreshes below.
+                self.postMutationAnnouncement(message)
+                self.refreshSidebarTagTree()
+            } catch {
+                guard let self, self.currentSession === session else { return }
+                self.postMutationAnnouncement(error.localizedDescription)
+            }
+        }
+    }
+
+    /// The Add editor's autocomplete inventory (free entry allowed):
+    /// every normalized full tag, from the fetched tree when the Tags
+    /// section already holds one, else fetched on demand — the editor
+    /// is not gated on the section's lazy expansion.
+    func sidebarTagSuggestions() -> [String] {
+        if let tree = sidebarTagTree {
+            return tree.entries.filter { $0.directCount > 0 }.map(\.full)
+        }
+        let fetched: TagTree?
+        if let provider = sidebarTagTreeProvider {
+            fetched = provider()
+        } else {
+            fetched = try? currentSession?.tagTree()
+        }
+        return fetched?.entries.filter { $0.directCount > 0 }.map(\.full) ?? []
+    }
+
+    /// The Remove picker's choice list: tags carried by the frozen
+    /// selection, distinct-file counts, alphabetical (DB truth — the
+    /// app never parses note bodies). Async: the query runs off-main
+    /// like the batch itself.
+    func sidebarSelectionTags(for paths: [String]) async -> [TagCount] {
+        guard let session = currentSession else { return [] }
+        return (try? await sidebarSelectionTagsRunner(session, paths)) ?? []
+    }
+
+    /// FL5-2 rule 4: Add to Shortcuts from a tag row (or the Untagged
+    /// row) — a DIRECT variant of the catalog's selection-driven
+    /// add-shortcut, same capacity gate and funnel, section-row
+    /// identity (the FL-07 removeSidebarShortcutDirect convention).
+    func addSidebarTagShortcutDirect(kind: SidebarShortcut.Kind, path: String) {
+        let shortcut = SidebarShortcut(kind: kind, path: path)
+        guard !sidebarOrganization.shortcuts.contains(shortcut) else {
+            postMutationAnnouncement("Already in Shortcuts.")
+            return
+        }
+        guard
+            sidebarOrganization.shortcutRawEntryCount
+                < SidebarOrganizationSchema.maxShortcuts
+        else {
+            postMutationAnnouncement(
+                "Shortcut limit reached "
+                    + "(\(SidebarOrganizationSchema.maxShortcuts)). "
+                    + "Remove one to add another.")
+            return
+        }
+        do {
+            try mutateSidebarOrganization(announce: "Added to Shortcuts.") {
+                root in
+                SidebarOrganizationSchema.addShortcut(
+                    &root, kind: kind.rawValue, path: path)
+            } reflect: { state in
+                if !state.shortcuts.contains(shortcut) {
+                    state.shortcuts.append(shortcut)
+                    state.shortcutRawEntryCount += 1
+                }
+            }
+        } catch {
+            postMutationAnnouncement(error.sidebarActionAnnouncement)
+        }
+    }
+
+    /// FL5-2 rule 4 context-menu verbs on tag rows.
+    func copySidebarTag(_ full: String) {
+        let value = "#\(full)"
+        sidebarPasteboard.clearContents()
+        if sidebarPasteboard.setString(value) {
+            postMutationAnnouncement("Copied \(value).")
+        } else {
+            postMutationAnnouncement("Couldn't copy \(value).")
+        }
+    }
+
     struct SidebarHistoryEntry: Equatable {
         let path: String
         let isDirectory: Bool
@@ -6148,6 +6367,12 @@ final class AppState: ObservableObject {
                     query: query, scopeDir: nil, dateWindows: windows,
                     paging: paging)
             },
+            performUntagged: { [weak session] paging in
+                guard let session else {
+                    throw SidebarFilterSessionClosedError()
+                }
+                return try session.untaggedFiles(paging: paging)
+            },
             announce: { [announcer] message in
                 // W0.5-3 residue: SidebarFilterModel inline messages
                 announcer.post(.hostComposed(text: message, priority: .medium))
@@ -6212,6 +6437,13 @@ final class AppState: ObservableObject {
             requestSidebarReveal(path: shortcut.path, isDirectory: true)
         case .file:
             openFile(shortcut.path, target: .currentTab)
+        case .tag:
+            // FL5-2 rule 4: tag shortcuts are containers whose
+            // activation drives the shared flat list with the tag query
+            // (single-tree mode = the FL4 handoff).
+            sidebarFilterModel.activateTagQuery("#\(shortcut.path)")
+        case .untagged:
+            sidebarFilterModel.activateUntaggedScope()
         }
     }
 
@@ -7461,10 +7693,16 @@ final class AppState: ObservableObject {
         preferencesStore: PreferencesStore = PreferencesStore(),
         commandPaletteRecentsStore: CommandPaletteRecentsStore? = nil,
         announcer: AnnouncementPosting = AppKitAnnouncementPoster(),
-        sidebarPasteboard: SidebarPasteboardWriting = AppKitSidebarPasteboard()
+        sidebarPasteboard: SidebarPasteboardWriting = AppKitSidebarPasteboard(),
+        sidebarSectionDefaults: UserDefaults = .standard
     ) {
         self.announcer = announcer
         self.sidebarPasteboard = sidebarPasteboard
+        self.sidebarSectionDefaults = sidebarSectionDefaults
+        // FL5-2 rule 1: Tags section collapsed state is device-local,
+        // default collapsed (lazy — nothing fetches until first expand).
+        self.sidebarTagsSectionExpanded =
+            sidebarSectionDefaults.bool(forKey: Self.tagsSectionExpandedKey)
         // Fall back to an in-memory-only store (writes go to a temp
         // path that's discarded on exit) if the standard Application
         // Support location can't be set up. Better degraded than crash
@@ -8948,6 +9186,10 @@ final class AppState: ObservableObject {
             // FL-09 (#663): bind the sidebar filter to this session,
             // restoring the persisted query into the field (not applied).
             bindSidebarFilterModel(session: session)
+            // FL5-2 review round (high): a device-restored EXPANDED Tags
+            // section must fetch for THIS vault — didSet only fires on
+            // toggles, and the teardown path cleared the previous tree.
+            refreshSidebarTagTree()
             // #876: likewise this vault's recent search queries — per-
             // vault, so the overlay's idle "Recent Searches" reflects the
             // vault the user is actually in.

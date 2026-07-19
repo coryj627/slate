@@ -425,6 +425,16 @@ enum SidebarActionCatalog {
             SlateCommandID.sidebarFocusFilter, "Focus Sidebar Filter",
             .search, .anySelection,
             "Move focus to the sidebar filter field."),
+        // FL5-3b batch tag editors (#666): selection actions opening
+        // the tag editor; per-file refusals ride the core report.
+        action(
+            SlateCommandID.sidebarAddTag, "Add Tag…", .pin,
+            .oneOrMoreFiles,
+            "Add a tag to the selected files' frontmatter."),
+        action(
+            SlateCommandID.sidebarRemoveTag, "Remove Tag…", .unpin,
+            .oneOrMoreFiles,
+            "Remove a tag from the selected files' frontmatter."),
         action(
             SlateCommandID.deleteEntry, "Move to Trash", .trash, .oneOrMoreItems,
             "Move the selected files or folders to the Trash.",
@@ -565,6 +575,8 @@ enum SidebarActionCatalog {
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddTag,
+                    SlateCommandID.sidebarRemoveTag,
                     SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
                     SlateCommandID.sidebarCopyWikilink,
@@ -575,6 +587,8 @@ enum SidebarActionCatalog {
             ids = [
                 SlateCommandID.sidebarOpen,
                 SlateCommandID.moveTo,
+                SlateCommandID.sidebarAddTag,
+                SlateCommandID.sidebarRemoveTag,
                 SlateCommandID.deleteEntry,
             ]
         } else {
