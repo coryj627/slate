@@ -338,7 +338,7 @@ def help_docs() -> list[str]:
     return sorted(p.name for p in HELP_DIR.glob("*.md"))
 
 
-def cli_verbs() -> list[str]:
+def cli_verbs_live() -> list[str]:
     try:
         out = subprocess.run(
             ["cargo", "run", "-q", "-p", "slate-cli", "--", "--help"],
@@ -347,19 +347,39 @@ def cli_verbs() -> list[str]:
     except (OSError, subprocess.TimeoutExpired):
         out = ""
     verbs = re.findall(r"^  (\w[\w-]*)\s{2,}", out, re.MULTILINE)
-    if not verbs:
-        # Fallback: clap derives kebab-case verb names from the enum
-        # variants by default; explicit name attributes would make this
-        # conversion ambiguous, so their presence aborts generation.
-        main_rs = (REPO / "crates/slate-cli/src/main.rs").read_text(encoding="utf-8")
-        if re.search(r"#\[command\(\s*name\s*=", main_rs):
-            fail("slate-cli uses explicit #[command(name=...)] attributes; "
-                 "run with cargo available so verbs come from live --help")
-        verbs = [
-            re.sub(r"(?<!^)(?=[A-Z])", "-", v).lower()
-            for v in re.findall(r"^\s{4}(\w+)\s*[({]", main_rs, re.MULTILINE)
-        ]
-    return [v for v in verbs if v not in ("help",)]
+    return [v for v in verbs if v != "help"]
+
+
+def cli_verbs_fallback() -> list[str]:
+    """clap derives kebab-case verb names from the subcommand enum's
+    variants by default. Scope both the extraction and the explicit-name
+    ambiguity guard to the ``enum Command`` body — the root ``Cli``
+    struct's ``#[command(name = "slate")]`` names the executable, not a
+    verb, and must not abort the fallback."""
+    main_rs = (REPO / "crates/slate-cli/src/main.rs").read_text(encoding="utf-8")
+    body_match = re.search(r"\benum Command\s*\{(.*?)\n\}", main_rs, re.DOTALL)
+    if not body_match:
+        fail("could not locate `enum Command` in slate-cli main.rs")
+    body = body_match.group(1)
+    if re.search(r"#\[command\(\s*name\s*=", body):
+        fail("slate-cli subcommands use explicit #[command(name=...)] "
+             "attributes; run with cargo available so verbs come from "
+             "live --help")
+    return [
+        re.sub(r"(?<!^)(?=[A-Z])", "-", v).lower()
+        for v in re.findall(r"^\s{4}(\w+)\s*[({]", body, re.MULTILINE)
+    ]
+
+
+def cli_verbs() -> list[str]:
+    if "--verify-fallback" in sys.argv:
+        live, derived = cli_verbs_live(), cli_verbs_fallback()
+        if live != derived:
+            fail(f"CLI verb fallback drifted from live --help: live={live} "
+                 f"fallback={derived}")
+        print(f"cli fallback verified against live --help ({len(live)} verbs)")
+        return live
+    return cli_verbs_live() or cli_verbs_fallback()
 
 
 def main() -> int:
