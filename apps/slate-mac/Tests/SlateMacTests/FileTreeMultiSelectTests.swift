@@ -1964,7 +1964,8 @@ final class FileTreeMultiSelectTests: XCTestCase {
         XCTAssertFalse(main.contains("dismissActiveBatchAttention"))
         XCTAssertTrue(
             main.contains(
-                "FileTreeSidebar(rowPreferences: appState.sidebarPreferences.rowSnapshot) "
+                "FileTreeSidebar( rowPreferences: appState.sidebarPreferences.rowSnapshot, "
+                    + "filterModel: appState.sidebarFilterModel) "
                     + ".accessibilityLabel( ) "
                     + ".accessibilityFocused($alertFocusReturn, equals: .tree)"),
             "the files sidebar is the real accessibility focus target")

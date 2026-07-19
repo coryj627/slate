@@ -419,6 +419,12 @@ enum SidebarActionCatalog {
             SlateCommandID.sidebarOpenShortcut(9), "Open Shortcut 9",
             .pin, .anySelection,
             "Activate shortcut 9 in the Shortcuts section."),
+        // FL-09 filter UI (#663). View-state only, like the FL-07
+        // navigation family.
+        action(
+            SlateCommandID.sidebarFocusFilter, "Focus Sidebar Filter",
+            .search, .anySelection,
+            "Move focus to the sidebar filter field."),
         action(
             SlateCommandID.deleteEntry, "Move to Trash", .trash, .oneOrMoreItems,
             "Move the selected files or folders to the Trash.",

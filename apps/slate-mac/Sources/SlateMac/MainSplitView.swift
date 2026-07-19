@@ -139,7 +139,9 @@ struct MainSplitView: View {
         // mangled NSHostingView type names that the Accessibility
         // Inspector flagged with "Element has no description".
         NavigationSplitView {
-            FileTreeSidebar(rowPreferences: appState.sidebarPreferences.rowSnapshot)
+            FileTreeSidebar(
+                rowPreferences: appState.sidebarPreferences.rowSnapshot,
+                filterModel: appState.sidebarFilterModel)
                 .accessibilityLabel("Files sidebar")
                 .accessibilityFocused($alertFocusReturn, equals: .tree)
         } content: {

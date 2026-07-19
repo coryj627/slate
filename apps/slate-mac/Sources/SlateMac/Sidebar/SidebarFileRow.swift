@@ -179,6 +179,12 @@ struct SidebarRowModel {
   let taskAccessibilityText: String?
   let taskBadgeIsComplete: Bool
   let isPinned: Bool
+  /// FL4-2 (#663): the containing folder, shown under the row in the
+  /// flat filter-result list (nil everywhere else). Location is row
+  /// identity in a flat list — two same-named notes are otherwise
+  /// indistinguishable — so it renders in every density and is spoken
+  /// in the AX value.
+  let pathSubtitle: String?
   let accessibilityValue: String
   let visuallyShowsMetadata: Bool
   let visuallyShowsPreview: Bool
@@ -193,6 +199,7 @@ struct SidebarRowModel {
     summary: FileSummary,
     preferences: SidebarRowPreferencesSnapshot,
     isPinned: Bool = false,
+    pathSubtitle: String? = nil,
     now: Date = Date(),
     locale: Locale = .current,
     calendar: Calendar = .current,
@@ -200,6 +207,7 @@ struct SidebarRowModel {
     formatter: any SidebarRowFormatting = SidebarRowFormatterCache.shared
   ) {
     self.isPinned = isPinned
+    self.pathSubtitle = pathSubtitle
     filename = summary.name
     filenameTooltip = summary.name
     if let authoredTitle = summary.displayName {
@@ -283,6 +291,9 @@ struct SidebarRowModel {
     }
 
     var spokenParts = [metadata]
+    if let pathSubtitle {
+      spokenParts.insert("in \(pathSubtitle)", at: 0)
+    }
     if let previewText {
       spokenParts.append("Preview: \(previewText)")
     }
@@ -402,6 +413,16 @@ struct SidebarFileRow: View {
             .foregroundStyle(model.taskBadgeIsComplete ? secondaryText : primaryText)
             .accessibilityHidden(true)
           }
+        }
+        if let pathSubtitle = model.pathSubtitle {
+          // Spoken through the AX value's leading "in <folder>"; the
+          // visual line is the twin, so it stays out of the AX tree.
+          Text(pathSubtitle)
+            .font(Tokens.Typography.caption)
+            .foregroundStyle(secondaryText)
+            .lineLimit(2)
+            .truncationMode(.middle)
+            .accessibilityHidden(true)
         }
         if model.visuallyShowsMetadata {
           Text(model.metadataText)
