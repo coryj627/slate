@@ -3222,6 +3222,10 @@ struct FileTreeSidebar: View {
             isSelected: selected,
             selectionIsActive: nativeSelectionIsActive)
             .tag(summary.path)
+            // Complex-gesture disclosure (WCAG 3.3.2), the tree-row
+            // idiom: say what activation does and where the rest lives.
+            .accessibilityHint(
+                "Opens the file. Other available actions are in the context menu.")
             .contextMenu {
                 if let publishedSnapshot = appState.sidebarSelectionSnapshot {
                     // The overlay owns selection while active: target THIS
