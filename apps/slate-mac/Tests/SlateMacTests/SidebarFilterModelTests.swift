@@ -426,6 +426,61 @@ final class SidebarFilterModelTests: XCTestCase {
         XCTAssertEqual(recorder.performCalls.count, 2)
     }
 
+    func testInlineErrorsAnnouncePolitelyAndDedupPerMessage() {
+        let recorder = Recorder()
+        recorder.pages["alpha"] = page(["a.md"], summary: "1 result.")
+        recorder.errors["ext:"] = VaultError.InvalidQuery(
+            message: "\"ext:\" needs an extension, like ext:md.")
+        recorder.errors["#"] = VaultError.InvalidQuery(
+            message: "\"#\" needs a tag name.")
+        let model = makeModel(recorder, defaults: freshDefaults())
+
+        model.fieldText = "ext:"
+        model.commit()
+        model.commit()
+        XCTAssertEqual(
+            recorder.announcements,
+            ["\"ext:\" needs an extension, like ext:md."],
+            "the error speaks once per distinct message, not per keystroke")
+
+        model.fieldText = "#"
+        model.commit()
+        XCTAssertEqual(recorder.announcements.count, 2)
+
+        // Success clears the token: the SAME error later re-announces.
+        model.fieldText = "alpha"
+        model.commit()
+        model.fieldText = "ext:"
+        model.commit()
+        XCTAssertEqual(recorder.announcements.count, 4)
+        XCTAssertEqual(
+            recorder.announcements.last,
+            "\"ext:\" needs an extension, like ext:md.")
+    }
+
+    func testRefreshAfterStructuralMutationRerunsOnlyWhileActive() {
+        let recorder = Recorder()
+        recorder.pages["alpha"] = page(["a.md"])
+        let model = makeModel(recorder, defaults: freshDefaults())
+
+        model.refreshAfterStructuralMutation()
+        XCTAssertTrue(
+            recorder.performCalls.isEmpty,
+            "no committed query: mutation completions are ignored")
+
+        model.fieldText = "alpha"
+        model.commit()
+        XCTAssertEqual(recorder.performCalls.count, 1)
+        model.refreshAfterStructuralMutation()
+        XCTAssertEqual(
+            recorder.performCalls.count, 2,
+            "an active overlay re-runs so renamed/deleted rows can't linger")
+
+        model.escapeInField()
+        model.refreshAfterStructuralMutation()
+        XCTAssertEqual(recorder.performCalls.count, 2)
+    }
+
     // MARK: - Rollover / time-zone change (spec rule 7)
 
     func testRolloverRefreshRunsOnlyWhileADateTermIsActive() {

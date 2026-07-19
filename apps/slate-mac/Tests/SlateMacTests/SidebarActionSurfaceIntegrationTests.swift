@@ -1458,7 +1458,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             structuralAnchor: "private func singleFileContextMenuGroups(",
             in: document)
         let filterRow = try pairedBlockBody(
-            structuralAnchor: "private func filterResultRow(", in: document)
+            structuralAnchor: "private func filterResultFileRow(", in: document)
         let filterContext = try pairedBlockBody(
             structuralAnchor: ".contextMenu {", in: filterRow)
         let folderStructure = normalized(folderContext.structural)

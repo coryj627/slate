@@ -98,6 +98,11 @@ final class SidebarFilterModel: ObservableObject {
 
   private var dependencies: Dependencies?
   private var lastAnnouncement: (query: String, total: UInt64)?
+  /// Dedup token for spoken error feedback (review round: the inline
+  /// text alone is silent for VoiceOver — rule 4 requires a polite
+  /// announcement). Distinct from the results dedup so an error →
+  /// same-results → same-error cycle still re-announces the error.
+  private var lastErrorAnnouncement: String?
   /// The exact windows the committed page ran with — reused verbatim by
   /// `loadNextPage` so every page of one committed query sees identical
   /// boundaries even across a rollover (rule 7's recompute is explicit).
@@ -174,6 +179,7 @@ final class SidebarFilterModel: ObservableObject {
       committedQuery = ""
       results = nil
       inlineError = nil
+      lastErrorAnnouncement = nil
       dependencies.defaults.set("", forKey: Self.persistedQueryKey)
       return
     }
@@ -199,7 +205,7 @@ final class SidebarFilterModel: ObservableObject {
         total: page.total,
         audioSummary: page.audioSummary)
     } catch {
-      inlineError = errorMessage(for: error)
+      setInlineError(errorMessage(for: error), dependencies: dependencies)
     }
   }
 
@@ -213,7 +219,9 @@ final class SidebarFilterModel: ObservableObject {
           timeZone: dependencies.timeZone(),
           resolver: dependencies.resolver)
       else {
-        inlineError = "That date can't be resolved in this calendar."
+        setInlineError(
+          "That date can't be resolved in this calendar.",
+          dependencies: dependencies)
         return
       }
       let page = try dependencies.perform(
@@ -222,6 +230,7 @@ final class SidebarFilterModel: ObservableObject {
       activeWindows = windows
       results = page
       inlineError = nil
+      lastErrorAnnouncement = nil
       dependencies.defaults.set(query, forKey: Self.persistedQueryKey)
       if lastAnnouncement?.query != query
         || lastAnnouncement?.total != page.total
@@ -232,7 +241,19 @@ final class SidebarFilterModel: ObservableObject {
     } catch {
       // InvalidQuery renders inline naming the bad term; the previous
       // good results stay visible (spec rule 4).
-      inlineError = errorMessage(for: error)
+      setInlineError(errorMessage(for: error), dependencies: dependencies)
+    }
+  }
+
+  /// Rule 4's polite live region: the inline text is the visual, the
+  /// announce seam is the spoken channel (priority .medium = polite).
+  /// Deduped per distinct message so a keystroke stream over one broken
+  /// term doesn't spam; a NEW error message always speaks.
+  private func setInlineError(_ message: String, dependencies: Dependencies) {
+    inlineError = message
+    if lastErrorAnnouncement != message {
+      lastErrorAnnouncement = message
+      dependencies.announce(message)
     }
   }
 
@@ -256,6 +277,7 @@ final class SidebarFilterModel: ObservableObject {
     committedQuery = ""
     results = nil
     inlineError = nil
+    lastErrorAnnouncement = nil
     dependencies?.defaults.set("", forKey: Self.persistedQueryKey)
   }
 
@@ -273,7 +295,18 @@ final class SidebarFilterModel: ObservableObject {
     results = nil
     inlineError = nil
     lastAnnouncement = nil
+    lastErrorAnnouncement = nil
     activeWindows = []
+  }
+
+  /// A structural mutation (rename, move, trash, duplicate) completed
+  /// while the overlay is active: the committed query re-runs so the
+  /// flat list can't keep showing a renamed or deleted row (review
+  /// round). Wholesale replacement; the announce dedup keys on
+  /// (query, total), so an unchanged count stays silent.
+  func refreshAfterStructuralMutation() {
+    guard let dependencies, isActive else { return }
+    runQuery(committedQuery, dependencies: dependencies)
   }
 
   /// Local-day rollover / system time-zone change: recompute ONLY when a

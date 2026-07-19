@@ -3016,6 +3016,27 @@ struct FileTreeSidebar: View {
         .onChange(of: appState.sidebarFilterFocusRequest) { _, _ in
             filterFieldFocused = true
         }
+        .onChange(of: filterModel.isActive) { _, active in
+            if active {
+                publishFilterSelectionSnapshot()
+            } else {
+                filterListSelection = nil
+                republishTreeSelectionSnapshot()
+            }
+        }
+        // Rename/move/trash/duplicate completions re-run the committed
+        // query so the flat list can't keep a renamed or deleted row
+        // (review round). Announcement changes are the one funnel every
+        // structural completion already passes through.
+        .onChange(of: appState.lastMutationAnnouncement) { _, _ in
+            filterModel.refreshAfterStructuralMutation()
+        }
+        .onChange(of: filterFieldFocused) { _, _ in
+            syncSidebarRegionFocus()
+        }
+        .onChange(of: filterResultsFocused) { _, _ in
+            syncSidebarRegionFocus()
+        }
         // FL-07: one-shot reveal requests (shortcut containers, history
         // navigation). Ancestors expand through the existing seam; the
         // selection applies programmatically, so the history dedupe
@@ -3071,6 +3092,45 @@ struct FileTreeSidebar: View {
         filterResultsFocused = true
     }
 
+    /// Selection-snapshot ownership for the overlay (review round,
+    /// high): a single-item snapshot for the selected result row, or an
+    /// empty one while nothing is selected — never the hidden tree
+    /// selection. Published through the same admission funnel the tree
+    /// uses.
+    private func publishFilterSelectionSnapshot() {
+        guard let sessionIdentity = tree.sessionIdentity else { return }
+        let selectedSummary = filterListSelection.flatMap { path in
+            filterModel.results?.files.first(where: { $0.path == path })
+        }
+        let items = selectedSummary.map {
+            [SidebarSelectionItem(
+                path: $0.path, isDirectory: false, isMarkdown: $0.isMarkdown)]
+        } ?? []
+        let parent = (selectedSummary?.path as NSString?)?
+            .deletingLastPathComponent ?? ""
+        _ = appState.publishSidebarSelectionSnapshot(SidebarSelectionSnapshot(
+            sessionIdentity: sessionIdentity,
+            items: items,
+            focusedPath: selectedSummary?.path,
+            creationParent: parent == "." ? "" : parent))
+    }
+
+    /// Exit the overlay: hand snapshot ownership back to the tree's
+    /// selection model (its own edges republish only on CHANGE, so a
+    /// silent handback would leave the last filter row as the frozen
+    /// menu target while the tree highlights something else).
+    private func republishTreeSelectionSnapshot() {
+        mutateSelectionAndPublish { _ in }
+    }
+
+    /// Mirror of `workspace.noteTreeFocusChanged` covering every
+    /// sidebar-owned focus carrier (review round: ⌥⌘F from the editor
+    /// must register the sidebar region or ⌘⌥→ round-trips break).
+    private func syncSidebarRegionFocus() {
+        appState.workspace.noteTreeFocusChanged(
+            fileTreeFocused || filterFieldFocused || filterResultsFocused)
+    }
+
     /// The flat paged result list of shared FL1 rows (locked decision
     /// 7). One `List`, path-keyed selection; Esc moves focus back to the
     /// field; the tree beneath was never torn down.
@@ -3103,6 +3163,12 @@ struct FileTreeSidebar: View {
                     filterFieldFocused = true
                 }
                 .onChange(of: filterListSelection) { _, selected in
+                    // Review round (high): while the overlay is active it
+                    // OWNS the published selection — File menu, palette,
+                    // and keyboard projections must target the visible
+                    // row, never the hidden tree multi-selection (a
+                    // wrong-target trash is a data-loss path).
+                    publishFilterSelectionSnapshot()
                     guard let selected else { return }
                     appState.openFile(selected, target: .currentTab)
                 }
@@ -3123,7 +3189,21 @@ struct FileTreeSidebar: View {
     /// containing-folder subtitle, carrying the exact single-file
     /// context menu tree rows use (spec rule 5 — same component, all
     /// FL2 verbs).
+    @ViewBuilder
     private func filterResultRow(_ summary: FileSummary) -> some View {
+        if let rename = appState.renamingNode,
+            rename.path == summary.path, !rename.isDirectory
+        {
+            // Review round: the shared menu exposes Rename, so the
+            // overlay must render the SAME visible editor the tree row
+            // swaps to — otherwise the rename owner strands invisibly.
+            renameEditor(rename, isDirectory: false)
+        } else {
+            filterResultFileRow(summary)
+        }
+    }
+
+    private func filterResultFileRow(_ summary: FileSummary) -> some View {
         let item = SidebarSelectionItem(
             path: summary.path,
             isDirectory: false,
@@ -3307,8 +3387,8 @@ struct FileTreeSidebar: View {
         // U4-4 review: mirror REAL tree focus into the region bookkeeping —
         // Tab/click into the tree must make the next ⌘⌥→ "return to editor"
         // per spec, not an interior editor move. Post-update (#448-safe).
-        .onChange(of: fileTreeFocused) { _, focused in
-            appState.workspace.noteTreeFocusChanged(focused)
+        .onChange(of: fileTreeFocused) { _, _ in
+            syncSidebarRegionFocus()
         }
         // If another structural operation begins while a drag is hovering or
         // decoding, immediately remove every acceptance mirror, cancel spring
@@ -5296,18 +5376,27 @@ struct FileTreeSidebar: View {
                 if node.isDirectory {
                     SlateSymbol.folder.decorative.foregroundStyle(Tokens.ColorRole.textSecondary)
                 }
-                RenameField(
-                    initialName: rename.name,
-                    isDirectory: node.isDirectory,
-                    error: appState.structuralRenameError,
-                    onCommit: { newName in
-                        appState.commitPendingRename(id: rename.id, to: newName)
-                    },
-                    onCancel: {
-                        appState.cancelPendingRename(id: rename.id)
-                    })
+                renameEditor(rename, isDirectory: node.isDirectory)
             }
         }
+    }
+
+    /// The ONE `RenameField` construction (FilenameAdvisory contract):
+    /// tree rows and FL-09 filter-result rows swap in the same editor
+    /// with the same commit/cancel/error wiring.
+    private func renameEditor(
+        _ rename: AppState.RenamingNode, isDirectory: Bool
+    ) -> some View {
+        RenameField(
+            initialName: rename.name,
+            isDirectory: isDirectory,
+            error: appState.structuralRenameError,
+            onCommit: { newName in
+                appState.commitPendingRename(id: rename.id, to: newName)
+            },
+            onCancel: {
+                appState.cancelPendingRename(id: rename.id)
+            })
     }
 
     // MARK: - Drag & drop (U2-5)
