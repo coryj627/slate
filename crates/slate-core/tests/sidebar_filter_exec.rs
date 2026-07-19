@@ -352,6 +352,124 @@ fn audio_summary_is_normative() {
     );
 }
 
+#[test]
+fn scope_and_path_bounds_are_binary_not_like_folded() {
+    // Review round: LIKE is ASCII-case-insensitive on this connection —
+    // scoping must use binary subtree bounds so a case-distinct sibling
+    // directory can never leak into a scope.
+    let tmp = tempfile::tempdir().unwrap();
+    write(tmp.path(), "Research/Case.md", "cased\n");
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session
+        .scan_initial(&slate_core::CancelToken::new())
+        .unwrap();
+    let lower = session
+        .filter_files("", Some("research"), &[], Paging::first(10))
+        .unwrap();
+    assert_eq!(lower.total, 0, "lowercase scope must not match 'Research/'");
+    let exact = session
+        .filter_files("", Some("Research"), &[], Paging::first(10))
+        .unwrap();
+    assert_eq!(exact.total, 1);
+    assert_eq!(
+        session
+            .filter_files("path:research/", None, &[], Paging::first(10))
+            .unwrap()
+            .total,
+        0,
+        "path: terms use the same binary bounds"
+    );
+}
+
+#[test]
+fn title_effective_name_matches_the_shared_decoder_rules() {
+    // Review round: blank text titles and non-text titles fall back to
+    // the stem for BOTH matching and ordering, exactly like
+    // FileSummary.display_name.
+    let tmp = tempfile::tempdir().unwrap();
+    write(
+        tmp.path(),
+        "blankish.md",
+        "---\ntitle: \"   \"\n---\nbody\n",
+    );
+    write(tmp.path(), "numeric.md", "---\ntitle: 42\n---\nbody\n");
+    let session = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session
+        .scan_initial(&slate_core::CancelToken::new())
+        .unwrap();
+    let by_stem = session
+        .filter_files("blankish", None, &[], Paging::first(10))
+        .unwrap();
+    assert_eq!(by_stem.total, 1, "a blank title falls back to the stem");
+    assert_eq!(
+        session
+            .filter_files("numeric", None, &[], Paging::first(10))
+            .unwrap()
+            .total,
+        1,
+        "a non-text title falls back to the stem"
+    );
+    // Ordering uses the stem too: blankish < numeric alphabetically.
+    let page = session
+        .filter_files("ext:md", None, &[], Paging::first(10))
+        .unwrap();
+    assert_eq!(
+        page.files
+            .iter()
+            .map(|f| f.path.as_str())
+            .collect::<Vec<_>>(),
+        ["blankish.md", "numeric.md"]
+    );
+}
+
+#[test]
+fn cursors_are_length_prefixed_and_malformed_ones_are_rejected() {
+    let (_tmp, session) = fixture();
+    // Round-trip: page one, then resume — no repeats, no skips, even
+    // though sort keys and paths are arbitrary user-authored text.
+    let first = session
+        .filter_files("", Some("notes"), &[], Paging::first(1))
+        .unwrap();
+    let cursor = first.next_cursor.clone().expect("more pages");
+    let second = session
+        .filter_files(
+            "",
+            Some("notes"),
+            &[],
+            Paging {
+                cursor: Some(cursor),
+                limit: 1,
+            },
+        )
+        .unwrap();
+    let mut both: Vec<String> = first
+        .files
+        .iter()
+        .chain(second.files.iter())
+        .map(|f| f.path.clone())
+        .collect();
+    both.dedup();
+    assert_eq!(both.len(), 2, "no repeated or skipped rows across pages");
+    // Malformed cursors are loud errors, never a silent restart.
+    for bad in ["", "short", "zzzzzzzzrest", "ffffffff"] {
+        assert!(
+            matches!(
+                session.filter_files(
+                    "",
+                    Some("notes"),
+                    &[],
+                    Paging {
+                        cursor: Some(bad.to_string()),
+                        limit: 1,
+                    },
+                ),
+                Err(VaultError::InvalidQuery { .. })
+            ),
+            "{bad:?}"
+        );
+    }
+}
+
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(24))]
     /// Positive-term monotonicity: filter(q) ⊆ filter(q minus one term).

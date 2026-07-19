@@ -39,8 +39,8 @@ The first three groups run for three vault sizes: **1 000**, **10 000**, **50 00
 
 | Bench | Median | Budget | Notes |
 |---|---|---|---|
-| `sidebar_filter/10000` | ~45 ms | ≤ 50 ms | Name term (worst case): linear casefolded substring over every effective name via the `slate_tree_sort_key` UDF, one statement, set-based title join. |
-| `sidebar_filter/10000_mixed_terms` | ~43 ms | ≤ 50 ms | `note ext:md -has:task` — EXISTS joins narrow before the name scan. |
+| `sidebar_filter/10000` | ~42 ms | ≤ 50 ms | Name term (worst case): linear casefolded substring over every effective name via the `slate_tree_sort_key` UDF, one statement, set-based title join. |
+| `sidebar_filter/10000_mixed_terms` | ~49 ms | ≤ 50 ms | `note ext:md -has:task` — EXISTS joins narrow before the name scan. |
 
 Per fl4_spec FL4-1 rule 7: if a regression pushes the name term past
 budget, the remedy is a casefolded effective-name column maintained at

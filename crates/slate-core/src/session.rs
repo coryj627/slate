@@ -7532,8 +7532,35 @@ pub(crate) fn decode_file_summary_query_row(
     ))
 }
 
-/// Cursor encoding for the filter's (casefold key, path) total order.
-const SIDEBAR_FILTER_CURSOR_SEPARATOR: char = '\u{1}';
+/// Cursor encoding for the filter's (casefold key, path) total order:
+/// an 8-hex-digit byte length prefixes the key, so keys and paths may
+/// contain ANY character (review round — titles are user-authored).
+/// Malformed cursors are rejected loudly, never silently restarted.
+fn encode_sidebar_filter_cursor(sort_key: &str, path: &str) -> String {
+    format!("{:08x}{sort_key}{path}", sort_key.len())
+}
+
+fn decode_sidebar_filter_cursor(cursor: &str) -> Result<(String, String), VaultError> {
+    let malformed = || VaultError::InvalidQuery {
+        message: "malformed pagination cursor".to_string(),
+    };
+    let bytes = cursor.as_bytes();
+    if bytes.len() < 8 {
+        return Err(malformed());
+    }
+    let key_len = usize::from_str_radix(
+        std::str::from_utf8(&bytes[..8]).map_err(|_| malformed())?,
+        16,
+    )
+    .map_err(|_| malformed())?;
+    let rest = &bytes[8..];
+    if key_len > rest.len() {
+        return Err(malformed());
+    }
+    let key = std::str::from_utf8(&rest[..key_len]).map_err(|_| malformed())?;
+    let path = std::str::from_utf8(&rest[key_len..]).map_err(|_| malformed())?;
+    Ok((key.to_string(), path.to_string()))
+}
 
 fn sidebar_filter_impl(
     conn: &Connection,
@@ -7551,12 +7578,11 @@ fn sidebar_filter_impl(
     } else {
         plan.name_clauses.join(" AND ")
     };
-    let (cursor_key, cursor_path) = match paging
-        .cursor
-        .as_deref()
-        .and_then(|cursor| cursor.split_once(SIDEBAR_FILTER_CURSOR_SEPARATOR))
-    {
-        Some((key, path)) => (Some(key.to_string()), Some(path.to_string())),
+    let (cursor_key, cursor_path) = match paging.cursor.as_deref() {
+        Some(cursor) => {
+            let (key, path) = decode_sidebar_filter_cursor(cursor)?;
+            (Some(key), Some(path))
+        }
         None => (None, None),
     };
     let fetch_n = paging.limit as i64 + 1;
@@ -7576,32 +7602,28 @@ fn sidebar_filter_impl(
          titled AS (
              -- Set-based title join (one window scan) instead of a
              -- correlated subquery per row: the 10k budget hinges on it.
-             SELECT f.*, tv.value_text AS title_json
+             -- The FIRST title ordinal ranks regardless of kind, exactly
+             -- like the shared summary projection (review round).
+             SELECT f.*, tv.value_kind AS title_kind,
+                    tv.value_text AS title_json
              FROM filtered f
              LEFT JOIN (
-                 SELECT p.file_id, p.value_text,
+                 SELECT p.file_id, p.value_kind, p.value_text,
                         ROW_NUMBER() OVER (
                             PARTITION BY p.file_id ORDER BY p.ordinal ASC
                         ) AS title_rank
                  FROM properties p
-                 WHERE p.key = 'title' AND p.value_kind = 'text'
+                 WHERE p.key = 'title'
              ) tv ON tv.file_id = f.id AND tv.title_rank = 1
          ),
          keyed AS (
+             -- ONE effective-name rule, shared with the summary decoder
+             -- via the registered UDF: text titles decode/trim/require
+             -- nonempty, everything else falls back to the stem.
              SELECT id, path, name, mtime_ms, size_bytes, is_markdown,
                     birthtime_ms,
-                    slate_tree_sort_key(
-                        COALESCE(
-                            CASE WHEN title_json IS NOT NULL
-                                      AND json_valid(title_json)
-                                 THEN CAST(json_extract(title_json, '$') AS TEXT)
-                            END,
-                            CASE WHEN extension IS NOT NULL AND extension != ''
-                                 THEN substr(
-                                     name, 1,
-                                     length(name) - length(extension) - 1)
-                                 ELSE name
-                            END)) AS sort_key
+                    slate_effective_name_key(
+                        title_kind, title_json, name, extension) AS sort_key
              FROM titled
          ),
          matched AS (
@@ -7658,10 +7680,7 @@ fn sidebar_filter_impl(
     if rows_with_keys.len() > paging.limit as usize {
         rows_with_keys.truncate(paging.limit as usize);
         if let Some((summary, sort_key)) = rows_with_keys.last() {
-            next_cursor = Some(format!(
-                "{sort_key}{SIDEBAR_FILTER_CURSOR_SEPARATOR}{}",
-                summary.path
-            ));
+            next_cursor = Some(encode_sidebar_filter_cursor(sort_key, &summary.path));
         }
     }
     let audio_summary = crate::sidebar_filter::sidebar_filter_audio_summary(total, scope_dir);

@@ -329,10 +329,13 @@ pub(crate) fn plan(
             normalize_vault_relative_dir(scope).map_err(|reason| VaultError::InvalidQuery {
                 message: format!("scope '{scope}': {reason}"),
             })?;
+        // Binary subtree bounds (the `subtree_bounds` convention): LIKE
+        // is ASCII-case-insensitive on this connection, and a scope must
+        // never leak a case-distinct sibling directory (review round).
         plan.files_clauses
-            .push("f.path LIKE ? ESCAPE '\\'".to_string());
-        plan.files_params
-            .push(format!("{}/%", escape_like(&normalized)).into());
+            .push("(f.path >= ? AND f.path < ?)".to_string());
+        plan.files_params.push(format!("{normalized}/").into());
+        plan.files_params.push(format!("{normalized}0").into());
     }
     for query_term in terms {
         let polarity = |clause: String| {
@@ -386,10 +389,11 @@ pub(crate) fn plan(
                 plan.files_params.push(ext.clone().into());
             }
             SidebarFilterTerm::PathPrefix(prefix) => {
+                // Binary subtree bounds — see the scope_dir note above.
                 plan.files_clauses
-                    .push(polarity("f.path LIKE ? ESCAPE '\\'".to_string()));
-                plan.files_params
-                    .push(format!("{}/%", escape_like(prefix)).into());
+                    .push(polarity("(f.path >= ? AND f.path < ?)".to_string()));
+                plan.files_params.push(format!("{prefix}/").into());
+                plan.files_params.push(format!("{prefix}0").into());
             }
         }
     }
