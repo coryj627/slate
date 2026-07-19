@@ -6,9 +6,14 @@
 #
 # Respects CARGO_TARGET_DIR. On machines where the repo sits on a network
 # share, point it at local disk before running (builds into the share are
-# painfully slow).
+# painfully slow). -Locked passes --locked to cargo (the CI lanes'
+# pin-everything convention; both Cargo.locks are committed).
+
+param([switch]$Locked)
 
 $ErrorActionPreference = 'Stop'
+$cargoFlags = @()
+if ($Locked) { $cargoFlags += '--locked' }
 
 $probeDir = $PSScriptRoot
 $repoRoot = (Resolve-Path (Join-Path $probeDir '..\..')).Path
@@ -19,7 +24,7 @@ if (-not $targetDir) { $targetDir = Join-Path $repoRoot 'target' }
 Write-Host "==> cargo build -p slate-uniffi (debug)"
 Push-Location $repoRoot
 try {
-    cargo build -p slate-uniffi
+    cargo build -p slate-uniffi @cargoFlags
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
 }
 finally { Pop-Location }
@@ -41,7 +46,7 @@ Copy-Item $dll (Join-Path $genDir 'slate_uniffi.dll') -Force
 Write-Host "==> cargo build (csbindgen shim; emits ShimProbe/generated/NativeMethods.g.cs)"
 Push-Location (Join-Path $probeDir 'shim')
 try {
-    cargo build
+    cargo build @cargoFlags
     if ($LASTEXITCODE -ne 0) { throw "shim cargo build failed ($LASTEXITCODE)" }
 }
 finally { Pop-Location }
