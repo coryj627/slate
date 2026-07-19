@@ -126,7 +126,16 @@ final class CommandPaletteModel: ObservableObject {
     /// contract as before #717. The score is core-computed and carried
     /// on each row; the host only orders by it (display stays the
     /// section-grouped `sections`). Empty query returns the snapshot
-    /// unchanged. Feeds the filter-count announcement.
+    /// unchanged.
+    ///
+    /// **Not a display or navigation order.** Selection and arrow-key
+    /// movement never read this property — `selectNext` /
+    /// `selectPrevious` / `invokeSelected` operate exclusively on
+    /// `displayOrder`, the section-grouped flatten of `sections`, so
+    /// keyboard navigation always matches the rendered rows. This
+    /// global ordering has exactly two consumers: the filter-count
+    /// announcement (count only) and the strongest-match-overall
+    /// contract pinned by `MilestoneQIntegrationTests`.
     var filteredCommands: [Command] {
         guard !query.isEmpty else { return commands }
         return sections
