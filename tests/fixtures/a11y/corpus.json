@@ -195,6 +195,11 @@
     "text": "Opened notes.md, line 40."
   },
   {
+    "event": "OpenedFile { filename: \"notes.md\" }",
+    "priority": "medium",
+    "text": "Opened notes.md."
+  },
+  {
     "event": "ShowingNote { display_name: \"notes\" }",
     "priority": "medium",
     "text": "Showing notes."
@@ -498,6 +503,11 @@
     "event": "ItemsSelected { count: 4 }",
     "priority": "medium",
     "text": "4 items selected"
+  },
+  {
+    "event": "ItemsSelected { count: 1 }",
+    "priority": "medium",
+    "text": "1 item selected"
   },
   {
     "event": "NoItemsSelected",

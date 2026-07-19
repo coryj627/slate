@@ -10,14 +10,19 @@ import XCTest
 /// `slate_core::a11y::corpus()` in the SAME order, renders each through
 /// the FFI (`a11yRender` — the exact path `postAccessibilityAnnouncement(
 /// _ event:)` posts through), and asserts (priority, text) against the
-/// committed artifact `tests/fixtures/a11y/corpus.json`. The Windows
+/// committed artifact `tests/fixtures/a11y/corpus.json`. Each entry's
+/// `event` field (core's Debug identity, via `a11yEventIdentity`) is
+/// asserted too, so the mirror must construct the SAME semantic event —
+/// not merely one that happens to render identical text. The Windows
 /// census will consume the same file, which is what makes the corpus the
 /// cross-platform anchor: if this test and its Windows twin are green,
 /// both hosts speak identical announcements for identical events.
 ///
 /// Corpus changes are DELIBERATE: regenerate the artifact core-side
-/// (`SLATE_REGENERATE_FIXTURES=1 cargo test -p slate-core a11y`), update
-/// the mirrored construction below, and review the diff as a §W-D delta.
+/// (`SLATE_REGENERATE_FIXTURES=1 cargo test -p slate-core a11y` — that
+/// run fails by design after rewriting; re-run clean to prove the pin),
+/// update the mirrored construction below, and review the diff as a
+/// §W-D delta.
 final class A11yCorpusCensusTests: XCTestCase {
 
     private struct CorpusEntry: Decodable {
@@ -80,6 +85,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .scrolledToHeading(heading: "Roadmap"),
             .scrolledToLine(filename: "notes.md", line: 40),
             .openedAtLine(filename: "notes.md", line: 40),
+            .openedFile(filename: "notes.md"),
             .showingNote(displayName: "notes"),
             .taskToggleUnsaved(filename: "notes.md"),
             .taskToggleConflict(filename: "notes.md"),
@@ -141,6 +147,7 @@ final class A11yCorpusCensusTests: XCTestCase {
             .fileListCount(count: 1),
             .fileListCount(count: 12),
             .itemsSelected(count: 4),
+            .itemsSelected(count: 1),
             .noItemsSelected,
             .treeFolderSelected(name: "Archive"),
             .rowSelected(name: "notes"),
@@ -186,6 +193,11 @@ final class A11yCorpusCensusTests: XCTestCase {
         )
 
         for (index, (event, entry)) in zip(corpus, entries).enumerated() {
+            XCTAssertEqual(
+                a11yEventIdentity(event: event), entry.event,
+                "event identity mismatch at corpus[\(index)] — the mirror \
+                constructed a different variant or parameters than the artifact pins"
+            )
             let rendered = a11yRender(event: event)
             XCTAssertEqual(
                 rendered.text, entry.text,

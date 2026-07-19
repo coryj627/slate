@@ -5679,6 +5679,9 @@ pub enum A11yEvent {
         filename: String,
         line: u32,
     },
+    OpenedFile {
+        filename: String,
+    },
     ShowingNote {
         display_name: String,
     },
@@ -5959,6 +5962,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::ScrolledToHeading { heading } => C::ScrolledToHeading { heading },
             F::ScrolledToLine { filename, line } => C::ScrolledToLine { filename, line },
             F::OpenedAtLine { filename, line } => C::OpenedAtLine { filename, line },
+            F::OpenedFile { filename } => C::OpenedFile { filename },
             F::ShowingNote { display_name } => C::ShowingNote { display_name },
             F::TaskToggleUnsaved { filename } => C::TaskToggleUnsaved { filename },
             F::TaskToggleConflict { filename } => C::TaskToggleConflict { filename },
@@ -6097,6 +6101,17 @@ pub fn a11y_render(event: A11yEvent) -> RenderedAnnouncement {
         text: event.render(),
         priority: event.priority().into(),
     }
+}
+
+/// Core Debug identity of the event — the exact string the corpus artifact
+/// pins in its `event` field. Host censuses assert this to prove they
+/// constructed the SAME semantic event (variant + parameters), not merely
+/// one that happens to render identical text (e.g. `OpenedFile` vs an
+/// `InternalNavigated { kind: "Opened", .. }` both say "Opened notes.md.").
+#[uniffi::export]
+pub fn a11y_event_identity(event: A11yEvent) -> String {
+    let event: core::a11y::A11yEvent = event.into();
+    format!("{event:?}")
 }
 
 // ---------------------------------------------------------------------------
@@ -7925,6 +7940,31 @@ mod tests {
         assert_eq!(properties[2].key, "tags");
         assert_eq!(properties[2].kind, "tag_list");
         assert_eq!(properties[2].value_json, "[\"one\",\"two\"]");
+    }
+
+    #[test]
+    fn a11y_event_identity_is_the_corpus_artifact_event_string() {
+        assert_eq!(
+            a11y_event_identity(A11yEvent::OpenedAtLine {
+                filename: "notes.md".into(),
+                line: 40,
+            }),
+            "OpenedAtLine { filename: \"notes.md\", line: 40 }"
+        );
+        assert_eq!(
+            a11y_event_identity(A11yEvent::NoItemsSelected),
+            "NoItemsSelected"
+        );
+        // Same rendered text, different identity — the census must be able
+        // to tell these apart (that is this accessor's whole job).
+        let file = a11y_event_identity(A11yEvent::OpenedFile {
+            filename: "notes.md".into(),
+        });
+        let nav = a11y_event_identity(A11yEvent::InternalNavigated {
+            kind: "Opened".into(),
+            filename: "notes.md".into(),
+        });
+        assert_ne!(file, nav);
     }
 
     fn ffi_batch_item(path: &str, is_directory: bool) -> StructuralBatchItem {

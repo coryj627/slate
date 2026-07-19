@@ -3829,12 +3829,8 @@ struct FileTreeSidebar: View {
         }
         if outcome.changed {
             let count = outcome.visibleSelectedCount
-            let message = count == 0
-                ? "No items selected"
-                : "\(count) \(count == 1 ? "item" : "items") selected"
-            // W0.5-3 residue: selection-count message local
             postAccessibilityAnnouncement(
-                .hostComposed(text: message, priority: .medium))
+                count == 0 ? .noItemsSelected : .itemsSelected(count: UInt32(count)))
         }
         return true
     }

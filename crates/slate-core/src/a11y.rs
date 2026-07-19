@@ -158,6 +158,12 @@ pub enum A11yEvent {
         filename: String,
         line: u32,
     },
+    /// Plain open echo (no line target). Renders the same words as an
+    /// `InternalNavigated { kind: "Opened", .. }` but stays Medium: this is
+    /// a routine action confirmation, not an interrupt-worthy navigation.
+    OpenedFile {
+        filename: String,
+    },
     ShowingNote {
         display_name: String,
     },
@@ -517,6 +523,7 @@ impl A11yEvent {
             ScrolledToHeading { heading } => format!("Scrolled to {heading}."),
             ScrolledToLine { filename, line } => format!("Scrolled to {filename}, line {line}."),
             OpenedAtLine { filename, line } => format!("Opened {filename}, line {line}."),
+            OpenedFile { filename } => format!("Opened {filename}."),
             ShowingNote { display_name } => format!("Showing {display_name}."),
 
             TaskToggleUnsaved { filename } => format!(
@@ -668,7 +675,9 @@ impl A11yEvent {
             FileListCount { count } => {
                 format!("File list, {count} {}", plural(*count, "item", "items"))
             }
-            ItemsSelected { count } => format!("{count} items selected"),
+            ItemsSelected { count } => {
+                format!("{count} {} selected", plural(*count, "item", "items"))
+            }
             NoItemsSelected => "No items selected".to_owned(),
             TreeFolderSelected { name } => format!("Selected: {name}, folder"),
             RowSelected { name } => format!("Selected: {name}"),
@@ -836,6 +845,9 @@ pub fn corpus() -> Vec<A11yEvent> {
             filename: "notes.md".into(),
             line: 40,
         },
+        OpenedFile {
+            filename: "notes.md".into(),
+        },
         ShowingNote {
             display_name: "notes".into(),
         },
@@ -974,6 +986,7 @@ pub fn corpus() -> Vec<A11yEvent> {
         FileListCount { count: 1 },
         FileListCount { count: 12 },
         ItemsSelected { count: 4 },
+        ItemsSelected { count: 1 },
         NoItemsSelected,
         TreeFolderSelected {
             name: "Archive".into(),
@@ -1113,6 +1126,7 @@ mod tests {
             (Medium, "Scrolled to Roadmap."),
             (Medium, "Scrolled to notes.md, line 40."),
             (Medium, "Opened notes.md, line 40."),
+            (Medium, "Opened notes.md."),
             (Medium, "Showing notes."),
             (
                 High,
@@ -1216,6 +1230,7 @@ mod tests {
             (Medium, "File list, 1 item"),
             (Medium, "File list, 12 items"),
             (Medium, "4 items selected"),
+            (Medium, "1 item selected"),
             (Medium, "No items selected"),
             (Medium, "Selected: Archive, folder"),
             (Medium, "Selected: notes"),
@@ -1272,8 +1287,10 @@ mod tests {
     /// `{ "event": <Debug>, "priority": "medium"|"high", "text": <render> }`
     /// in corpus order. Regenerate deliberately with
     /// `SLATE_REGENERATE_FIXTURES=1 cargo test -p slate-core a11y` after a
-    /// vocabulary change — the diff is the reviewable §W-D delta. The
-    /// Windows host consumes this same file for its parity census.
+    /// vocabulary change — the regenerating run FAILS by design (so the
+    /// variable can never mask drift, even exported in CI); review the diff
+    /// as the §W-D delta, then re-run without the variable to prove the pin.
+    /// The Windows host consumes this same file for its parity census.
     #[test]
     fn committed_corpus_artifact_matches_the_vocabulary() {
         let rendered: Vec<serde_json::Value> = corpus()
@@ -1294,9 +1311,17 @@ mod tests {
 
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../tests/fixtures/a11y/corpus.json");
-        if std::env::var_os("SLATE_REGENERATE_FIXTURES").is_some() {
+        if std::env::var("SLATE_REGENERATE_FIXTURES").as_deref() == Ok("1") {
             std::fs::create_dir_all(path.parent().unwrap()).expect("fixture dir");
             std::fs::write(&path, &expected).expect("write corpus fixture");
+            // A regenerating run must never double as a passing pin: the
+            // comparison below would trivially succeed against the file just
+            // written, so exporting the variable (say, in CI) would silence
+            // this test forever. Fail loudly instead.
+            panic!(
+                "regenerated {path:?} — review the diff as a §W-D change, \
+                 then re-run without SLATE_REGENERATE_FIXTURES"
+            );
         }
         let committed = std::fs::read_to_string(&path).unwrap_or_else(|_| {
             panic!(

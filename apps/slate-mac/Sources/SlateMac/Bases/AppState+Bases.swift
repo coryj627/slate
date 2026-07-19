@@ -2686,14 +2686,11 @@ extension AppState {
         {
             openTaskRowInEditor(
                 TaskWithLocation(task: task, path: row.filePath, fileName: baseFilename(row.filePath)))
-            let text = "Opened \(baseFilename(row.filePath)), line \(task.line)."
-            postBaseActionAnnouncement(text)
-            return text
+            return postBaseActionEvent(
+                .openedAtLine(filename: baseFilename(row.filePath), line: UInt32(task.line)))
         }
         openFile(row.filePath, target: .currentTab)
-        let text = "Opened \(baseFilename(row.filePath))."
-        postBaseActionAnnouncement(text)
-        return text
+        return postBaseActionEvent(.openedFile(filename: baseFilename(row.filePath)))
     }
 
     @discardableResult
@@ -3338,6 +3335,17 @@ extension AppState {
         lastBaseActionAnnouncement = message
         // W0.5-3 residue: Bases action message builders (postBaseActionAnnouncement callers)
         postAccessibilityAnnouncement(.hostComposed(text: message, priority: .medium))
+    }
+
+    /// Typed sibling of `postBaseActionAnnouncement`: posts the canonical
+    /// event and feeds core's rendered text through the same
+    /// `lastBaseActionAnnouncement` seam the string form records.
+    @discardableResult
+    func postBaseActionEvent(_ event: A11yEvent) -> String {
+        let text = a11yRender(event: event).text
+        lastBaseActionAnnouncement = text
+        postAccessibilityAnnouncement(event)
+        return text
     }
 
     private func activeBaseSelectedRowForCommand() -> BasesRow? {
