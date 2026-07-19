@@ -61,8 +61,8 @@ struct AppKitAnnouncementPoster: AnnouncementPosting {
 /// Post a typed accessibility event through the global AppKit helper —
 /// the event-first twin of `postAccessibilityAnnouncement(_:priority:)`
 /// (which remains the platform PRIMITIVE this renders into; every
-/// interaction-site caller posts events, and the W0.5-3 census keeps
-/// non-poster string calls at zero).
+/// interaction-site caller posts events, and `A11yResidueCensusTests`
+/// keeps non-poster string-primitive calls at zero).
 func postAccessibilityAnnouncement(_ event: A11yEvent) {
     let rendered = a11yRender(event: event)
     postAccessibilityAnnouncement(

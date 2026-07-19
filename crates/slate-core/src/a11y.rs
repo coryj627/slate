@@ -22,9 +22,10 @@
 //! availability logic whose copy serves double duty in dialogs/hints;
 //! those post [`A11yEvent::HostComposed`] carrying their text verbatim,
 //! each call site marked `// W0.5-3 residue:` with the owning engine.
-//! The parity census counts the residue so it shrinks deliberately
-//! (engine-level vocabularies are follow-on batches), and no NEW
-//! announcement may bypass the vocabulary.
+//! A source census (mac: `A11yResidueCensusTests`) pins the marker/site
+//! count so residue shrinks deliberately (engine-level vocabularies are
+//! follow-on batches) and keeps direct string-primitive calls at zero,
+//! so no NEW announcement can bypass the vocabulary.
 //!
 //! ## Copy rules
 //!
