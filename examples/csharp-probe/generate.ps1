@@ -51,7 +51,11 @@ try {
 }
 finally { Pop-Location }
 
-$shimDll = Join-Path $targetDir 'debug\slate_csabi_shim.dll'
+# The shim is its own workspace: without CARGO_TARGET_DIR it builds into
+# shim/target, not the repo-root target dir.
+$shimTargetDir = $env:CARGO_TARGET_DIR
+if (-not $shimTargetDir) { $shimTargetDir = Join-Path $probeDir 'shim\target' }
+$shimDll = Join-Path $shimTargetDir 'debug\slate_csabi_shim.dll'
 if (-not (Test-Path $shimDll)) { throw "expected shim cdylib not found: $shimDll" }
 Copy-Item $shimDll (Join-Path $probeDir 'ShimProbe\generated\slate_csabi_shim.dll') -Force
 
