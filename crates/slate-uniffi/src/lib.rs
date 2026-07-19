@@ -5410,6 +5410,88 @@ pub fn palette_recents_remove(ids: Vec<String>, id: String) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// Quick-switcher ranking + recency blending (W0.5-2, #718): thin mirrors of
+// `slate_core::switcher`. Same shape as the palette calls — pure functions
+// over an explicit file snapshot; the shared base matcher is
+// `slate_core::palette::fuzzy_score` (the one-ranking-engine decision).
+
+/// One rankable file, as the host's file list provides it. `path` is
+/// vault-relative; `name` is the display name WITH extension, as
+/// `FileSummary` carries it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SwitcherFile {
+    pub path: String,
+    pub name: String,
+}
+
+impl From<SwitcherFile> for core::switcher::SwitcherFile {
+    fn from(f: SwitcherFile) -> Self {
+        Self {
+            path: f.path,
+            name: f.name,
+        }
+    }
+}
+
+/// One ranked switcher row: the file, its canonical extension-stripped
+/// display label, the winning blended score (0 on an empty query), and
+/// the matched byte ranges inside `display_name` for host bolding
+/// (empty when only the full name or the path matched).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SwitcherRow {
+    pub path: String,
+    pub name: String,
+    pub display_name: String,
+    pub score: i32,
+    pub display_name_match_spans: Vec<MatchSpan>,
+}
+
+impl From<core::switcher::SwitcherRow> for SwitcherRow {
+    fn from(r: core::switcher::SwitcherRow) -> Self {
+        Self {
+            path: r.path,
+            name: r.name,
+            display_name: r.display_name,
+            score: r.score,
+            display_name_match_spans: r
+                .display_name_match_spans
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+        }
+    }
+}
+
+/// Rank a file snapshot for the quick switcher — the name-over-path
+/// score bias and the recency-blended orderings all live core-side
+/// (`slate_core::switcher::switcher_rank`). Empty query returns the
+/// still-present recents first (pruned, recency order) then the rest in
+/// incoming order; non-empty returns matches sorted by descending score
+/// with recency-then-path tiebreaks. The display cap on rendered rows
+/// stays a host/view concern — the full list's length is what
+/// result-count announcements report.
+#[uniffi::export]
+pub fn switcher_rank(
+    files: Vec<SwitcherFile>,
+    query: String,
+    recent_paths: Vec<String>,
+) -> Vec<SwitcherRow> {
+    let files: Vec<core::switcher::SwitcherFile> = files.into_iter().map(Into::into).collect();
+    core::switcher::switcher_rank(&files, &query, &recent_paths)
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+/// Canonical extension-stripped display label for a file name (the
+/// switcher row label; only a trailing `.md`/`.markdown` is removed,
+/// case-insensitively).
+#[uniffi::export]
+pub fn switcher_display_name(name: String) -> String {
+    core::switcher::display_name(&name)
+}
+
+// ---------------------------------------------------------------------------
 // Bases (Milestone N, #699): 1:1 mirrors of the handle-based session API.
 // No logic here -- every method delegates to core and converts shapes.
 
@@ -8472,6 +8554,49 @@ mod tests {
         let bytes = palette_recents_encode(vec!["a".into(), "b".into()]);
         assert_eq!(palette_recents_decode(bytes), vec!["a", "b"]);
         assert!(palette_recents_remove(vec!["a".into(), "b".into()], "a".into()) == vec!["b"]);
+    }
+
+    #[test]
+    fn switcher_rank_blends_recency_through_ffi_shapes() {
+        let files = vec![
+            SwitcherFile {
+                path: "alpha/note.md".into(),
+                name: "note.md".into(),
+            },
+            SwitcherFile {
+                path: "beta/note.md".into(),
+                name: "note.md".into(),
+            },
+            SwitcherFile {
+                path: "diagram.png".into(),
+                name: "diagram.png".into(),
+            },
+        ];
+
+        // Empty query: still-present recents first, rest in incoming order.
+        let rows = switcher_rank(files.clone(), String::new(), vec!["beta/note.md".into()]);
+        assert_eq!(rows[0].path, "beta/note.md");
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].display_name, "note");
+        assert_eq!(rows[2].display_name, "diagram.png");
+
+        // Ranked: identical scores tie-break by recency, spans carried
+        // for the display-name match.
+        let rows = switcher_rank(files, "note".into(), vec!["beta/note.md".into()]);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].path, "beta/note.md");
+        assert_eq!(
+            rows[0].display_name_match_spans,
+            vec![MatchSpan {
+                start_byte: 0,
+                end_byte: 4
+            }]
+        );
+        assert!(rows[0].score > 0);
+        assert_eq!(
+            switcher_display_name("2026.01.notes.md".into()),
+            "2026.01.notes"
+        );
     }
 
     #[test]

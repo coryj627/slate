@@ -12,12 +12,12 @@ import Foundation
 /// are the domain (vault files, not commands) and the ranking
 /// (recency-weighted rather than section-grouped).
 ///
-/// Scoring uses an **interim copy** of the subsequence-with-boost
-/// matcher (see `fuzzyScore` below): the reference implementation moved
-/// to `slate_core::palette::fuzzy_score` with W0.5-1 (#717), and the
-/// switcher's own core migration is W0.5-2 (#718) — which also decides
-/// whether palette + switcher share one ranking engine. This model adds
-/// the name-over-path bias and the recency ordering on top.
+/// Ranking is core-owned since W0.5-2 (#718): scoring (the shared
+/// subsequence-with-boost engine, `slate_core::palette::fuzzy_score`,
+/// plus the name-over-path bias) and the recency-blended orderings all
+/// live in `slate_core::switcher` behind the FFI. This model forwards
+/// its snapshot state and keeps only UI concerns — selection,
+/// announcements, and the rendered-row display cap.
 @MainActor
 final class QuickSwitcherModel: ObservableObject {
 
@@ -28,21 +28,30 @@ final class QuickSwitcherModel: ObservableObject {
         let path: String
         let name: String
 
+        /// The canonical extension-stripped row label
+        /// (`slate_core::switcher::display_name` — the derivation is
+        /// ranking vocabulary, shared verbatim with the Windows host).
+        /// Stored, not computed: one FFI call at construction; rows
+        /// coming back from the ranking already carry it for free.
+        let displayName: String
+
+        init(path: String, name: String) {
+            self.init(
+                path: path,
+                name: name,
+                displayName: switcherDisplayName(name: name)
+            )
+        }
+
+        init(path: String, name: String, displayName: String) {
+            self.path = path
+            self.name = name
+            self.displayName = displayName
+        }
+
         /// Row identity for SwiftUI + arrow nav: the vault-relative
         /// path is unique within a vault, so it's the stable id.
         var id: String { path }
-
-        /// The name with its markdown extension stripped, for the
-        /// primary row label ("foo", not "foo.md"). Only the trailing
-        /// `.md`/`.markdown` is removed; a dotted stem like
-        /// `2026.01.notes.md` keeps everything but the final extension.
-        var displayName: String {
-            let lower = name.lowercased()
-            for ext in [".md", ".markdown"] where lower.hasSuffix(ext) {
-                return String(name.dropLast(ext.count))
-            }
-            return name
-        }
     }
 
     /// All candidate files, set once on `load` (matches the view's
@@ -65,13 +74,10 @@ final class QuickSwitcherModel: ObservableObject {
     @Published private(set) var resultAnnouncement: String?
 
     /// Recency order (most-recent-first) of vault-relative paths, set
-    /// on `load` from the vault's `FileRecentsStore`. Drives the
-    /// empty-query ordering and the fuzzy tie-break.
+    /// on `load` from the vault's `FileRecentsStore`. Passed to core's
+    /// ranking as data — pruning to still-present files, rank building,
+    /// and the tie-break all happen core-side.
     private var recentPaths: [String] = []
-
-    /// Rank of each path in `recentPaths` (0 = most recent). Absent =
-    /// never opened. Precomputed on `load` so ordering is O(1) per row.
-    private var recencyRank: [String: Int] = [:]
 
     /// Display cap. A huge vault would otherwise render thousands of
     /// rows; List/LazyVStack virtualizes, but capping bounds the work
@@ -81,25 +87,16 @@ final class QuickSwitcherModel: ObservableObject {
     /// silently — so we announce the total and render the capped list).
     static let displayCap = 50
 
-    /// Bonus added to a row's score when the QUERY subsequence-matched
-    /// the file's NAME (not merely its full path). Biases `foo` toward
-    /// `foo.md` over `notes/foo-archive/bar.md`. Local + documented per
-    /// spec; pinned by `QuickSwitcherModelTests`.
-    static let nameMatchBonus = 20
-
     /// Initial-load entry point — called from the view's `.onAppear`.
-    /// Idempotent; recomputes the recency map and snaps selection to
-    /// the first row of the (empty-query) display order.
+    /// Idempotent; snaps selection to the first row of the
+    /// (empty-query) display order. Recents pass through raw — core
+    /// prunes entries whose file no longer exists (spec: filter in the
+    /// ranking, don't rewrite the store on every open).
     func load(files: [FileRow], recents: [String]) {
         self.files = files
-        // Prune recents for files that no longer exist (moved/deleted
-        // since last session) at load time — spec: filter in the model,
-        // don't rewrite the store on every open.
-        let present = Set(files.map(\.path))
-        self.recentPaths = recents.filter { present.contains($0) }
-        var rank: [String: Int] = [:]
-        for (i, path) in recentPaths.enumerated() { rank[path] = i }
-        self.recencyRank = rank
+        self.recentPaths = recents
+        self.ffiFiles = files.map { SwitcherFile(path: $0.path, name: $0.name) }
+        self.rankedCacheQuery = nil
         self.selectedID = displayOrder.first?.id
     }
 
@@ -121,7 +118,7 @@ final class QuickSwitcherModel: ObservableObject {
     }
 
     private func refreshAnnouncement() {
-        let total = matches.count
+        let total = rankedRows().count
         if query.isEmpty {
             resultAnnouncement =
                 "\(total) recent file\(total == 1 ? "" : "s")"
@@ -139,118 +136,53 @@ final class QuickSwitcherModel: ObservableObject {
         resultAnnouncement = nil
     }
 
-    // MARK: - Ranking
+    // MARK: - Ranking (core-owned since W0.5-2 #718)
 
-    /// The full ranked match set BEFORE the display cap. `matches.count`
-    /// is what the announcement reports.
-    ///
-    /// - Empty query: every file, recents first (in recency order),
-    ///   then the remaining files in their incoming (path-sorted) order.
-    /// - Non-empty query: files whose name or path fuzzy-matches, sorted
-    ///   by descending score; ties broken by recency rank, then path.
-    ///   Recency only ever breaks ties — a materially better fuzzy score
-    ///   always wins (spec).
+    /// The file snapshot in FFI shape, built once per `load` so a
+    /// keystroke re-rank doesn't rebuild N input records first.
+    private var ffiFiles: [SwitcherFile] = []
+
+    /// Ranked-row cache: core ranks once per input change, not once
+    /// per property access — `displayOrder`, `matches`, selection
+    /// snapping, and the count announcement all read the same result.
+    /// Keyed by the query (files/recents invalidate via `load`).
+    private var rankedCache: [SwitcherRow] = []
+    private var rankedCacheQuery: String? = nil
+
+    /// The full ranked match set BEFORE the display cap, computed by
+    /// `slate_core::switcher::switcher_rank` through the FFI — the
+    /// name-over-path score bias, recency blending, prune-on-rank, and
+    /// every tie-break live core-side so both hosts rank identically.
+    private func rankedRows() -> [SwitcherRow] {
+        if rankedCacheQuery != query {
+            rankedCache = switcherRank(
+                files: ffiFiles,
+                query: query,
+                recentPaths: recentPaths
+            )
+            rankedCacheQuery = query
+        }
+        return rankedCache
+    }
+
+    /// The full ranked match set as `FileRow`s (display names carried
+    /// back from core — no per-row FFI). `matches.count` is what the
+    /// announcement reports.
     var matches: [FileRow] {
-        guard !query.isEmpty else {
-            let recentSet = Set(recentPaths)
-            let recentRows: [FileRow] = recentPaths.compactMap { path in
-                files.first(where: { $0.path == path })
-            }
-            let rest = files.filter { !recentSet.contains($0.path) }
-            return recentRows + rest
+        rankedRows().map {
+            FileRow(path: $0.path, name: $0.name, displayName: $0.displayName)
         }
-        return
-            files
-            .compactMap { row -> (FileRow, Int)? in
-                guard let score = Self.score(query: query, row: row) else { return nil }
-                return (row, score)
-            }
-            .sorted { lhs, rhs in
-                if lhs.1 != rhs.1 { return lhs.1 > rhs.1 }
-                // Tie-break 1: recency (opened files sort ahead of
-                // never-opened; `.max` for absent puts them last).
-                let lRank = recencyRank[lhs.0.path] ?? Int.max
-                let rRank = recencyRank[rhs.0.path] ?? Int.max
-                if lRank != rRank { return lRank < rRank }
-                // Tie-break 2: path, for a fully deterministic order.
-                return lhs.0.path < rhs.0.path
-            }
-            .map { $0.0 }
     }
 
-    /// The rows the view renders — `matches` clipped to `displayCap`.
-    /// Arrow nav cycles this exact list so selection matches the
-    /// visible rows.
+    /// The rows the view renders — the ranked set clipped to
+    /// `displayCap`. Arrow nav cycles this exact list so selection
+    /// matches the visible rows. The cap is view virtualization policy
+    /// and stays host-side; core returns the full ranked list.
     var displayOrder: [FileRow] {
-        Array(matches.prefix(Self.displayCap))
-    }
-
-    /// Score a file for `query`, biased toward name matches. Returns
-    /// `nil` when neither the name nor the path subsequence-matches.
-    ///
-    /// Uses the interim `fuzzyScore` copy below on three targets — the
-    /// extension-stripped name, the full name, and the full path — and
-    /// takes the max. When a NAME target (either form) matched,
-    /// `nameMatchBonus` is added so a name hit outranks a same-strength
-    /// path-only hit. Path-only matches (`dir/foo`) still score, just
-    /// below an equivalent name hit.
-    nonisolated static func score(query: String, row: FileRow) -> Int? {
-        let nameScores = [row.displayName, row.name].compactMap {
-            Self.fuzzyScore(query: query, target: $0)
+        rankedRows().prefix(Self.displayCap).map {
+            FileRow(path: $0.path, name: $0.name, displayName: $0.displayName)
         }
-        let pathScore = Self.fuzzyScore(query: query, target: row.path)
-
-        let bestName = nameScores.max()
-        let candidates: [Int] = [
-            bestName.map { $0 + nameMatchBonus },
-            pathScore,
-        ].compactMap { $0 }
-        return candidates.max()
     }
-
-    /// **Interim copy** of the palette's subsequence-with-boost matcher,
-    /// pending W0.5-2 (#718). The reference implementation now lives in
-    /// `slate_core::palette::fuzzy_score` (W0.5-1 #717 moved the palette
-    /// onto it and deleted the Swift original); the switcher keeps this
-    /// verbatim copy so its ranking is bit-identical until its own
-    /// core migration decides the one-engine question. Do NOT add call
-    /// sites — new consumers use the FFI.
-    nonisolated static func fuzzyScore(query: String, target: String) -> Int? {
-        let q = Array(query.lowercased())
-        let t = Array(target.lowercased())
-        guard !q.isEmpty else { return 0 }
-
-        var qi = 0
-        var consecutive = 0
-        var score = 0
-
-        for (ti, ch) in t.enumerated() {
-            guard qi < q.count else { break }
-            if ch == q[qi] {
-                score += 10
-                let prev = ti > 0 ? t[ti - 1] : Character(" ")
-                if ti == 0 || Self.wordBoundary.contains(prev) {
-                    score += 5
-                }
-                if consecutive > 0 {
-                    score += 3
-                }
-                consecutive += 1
-                qi += 1
-            } else {
-                consecutive = 0
-            }
-        }
-
-        guard qi == q.count else { return nil }
-        if t.starts(with: q) {
-            score += 50
-        }
-        return score
-    }
-
-    /// Word-boundary characters for the interim matcher's +5 bonus.
-    private nonisolated static let wordBoundary: Set<Character> = [" ", ".", "-", ":", "_"]
 
     // MARK: - Selection navigation
 
