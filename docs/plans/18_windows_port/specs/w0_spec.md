@@ -86,9 +86,9 @@ Consequences for W0-2/W0-3: the binding assembly compiles the generated file wit
 3. Confirm entry criteria 1–3 held (T residual, P canonical graph representation, queue state); record the actual shipped-milestone set the matrix was generated against.
 4. Feature-conditional rows (program §moving-target) for unshipped milestones are dropped with one-line notes.
 
-- [ ] Matrix generated + committed + script re-runnable
-- [ ] §W-B budgets pinned with rationale
-- [ ] Entry-criteria snapshot recorded
+- [x] Matrix generated + committed + script re-runnable *(`scripts/generate-parity-matrix.py` → `parity_matrix.md`: 181 command rows from the drift-test-enforced `SlateCommandID` catalog — source-catalog deviation recorded as gap G16 — plus leaf/panel/settings/help/CLI/file-type inventories, each row carrying its consuming W issue)*
+- [x] §W-B budgets pinned with rationale *(matrix §W-B: 0.5 / 0.5 / 1.0 ms p50 at 100 KB / 1 MB / 8 MB = mac `doc_buffer_keystroke` baselines + an explicit 250 µs marshalling allowance derived from the W0-1 measured round-trip, with a ≤4× flatness gate; W8-5 records actuals)*
+- [x] Entry-criteria snapshot recorded *(matrix §Entry-criteria snapshot, 2026-07-19: criteria 1/2/4/5 met, criterion 3 owner call with the shipped-milestone set and the dropped-row list for V/X/XD/E/PD/R/S)*
 
 ---
 
