@@ -1525,9 +1525,18 @@ struct FileTreeSidebar: View {
     /// Immutable device-local row presentation supplied by the assembly layer.
     /// A default preserves existing previews/tests and the shipped U2 density.
     let rowPreferences: SidebarRowPreferencesSnapshot
+    /// FL-09 (#663): the top-pinned filter's state machine, observed
+    /// directly (it is its own ObservableObject, not derived AppState
+    /// state) so activation/results/errors re-render this view.
+    @ObservedObject var filterModel: SidebarFilterModel
 
-    init(rowPreferences: SidebarRowPreferencesSnapshot = .defaults) {
+    @MainActor
+    init(
+        rowPreferences: SidebarRowPreferencesSnapshot = .defaults,
+        filterModel: SidebarFilterModel? = nil
+    ) {
         self.rowPreferences = rowPreferences
+        self.filterModel = filterModel ?? SidebarFilterModel()
     }
 
     /// The tree model. `@StateObject` so it survives view-body churn; rebound
@@ -1558,6 +1567,14 @@ struct FileTreeSidebar: View {
     /// native `List` binding remains a local mirror because its mutation edge is
     /// the post-update point where #448-safe open/AppState effects run.
     @State private var selectionModel = SidebarSelectionModel<RowID>()
+    /// FL-09 (#663): filter-surface focus/selection. The overlay list is
+    /// its own focus model (one result list, one focus model — spec
+    /// rule 2); the tree's selection state above stays untouched while
+    /// the overlay is shown, which is what "prior expansion/selection
+    /// intact" on Esc means.
+    @FocusState private var filterFieldFocused: Bool
+    @FocusState private var filterResultsFocused: Bool
+    @State private var filterListSelection: String?
     /// #852: one-shot suppression consumed by `.onChange(of: listSelection)`. A
     /// ⌘/⇧ multi-select click moves the focus (`listSelection`) but must NOT run
     /// the open path — the gesture decides open/no-open itself (a live ⌘ during
@@ -2805,7 +2822,12 @@ struct FileTreeSidebar: View {
             }
             sidebarSectionsMount
             Group {
-                if appState.currentImportBatchOwner != nil {
+                if filterModel.isActive {
+                    // FL-09 (#663): the flat filter-result overlay
+                    // replaces every tree branch, including scanning /
+                    // error / empty — one result list, one focus model.
+                    filterResultsList
+                } else if appState.currentImportBatchOwner != nil {
                     treeList
                 } else if appState.isScanning && appState.files.isEmpty {
                     scanningState
@@ -2972,50 +2994,176 @@ struct FileTreeSidebar: View {
     /// FL-07: hoisted so the sidebar column's ViewBuilder stays within
     /// the type-checker's budget.
     private var sidebarSectionsMount: some View {
-        SidebarSectionsView(
-            activateShortcut: { appState.activateSidebarShortcut($0) },
-            openRecent: { appState.openFile($0, target: .currentTab) })
-            // FL-07: one-shot reveal requests (shortcut containers, history
-            // navigation). Ancestors expand through the existing seam; the
-            // selection applies programmatically, so the history dedupe
-            // (the navigated entry equals the ring's cursor) prevents
-            // re-pushing. Mounted here, off the List's modifier chain,
-            // to stay inside the type-checker's budget.
-            .onChange(of: appState.sidebarRevealRequest) { _, request in
-                guard let request else { return }
-                tree.ensureAncestorsExpanded(forPath: request.path)
-                if let rowID = rowID(
-                    forRevealPath: request.path,
-                    isDirectory: request.isDirectory)
-                {
-                    mirrorProgrammaticSelection(rowID)
+        VStack(spacing: 0) {
+            // FL-09 (#663): the filter field is the topmost sidebar
+            // control. It never unmounts — it hosts the rollover
+            // observers and must keep focus through activation.
+            SidebarFilterField(
+                model: filterModel,
+                isFocused: $filterFieldFocused,
+                moveFocusToResults: { focusFilterResultsAtFirstRow() })
+            // A committed query overlays sections and tree with ONE
+            // result list (locked decision 7). The views unmount; the
+            // backing models (tree expansion, selection, shortcut and
+            // recents state) are untouched, so Esc restores the exact
+            // prior view.
+            if !filterModel.isActive {
+                SidebarSectionsView(
+                    activateShortcut: { appState.activateSidebarShortcut($0) },
+                    openRecent: { appState.openFile($0, target: .currentTab) })
+            }
+        }
+        .onChange(of: appState.sidebarFilterFocusRequest) { _, _ in
+            filterFieldFocused = true
+        }
+        // FL-07: one-shot reveal requests (shortcut containers, history
+        // navigation). Ancestors expand through the existing seam; the
+        // selection applies programmatically, so the history dedupe
+        // (the navigated entry equals the ring's cursor) prevents
+        // re-pushing. Mounted here, off the List's modifier chain,
+        // to stay inside the type-checker's budget.
+        .onChange(of: appState.sidebarRevealRequest) { _, request in
+            guard let request else { return }
+            tree.ensureAncestorsExpanded(forPath: request.path)
+            if let rowID = rowID(
+                forRevealPath: request.path,
+                isDirectory: request.isDirectory)
+            {
+                mirrorProgrammaticSelection(rowID)
+            }
+        }
+        // FL3-4.1: Expand Loaded — materialized folders expand,
+        // fetching at most one level deeper.
+        .onChange(of: appState.sidebarExpandLoadedRequest) { _, _ in
+            tree.expandLoadedLevels()
+        }
+        // FL3-4.1: Collapse All against the LIVE tree, preserving the
+        // selected row's ancestors.
+        .onChange(of: appState.sidebarCollapseAllRequest) { _, _ in
+            let anchor = selectionModel.focused
+                .flatMap { selectionRow(for: $0)?.path }
+                ?? appState.selectedFilePath
+            tree.collapseAllPreservingAncestors(ofPath: anchor)
+        }
+        // FL3-3.2: ⌃1–⌃9 activate shortcuts 1–9 while the sidebar has
+        // key focus (⌘1–9 belong to tabs; palette commands work
+        // anywhere).
+        .background {
+            SidebarShortcutChordMonitor(
+                enabled: fileTreeFocused,
+                isRenaming: appState.renamingNode != nil,
+                activateSlot: { slot in
+                    _ = try? appState.dispatchSidebarAction(
+                        id: SlateCommandID.sidebarOpenShortcut(slot))
+                })
+                .frame(width: 0, height: 0)
+        }
+    }
+
+    // MARK: - Filter results overlay (FL-09, #663)
+
+    /// ↓ from the field: enter the flat list at row 1. Selection is
+    /// activation in this list (the tree's shipped FL1 behavior), so
+    /// entering also opens row 1's note.
+    private func focusFilterResultsAtFirstRow() {
+        guard let first = filterModel.results?.files.first?.path else { return }
+        filterListSelection = first
+        filterResultsFocused = true
+    }
+
+    /// The flat paged result list of shared FL1 rows (locked decision
+    /// 7). One `List`, path-keyed selection; Esc moves focus back to the
+    /// field; the tree beneath was never torn down.
+    private var filterResultsList: some View {
+        Group {
+            if let page = filterModel.results, !page.files.isEmpty {
+                List(selection: $filterListSelection) {
+                    ForEach(page.files, id: \.path) { summary in
+                        filterResultRow(summary)
+                    }
+                    if page.nextCursor != nil {
+                        Button {
+                            filterModel.loadNextPage()
+                        } label: {
+                            Text("Load More Results")
+                                .font(Tokens.Typography.body)
+                                .foregroundStyle(Tokens.ColorRole.accentText)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.borderless)
+                        .selectionDisabled()
+                        .accessibilityHint(
+                            "Appends the next page of matching files to the list.")
+                    }
                 }
+                .listStyle(.sidebar)
+                .focused($filterResultsFocused)
+                .onExitCommand {
+                    filterResultsFocused = false
+                    filterFieldFocused = true
+                }
+                .onChange(of: filterListSelection) { _, selected in
+                    guard let selected else { return }
+                    appState.openFile(selected, target: .currentTab)
+                }
+                .accessibilityLabel("Filter results")
+            } else {
+                VStack(spacing: Tokens.Spacing.sm) {
+                    Text("No results.")
+                        .font(Tokens.Typography.body)
+                        .foregroundStyle(Tokens.ColorRole.textSecondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .accessibilityElement(children: .combine)
             }
-            // FL3-4.1: Expand Loaded — materialized folders expand,
-            // fetching at most one level deeper.
-            .onChange(of: appState.sidebarExpandLoadedRequest) { _, _ in
-                tree.expandLoadedLevels()
-            }
-            // FL3-4.1: Collapse All against the LIVE tree, preserving the
-            // selected row's ancestors.
-            .onChange(of: appState.sidebarCollapseAllRequest) { _, _ in
-                let anchor = selectionModel.focused
-                    .flatMap { selectionRow(for: $0)?.path }
-                    ?? appState.selectedFilePath
-                tree.collapseAllPreservingAncestors(ofPath: anchor)
-            }
-            // FL3-3.2: ⌃1–⌃9 activate shortcuts 1–9 while the sidebar has
-            // key focus (⌘1–9 belong to tabs; palette commands work
-            // anywhere).
-            .background {
-                SidebarShortcutChordMonitor(
-                    enabled: fileTreeFocused,
-                    isRenaming: appState.renamingNode != nil,
-                    activateSlot: { slot in
-                        _ = try? appState.dispatchSidebarAction(
-                            id: SlateCommandID.sidebarOpenShortcut(slot))
-                    })
-                    .frame(width: 0, height: 0)
+        }
+    }
+
+    /// One filter-result row: the shared FL1 row component plus the
+    /// containing-folder subtitle, carrying the exact single-file
+    /// context menu tree rows use (spec rule 5 — same component, all
+    /// FL2 verbs).
+    private func filterResultRow(_ summary: FileSummary) -> some View {
+        let item = SidebarSelectionItem(
+            path: summary.path,
+            isDirectory: false,
+            isMarkdown: summary.isMarkdown)
+        let parent = (summary.path as NSString).deletingLastPathComponent
+        let subtitle = parent.isEmpty ? "Vault root" : parent
+        let selected = filterListSelection == summary.path
+        return SidebarFileRow(
+            model: SidebarRowModel(
+                summary: summary,
+                preferences: rowPreferences,
+                isPinned: false,
+                pathSubtitle: subtitle,
+                now: sidebarNow),
+            depth: 0,
+            isSelected: selected,
+            selectionIsActive: nativeSelectionIsActive)
+            .tag(summary.path)
+            .contextMenu {
+                if let publishedSnapshot = appState.sidebarSelectionSnapshot {
+                    // The overlay owns selection while active: target THIS
+                    // row, never the tree's (hidden) multi-selection —
+                    // so the single-row snapshot is built directly.
+                    let rowSnapshot = SidebarSelectionSnapshot(
+                        sessionIdentity: publishedSnapshot.sessionIdentity,
+                        items: [item],
+                        focusedPath: summary.path,
+                        creationParent: parent.isEmpty ? "" : parent,
+                        selectionRevision: publishedSnapshot.selectionRevision)
+                    let projection = Self.sidebarRowActionProjection(
+                        surface: .contextMenu,
+                        row: item,
+                        publishedSnapshot: rowSnapshot,
+                        structuralMutationDisabledReason:
+                            appState.structuralMutationDisabledReason,
+                        actionDisabledReasons: sidebarRowActionDisabledReasons(
+                            for: item))
+                    singleFileContextMenuGroups(
+                        projection: projection, path: summary.path)
+                }
             }
     }
 
@@ -4999,103 +5147,122 @@ struct FileTreeSidebar: View {
                     if projection.targetSnapshot.items.count == 1,
                         projection.targetSnapshot.items.first?.isDirectory == false
                     {
-                        let managementIDs = [
-                            SlateCommandID.renameEntry,
-                            SlateCommandID.moveTo,
-                            SlateCommandID.duplicateEntry,
-                        ]
-                        let pinIDs = [
-                            SlateCommandID.sidebarPinNote,
-                            SlateCommandID.sidebarUnpinNote,
-                        ]
-                        let revealIDs = [SlateCommandID.revealInFinder]
-                        let copyIDs = [
-                            SlateCommandID.copyPath,
-                            SlateCommandID.sidebarCopyWikilink,
-                        ]
-                        let trashIDs = [SlateCommandID.deleteEntry]
-                        let availableIDs = Set(projection.evaluations.map(\.id))
-                        let hasCatalogOpen = availableIDs.contains(
-                            SlateCommandID.sidebarOpen)
-                        let hasManagement = managementIDs.contains(
-                            where: availableIDs.contains)
-                        let hasPins = pinIDs.contains(where: availableIDs.contains)
-                        let hasReveal = revealIDs.contains(where: availableIDs.contains)
-                        let hasCopy = copyIDs.contains(where: availableIDs.contains)
-                        let hasTrash = trashIDs.contains(where: availableIDs.contains)
-
-                        if hasCatalogOpen {
-                            Menu {
-                                sidebarCatalogActions(
-                                    projection.evaluations,
-                                    actionIDs: [SlateCommandID.sidebarOpen])
-                                Divider()
-                                Button {
-                                    appState.openFile(node.path, target: .newTab)
-                                } label: {
-                                    SlateSymbol.newTab.label("Open in New Tab")
-                                }
-                                Button {
-                                    appState.openFile(
-                                        node.path, target: .newSplit(.horizontal))
-                                } label: {
-                                    SlateSymbol.splitRight.label("Open in Split")
-                                }
-                            } label: {
-                                SlateSymbol.open.label("Open")
-                            }
-                        }
-                        if hasManagement {
-                            sidebarCatalogActions(
-                                projection.evaluations,
-                                actionIDs: [
-                                    SlateCommandID.renameEntry,
-                                    SlateCommandID.moveTo,
-                                    SlateCommandID.duplicateEntry,
-                                ])
-                        }
-                        if hasPins {
-                            // FL-06 (#659): the applicable pin direction only
-                            // — the row-targeted reasons omit the other one.
-                            Divider()
-                            sidebarCatalogActions(
-                                projection.evaluations,
-                                actionIDs: [
-                                    SlateCommandID.sidebarPinNote,
-                                    SlateCommandID.sidebarUnpinNote,
-                                ])
-                        }
-                        if hasReveal || hasCopy {
-                            Divider()
-                        }
-                        if hasReveal {
-                            sidebarCatalogActions(
-                                projection.evaluations,
-                                actionIDs: [SlateCommandID.revealInFinder])
-                        }
-                        if hasCopy {
-                            Menu {
-                                sidebarCatalogActions(
-                                    projection.evaluations,
-                                    actionIDs: [
-                                        SlateCommandID.copyPath,
-                                        SlateCommandID.sidebarCopyWikilink,
-                                    ])
-                            } label: {
-                                SlateSymbol.copyPath.label("Copy")
-                            }
-                        }
-                        if hasTrash {
-                            Divider()
-                            sidebarCatalogActions(
-                                projection.evaluations,
-                                actionIDs: [SlateCommandID.deleteEntry])
-                        }
+                        singleFileContextMenuGroups(
+                            projection: projection, path: node.path)
                     } else {
                         sidebarCatalogActions(projection.evaluations)
                     }
                 }
             }
+        }
+    }
+
+
+    /// The single-FILE context-menu body (Open group, management, pins,
+    /// reveal, copy, trash), shared verbatim between tree file rows and
+    /// FL-09 filter-result rows — the spec's "same component" contract:
+    /// every FL2 verb on a result row is this exact projection-driven
+    /// menu, not a re-implementation.
+    @ViewBuilder
+    private func singleFileContextMenuGroups(
+        projection: (
+            targetSnapshot: SidebarSelectionSnapshot,
+            evaluations: [SidebarActionEvaluation],
+            openEvaluation: SidebarActionEvaluation?
+        ),
+        path: String
+    ) -> some View {
+        let managementIDs = [
+            SlateCommandID.renameEntry,
+            SlateCommandID.moveTo,
+            SlateCommandID.duplicateEntry,
+        ]
+        let pinIDs = [
+            SlateCommandID.sidebarPinNote,
+            SlateCommandID.sidebarUnpinNote,
+        ]
+        let revealIDs = [SlateCommandID.revealInFinder]
+        let copyIDs = [
+            SlateCommandID.copyPath,
+            SlateCommandID.sidebarCopyWikilink,
+        ]
+        let trashIDs = [SlateCommandID.deleteEntry]
+        let availableIDs = Set(projection.evaluations.map(\.id))
+        let hasCatalogOpen = availableIDs.contains(
+            SlateCommandID.sidebarOpen)
+        let hasManagement = managementIDs.contains(
+            where: availableIDs.contains)
+        let hasPins = pinIDs.contains(where: availableIDs.contains)
+        let hasReveal = revealIDs.contains(where: availableIDs.contains)
+        let hasCopy = copyIDs.contains(where: availableIDs.contains)
+        let hasTrash = trashIDs.contains(where: availableIDs.contains)
+
+        if hasCatalogOpen {
+            Menu {
+                sidebarCatalogActions(
+                    projection.evaluations,
+                    actionIDs: [SlateCommandID.sidebarOpen])
+                Divider()
+                Button {
+                    appState.openFile(path, target: .newTab)
+                } label: {
+                    SlateSymbol.newTab.label("Open in New Tab")
+                }
+                Button {
+                    appState.openFile(
+                        path, target: .newSplit(.horizontal))
+                } label: {
+                    SlateSymbol.splitRight.label("Open in Split")
+                }
+            } label: {
+                SlateSymbol.open.label("Open")
+            }
+        }
+        if hasManagement {
+            sidebarCatalogActions(
+                projection.evaluations,
+                actionIDs: [
+                    SlateCommandID.renameEntry,
+                    SlateCommandID.moveTo,
+                    SlateCommandID.duplicateEntry,
+                ])
+        }
+        if hasPins {
+            // FL-06 (#659): the applicable pin direction only
+            // — the row-targeted reasons omit the other one.
+            Divider()
+            sidebarCatalogActions(
+                projection.evaluations,
+                actionIDs: [
+                    SlateCommandID.sidebarPinNote,
+                    SlateCommandID.sidebarUnpinNote,
+                ])
+        }
+        if hasReveal || hasCopy {
+            Divider()
+        }
+        if hasReveal {
+            sidebarCatalogActions(
+                projection.evaluations,
+                actionIDs: [SlateCommandID.revealInFinder])
+        }
+        if hasCopy {
+            Menu {
+                sidebarCatalogActions(
+                    projection.evaluations,
+                    actionIDs: [
+                        SlateCommandID.copyPath,
+                        SlateCommandID.sidebarCopyWikilink,
+                    ])
+            } label: {
+                SlateSymbol.copyPath.label("Copy")
+            }
+        }
+        if hasTrash {
+            Divider()
+            sidebarCatalogActions(
+                projection.evaluations,
+                actionIDs: [SlateCommandID.deleteEntry])
         }
     }
 

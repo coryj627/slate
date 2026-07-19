@@ -5028,6 +5028,9 @@ final class AppState: ObservableObject {
         sidebarSelectionHistory = []
         sidebarSelectionHistoryIndex = -1
         sidebarRevealRequest = nil
+        // FL-09: filter results are vault-content; the device-local
+        // persisted query survives (restore-not-apply on the next bind).
+        sidebarFilterModel.resetForVaultClose()
         if sidebarOrganizationJournalRecoveryPending {
             sidebarOrganizationJournalRecoveryPending = false
         }
@@ -5995,6 +5998,16 @@ final class AppState: ObservableObject {
     /// (FL3-4.1 — VoiceOver focus must not land on a vanished row).
     @Published private(set) var sidebarCollapseAllRequest = 0
 
+    /// FL4-2 (#663): the top-pinned sidebar filter's state machine.
+    /// One instance for the app; bound to each vault's session on open
+    /// and reset through `resetSidebarOrganizationState` with the rest
+    /// of the vault-scoped sidebar state.
+    let sidebarFilterModel = SidebarFilterModel()
+    /// One-shot request moving key focus into the filter field
+    /// (⌥⌘F / palette). Same consume-on-change contract as
+    /// `sidebarCollapseAllRequest`.
+    @Published private(set) var sidebarFilterFocusRequest = 0
+
     struct SidebarHistoryEntry: Equatable {
         let path: String
         let isDirectory: Bool
@@ -6090,6 +6103,11 @@ final class AppState: ObservableObject {
             lastMutationAnnouncement = message
             announcer.post(message, priority: .medium)
 
+        case SlateCommandID.sidebarFocusFilter:
+            // No announcement: focus lands in the field and VoiceOver
+            // reads the field itself.
+            sidebarFilterFocusRequest &+= 1
+
         case SlateCommandID.sidebarHistoryBack:
             try navigateSidebarHistory(step: -1)
 
@@ -6112,6 +6130,40 @@ final class AppState: ObservableObject {
         default:
             throw sidebarActionFailure(Self.sidebarSelectionChangedReason)
         }
+    }
+
+    /// FL4-2 (#663): wire the filter model to the freshly opened session.
+    /// The session is captured WEAK: `resetSidebarOrganizationState`
+    /// drops these closures on every teardown path before the session
+    /// releases, so a nil session here is a benign race, surfaced as a
+    /// transient inline message rather than a crash or a wrong-vault
+    /// query.
+    private func bindSidebarFilterModel(session: VaultSession) {
+        struct SidebarFilterSessionClosedError: Error, LocalizedError {
+            var errorDescription: String? { "The vault is closed." }
+        }
+        sidebarFilterModel.bind(SidebarFilterModel.Dependencies(
+            requirements: { [weak session] query in
+                guard let session else {
+                    throw SidebarFilterSessionClosedError()
+                }
+                return try session.sidebarFilterDateRequirements(query: query)
+            },
+            perform: { [weak session] query, windows, paging in
+                guard let session else {
+                    throw SidebarFilterSessionClosedError()
+                }
+                return try session.filterFiles(
+                    query: query, scopeDir: nil, dateWindows: windows,
+                    paging: paging)
+            },
+            announce: { [announcer] message in
+                announcer.post(message, priority: .medium)
+            },
+            now: { Date() },
+            timeZone: { TimeZone.current },
+            resolver: SidebarProductionCivilDateResolver(),
+            defaults: .standard))
     }
 
     /// FL3-3.3: the sidebar Recents section shows the first ten eligible
@@ -8928,6 +8980,9 @@ final class AppState: ObservableObject {
             // vault path resolves. Per-vault, so it's repopulated on
             // every vault switch; a missing / malformed file loads empty.
             fileRecents = fileRecentsStore?.load() ?? []
+            // FL-09 (#663): bind the sidebar filter to this session,
+            // restoring the persisted query into the field (not applied).
+            bindSidebarFilterModel(session: session)
             // #876: likewise this vault's recent search queries — per-
             // vault, so the overlay's idle "Recent Searches" reflects the
             // vault the user is actually in.

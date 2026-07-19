@@ -77,6 +77,9 @@ struct SidebarNavigationMenuItems: View {
       .keyboardShortcut("[", modifiers: [.command, .control])
     item(SlateCommandID.sidebarHistoryForward)
       .keyboardShortcut("]", modifiers: [.command, .control])
+    // FL-09 (#663): ⌥⌘F — ⌘F stays with content search.
+    item(SlateCommandID.sidebarFocusFilter)
+      .keyboardShortcut("f", modifiers: [.command, .option])
   }
 }
 

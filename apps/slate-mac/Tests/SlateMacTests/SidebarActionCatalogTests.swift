@@ -73,6 +73,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "slate.sidebar.openShortcut7",
                 "slate.sidebar.openShortcut8",
                 "slate.sidebar.openShortcut9",
+                "slate.sidebar.focusFilter",
                 "slate.file.delete",
             ])
         XCTAssertEqual(
@@ -93,6 +94,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "Open Shortcut 1", "Open Shortcut 2", "Open Shortcut 3",
                 "Open Shortcut 4", "Open Shortcut 5", "Open Shortcut 6",
                 "Open Shortcut 7", "Open Shortcut 8", "Open Shortcut 9",
+                "Focus Sidebar Filter",
                 "Move to Trash",
             ])
         XCTAssertEqual(
@@ -107,6 +109,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 .pin, .unpin, .unpin,
                 .sortOrder, .sortOrder, .sortOrder, .sortOrder,
                 .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin,
+                .search,
                 .trash,
             ])
         XCTAssertEqual(
@@ -223,6 +226,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.sidebarHistoryBack,
                 SlateCommandID.sidebarHistoryForward,
             ] + SlateCommandID.sidebarOpenShortcutSlots
+            + [SlateCommandID.sidebarFocusFilter]
         XCTAssertEqual(
             ids(empty),
             [

@@ -178,6 +178,10 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             hint: "Activate shortcut 9 in the Shortcuts section.",
             section: .sidebar, hotkey: nil),
         .init(
+            id: "slate.sidebar.focusFilter", label: "Focus Sidebar Filter",
+            hint: "Move focus to the sidebar filter field.",
+            section: .sidebar, hotkey: "⌥⌘F"),
+        .init(
             id: "slate.file.delete", label: "Move to Trash",
             hint: "Move the selected files or folders to the Trash.",
             section: .sidebar, hotkey: nil),
@@ -331,6 +335,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.sidebarHistoryBack,
                     SlateCommandID.sidebarHistoryForward,
                 ] + SlateCommandID.sidebarOpenShortcutSlots
+                + [SlateCommandID.sidebarFocusFilter]
                 + [SlateCommandID.deleteEntry],
             "multi-selection rejects single-destination actions; the FL-07 "
                 + "navigation family is selection-independent")
@@ -1165,6 +1170,9 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             SlateCommandID.sidebarExpandLoaded,
             SlateCommandID.sidebarHistoryBack,
             SlateCommandID.sidebarHistoryForward,
+            // FL-09: the filter-focus chord (⌥⌘F) lives beside the other
+            // sidebar navigation items in the View menu.
+            SlateCommandID.sidebarFocusFilter,
         ]
         let paletteOnlyIDs = Set(SlateCommandID.sidebarOpenShortcutSlots)
         let viewMenuIDs = viewMenuSortIDs.union(viewMenuNavigationIDs)
@@ -1394,23 +1402,25 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
     }
 
     func testWorkspaceOpenButtonsRemainDistinctInsideTheRealFileContextOwner() throws {
+        // FL-09 moved the single-file menu body into
+        // `singleFileContextMenuGroups`, the ONE owner shared by tree
+        // file rows and filter-result rows; the Open buttons live there.
         let document = try sourceRegion("FileTreeSidebar.swift")
-        let fileRow = try pairedBlockBody(
-            structuralAnchor: "private func fileRow(", in: document)
         let context = try pairedBlockBody(
-            structuralAnchor: ".contextMenu {", in: fileRow)
+            structuralAnchor: "private func singleFileContextMenuGroups(",
+            in: document)
         let source = normalized(context.structural)
         let compactSource = source.filter { !$0.isWhitespace }
         let literals = normalized(context.literals)
 
         XCTAssertEqual(
             occurrences(
-                of: "appState.openFile(node.path,target:.newTab)",
+                of: "appState.openFile(path,target:.newTab)",
                 in: compactSource),
             1)
         XCTAssertTrue(
             compactSource.contains(
-                "appState.openFile(node.path,target:.newSplit(.horizontal))"))
+                "appState.openFile(path,target:.newSplit(.horizontal))"))
         XCTAssertTrue(literals.contains("SlateSymbol.newTab.label(\"Open in New Tab\")"))
         XCTAssertTrue(literals.contains("SlateSymbol.splitRight.label(\"Open in Split\")"))
 
@@ -1424,11 +1434,11 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             "the retained catalog Open evaluation owns the complete submenu")
         XCTAssertTrue(
             compactAvailabilityGate.contains(
-                "appState.openFile(node.path,target:.newTab)"),
+                "appState.openFile(path,target:.newTab)"),
             "temporary Open unavailability must omit the direct new-tab path")
         XCTAssertTrue(
             compactAvailabilityGate.contains(
-                "appState.openFile(node.path,target:.newSplit(.horizontal))"),
+                "appState.openFile(path,target:.newSplit(.horizontal))"),
             "temporary Open unavailability must omit the direct split path")
     }
 
@@ -1442,20 +1452,31 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             structuralAnchor: ".contextMenu {", in: folderRow)
         let fileContext = try pairedBlockBody(
             structuralAnchor: ".contextMenu {", in: fileRow)
+        // FL-09: the single-file group bodies live in ONE shared builder
+        // consumed by the tree file row and the filter-result row alike.
+        let sharedFileGroups = try pairedBlockBody(
+            structuralAnchor: "private func singleFileContextMenuGroups(",
+            in: document)
+        let filterRow = try pairedBlockBody(
+            structuralAnchor: "private func filterResultRow(", in: document)
+        let filterContext = try pairedBlockBody(
+            structuralAnchor: ".contextMenu {", in: filterRow)
         let folderStructure = normalized(folderContext.structural)
         let fileStructure = normalized(fileContext.structural)
+        let sharedStructure = normalized(sharedFileGroups.structural)
+        let filterStructure = normalized(filterContext.structural)
         func compactSyntax(_ source: String) -> String {
             source.filter { !$0.isWhitespace }
                 .replacingOccurrences(of: ",]", with: "]")
         }
         let folderLiterals = normalized(folderContext.literals)
-        let fileLiterals = normalized(fileContext.literals)
+        let sharedLiterals = normalized(sharedFileGroups.literals)
 
         XCTAssertTrue(folderLiterals.contains("SlateSymbol.newNote.label(\"New\")"))
-        XCTAssertTrue(fileLiterals.contains("SlateSymbol.open.label(\"Open\")"))
-        XCTAssertTrue(fileLiterals.contains("SlateSymbol.copyPath.label(\"Copy\")"))
-        XCTAssertTrue(fileLiterals.contains("SlateSymbol.newTab.label(\"Open in New Tab\")"))
-        XCTAssertTrue(fileLiterals.contains("SlateSymbol.splitRight.label(\"Open in Split\")"))
+        XCTAssertTrue(sharedLiterals.contains("SlateSymbol.open.label(\"Open\")"))
+        XCTAssertTrue(sharedLiterals.contains("SlateSymbol.copyPath.label(\"Copy\")"))
+        XCTAssertTrue(sharedLiterals.contains("SlateSymbol.newTab.label(\"Open in New Tab\")"))
+        XCTAssertTrue(sharedLiterals.contains("SlateSymbol.splitRight.label(\"Open in Split\")"))
 
         for (owner, source, groups) in [
             (
@@ -1468,7 +1489,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 ]
             ),
             (
-                "file", fileStructure,
+                "file", sharedStructure,
                 [
                     "SlateCommandID.sidebarOpen",
                     "SlateCommandID.renameEntry, SlateCommandID.moveTo, SlateCommandID.duplicateEntry",
@@ -1479,20 +1500,41 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             ),
         ] {
             let compactSource = compactSyntax(source)
-            XCTAssertTrue(
-                source.contains("projection.targetSnapshot.items.count == 1"),
-                "\(owner) groups only a single-row target")
             for ids in groups {
                 XCTAssertTrue(
                     compactSource.contains(
                         compactSyntax("actionIDs: [\(ids)]")),
                     "\(owner) contextual group drifted: \(ids)")
             }
-            XCTAssertTrue(
-                source.contains("sidebarCatalogActions(projection.evaluations)"),
-                "\(owner) multi-selection fallback stays flat")
             XCTAssertFalse(source.contains("keyboardShortcut"))
         }
+        XCTAssertTrue(
+            folderStructure.contains("projection.targetSnapshot.items.count == 1"),
+            "folder groups only a single-row target")
+        XCTAssertTrue(
+            folderStructure.contains("sidebarCatalogActions(projection.evaluations)"),
+            "folder multi-selection fallback stays flat")
+        XCTAssertTrue(
+            fileStructure.contains("projection.targetSnapshot.items.count == 1"),
+            "file groups only a single-row target")
+        XCTAssertTrue(
+            fileStructure.contains("singleFileContextMenuGroups("),
+            "the tree file row renders the one shared single-file menu")
+        XCTAssertTrue(
+            fileStructure.contains("sidebarCatalogActions(projection.evaluations)"),
+            "file multi-selection fallback stays flat")
+        XCTAssertFalse(fileStructure.contains("keyboardShortcut"))
+        // FL-09 same-component contract: the filter-result row renders
+        // the same shared single-file menu against a single-row snapshot
+        // — never a re-implementation, never the tree's hidden
+        // multi-selection.
+        XCTAssertTrue(
+            filterStructure.contains("singleFileContextMenuGroups("),
+            "the filter row renders the one shared single-file menu")
+        XCTAssertTrue(
+            filterStructure.contains("items: [item]"),
+            "the filter row targets exactly its own row")
+        XCTAssertFalse(filterStructure.contains("keyboardShortcut"))
     }
 
     func testVoiceOverDefaultOpenRetainsUnavailableReasonAndNeverDuplicatesRotorOpen()

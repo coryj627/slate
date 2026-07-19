@@ -39,6 +39,8 @@ enum SlateCommandID {
     }
     static let sidebarOpenShortcutSlots: [String] =
         (1...9).map { sidebarOpenShortcut($0) }
+    /// FL-09 (#663): move focus into the top-pinned sidebar filter field.
+    static let sidebarFocusFilter = "slate.sidebar.focusFilter"
     static let sidebarSortNameAsc = "slate.sidebar.sortNameAsc"
     static let sidebarSortNameDesc = "slate.sidebar.sortNameDesc"
     static let sidebarSortCreatedDesc = "slate.sidebar.sortCreatedDesc"
@@ -76,6 +78,7 @@ enum SlateCommandID {
             sidebarExpandLoaded,
             sidebarHistoryBack,
             sidebarHistoryForward,
+            sidebarFocusFilter,
         ])
 
     // File
@@ -466,6 +469,7 @@ enum SlateCommandID {
         sidebarOpenShortcut(7),
         sidebarOpenShortcut(8),
         sidebarOpenShortcut(9),
+        sidebarFocusFilter,
         deleteEntry,
         printNote,
         jumpToBibliography,
@@ -665,6 +669,7 @@ func registerSidebarCommands(
         case SlateCommandID.moveTo: hotkey = "⇧⌘M"
         case SlateCommandID.sidebarHistoryBack: hotkey = "⌃⌘["
         case SlateCommandID.sidebarHistoryForward: hotkey = "⌃⌘]"
+        case SlateCommandID.sidebarFocusFilter: hotkey = "⌥⌘F"
         // ⌃1–⌃9 are focus-scoped view chords (FL3-3.2): with the sidebar
         // unfocused they are intentionally inert, so the registry must not
         // advertise them as menu-reachable hints (#422 dead-zone gate).
