@@ -4872,14 +4872,17 @@ impl From<CitationMode> for core::CitationMode {
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct Locator {
     pub label: String,
-    pub locator: String,
+    /// The locator value (core's `locator` field). Named `value` here because
+    /// generators that PascalCase record fields (C#) may not emit a member
+    /// named identically to its enclosing type (`Locator.Locator`, CS0542).
+    pub value: String,
 }
 
 impl From<core::Locator> for Locator {
     fn from(l: core::Locator) -> Self {
         Self {
             label: l.label,
-            locator: l.locator,
+            value: l.locator,
         }
     }
 }
@@ -4888,7 +4891,7 @@ impl From<Locator> for core::Locator {
     fn from(l: Locator) -> Self {
         Self {
             label: l.label,
-            locator: l.locator,
+            locator: l.value,
         }
     }
 }
@@ -8305,7 +8308,14 @@ mod tests {
         let result = read_headings("/does/not/exist.md".to_string());
         match result {
             Err(VaultError::Io { message }) => {
-                assert!(message.contains("No such file") || message.contains("not found"));
+                // Message text is OS strerror: unix says "No such file",
+                // Windows says "The system cannot find the file/path".
+                assert!(
+                    message.contains("No such file")
+                        || message.contains("not found")
+                        || message.contains("cannot find"),
+                    "unexpected io message: {message}"
+                );
             }
             other => panic!("expected Io error, got {other:?}"),
         }

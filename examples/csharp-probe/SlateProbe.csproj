@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>SlateProbe</RootNamespace>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Generated binding is compiled into this assembly (default
+         `internal` visibility is enough); run generate.ps1 first. The
+         generated [LibraryImport] marshalling requires unsafe blocks. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="generated\slate_uniffi.dll" Link="slate_uniffi.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>
