@@ -74,6 +74,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "slate.sidebar.openShortcut8",
                 "slate.sidebar.openShortcut9",
                 "slate.sidebar.focusFilter",
+                "slate.sidebar.toggleLayout",
                 "slate.sidebar.addTag",
                 "slate.sidebar.removeTag",
                 "slate.sidebar.createFolderNote",
@@ -99,7 +100,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 "Open Shortcut 1", "Open Shortcut 2", "Open Shortcut 3",
                 "Open Shortcut 4", "Open Shortcut 5", "Open Shortcut 6",
                 "Open Shortcut 7", "Open Shortcut 8", "Open Shortcut 9",
-                "Focus Sidebar Filter",
+                "Focus Sidebar Filter", "Toggle Sidebar Layout",
                 "Add Tag…", "Remove Tag…",
                 "Create Folder Note", "Open Folder Note", "Delete Folder Note",
                 "Move to Trash",
@@ -116,7 +117,7 @@ final class SidebarActionCatalogTests: XCTestCase {
                 .pin, .unpin, .unpin,
                 .sortOrder, .sortOrder, .sortOrder, .sortOrder,
                 .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin, .pin,
-                .search,
+                .search, .sortOrder,
                 .pin, .unpin,
                 .newNote, .open, .trash,
                 .trash,
@@ -235,7 +236,10 @@ final class SidebarActionCatalogTests: XCTestCase {
                 SlateCommandID.sidebarHistoryBack,
                 SlateCommandID.sidebarHistoryForward,
             ] + SlateCommandID.sidebarOpenShortcutSlots
-            + [SlateCommandID.sidebarFocusFilter]
+            + [
+                SlateCommandID.sidebarFocusFilter,
+                SlateCommandID.sidebarToggleLayout,
+            ]
         XCTAssertEqual(
             ids(empty),
             [

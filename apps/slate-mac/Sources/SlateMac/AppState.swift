@@ -2209,7 +2209,8 @@ final class AppState: ObservableObject {
             SlateCommandID.sidebarExpandLoaded,
             SlateCommandID.sidebarHistoryBack,
             SlateCommandID.sidebarHistoryForward,
-            SlateCommandID.sidebarFocusFilter:
+            SlateCommandID.sidebarFocusFilter,
+            SlateCommandID.sidebarToggleLayout:
             try dispatchSidebarNavigationAction(intent, rejected: rejected)
             return .completed(actionID: intent.actionID)
 
@@ -5087,7 +5088,8 @@ final class AppState: ObservableObject {
         // vault-scoped; the layout gate itself is device-local.
         sidebarSelectedContainer = nil
         sidebarDualPaneListSelection = nil
-        sidebarContainerListModel.resetForVaultClose()
+        sidebarDualPaneMultiSelection = []
+        sidebarListPaneModel.resetForVaultClose()
         if sidebarOrganizationJournalRecoveryPending {
             sidebarOrganizationJournalRecoveryPending = false
         }
@@ -6124,14 +6126,22 @@ final class AppState: ObservableObject {
     @Published private(set) var sidebarLayout: SidebarLayoutMode
     static let sidebarLayoutKey = "slate.sidebar.layout"
 
-    /// The internal gate's only mutator. Mode switches preserve state
-    /// both ways — nothing here tears down the tree VM, the filter
-    /// model, or selection; the views re-mount around the same models.
-    func setSidebarLayoutForInternalTesting(_ layout: SidebarLayoutMode) {
+    /// FL7-2 rule 6: the PUBLIC layout mutator (Settings picker +
+    /// palette toggle) — the FL-13 internal gate opens now that the
+    /// complete list pane and equivalence tests are in place. Mode
+    /// switches preserve state both ways — nothing here tears down the
+    /// tree VM, the filter model, or selection; the views re-mount
+    /// around the same models.
+    func setSidebarLayout(_ layout: SidebarLayoutMode) {
         guard layout != sidebarLayout else { return }
         sidebarLayout = layout
         sidebarSectionDefaults.set(
             layout.rawValue, forKey: Self.sidebarLayoutKey)
+    }
+
+    /// FL-13-era test entry point; forwards to the public mutator.
+    func setSidebarLayoutForInternalTesting(_ layout: SidebarLayoutMode) {
+        setSidebarLayout(layout)
     }
 
     /// FL7-1 rule 3: the dual-pane navigation selection — the container
@@ -6139,9 +6149,10 @@ final class AppState: ObservableObject {
     /// one (the list pane renders its quiet empty state).
     @Published var sidebarSelectedContainer: SidebarContainer?
 
-    /// The gated list pane's content model — bound with the filter
-    /// model on vault open, reset with it on teardown.
-    let sidebarContainerListModel = SidebarContainerListModel()
+    /// The list pane's content model — bound with the filter model on
+    /// vault open, reset with it on teardown. FL7-2 replaces FL-13's
+    /// lean pager with the complete drain+organize pipeline.
+    let sidebarListPaneModel = SidebarListPaneModel()
 
     /// One-shot request: ↓ from the filter field enters the dual-pane
     /// list at row 1 (the FL4-2 walk, dual-pane edition).
@@ -6150,11 +6161,26 @@ final class AppState: ObservableObject {
         sidebarDualPaneListFocusRequest &+= 1
     }
 
+    /// FL7-2 rule 5: the pane's MULTI-selection (batch target). The
+    /// single `sidebarDualPaneListSelection` remains the focus row.
+    @Published var sidebarDualPaneMultiSelection: Set<String> = []
+
     /// The list pane's selected row. Hoisted here (not view @State) so
     /// a mode switch preserves it and the action snapshot can follow
     /// it (review round: view-local selection died on re-mount and
     /// never owned the snapshot).
     @Published var sidebarDualPaneListSelection: String?
+
+    /// FL7-2: the organization context the list pane's client-side
+    /// projection consumes — the same prefs/pins the tree reads.
+    func sidebarOrganizationContext() -> FileTreeViewModel.OrganizationContext {
+        FileTreeViewModel.OrganizationContext(
+            prefs: sidebarOrganization.prefs,
+            pins: sidebarOrganization.pins,
+            now: Date(),
+            calendar: .current,
+            locale: .current)
+    }
 
     /// FL7-1 rule 3: publish the dual-pane selection into the ONE
     /// action-snapshot funnel — a visible list row is a single-file
@@ -6170,11 +6196,25 @@ final class AppState: ObservableObject {
         let items: [SidebarSelectionItem]
         var focused: String?
         var creationParent = ""
-        if let path = sidebarDualPaneListSelection {
+        if !sidebarDualPaneMultiSelection.isEmpty {
+            // FL7-2 rule 5: pane multi-selection is the batch target,
+            // ordered by the visible rows.
+            let ordered = sidebarListPaneModel.fileSummaries.filter {
+                sidebarDualPaneMultiSelection.contains($0.path)
+            }
+            items = ordered.map {
+                SidebarSelectionItem(
+                    path: $0.path, isDirectory: false,
+                    isMarkdown: $0.isMarkdown)
+            }
+            focused = sidebarDualPaneListSelection ?? ordered.last?.path
+            let parent =
+                (focused.map { ($0 as NSString).deletingLastPathComponent }
+                    ?? "")
+            creationParent = parent == "." ? "" : parent
+        } else if let path = sidebarDualPaneListSelection {
             let summary =
-                sidebarContainerListModel.page?.files.first {
-                    $0.path == path
-                }
+                sidebarListPaneModel.summary(at: path)
                 ?? sidebarFilterModel.results?.files.first { $0.path == path }
             items = [
                 SidebarSelectionItem(
@@ -6215,7 +6255,7 @@ final class AppState: ObservableObject {
             let container = SidebarContainer.containing(filePath: path)
             if sidebarSelectedContainer != container {
                 sidebarSelectedContainer = container
-                sidebarContainerListModel.show(container)
+                sidebarListPaneModel.show(container)
             }
         }
         sidebarDualPaneListSelection = path
@@ -6335,6 +6375,86 @@ final class AppState: ObservableObject {
     func sidebarSelectionTags(for paths: [String]) async -> [TagCount] {
         guard let session = currentSession else { return [] }
         return (try? await sidebarSelectionTagsRunner(session, paths)) ?? []
+    }
+
+    /// FL7-2 rule 3 (#669): per-folder display/scope overrides through
+    /// the ONE organization mutation funnel — same locked-write replay,
+    /// journal, and announcement discipline as sort/grouping. nil
+    /// clears the axis back to vault/device inheritance.
+    func setSidebarFolderPreviewLinesOverride(
+        folder: String, lines: Int?
+    ) {
+        mutateFolderDisplayOverride(
+            folder: folder,
+            key: SidebarOrganizationSchema.previewLinesKey,
+            value: lines.map { min(max($0, 0), 3) },
+            announce: lines == nil
+                ? "Preview lines follow the vault default."
+                : "Preview lines set to \(min(max(lines ?? 0, 0), 3)).",
+            reflect: { override, cleared in
+                override.previewLines = cleared ? nil : lines.map {
+                    min(max($0, 0), 3)
+                }
+            })
+    }
+
+    func setSidebarFolderDensityOverride(
+        folder: String, density: SidebarRowPreferencesSnapshot.Density?
+    ) {
+        mutateFolderDisplayOverride(
+            folder: folder,
+            key: SidebarOrganizationSchema.densityKey,
+            value: density?.rawValue,
+            announce: density == nil
+                ? "Density follows the vault default."
+                : "Density set to \(density?.rawValue ?? "").",
+            reflect: { override, cleared in
+                override.density = cleared ? nil : density
+            })
+    }
+
+    func setSidebarFolderDescendantsOverride(
+        folder: String, includeDescendants: Bool
+    ) {
+        mutateFolderDisplayOverride(
+            folder: folder,
+            key: SidebarOrganizationSchema.descendantsKey,
+            value: includeDescendants ? true : nil,
+            announce: includeDescendants
+                ? "Including subfolders."
+                : "Showing this folder only.",
+            reflect: { override, cleared in
+                override.descendants = cleared || !includeDescendants
+                    ? nil : true
+            })
+    }
+
+    private func mutateFolderDisplayOverride(
+        folder: String,
+        key: String,
+        value: Any?,
+        announce: String,
+        reflect: @escaping (inout SidebarOrganizationOverride, _ cleared: Bool)
+            -> Void
+    ) {
+        do {
+            try mutateSidebarOrganization(announce: announce) { root in
+                SidebarOrganizationSchema.setFolderOverrideValue(
+                    &root, folder: folder, key: key, value: value)
+            } reflect: { state in
+                var override =
+                    state.prefs.folderOverrides[folder]
+                    ?? SidebarOrganizationOverride()
+                reflect(&override, value == nil)
+                if override.isEmpty {
+                    state.prefs.folderOverrides.removeValue(forKey: folder)
+                } else {
+                    state.prefs.folderOverrides[folder] = override
+                }
+            }
+        } catch {
+            postMutationAnnouncement(error.sidebarActionAnnouncement)
+        }
     }
 
     /// FL5-2 rule 4: Add to Shortcuts from a tag row (or the Untagged
@@ -6486,6 +6606,15 @@ final class AppState: ObservableObject {
             // No announcement: focus lands in the field and VoiceOver
             // reads the field itself.
             sidebarFilterFocusRequest &+= 1
+
+        case SlateCommandID.sidebarToggleLayout:
+            let next: SidebarLayoutMode =
+                sidebarLayout == .tree ? .dualPane : .tree
+            setSidebarLayout(next)
+            let message =
+                next == .dualPane ? "Dual-pane sidebar." : "Tree sidebar."
+            lastMutationAnnouncement = message
+            announcer.post(message, priority: .medium)
 
         case SlateCommandID.sidebarHistoryBack:
             try navigateSidebarHistory(step: -1)
@@ -9407,10 +9536,13 @@ final class AppState: ObservableObject {
             // FL-09 (#663): bind the sidebar filter to this session,
             // restoring the persisted query into the field (not applied).
             bindSidebarFilterModel(session: session)
-            // FL7-1 (#668): the gated list pane binds to the same
-            // session contracts (scoped listing / tag query / untagged).
-            sidebarContainerListModel.bind(
-                SidebarContainerListModel.Dependencies(
+            // FL7-2 (#669): the list pane binds the full pipeline —
+            // one-level listing for the folder default, the FL-08
+            // descendant scope, tag query, and untagged — plus the
+            // organization context and device display defaults for the
+            // client-side pins/sort/group projection.
+            sidebarListPaneModel.bind(
+                SidebarListPaneModel.Dependencies(
                     performQuery: { [weak session] query, scopeDir, paging in
                         guard let session else {
                             throw SidebarFilterSessionClosedError()
@@ -9424,7 +9556,24 @@ final class AppState: ObservableObject {
                             throw SidebarFilterSessionClosedError()
                         }
                         return try session.untaggedFiles(paging: paging)
-                    }))
+                    },
+                    listLevel: { [weak session] parent, paging in
+                        guard let session else {
+                            throw SidebarFilterSessionClosedError()
+                        }
+                        return try session.listDirChildren(
+                            parentPath: parent, paging: paging)
+                    }),
+                organization: { [weak self] in
+                    self?.sidebarOrganizationContext()
+                        ?? FileTreeViewModel.OrganizationContext()
+                },
+                deviceDefaults: { [weak self] in
+                    let snapshot =
+                        self?.sidebarPreferences.rowSnapshot
+                        ?? .defaults
+                    return (snapshot.previewLines, snapshot.density)
+                })
             // FL5-2 review round (high): a device-restored EXPANDED Tags
             // section must fetch for THIS vault — didSet only fires on
             // toggles, and the teardown path cleared the previous tree.

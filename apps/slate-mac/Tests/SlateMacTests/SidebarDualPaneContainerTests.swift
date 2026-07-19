@@ -81,22 +81,41 @@ final class SidebarDualPaneContainerTests: XCTestCase {
             defaults.string(forKey: AppState.sidebarLayoutKey), "tree")
     }
 
-    func testNoUserFacingToggleExistsWhileGated() {
-        // Rule 1: no palette/menu command may expose the layout until
-        // FL-14. The catalog is the registry of user-facing sidebar
-        // commands — assert nothing mentions the layout.
-        XCTAssertFalse(
+    func testLayoutToggleIsPublicAfterListPaneShips() throws {
+        // FL7-2 rule 6: FL-13 kept the layout internal; FL-14 ships the
+        // complete list pane + equivalence tests, so the exposure gate
+        // OPENS — the catalog carries the toggle and dispatch flips the
+        // mode with an announcement.
+        XCTAssertTrue(
             SidebarActionCatalog.actions.contains {
-                $0.id.localizedCaseInsensitiveContains("layout")
-                    || $0.id.localizedCaseInsensitiveContains("dualPane")
-                    || $0.label.localizedCaseInsensitiveContains("dual")
+                $0.id == SlateCommandID.sidebarToggleLayout
             },
-            "the dual-pane toggle stays internal in FL-13")
-        XCTAssertFalse(
-            SlateCommandID.all.contains {
-                $0.localizedCaseInsensitiveContains("layout")
-                    || $0.localizedCaseInsensitiveContains("dualPane")
-            })
+            "FL-14 exposes the layout toggle in the catalog")
+        XCTAssertTrue(SlateCommandID.all.contains(
+            SlateCommandID.sidebarToggleLayout))
+
+        let state = makeState()
+        try openVault(state, named: "toggle-cmd", files: ["a.md"])
+        XCTAssertEqual(state.sidebarLayout, .tree)
+        _ = try state.dispatchSidebarAction(
+            id: SlateCommandID.sidebarToggleLayout)
+        XCTAssertEqual(state.sidebarLayout, .dualPane)
+        XCTAssertEqual(state.lastMutationAnnouncement, "Dual-pane sidebar.")
+        _ = try state.dispatchSidebarAction(
+            id: SlateCommandID.sidebarToggleLayout)
+        XCTAssertEqual(state.sidebarLayout, .tree)
+        XCTAssertEqual(state.lastMutationAnnouncement, "Tree sidebar.")
+    }
+
+    func testPublicSetterPersistsAndInternalHookForwards() {
+        let defaults = freshDefaults()
+        let state = makeState(defaults: defaults)
+        state.setSidebarLayout(.dualPane)
+        XCTAssertEqual(
+            defaults.string(forKey: AppState.sidebarLayoutKey), "dualPane")
+        state.setSidebarLayoutForInternalTesting(.tree)
+        XCTAssertEqual(
+            defaults.string(forKey: AppState.sidebarLayoutKey), "tree")
     }
 
     // MARK: - Container vs leaf selection matrix (rule 3)
@@ -249,25 +268,28 @@ final class SidebarDualPaneContainerTests: XCTestCase {
 
     // MARK: - Container list contents + filter scoping (rule 5)
 
-    func testContainerListLoadsScopedContentsPerContainer() throws {
+    func testContainerListLoadsScopedContentsPerContainer() async throws {
         let state = makeState()
         try openVault(
             state, named: "list",
             files: ["P/one.md", "P/two.md", "Q/three.md"])
         state.setSidebarLayoutForInternalTesting(.dualPane)
-        let model = state.sidebarContainerListModel
+        let model = state.sidebarListPaneModel
 
         model.show(.folder(path: "P"))
+        await model.drainTaskForTesting?.value
         XCTAssertEqual(
-            model.page?.files.map(\.path), ["P/one.md", "P/two.md"],
+            model.fileSummaries.map(\.path), ["P/one.md", "P/two.md"],
             "folder containers use the scoped listing")
 
         model.show(.tag(full: "tagged"))
+        await model.drainTaskForTesting?.value
         XCTAssertEqual(
-            model.page?.files.count, 3, "tag containers use the tag query")
+            model.fileSummaries.count, 3, "tag containers use the tag query")
 
         model.show(nil)
-        XCTAssertNil(model.page, "clearing shows the empty state")
+        XCTAssertNil(model.container, "clearing shows the empty state")
+        XCTAssertTrue(model.rows.isEmpty)
     }
 
     func testFilterScopesToTheSelectedContainerInDualPane() throws {
@@ -310,7 +332,7 @@ final class SidebarDualPaneContainerTests: XCTestCase {
         XCTAssertEqual(
             state.sidebarSelectionSnapshot?.items.first?.isDirectory, true)
 
-        state.sidebarContainerListModel.show(.folder(path: "P"))
+        state.sidebarListPaneModel.show(.folder(path: "P"))
         state.sidebarDualPaneListSelection = "P/a.md"
         state.publishDualPaneSelectionSnapshot()
         XCTAssertEqual(
@@ -325,15 +347,17 @@ final class SidebarDualPaneContainerTests: XCTestCase {
         try openVault(state, named: "mirror", files: ["P/note.md", "Q/x.md"])
         state.setSidebarLayoutForInternalTesting(.dualPane)
         state.sidebarSelectedContainer = .folder(path: "Q")
-        state.sidebarContainerListModel.show(.folder(path: "Q"))
+        state.sidebarListPaneModel.show(.folder(path: "Q"))
+        await state.sidebarListPaneModel.drainTaskForTesting?.value
 
         state.mirrorOpenedFileIntoDualPane("P/note.md")
+        await state.sidebarListPaneModel.drainTaskForTesting?.value
         XCTAssertEqual(
             state.sidebarSelectedContainer, .folder(path: "P"),
             "the mirror selects the CONTAINING folder container")
         XCTAssertEqual(state.sidebarDualPaneListSelection, "P/note.md")
         XCTAssertEqual(
-            state.sidebarContainerListModel.page?.files.map(\.path),
+            state.sidebarListPaneModel.fileSummaries.map(\.path),
             ["P/note.md"],
             "the list pane follows the mirrored container")
         XCTAssertEqual(
@@ -360,18 +384,20 @@ final class SidebarDualPaneContainerTests: XCTestCase {
 
     // MARK: - Vault lifecycle
 
-    func testContainerStateDiesWithTheVaultButLayoutSurvives() throws {
+    func testContainerStateDiesWithTheVaultButLayoutSurvives() async throws {
         let defaults = freshDefaults()
         let state = makeState(defaults: defaults)
         try openVault(state, named: "life", files: ["P/a.md"])
         state.setSidebarLayoutForInternalTesting(.dualPane)
         state.sidebarSelectedContainer = .folder(path: "P")
-        state.sidebarContainerListModel.show(.folder(path: "P"))
-        XCTAssertNotNil(state.sidebarContainerListModel.page)
+        state.sidebarListPaneModel.show(.folder(path: "P"))
+        await state.sidebarListPaneModel.drainTaskForTesting?.value
+        XCTAssertFalse(state.sidebarListPaneModel.fileSummaries.isEmpty)
 
         state.closeVault()
         XCTAssertNil(state.sidebarSelectedContainer)
-        XCTAssertNil(state.sidebarContainerListModel.page)
+        XCTAssertNil(state.sidebarListPaneModel.container)
+        XCTAssertTrue(state.sidebarListPaneModel.rows.isEmpty)
         XCTAssertEqual(
             state.sidebarLayout, .dualPane,
             "the layout gate is device-local and survives the vault")

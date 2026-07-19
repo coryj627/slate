@@ -2907,22 +2907,7 @@ struct FileTreeSidebar: View {
                         + "Retry to save them.")
             }
             if appState.sidebarLayout == .dualPane {
-                // FL7-1 (#668): the internally gated dual-pane layout —
-                // filter field on top (always), then the split panes
-                // sharing the SAME tree VM and filter model, so a mode
-                // switch preserves expansion/selection/filter state and
-                // refetches nothing beyond lazy levels.
-                SidebarFilterField(
-                    model: filterModel,
-                    isFocused: $filterFieldFocused,
-                    moveFocusToResults: {
-                        appState.requestDualPaneListFocus()
-                    })
-                SidebarDualPaneView(
-                    filterModel: filterModel,
-                    tree: tree,
-                    listModel: appState.sidebarContainerListModel)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                dualPaneMount
             } else {
             sidebarSectionsMount
             Group {
@@ -3103,6 +3088,102 @@ struct FileTreeSidebar: View {
     /// by the vault-open announcement.
     /// FL-07: hoisted so the sidebar column's ViewBuilder stays within
     /// the type-checker's budget.
+    /// FL7-1/2 (#668/#669): the dual-pane mount — filter field on top
+    /// (always), then the split panes sharing the SAME tree VM and
+    /// filter model, so a mode switch preserves expansion/selection/
+    /// filter state and refetches nothing beyond lazy levels. Hoisted
+    /// off the body chain for the type-checker's budget.
+    @ViewBuilder
+    private var dualPaneMount: some View {
+        SidebarFilterField(
+            model: filterModel,
+            isFocused: $filterFieldFocused,
+            moveFocusToResults: {
+                appState.requestDualPaneListFocus()
+            })
+        SidebarDualPaneView(
+            filterModel: filterModel,
+            tree: tree,
+            listModel: appState.sidebarListPaneModel,
+            rowContextMenu: { summary in
+                AnyView(dualPaneRowMenu(summary))
+            },
+            rowDragProvider: { summary in
+                dualPaneDragProvider(summary)
+            },
+            navDrop: { path, providers in
+                handleDrop(providers, into: path)
+            })
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// FL7-2 rule 3 (two projections, one storage): tree-mode rows
+    /// honor the file's FOLDER preview/density override.
+    private func effectiveRowPreferences(
+        forFilePath path: String
+    ) -> SidebarRowPreferencesSnapshot {
+        let parent = (path as NSString).deletingLastPathComponent
+        let folder = parent == "." ? "" : parent
+        let prefs = appState.sidebarOrganization.prefs
+        var snapshot = rowPreferences
+        snapshot.previewLines = prefs.effectivePreviewLines(
+            forFolder: folder, default: snapshot.previewLines)
+        snapshot.density = prefs.effectiveDensity(
+            forFolder: folder, default: snapshot.density)
+        return snapshot
+    }
+
+    /// FL7-2 rule 4: the pane row menu — the SAME shared single-file
+    /// builder for a lone row, the flat catalog fallback for a batch
+    /// (identical to tree semantics; the projections come from the
+    /// published snapshot the pane itself owns).
+    @ViewBuilder
+    private func dualPaneRowMenu(_ summary: FileSummary) -> some View {
+        if let publishedSnapshot = appState.sidebarSelectionSnapshot {
+            let item = SidebarSelectionItem(
+                path: summary.path,
+                isDirectory: false,
+                isMarkdown: summary.isMarkdown)
+            let projection = Self.sidebarRowActionProjection(
+                surface: .contextMenu,
+                row: item,
+                publishedSnapshot: publishedSnapshot,
+                structuralMutationDisabledReason:
+                    appState.structuralMutationDisabledReason,
+                actionDisabledReasons: sidebarRowActionDisabledReasons(
+                    for: item))
+            if projection.targetSnapshot.items.count == 1 {
+                singleFileContextMenuGroups(
+                    projection: projection, path: summary.path)
+            } else {
+                sidebarCatalogActions(projection.evaluations)
+            }
+        }
+    }
+
+    /// FL7-2 rule 4: the pane drag payload — the batch when the row is
+    /// part of the multi-selection, else the single row; the SAME
+    /// in-process envelope + file-URL flavors as tree drags.
+    private func dualPaneDragProvider(_ summary: FileSummary) -> NSItemProvider? {
+        let selection = appState.sidebarDualPaneMultiSelection
+        let paths: [String] =
+            selection.contains(summary.path) && selection.count > 1
+            ? appState.sidebarListPaneModel.fileSummaries
+                .map(\.path).filter { selection.contains($0) }
+            : [summary.path]
+        let items = paths.map {
+            Self.DragPayloadItem(path: $0, isDirectory: false)
+        }
+        let originURL = appState.currentVaultURL?
+            .appendingPathComponent(summary.path)
+        return Self.makeDragProvider(
+            items: items,
+            originFileURL: originURL,
+            preferredFocusPath: summary.path,
+            originVaultURL: appState.currentVaultURL,
+            originSession: appState.currentSession)
+    }
+
     private var sidebarSectionsMount: some View {
         VStack(spacing: 0) {
             // FL-09 (#663): the filter field is the topmost sidebar
@@ -5237,6 +5318,12 @@ struct FileTreeSidebar: View {
                                 projection.evaluations,
                                 actionIDs: [SlateCommandID.sidebarUnpinAll])
                         }
+                        // FL7-2 rule 3: the shared per-folder display
+                        // overrides — the same component the dual-pane
+                        // list header mounts (one storage, one menu).
+                        Divider()
+                        SidebarFolderDisplayOverrideItems(
+                            folder: node.path, showsDescendants: false)
                         if (hasCreation || hasManagement || hasSort || hasPins)
                             && hasInspection
                         {
@@ -5317,7 +5404,7 @@ struct FileTreeSidebar: View {
             }
             SidebarObservedFileRowContent(
                 fileState: fileState,
-                preferences: rowPreferences,
+                preferences: effectiveRowPreferences(forFilePath: node.path),
                 isPinned: tree.isPinnedRow(node.nodeID),
                 now: sidebarNow,
                 depth: node.depth,

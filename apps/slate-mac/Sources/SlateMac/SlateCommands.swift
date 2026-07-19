@@ -44,6 +44,8 @@ enum SlateCommandID {
     /// FL5-3b (#666): batch tag editor invocations on the selection.
     static let sidebarAddTag = "slate.sidebar.addTag"
     static let sidebarRemoveTag = "slate.sidebar.removeTag"
+    /// FL7-2 (#669): the public tree/dual-pane layout toggle.
+    static let sidebarToggleLayout = "slate.sidebar.toggleLayout"
     /// FL6-1 (#667): folder-note lifecycle on a single selected folder.
     static let createFolderNote = "slate.sidebar.createFolderNote"
     static let openFolderNote = "slate.sidebar.openFolderNote"
@@ -86,6 +88,7 @@ enum SlateCommandID {
             sidebarHistoryBack,
             sidebarHistoryForward,
             sidebarFocusFilter,
+            sidebarToggleLayout,
         ])
 
     // File
@@ -477,6 +480,7 @@ enum SlateCommandID {
         sidebarOpenShortcut(8),
         sidebarOpenShortcut(9),
         sidebarFocusFilter,
+        sidebarToggleLayout,
         sidebarAddTag,
         sidebarRemoveTag,
         createFolderNote,

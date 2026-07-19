@@ -3,100 +3,6 @@
 
 import SwiftUI
 
-/// FL7-1 (#668): the list-pane content model for the selected
-/// container. Deliberately lean — FL7-2 (FL-14) delivers the complete
-/// list pane (sort/grouping overrides, full parity); this model gives
-/// the gated container its honest paged contents through the SAME core
-/// contracts the filter overlay uses (scoped listing, tag query,
-/// untagged scope — no second query path).
-@MainActor
-final class SidebarContainerListModel: ObservableObject {
-  struct Dependencies {
-    /// Scoped/queried listing — the FL4-1 contract.
-    var performQuery:
-      (_ query: String, _ scopeDir: String?, _ paging: Paging) throws
-        -> SidebarFilterPage
-    var performUntagged: (_ paging: Paging) throws -> SidebarFilterPage
-  }
-
-  static let pageLimit: UInt32 = 200
-
-  @Published private(set) var container: SidebarContainer?
-  @Published private(set) var page: SidebarFilterPage?
-  @Published private(set) var loadError: String?
-
-  private var dependencies: Dependencies?
-
-  func bind(_ dependencies: Dependencies) {
-    self.dependencies = dependencies
-  }
-
-  func resetForVaultClose() {
-    dependencies = nil
-    container = nil
-    page = nil
-    loadError = nil
-  }
-
-  /// Wholesale replacement per container selection (VO stability, the
-  /// FL4-2 discipline). nil clears to the empty state.
-  func show(_ container: SidebarContainer?) {
-    self.container = container
-    guard let container, let dependencies else {
-      page = nil
-      loadError = nil
-      return
-    }
-    do {
-      page = try Self.load(
-        container, dependencies: dependencies,
-        paging: Paging(cursor: nil, limit: Self.pageLimit))
-      loadError = nil
-    } catch {
-      page = nil
-      loadError = error.localizedDescription
-    }
-  }
-
-  func loadNextPage() {
-    guard let container, let dependencies,
-      let current = page, let cursor = current.nextCursor
-    else { return }
-    do {
-      let next = try Self.load(
-        container, dependencies: dependencies,
-        paging: Paging(cursor: cursor, limit: Self.pageLimit))
-      page = SidebarFilterPage(
-        files: current.files + next.files,
-        nextCursor: next.nextCursor,
-        total: next.total,
-        audioSummary: next.audioSummary)
-    } catch {
-      loadError = error.localizedDescription
-    }
-  }
-
-  /// Structural mutations refresh the visible container (rename/trash
-  /// must not leave stale rows), same funnel as the filter overlay.
-  func refreshAfterStructuralMutation() {
-    guard container != nil else { return }
-    show(container)
-  }
-
-  private static func load(
-    _ container: SidebarContainer, dependencies: Dependencies, paging: Paging
-  ) throws -> SidebarFilterPage {
-    switch container {
-    case .folder(let path):
-      return try dependencies.performQuery("", path, paging)
-    case .tag(let full):
-      return try dependencies.performQuery("#\(full)", nil, paging)
-    case .untagged:
-      return try dependencies.performUntagged(paging)
-    }
-  }
-}
-
 /// FL7-1 (#668): the internally gated dual-pane container — navigation
 /// pane (Shortcuts, Recents, folders-only tree, Tags) over the list
 /// pane, split by a persisted, AX-adjustable divider. Mounted ONLY
@@ -106,7 +12,16 @@ struct SidebarDualPaneView: View {
   @EnvironmentObject private var appState: AppState
   @ObservedObject var filterModel: SidebarFilterModel
   @ObservedObject var tree: FileTreeViewModel
-  @ObservedObject var listModel: SidebarContainerListModel
+  @ObservedObject var listModel: SidebarListPaneModel
+  /// FL7-2 rule 4 action parity: the tree's OWNER builds the row
+  /// context menu (the one shared single-file builder + flat multi
+  /// fallback) and drag payloads; closures keep those file-private
+  /// helpers — and their source-contract anchors — where they live.
+  var rowContextMenu: ((FileSummary) -> AnyView)?
+  var rowDragProvider: ((FileSummary) -> NSItemProvider?)?
+  /// Drag-to-navigation (rule 4): drops on nav folder rows route into
+  /// the tree owner's one admission funnel.
+  var navDrop: ((_ folderPath: String, _ providers: [NSItemProvider]) -> Bool)?
 
   @State private var dividerFraction = SidebarDualPaneDivider.load(
     from: .standard)
@@ -163,11 +78,12 @@ struct SidebarDualPaneView: View {
     .onChange(of: appState.sidebarDualPaneListFocusRequest) { _, _ in
       // ↓ from the filter field: enter the list at row 1 (rule 4).
       let first =
-        (filterModel.isActive
-          ? filterModel.results?.files.first?.path
-          : listModel.page?.files.first?.path)
+        filterModel.isActive
+        ? filterModel.results?.files.first?.path
+        : listModel.fileSummaries.first?.path
       if let first {
         appState.sidebarDualPaneListSelection = first
+        appState.sidebarDualPaneMultiSelection = [first]
       }
       navigationFocused = false
       listFocused = true
@@ -324,6 +240,18 @@ struct SidebarDualPaneView: View {
           for: row.node, expanded: row.isExpanded))
       .accessibilityHint("Shows this folder's files in the list pane.")
       .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+      .onDrop(
+        of: [FileTreeSidebar.nodeUTType, FileTreeSidebar.fileURLUTType],
+        isTargeted: nil
+      ) { providers in
+        navDrop?(row.node.path, providers) ?? false
+      }
+      .contextMenu {
+        // FL7-2 rule 3: the same shared override items as the list
+        // header — one component, two surfaces.
+        SidebarFolderDisplayOverrideItems(
+          folder: row.node.path, showsDescendants: true)
+      }
   }
 
   // MARK: - Divider
@@ -364,32 +292,12 @@ struct SidebarDualPaneView: View {
       }
   }
 
-  // MARK: - List pane
+  // MARK: - List pane (FL7-2 complete)
 
   private var listPane: some View {
-    Group {
-      if filterModel.isActive {
-        // Rule 5: an active filter replaces the LIST pane contents
-        // only; the navigation pane stays navigable.
-        filterResults
-      } else if let page = listModel.page, !page.files.isEmpty {
-        containerRows(page)
-      } else if let error = listModel.loadError {
-        Text(error)
-          .font(Tokens.Typography.caption)
-          .foregroundStyle(Tokens.ColorRole.warningText)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else if listModel.container != nil {
-        Text("No files here.")
-          .font(Tokens.Typography.body)
-          .foregroundStyle(Tokens.ColorRole.textSecondary)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-      } else {
-        Text("Select a folder or tag.")
-          .font(Tokens.Typography.body)
-          .foregroundStyle(Tokens.ColorRole.textSecondary)
-          .frame(maxWidth: .infinity, maxHeight: .infinity)
-      }
+    VStack(alignment: .leading, spacing: 0) {
+      listPaneHeader
+      listPaneBody
     }
     .accessibilityElement(children: .contain)
     .accessibilityLabel("Files")
@@ -403,34 +311,107 @@ struct SidebarDualPaneView: View {
     }
   }
 
-  private var listSelectionBinding: Binding<String?> {
-    Binding(
-      get: { appState.sidebarDualPaneListSelection },
-      set: { appState.sidebarDualPaneListSelection = $0 })
+  /// The pane header: container title + count/truncation + the FL7-2
+  /// display-override menu (folder containers get the full override
+  /// set; every container gets sort/group through the SAME catalog
+  /// evaluations the tree uses — no second command dialect).
+  private var listPaneHeader: some View {
+    HStack(spacing: Tokens.Spacing.xs) {
+      Text("Files")
+        .font(Tokens.Typography.sectionHeader)
+        .foregroundStyle(Tokens.ColorRole.textSecondary)
+        .accessibilityAddTraits(.isHeader)
+      if listModel.container != nil {
+        Text(headerCountText)
+          .font(Tokens.Typography.caption)
+          .foregroundStyle(Tokens.ColorRole.textSecondary)
+      }
+      Spacer(minLength: 0)
+      if listModel.container != nil {
+        SidebarListPaneDisplayMenu(container: listModel.container)
+      }
+    }
+    .padding(.horizontal, Tokens.Spacing.md)
+    .padding(.vertical, Tokens.Spacing.xxs)
   }
 
-  private func containerRows(_ page: SidebarFilterPage) -> some View {
-    List(selection: listSelectionBinding) {
-      ForEach(page.files, id: \.path) { summary in
-        fileRow(summary)
-      }
-      if page.nextCursor != nil {
+  private var headerCountText: String {
+    let count = listModel.fileCount
+    let base = count == 1 ? "1 file" : "\(count) files"
+    return listModel.truncated ? "first \(base)" : base
+  }
+
+  @ViewBuilder
+  private var listPaneBody: some View {
+    if filterModel.isActive {
+      // Rule 5: an active filter replaces the LIST pane contents only.
+      filterResults
+    } else if listModel.isLoading && listModel.rows.isEmpty {
+      Text("Loading…")
+        .font(Tokens.Typography.caption)
+        .foregroundStyle(Tokens.ColorRole.textSecondary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if !listModel.rows.isEmpty {
+      containerRows
+    } else if let error = listModel.loadError {
+      Text(error)
+        .font(Tokens.Typography.caption)
+        .foregroundStyle(Tokens.ColorRole.warningText)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    } else if listModel.container != nil {
+      emptyContainerState
+    } else {
+      Text("Select a folder or tag.")
+        .font(Tokens.Typography.body)
+        .foregroundStyle(Tokens.ColorRole.textSecondary)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+  }
+
+  /// Rule 1: empty container ⇒ quiet empty state + New Note into the
+  /// folder container (tags/Untagged have no creation location).
+  private var emptyContainerState: some View {
+    VStack(spacing: Tokens.Spacing.sm) {
+      Text("No files here.")
+        .font(Tokens.Typography.body)
+        .foregroundStyle(Tokens.ColorRole.textSecondary)
+      if case .folder(let path) = listModel.container {
         Button {
-          listModel.loadNextPage()
+          _ = appState.createNote(in: path)
         } label: {
-          Text("Load More Results")
-            .font(Tokens.Typography.body)
-            .foregroundStyle(Tokens.ColorRole.accentText)
-            .frame(maxWidth: .infinity, alignment: .leading)
+          SlateSymbol.newNote.label("New Note")
         }
         .buttonStyle(.borderless)
-        .selectionDisabled()
+        .accessibilityHint("Creates a note in this folder.")
+      }
+    }
+    .frame(maxWidth: .infinity, maxHeight: .infinity)
+  }
+
+  private var multiSelectionBinding: Binding<Set<String>> {
+    Binding(
+      get: { appState.sidebarDualPaneMultiSelection },
+      set: { appState.sidebarDualPaneMultiSelection = $0 })
+  }
+
+  private var containerRows: some View {
+    List(selection: multiSelectionBinding) {
+      ForEach(listModel.rows) { row in
+        switch row {
+        case .header(_, let label, let count):
+          Text("\(label) — \(count == 1 ? "1 file" : "\(count) files")")
+            .font(Tokens.Typography.caption)
+            .foregroundStyle(Tokens.ColorRole.textSecondary)
+            .accessibilityAddTraits(.isHeader)
+            .selectionDisabled()
+        case .file(let summary):
+          fileRow(summary)
+        }
       }
     }
     .listStyle(.sidebar)
     .focused($listFocused)
     .onExitCommand {
-      // Rule 4: ← / Esc in the list returns to the navigation pane.
       listFocused = false
       navigationFocused = true
     }
@@ -440,17 +421,22 @@ struct SidebarDualPaneView: View {
         navigationFocused = true
       }
     }
-    .onChange(of: appState.sidebarDualPaneListSelection) { _, selected in
+    .onChange(of: appState.sidebarDualPaneMultiSelection) { _, selection in
+      // Rule 5: single selection keeps the open-on-select behavior;
+      // a batch is a TARGET, not an open storm.
+      appState.sidebarDualPaneListSelection =
+        selection.count == 1 ? selection.first : nil
       appState.publishDualPaneSelectionSnapshot()
-      guard let selected else { return }
-      appState.openFile(selected, target: .currentTab)
+      if selection.count == 1, let path = selection.first {
+        appState.openFile(path, target: .currentTab)
+      }
     }
   }
 
   private var filterResults: some View {
     Group {
       if let page = filterModel.results, !page.files.isEmpty {
-        List(selection: listSelectionBinding) {
+        List(selection: multiSelectionBinding) {
           ForEach(page.files, id: \.path) { summary in
             fileRow(summary)
           }
@@ -473,11 +459,6 @@ struct SidebarDualPaneView: View {
           listFocused = false
           navigationFocused = true
         }
-        .onChange(of: appState.sidebarDualPaneListSelection) { _, selected in
-          appState.publishDualPaneSelectionSnapshot()
-          guard let selected else { return }
-          appState.openFile(selected, target: .currentTab)
-        }
       } else {
         Text("No results.")
           .font(Tokens.Typography.body)
@@ -487,19 +468,35 @@ struct SidebarDualPaneView: View {
     }
   }
 
+  @ViewBuilder
   private func fileRow(_ summary: FileSummary) -> some View {
     let parent = (summary.path as NSString).deletingLastPathComponent
-    return SidebarFileRow(
+    let base = appState.sidebarPreferences.rowSnapshot
+    let row = SidebarFileRow(
       model: SidebarRowModel(
         summary: summary,
-        preferences: appState.sidebarPreferences.rowSnapshot,
+        preferences: listModel.rowPreferences(base: base),
         isPinned: false,
-        pathSubtitle: parent.isEmpty ? "Vault root" : parent,
+        pathSubtitle: listModel.includesDescendants(
+          for: listModel.container ?? .untagged)
+          ? (parent.isEmpty ? "Vault root" : parent) : nil,
         now: Date()),
       depth: 0,
-      isSelected: appState.sidebarDualPaneListSelection == summary.path,
+      isSelected: appState.sidebarDualPaneMultiSelection.contains(
+        summary.path),
       selectionIsActive: listFocused)
       .tag(summary.path)
-      .accessibilityHint("Opens the file.")
+      .accessibilityHint(
+        "Opens the file. Other available actions are in the context menu.")
+    if let rowDragProvider,
+      let provider = rowDragProvider(summary)
+    {
+      row
+        .onDrag { provider }
+        .contextMenu { rowContextMenu?(summary) }
+    } else {
+      row
+        .contextMenu { rowContextMenu?(summary) }
+    }
   }
 }

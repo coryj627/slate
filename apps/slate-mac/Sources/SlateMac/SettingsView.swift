@@ -130,6 +130,8 @@ enum SidebarSettingsControl: String, CaseIterable, Identifiable {
     case showTaskCounts = "Show task counts"
     case showWordCount = "Show word count"
     case density = "Density"
+    /// FL7-2 rule 6 (#669): the tree/dual-pane control goes public.
+    case paneLayout = "Sidebar layout"
 
     var id: Self { self }
     var label: String { rawValue }
@@ -169,9 +171,10 @@ struct SidebarSettingsTab: View {
         SidebarSettingsSection(
             id: .layout,
             title: "Layout",
-            controls: [.density],
+            controls: [.density, .paneLayout],
             footer: "Compact rows show only the note name visually while VoiceOver keeps "
-                + "the full date and detail summary."),
+                + "the full date and detail summary. Dual-pane splits the sidebar into "
+                + "folders above and a file list below."),
     ]
 
     var body: some View {
@@ -243,6 +246,20 @@ struct SidebarSettingsTab: View {
                 ForEach(SidebarPreferences.Density.allCases, id: \.self) { density in
                     Text(density.displayName).tag(density)
                 }
+            }
+            .pickerStyle(.segmented)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(setting.label)
+
+        case .paneLayout:
+            Picker(
+                setting.label,
+                selection: Binding(
+                    get: { appState.sidebarLayout },
+                    set: { appState.setSidebarLayout($0) })
+            ) {
+                Text("Tree").tag(SidebarLayoutMode.tree)
+                Text("Dual-pane").tag(SidebarLayoutMode.dualPane)
             }
             .pickerStyle(.segmented)
             .accessibilityElement(children: .contain)
