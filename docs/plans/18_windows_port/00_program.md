@@ -44,6 +44,8 @@ Items 4–5 are deliberately front-loadable: they de-risk the port while the mac
 
 **Gate snapshot (2026-07-14):** criteria 1–2 are met — Milestones T (20) and P (16) are closed, and P exposes the graph's canonical Rust representation. Criterion 3 still needs the owner's queue-state call; criteria 4–5 remain open because W0.5 and W0-1 are not complete. W therefore remains parked.
 
+**Gate snapshot (2026-07-19) — W0 unparked by owner call:** criteria 4–5 are now also met — W0.5-1/-2/-3 landed (#717/#718/#719 closed, PRs #943/#946/#953) and the W0-1 spike concluded (#714 closed, PR #942, decision recorded in `specs/w0_spec.md` §Decision). On criterion 3, the owner (2026-07-19) directed execution of the **complete W0 set** (W0-2, W0-3, W0-4) while the remaining mac queue (V, X, FL, XD, E, PD) continues shipping; the queue-state reading and the shipped-milestone set the parity matrix is generated against are recorded in the W0-4 snapshot per §W0-4 item 3. **Waves W1–W8 remain parked** pending the owner's full-milestone unpark once the queue majority lands.
+
 ---
 
 ## Locked scope decisions
