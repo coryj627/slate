@@ -42,6 +42,44 @@ final class SlateAppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// FL-07 (#661): View-menu items for the sidebar navigation family.
+/// Collapse/Expand act on the tree's loaded state; Back/Forward own the
+/// ⌘⌃[ / ⌘⌃] chords (menu-declared so they are reachable regardless of
+/// sidebar focus, matching the registry's hints).
+struct SidebarNavigationMenuItems: View {
+  @EnvironmentObject private var appState: AppState
+
+  private func evaluation(_ id: String) -> SidebarActionEvaluation? {
+    appState.sidebarActionProjection(surface: .menuBar).first { $0.id == id }
+  }
+
+  private func item(_ id: String) -> some View {
+    Group {
+      if let evaluation = evaluation(id) {
+        Button(evaluation.label) {
+          guard let intent = evaluation.intent else { return }
+          do {
+            _ = try appState.dispatchSidebarAction(intent)
+          } catch {
+            appState.postMutationAnnouncement(error.sidebarActionAnnouncement)
+          }
+        }
+        .disabled(evaluation.disabledReason != nil)
+        .accessibilityHint(evaluation.definition.accessibilityHint)
+      }
+    }
+  }
+
+  var body: some View {
+    item(SlateCommandID.sidebarCollapseAll)
+    item(SlateCommandID.sidebarExpandLoaded)
+    item(SlateCommandID.sidebarHistoryBack)
+      .keyboardShortcut("[", modifiers: [.command, .control])
+    item(SlateCommandID.sidebarHistoryForward)
+      .keyboardShortcut("]", modifiers: [.command, .control])
+  }
+}
+
 @main
 struct SlateMacApp: App {
     @NSApplicationDelegateAdaptor(SlateAppDelegate.self)
@@ -78,6 +116,9 @@ struct SlateMacApp: App {
                     SlateCommandID.sidebarPinNote,
                     SlateCommandID.sidebarUnpinNote,
                     SlateCommandID.sidebarUnpinAll,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.sidebarClearRecents,
                 ]
             case .inspection:
                 return [
@@ -484,6 +525,12 @@ struct SlateMacApp: App {
                 // the published selection's container; every item dispatches
                 // the same catalog command the palette owns.
                 SidebarSortMenu()
+
+                // FL-07 (#661): sidebar navigation's menu-bar home. The
+                // history chords' single menu owners live here (#422
+                // dead-zone rule); ⌃1–9 stay focus-scoped view chords by
+                // spec and have no menu items.
+                SidebarNavigationMenuItems()
 
                 Divider()
 

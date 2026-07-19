@@ -1364,6 +1364,38 @@ final class FileTreeViewModel: ObservableObject {
         }
     }
 
+    /// FL3-4.1: collapse every materialized folder except the ancestor
+    /// chain of `path` (the current selection stays revealed, so
+    /// VoiceOver focus cannot land on a vanished row).
+    func collapseAllPreservingAncestors(ofPath path: String?) {
+        var keep: Set<String> = []
+        if let path {
+            let components = path.split(separator: "/").map(String.init)
+            var prefix = ""
+            for component in components.dropLast() {
+                prefix = prefix.isEmpty ? component : "\(prefix)/\(component)"
+                keep.insert(prefix)
+            }
+        }
+        let materialized =
+            (rootLevel + children.values.flatMap { $0 }).filter(\.isDirectory)
+        for node in materialized where !keep.contains(node.path) {
+            collapse(node)
+        }
+    }
+
+    /// FL3-4.1: expand every already-materialized folder. Expanding an
+    /// unfetched folder fetches its level — exactly one level deeper than
+    /// what was loaded — and the newly fetched levels' own folders are NOT
+    /// expanded, so a 10k-vault full expansion cannot cascade.
+    func expandLoadedLevels() {
+        let materialized =
+            (rootLevel + children.values.flatMap { $0 }).filter(\.isDirectory)
+        for node in materialized {
+            expand(node)
+        }
+    }
+
     /// The full `TreeNode` for a folder at `path` in the current tree, or nil.
     private func dirNode(forPath path: String) -> TreeNode? {
         if let dir = rootLevel.first(where: { $0.path == path && $0.isDirectory }) {
@@ -2771,6 +2803,7 @@ struct FileTreeSidebar: View {
                     "Some sidebar organization changes aren't saved yet. "
                         + "Retry to save them.")
             }
+            sidebarSectionsMount
             Group {
                 if appState.currentImportBatchOwner != nil {
                     treeList
@@ -2936,6 +2969,56 @@ struct FileTreeSidebar: View {
     /// preferences. It stays visible while defaults are in use, uses a warning
     /// symbol plus text (never color alone), and shares the exact message spoken
     /// by the vault-open announcement.
+    /// FL-07: hoisted so the sidebar column's ViewBuilder stays within
+    /// the type-checker's budget.
+    private var sidebarSectionsMount: some View {
+        SidebarSectionsView(
+            activateShortcut: { appState.activateSidebarShortcut($0) },
+            openRecent: { appState.openFile($0, target: .currentTab) })
+            // FL-07: one-shot reveal requests (shortcut containers, history
+            // navigation). Ancestors expand through the existing seam; the
+            // selection applies programmatically, so the history dedupe
+            // (the navigated entry equals the ring's cursor) prevents
+            // re-pushing. Mounted here, off the List's modifier chain,
+            // to stay inside the type-checker's budget.
+            .onChange(of: appState.sidebarRevealRequest) { _, request in
+                guard let request else { return }
+                tree.ensureAncestorsExpanded(forPath: request.path)
+                if let rowID = rowID(
+                    forRevealPath: request.path,
+                    isDirectory: request.isDirectory)
+                {
+                    mirrorProgrammaticSelection(rowID)
+                }
+            }
+            // FL3-4.1: Expand Loaded — materialized folders expand,
+            // fetching at most one level deeper.
+            .onChange(of: appState.sidebarExpandLoadedRequest) { _, _ in
+                tree.expandLoadedLevels()
+            }
+            // FL3-4.1: Collapse All against the LIVE tree, preserving the
+            // selected row's ancestors.
+            .onChange(of: appState.sidebarCollapseAllRequest) { _, _ in
+                let anchor = selectionModel.focused
+                    .flatMap { selectionRow(for: $0)?.path }
+                    ?? appState.selectedFilePath
+                tree.collapseAllPreservingAncestors(ofPath: anchor)
+            }
+            // FL3-3.2: ⌃1–⌃9 activate shortcuts 1–9 while the sidebar has
+            // key focus (⌘1–9 belong to tabs; palette commands work
+            // anywhere).
+            .background {
+                SidebarShortcutChordMonitor(
+                    enabled: fileTreeFocused,
+                    isRenaming: appState.renamingNode != nil,
+                    activateSlot: { slot in
+                        _ = try? appState.dispatchSidebarAction(
+                            id: SlateCommandID.sidebarOpenShortcut(slot))
+                    })
+                    .frame(width: 0, height: 0)
+            }
+    }
+
     private func sidebarPreferencesNotice(_ message: String) -> some View {
         VStack(alignment: .leading, spacing: Tokens.Spacing.xs) {
             HStack(alignment: .top, spacing: Tokens.Spacing.sm) {
@@ -3358,6 +3441,9 @@ struct FileTreeSidebar: View {
                     suppressed: announcementIsSuppressed)
                 return
             }
+            // FL3-4.2: record the selection for Back/Forward (dupes and
+            // history-navigation arrivals collapse inside the recorder).
+            recordHistoryForUserSelection(newSelection)
             // #852: any OTHER focus change (keyboard arrow, type-select,
             // programmatic open, plain click) is SINGLE — collapse any lingering
             // batch set to this one row so batch state never outlives it.
@@ -6148,6 +6234,34 @@ struct FileTreeSidebar: View {
         }
         for level in tree.children.values where level.contains(where: { $0.nodeID == fileID }) {
             return .node(fileID)
+        }
+        return nil
+    }
+
+    /// FL-07: resolve a reveal target that may be a folder (shortcut
+    /// containers, history entries). Searches materialized levels for the
+    /// matching node of the requested kind.
+    /// FL3-4.2: user-selection edge → history ring. Hoisted out of the
+    /// List's modifier chain for the type-checker's budget.
+    private func recordHistoryForUserSelection(_ newSelection: RowID?) {
+        guard let newSelection,
+            let row = selectionRow(for: newSelection)
+        else { return }
+        appState.recordSidebarSelectionForHistory(
+            path: row.path, isDirectory: row.isDirectory)
+    }
+
+    private func rowID(forRevealPath path: String, isDirectory: Bool) -> RowID? {
+        guard isDirectory else { return rowID(forPath: path) }
+        if let dir = tree.rootLevel.first(where: {
+            $0.path == path && $0.isDirectory
+        }) {
+            return .node(dir.nodeID)
+        }
+        for level in tree.children.values {
+            if let dir = level.first(where: { $0.path == path && $0.isDirectory }) {
+                return .node(dir.nodeID)
+            }
         }
         return nil
     }

@@ -114,6 +114,70 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             hint: "Remove the selected folder's sort override.",
             section: .sidebar, hotkey: nil),
         .init(
+            id: "slate.sidebar.addShortcut", label: "Add to Shortcuts",
+            hint: "Add the selected file or folder to the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.removeShortcut", label: "Remove from Shortcuts",
+            hint: "Remove the selected file or folder from the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.clearRecents", label: "Clear Recents",
+            hint: "Clear the shared recent-files history for this vault.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.collapseAll", label: "Collapse All Folders",
+            hint: "Collapse every folder except the current selection's ancestors.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.expandLoaded", label: "Expand Loaded Folders",
+            hint: "Expand already-loaded folders, fetching at most one level deeper.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.historyBack", label: "Back in Sidebar History",
+            hint: "Select the previous sidebar selection from this window's history.",
+            section: .sidebar, hotkey: "⌃⌘["),
+        .init(
+            id: "slate.sidebar.historyForward", label: "Forward in Sidebar History",
+            hint: "Select the next sidebar selection from this window's history.",
+            section: .sidebar, hotkey: "⌃⌘]"),
+        .init(
+            id: "slate.sidebar.openShortcut1", label: "Open Shortcut 1",
+            hint: "Activate shortcut 1 in the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.openShortcut2", label: "Open Shortcut 2",
+            hint: "Activate shortcut 2 in the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.openShortcut3", label: "Open Shortcut 3",
+            hint: "Activate shortcut 3 in the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.openShortcut4", label: "Open Shortcut 4",
+            hint: "Activate shortcut 4 in the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.openShortcut5", label: "Open Shortcut 5",
+            hint: "Activate shortcut 5 in the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.openShortcut6", label: "Open Shortcut 6",
+            hint: "Activate shortcut 6 in the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.openShortcut7", label: "Open Shortcut 7",
+            hint: "Activate shortcut 7 in the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.openShortcut8", label: "Open Shortcut 8",
+            hint: "Activate shortcut 8 in the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.openShortcut9", label: "Open Shortcut 9",
+            hint: "Activate shortcut 9 in the Shortcuts section.",
+            section: .sidebar, hotkey: nil),
+        .init(
             id: "slate.file.delete", label: "Move to Trash",
             hint: "Move the selected files or folders to the Trash.",
             section: .sidebar, hotkey: nil),
@@ -259,8 +323,17 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         XCTAssertEqual(menu.map(\.id), catalogIDs)
         XCTAssertEqual(
             menu.filter { $0.disabledReason == nil }.map(\.id),
-            [SlateCommandID.moveTo, SlateCommandID.deleteEntry],
-            "multi-selection rejects every single-destination creation action")
+            [SlateCommandID.moveTo]
+                + [
+                    SlateCommandID.sidebarClearRecents,
+                    SlateCommandID.sidebarCollapseAll,
+                    SlateCommandID.sidebarExpandLoaded,
+                    SlateCommandID.sidebarHistoryBack,
+                    SlateCommandID.sidebarHistoryForward,
+                ] + SlateCommandID.sidebarOpenShortcutSlots
+                + [SlateCommandID.deleteEntry],
+            "multi-selection rejects single-destination actions; the FL-07 "
+                + "navigation family is selection-independent")
 
         let expectedDisabledReasons: [String: String] = [
             SlateCommandID.sidebarOpen: "Open is available only for files.",
@@ -298,6 +371,10 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 "Select a single location to change how it's sorted.",
             SlateCommandID.sidebarUseVaultDefaultSort:
                 "Select a single location to change how it's sorted.",
+            SlateCommandID.sidebarAddShortcut:
+                "Select exactly one file or folder to change its Shortcuts membership.",
+            SlateCommandID.sidebarRemoveShortcut:
+                "Select exactly one file or folder to change its Shortcuts membership.",
         ]
         XCTAssertEqual(
             Dictionary(uniqueKeysWithValues: menu.compactMap { evaluation in
@@ -346,6 +423,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.deleteEntry,
                 ],
                 "context remains concise and VoiceOver omits default-owned Open; AppState's live pin-state reason hides the inapplicable pin direction")
@@ -356,6 +435,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.deleteEntry,
                 ],
                 "non-Markdown files omit Copy Wikilink")
@@ -369,6 +450,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                 ],
                 "busy contextual surfaces omit every structurally blocked action; preference edits never block on the structural gate")
             XCTAssertEqual(
@@ -378,6 +461,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.deleteEntry,
                 ],
                 "action-specific unavailable rows are omitted, not rendered disabled")
@@ -388,6 +473,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.deleteEntry,
                 ],
                 "property-edit navigation state omits contextual Open")
@@ -461,6 +548,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.duplicateEntry, SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
                     SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
                     SlateCommandID.deleteEntry,
                 ])
             XCTAssertTrue(outside.evaluations.allSatisfy {
@@ -497,7 +586,9 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.revealInFinder, SlateCommandID.copyPath,
                     SlateCommandID.sidebarUnpinAll,
                 ] + folderSortSet + [
-                    SlateCommandID.deleteEntry
+                    SlateCommandID.sidebarAddShortcut,
+                    SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.deleteEntry,
                 ])
             XCTAssertTrue(folder.evaluations.allSatisfy {
                 $0.disabledReason == nil && $0.intent?.snapshot == expectedOutsideFolder
@@ -1046,6 +1137,9 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 SlateCommandID.duplicateEntry,
                 SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                 SlateCommandID.sidebarUnpinAll,
+                SlateCommandID.sidebarAddShortcut,
+                SlateCommandID.sidebarRemoveShortcut,
+                SlateCommandID.sidebarClearRecents,
                 SlateCommandID.revealInFinder,
                 SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink,
                 SlateCommandID.deleteEntry,
@@ -1063,21 +1157,35 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             SlateCommandID.sidebarToggleDateGrouping,
             SlateCommandID.sidebarUseVaultDefaultSort,
         ]
+        // FL-07: the navigation set's menu-bar home is also the View menu;
+        // the nine positional Open Shortcut commands are palette/chord-only
+        // by design (FL3-3.2 — ⌃1–9 with sidebar focus, palette anywhere).
+        let viewMenuNavigationIDs: Set<String> = [
+            SlateCommandID.sidebarCollapseAll,
+            SlateCommandID.sidebarExpandLoaded,
+            SlateCommandID.sidebarHistoryBack,
+            SlateCommandID.sidebarHistoryForward,
+        ]
+        let paletteOnlyIDs = Set(SlateCommandID.sidebarOpenShortcutSlots)
+        let viewMenuIDs = viewMenuSortIDs.union(viewMenuNavigationIDs)
         XCTAssertEqual(
-            grouped.count + viewMenuSortIDs.count,
+            grouped.count + viewMenuIDs.count + paletteOnlyIDs.count,
             SidebarActionCatalog.actions.count)
         XCTAssertEqual(
-            Set(grouped.map(\.id)).union(viewMenuSortIDs),
+            Set(grouped.map(\.id)).union(viewMenuIDs).union(paletteOnlyIDs),
             Set(SidebarActionCatalog.actions.map(\.id)),
-            "File groups plus the View sort submenu cover the catalog exactly")
+            "File groups plus the View sets plus the palette-only slots cover the catalog exactly")
         XCTAssertTrue(
-            Set(grouped.map(\.id)).isDisjoint(with: viewMenuSortIDs),
+            Set(grouped.map(\.id)).isDisjoint(with: viewMenuIDs),
             "no catalog action has two menu-bar homes")
         XCTAssertEqual(
             Dictionary(uniqueKeysWithValues: grouped.map { ($0.id, $0) }),
             Dictionary(
                 uniqueKeysWithValues: projection
-                    .filter { !viewMenuSortIDs.contains($0.id) }
+                    .filter {
+                        !viewMenuIDs.contains($0.id)
+                            && !paletteOnlyIDs.contains($0.id)
+                    }
                     .map { ($0.id, $0) }),
             "File grouping must preserve every live evaluation without mutation")
     }
@@ -1577,19 +1685,20 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         XCTAssertEqual(dispatched.count, 1, "mixed Return consumes without dispatch")
     }
 
-    func testToolbarKeepsExactSevenIDsAndRoutesOnlyTemplate() throws {
+    func testToolbarKeepsExactNineIDsAndRoutesCatalogActions() throws {
         let document = try sourceRegion("MainSplitView.swift")
         let toolbar = try pairedBlockBody(
             structuralAnchor: "private var mainToolbar", in: document)
         let expectedIDs = [
-            "saveStatus", "save", "search", "template", "tasksReview",
+            "saveStatus", "save", "search", "template",
+            "collapseAll", "expandLoaded", "tasksReview",
             "citationSummary", "bibliography",
         ]
         let allItems = try regexMatches(#"\bToolbarItem\s*\("#, in: toolbar.structural)
         let idItems = try regexMatches(
             #"\bToolbarItem\s*\(\s*id\s*:\s*\"([^\"]+)\""#,
             in: toolbar.literals)
-        XCTAssertEqual(allItems.count, 7, "the persisted toolbar has exactly seven items")
+        XCTAssertEqual(allItems.count, 9, "the persisted toolbar has exactly nine items")
         XCTAssertEqual(
             idItems.count,
             allItems.count,

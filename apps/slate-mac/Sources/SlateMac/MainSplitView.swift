@@ -1177,6 +1177,48 @@ struct MainSplitView: View {
                     .help(evaluation.disabledReason ?? evaluation.definition.accessibilityHint)
                 }
             }
+            ToolbarItem(id: "collapseAll", placement: .secondaryAction) {
+                let evaluation = appState.sidebarActionProjection(surface: .toolbar)
+                    .first { $0.id == SlateCommandID.sidebarCollapseAll }
+                if let evaluation {
+                    Button {
+                        guard let intent = evaluation.intent else { return }
+                        do {
+                            _ = try appState.dispatchSidebarAction(intent)
+                        } catch {
+                            appState.postMutationAnnouncement(
+                                error.sidebarActionAnnouncement)
+                        }
+                    } label: {
+                        SlateSymbol.sortOrder.label("Collapse All Folders")
+                    }
+                    // The View menu owns the command's menu home; the
+                    // toolbar is the click/AX surface (FL3-4.1).
+                    .disabled(evaluation.disabledReason != nil)
+                    .accessibilityHint(evaluation.disabledReason ?? evaluation.definition.accessibilityHint)
+                    .help(evaluation.disabledReason ?? evaluation.definition.accessibilityHint)
+                }
+            }
+            ToolbarItem(id: "expandLoaded", placement: .secondaryAction) {
+                let evaluation = appState.sidebarActionProjection(surface: .toolbar)
+                    .first { $0.id == SlateCommandID.sidebarExpandLoaded }
+                if let evaluation {
+                    Button {
+                        guard let intent = evaluation.intent else { return }
+                        do {
+                            _ = try appState.dispatchSidebarAction(intent)
+                        } catch {
+                            appState.postMutationAnnouncement(
+                                error.sidebarActionAnnouncement)
+                        }
+                    } label: {
+                        SlateSymbol.folderOpen.label("Expand Loaded Folders")
+                    }
+                    .disabled(evaluation.disabledReason != nil)
+                    .accessibilityHint(evaluation.disabledReason ?? evaluation.definition.accessibilityHint)
+                    .help(evaluation.disabledReason ?? evaluation.definition.accessibilityHint)
+                }
+            }
             ToolbarItem(id: "tasksReview", placement: .secondaryAction) {
                 Button {
                     appState.openTasksReview()

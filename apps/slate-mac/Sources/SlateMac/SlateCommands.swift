@@ -26,6 +26,19 @@ enum SlateCommandID {
     static let sidebarPinNote = "slate.sidebar.pinNote"
     static let sidebarUnpinNote = "slate.sidebar.unpinNote"
     static let sidebarUnpinAll = "slate.sidebar.unpinAllInFolder"
+    // FL-07 (#660/#661): shortcuts, recents, and navigation polish.
+    static let sidebarAddShortcut = "slate.sidebar.addShortcut"
+    static let sidebarRemoveShortcut = "slate.sidebar.removeShortcut"
+    static let sidebarClearRecents = "slate.sidebar.clearRecents"
+    static let sidebarCollapseAll = "slate.sidebar.collapseAll"
+    static let sidebarExpandLoaded = "slate.sidebar.expandLoaded"
+    static let sidebarHistoryBack = "slate.sidebar.historyBack"
+    static let sidebarHistoryForward = "slate.sidebar.historyForward"
+    static func sidebarOpenShortcut(_ slot: Int) -> String {
+        "slate.sidebar.openShortcut\(slot)"
+    }
+    static let sidebarOpenShortcutSlots: [String] =
+        (1...9).map { sidebarOpenShortcut($0) }
     static let sidebarSortNameAsc = "slate.sidebar.sortNameAsc"
     static let sidebarSortNameDesc = "slate.sidebar.sortNameDesc"
     static let sidebarSortCreatedDesc = "slate.sidebar.sortCreatedDesc"
@@ -42,6 +55,8 @@ enum SlateCommandID {
         sidebarPinNote,
         sidebarUnpinNote,
         sidebarUnpinAll,
+        sidebarAddShortcut,
+        sidebarRemoveShortcut,
         sidebarSortNameAsc,
         sidebarSortNameDesc,
         sidebarSortCreatedDesc,
@@ -51,6 +66,17 @@ enum SlateCommandID {
         sidebarToggleDateGrouping,
         sidebarUseVaultDefaultSort,
     ]
+
+    /// FL-07 navigation family (#660/#661): device/view state only —
+    /// never gated by the read-only preferences notice.
+    static let sidebarNavigationCommands: Set<String> =
+        Set(sidebarOpenShortcutSlots).union([
+            sidebarClearRecents,
+            sidebarCollapseAll,
+            sidebarExpandLoaded,
+            sidebarHistoryBack,
+            sidebarHistoryForward,
+        ])
 
     // File
     static let newFromTemplate = "slate.file.newFromTemplate"
@@ -424,6 +450,22 @@ enum SlateCommandID {
         sidebarSortModifiedAsc,
         sidebarToggleDateGrouping,
         sidebarUseVaultDefaultSort,
+        sidebarAddShortcut,
+        sidebarRemoveShortcut,
+        sidebarClearRecents,
+        sidebarCollapseAll,
+        sidebarExpandLoaded,
+        sidebarHistoryBack,
+        sidebarHistoryForward,
+        sidebarOpenShortcut(1),
+        sidebarOpenShortcut(2),
+        sidebarOpenShortcut(3),
+        sidebarOpenShortcut(4),
+        sidebarOpenShortcut(5),
+        sidebarOpenShortcut(6),
+        sidebarOpenShortcut(7),
+        sidebarOpenShortcut(8),
+        sidebarOpenShortcut(9),
         deleteEntry,
         printNote,
         jumpToBibliography,
@@ -621,6 +663,11 @@ func registerSidebarCommands(
         case SlateCommandID.newFromTemplate: hotkey = "⇧⌘N"
         case SlateCommandID.renameEntry: hotkey = "⌥⌘R"
         case SlateCommandID.moveTo: hotkey = "⇧⌘M"
+        case SlateCommandID.sidebarHistoryBack: hotkey = "⌃⌘["
+        case SlateCommandID.sidebarHistoryForward: hotkey = "⌃⌘]"
+        // ⌃1–⌃9 are focus-scoped view chords (FL3-3.2): with the sidebar
+        // unfocused they are intentionally inert, so the registry must not
+        // advertise them as menu-reachable hints (#422 dead-zone gate).
         default: hotkey = nil
         }
         let replaced = registry.register(

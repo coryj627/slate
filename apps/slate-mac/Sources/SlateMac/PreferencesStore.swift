@@ -27,7 +27,9 @@ final class PreferencesStore {
     static let canvasKey = "slate.prefs.canvas"
     static let baseQueriesKey = "slate.prefs.baseQueries"
 
-    private let defaults: UserDefaults
+    /// Internal so sibling device-local stores (FL3-3 recents) share the
+    /// same injected suite in tests.
+    let defaults: UserDefaults
 
     /// Inject `UserDefaults` for tests; production uses `.standard`.
     init(defaults: UserDefaults = .standard) {
