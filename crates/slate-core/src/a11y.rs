@@ -1024,6 +1024,52 @@ mod tests {
         }
     }
 
+    /// The committed §W-D corpus artifact (`tests/fixtures/a11y/corpus.json`)
+    /// is generated FROM [`corpus()`] and pinned here: every entry is
+    /// `{ "event": <Debug>, "priority": "medium"|"high", "text": <render> }`
+    /// in corpus order. Regenerate deliberately with
+    /// `SLATE_REGENERATE_FIXTURES=1 cargo test -p slate-core a11y` after a
+    /// vocabulary change — the diff is the reviewable §W-D delta. The
+    /// Windows host consumes this same file for its parity census.
+    #[test]
+    fn committed_corpus_artifact_matches_the_vocabulary() {
+        let rendered: Vec<serde_json::Value> = corpus()
+            .iter()
+            .map(|event| {
+                serde_json::json!({
+                    "event": format!("{event:?}"),
+                    "priority": match event.priority() {
+                        A11yPriority::Medium => "medium",
+                        A11yPriority::High => "high",
+                    },
+                    "text": event.render(),
+                })
+            })
+            .collect();
+        let mut expected = serde_json::to_string_pretty(&rendered)
+            .expect("corpus serializes");
+        expected.push('\n');
+
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/a11y/corpus.json");
+        if std::env::var_os("SLATE_REGENERATE_FIXTURES").is_some() {
+            std::fs::create_dir_all(path.parent().unwrap()).expect("fixture dir");
+            std::fs::write(&path, &expected).expect("write corpus fixture");
+        }
+        let committed = std::fs::read_to_string(&path).unwrap_or_else(|_| {
+            panic!(
+                "missing {path:?} — run SLATE_REGENERATE_FIXTURES=1 \
+                 cargo test -p slate-core a11y"
+            )
+        });
+        assert_eq!(
+            committed.replace("\r\n", "\n"),
+            expected,
+            "corpus artifact drifted from the vocabulary — regenerate \
+             deliberately and review the diff as a §W-D change",
+        );
+    }
+
     #[test]
     fn multiline_templates_carry_no_stray_whitespace() {
         // The templates written with line-continuation backslashes must
