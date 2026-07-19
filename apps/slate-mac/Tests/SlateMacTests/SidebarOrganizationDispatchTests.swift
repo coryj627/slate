@@ -2754,7 +2754,7 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
       root["landedBeforeQuit"] = true
     }
     XCTAssertTrue(
-      AppState.hasPendingSidebarWriterChains,
+      AppState.hasPendingSidebarWorkAtTermination,
       "a queued writer holds the chain slot the fence watches")
     let settlement = Task { @MainActor in
       await AppState.settleSidebarWriterChainsForTermination()
@@ -2766,6 +2766,100 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertEqual(
       json["landedBeforeQuit"] as? Bool, true,
       "termination waits for the queued write to land")
+  }
+
+  // MARK: - Red-team regressions (adversarial review round 32)
+
+  func testTerminationSettlementReturnsNearTheDeadlineWhenWedged()
+    async throws
+  {
+    // Round-32: the five-second bound is REAL — a writer wedged past the
+    // deadline (a blocking-flock analog) must not turn quit into a hang.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let gate = GateBox()
+    let (state, _) = try openVault(named: "quit-bound", files: ["a.md"])
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      root["late"] = true
+    }
+    let clock = ContinuousClock()
+    let start = clock.now
+    await AppState.settleSidebarWriterChainsForTermination()
+    let elapsed = clock.now - start
+    XCTAssertGreaterThan(
+      elapsed, .seconds(4), "the fence waits for the wedged writer")
+    XCTAssertLessThan(
+      elapsed, .seconds(20), "…but returns near the bound, never hangs")
+    gate.open()
+    await awaitPersist(state)
+  }
+
+  func testCapacityRefusesNewWorkInsteadOfEvictingAcknowledgedIntents()
+    async throws
+  {
+    // Round-32: the retained-write cap gates NEW acknowledgements up
+    // front; it never silently evicts an already-acknowledged intent.
+    final class GateBox: @unchecked Sendable {
+      private let semaphore = DispatchSemaphore(value: 0)
+      func wait() { semaphore.wait() }
+      func open() { semaphore.signal() }
+    }
+    let originalCap = AppState.sidebarUnflushedWriteRetriesCap
+    AppState.sidebarUnflushedWriteRetriesCap = 2
+    defer { AppState.sidebarUnflushedWriteRetriesCap = originalCap }
+    let gate = GateBox()
+    let failOnce = FailOnceBox()
+    let (state, vault) = try openVault(named: "cap-refuse", files: ["a.md"])
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      gate.wait()
+      if failOnce.consume() { throw TransientWriteError() }
+      root["first"] = true
+    }
+    state.enqueueSidebarOrganizationWriteForTesting { root in
+      root["second"] = true
+    }
+    let tail = state.sidebarOrganizationPersistTaskForTesting
+    state.closeVault()
+    gate.open()
+    gate.open()
+    await tail?.value
+
+    // Registry now holds both entries (at the test cap). A reopen's new
+    // dispatch is refused up front until the drain settles them.
+    state.openVault(at: vault)
+    _ = try XCTUnwrap(state.currentSession).scanInitial(cancel: CancelToken())
+    try publish(state, [])
+    XCTAssertThrowsError(
+      try state.dispatchSidebarAction(
+        id: SlateCommandID.sidebarSortModifiedDesc),
+      "an at-capacity registry refuses new acknowledgements")
+
+    var attempts = 0
+    while attempts < 1000 {
+      if let json = try? sidebarJSON(at: vault),
+        json["second"] as? Bool == true
+      {
+        break
+      }
+      attempts += 1
+      try? await Task.sleep(nanoseconds: 5_000_000)
+    }
+    await awaitPersist(state)
+    let json = try sidebarJSON(at: vault)
+    XCTAssertEqual(json["first"] as? Bool, true, "nothing was evicted")
+    XCTAssertEqual(json["second"] as? Bool, true)
+    _ = try state.dispatchSidebarAction(
+      id: SlateCommandID.sidebarSortModifiedDesc)
+    await awaitPersist(state)
+    let sort = try XCTUnwrap(
+      sidebarJSON(at: vault)["sort"] as? [String: String])
+    XCTAssertEqual(
+      sort["field"], "modified",
+      "capacity clears once the registry drains")
   }
 
   // MARK: - Lazy stale prune

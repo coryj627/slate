@@ -20,17 +20,17 @@ extension CancelImportCommandContract {
 /// Open…" (the documents users open all day are notes; #863) — on the
 /// welcome screen it falls through to the vault picker, so the chord
 /// works globally; "Open Vault…" itself lives on ⇧⌘O.
-/// Round-31: quit fence. Queued sidebar-organization writes are the
-/// user's committed intent (round-21) — normal termination waits for the
-/// writer chains to settle (bounded at five seconds) instead of killing
-/// them mid-flight. Durable cross-launch recovery of writes that FAILED
-/// is tracked in #941.
+/// Rounds 31–32: quit fence. Queued sidebar-organization writes and
+/// in-flight structural operations are the user's committed intent —
+/// normal termination waits for both to settle (bounded at five
+/// seconds) instead of killing them mid-flight. Durable cross-launch
+/// recovery of writes that already FAILED is tracked in #944.
 final class SlateAppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(
         _ sender: NSApplication
     ) -> NSApplication.TerminateReply {
         MainActor.assumeIsolated {
-            guard AppState.hasPendingSidebarWriterChains else {
+            guard AppState.hasPendingSidebarWorkAtTermination else {
                 return .terminateNow
             }
             Task { @MainActor in

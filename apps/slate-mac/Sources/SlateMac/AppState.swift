@@ -4912,37 +4912,41 @@ final class AppState: ObservableObject {
     }
     @MainActor private static var sidebarUnflushedWriteRetries:
         [SidebarVaultRootIdentity: [SidebarUnflushedWrite]] = [:]
-    private static let sidebarUnflushedWriteRetriesCap = 64
+    /// Round-32: capacity gates NEW acknowledgements up front (mutate
+    /// refuses before any optimistic reflect); parking never evicts an
+    /// already-acknowledged intent. Var for cap-boundary tests.
+    static var sidebarUnflushedWriteRetriesCap = 64
 
-    /// Round-31: termination fence. True while any identity's writer
-    /// chain still holds queued work — quit waits for settlement so an
-    /// announced change can't die mid-flight with the process.
-    @MainActor static var hasPendingSidebarWriterChains: Bool {
+    /// Round-32: static mirror of `isMutatingStructure` for the
+    /// termination fence (didSet-maintained; production has exactly one
+    /// AppState).
+    @MainActor fileprivate(set) static var
+        structuralMutationInFlightForTermination = false
+
+    /// Rounds 31–32: termination fence. True while any identity's writer
+    /// chain still holds queued work OR a structural operation (rename /
+    /// move) is in flight — those commit on a worker and only then
+    /// publish their sidebar transform, so quitting between the two
+    /// would strand pins at the old path. Quit waits so an announced
+    /// change can't die mid-flight with the process.
+    @MainActor static var hasPendingSidebarWorkAtTermination: Bool {
         !sidebarStoreWriterChains.isEmpty
+            || structuralMutationInFlightForTermination
     }
 
-    /// Round-31: await chain quiescence with a hard 5-second bound —
-    /// chains normally settle in milliseconds; a wedged filesystem must
-    /// not turn Quit into a hang. Successors installed while waiting
-    /// (parked-write drains) are awaited too. Parked retained writes
-    /// whose vault is closed are NOT recoverable at quit — durable
-    /// cross-launch recovery is tracked separately (#941).
+    /// Rounds 31–32: await quiescence with an unconditionally REAL
+    /// five-second bound. Deadline-based polling never awaits an
+    /// unbounded chain value (a writer wedged on the store's blocking
+    /// flock must not turn Quit into a hang) — chains retire their own
+    /// registry entries, so an empty registry IS settlement. Parked
+    /// retained writes whose vault is closed are not recoverable at
+    /// quit; durable cross-launch recovery is tracked in #944.
     @MainActor
     static func settleSidebarWriterChainsForTermination() async {
-        await withTaskGroup(of: Void.self) { group in
-            group.addTask { @MainActor in
-                while !Task.isCancelled,
-                    let task = sidebarStoreWriterChains.values.first
-                {
-                    await task.value
-                    await Task.yield()
-                }
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-            }
-            await group.next()
-            group.cancelAll()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .seconds(5))
+        while clock.now < deadline, hasPendingSidebarWorkAtTermination {
+            try? await Task.sleep(for: .milliseconds(50))
         }
     }
 
@@ -5221,6 +5225,20 @@ final class AppState: ObservableObject {
                 "Sidebar settings can't change right now — this vault's "
                     + "on-disk location could not be verified when it opened.")
         }
+        // Round-32: never silently evict an acknowledged intent — refuse
+        // NEW work up front, before any optimistic reflect or announce,
+        // while the retained-write registry is at capacity. Writes already
+        // in flight when the registry filled may still park past the cap;
+        // parking never evicts.
+        if !isRetainedDrain,
+            let parked = Self.sidebarUnflushedWriteRetries[enqueueIdentity],
+            parked.count >= Self.sidebarUnflushedWriteRetriesCap
+        {
+            throw sidebarActionFailure(
+                "Sidebar changes can't be saved right now — earlier changes "
+                    + "are still waiting to retry. Use Retry in the sidebar, "
+                    + "then try again.")
+        }
 
         var next = sidebarOrganization
         reflect(&next)
@@ -5301,13 +5319,6 @@ final class AppState: ObservableObject {
                     .append(
                         SidebarUnflushedWrite(
                             apply: apply, backlog: effectiveBacklog))
-                if let count = Self.sidebarUnflushedWriteRetries[
-                    enqueueIdentity]?.count,
-                    count > Self.sidebarUnflushedWriteRetriesCap
-                {
-                    Self.sidebarUnflushedWriteRetries[enqueueIdentity]?
-                        .removeFirst()
-                }
                 let ownedNow =
                     self.sidebarOrganizationWriteGeneration == generation
                     && self.currentSession === session
@@ -5462,18 +5473,13 @@ final class AppState: ObservableObject {
                                 return false
                             }) == true
                     if !isFinalRefusal {
+                        // Round-32: append-only — capacity is enforced at
+                        // acknowledgement time, never by eviction here.
                         Self.sidebarUnflushedWriteRetries[
                             enqueueIdentity, default: []
                         ].append(
                             SidebarUnflushedWrite(
                                 apply: apply, backlog: effectiveBacklog))
-                        if let count = Self.sidebarUnflushedWriteRetries[
-                            enqueueIdentity]?.count,
-                            count > Self.sidebarUnflushedWriteRetriesCap
-                        {
-                            Self.sidebarUnflushedWriteRetries[enqueueIdentity]?
-                                .removeFirst()
-                        }
                     }
                     return
                 }
@@ -13075,7 +13081,14 @@ final class AppState: ObservableObject {
     /// True while any structural mutation FFI call is in flight — serializes the
     /// commands (the session lock does too, but this stops the UI from firing a
     /// second mutation before the first's tree refresh lands).
-    @Published private(set) var isMutatingStructure = false
+    @Published private(set) var isMutatingStructure = false {
+        // Round-32: mirrored into a static the termination fence can read
+        // without an instance — every set/clear path (begin/end and the
+        // open/close invalidation) flows through this property.
+        didSet {
+            Self.structuralMutationInFlightForTermination = isMutatingStructure
+        }
+    }
 
     /// Aggregate Finder import ownership is claimed synchronously before any
     /// public item-provider load. The reference identity is the lifecycle
