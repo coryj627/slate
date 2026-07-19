@@ -9,17 +9,26 @@ its consuming W issue. Re-runnable by design — matrix drift = re-run,
 diff, re-triage (program §moving-target).
 
 Sources (all mechanical, all drift-test- or CI-enforced in the mac app):
-- Command inventory: ``SlateCommandID`` statics in ``SlateCommands.swift``
-  (the stability-contract catalog; ``SlateCommandsTests`` asserts every id
-  resolves to a registered ``Command``) plus the chord tables
-  (``hotkey = "…"`` switch arms and ``hotkeyHint`` constants).
-- Panel inventory: ``*Panel.swift`` under the mac app source.
+- Command inventory: ``SlateCommandID`` statics (the stability-contract
+  catalog; ``SlateCommandsTests`` asserts every id resolves to a
+  registered ``Command``), enriched from the ``register(...)`` blocks
+  (label, registered section, ``hotkey:``) and the definition-table
+  chord switches (``case SlateCommandID.x: hotkey = "…"``). Spoken
+  hotkeys are derived from chords by mirroring ``HotkeySpoken.spoken``
+  (the canonical per-character glyph walk).
+- Leaf inventory: the authoritative ``enum Leaf: CaseIterable`` registry
+  in ``Workspace/RightPaneView.swift`` — one row per shipped leaf.
 - Settings tabs: ``*SettingsTab()`` uses in ``SettingsView.swift``.
 - Help docs: ``docs/help/*.md``.
-- CLI verbs: ``slate-cli --help`` (run live when cargo is available, else
-  parsed from the clap ``Commands`` enum in ``crates/slate-cli``).
+- CLI verbs: ``slate-cli --help`` (run live when cargo is available,
+  else parsed from the clap enum).
 - File-type handlers: pinned from program decision 15 (the SwiftPM mac
   app declares no CFBundleDocumentTypes; Windows registration is W8-3).
+
+Fail-fast contract: generation aborts when a ``hotkey:`` literal is not
+attributed to a command, when a command id or leaf case has no W-issue
+mapping, or when a registered section is unknown — a silent drop would
+let §W-F report parity that was never inventoried.
 
 Deviation from the w0_spec §W0-4 wording ("driven via the mac app/test
 target"): this generator reads the drift-test-enforced *source catalog*
@@ -39,13 +48,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 COMMANDS_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/SlateCommands.swift"
 SETTINGS_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/SettingsView.swift"
-MAC_SRC = REPO / "apps/slate-mac/Sources/SlateMac"
+LEAF_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/Workspace/RightPaneView.swift"
 HELP_DIR = REPO / "docs/help"
 OUT = REPO / "docs/plans/18_windows_port/parity_matrix.md"
 
-# Command-id section token -> the W issue that ships that surface on
-# Windows. Palette/chords themselves are W5-1 (#741); each command's
-# *capability* lands with its surface's issue.
+# Registered-section (the `section:` field of the actual registration,
+# not the id namespace) -> consuming W issue. Palette/chords themselves
+# are W5-1 (#741); each command's *capability* lands with its surface.
 SECTION_ISSUE = {
     "sidebar": "#721 (W1-2)",
     "file": "#744 (W5-4)",
@@ -53,35 +62,62 @@ SECTION_ISSUE = {
     "workspace": "#722 (W1-3)",
     "editor": "#725 (W2-3)",
     "search": "#742 (W5-2)",
-    "template": "#743 (W5-3)",
-    "templates": "#743 (W5-3)",
     "tasks": "#735 (W4-3)",
     "properties": "#736 (W4-4)",
     "citations": "#737 (W4-5)",
-    "bibliography": "#737 (W4-5)",
     "history": "#739 (W4-7)",
     "canvas": "#745 (W6-1)",
     "graph": "#746 (W6-2)",
     "bases": "#738 (W4-6)",
-    "sync": "#740 (W4-8)",
-    "vault": "#720 (W1-1)",
     "app": "#720 (W1-1)",
+    "vault": "#720 (W1-1)",
     "help": "#756 (W8-6)",
     "settings": "#751 (W8-1)",
-    "math": "#729 (W3-2)",
-    "reading": "#728 (W3-1)",
 }
 
-PANEL_ISSUE = {
-    "BacklinksPanel": "#734 (W4-2)",
-    "OutgoingLinksPanel": "#734 (W4-2)",
-    "EmbedsPanel": "#734 (W4-2)",
-    "ContentBlockPanels": "#734 (W4-2)",
-    "TasksPanel": "#735 (W4-3)",
-    "CitationsPanel": "#737 (W4-5)",
-    "BibliographyPanel": "#737 (W4-5)",
-    "HistoryPanel": "#739 (W4-7)",
-    "SyncDiagnosticsPanel": "#740 (W4-8)",
+# Cross-namespace capabilities: the id namespace/registered section is
+# NOT the owning surface. Exhaustive by review; a wrong consumer here
+# lets the real owner close without burning its rows down.
+ID_ISSUE_OVERRIDES = {
+    "slate.workspace.quickOpen": "#723 (W1-4)",
+    "slate.view.toggleSearch": "#742 (W5-2)",
+    "slate.editor.findInNote": "#742 (W5-2)",
+    "slate.editor.save": "#724 (W2-1)",
+    "slate.editor.toggleViewMode": "#728 (W3-1)",
+    "slate.editor.addProperty": "#736 (W4-4)",
+    "slate.editor.bulkRenameProperties": "#736 (W4-4)",
+    "slate.editor.togglePropertiesSource": "#736 (W4-4)",
+    "slate.editor.citationSummary": "#737 (W4-5)",
+    "slate.file.newFromTemplate": "#743 (W5-3)",
+    "slate.file.newCanvas": "#745 (W6-1)",
+    "slate.file.printNote": "#728 (W3-1)",
+    "slate.vault.open": "#720 (W1-1)",
+    "slate.vault.close": "#720 (W1-1)",
+    "slate.help.open": "#756 (W8-6)",
+    "slate.settings.open": "#751 (W8-1)",
+    "slate.navigation.jumpToBibliography": "#737 (W4-5)",
+}
+
+# The authoritative Leaf registry (Workspace/RightPaneView.swift) -> W
+# issue. Generation fails on an unmapped case so a newly shipped leaf
+# can never be silently absent from the matrix.
+LEAF_ISSUE = {
+    "outline": "#734 (W4-2)",
+    "backlinks": "#734 (W4-2)",
+    "outgoingLinks": "#734 (W4-2)",
+    "connections": "#746 (W6-2)",
+    "embeds": "#734 (W4-2)",
+    "math": "#729 (W3-2)",
+    "code": "#731 (W3-4)",
+    "diagrams": "#730 (W3-3)",
+    "tasks": "#735 (W4-3)",
+    "tasksReview": "#735 (W4-3)",
+    "history": "#739 (W4-7)",
+    "citations": "#737 (W4-5)",
+    "bibliography": "#737 (W4-5)",
+    "queries": "#738 (W4-6)",
+    "basesDock": "#738 (W4-6)",
+    "syncDiagnostics": "#740 (W4-8)",
 }
 
 # Milestones unshipped at the 2026-07-19 snapshot: their rows drop out
@@ -103,38 +139,110 @@ DROPPED = [
      "S unstarted at snapshot (GH milestone 19 empty)"),
 ]
 
+# HotkeySpoken.swift mirrors (glyph walk; keep in lockstep — the mac
+# tables are private by design, so this is a reviewed copy, and chords
+# using glyphs outside it pass characters through unchanged exactly as
+# the mac walk does).
+GLYPH_WORD = {"⌘": "Command", "⇧": "Shift", "⌥": "Option", "⌃": "Control"}
+KEY_WORD = {
+    ",": "Comma", ".": "Period", ";": "Semicolon", "'": "Apostrophe",
+    "[": "Left Bracket", "]": "Right Bracket", "\\": "Backslash",
+    "/": "Slash", "-": "Minus", "=": "Equals", "`": "Backtick",
+    "↑": "Up Arrow", "↓": "Down Arrow", "←": "Left Arrow", "→": "Right Arrow",
+    "0": "Zero",
+}
 
-def commands() -> list[tuple[str, str, str]]:
-    """(id, chord-or-'', section-token) for every SlateCommandID."""
+
+def spoken(chord: str) -> str:
+    return " ".join(GLYPH_WORD.get(c) or KEY_WORD.get(c, c) for c in chord)
+
+
+def fail(msg: str) -> None:
+    print(f"generate-parity-matrix: FATAL: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def commands() -> list[tuple[str, str, str, str, str]]:
+    """(id, label, chord, spoken, issue) for every SlateCommandID."""
     text = COMMANDS_SWIFT.read_text(encoding="utf-8")
     ids: dict[str, str] = {}
     for name, cid in re.findall(
         r'static let (\w+)(?::\s*String)?\s*=\s*"(slate\.[a-zA-Z0-9.]+)"', text
     ):
         ids[name] = cid
-    # Numbered shortcut slots (sidebarOpenShortcut(1...9)).
     if "sidebarOpenShortcutSlots" in text:
         for slot in range(1, 10):
             ids[f"sidebarOpenShortcut{slot}"] = f"slate.sidebar.openShortcut{slot}"
 
+    # register(SlateCommandID.x, label: "…", section: .y[, hotkey: "…"]…)
+    # blocks: chunk on `register(` and read fields up to the action
+    # closure. Definition-table registrations (no literal id) contribute
+    # via the chord switch below instead.
+    labels: dict[str, str] = {}
+    sections: dict[str, str] = {}
     chords: dict[str, str] = {}
+    block_hotkeys = 0
+    for chunk in re.split(r"\bregister\(", text)[1:]:
+        body = chunk.split(") {", 1)[0]
+        id_match = re.search(r"SlateCommandID\.(\w+)", body)
+        if not id_match:
+            continue
+        name = id_match.group(1)
+        if m := re.search(r'label:\s*"([^"]*)"', body):
+            labels[name] = m.group(1)
+        if m := re.search(r"section:\s*\.(\w+)", body):
+            sections[name] = m.group(1)
+        if m := re.search(r'hotkey:\s*"([^"]*)"', body):
+            chords[name] = m.group(1)
+            block_hotkeys += 1
+
+    # Definition-table chord switches: case SlateCommandID.x: hotkey = "…"
     for name, chord in re.findall(
         r"case SlateCommandID\.(\w+):\s*hotkey(?:Hint)?\s*=\s*\"([^\"]+)\"", text
     ):
-        chords[name] = chord
+        chords.setdefault(name, chord)
+
+    # Fail-fast: every `hotkey: "` literal in the file must have been
+    # attributed to a command id — a silent drop misreports chord parity.
+    literal_hotkeys = len(re.findall(r'hotkey:\s*"', text))
+    if block_hotkeys != literal_hotkeys:
+        fail(
+            f"attributed {block_hotkeys} of {literal_hotkeys} `hotkey:` "
+            "literals — the register-block parser no longer matches "
+            "SlateCommands.swift; fix the parser before regenerating"
+        )
 
     rows = []
+    unmapped: list[str] = []
     for name, cid in sorted(ids.items(), key=lambda kv: kv[1]):
-        section = cid.split(".")[1] if cid.count(".") >= 2 else "app"
-        # Trailing-dot constants are dynamic-id prefixes (e.g. per-saved-
-        # query commands) — one row per family, marked as such.
         display = cid + "<dynamic>" if cid.endswith(".") else cid
-        rows.append((display, chords.get(name, ""), section))
+        section = sections.get(name) or (cid.split(".")[1] if cid.count(".") >= 2 else "")
+        issue = ID_ISSUE_OVERRIDES.get(cid) or SECTION_ISSUE.get(section)
+        if issue is None:
+            unmapped.append(cid)
+            continue
+        chord = chords.get(name, "")
+        base = name[: -1] if False else name
+        label = labels.get(base, "")
+        rows.append((display, label, chord, spoken(chord) if chord else "", issue))
+    # Numbered shortcut slots share the base definition's mapping.
+    if unmapped:
+        fail("unmapped command ids (add to SECTION_ISSUE/ID_ISSUE_OVERRIDES): "
+             + ", ".join(unmapped))
     return rows
 
 
-def panels() -> list[str]:
-    return sorted(p.stem for p in MAC_SRC.glob("*Panel*.swift"))
+def leaves() -> list[tuple[str, str]]:
+    text = LEAF_SWIFT.read_text(encoding="utf-8")
+    enum_body = re.search(r"enum Leaf: String, CaseIterable.*?\n(.*?)\n    var id",
+                          text, re.DOTALL)
+    if not enum_body:
+        fail("could not locate `enum Leaf` in RightPaneView.swift")
+    cases = re.findall(r"^\s*case (\w+)", enum_body.group(1), re.MULTILINE)
+    unmapped = [c for c in cases if c not in LEAF_ISSUE]
+    if unmapped:
+        fail("unmapped Leaf cases (add to LEAF_ISSUE): " + ", ".join(unmapped))
+    return [(c, LEAF_ISSUE[c]) for c in cases]
 
 
 def settings_tabs() -> list[str]:
@@ -163,10 +271,12 @@ def cli_verbs() -> list[str]:
 
 def main() -> int:
     cmd_rows = commands()
+    leaf_rows = leaves()
     head = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=REPO,
         capture_output=True, text=True).stdout.strip()
     today = datetime.date.today().isoformat()
+    with_chords = sum(1 for _, _, c, _, _ in cmd_rows if c)
 
     lines: list[str] = []
     a = lines.append
@@ -222,22 +332,32 @@ def main() -> int:
     a("## Command inventory")
     a("")
     a(f"{len(cmd_rows)} stable command ids from the `SlateCommandID` catalog "
-      "(drift-test-enforced; chords from the registration chord tables — "
-      "blank chord = palette/menu-only or focus-scoped by design). Windows "
+      f"(drift-test-enforced), {with_chords} carrying chords from the "
+      "registration blocks and definition-table chord switches (blank chord "
+      "= palette/menu-only or focus-scoped by design; the generator fails if "
+      "a `hotkey:` literal goes unattributed). Spoken hotkeys derive from "
+      "chords via the `HotkeySpoken` glyph walk (mirrored here); Windows "
       "chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), "
-      "declared in one table in W5-1.")
+      "declared in one table in W5-1 with spoken strings substituted "
+      "per-platform through the canonical vocabulary.")
     a("")
-    a("| command id | mac chord | consuming W issue | status |")
-    a("|---|---|---|---|")
-    for cid, chord, section in cmd_rows:
-        issue = SECTION_ISSUE.get(section, "#741 (W5-1)")
-        a(f"| `{cid}` | {chord or '—'} | {issue} | pending |")
+    a("| command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |")
+    a("|---|---|---|---|---|---|")
+    for cid, label, chord, spoke, issue in cmd_rows:
+        a(f"| `{cid}` | {label or '—'} | {chord or '—'} | {spoke or '—'} | {issue} | pending |")
     a("")
     a("The palette surface itself (ranking via the W0.5-1 core engine, "
       "sections, recents, chord display) is **#741 (W5-1)**; the quick "
       "switcher is **#723 (W1-4)**.")
     a("")
-    a("## Leaf / panel / tab inventory")
+    a("## Leaf inventory (`enum Leaf`, the shipped right-pane registry)")
+    a("")
+    a("| leaf | consuming W issue | status |")
+    a("|---|---|---|")
+    for leaf, issue in leaf_rows:
+        a(f"| `{leaf}` | {issue} | pending |")
+    a("")
+    a("## Primary surfaces")
     a("")
     a("| surface | source | consuming W issue | status |")
     a("|---|---|---|---|")
@@ -245,16 +365,16 @@ def main() -> int:
     a("| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | pending |")
     a("| Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | pending |")
     a("| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | pending |")
-    a("| Editor (AvalonEdit ⇄ DocumentBuffer, spans, interactions) | `NoteEditorView.swift` | #724/#381/#725 (W2-1/2/3) | pending |")
-    a("| Reading view (block model, mode toggle, heading/link AT nav) | `Reading/` | #728 (W3-1) | pending |")
-    a("| Math rendering + speech/braille artifact | `MathBlockView` + core `math.rs` | #729 (W3-2) | pending |")
+    a("| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | pending |")
+    a("| Editor canonical spans | #381 span API consumers | #381 (W2-2) | pending |")
+    a("| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | pending |")
+    a("| Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | pending |")
+    a("| Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | pending |")
     a("| Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | pending |")
     a("| Code blocks (canonical tokens + AT preamble) | `CodeBlockView.swift` | #731 (W3-4) | pending |")
-    a("| Embeds across contexts | `EmbedsPanel.swift` + editor embeds | #732 (W3-5; XD rows dropped) | pending |")
+    a("| Embeds across contexts | editor/reading embeds | #732 (W3-5; XD rows dropped) | pending |")
     a("| Accessible grid substrate | `AccessibleDataGrid.swift` | #733 (W4-1) | pending |")
-    for p in panels():
-        a(f"| {p} | `{p}.swift` | {PANEL_ISSUE.get(p, '#734 (W4-2)')} | pending |")
-    a("| Properties (in-note header, panel, typed rows) | `Properties*` views | #736 (W4-4) | pending |")
+    a("| Properties (in-note header, panel, typed rows, add-property) | `Properties*` views | #736 (W4-4) | pending |")
     a("| Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | pending |")
     a("| Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | pending |")
     a("| Search overlay | search UI over `full_text_search` | #742 (W5-2) | pending |")
@@ -316,7 +436,9 @@ def main() -> int:
     a("")
 
     OUT.write_text("\n".join(lines), encoding="utf-8", newline="\n")
-    print(f"wrote {OUT.relative_to(REPO)} ({len(cmd_rows)} command rows)")
+    print(f"wrote {OUT.relative_to(REPO)} "
+          f"({len(cmd_rows)} command rows, {with_chords} with chords; "
+          f"{len(leaf_rows)} leaves)")
     return 0
 
 

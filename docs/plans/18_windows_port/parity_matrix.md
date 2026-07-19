@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-19 at `98934d9` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-07-19 at `d98d8d1` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -26,195 +26,216 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 
 ## Command inventory
 
-181 stable command ids from the `SlateCommandID` catalog (drift-test-enforced; chords from the registration chord tables — blank chord = palette/menu-only or focus-scoped by design). Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1.
+181 stable command ids from the `SlateCommandID` catalog (drift-test-enforced), 51 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
 
-| command id | mac chord | consuming W issue | status |
-|---|---|---|---|
-| `slate.bases.builder.addCondition` | — | #738 (W4-6) | pending |
-| `slate.bases.builder.addGroup` | — | #738 (W4-6) | pending |
-| `slate.bases.builder.editCondition` | — | #738 (W4-6) | pending |
-| `slate.bases.builder.removeCondition` | — | #738 (W4-6) | pending |
-| `slate.bases.copyLink` | — | #738 (W4-6) | pending |
-| `slate.bases.copyMarkdown` | — | #738 (W4-6) | pending |
-| `slate.bases.editProperty` | — | #738 (W4-6) | pending |
-| `slate.bases.editViewFilters` | — | #738 (W4-6) | pending |
-| `slate.bases.exportCsv` | — | #738 (W4-6) | pending |
-| `slate.bases.exportMarkdown` | — | #738 (W4-6) | pending |
-| `slate.bases.newQuery` | — | #738 (W4-6) | pending |
-| `slate.bases.nextView` | — | #738 (W4-6) | pending |
-| `slate.bases.openRow` | — | #738 (W4-6) | pending |
-| `slate.bases.openViewSwitcher` | — | #738 (W4-6) | pending |
-| `slate.bases.previousView` | — | #738 (W4-6) | pending |
-| `slate.bases.quickFilter` | — | #738 (W4-6) | pending |
-| `slate.bases.refresh` | — | #738 (W4-6) | pending |
-| `slate.bases.resultsPopover` | — | #738 (W4-6) | pending |
-| `slate.bases.saveSortToView` | — | #738 (W4-6) | pending |
-| `slate.bases.savedQuery.run.<dynamic>` | — | #738 (W4-6) | pending |
-| `slate.bases.showBacklinks` | — | #738 (W4-6) | pending |
-| `slate.bases.sortByColumn` | — | #738 (W4-6) | pending |
-| `slate.bases.viewAsList` | — | #738 (W4-6) | pending |
-| `slate.bases.viewAsTable` | — | #738 (W4-6) | pending |
-| `slate.bases.whereAmI` | — | #738 (W4-6) | pending |
-| `slate.canvas.actualSize` | — | #745 (W6-1) | pending |
-| `slate.canvas.addLink` | — | #745 (W6-1) | pending |
-| `slate.canvas.addMedia` | — | #745 (W6-1) | pending |
-| `slate.canvas.addNote` | — | #745 (W6-1) | pending |
-| `slate.canvas.alignWith` | — | #745 (W6-1) | pending |
-| `slate.canvas.cancelMode` | — | #745 (W6-1) | pending |
-| `slate.canvas.clearColor` | — | #745 (W6-1) | pending |
-| `slate.canvas.clearFilter` | — | #745 (W6-1) | pending |
-| `slate.canvas.clearMarks` | — | #745 (W6-1) | pending |
-| `slate.canvas.commitMode` | — | #745 (W6-1) | pending |
-| `slate.canvas.connectMode` | — | #745 (W6-1) | pending |
-| `slate.canvas.connectTo` | — | #745 (W6-1) | pending |
-| `slate.canvas.convertToNote` | — | #745 (W6-1) | pending |
-| `slate.canvas.createConnectedCard` | — | #745 (W6-1) | pending |
-| `slate.canvas.createConnectedCardDirectional` | — | #745 (W6-1) | pending |
-| `slate.canvas.delete` | — | #745 (W6-1) | pending |
-| `slate.canvas.deleteConnection` | — | #745 (W6-1) | pending |
-| `slate.canvas.deleteMarked` | — | #745 (W6-1) | pending |
-| `slate.canvas.duplicate` | — | #745 (W6-1) | pending |
-| `slate.canvas.editCard` | — | #745 (W6-1) | pending |
-| `slate.canvas.editConnection` | — | #745 (W6-1) | pending |
-| `slate.canvas.enterGroup` | — | #745 (W6-1) | pending |
-| `slate.canvas.exitGroup` | — | #745 (W6-1) | pending |
-| `slate.canvas.filterCards` | — | #745 (W6-1) | pending |
-| `slate.canvas.fitCanvas` | — | #745 (W6-1) | pending |
-| `slate.canvas.followConnectionBack` | — | #745 (W6-1) | pending |
-| `slate.canvas.followConnectionForward` | — | #745 (W6-1) | pending |
-| `slate.canvas.groupMarked` | — | #745 (W6-1) | pending |
-| `slate.canvas.locateFile` | — | #745 (W6-1) | pending |
-| `slate.canvas.moveIntoGroup` | — | #745 (W6-1) | pending |
-| `slate.canvas.moveMode` | — | #745 (W6-1) | pending |
-| `slate.canvas.newCard` | — | #745 (W6-1) | pending |
-| `slate.canvas.newGroup` | — | #745 (W6-1) | pending |
-| `slate.canvas.nextCard` | — | #745 (W6-1) | pending |
-| `slate.canvas.placeAbove` | — | #745 (W6-1) | pending |
-| `slate.canvas.placeBelow` | — | #745 (W6-1) | pending |
-| `slate.canvas.placeLeftOf` | — | #745 (W6-1) | pending |
-| `slate.canvas.placeRightOf` | — | #745 (W6-1) | pending |
-| `slate.canvas.previousCard` | — | #745 (W6-1) | pending |
-| `slate.canvas.removeFromGroup` | — | #745 (W6-1) | pending |
-| `slate.canvas.renameGroup` | — | #745 (W6-1) | pending |
-| `slate.canvas.resizeDefaultSize` | — | #745 (W6-1) | pending |
-| `slate.canvas.resizeFitContent` | — | #745 (W6-1) | pending |
-| `slate.canvas.resizeMode` | — | #745 (W6-1) | pending |
-| `slate.canvas.setColor` | — | #745 (W6-1) | pending |
-| `slate.canvas.showMarks` | — | #745 (W6-1) | pending |
-| `slate.canvas.showOutline` | — | #745 (W6-1) | pending |
-| `slate.canvas.showTable` | — | #745 (W6-1) | pending |
-| `slate.canvas.showVisual` | — | #745 (W6-1) | pending |
-| `slate.canvas.toggleFollowSelection` | — | #745 (W6-1) | pending |
-| `slate.canvas.toggleMark` | — | #745 (W6-1) | pending |
-| `slate.canvas.tracePath` | — | #745 (W6-1) | pending |
-| `slate.canvas.whereAmI` | — | #745 (W6-1) | pending |
-| `slate.canvas.zoomIn` | — | #745 (W6-1) | pending |
-| `slate.canvas.zoomOut` | — | #745 (W6-1) | pending |
-| `slate.canvas.zoomToSelection` | — | #745 (W6-1) | pending |
-| `slate.diagnostics.refreshSync` | — | #741 (W5-1) | pending |
-| `slate.editor.actualSize` | — | #725 (W2-3) | pending |
-| `slate.editor.addProperty` | — | #725 (W2-3) | pending |
-| `slate.editor.bulkRenameProperties` | — | #725 (W2-3) | pending |
-| `slate.editor.citationSummary` | — | #725 (W2-3) | pending |
-| `slate.editor.findInNote` | — | #725 (W2-3) | pending |
-| `slate.editor.save` | — | #725 (W2-3) | pending |
-| `slate.editor.togglePropertiesSource` | — | #725 (W2-3) | pending |
-| `slate.editor.toggleSpellCheck` | — | #725 (W2-3) | pending |
-| `slate.editor.toggleViewMode` | — | #725 (W2-3) | pending |
-| `slate.editor.zoomIn` | — | #725 (W2-3) | pending |
-| `slate.editor.zoomOut` | — | #725 (W2-3) | pending |
-| `slate.file.cancelImport` | — | #744 (W5-4) | pending |
-| `slate.file.copyPath` | — | #744 (W5-4) | pending |
-| `slate.file.delete` | — | #744 (W5-4) | pending |
-| `slate.file.duplicate` | — | #744 (W5-4) | pending |
-| `slate.file.importFilesAndFolders` | — | #744 (W5-4) | pending |
-| `slate.file.moveTo` | ⇧⌘M | #744 (W5-4) | pending |
-| `slate.file.newCanvas` | — | #744 (W5-4) | pending |
-| `slate.file.newFolder` | — | #744 (W5-4) | pending |
-| `slate.file.newFromTemplate` | ⇧⌘N | #744 (W5-4) | pending |
-| `slate.file.newNote` | ⌘N | #744 (W5-4) | pending |
-| `slate.file.printNote` | — | #744 (W5-4) | pending |
-| `slate.file.rename` | ⌥⌘R | #744 (W5-4) | pending |
-| `slate.file.revealInFinder` | — | #744 (W5-4) | pending |
-| `slate.graph.actualSize` | — | #746 (W6-2) | pending |
-| `slate.graph.connectionsDeeper` | — | #746 (W6-2) | pending |
-| `slate.graph.connectionsShallower` | — | #746 (W6-2) | pending |
-| `slate.graph.fitGraph` | — | #746 (W6-2) | pending |
-| `slate.graph.mostLinked` | — | #746 (W6-2) | pending |
-| `slate.graph.openTab` | — | #746 (W6-2) | pending |
-| `slate.graph.orphans` | — | #746 (W6-2) | pending |
-| `slate.graph.showConnections` | — | #746 (W6-2) | pending |
-| `slate.graph.unresolved` | — | #746 (W6-2) | pending |
-| `slate.graph.whereAmI` | — | #746 (W6-2) | pending |
-| `slate.graph.zoomIn` | — | #746 (W6-2) | pending |
-| `slate.graph.zoomOut` | — | #746 (W6-2) | pending |
-| `slate.help.open` | — | #756 (W8-6) | pending |
-| `slate.history.showPanel` | — | #739 (W4-7) | pending |
-| `slate.navigation.jumpToBibliography` | — | #741 (W5-1) | pending |
-| `slate.settings.open` | — | #751 (W8-1) | pending |
-| `slate.sidebar.addShortcut` | — | #721 (W1-2) | pending |
-| `slate.sidebar.addTag` | — | #721 (W1-2) | pending |
-| `slate.sidebar.clearRecents` | — | #721 (W1-2) | pending |
-| `slate.sidebar.collapseAll` | — | #721 (W1-2) | pending |
-| `slate.sidebar.copyWikilink` | — | #721 (W1-2) | pending |
-| `slate.sidebar.createFolderNote` | — | #721 (W1-2) | pending |
-| `slate.sidebar.deleteFolderNote` | — | #721 (W1-2) | pending |
-| `slate.sidebar.expandLoaded` | — | #721 (W1-2) | pending |
-| `slate.sidebar.focusFilter` | ⌥⌘F | #721 (W1-2) | pending |
-| `slate.sidebar.historyBack` | ⌃⌘[ | #721 (W1-2) | pending |
-| `slate.sidebar.historyForward` | ⌃⌘] | #721 (W1-2) | pending |
-| `slate.sidebar.open` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openFolderNote` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut1` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut2` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut3` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut4` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut5` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut6` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut7` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut8` | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut9` | — | #721 (W1-2) | pending |
-| `slate.sidebar.pinNote` | — | #721 (W1-2) | pending |
-| `slate.sidebar.removeShortcut` | — | #721 (W1-2) | pending |
-| `slate.sidebar.removeTag` | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortCreatedAsc` | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortCreatedDesc` | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortModifiedAsc` | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortModifiedDesc` | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortNameAsc` | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortNameDesc` | — | #721 (W1-2) | pending |
-| `slate.sidebar.toggleDateGrouping` | — | #721 (W1-2) | pending |
-| `slate.sidebar.unpinAllInFolder` | — | #721 (W1-2) | pending |
-| `slate.sidebar.unpinNote` | — | #721 (W1-2) | pending |
-| `slate.sidebar.useVaultDefaultSort` | — | #721 (W1-2) | pending |
-| `slate.tasks.review` | — | #735 (W4-3) | pending |
-| `slate.vault.close` | — | #720 (W1-1) | pending |
-| `slate.vault.open` | — | #720 (W1-1) | pending |
-| `slate.view.toggleRightPane` | — | #722 (W1-3) | pending |
-| `slate.view.toggleSearch` | — | #722 (W1-3) | pending |
-| `slate.workspace.closePane` | — | #722 (W1-3) | pending |
-| `slate.workspace.closeTab` | — | #722 (W1-3) | pending |
-| `slate.workspace.focusPaneAbove` | — | #722 (W1-3) | pending |
-| `slate.workspace.focusPaneBelow` | — | #722 (W1-3) | pending |
-| `slate.workspace.focusPaneLeft` | — | #722 (W1-3) | pending |
-| `slate.workspace.focusPaneRight` | — | #722 (W1-3) | pending |
-| `slate.workspace.growPane` | — | #722 (W1-3) | pending |
-| `slate.workspace.moveTabLeft` | — | #722 (W1-3) | pending |
-| `slate.workspace.moveTabRight` | — | #722 (W1-3) | pending |
-| `slate.workspace.newTab` | — | #722 (W1-3) | pending |
-| `slate.workspace.nextTab` | — | #722 (W1-3) | pending |
-| `slate.workspace.openInNewTab` | — | #722 (W1-3) | pending |
-| `slate.workspace.openInSplit` | — | #722 (W1-3) | pending |
-| `slate.workspace.previousTab` | — | #722 (W1-3) | pending |
-| `slate.workspace.quickOpen` | — | #722 (W1-3) | pending |
-| `slate.workspace.reopenClosedTab` | — | #722 (W1-3) | pending |
-| `slate.workspace.shrinkPane` | — | #722 (W1-3) | pending |
-| `slate.workspace.splitDown` | — | #722 (W1-3) | pending |
-| `slate.workspace.splitRight` | — | #722 (W1-3) | pending |
+| command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |
+|---|---|---|---|---|---|
+| `slate.bases.builder.addCondition` | Bases: Add Condition | — | — | #738 (W4-6) | pending |
+| `slate.bases.builder.addGroup` | Bases: Add Group | — | — | #738 (W4-6) | pending |
+| `slate.bases.builder.editCondition` | Bases: Edit Condition | — | — | #738 (W4-6) | pending |
+| `slate.bases.builder.removeCondition` | Bases: Remove Condition | — | — | #738 (W4-6) | pending |
+| `slate.bases.copyLink` | Bases: Copy Link | — | — | #738 (W4-6) | pending |
+| `slate.bases.copyMarkdown` | Bases: Copy View as Markdown | — | — | #738 (W4-6) | pending |
+| `slate.bases.editProperty` | Bases: Edit Property | — | — | #738 (W4-6) | pending |
+| `slate.bases.editViewFilters` | Bases: Edit View Filters | — | — | #738 (W4-6) | pending |
+| `slate.bases.exportCsv` | — | — | — | #738 (W4-6) | pending |
+| `slate.bases.exportMarkdown` | — | — | — | #738 (W4-6) | pending |
+| `slate.bases.newQuery` | Bases: New Query | — | — | #738 (W4-6) | pending |
+| `slate.bases.nextView` | Bases: Next View | — | — | #738 (W4-6) | pending |
+| `slate.bases.openRow` | Bases: Open Row | — | — | #738 (W4-6) | pending |
+| `slate.bases.openViewSwitcher` | Bases: Open View Switcher | — | — | #738 (W4-6) | pending |
+| `slate.bases.previousView` | Bases: Previous View | — | — | #738 (W4-6) | pending |
+| `slate.bases.quickFilter` | Bases: Quick Filter | — | — | #738 (W4-6) | pending |
+| `slate.bases.refresh` | Bases: Refresh | — | — | #738 (W4-6) | pending |
+| `slate.bases.resultsPopover` | Bases: Results | — | — | #738 (W4-6) | pending |
+| `slate.bases.saveSortToView` | Bases: Save Sort to View | — | — | #738 (W4-6) | pending |
+| `slate.bases.savedQuery.run.<dynamic>` | — | — | — | #738 (W4-6) | pending |
+| `slate.bases.showBacklinks` | Bases: Show Backlinks | — | — | #738 (W4-6) | pending |
+| `slate.bases.sortByColumn` | Bases: Sort by Column | — | — | #738 (W4-6) | pending |
+| `slate.bases.viewAsList` | Bases: View as List | — | — | #738 (W4-6) | pending |
+| `slate.bases.viewAsTable` | Bases: View as Table | — | — | #738 (W4-6) | pending |
+| `slate.bases.whereAmI` | Bases: Where Am I? | — | — | #738 (W4-6) | pending |
+| `slate.canvas.actualSize` | Canvas: Actual Size | ⌘0 | Command Zero | #745 (W6-1) | pending |
+| `slate.canvas.addLink` | Canvas: Add Link Card… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.addMedia` | Canvas: Add Media… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.addNote` | Canvas: Add Note to Canvas… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.alignWith` | Canvas: Align With… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.cancelMode` | Canvas: Cancel Mode | — | — | #745 (W6-1) | pending |
+| `slate.canvas.clearColor` | Canvas: Clear Color | — | — | #745 (W6-1) | pending |
+| `slate.canvas.clearFilter` | Canvas: Clear Filter | — | — | #745 (W6-1) | pending |
+| `slate.canvas.clearMarks` | Canvas: Clear All Marks | — | — | #745 (W6-1) | pending |
+| `slate.canvas.commitMode` | Canvas: Commit Mode | — | — | #745 (W6-1) | pending |
+| `slate.canvas.connectMode` | Canvas: Connect Mode | — | — | #745 (W6-1) | pending |
+| `slate.canvas.connectTo` | Canvas: Connect To… | ⌃⌘C | Control Command C | #745 (W6-1) | pending |
+| `slate.canvas.convertToNote` | — | — | — | #745 (W6-1) | pending |
+| `slate.canvas.createConnectedCard` | Canvas: Create Connected Card | ⌃⌥⌘N | Control Option Command N | #745 (W6-1) | pending |
+| `slate.canvas.createConnectedCardDirectional` | Canvas: Create Connected Card (Choose Direction)… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.delete` | Canvas: Delete Selection | — | — | #745 (W6-1) | pending |
+| `slate.canvas.deleteConnection` | Canvas: Delete Connection… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.deleteMarked` | Canvas: Delete Marked Cards | — | — | #745 (W6-1) | pending |
+| `slate.canvas.duplicate` | Canvas: Duplicate | — | — | #745 (W6-1) | pending |
+| `slate.canvas.editCard` | Canvas: Edit Card Text… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.editConnection` | Canvas: Edit Connection… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.enterGroup` | Canvas: Enter Group | — | — | #745 (W6-1) | pending |
+| `slate.canvas.exitGroup` | Canvas: Exit Group | — | — | #745 (W6-1) | pending |
+| `slate.canvas.filterCards` | Canvas: Filter Cards… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.fitCanvas` | Canvas: Fit Canvas | — | — | #745 (W6-1) | pending |
+| `slate.canvas.followConnectionBack` | Canvas: Follow Connection Back | — | — | #745 (W6-1) | pending |
+| `slate.canvas.followConnectionForward` | Canvas: Follow Connection Forward | — | — | #745 (W6-1) | pending |
+| `slate.canvas.groupMarked` | Canvas: Group Marked Cards… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.locateFile` | Canvas: Locate File… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.moveIntoGroup` | Canvas: Move into Group… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.moveMode` | Canvas: Move Mode | ⌃⌘G | Control Command G | #745 (W6-1) | pending |
+| `slate.canvas.newCard` | Canvas: New Card | ⌥⌘N | Option Command N | #745 (W6-1) | pending |
+| `slate.canvas.newGroup` | Canvas: New Group… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.nextCard` | Canvas: Next Card | — | — | #745 (W6-1) | pending |
+| `slate.canvas.placeAbove` | Canvas: Place Above… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.placeBelow` | Canvas: Place Below… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.placeLeftOf` | Canvas: Place Left Of… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.placeRightOf` | Canvas: Place Right Of… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.previousCard` | Canvas: Previous Card | — | — | #745 (W6-1) | pending |
+| `slate.canvas.removeFromGroup` | Canvas: Remove from Group | — | — | #745 (W6-1) | pending |
+| `slate.canvas.renameGroup` | Canvas: Rename Group… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.resizeDefaultSize` | Canvas: Resize to Default Size | — | — | #745 (W6-1) | pending |
+| `slate.canvas.resizeFitContent` | Canvas: Resize to Fit Content | — | — | #745 (W6-1) | pending |
+| `slate.canvas.resizeMode` | Canvas: Resize Mode | ⌃⌘R | Control Command R | #745 (W6-1) | pending |
+| `slate.canvas.setColor` | Canvas: Set Color… | — | — | #745 (W6-1) | pending |
+| `slate.canvas.showMarks` | Canvas: Show Marked Cards | — | — | #745 (W6-1) | pending |
+| `slate.canvas.showOutline` | Canvas: Show Outline | — | — | #745 (W6-1) | pending |
+| `slate.canvas.showTable` | Canvas: Show Table | — | — | #745 (W6-1) | pending |
+| `slate.canvas.showVisual` | Canvas: Show Visual | — | — | #745 (W6-1) | pending |
+| `slate.canvas.toggleFollowSelection` | Canvas: Toggle Viewport Follows Selection | — | — | #745 (W6-1) | pending |
+| `slate.canvas.toggleMark` | Canvas: Toggle Mark | ⌃⌘M | Control Command M | #745 (W6-1) | pending |
+| `slate.canvas.tracePath` | Canvas: Trace Path from Selected Card | — | — | #745 (W6-1) | pending |
+| `slate.canvas.whereAmI` | Canvas: Where Am I? | ⌃⌘I | Control Command I | #745 (W6-1) | pending |
+| `slate.canvas.zoomIn` | Canvas: Zoom In | ⌘= | Command Equals | #745 (W6-1) | pending |
+| `slate.canvas.zoomOut` | Canvas: Zoom Out | ⌘- | Command Minus | #745 (W6-1) | pending |
+| `slate.canvas.zoomToSelection` | Canvas: Zoom to Selection | — | — | #745 (W6-1) | pending |
+| `slate.diagnostics.refreshSync` | Refresh Sync Diagnostics | — | — | #722 (W1-3) | pending |
+| `slate.editor.actualSize` | Editor: Actual Size | — | — | #725 (W2-3) | pending |
+| `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | pending |
+| `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | pending |
+| `slate.editor.citationSummary` | Citation Summary | ⇧⌘J | Shift Command J | #737 (W4-5) | pending |
+| `slate.editor.findInNote` | Find… | ⌘F | Command F | #742 (W5-2) | pending |
+| `slate.editor.save` | Save | ⌘S | Command S | #724 (W2-1) | pending |
+| `slate.editor.togglePropertiesSource` | Show Properties Source | ⇧⌘D | Shift Command D | #736 (W4-4) | pending |
+| `slate.editor.toggleSpellCheck` | Check Spelling While Typing | — | — | #725 (W2-3) | pending |
+| `slate.editor.toggleViewMode` | Toggle Reading Mode | ⇧⌘E | Shift Command E | #728 (W3-1) | pending |
+| `slate.editor.zoomIn` | Editor: Zoom In | — | — | #725 (W2-3) | pending |
+| `slate.editor.zoomOut` | Editor: Zoom Out | — | — | #725 (W2-3) | pending |
+| `slate.file.cancelImport` | — | — | — | #721 (W1-2) | pending |
+| `slate.file.copyPath` | — | — | — | #744 (W5-4) | pending |
+| `slate.file.delete` | — | — | — | #744 (W5-4) | pending |
+| `slate.file.duplicate` | — | — | — | #744 (W5-4) | pending |
+| `slate.file.importFilesAndFolders` | — | — | — | #744 (W5-4) | pending |
+| `slate.file.moveTo` | — | ⇧⌘M | Shift Command M | #744 (W5-4) | pending |
+| `slate.file.newCanvas` | — | — | — | #745 (W6-1) | pending |
+| `slate.file.newFolder` | — | — | — | #744 (W5-4) | pending |
+| `slate.file.newFromTemplate` | — | ⇧⌘N | Shift Command N | #743 (W5-3) | pending |
+| `slate.file.newNote` | — | ⌘N | Command N | #744 (W5-4) | pending |
+| `slate.file.printNote` | Print… | ⌘P | Command P | #728 (W3-1) | pending |
+| `slate.file.rename` | — | ⌥⌘R | Option Command R | #744 (W5-4) | pending |
+| `slate.file.revealInFinder` | — | — | — | #744 (W5-4) | pending |
+| `slate.graph.actualSize` | Graph: Actual Size | ⌘0 | Command Zero | #746 (W6-2) | pending |
+| `slate.graph.connectionsDeeper` | Connections: Deeper | — | — | #746 (W6-2) | pending |
+| `slate.graph.connectionsShallower` | Connections: Shallower | — | — | #746 (W6-2) | pending |
+| `slate.graph.fitGraph` | Graph: Fit Graph | ⌥⌘0 | Option Command Zero | #746 (W6-2) | pending |
+| `slate.graph.mostLinked` | Graph: Most Linked Notes | — | — | #746 (W6-2) | pending |
+| `slate.graph.openTab` | Open Graph | — | — | #746 (W6-2) | pending |
+| `slate.graph.orphans` | Graph: Orphaned Notes | — | — | #746 (W6-2) | pending |
+| `slate.graph.showConnections` | Show Connections | — | — | #746 (W6-2) | pending |
+| `slate.graph.unresolved` | Graph: Unresolved Links | — | — | #746 (W6-2) | pending |
+| `slate.graph.whereAmI` | Graph: Where Am I? | ⌃⌘I | Control Command I | #746 (W6-2) | pending |
+| `slate.graph.zoomIn` | Graph: Zoom In | ⌘= | Command Equals | #746 (W6-2) | pending |
+| `slate.graph.zoomOut` | Graph: Zoom Out | ⌘- | Command Minus | #746 (W6-2) | pending |
+| `slate.help.open` | Help | — | — | #756 (W8-6) | pending |
+| `slate.history.showPanel` | Show History Panel | — | — | #722 (W1-3) | pending |
+| `slate.navigation.jumpToBibliography` | Jump to Bibliography | ⌘J | Command J | #737 (W4-5) | pending |
+| `slate.settings.open` | Settings… | ⌘, | Command Comma | #751 (W8-1) | pending |
+| `slate.sidebar.addShortcut` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.addTag` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.clearRecents` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.collapseAll` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.copyWikilink` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.createFolderNote` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.deleteFolderNote` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.expandLoaded` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.focusFilter` | — | ⌥⌘F | Option Command F | #721 (W1-2) | pending |
+| `slate.sidebar.historyBack` | — | ⌃⌘[ | Control Command Left Bracket | #721 (W1-2) | pending |
+| `slate.sidebar.historyForward` | — | ⌃⌘] | Control Command Right Bracket | #721 (W1-2) | pending |
+| `slate.sidebar.open` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openFolderNote` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openShortcut1` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openShortcut2` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openShortcut3` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openShortcut4` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openShortcut5` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openShortcut6` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openShortcut7` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openShortcut8` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.openShortcut9` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.pinNote` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.removeShortcut` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.removeTag` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortCreatedAsc` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortCreatedDesc` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortModifiedAsc` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortModifiedDesc` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortNameAsc` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.sortNameDesc` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.toggleDateGrouping` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.unpinAllInFolder` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.unpinNote` | — | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.useVaultDefaultSort` | — | — | — | #721 (W1-2) | pending |
+| `slate.tasks.review` | Tasks Review | ⌘R | Command R | #735 (W4-3) | pending |
+| `slate.vault.close` | Close Vault | — | — | #720 (W1-1) | pending |
+| `slate.vault.open` | Open Vault… | ⇧⌘O | Shift Command O | #720 (W1-1) | pending |
+| `slate.view.toggleRightPane` | Toggle Right Pane | ⌥⌘I | Option Command I | #722 (W1-3) | pending |
+| `slate.view.toggleSearch` | Search Vault | ⇧⌘F | Shift Command F | #742 (W5-2) | pending |
+| `slate.workspace.closePane` | Close Pane | — | — | #722 (W1-3) | pending |
+| `slate.workspace.closeTab` | Close Tab | ⌘W | Command W | #722 (W1-3) | pending |
+| `slate.workspace.focusPaneAbove` | Focus Pane Above | ⌥⌘↑ | Option Command Up Arrow | #722 (W1-3) | pending |
+| `slate.workspace.focusPaneBelow` | Focus Pane Below | ⌥⌘↓ | Option Command Down Arrow | #722 (W1-3) | pending |
+| `slate.workspace.focusPaneLeft` | Focus Pane Left | ⌥⌘← | Option Command Left Arrow | #722 (W1-3) | pending |
+| `slate.workspace.focusPaneRight` | Focus Pane Right | ⌥⌘→ | Option Command Right Arrow | #722 (W1-3) | pending |
+| `slate.workspace.growPane` | Grow Pane | ⌥⌘= | Option Command Equals | #722 (W1-3) | pending |
+| `slate.workspace.moveTabLeft` | Move Tab Left | ⌃⌘← | Control Command Left Arrow | #722 (W1-3) | pending |
+| `slate.workspace.moveTabRight` | Move Tab Right | ⌃⌘→ | Control Command Right Arrow | #722 (W1-3) | pending |
+| `slate.workspace.newTab` | Duplicate Tab | ⌘T | Command T | #722 (W1-3) | pending |
+| `slate.workspace.nextTab` | Show Next Tab | ⇧⌘] | Shift Command Right Bracket | #722 (W1-3) | pending |
+| `slate.workspace.openInNewTab` | Open Selected File in New Tab | — | — | #722 (W1-3) | pending |
+| `slate.workspace.openInSplit` | Open Selected File in Split | — | — | #722 (W1-3) | pending |
+| `slate.workspace.previousTab` | Show Previous Tab | ⇧⌘[ | Shift Command Left Bracket | #722 (W1-3) | pending |
+| `slate.workspace.quickOpen` | Quick Open… | ⌘O | Command O | #723 (W1-4) | pending |
+| `slate.workspace.reopenClosedTab` | Reopen Closed Tab | ⇧⌘T | Shift Command T | #722 (W1-3) | pending |
+| `slate.workspace.shrinkPane` | Shrink Pane | ⌥⌘- | Option Command Minus | #722 (W1-3) | pending |
+| `slate.workspace.splitDown` | Split Down | ⌥⌘\\ | Option Command Backslash Backslash | #722 (W1-3) | pending |
+| `slate.workspace.splitRight` | Split Right | ⌘\\ | Command Backslash Backslash | #722 (W1-3) | pending |
 
 The palette surface itself (ranking via the W0.5-1 core engine, sections, recents, chord display) is **#741 (W5-1)**; the quick switcher is **#723 (W1-4)**.
 
-## Leaf / panel / tab inventory
+## Leaf inventory (`enum Leaf`, the shipped right-pane registry)
+
+| leaf | consuming W issue | status |
+|---|---|---|
+| `outline` | #734 (W4-2) | pending |
+| `backlinks` | #734 (W4-2) | pending |
+| `outgoingLinks` | #734 (W4-2) | pending |
+| `connections` | #746 (W6-2) | pending |
+| `embeds` | #734 (W4-2) | pending |
+| `math` | #729 (W3-2) | pending |
+| `code` | #731 (W3-4) | pending |
+| `diagrams` | #730 (W3-3) | pending |
+| `tasks` | #735 (W4-3) | pending |
+| `tasksReview` | #735 (W4-3) | pending |
+| `history` | #739 (W4-7) | pending |
+| `citations` | #737 (W4-5) | pending |
+| `bibliography` | #737 (W4-5) | pending |
+| `queries` | #738 (W4-6) | pending |
+| `basesDock` | #738 (W4-6) | pending |
+| `syncDiagnostics` | #740 (W4-8) | pending |
+
+## Primary surfaces
 
 | surface | source | consuming W issue | status |
 |---|---|---|---|
@@ -222,24 +243,16 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 | Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | pending |
 | Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | pending |
 | Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | pending |
-| Editor (AvalonEdit ⇄ DocumentBuffer, spans, interactions) | `NoteEditorView.swift` | #724/#381/#725 (W2-1/2/3) | pending |
-| Reading view (block model, mode toggle, heading/link AT nav) | `Reading/` | #728 (W3-1) | pending |
-| Math rendering + speech/braille artifact | `MathBlockView` + core `math.rs` | #729 (W3-2) | pending |
+| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | pending |
+| Editor canonical spans | #381 span API consumers | #381 (W2-2) | pending |
+| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | pending |
+| Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | pending |
+| Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | pending |
 | Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | pending |
 | Code blocks (canonical tokens + AT preamble) | `CodeBlockView.swift` | #731 (W3-4) | pending |
-| Embeds across contexts | `EmbedsPanel.swift` + editor embeds | #732 (W3-5; XD rows dropped) | pending |
+| Embeds across contexts | editor/reading embeds | #732 (W3-5; XD rows dropped) | pending |
 | Accessible grid substrate | `AccessibleDataGrid.swift` | #733 (W4-1) | pending |
-| BacklinksPanel | `BacklinksPanel.swift` | #734 (W4-2) | pending |
-| BibliographyPanel | `BibliographyPanel.swift` | #737 (W4-5) | pending |
-| CitationsPanel | `CitationsPanel.swift` | #737 (W4-5) | pending |
-| ContentBlockPanels | `ContentBlockPanels.swift` | #734 (W4-2) | pending |
-| EmbedsPanel | `EmbedsPanel.swift` | #734 (W4-2) | pending |
-| HistoryPanel | `HistoryPanel.swift` | #739 (W4-7) | pending |
-| OutgoingLinksPanel | `OutgoingLinksPanel.swift` | #734 (W4-2) | pending |
-| SyncDiagnosticsPanel | `SyncDiagnosticsPanel.swift` | #740 (W4-8) | pending |
-| TasksPanel | `TasksPanel.swift` | #735 (W4-3) | pending |
-| TasksReviewPanel | `TasksReviewPanel.swift` | #734 (W4-2) | pending |
-| Properties (in-note header, panel, typed rows) | `Properties*` views | #736 (W4-4) | pending |
+| Properties (in-note header, panel, typed rows, add-property) | `Properties*` views | #736 (W4-4) | pending |
 | Bases grid + builder (N shipped) | `Bases/` | #738 (W4-6) | pending |
 | Command palette | `CommandPaletteModel.swift` (core ranking, W0.5-1) | #741 (W5-1) | pending |
 | Search overlay | search UI over `full_text_search` | #742 (W5-2) | pending |
