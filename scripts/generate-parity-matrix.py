@@ -194,6 +194,20 @@ def fail(msg: str) -> None:
     sys.exit(1)
 
 
+def swift_enum_cases(body: str) -> list[str]:
+    """Case names from a Swift enum body: handles payloads and
+    comma-separated declarations (`case a, b`) so a style change cannot
+    silently drop a case from the inventory."""
+    names: list[str] = []
+    for decl in re.findall(r"^[ \t]*case[ \t]+(.+)", body, re.MULTILINE):
+        decl = re.sub(r"\([^)]*\)", "", decl)  # strip payloads
+        for part in decl.split(","):
+            name = part.strip().rstrip(":")
+            if re.fullmatch(r"\w+", name):
+                names.append(name)
+    return names
+
+
 def commands() -> list[tuple[str, str, str, str, str]]:
     """(id, label, chord, spoken, issue) for every SlateCommandID."""
     text = COMMANDS_SWIFT.read_text(encoding="utf-8")
@@ -323,7 +337,7 @@ def leaves() -> list[tuple[str, str]]:
                           text, re.DOTALL)
     if not enum_body:
         fail("could not locate `enum Leaf` in RightPaneView.swift")
-    cases = re.findall(r"^\s*case (\w+)", enum_body.group(1), re.MULTILINE)
+    cases = swift_enum_cases(enum_body.group(1))
     unmapped = [c for c in cases if c not in LEAF_ISSUE]
     if unmapped:
         fail("unmapped Leaf cases (add to LEAF_ISSUE): " + ", ".join(unmapped))
@@ -338,7 +352,7 @@ def editor_item_kinds() -> list[str]:
     body_match = re.search(r"enum EditorItem[^{]*\{(.*?)\n\}", text, re.DOTALL)
     if not body_match:
         fail("could not locate `enum EditorItem` in WorkspaceModel.swift")
-    kinds = re.findall(r"^\s*case (\w+)", body_match.group(1), re.MULTILINE)
+    kinds = swift_enum_cases(body_match.group(1))
     if not kinds:
         fail("`enum EditorItem` parsed empty — parser no longer matches")
     return kinds
