@@ -26,7 +26,7 @@ final class FileTreeSidebarTests: XCTestCase {
     ) -> DirNodeSummary {
         DirNodeSummary(
             id: id, path: path, name: (path as NSString).lastPathComponent,
-            childDirCount: UInt32(dirCount), childFileCount: UInt32(fileCount))
+            childDirCount: UInt32(dirCount), childFileCount: UInt32(fileCount), hasFolderNote: false)
     }
 
     private func file(_ path: String, mtime: Int64 = 0) -> FileSummary {
@@ -73,7 +73,7 @@ final class FileTreeSidebarTests: XCTestCase {
     func testFolderAccessibilityValueCollapsedPluralAtRoot() {
         let node = TreeNode(
             nodeID: .dir(1), path: "notes", name: "notes", depth: 0,
-            kind: .directory(childDirCount: 2, childFileCount: 3))
+            kind: .directory(childDirCount: 2, childFileCount: 3, hasFolderNote: false))
         // Collapsed, 5 immediate items, depth 0 → level 1 (1-based).
         XCTAssertEqual(
             FileTreeSidebar.folderAccessibilityValue(for: node, expanded: false),
@@ -83,7 +83,7 @@ final class FileTreeSidebarTests: XCTestCase {
     func testFolderAccessibilityValueExpandedAndDeeperLevel() {
         let node = TreeNode(
             nodeID: .dir(2), path: "notes/sub", name: "sub", depth: 2,
-            kind: .directory(childDirCount: 0, childFileCount: 4))
+            kind: .directory(childDirCount: 0, childFileCount: 4, hasFolderNote: false))
         XCTAssertEqual(
             FileTreeSidebar.folderAccessibilityValue(for: node, expanded: true),
             "expanded, 4 items, level 3")
@@ -92,7 +92,7 @@ final class FileTreeSidebarTests: XCTestCase {
     func testFolderAccessibilityValueSingularItem() {
         let node = TreeNode(
             nodeID: .dir(3), path: "solo", name: "solo", depth: 0,
-            kind: .directory(childDirCount: 0, childFileCount: 1))
+            kind: .directory(childDirCount: 0, childFileCount: 1, hasFolderNote: false))
         // Singular phrasing for exactly one item.
         XCTAssertEqual(
             FileTreeSidebar.folderAccessibilityValue(for: node, expanded: false),
@@ -102,7 +102,7 @@ final class FileTreeSidebarTests: XCTestCase {
     func testFolderAccessibilityValueEmptyFolder() {
         let node = TreeNode(
             nodeID: .dir(4), path: "empty", name: "empty", depth: 1,
-            kind: .directory(childDirCount: 0, childFileCount: 0))
+            kind: .directory(childDirCount: 0, childFileCount: 0, hasFolderNote: false))
         XCTAssertEqual(
             FileTreeSidebar.folderAccessibilityValue(for: node, expanded: false),
             "collapsed, 0 items, level 2")
@@ -755,7 +755,7 @@ final class FileTreeSidebarTests: XCTestCase {
     func testSelectedFolderContentRendersWithActiveAndInactiveSystemPalettes() {
         let node = TreeNode(
             nodeID: .dir(7), path: "Reference", name: "Reference", depth: 1,
-            kind: .directory(childDirCount: 2, childFileCount: 3))
+            kind: .directory(childDirCount: 2, childFileCount: 3, hasFolderNote: false))
 
         PresentationReady.assertRendersInBothAppearances(
             SidebarFolderRowContent(
@@ -1331,7 +1331,7 @@ final class FileTreeSidebarTests: XCTestCase {
             depth: 1, kind: .file(FileTreeFileState(summary: titled)))
         let folderNode = TreeNode(
             nodeID: .dir(9), path: "Reference", name: "Reference", depth: 0,
-            kind: .directory(childDirCount: 0, childFileCount: 1))
+            kind: .directory(childDirCount: 0, childFileCount: 1, hasFolderNote: false))
 
         XCTAssertEqual(FileTreeSidebar.typeSelectName(for: fileNode), "Weekly review")
         XCTAssertEqual(FileTreeSidebar.typeSelectName(for: folderNode), "Reference")

@@ -286,6 +286,10 @@ pub struct DirNodeSummary {
     pub name: String,
     pub child_dir_count: u32,
     pub child_file_count: u32,
+    /// FL6-1 (#667): this folder contains `<name>/<name>.md` — the one
+    /// censusable folder-note convention (exact stem, byte compare, no
+    /// index.md fallback). Computed from the listing's own subtree scan.
+    pub has_folder_note: bool,
 }
 
 /// One level of the file tree: the child directories of a parent, then
@@ -8257,6 +8261,7 @@ fn list_dir_children_impl(
     let mut total_files = 0;
     let mut dir_child_file_count: std::collections::HashMap<String, u32> =
         std::collections::HashMap::new();
+    let mut folder_note_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
     {
         let (lower, upper) = subtree_bounds(&parent)
             .map(|(lower, upper)| (Some(lower), Some(upper)))
@@ -8271,7 +8276,7 @@ fn list_dir_children_impl(
         let summary_projection = file_summary_query_projection(
             "LEFT JOIN row_sources rs ON 1 = 1
              LEFT JOIN candidates c ON c.id = rs.file_id",
-            ", rs.parent_path, rs.child_file_count",
+            ", rs.parent_path, rs.child_file_count, rs.folder_note_dir",
             "ORDER BY CASE WHEN rs.file_id IS NULL THEN 0 ELSE 1 END ASC,
                       rs.parent_path COLLATE BINARY ASC,
                       slate_tree_sort_key(c.name) ASC,
@@ -8279,9 +8284,34 @@ fn list_dir_children_impl(
         );
         let query = format!(
             "WITH subtree_paths AS (
-                 SELECT id, path, name
+                 SELECT id, path, name, is_markdown
                  FROM files
                  WHERE (?1 IS NULL OR (path > ?1 AND path < ?2))
+             ),
+             folder_note_dirs AS (
+                 -- FL6-1 (#667): a markdown file whose stem equals its
+                 -- OWN directory's final segment marks that directory
+                 -- as having a folder note. Byte-exact suffix compare —
+                 -- never LIKE: names may contain metacharacters, and
+                 -- the convention is case-sensitive (exact stem).
+                 SELECT substr(path, 1, length(path) - length(name) - 1)
+                            AS dir_path
+                 FROM subtree_paths
+                 WHERE is_markdown = 1
+                   AND length(name) > 3
+                   AND substr(name, -3) = '.md'
+                   AND (
+                       path = substr(name, 1, length(name) - 3)
+                           || '/' || name
+                       OR (
+                           length(path) > 2 * length(name) - 1
+                           AND substr(
+                                   path,
+                                   -(2 * length(name) - 1)
+                               ) = '/' || substr(name, 1, length(name) - 3)
+                                   || '/' || name
+                       )
+                   )
              ),
              file_counts AS (
                  SELECT CASE
@@ -8308,11 +8338,15 @@ fn list_dir_children_impl(
                  LIMIT ?4 OFFSET ?5
              ),
              row_sources AS (
-                 SELECT parent_path, child_file_count, NULL AS file_id
+                 SELECT parent_path, child_file_count, NULL AS file_id,
+                        NULL AS folder_note_dir
                  FROM file_counts
                  UNION ALL
-                 SELECT NULL, NULL, id
+                 SELECT NULL, NULL, id, NULL
                  FROM candidates
+                 UNION ALL
+                 SELECT NULL, NULL, NULL, dir_path
+                 FROM folder_note_dirs
              )
              {summary_projection}"
         );
@@ -8326,14 +8360,18 @@ fn list_dir_children_impl(
                     total,
                     row.get::<_, Option<String>>(16)?,
                     row.get::<_, Option<u32>>(17)?,
+                    row.get::<_, Option<String>>(18)?,
                 ))
             },
         )?;
         for row in mapped {
-            let (summary, total, count_parent, child_file_count) = row?;
+            let (summary, total, count_parent, child_file_count, folder_note_dir) = row?;
             total_files = total;
             if let (Some(count_parent), Some(child_file_count)) = (count_parent, child_file_count) {
                 dir_child_file_count.insert(count_parent, child_file_count);
+            }
+            if let Some(folder_note_dir) = folder_note_dir {
+                folder_note_dirs.insert(folder_note_dir);
             }
             if let Some(summary) = summary {
                 listing_files.push(summary);
@@ -8348,6 +8386,7 @@ fn list_dir_children_impl(
         .map(|(id, path, name)| DirNodeSummary {
             child_dir_count: dir_child_dir_count.get(&path).copied().unwrap_or(0),
             child_file_count: dir_child_file_count.get(&path).copied().unwrap_or(0),
+            has_folder_note: folder_note_dirs.contains(&path),
             id,
             path,
             name,
@@ -11254,6 +11293,121 @@ impl VaultSession {
             crate::structural::StructuralOpKind::RenameFolder,
             true,
         )?;
+        drop(structural_operation);
+        drop(vault_structural_lock);
+        self.notify_moved(&report);
+        Ok(report)
+    }
+
+    /// FL6-1 rule 5 (#667): rename a folder AND its folder note
+    /// (`<Folder>/<Folder>.md`) as ONE core compound operation. Complete
+    /// preflight runs before any mutation (the note must exist; the
+    /// post-rename note name must not collide); both steps ride the
+    /// existing structural/link-rewrite machinery under one structural
+    /// lock; a second-step failure rolls the folder rename back. The
+    /// filesystem pair is NOT crash-atomic — a rollback failure is
+    /// reported honestly, never masked. The merged report maps the note
+    /// ORIGINAL → FINAL (interim pair collapsed) so backlink repair,
+    /// tab retargeting, and pin/shortcut transforms see one rename.
+    pub fn rename_folder_with_note(
+        &self,
+        path: &str,
+        new_name: &str,
+    ) -> Result<crate::structural::StructuralReport, VaultError> {
+        let vault_structural_lock = VaultStructuralLock::acquire(&self.config.cache_dir)?;
+        let structural_operation = self.structural_operation_guard()?;
+        let new_path = sibling_path(path, new_name)?;
+        let old_leaf = leaf_name(path).to_string();
+        let old_note = format!("{path}/{old_leaf}.md");
+        let interim_note = format!("{new_path}/{old_leaf}.md");
+        let new_note = format!("{new_path}/{new_name}.md");
+
+        // Complete preflight BEFORE step 1 (rule 5). The note-collision
+        // check runs at the PRE-rename location `<path>/<new_name>.md`
+        // (the folder rename carries every child); a case-insensitive
+        // hit that IS the old note itself is the case-only rename of
+        // the pair and passes.
+        {
+            let conn = self.conn.lock().expect("session connection mutex");
+            let note_indexed: bool = conn
+                .query_row(
+                    "SELECT 1 FROM files WHERE path = ?1",
+                    rusqlite::params![old_note],
+                    |_| Ok(true),
+                )
+                .unwrap_or(false);
+            if !note_indexed {
+                return Err(VaultError::InvalidPath {
+                    path: old_note,
+                    reason: "no folder note in the index".into(),
+                });
+            }
+            let collision_probe = format!("{path}/{new_name}.md");
+            if let Some(existing) = index_entry_case_insensitive(&conn, &collision_probe)? {
+                return Err(VaultError::DestinationExists { path: existing });
+            }
+        }
+
+        let first = self.structural_move_folder(
+            path,
+            &new_path,
+            crate::structural::StructuralOpKind::RenameFolder,
+            true,
+        )?;
+        let second = match self.structural_move_file(
+            &interim_note,
+            &new_note,
+            crate::structural::StructuralOpKind::RenameFile,
+            true,
+        ) {
+            Ok(second) => second,
+            Err(step_error) => {
+                // Roll the folder rename back. Success ⇒ the vault is
+                // in its pre-operation state and the step error stands;
+                // failure ⇒ say exactly where things ended up.
+                return match self.structural_move_folder(
+                    &new_path,
+                    path,
+                    crate::structural::StructuralOpKind::RenameFolder,
+                    true,
+                ) {
+                    Ok(_) => Err(VaultError::InvalidArgument {
+                        message: format!(
+                            "renaming the folder note failed and the folder \
+                             rename was rolled back: {step_error}"
+                        ),
+                    }),
+                    Err(rollback_error) => Err(VaultError::InvalidArgument {
+                        message: format!(
+                            "renaming the folder note failed ({step_error}) AND \
+                             rolling the folder rename back failed \
+                             ({rollback_error}): the folder is now at \
+                             \"{new_path}\" with its note still named \
+                             \"{old_leaf}.md\""
+                        ),
+                    }),
+                };
+            }
+        };
+
+        // One merged report: collapse the note's interim hop.
+        let mut moved: Vec<(String, String)> = first
+            .moved
+            .into_iter()
+            .filter(|(old, _)| *old != old_note)
+            .collect();
+        moved.push((old_note.clone(), new_note.clone()));
+        moved.sort();
+        let mut rewritten = first.rewritten;
+        rewritten.extend(second.rewritten);
+        let mut failed = first.failed;
+        failed.extend(second.failed);
+        let report = crate::structural::StructuralReport {
+            op_id: second.op_id,
+            moved,
+            rewritten,
+            failed,
+        };
         drop(structural_operation);
         drop(vault_structural_lock);
         self.notify_moved(&report);

@@ -244,8 +244,13 @@ final class FileTreeRowDragSourceTests: XCTestCase {
             from: "private func folderRow(", to: "private func fileRow(")
         XCTAssertTrue(
             folder.contains(
-                "let activate = { fileTreeFocused = true applyPlainSelection(.node(node.nodeID)) tree.toggle(node) }"),
-            "folder activation must focus, plain-select, then toggle disclosure")
+                "let activate = { fileTreeFocused = true applyPlainSelection(.node(node.nodeID))"),
+            "folder activation must focus and plain-select first")
+        XCTAssertTrue(
+            folder.contains(
+                "if let notePath = node.folderNotePath { appState.openFile(notePath, target: .currentTab) } else { tree.toggle(node) }"),
+            "FL6-1: label activation opens the folder note when present, "
+                + "discloses otherwise")
         XCTAssertTrue(
             folder.contains("if click == .plain { activate() }"),
             "plain pointer activation must use the shared folder closure")

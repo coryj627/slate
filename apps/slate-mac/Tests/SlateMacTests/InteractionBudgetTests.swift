@@ -136,7 +136,7 @@ final class InteractionBudgetTests: XCTestCase {
             dirs: [
                 DirNodeSummary(
                     id: 1, path: "big", name: "big",
-                    childDirCount: 0, childFileCount: 10_000)
+                    childDirCount: 0, childFileCount: 10_000, hasFolderNote: false)
             ],
             files: FileSummaryPage(items: [], nextCursor: nil, totalFiltered: 0))
         let level = DirListing(

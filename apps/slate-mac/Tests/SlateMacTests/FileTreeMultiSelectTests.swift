@@ -995,8 +995,10 @@ final class FileTreeMultiSelectTests: XCTestCase {
             "the scoped busy suffix must append the exact shared reason once")
         XCTAssertTrue(
             folder.contains(
-                "primaryAction: \"Expands or collapses.\""),
-            "busy folder help must retain its enabled disclosure action")
+                "? \"Expands or collapses.\""),
+            "busy folder help must retain its enabled disclosure action "
+                + "(FL6-1 made the primary action conditional on the "
+                + "folder-note presence)")
         XCTAssertTrue(
             file.contains(
                 "Self.fileRowAvailableOpenHint("),

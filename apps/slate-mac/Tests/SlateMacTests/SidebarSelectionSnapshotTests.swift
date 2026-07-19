@@ -333,7 +333,7 @@ final class SidebarSelectionSnapshotTests: XCTestCase {
         }
         let folder = DirNodeSummary(
             id: 1, path: "Folder", name: "Folder",
-            childDirCount: 0, childFileCount: 2)
+            childDirCount: 0, childFileCount: 2, hasFolderNote: false)
         var failChildRefetch = false
         let tree = FileTreeViewModel()
         tree.bindForTesting { parent in

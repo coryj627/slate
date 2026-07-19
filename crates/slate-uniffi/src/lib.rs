@@ -613,6 +613,19 @@ impl VaultSession {
         Ok(self.inner.rename_folder(&path, &new_name)?.into())
     }
 
+    /// FL6-1 (#667): rename a folder AND its `<Folder>/<Folder>.md`
+    /// note as one core compound operation — complete preflight,
+    /// rollback on second-step failure (reported honestly; the pair is
+    /// not crash-atomic), one merged report mapping the note
+    /// original → final.
+    pub fn rename_folder_with_note(
+        &self,
+        path: String,
+        new_name: String,
+    ) -> Result<StructuralReport, VaultError> {
+        Ok(self.inner.rename_folder_with_note(&path, &new_name)?.into())
+    }
+
     pub fn move_folder(
         &self,
         path: String,
@@ -1938,6 +1951,9 @@ pub struct DirNodeSummary {
     pub name: String,
     pub child_dir_count: u32,
     pub child_file_count: u32,
+    /// FL6-1 (#667): this folder contains `<name>/<name>.md` (exact
+    /// stem, byte compare — the one folder-note convention).
+    pub has_folder_note: bool,
 }
 
 /// U2-2 (#460): structural-mutation report mirrors.
@@ -2334,6 +2350,7 @@ impl From<core::DirNodeSummary> for DirNodeSummary {
             name: d.name,
             child_dir_count: d.child_dir_count,
             child_file_count: d.child_file_count,
+            has_folder_note: d.has_folder_note,
         }
     }
 }

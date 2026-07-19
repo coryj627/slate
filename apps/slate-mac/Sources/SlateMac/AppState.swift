@@ -1692,9 +1692,21 @@ final class AppState: ObservableObject {
     var structuralRenameRunner: StructuralRenameRunner = {
         session, path, isDirectory, newName in
         try await Task.detached(priority: .userInitiated) {
-            isDirectory
-                ? try session.renameFolder(path: path, newName: newName)
-                : try session.renameFile(path: path, newName: newName)
+            guard isDirectory else {
+                return try session.renameFile(path: path, newName: newName)
+            }
+            // FL6-1 rule 5 (#667): a folder WITH a folder note renames
+            // as ONE core compound operation — Swift never sequences
+            // two renames. Presence probe = the exact-path indexed
+            // lookup of the convention (`<path>/<leaf>.md`). The
+            // inverse of a compound rename routes back through this
+            // same picker, so undo re-pairs naturally.
+            let leaf = (path as NSString).lastPathComponent
+            let hasNote =
+                (try session.getFileSummary(path: "\(path)/\(leaf).md")) != nil
+            return hasNote
+                ? try session.renameFolderWithNote(path: path, newName: newName)
+                : try session.renameFolder(path: path, newName: newName)
         }.value
     }
 
@@ -2117,6 +2129,49 @@ final class AppState: ObservableObject {
                 throw sidebarActionFailure(rejected)
             }
             return startSidebarWikilinkCopy(intent, session: session)
+
+        case SlateCommandID.createFolderNote,
+            SlateCommandID.openFolderNote,
+            SlateCommandID.deleteFolderNote:
+            guard intent.snapshot.items.count == 1,
+                let folder = intent.snapshot.items.first, folder.isDirectory
+            else {
+                throw sidebarActionFailure(rejected)
+            }
+            let leaf = (folder.path as NSString).lastPathComponent
+            let notePath = "\(folder.path)/\(leaf).md"
+            let noteIndexed =
+                ((try? currentSession?.getFileSummary(path: notePath))
+                    .flatMap { $0 }) != nil
+            switch intent.actionID {
+            case SlateCommandID.createFolderNote:
+                guard !noteIndexed else {
+                    throw sidebarActionFailure(
+                        "\(leaf) already has a folder note.")
+                }
+                guard createFolderNote(at: notePath) else {
+                    throw sidebarActionFailure(rejected)
+                }
+            case SlateCommandID.openFolderNote:
+                guard noteIndexed else {
+                    throw sidebarActionFailure(
+                        "\(leaf) has no folder note.")
+                }
+                openFile(notePath, target: .currentTab)
+            default:
+                guard noteIndexed else {
+                    throw sidebarActionFailure(
+                        "\(leaf) has no folder note.")
+                }
+                let target = TreeSelection(path: notePath, isDirectory: false)
+                let admitted =
+                    sidebarActionDispatchOverrides.trashSingle?(target)
+                    ?? requestDeleteEntry(path: notePath, isDirectory: false)
+                guard admitted else {
+                    throw sidebarActionFailure(rejected)
+                }
+            }
+            return .completed(actionID: intent.actionID)
 
         case SlateCommandID.deleteEntry:
             let selections = intent.snapshot.items.map {
@@ -15634,6 +15689,59 @@ final class AppState: ObservableObject {
     /// title selected (spec §U2-5: "creates 'Untitled.md' … opens it, selects
     /// title for rename"). Collisions auto-suffix ("Untitled 2.md", …) so ⌘N is
     /// never a dead end.
+    /// FL6-1 rule 4 (#667): create `<Folder>/<Folder>.md` through the
+    /// SAME no-clobber create path as New Note (create_exclusive), then
+    /// open it — no inline-rename step (the name IS the convention; a
+    /// template picker is deliberately not wired in v1).
+    @discardableResult
+    func createFolderNote(at notePath: String) -> Bool {
+        guard admitStructuralMutationRequest(), let session = currentSession
+        else { return false }
+        guard let recoveryReservation = admitStructuralRecoveryDestination(notePath),
+            admitBatchTrashWrite(to: [notePath])
+        else { return false }
+        let token = beginStructuralMutation(
+            recoveryReservation: recoveryReservation)
+        let refresher = structuralBatchRefreshRunner
+        Task { [weak self] in
+            let outcome: Result<Void, VaultError> = await Task.detached(
+                priority: .userInitiated
+            ) {
+                do {
+                    _ = try session.createExclusive(path: notePath, content: "")
+                    return .success(())
+                } catch let e as VaultError { return .failure(e) }
+                catch { return .failure(.Io(message: error.localizedDescription)) }
+            }.value
+            guard let self else { return }
+            defer { self.endStructuralMutation(token) }
+            guard !Task.isCancelled,
+                self.ownsStructuralMutation(token, session: session)
+            else { return }
+            switch outcome {
+            case .success:
+                await refresher(self)
+                guard !Task.isCancelled,
+                    self.ownsStructuralMutation(token, session: session)
+                else { return }
+                self.publishTreeMutation(
+                    .createNote(path: notePath), rewrittenCount: 0)
+                self.openFile(
+                    notePath,
+                    target: .currentTab,
+                    advancesSidebarSelectionRevision: false)
+                self.postMutationAnnouncement(
+                    "Created note \((notePath as NSString).lastPathComponent).")
+            case .failure(let error):
+                self.lastError = self.humanReadable(error)
+                self.announceMutationFailure(
+                    verb: "create folder note",
+                    name: (notePath as NSString).lastPathComponent, error: error)
+            }
+        }
+        return true
+    }
+
     @discardableResult
     func createNote(in parent: String) -> Task<Void, Never>? {
         guard admitStructuralMutationRequest(), let session = currentSession else { return nil }

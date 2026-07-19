@@ -21,7 +21,7 @@ final class SidebarOrganizationTreeTests: XCTestCase {
   ) -> DirNodeSummary {
     DirNodeSummary(
       id: id, path: path, name: (path as NSString).lastPathComponent,
-      childDirCount: UInt32(dirCount), childFileCount: UInt32(fileCount))
+      childDirCount: UInt32(dirCount), childFileCount: UInt32(fileCount), hasFolderNote: false)
   }
 
   private func file(

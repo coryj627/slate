@@ -190,6 +190,18 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             hint: "Remove a tag from the selected files' frontmatter.",
             section: .sidebar, hotkey: nil),
         .init(
+            id: "slate.sidebar.createFolderNote", label: "Create Folder Note",
+            hint: "Create and open this folder's note.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.openFolderNote", label: "Open Folder Note",
+            hint: "Open this folder's note.",
+            section: .sidebar, hotkey: nil),
+        .init(
+            id: "slate.sidebar.deleteFolderNote", label: "Delete Folder Note",
+            hint: "Move this folder's note to the Trash.",
+            section: .sidebar, hotkey: nil),
+        .init(
             id: "slate.file.delete", label: "Move to Trash",
             hint: "Move the selected files or folders to the Trash.",
             section: .sidebar, hotkey: nil),
@@ -366,6 +378,12 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 "Select exactly one Markdown file to copy its wikilink.",
             SlateCommandID.sidebarAddTag: "Open is available only for files.",
             SlateCommandID.sidebarRemoveTag: "Open is available only for files.",
+            SlateCommandID.createFolderNote:
+                "Select exactly one folder to manage its folder note.",
+            SlateCommandID.openFolderNote:
+                "Select exactly one folder to manage its folder note.",
+            SlateCommandID.deleteFolderNote:
+                "Select exactly one folder to manage its folder note.",
             SlateCommandID.sidebarPinNote: "Select exactly one note to pin.",
             SlateCommandID.sidebarUnpinNote: "Select exactly one note to unpin.",
             SlateCommandID.sidebarUnpinAll:
@@ -615,6 +633,9 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 ] + folderSortSet + [
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.createFolderNote,
+                    SlateCommandID.openFolderNote,
+                    SlateCommandID.deleteFolderNote,
                     SlateCommandID.deleteEntry,
                 ])
             XCTAssertTrue(folder.evaluations.allSatisfy {
@@ -1122,7 +1143,7 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         let expectedGroups = [
             "case .creation: return [ SlateCommandID.newNote, SlateCommandID.newFolder, SlateCommandID.newFromTemplate, SlateCommandID.importFilesAndFolders ]",
             "case .open: return [SlateCommandID.sidebarOpen]",
-            "case .management: return [ SlateCommandID.renameEntry, SlateCommandID.moveTo, SlateCommandID.duplicateEntry ]",
+            "case .management: return [ SlateCommandID.renameEntry, SlateCommandID.moveTo, SlateCommandID.duplicateEntry, SlateCommandID.createFolderNote, SlateCommandID.openFolderNote, SlateCommandID.deleteFolderNote ]",
             "case .inspection: return [ SlateCommandID.revealInFinder, SlateCommandID.copyPath, SlateCommandID.sidebarCopyWikilink ]",
             "case .destructive: return [SlateCommandID.deleteEntry]",
         ]
@@ -1142,6 +1163,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             "SlateCommandID.duplicateEntry", "SlateCommandID.revealInFinder",
             "SlateCommandID.copyPath", "SlateCommandID.sidebarCopyWikilink",
             "SlateCommandID.sidebarAddTag", "SlateCommandID.sidebarRemoveTag",
+            "SlateCommandID.createFolderNote", "SlateCommandID.openFolderNote",
+            "SlateCommandID.deleteFolderNote",
             "SlateCommandID.deleteEntry",
         ] {
             XCTAssertEqual(
@@ -1163,6 +1186,9 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                 SlateCommandID.sidebarOpen,
                 SlateCommandID.renameEntry, SlateCommandID.moveTo,
                 SlateCommandID.duplicateEntry,
+                SlateCommandID.createFolderNote,
+                SlateCommandID.openFolderNote,
+                SlateCommandID.deleteFolderNote,
                 SlateCommandID.sidebarPinNote, SlateCommandID.sidebarUnpinNote,
                 SlateCommandID.sidebarUnpinAll,
                 SlateCommandID.sidebarAddShortcut,

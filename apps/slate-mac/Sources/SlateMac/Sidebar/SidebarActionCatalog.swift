@@ -435,6 +435,24 @@ enum SidebarActionCatalog {
             SlateCommandID.sidebarRemoveTag, "Remove Tag…", .unpin,
             .oneOrMoreFiles,
             "Remove a tag from the selected files' frontmatter."),
+        // FL6-1 folder notes (#667). Presence is validated at
+        // activation (the catalog is pure); refusals announce once.
+        action(
+            SlateCommandID.createFolderNote, "Create Folder Note",
+            .newNote, .exactlyOneFolder,
+            "Create and open this folder's note.",
+            blocksDuringStructuralMutation: true,
+            undo: .historyBarrier),
+        action(
+            SlateCommandID.openFolderNote, "Open Folder Note",
+            .open, .exactlyOneFolder,
+            "Open this folder's note."),
+        action(
+            SlateCommandID.deleteFolderNote, "Delete Folder Note",
+            .trash, .exactlyOneFolder,
+            "Move this folder's note to the Trash.",
+            blocksDuringStructuralMutation: true,
+            destructive: true, undo: .notUndoable),
         action(
             SlateCommandID.deleteEntry, "Move to Trash", .trash, .oneOrMoreItems,
             "Move the selected files or folders to the Trash.",
@@ -561,6 +579,9 @@ enum SidebarActionCatalog {
                     SlateCommandID.sidebarUnpinAll,
                     SlateCommandID.sidebarAddShortcut,
                     SlateCommandID.sidebarRemoveShortcut,
+                    SlateCommandID.createFolderNote,
+                    SlateCommandID.openFolderNote,
+                    SlateCommandID.deleteFolderNote,
                     SlateCommandID.revealInFinder,
                     SlateCommandID.copyPath,
                     SlateCommandID.deleteEntry,
@@ -674,7 +695,14 @@ enum SidebarActionCatalog {
             }
         case .exactlyOneFolder:
             guard items.count == 1, items[0].isDirectory else {
-                return "Select exactly one folder to unpin its notes."
+                switch action.id {
+                case SlateCommandID.createFolderNote,
+                    SlateCommandID.openFolderNote,
+                    SlateCommandID.deleteFolderNote:
+                    return "Select exactly one folder to manage its folder note."
+                default:
+                    return "Select exactly one folder to unpin its notes."
+                }
             }
         case .exactlyOneMarkdownFile:
             guard items.count == 1, items[0].isDirectory == false, items[0].isMarkdown else {
