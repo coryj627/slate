@@ -8759,7 +8759,7 @@ final class AppState: ObservableObject {
     }
 
     /// Install and inspect the per-vault store once per successful open. Reads
-    /// are bounded by the store's 16 MiB cap. The typed notice is included in
+    /// are bounded by the store's 2 MiB cap. The typed notice is included in
     /// whichever single open announcement owns this transition and remains
     /// visible in the sidebar until the vault closes.
     private func loadSidebarVaultPreferences(at vaultRoot: URL) {

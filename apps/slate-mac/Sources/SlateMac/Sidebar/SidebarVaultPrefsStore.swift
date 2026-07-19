@@ -102,7 +102,12 @@ struct SidebarVaultPrefsStore: Sendable {
   }
 
   static let currentVersion = 1
-  static let maxReadBytes = 16 * 1_024 * 1_024
+  /// Round-34: 2 MiB. Sidebar preferences are sorts, per-folder
+  /// overrides, and pins — legitimate files are kilobytes. The cap
+  /// bounds the object graph a hostile vault-authored file can force
+  /// the open to materialize; the schema's cardinality ceilings bound
+  /// what survives decode.
+  static let maxReadBytes = 2 * 1_024 * 1_024
 
   private static let slateDirectoryName = ".slate"
   private static let sidebarFileName = "sidebar.json"
@@ -327,7 +332,7 @@ struct SidebarVaultPrefsStore: Sendable {
     }
     guard output.count <= Self.maxReadBytes else {
       throw SidebarVaultPrefsStoreError.encodingFailed(
-        reason: "the update would exceed the 16 MiB safety limit"
+        reason: "the update would exceed the 2 MiB safety limit"
       )
     }
 

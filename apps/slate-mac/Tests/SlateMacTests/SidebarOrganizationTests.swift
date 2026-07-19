@@ -792,4 +792,52 @@ final class SidebarOrganizationTests: XCTestCase {
       ).sortAnnouncement,
       "Sorted by created, newest first, grouped by date.")
   }
+
+  // MARK: - Red-team regressions (adversarial review round 34)
+
+  func testShapeGuardRejectsPinCardinalityAboveTheCeilings() {
+    // Round-34: hostile in-cap files with huge pin cardinality route into
+    // recovery instead of materializing multi-hundred-thousand-element
+    // published state.
+    let overPerFolder: [String: Any] = [
+      "pins": ["F": (0...1_000).map { "F/n\($0).md" }]
+    ]
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(
+        root: overPerFolder))
+
+    var overTotal: [String: [String]] = [:]
+    for folderIndex in 0..<11 {
+      overTotal["F\(folderIndex)"] = (0..<1_000).map { "F\(folderIndex)/n\($0).md" }
+    }
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(
+        root: ["pins": overTotal]))
+
+    let longPath = String(repeating: "a", count: 4_097)
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(
+        root: ["pins": ["F": [longPath]]]))
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(
+        root: ["pins": [longPath: ["F/a.md"]]]))
+    XCTAssertFalse(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(
+        root: [
+          "folderOverrides": [
+            longPath: ["grouping": "dateBuckets"]
+          ]
+        ]))
+
+    // Boundary values stay valid.
+    let atPerFolder: [String: Any] = [
+      "pins": ["F": (0..<1_000).map { "F/n\($0).md" }]
+    ]
+    XCTAssertTrue(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(
+        root: atPerFolder))
+    XCTAssertTrue(
+      SidebarOrganizationSchema.knownSectionShapesAreValid(
+        root: ["pins": ["F": [String(repeating: "a", count: 4_096)]]]))
+  }
 }

@@ -661,15 +661,27 @@ enum SidebarOrganizationSchema {
   /// into safely — the caller places it into the read-only recovery flow
   /// instead of silently replacing it on the next write (round-5 finding 3).
   /// Per-entry leniency inside a well-shaped section is unchanged.
+  /// Round-34: cardinality and length ceilings on vault-authored input.
+  /// The store's byte cap bounds what the parse materializes; these bound
+  /// what survives decode into published state and the UI. Violations
+  /// route into the same read-only recovery flow as malformed JSON —
+  /// never silently truncated.
+  static let maxPinsPerFolder = 1_000
+  static let maxTotalPins = 10_000
+  static let maxAuthoredEntries = 10_000
+  static let maxAuthoredPathLength = 4_096
+
   static func knownSectionShapesAreValid(root: [String: Any]) -> Bool {
     if let sort = root[sortKey], !(sort is [String: Any]) { return false }
     if let grouping = root[groupingKey], !(grouping is String) { return false }
     if let overrides = root[folderOverridesKey] {
       guard let overrides = overrides as? [String: Any] else { return false }
+      guard overrides.count <= maxAuthoredEntries else { return false }
       // Round-7 finding 1: nested mergeability. Every entry must be an
       // object, and its known child fields must have structural types the
       // field-specific mutators can merge into without destroying data.
-      for value in overrides.values {
+      for (folder, value) in overrides {
+        guard folder.count <= maxAuthoredPathLength else { return false }
         guard let entry = value as? [String: Any] else { return false }
         if let sort = entry[sortKey], !(sort is [String: Any]) { return false }
         if let grouping = entry[groupingKey], !(grouping is String) {
@@ -679,10 +691,21 @@ enum SidebarOrganizationSchema {
     }
     if let pins = root[pinsKey] {
       guard let pins = pins as? [String: Any] else { return false }
-      // A pin list that is not purely strings would be truncated by decode
-      // and then destroyed by the next exact-op rewrite of that folder —
-      // route it into recovery instead.
-      for value in pins.values where !(value is [String]) { return false }
+      guard pins.count <= maxAuthoredEntries else { return false }
+      var totalPins = 0
+      for (folder, value) in pins {
+        guard folder.count <= maxAuthoredPathLength else { return false }
+        // A pin list that is not purely strings would be truncated by
+        // decode and then destroyed by the next exact-op rewrite of that
+        // folder — route it into recovery instead.
+        guard let paths = value as? [String] else { return false }
+        guard paths.count <= maxPinsPerFolder else { return false }
+        totalPins += paths.count
+        guard totalPins <= maxTotalPins else { return false }
+        for path in paths where path.count > maxAuthoredPathLength {
+          return false
+        }
+      }
     }
     return true
   }

@@ -1586,11 +1586,13 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
   // MARK: - Red-team regressions (adversarial review round 12)
 
   func testAdversariallyDuplicatedStaleListsPruneBoundedAndOffMain() async throws {
-    // Round-12 finding 1: thousands of duplicated candidates collapse to
-    // one bounded, deduplicated locked pass — and decode dedupes the
-    // authored list itself.
+    // Round-12 finding 1: duplicated candidates collapse to one bounded,
+    // deduplicated locked pass — and decode dedupes the authored list
+    // itself. Round-34 caps authored lists at 1,000 entries (beyond that
+    // the file enters recovery instead), so the duplicated fixture sits
+    // under the ceiling while the prune's candidate list stays huge.
     let ghost = "Projects/ghost.md"
-    let duplicated = Array(repeating: ghost, count: 5_000) + ["Projects/real.md"]
+    let duplicated = Array(repeating: ghost, count: 900) + ["Projects/real.md"]
     let pinsJSON = duplicated.map { "\"\($0)\"" }.joined(separator: ",")
     let (state, vault) = try openVault(
       named: "dup-prune", files: ["Projects/real.md"], folders: ["Projects"],
@@ -2860,6 +2862,30 @@ final class SidebarOrganizationDispatchTests: XCTestCase {
     XCTAssertEqual(
       sort["field"], "modified",
       "capacity clears once the registry drains")
+  }
+
+  // MARK: - Red-team regressions (adversarial review round 34)
+
+  func testOverCeilingPinListEntersRecoveryInsteadOfTruncating() async throws {
+    // Round-34: an in-byte-cap file whose pin cardinality exceeds the
+    // schema ceilings routes into read-only recovery — defaults publish,
+    // the file is untouched, and nothing silently truncates.
+    let flood = (0...1_000).map { "\"Projects/n\($0).md\"" }
+      .joined(separator: ",")
+    let (state, vault) = try openVault(
+      named: "over-ceiling", files: ["Projects/real.md"],
+      folders: ["Projects"],
+      sidebarJSON: """
+        {"version": 1, "pins": {"Projects": [\(flood)]}}
+        """)
+    XCTAssertEqual(state.sidebarVaultPrefsNotice, .malformed)
+    XCTAssertEqual(
+      state.sidebarOrganization, AppState.SidebarOrganizationState())
+    let json = try sidebarJSON(at: vault)
+    let pins = try XCTUnwrap(json["pins"] as? [String: Any])
+    XCTAssertEqual(
+      (pins["Projects"] as? [String])?.count, 1_001,
+      "recovery leaves the oversized authored list untouched")
   }
 
   // MARK: - Red-team regressions (adversarial review round 33)

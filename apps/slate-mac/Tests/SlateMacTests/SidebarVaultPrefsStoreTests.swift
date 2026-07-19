@@ -145,7 +145,7 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
   }
 
   func testMaximumReadIsSixteenMebibytes() {
-    XCTAssertEqual(SidebarVaultPrefsStore.maxReadBytes, 16 * 1_024 * 1_024)
+    XCTAssertEqual(SidebarVaultPrefsStore.maxReadBytes, 2 * 1_024 * 1_024)
   }
 
   func testUpdateCreatesOnlyTheVersionAndCallerKeysWithDeterministicJSON() throws {
@@ -419,8 +419,8 @@ final class SidebarVaultPrefsStoreTests: XCTestCase {
     guard case .oversized(let limitBytes) = result.notice else {
       return XCTFail("expected oversized notice, got \(String(describing: result.notice))")
     }
-    XCTAssertEqual(limitBytes, 16 * 1_024 * 1_024)
-    XCTAssertTrue(result.notice?.localizedDescription.contains("16 MiB") == true)
+    XCTAssertEqual(limitBytes, 2 * 1_024 * 1_024)
+    XCTAssertTrue(result.notice?.localizedDescription.contains("2 MiB") == true)
     XCTAssertTrue(
       result.notice?.localizedDescription.contains("Slate won’t change this file") == true)
     assertReadOnlyUpdate(store, expectedNotice: result.notice)
