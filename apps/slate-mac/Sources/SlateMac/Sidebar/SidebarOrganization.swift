@@ -572,7 +572,7 @@ struct SidebarPinPruneLedger {
 /// FL3-3 (#660): one vault-local shortcut. Storage keeps `kind` as a raw
 /// string — FL3-3 ships `file` and `folder`; `tag`/`untagged` are reserved
 /// for FL5-2 and must survive every rewrite untouched and in place.
-struct SidebarShortcut: Equatable, Sendable {
+struct SidebarShortcut: Hashable, Sendable {
   enum Kind: String, Sendable {
     case file
     case folder

@@ -53,9 +53,9 @@ Tests: pin order stability; rename/move/delete integrity via mutation replay; st
 
 Tests: section AX structure (headers, groups); shortcut add/remove/reorder persistence + chord dispatch under focus; folder shortcut container activation versus file shortcut leaf open/mirror; Recents leaf open/mirror and proof that neither file-leaf source becomes a list container; recents migration idempotence/corruption/oversize; two-window writes; retain-50/display-10/dedup/current exclusion; mutation retargeting both sections. Apply Apple's [Sidebars](https://developer.apple.com/design/human-interface-guidelines/sidebars), [Outline views](https://developer.apple.com/design/human-interface-guidelines/outline-views), and [Focus and selection](https://developer.apple.com/design/human-interface-guidelines/focus-and-selection) guidance without introducing custom measurements.
 
-- [ ] Sections + placeholder rows + AX structure
-- [ ] Shortcuts storage/commands/chords; one migrated Recents history
-- [ ] Mutation integrity; tests; a11y 100/100
+- [x] Sections + placeholder rows + AX structure
+- [x] Shortcuts storage/commands/chords; one migrated Recents history
+- [x] Mutation integrity; tests; a11y 100/100
 
 ## FL3-4 · Navigation polish: collapse/expand-loaded, selection history (#661) — closing PR FL-07
 
@@ -65,6 +65,6 @@ Tests: section AX structure (headers, groups); shortcut add/remove/reorder persi
 
 Tests: collapse-all ancestor preservation; expand-all fetch bound; history push/dedup/skip-deleted; chord scoping to sidebar focus.
 
-- [ ] Commands + chords (focus-scoped) + menu items
-- [ ] History ring + reveal integration
-- [ ] Tests; a11y 100/100
+- [x] Commands + chords (focus-scoped) + menu items
+- [x] History ring + reveal integration
+- [x] Tests; a11y 100/100

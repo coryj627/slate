@@ -6097,6 +6097,46 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// FL3-3.3: the sidebar Recents section shows the first ten eligible
+    /// entries, excluding the file that is already open.
+    var sidebarRecentsForDisplay: [String] {
+        Array(fileRecents.lazy.filter { $0 != self.selectedFilePath }.prefix(10))
+    }
+
+    /// Section-row Remove (the catalog's remove command targets the TREE
+    /// selection; section rows carry their own identity).
+    func removeSidebarShortcutDirect(_ shortcut: SidebarShortcut) throws {
+        try mutateSidebarOrganization(announce: "Removed from Shortcuts.") {
+            root in
+            SidebarOrganizationSchema.removeShortcut(
+                &root, kind: shortcut.kind.rawValue, path: shortcut.path)
+        } reflect: { state in
+            state.shortcuts.removeAll { $0 == shortcut }
+        }
+    }
+
+    /// FL3-3.2 keyboard-parity reorder (decision 15): swap the shortcut
+    /// with its visible neighbor. The raw write hops reserved entries the
+    /// same way, so authored order stays coherent for both views.
+    func moveSidebarShortcut(_ shortcut: SidebarShortcut, delta: Int) {
+        guard delta == 1 || delta == -1,
+            let index = sidebarOrganization.shortcuts.firstIndex(of: shortcut),
+            sidebarOrganization.shortcuts.indices.contains(index + delta)
+        else { return }
+        try? mutateSidebarOrganization(
+            announce: delta == -1 ? "Moved up." : "Moved down."
+        ) { root in
+            SidebarOrganizationSchema.moveShortcut(
+                &root, kind: shortcut.kind.rawValue, path: shortcut.path,
+                delta: delta)
+        } reflect: { state in
+            guard let liveIndex = state.shortcuts.firstIndex(of: shortcut),
+                state.shortcuts.indices.contains(liveIndex + delta)
+            else { return }
+            state.shortcuts.swapAt(liveIndex, liveIndex + delta)
+        }
+    }
+
     /// FL3-3.2 activation semantics: a folder shortcut is a navigation
     /// CONTAINER (reveal + select); a file shortcut is a LEAF that opens
     /// through the normal file-open seam, after which the standard
