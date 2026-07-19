@@ -80,8 +80,13 @@ public class CallbackConcurrencyCensus
                 int n = 0;
                 while (!stop.IsCancellationRequested)
                 {
-                    pump.Post(() => registry.InvokeById("census.spin"))
-                        .Wait(TimeSpan.FromSeconds(30));
+                    // A timed-out pump item is a stuck pump — fatal, never
+                    // counted as progress.
+                    if (!pump.Post(() => registry.InvokeById("census.spin"))
+                            .Wait(TimeSpan.FromSeconds(30)))
+                    {
+                        throw new TimeoutException("pump work item did not complete within 30s");
+                    }
                     n++;
                 }
                 return n;

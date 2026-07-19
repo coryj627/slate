@@ -58,6 +58,11 @@ internal sealed class WorkPump : IDisposable
     public void Dispose()
     {
         _queue.CompleteAdding();
-        _thread.Join(TimeSpan.FromSeconds(10));
+        if (!_thread.Join(TimeSpan.FromSeconds(10)))
+        {
+            // A pump thread that cannot drain and exit is a deadlocked
+            // dispatcher — surface it instead of leaking a stuck thread.
+            throw new InvalidOperationException("census work pump failed to drain and join within 10s");
+        }
     }
 }

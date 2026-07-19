@@ -354,6 +354,7 @@ mod census_live {
     pub static BUFFERS: AtomicI64 = AtomicI64::new(0);
     pub static CANCEL_TOKENS: AtomicI64 = AtomicI64::new(0);
     pub static REGISTRIES: AtomicI64 = AtomicI64::new(0);
+    pub static LAYOUT_SESSIONS: AtomicI64 = AtomicI64::new(0);
 
     /// RAII marker: one live native object of its kind.
     pub struct Marker(&'static AtomicI64);
@@ -379,6 +380,7 @@ pub struct LiveObjectCounts {
     pub buffers: i64,
     pub cancel_tokens: i64,
     pub registries: i64,
+    pub layout_sessions: i64,
 }
 
 /// Snapshot the census live-object counters (see [`census_live`]).
@@ -390,6 +392,7 @@ pub fn census_live_object_counts() -> LiveObjectCounts {
         buffers: census_live::BUFFERS.load(Ordering::Acquire),
         cancel_tokens: census_live::CANCEL_TOKENS.load(Ordering::Acquire),
         registries: census_live::REGISTRIES.load(Ordering::Acquire),
+        layout_sessions: census_live::LAYOUT_SESSIONS.load(Ordering::Acquire),
     }
 }
 
@@ -1186,6 +1189,7 @@ impl VaultSession {
             session: Arc::clone(&self),
             filter: core_filter,
             state: std::sync::Mutex::new(state),
+            _census: census_live::Marker::count(&census_live::LAYOUT_SESSIONS),
         }))
     }
 
@@ -3116,6 +3120,7 @@ pub struct LayoutSession {
     /// The projection this layout is bound to; re-applied on `refresh`.
     filter: core::graph::GraphFilter,
     state: std::sync::Mutex<LayoutState>,
+    _census: census_live::Marker,
 }
 
 /// Mutable layout state behind the session's mutex. `ids`/`edges`/

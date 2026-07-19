@@ -17,13 +17,14 @@ namespace SlateWindows.Tests.Censuses;
 public class BindingSurfaceCensus
 {
     [Fact]
-    public void AllFourObjectTypes_AndAllThreeForeignTraits_AreBound()
+    public void AllFiveObjectTypes_AndAllThreeForeignTraits_AreBound()
     {
         var assembly = typeof(VaultSession).Assembly;
 
-        // uniffi::Object types (w0 baseline: VaultSession, CancelToken,
-        // DocumentBuffer, CommandRegistry).
-        foreach (var name in new[] { "VaultSession", "CancelToken", "DocumentBuffer", "CommandRegistry" })
+        // uniffi::Object types: the w0-baseline four plus LayoutSession
+        // (Milestone P). Keep in lockstep with the census_live counters in
+        // crates/slate-uniffi/src/lib.rs.
+        foreach (var name in new[] { "VaultSession", "CancelToken", "DocumentBuffer", "CommandRegistry", "LayoutSession" })
         {
             var type = assembly.GetTypes().SingleOrDefault(t => t.Name == name && t.IsClass);
             Assert.True(type != null, $"object type {name} missing from the binding");
@@ -59,6 +60,10 @@ public class BindingSurfaceCensus
         _ = registry.Register(new Command("census.ok", "OK", null, null, CommandSection.File), action);
         registry.InvokeById("census.ok");
         Assert.Equal(1, action.InvocationCount);
+
+        using var layout = session.StartGraphLayout(
+            new GraphFilter(false, false, false), new LayoutForces(), new LayoutConfig());
+        Assert.True(layout.Tick(1).Iteration >= 1);
 
         // Free functions bind through the static entry point.
         var spans = SlateUniffiMethods.EditorHighlightSpans("# Heading\n\nBody with #tag\n");

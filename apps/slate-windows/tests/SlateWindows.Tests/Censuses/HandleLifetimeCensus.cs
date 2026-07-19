@@ -92,6 +92,30 @@ public class HandleLifetimeCensus
             }
         }
 
+        // All five uniffi::Object types churn through both paths:
+        // populated registries (foreign CommandAction attached) and layout
+        // sessions join the buffers/tokens/sessions above.
+        int registries = CensusTier.Scale(40, 160);
+        for (int i = 0; i < registries; i++)
+        {
+            undisposed.AddRange(TouchPopulatedRegistry(i, disposeEagerly: (i & 1) == 0));
+        }
+        using (var layoutVault = FixtureVault.Create(4, "layout"))
+        {
+            using var layoutHost = VaultSession.OpenFilesystem(layoutVault.Root);
+            using var scanToken = new CancelToken();
+            layoutHost.ScanInitial(scanToken);
+            int layouts = CensusTier.Scale(10, 40);
+            for (int i = 0; i < layouts; i++)
+            {
+                var weak = StartLayout(layoutHost, dispose: (i & 1) == 0);
+                if (weak != null)
+                {
+                    undisposed.Add(weak);
+                }
+            }
+        }
+
         bool settled = Waiting.WaitFor(() =>
         {
             GC.Collect();
@@ -99,7 +123,9 @@ public class HandleLifetimeCensus
             var now = SlateUniffiMethods.CensusLiveObjectCounts();
             return now.Sessions == baseline.Sessions
                 && now.Buffers == baseline.Buffers
-                && now.CancelTokens == baseline.CancelTokens;
+                && now.CancelTokens == baseline.CancelTokens
+                && now.Registries == baseline.Registries
+                && now.LayoutSessions == baseline.LayoutSessions;
         }, 15_000);
         var final = SlateUniffiMethods.CensusLiveObjectCounts();
         Assert.True(
@@ -107,13 +133,24 @@ public class HandleLifetimeCensus
             "native handles leaked through the finalizer path: live " +
             $"sessions {final.Sessions} (baseline {baseline.Sessions}), " +
             $"buffers {final.Buffers} (baseline {baseline.Buffers}), " +
-            $"tokens {final.CancelTokens} (baseline {baseline.CancelTokens})");
+            $"tokens {final.CancelTokens} (baseline {baseline.CancelTokens}), " +
+            $"registries {final.Registries} (baseline {baseline.Registries}), " +
+            $"layouts {final.LayoutSessions} (baseline {baseline.LayoutSessions})");
 
         // Secondary managed-retention check: the wrappers themselves must
-        // also have collected.
+        // also collect. Foreign CommandAction wrappers become unreachable
+        // only after their registry's finalizer released the callback
+        // handle-map entry, so collection may take one further GC round —
+        // hence the loop; a genuine pin never collects and times out.
+        bool wrappersCollected = Waiting.WaitFor(() =>
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            return undisposed.Count(w => w.IsAlive) <= 1;
+        }, 10_000);
         int alive = undisposed.Count(w => w.IsAlive);
         Assert.True(
-            alive <= 1,
+            wrappersCollected,
             $"managed wrappers pinned: {alive}/{undisposed.Count} finalizer-path wrappers still alive after GC");
 
         using var reopened = VaultSession.OpenFilesystem(vault.Root);
@@ -152,6 +189,41 @@ public class HandleLifetimeCensus
             return null;
         }
         return new WeakReference(s);
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static List<WeakReference> TouchPopulatedRegistry(int i, bool disposeEagerly)
+    {
+        var tracked = new List<WeakReference>();
+        var registry = new CommandRegistry();
+        var action = new Support.ScriptedAction(() => { });
+        _ = registry.Register(
+            new Command($"census.gc{i}", "GC", null, null, CommandSection.File), action);
+        registry.InvokeById($"census.gc{i}");
+        if (disposeEagerly)
+        {
+            registry.Dispose();
+        }
+        else
+        {
+            tracked.Add(new WeakReference(registry)); // rides the finalizer
+            tracked.Add(new WeakReference(action)); // retained via the native registry
+        }
+        return tracked;
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    private static WeakReference? StartLayout(VaultSession host, bool dispose)
+    {
+        var layout = host.StartGraphLayout(
+            new GraphFilter(false, false, false), new LayoutForces(), new LayoutConfig());
+        _ = layout.Tick(1);
+        if (dispose)
+        {
+            layout.Dispose();
+            return null;
+        }
+        return new WeakReference(layout);
     }
 
     [Fact]
