@@ -6027,7 +6027,7 @@ final class AppState: ObservableObject {
     /// Section collapsed state, device-local, default collapsed.
     @Published var sidebarTagsSectionExpanded: Bool {
         didSet {
-            UserDefaults.standard.set(
+            sidebarSectionDefaults.set(
                 sidebarTagsSectionExpanded, forKey: Self.tagsSectionExpandedKey)
             if sidebarTagsSectionExpanded && sidebarTagTree == nil {
                 refreshSidebarTagTree()
@@ -6035,6 +6035,10 @@ final class AppState: ObservableObject {
         }
     }
     static let tagsSectionExpandedKey = "slate.sidebar.tagsSectionExpanded"
+    /// Device-local section-state store. Injectable (Codoki review):
+    /// parallel test cases sharing `UserDefaults.standard` raced on the
+    /// expanded flag; production uses standard, tests inject a suite.
+    private let sidebarSectionDefaults: UserDefaults
     /// Fetch seam: tests inject a recorded tree; production reads the
     /// session. nil result leaves the previous tree (transient failure
     /// must not blank an expanded section).
@@ -7689,14 +7693,16 @@ final class AppState: ObservableObject {
         preferencesStore: PreferencesStore = PreferencesStore(),
         commandPaletteRecentsStore: CommandPaletteRecentsStore? = nil,
         announcer: AnnouncementPosting = AppKitAnnouncementPoster(),
-        sidebarPasteboard: SidebarPasteboardWriting = AppKitSidebarPasteboard()
+        sidebarPasteboard: SidebarPasteboardWriting = AppKitSidebarPasteboard(),
+        sidebarSectionDefaults: UserDefaults = .standard
     ) {
         self.announcer = announcer
         self.sidebarPasteboard = sidebarPasteboard
+        self.sidebarSectionDefaults = sidebarSectionDefaults
         // FL5-2 rule 1: Tags section collapsed state is device-local,
         // default collapsed (lazy — nothing fetches until first expand).
         self.sidebarTagsSectionExpanded =
-            UserDefaults.standard.bool(forKey: Self.tagsSectionExpandedKey)
+            sidebarSectionDefaults.bool(forKey: Self.tagsSectionExpandedKey)
         // Fall back to an in-memory-only store (writes go to a temp
         // path that's discarded on exit) if the standard Application
         // Support location can't be set up. Better degraded than crash

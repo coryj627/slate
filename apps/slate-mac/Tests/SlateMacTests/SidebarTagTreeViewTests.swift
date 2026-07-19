@@ -83,12 +83,24 @@ final class SidebarTagTreeViewTests: XCTestCase {
 
     // MARK: - Lifecycle (lazy fetch + refresh gating)
 
-    private func makeState() -> AppState {
+    /// Isolated section-state suite per test (Codoki review: parallel
+    /// cases racing on UserDefaults.standard flaked on CI).
+    private func freshSectionDefaults() -> UserDefaults {
+        let suite = "SidebarTagTreeViewTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defaults.removePersistentDomain(forName: suite)
+        return defaults
+    }
+
+    private func makeState(
+        sectionDefaults: UserDefaults? = nil
+    ) -> AppState {
         AppState(
             recentsStore: RecentVaultsStore(
                 fileURL: FileManager.default.temporaryDirectory
                     .appendingPathComponent(
-                        "tagtree-recents-\(UUID().uuidString).json")))
+                        "tagtree-recents-\(UUID().uuidString).json")),
+            sidebarSectionDefaults: sectionDefaults ?? freshSectionDefaults())
     }
 
     func testTreeFetchesLazilyOnFirstExpandAndRefreshGatesOnExpansion() {
@@ -99,8 +111,6 @@ final class SidebarTagTreeViewTests: XCTestCase {
             return TagTree(
                 entries: [], untaggedCount: 0, audioSummary: "0 tags.")
         }
-        UserDefaults.standard.removeObject(
-            forKey: AppState.tagsSectionExpandedKey)
 
         XCTAssertNil(state.sidebarTagTree, "collapsed: zero cost")
         state.refreshSidebarTagTree()
@@ -116,20 +126,14 @@ final class SidebarTagTreeViewTests: XCTestCase {
         state.sidebarTagsSectionExpanded = false
         state.refreshSidebarTagTree()
         XCTAssertEqual(fetches, 2, "collapsing gates refresh again")
-        UserDefaults.standard.removeObject(
-            forKey: AppState.tagsSectionExpandedKey)
     }
 
     func testVaultOpenRefreshesAnAlreadyExpandedSection() throws {
         // Review round (high): didSet fires only on toggles — a
         // device-restored EXPANDED section must still fetch for the
         // newly opened vault (launch restore and A→B switches).
-        UserDefaults.standard.set(
-            true, forKey: AppState.tagsSectionExpandedKey)
-        defer {
-            UserDefaults.standard.removeObject(
-                forKey: AppState.tagsSectionExpandedKey)
-        }
+        let sectionDefaults = freshSectionDefaults()
+        sectionDefaults.set(true, forKey: AppState.tagsSectionExpandedKey)
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("tagtree-open-\(UUID().uuidString)")
         try FileManager.default.createDirectory(
@@ -144,7 +148,8 @@ final class SidebarTagTreeViewTests: XCTestCase {
 
         let state = AppState(
             recentsStore: RecentVaultsStore(
-                fileURL: root.appendingPathComponent("recents.json")))
+                fileURL: root.appendingPathComponent("recents.json")),
+            sidebarSectionDefaults: sectionDefaults)
         XCTAssertTrue(state.sidebarTagsSectionExpanded, "restored expanded")
         var fetches = 0
         state.sidebarTagTreeProvider = {
@@ -173,8 +178,6 @@ final class SidebarTagTreeViewTests: XCTestCase {
             entries: [entry("keep", depth: 0)],
             untaggedCount: 0, audioSummary: "1 tags.")
         state.sidebarTagTreeProvider = { next }
-        UserDefaults.standard.removeObject(
-            forKey: AppState.tagsSectionExpandedKey)
         state.sidebarTagsSectionExpanded = true
         XCTAssertEqual(state.sidebarTagTree?.entries.first?.full, "keep")
         next = nil
@@ -182,8 +185,5 @@ final class SidebarTagTreeViewTests: XCTestCase {
         XCTAssertEqual(
             state.sidebarTagTree?.entries.first?.full, "keep",
             "a failed refresh must not blank an expanded section")
-        state.sidebarTagsSectionExpanded = false
-        UserDefaults.standard.removeObject(
-            forKey: AppState.tagsSectionExpandedKey)
     }
 }
