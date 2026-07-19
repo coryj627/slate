@@ -2743,13 +2743,16 @@ final class SidebarImportCoordinatorTests: XCTestCase {
 
     cancelledIntake.cancel()
     let cancelledResult = await cancelledResultTask.value
+    // Time-bounded, not yield-bounded: a busy CI runner can burn a
+    // thousand cooperative yields before the provider's cancellation
+    // callback lands (observed on the FL-06 PR run).
     for _ in 0..<1_000 {
       if cancelledProvider.progressCancellations() == 1,
         cancelledProvider.progressBox.load() == nil
       {
         break
       }
-      await Task.yield()
+      try? await Task.sleep(nanoseconds: 5_000_000)
     }
 
     XCTAssertEqual(
