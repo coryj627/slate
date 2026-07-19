@@ -5954,6 +5954,18 @@ final class AppState: ObservableObject {
     /// concurrent writer's unrelated changes are never clobbered by a stale
     /// snapshot (round-2 finding 1). Silent — the structural mutation's own
     /// announcement already spoke.
+    nonisolated static func retargetedRecents(
+        _ recents: [String], transform: SidebarStructuralTransform
+    ) -> [String] {
+        var seen = Set<String>()
+        return recents.compactMap { path in
+            SidebarStructuralTransform.transformedShortcutPath(
+                path, kind: "file", renames: transform.renames,
+                deletedFiles: transform.deletedFiles,
+                deletedFolders: transform.deletedFolders)
+        }.filter { seen.insert($0).inserted }
+    }
+
     func applySidebarPinsMutation(_ kind: TreeMutation.Kind) {
         // Normalize the kind into one transform value so the in-memory
         // application, the locked disk replay, and the read-only journal all
@@ -5989,6 +6001,16 @@ final class AppState: ObservableObject {
             return
         }
         guard !transform.isEmpty else { return }
+        // FL3-3: the recents history follows the same transform in the
+        // FILE namespace — rename/move retargets, deletes drop, and
+        // convergences dedupe keep-first. Device-local, so it persists
+        // immediately and independently of the vault-file journal below.
+        let retargetedRecents = Self.retargetedRecents(
+            fileRecents, transform: transform)
+        if retargetedRecents != fileRecents {
+            fileRecents = retargetedRecents
+            fileRecentsStore?.save(retargetedRecents)
+        }
         guard sidebarVaultPrefsStore != nil else { return }
 
         // Every structural transform is journaled as PENDING first and only
@@ -7031,11 +7053,16 @@ final class AppState: ObservableObject {
     @Published private(set) var fileRecents: [String] = []
 
     /// The current vault's file-recents store, or nil with no vault
-    /// open. A computed value rather than a stored field because the
-    /// path is vault-relative (`<vault>/.slate/file-recents.json`) and
-    /// changes with every vault switch.
+    /// open. Computed because the vault (and its admission identity, the
+    /// defaults key) changes with every switch; the defaults suite is
+    /// shared with PreferencesStore so tests inject one place.
     private var fileRecentsStore: FileRecentsStore? {
-        currentVaultURL.map { FileRecentsStore(vaultRoot: $0) }
+        currentVaultURL.map {
+            FileRecentsStore(
+                vaultRoot: $0,
+                identity: sidebarVaultRootIdentity,
+                defaults: preferencesStore.defaults)
+        }
     }
 
     /// In-memory, most-recent-first list of vault search queries the
@@ -7384,14 +7411,7 @@ final class AppState: ObservableObject {
             updated = Array(updated.prefix(FileRecentsStore.maxEntries))
         }
         fileRecents = updated
-        do {
-            try store.save(updated)
-        } catch {
-            // Fixed-format NSLog: a file path / error text can contain `%`,
-            // which a dynamic format string would misread as a specifier.
-            let message = "Failed to persist file recent '\(path)': \(error)"
-            NSLog("%@", message)
-        }
+        store.save(updated)
     }
 
     /// Record a committed vault search into the recents so the overlay's

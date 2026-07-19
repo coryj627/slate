@@ -114,7 +114,13 @@ final class QuickSwitcherActivationTests: XCTestCase {
         first.closeVault()
         // Overwrite the persisted recents so the "did restore prepend
         // beta?" signal is unambiguous (beta is NOT first here).
-        try FileRecentsStore(vaultRoot: vault).save(["gamma.md", "alpha.md"])
+        var info = stat()
+        XCTAssertEqual(vault.path.withCString { stat($0, &info) }, 0)
+        FileRecentsStore(
+            vaultRoot: vault,
+            identity: .init(
+                device: UInt64(info.st_dev), inode: UInt64(info.st_ino))
+        ).save(["gamma.md", "alpha.md"])
 
         let second = AppState(
             recentsStore: RecentVaultsStore(
