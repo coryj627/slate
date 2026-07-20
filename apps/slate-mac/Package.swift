@@ -37,7 +37,7 @@ let package = Package(
         // braille that the AT layer consumes.
         .package(
             url: "https://github.com/colinc86/LaTeXSwiftUI",
-            from: "1.5.0"
+            from: "2.0.0"
         ),
         // SwiftDraw renders SVG content to native AppKit. Used by
         // `MermaidView` (#222) to display the mermaid-rs-renderer's
