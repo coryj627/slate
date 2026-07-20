@@ -258,7 +258,8 @@ struct SidebarRowModel {
     var metadata = "\(dateLabel) \(dateText)"
     if preferences.showWordCount, let wordCount = summary.wordCount {
       let count = formatter.decimal(wordCount, locale: locale)
-      metadata += wordCount == 1 ? " · \(count) word" : " · \(count) words"
+      // Number stays locale-formatted; only the noun agrees.
+      metadata += " · \(count) \(CountCopy.noun(wordCount, "word", "words"))"
     }
     metadataText = metadata
 

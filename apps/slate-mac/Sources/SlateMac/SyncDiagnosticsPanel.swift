@@ -125,7 +125,7 @@ struct SyncDiagnosticsPanel: View {
 
     private func header(count: Int) -> some View {
         HStack(spacing: Tokens.Spacing.xs) {
-            Text(verbatim: "Sync, \(count) \(count == 1 ? "system" : "systems") detected")
+            Text(verbatim: "Sync, \(CountCopy.counted(count, "system", "systems")) detected")
                 .font(Tokens.Typography.sectionHeader)
                 .accessibilityAddTraits(.isHeader)
             Spacer()

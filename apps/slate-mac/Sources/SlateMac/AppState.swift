@@ -842,12 +842,12 @@ final class AppState: ObservableObject {
                     hasOmittedDetails: detailCount > inlinePreviewLimit,
                     previewWorkCount: preview.workCount)
             case .importBatch(let report):
-                let failureSummary = report.terminalFailureCount == 1
-                    ? "1 item could not be imported."
-                    : "\(report.terminalFailureCount) items could not be imported."
-                let warningSummary = report.warningCount == 1
-                    ? "1 import warning needs attention."
-                    : "\(report.warningCount) import warnings need attention."
+                let failureSummary =
+                    "\(CountCopy.counted(report.terminalFailureCount, "item", "items")) "
+                    + "could not be imported."
+                let warningSummary =
+                    "\(CountCopy.counted(report.warningCount, "import warning", "import warnings")) "
+                    + "\(CountCopy.verb(report.warningCount, "needs", "need")) attention."
                 let summary: String
                 if report.terminalFailureCount == 0 {
                     summary = "Import completed. " + warningSummary
@@ -1023,7 +1023,7 @@ final class AppState: ObservableObject {
         }
 
         private static func itemCountText(_ count: Int) -> String {
-            "\(count) \(count == 1 ? "item" : "items")"
+            "\(CountCopy.counted(count, "item", "items"))"
         }
 
         private static func moveDetailEntryCount(_ report: BatchMoveReport) -> Int {
@@ -1159,7 +1159,7 @@ final class AppState: ObservableObject {
         }
 
         static func countText(_ count: Int) -> String {
-            "\(count) \(count == 1 ? "item" : "items")"
+            "\(CountCopy.counted(count, "item", "items"))"
         }
 
         private static func countText(_ count: Int, noun: String) -> String {
@@ -1209,7 +1209,7 @@ final class AppState: ObservableObject {
                 ]
                 if stayed > 0 {
                     sentences.append(
-                        "\(countText(stayed)) \(stayed == 1 ? "was" : "were") not moved.")
+                        "\(countText(stayed)) \(CountCopy.verb(stayed, "was", "were")) not moved.")
                 }
                 if !report.unknown.isEmpty {
                     sentences.append(unknownOutcomeSentence(report.unknown.count))
@@ -1227,7 +1227,7 @@ final class AppState: ObservableObject {
                     let stayed = report.untrashed.count
                     if stayed > 0 {
                         sentences.append(
-                            "\(countText(stayed)) \(stayed == 1 ? "was" : "were") not moved.")
+                            "\(countText(stayed)) \(CountCopy.verb(stayed, "was", "were")) not moved.")
                     }
                     sentences.append(unknownOutcomeSentence(report.unknown.count))
                     if report.requiresRescan { sentences.append("Rescan required.") }
@@ -6029,9 +6029,8 @@ final class AppState: ObservableObject {
             guard count > 0 else {
                 throw sidebarActionFailure("No pinned notes in this folder.")
             }
-            let noun = count == 1 ? "note" : "notes"
             try mutateSidebarOrganization(
-                announce: "Unpinned \(count) \(noun)."
+                announce: "Unpinned \(CountCopy.counted(count, "note", "notes"))."
             ) { root in
                 SidebarOrganizationSchema.setPins(&root, folder: folder, paths: [])
             } reflect: { state in
@@ -14259,7 +14258,7 @@ final class AppState: ObservableObject {
         let preferredFocusPath: String?
         /// The sheet's title/hint noun phrase — "3 items".
         var displayName: String {
-            "\(items.count) \(items.count == 1 ? "item" : "items")"
+            "\(CountCopy.counted(items.count, "item", "items"))"
         }
     }
 
@@ -14415,7 +14414,7 @@ final class AppState: ObservableObject {
     var batchTrashQuarantineNotice: String? {
         guard !batchTrashUnknownItems.isEmpty else { return nil }
         let count = batchTrashUnknownItems.count
-        let subject = count == 1 ? "1 item" : "\(count) items"
+        let subject = CountCopy.counted(count, "item", "items")
         let pronoun = count == 1 ? "It remains" : "They remain"
         return "Slate couldn’t verify whether \(subject) moved to Trash. "
             + "\(pronoun) read-only."
@@ -15988,9 +15987,9 @@ final class AppState: ObservableObject {
         let files = report.successfulFileCount
         let folders = report.successfulFolderCount
         var copiedParts: [String] = []
-        if files > 0 { copiedParts.append("\(files) \(files == 1 ? "file" : "files")") }
+        if files > 0 { copiedParts.append("\(CountCopy.counted(files, "file", "files"))") }
         if folders > 0 {
-            copiedParts.append("\(folders) \(folders == 1 ? "folder" : "folders")")
+            copiedParts.append("\(CountCopy.counted(folders, "folder", "folders"))")
         }
         var clauses: [String] = []
         if !copiedParts.isEmpty {
@@ -15998,13 +15997,14 @@ final class AppState: ObservableObject {
         }
         if moveCount > 0 {
             let verb = clauses.isEmpty ? "Moved" : "moved"
-            clauses.append("\(verb) \(moveCount) \(moveCount == 1 ? "item" : "items")")
+            clauses.append("\(verb) \(CountCopy.counted(moveCount, "item", "items"))")
         }
         if reconciledCandidateCount > 0 {
             let verb = clauses.isEmpty ? "Found" : "found"
             clauses.append(
                 "\(verb) \(reconciledCandidateCount) destination "
-                    + "\(reconciledCandidateCount == 1 ? "item" : "items") during reconciliation")
+                    + "\(CountCopy.noun(reconciledCandidateCount, "item", "items")) "
+                    + "during reconciliation")
         }
         var message = clauses.isEmpty
             ? "No items were imported"
@@ -16863,12 +16863,12 @@ final class AppState: ObservableObject {
     /// locked (the `withLinksSuffix` pattern).
     static func batchMoveAnnouncement(count: Int, destination newParent: String) -> String {
         let where_ = newParent.isEmpty ? "vault root" : (newParent as NSString).lastPathComponent
-        return "Moved \(count) \(count == 1 ? "item" : "items") to \(where_)."
+        return "Moved \(CountCopy.counted(count, "item", "items")) to \(where_)."
     }
 
     /// Pure (#852): the ONE summary sentence a batch delete announces.
     static func batchDeleteAnnouncement(count: Int) -> String {
-        "Moved \(count) \(count == 1 ? "item" : "items") to Trash."
+        "Moved \(CountCopy.counted(count, "item", "items")) to Trash."
     }
 
     @discardableResult
@@ -17451,7 +17451,7 @@ final class AppState: ObservableObject {
     }
 
     private static func batchItemCountText(_ count: Int) -> String {
-        "\(count) \(count == 1 ? "item" : "items")"
+        "\(CountCopy.counted(count, "item", "items"))"
     }
 
     // MARK: - Structural undo/redo (#871)
@@ -17512,7 +17512,7 @@ final class AppState: ObservableObject {
         case .rename(_, _, let newName):
             return "rename to \(newName)"
         case .batchMove(_, let entries):
-            return "move of \(entries.count) \(entries.count == 1 ? "item" : "items")"
+            return "move of \(CountCopy.counted(entries.count, "item", "items"))"
         }
     }
 
@@ -19138,7 +19138,8 @@ final class AppState: ObservableObject {
             }
             guard self.currentSession === session else { return }
             if let reason = self.structuralMutationDisabledReason {
-                let subject = items.count == 1 ? "1 item was" : "\(items.count) items were"
+                let subject = "\(CountCopy.counted(items.count, "item", "items")) "
+                    + CountCopy.verb(items.count, "was", "were")
                 self.postMutationAnnouncement(
                     "\(reason) \(subject) not moved.")
                 return
@@ -19767,7 +19768,7 @@ final class AppState: ObservableObject {
         // "Renamed a.md to b.md" (drop trailing period) + suffix.
         let trimmed = base.hasSuffix(".") ? String(base.dropLast()) : base
         return "\(trimmed), updated links in \(rewrittenCount) "
-            + "\(rewrittenCount == 1 ? "note" : "notes")."
+            + "\(CountCopy.noun(rewrittenCount, "note", "notes"))."
     }
 
     // MARK: Command entry points (palette + menu → tree selection)
@@ -22720,7 +22721,7 @@ final class AppState: ObservableObject {
             // haven't accumulated 350 ms of cooldown yet.
             announceScan(
                 message: "Scanning vault. "
-                    + "\(totalFiles) \(totalFiles == 1 ? "file" : "files") to index.",
+                    + "\(CountCopy.counted(totalFiles, "file", "files")) to index.",
                 force: true
             )
         case .fileIndexed(_, let indexed, let total):
@@ -22734,9 +22735,7 @@ final class AppState: ObservableObject {
         case .finished(let report):
             announceScan(
                 message: "Scan complete. "
-                    + "\(report.filesIndexed) "
-                    + (report.filesIndexed == 1 ? "file" : "files")
-                    + " indexed.",
+                    + "\(CountCopy.counted(report.filesIndexed, "file", "files")) indexed.",
                 force: true
             )
             // Clear so the progress bar hides; loadFiles' post-scan

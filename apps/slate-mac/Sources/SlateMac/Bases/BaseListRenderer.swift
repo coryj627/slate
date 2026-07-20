@@ -218,7 +218,7 @@ struct BaseListDisplayModel: Equatable {
     }
 
     private func sectionAccessibilityLabel(_ section: BaseListSection) -> String {
-        let rows = "\(section.rowCount) \(section.rowCount == 1 ? "row" : "rows")"
+        let rows = "\(CountCopy.counted(section.rowCount, "row", "rows"))"
         if let summary = section.summary, !summary.isEmpty {
             return "Group: \(section.label), \(rows). Summary: \(summary)"
         }
@@ -596,7 +596,7 @@ private final class BaseListCoordinator: NSObject, NSOutlineViewDataSource, NSOu
     }
 
     private func sectionAccessibilityLabel(_ section: BaseListSection) -> String {
-        let rows = "\(section.rowCount) \(section.rowCount == 1 ? "row" : "rows")"
+        let rows = "\(CountCopy.counted(section.rowCount, "row", "rows"))"
         if let summary = section.summary, !summary.isEmpty {
             return "Group: \(section.label), \(rows). Summary: \(summary)"
         }

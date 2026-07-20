@@ -467,9 +467,19 @@ pub fn sidebar_filter_audio_summary(
 /// exactly one — zero stays plural (`"0 tags."`). Announcement copy is
 /// assembled from this so noun agreement has a single definition.
 pub(crate) fn count_noun(value: u64, singular: &str, plural: &str) -> String {
-    let grouped = group_thousands(value);
-    let noun = if value == 1 { singular } else { plural };
-    format!("{grouped} {noun}")
+    format!(
+        "{} {}",
+        group_thousands(value),
+        noun(value, singular, plural)
+    )
+}
+
+/// The bare noun for a count — the single definition of the agreement
+/// rule. Callers that format the number themselves (locale decimals,
+/// ungrouped byte counts) take this instead of [`count_noun`] so they
+/// keep their own number formatting.
+pub(crate) fn noun<'a>(value: u64, singular: &'a str, plural: &'a str) -> &'a str {
+    if value == 1 { singular } else { plural }
 }
 
 pub(crate) fn group_thousands(value: u64) -> String {

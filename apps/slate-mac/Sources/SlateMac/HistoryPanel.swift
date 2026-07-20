@@ -309,7 +309,7 @@ struct HistoryPanel: View {
     /// The header's spoken contract (pure, unit-tested): title, count,
     /// and collapse state in one utterance.
     static func groupHeaderLabel(title: String, count: Int, collapsed: Bool) -> String {
-        let versions = count == 1 ? "1 version" : "\(count) versions"
+        let versions = CountCopy.counted(count, "version", "versions")
         return "\(title), \(versions), \(collapsed ? "collapsed" : "expanded")"
     }
 

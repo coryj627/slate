@@ -406,7 +406,8 @@ struct CanvasPromptSheet: View {
             .help(mutationDisabledReason ?? "Choose this file.")
         }
         .frame(minHeight: 180, maxHeight: 280)
-        .accessibilityLabel("\(heading): \(filtered.count) file\(filtered.count == 1 ? "" : "s")")
+        .accessibilityLabel(
+            "\(heading): \(CountCopy.counted(filtered.count, "file", "files"))")
         HStack {
             Text(
                 "\(filtered.count) of \(CountCopy.counted(files.count, "file", "files"))")

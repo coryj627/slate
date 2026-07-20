@@ -234,7 +234,7 @@ struct BulkRenameSheet: View {
         } else {
             let will = report.affected.count
             let skipped = report.skipped.count
-            return "\(will) \(will == 1 ? "file" : "files") will be renamed, \(skipped) skipped, 0 errors."
+            return "\(CountCopy.counted(will, "file", "files")) will be renamed, \(skipped) skipped, 0 errors."
         }
     }
 

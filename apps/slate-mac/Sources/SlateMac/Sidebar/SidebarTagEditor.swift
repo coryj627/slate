@@ -21,7 +21,7 @@ struct SidebarTagEditor: View {
   private var isAdd: Bool { request.kind == .add }
 
   private var fileCountLabel: String {
-    request.paths.count == 1 ? "1 file" : "\(request.paths.count) files"
+    CountCopy.counted(request.paths.count, "file", "files")
   }
 
   /// Prefix-matched suggestions for Add; empty text shows the whole
@@ -96,7 +96,7 @@ struct SidebarTagEditor: View {
                     .font(Tokens.Typography.body)
                     .fontWeight(tagText == count.tag ? .semibold : .regular)
                   Spacer(minLength: 0)
-                  Text(count.fileCount == 1 ? "1 file" : "\(count.fileCount) files")
+                  Text(CountCopy.counted(count.fileCount, "file", "files"))
                     .font(Tokens.Typography.caption)
                     .foregroundStyle(Tokens.ColorRole.textSecondary)
                 }
@@ -106,7 +106,7 @@ struct SidebarTagEditor: View {
               .padding(.vertical, Tokens.Spacing.xxs)
               .accessibilityLabel(count.tag)
               .accessibilityValue(
-                count.fileCount == 1 ? "1 file" : "\(count.fileCount) files")
+                CountCopy.counted(count.fileCount, "file", "files"))
               .accessibilityHint("Selects this tag for removal.")
             }
           }

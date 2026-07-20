@@ -13136,11 +13136,12 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
         }
     }
     fn size_phrase(delta: i64) -> String {
-        // Plain `{n}`, not grouped decimals: this fragment sits beside
-        // the `{op_count} operation{s}` clause below and its number
-        // formatting is load-bearing for the CLI's TSV output.
+        // `noun`, not `count_noun`: plain `{n}` rather than grouped
+        // decimals, because this number is load-bearing for the CLI's
+        // TSV output.
         fn bytes(count: i64) -> String {
-            format!("{count} byte{}", if count == 1 { "" } else { "s" })
+            let noun = crate::sidebar_filter::noun(count as u64, "byte", "bytes");
+            format!("{count} {noun}")
         }
         match delta.cmp(&0) {
             std::cmp::Ordering::Greater => format!("{} added", bytes(delta)),
@@ -13251,7 +13252,8 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
             OpKind::WholeFileReplace if is_marker => "anchor snapshot".to_string(),
             OpKind::WholeFileReplace => {
                 let len = prev_len.unwrap_or(0);
-                format!("snapshot, {len} byte{}", if len == 1 { "" } else { "s" })
+                let noun = crate::sidebar_filter::noun(len as u64, "byte", "bytes");
+                format!("snapshot, {len} {noun}")
             }
             OpKind::EditBatch if op_count == 0 => "marker".to_string(),
             OpKind::EditBatch => format!(

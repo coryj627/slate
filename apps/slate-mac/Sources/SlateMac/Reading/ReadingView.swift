@@ -763,8 +763,8 @@ struct ReadingView: View {
         }
         let columnCount = cells.header.count
         let summary =
-            "Table: \(rows.count) \(rows.count == 1 ? "row" : "rows"), "
-            + "\(columnCount) \(columnCount == 1 ? "column" : "columns")."
+            "Table: \(CountCopy.counted(rows.count, "row", "rows")), "
+            + "\(CountCopy.counted(columnCount, "column", "columns"))."
         return AccessibleDataGrid(
             columns: columns,
             rows: rows,
