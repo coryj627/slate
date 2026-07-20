@@ -2892,6 +2892,50 @@ final class AppStateTests: XCTestCase {
     /// assertion that followed read `.loading` instead of the terminal state.
     /// Here the supersede is injected directly, via the landing gates, so the
     /// interleaving is deterministic rather than load-dependent.
+    /// Direct coverage for `settleTemplateAvailability()` itself, rather than
+    /// only through the supersede scenario below: it must return promptly when
+    /// nothing is in flight, and it must wait out the 75 ms passive-refresh
+    /// debounce **and the load that debounce drains into** — which is the whole
+    /// reason the helper exists. Awaiting the task handle alone lands on the
+    /// `.loading` the drained load re-enters.
+    func testSettleTemplateAvailabilityDrainsDebounceAndReturnsWhenQuiet() async throws {
+        let vault = tempDir.appendingPathComponent("template-settle-unit")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([summary]) }
+        state.openVault(at: vault)
+        await state.settleTemplateAvailability()
+        XCTAssertEqual(state.templateAvailability, .available)
+
+        // Quiescent: nothing scheduled, so settling is a no-op that must return
+        // rather than block on a task that will never appear.
+        await state.settleTemplateAvailability()
+        XCTAssertEqual(state.templateAvailability, .available)
+        XCTAssertEqual(state.availableTemplates, [summary])
+
+        // A passive revalidation coalesces behind the debounce; settling must
+        // follow it through to the terminal state of the load it starts.
+        state.templateListRunner = { _, _ in .success([]) }
+        state.scheduleTemplateAvailabilityRefresh()
+        await state.settleTemplateAvailability()
+        XCTAssertEqual(state.templateAvailability, .empty)
+        XCTAssertTrue(state.availableTemplates.isEmpty)
+    }
+
+    /// With no session there is no load to start and
+    /// `refreshTemplateAvailability()` hands back `nil`. Settling must return
+    /// rather than wait on a task that never exists.
+    func testSettleTemplateAvailabilityReturnsWithNoSession() async throws {
+        let state = try makeAppState()
+        XCTAssertNil(state.currentSession)
+        XCTAssertNil(state.refreshTemplateAvailability())
+        await state.settleTemplateAvailability()
+        XCTAssertEqual(state.templateAvailability, .empty)
+        XCTAssertTrue(state.availableTemplates.isEmpty)
+    }
+
     func testSupersededAvailabilityLoadPublishesNothingUntilSettled() async throws {
         let vault = tempDir.appendingPathComponent("template-supersede")
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
