@@ -18,7 +18,7 @@ A file row leads with the note's **effective name**: the frontmatter `title` whe
 
 ## Selecting files and acting on them
 
-The tree is a real macOS multi-select list: ⇧-click (or ⇧↓/⇧↑) extends a range, ⌘-click toggles membership, and on a folder-note folder a ⌘/⇧ click selects without opening or disclosing. Whatever you select becomes the **one shared target** for every action surface — context menu, File and View menus, Command Palette, keyboard chords, and VoiceOver rotor actions all read the same selection and offer the same verbs with the same availability. A verb that doesn't apply isn't hidden arbitrarily: menus and the palette keep it visible with a spoken reason ("Select exactly one folder to manage its folder note.", "Open is available only for files.").
+The tree is a real macOS multi-select list: ⇧-click (or ⇧↓/⇧↑) extends a range, ⌘-click toggles membership, and on a folder-note folder a ⌘/⇧ click selects without opening or disclosing. Whatever you select becomes the **one shared target** for every action surface — context menu, File and View menus, Command Palette, keyboard chords, and VoiceOver rotor actions all read the same selection and evaluate availability from the same catalog. How they *present* an unavailable verb differs by surface, deliberately: the menu bar, Command Palette, and keyboard keep it visible and **speak the reason** ("Select exactly one folder to manage its folder note.", "Open is available only for files."), while context menus and the VoiceOver rotor stay concise and omit what doesn't apply.
 
 The verbs, and what they need:
 
@@ -108,7 +108,7 @@ Both editors edit the **frontmatter `tags:` list only**, one file at a time, ato
 - Removing the last tag removes the `tags:` key entirely — and an emptied frontmatter block goes with it; no `tags: []` debris.
 - Other frontmatter keys, their order, and the key's own spelling (`Tags:` stays `Tags:`) are preserved.
 
-The report is honest about what didn't happen. Files are **skipped with a spoken per-file reason** rather than mangled: not indexed yet, not a Markdown note, changed on disk since it was indexed, a `tags:` property that isn't a tag list (a nested mapping or a scalar), or duplicate case-variant `tags:` keys. And because the editors touch frontmatter only, removing a tag that also appears as `#tag` in note bodies reports the **inline remainder**: "Removed #draft from 4 files. 2 still have it inline." — the body occurrences are intentionally untouched, and the announcement says so instead of claiming a clean sweep.
+The report is honest about what didn't happen. Files that can't be edited safely are **skipped rather than mangled** — not indexed yet, not a Markdown note, changed on disk since it was indexed, a `tags:` property that isn't a tag list (a nested mapping or a scalar), or duplicate case-variant `tags:` keys — and the announcement reports how many: "Tagged 4 files with #draft. 2 skipped." (The per-file reasons exist in the underlying report; v1 speaks the count.) And because the editors touch frontmatter only, removing a tag that also appears as `#tag` in note bodies reports the **inline remainder**: "Removed #draft from 4 files. 2 still have it inline." — the body occurrences are intentionally untouched, and the announcement says so instead of claiming a clean sweep.
 
 ## Folder notes
 
@@ -143,7 +143,7 @@ Rows in the Folders pane divide into **containers** (folders, tags, Untagged —
 
 ### The file list
 
-A folder container lists its **immediate children** by default. Turn on **Include Subfolders** (in the list-pane header's display menu, or the folder's context menu) to list the whole subtree instead; subtree rows carry a small containing-folder subtitle so lookalike names stay distinguishable. Tag containers always list every file carrying the tag anywhere in the vault; Untagged lists every Markdown file with no tags at all.
+A folder container lists its **immediate children** by default. Turn on **Include Subfolders** (in the list-pane header's display menu, or a folder row's context menu in the Folders pane) to list the whole subtree instead; subtree rows carry a small containing-folder subtitle so lookalike names stay distinguishable. Tag containers always list every file carrying the tag anywhere in the vault; Untagged lists every Markdown file with no tags at all.
 
 The list applies the same organization as the tree — pinned notes lead under a "Pinned" header, then the folder's effective sort, with date-group headers when grouping is on — and file rows are the same component as tree rows, honoring the same date/preview/density settings and per-folder overrides.
 
@@ -151,14 +151,15 @@ Multi-select works like any macOS list (⇧-click ranges, ⌘-click toggles). A 
 
 ### Per-folder display overrides
 
-The list-pane header's display menu (also in a folder's context menu in either layout) sets, for the current folder only: **Preview Lines** (0–3), **Density** (Standard / Compact), and **Include Subfolders**. "Use Vault Default" clears an override back to inheritance. Overrides are stored in the vault's `.slate/sidebar.json` alongside sort/grouping overrides, so they travel with the vault and apply to both the list pane and the tree's rows — one setting, both layouts.
+The list-pane header's display menu sets, for the current folder only: **Preview Lines** (0–3), **Density** (Standard / Compact), and **Include Subfolders**. "Use Vault Default" clears an override back to inheritance. The same Preview Lines and Density items also sit in a folder's context menu in **both** layouts; Include Subfolders appears only where a file list can honor it — the list-pane header and the dual-pane Folders pane's folder rows. All three are stored in the vault's `.slate/sidebar.json` alongside the sort/grouping overrides, so they travel with the vault. Preview Lines and Density are **row** settings and apply on both surfaces — the list pane and the tree's rows for that folder. **Include Subfolders** is a *scope* setting for the dual-pane list only; the tree always shows one level per folder and discloses the rest.
 
 ### Keyboard in dual-pane
 
 | Key | Where | Action |
 | --- | --- | --- |
 | → | Folders pane | On a collapsed folder: disclose it. On an expanded or childless container: move focus into the Files pane (Navigator convention). On a leaf: nothing. |
-| ← / Esc | Files pane | Return focus to the Folders pane. |
+| ← | Files pane (container list) | Return focus to the Folders pane. |
+| Esc | Files pane | Return focus to the Folders pane — including from filter results, where Esc is the way back. |
 | ↓ | Filter field | Enter the Files pane at its first row. |
 | ⏎ | Files pane | Open the selected note. |
 
@@ -179,7 +180,7 @@ The filter field stays topmost in both layouts; in dual-pane a committed query *
 | ⇧⌘M | Selection | Move To… |
 | ⌥⌘F | Anywhere | Focus the filter field. |
 | ↓ (in filter) | Filter field | Enter results at the first row. |
-| Esc | Filter / lists | Clear the filter and restore the tree; in dual-pane lists, return to the Folders pane. |
+| Esc | Filter / lists | Clear the filter and restore the tree; in dual-pane lists (container rows and filter results alike), return to the Folders pane. |
 | ⌃1–⌃9 | Sidebar focused | Activate Shortcut 1–9. |
 | ⌃⌘[ / ⌃⌘] | Anywhere | Selection history back / forward. |
 

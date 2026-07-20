@@ -16,8 +16,10 @@ spoken string is heard and no focus dead-end occurs.
       value while showing only the name visually.
 - [ ] F2 rename on a focused row: editor is announced, ⏎ commits with the
       rename announcement, Esc cancels and restores focus to the row.
-- [ ] Multi-select with ⇧↓/⇧↑ then open the context menu: batch verbs speak
-      their target count; a disabled verb speaks its reason.
+- [ ] Multi-select with ⇧↓/⇧↑ then open the context menu: only verbs that
+      apply to the selection are listed (context menus omit the rest by
+      design). Then open the same selection's File menu or the palette:
+      the unavailable verbs ARE listed there and speak their reason.
 - [ ] Drag a row (VO+space alternative: Move To… ⇧⌘M): the move announces
       source and destination; sidebar focus lands on the moved note.
 
@@ -37,9 +39,11 @@ spoken string is heard and no focus dead-end occurs.
       activation; in dual-pane it selects the container instead of opening.
 - [ ] ⌥⌘F focuses the filter field (field announced); typing shows live
       results; ↓ enters results at row 1; Esc clears and returns to the tree.
-- [ ] Commit a query with an operator (e.g. `tag:project modified:today`) —
-      the result summary is announced ("N results …"); an invalid query
-      announces its error without moving focus.
+- [ ] Commit a query using real operators (e.g. `#project @today has:task`)
+      — the result summary is announced ("N results."). Then commit an
+      invalid one (e.g. `@nextweek` or `has:notes`): the error is announced
+      and rendered inline naming the bad term, focus does not move, and the
+      previous results stay visible.
 - [ ] ⌃⌘[ / ⌃⌘] walk selection history back/forward with announcements.
 
 ## Tags and batch tagging
@@ -49,8 +53,9 @@ spoken string is heard and no focus dead-end occurs.
 - [ ] Activate a tag row: tree mode shows its file list surface; dual-pane
       selects it as the Files-pane container ("Files" pane announced on
       focus arrival).
-- [ ] Select 3 notes → Add Tag… (editor sheet announced) → commit: the batch
-      report is announced; any skipped file is listed with its reason.
+- [ ] Select 3 notes → Add Tag… (editor sheet announced) → commit: the
+      batch report is announced ("Tagged N files with #x."), with a
+      skipped COUNT appended when any file was skipped.
 - [ ] A frontmatter tag containing a space (e.g. `project alpha`): activating
       its row (tree AND dual-pane) shows exactly its files — the summary
       names the whole tag ("N results for #project alpha.") and a file

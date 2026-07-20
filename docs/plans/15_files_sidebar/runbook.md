@@ -11,15 +11,16 @@ filled at close-out on the merged tree; commands are exact.
 # parallel builds on the same box skew the perf guards into false failures.
 make ci
 
-# Swift suite (apps/slate-mac). The debug dylib path is required.
-cd apps/slate-mac
-DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift test
+# Swift suite (from the repo root; the debug dylib path is required).
+(cd apps/slate-mac && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift test)
 
 # Targeted sidebar suites
-DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift test \
-  --filter "SidebarListPaneTests|SidebarActionParityTests|SidebarDualPaneContainerTests"
+(cd apps/slate-mac && DYLD_LIBRARY_PATH="$PWD/../../target/debug" swift test \
+  --filter "SidebarListPaneTests|SidebarActionParityTests|SidebarDualPaneContainerTests")
 
 # Accessibility-gated app build — 100.0 A+ (0 issues) is the merge floor.
+# Runs from the REPO ROOT (the script lives at scripts/, not under
+# apps/slate-mac — a stray `cd` into the app directory breaks it).
 # CI's checker can be newer than local: gate every PR's own tip in CI.
 ./scripts/build-mac-app.sh
 ```
@@ -67,7 +68,7 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
 | Batch tag edit skipped files | The report's per-file reason strings are exact; "inline" reasons mean body occurrences intentionally survive frontmatter removal. |
 | Folder note badge wrong | `has_folder_note` is one indexed probe per child dir (`<Folder>/<Folder>.md`, markdown only). Rescan; then check the index row for that exact path. |
 | Compound folder rename left pieces | The operation degrades to a plain rename when no note is present at operation time; rollback messages state exactly what was and wasn't restored — read the structural report, and `undo_op_ids` lists both undo rows. |
-| Dual-pane list stale after a mutation | Refresh triggers are value-typed: `treeMutation` (structural) and `sidebarOrganization` (pins/sort/overrides). If neither changed, the mutation didn't go through a funnel — that's the bug. |
+| Dual-pane list stale after a mutation | The refresh trigger is `sidebarMutationToken` — a monotonic counter ticked by every mutation announcement, so structural transforms, organization edits, AND content mutations (batch tag edits, which change neither `treeMutation` nor `sidebarOrganization`) all invalidate. If the token didn't tick, the mutation never passed the announcement funnel — that's the bug. |
 | Dual-pane list truncated | The drain caps at 10,000 files and the header says "first 10,000 files". Scope down (or filter); the cap is a deliberate ceiling, not a failure. |
 | Layout/divider/recents didn't follow the vault | They're device-local by design. Vault-owned state is exactly what's in `.slate/sidebar.json` (sort/grouping/folder overrides incl. preview/density/descendants, pins, shortcuts). |
 | Perf guard failed in a local run | Was the box busy? The guards sample best-of-3 but a saturated machine still fails falsely; re-run idle. CI's isolated runner is authoritative. |
@@ -79,8 +80,11 @@ cargo test -p slate-core --release -- session::tests::dir_tree    # perf guards 
   (authored order, per folder); shortcuts. Unknown keys are preserved on
   write; malformed files disable organization commands with a spoken reason
   rather than being clobbered.
-- **Device (UserDefaults)**: sidebar layout (tree/dual-pane), divider
-  fraction, Recents, section expansion, filter's committed-query restore.
+- **Device (UserDefaults)**: the six row-presentation preferences (date
+  source, date format, preview lines, show task counts, show word count,
+  density — `SidebarPreferences`), sidebar layout (tree/dual-pane),
+  divider fraction, Recents (per vault, keyed by device+inode identity),
+  section expansion, and the filter's committed-query restore.
 
 ## Failure / recovery procedures
 
