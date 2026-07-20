@@ -311,7 +311,7 @@ final class BasesTabRoutingTests: XCTestCase {
         state.openDashboard(id: dashboardID, name: "Task dashboard", target: .newTab)
         let openDashboard = try XCTUnwrap(state.activeDashboardDocument)
         state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
         let dock = try XCTUnwrap(state.basesDockDocument)
 
         state.openFile("Notes/Alpha.md", target: .newTab)
@@ -325,7 +325,7 @@ final class BasesTabRoutingTests: XCTestCase {
     func testWhereAmIRouteResolvesToBasesOnABaseTab() async throws {
         let state = try await makeAppState()
         state.openBaseFile("Queries/Reading.base")
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
         XCTAssertNotNil(state.activeBaseDocument, "a base tab is active")
         XCTAssertNil(state.activeCanvasDocument)
         XCTAssertEqual(state.whereAmIRouteTarget, .bases)
@@ -404,7 +404,7 @@ final class BasesTabRoutingTests: XCTestCase {
         state.openBaseFile("Queries/Edit.base", target: .newTab)
         let active = try XCTUnwrap(state.activeBaseDocument)
         state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
         let dock = try XCTUnwrap(state.basesDockDocument)
 
         active.selectView(index: 1, session: session)
@@ -1748,7 +1748,7 @@ final class BasesTabRoutingTests: XCTestCase {
         fixture.state.dockBaseFileToSidebar(
             path: "Queries/Edit.base",
             refreshDelayNanoseconds: 0)
-        await fixture.state.basesDockRefreshTask?.value
+        await fixture.state.settleBasesDockRefresh()
         let dock = try XCTUnwrap(fixture.state.basesDockDocument)
         let ownerHandle = try XCTUnwrap(fixture.active.handle)
         let dockHandle = try XCTUnwrap(dock.handle)
@@ -1805,7 +1805,7 @@ final class BasesTabRoutingTests: XCTestCase {
         let doc = state.baseDocument(for: "Queries/Reading.base")
         state.dockBaseFileToSidebar(
             path: "Queries/Reading.base", name: "Reading", refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
         let dockDocument = try XCTUnwrap(state.basesDockDocument)
 
         await state.renameEntry(

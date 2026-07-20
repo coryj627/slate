@@ -41,6 +41,14 @@ enum SidebarContainer: Equatable, Hashable {
 }
 
 /// Pure focus-walk decisions for the navigation pane (spec rule 4).
+///
+/// ← is deliberately absent here. It always returns focus to the
+/// navigation pane, so there is no decision to model — and the constant
+/// that used to stand in for one (`leftArrowReturnsToNavigation()`,
+/// `-> Bool { true }`) read as coverage while being unable to fail. The
+/// real ← guarantee is that every list surface installs the handler at
+/// all, which is pinned by the source census in
+/// `SidebarDualPaneContainerTests`.
 enum SidebarDualPaneFocus {
   enum RightArrowOutcome: Equatable {
     /// Inside-tree disclosure keeps priority: expand the collapsed
@@ -60,10 +68,6 @@ enum SidebarDualPaneFocus {
     if hasDisclosure && !isExpanded { return .disclose }
     return .moveToList
   }
-
-  /// ← in the list pane always returns to the selected container in
-  /// the navigation pane; expressed as a helper for symmetry/testing.
-  static func leftArrowReturnsToNavigation() -> Bool { true }
 }
 
 /// Divider persistence (spec rule 2): device-local fraction with a

@@ -246,7 +246,6 @@ final class SidebarDualPaneContainerTests: XCTestCase {
                 isContainer: false, hasDisclosure: false, isExpanded: false),
             .stay,
             "leaves never enter or retarget the list")
-        XCTAssertTrue(SidebarDualPaneFocus.leftArrowReturnsToNavigation())
     }
 
     /// FL-15 close-out regression: ←/Esc parity on EVERY sidebar list
@@ -260,8 +259,9 @@ final class SidebarDualPaneContainerTests: XCTestCase {
     /// This is a SOURCE census (the `A11yResidueCensusTests` pattern)
     /// because the defect lives in a SwiftUI modifier chain: no
     /// model-level assertion can observe whether `.onMoveCommand` is
-    /// attached, and `leftArrowReturnsToNavigation()` above is a
-    /// constant that cannot fail. The claim pinned here is the one
+    /// attached. This is the ONLY thing standing behind ← — the
+    /// constant that used to imply coverage was deleted precisely
+    /// because it could not fail. The claim pinned here is the one
     /// that actually broke — every site that routes Esc back to its
     /// owning pane routes ← there too, in equal number.
     func testEveryListSurfaceReturnsFocusOnLeftArrowAsWellAsEscape() throws {
