@@ -343,7 +343,7 @@ fn audio_summary_is_normative() {
             .filter_files("zebra", None, None, &[], Paging::first(10))
             .unwrap()
             .audio_summary,
-        "1 results."
+        "1 result."
     );
     assert_eq!(
         session
