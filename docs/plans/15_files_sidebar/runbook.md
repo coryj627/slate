@@ -42,7 +42,7 @@ Symptom of staleness: Swift compile errors on types that exist in Rust
 | Rust workspace | `make ci` (idle box) | ✅ green — merged main and again on the #992 audit-fix tree (2026-07-20, Apple M5 Pro) |
 | Swift suite | `swift test` (full) | ✅ 2823 tests, 0 failures (1 skipped) on the #992 tree |
 | Accessibility | `./scripts/build-mac-app.sh` | ✅ 100.0 A+ (0 issues); CI's newer checker also green on every PR tip |
-| Censuses (release) | see below | ✅ tag_tree_exec 21/21 · folder_notes_exec 11/11 · file_meta random-walk census 3/3 (217 s) · dir_tree guards (recorded in the PR thread) |
+| Censuses (release) | see below | ✅ `tag_tree_exec` 21/21 · `folder_notes_exec` 11/11 · `file_meta` random-walk census 3/3 (217 s) · `session::tests::dir_tree` 25/25 (1071 s — the four 125-seed filesystem-equivalence census shards, dir-id stability across rescans, and the root-listing perf guard) |
 | Benchmarks vs FL budgets | see below | ✅ all five inside budget — table in `BENCHMARKS.md` §FL close-out (filter 33.4/36.1 ms, tag tree 5.2 ms, root listing 7.8 ms, scan +0.5%) |
 
 FL budgets (program §NFR): filter ≤ 50 ms @10k files; tag tree ≤ 25 ms @10k;
