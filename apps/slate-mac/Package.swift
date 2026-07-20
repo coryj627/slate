@@ -47,7 +47,7 @@ let package = Package(
         // here so its surface is reachable from our code.)
         .package(
             url: "https://github.com/swhitty/SwiftDraw",
-            from: "0.21.0"
+            from: "0.29.0"
         ),
     ],
     targets: [
