@@ -6140,6 +6140,16 @@ pub enum A11yEvent {
     RowSelected {
         name: String,
     },
+    SwitcherRecentCount {
+        count: u32,
+    },
+    SwitcherNoMatches {
+        query: String,
+    },
+    SwitcherMatchCount {
+        count: u32,
+        query: String,
+    },
     PaletteCommandSelected {
         label: String,
         disabled_reason: Option<String>,
@@ -6365,6 +6375,9 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::NoItemsSelected => C::NoItemsSelected,
             F::TreeFolderSelected { name } => C::TreeFolderSelected { name },
             F::RowSelected { name } => C::RowSelected { name },
+            F::SwitcherRecentCount { count } => C::SwitcherRecentCount { count },
+            F::SwitcherNoMatches { query } => C::SwitcherNoMatches { query },
+            F::SwitcherMatchCount { count, query } => C::SwitcherMatchCount { count, query },
             F::PaletteCommandSelected {
                 label,
                 disabled_reason,

@@ -525,6 +525,36 @@
     "text": "Selected: notes"
   },
   {
+    "event": "SwitcherRecentCount { count: 2 }",
+    "priority": "medium",
+    "text": "2 recent files"
+  },
+  {
+    "event": "SwitcherRecentCount { count: 1 }",
+    "priority": "medium",
+    "text": "1 recent file"
+  },
+  {
+    "event": "SwitcherRecentCount { count: 0 }",
+    "priority": "medium",
+    "text": "0 recent files"
+  },
+  {
+    "event": "SwitcherNoMatches { query: \"zzz\" }",
+    "priority": "medium",
+    "text": "No files matching \"zzz\""
+  },
+  {
+    "event": "SwitcherMatchCount { count: 2, query: \"foo\" }",
+    "priority": "medium",
+    "text": "2 files matching \"foo\""
+  },
+  {
+    "event": "SwitcherMatchCount { count: 1, query: \"foo\" }",
+    "priority": "medium",
+    "text": "1 file matching \"foo\""
+  },
+  {
     "event": "PaletteCommandSelected { label: \"Save\", disabled_reason: None }",
     "priority": "medium",
     "text": "Selected: Save"
