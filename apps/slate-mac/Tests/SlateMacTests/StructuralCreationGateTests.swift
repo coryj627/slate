@@ -1081,7 +1081,7 @@ final class StructuralCreationGateTests: XCTestCase {
             "blocker.md": "# blocker\n", "dest/keep.md": "# keep\n",
             "Templates/Seed.md": "# Seed\n",
         ])
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
         let blocker = try await blockingMove(on: state)
         let ids = [SlateCommandID.newFromTemplate, SlateCommandID.newCanvas]

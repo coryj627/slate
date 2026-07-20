@@ -2829,7 +2829,7 @@ final class AppStateTests: XCTestCase {
 
         state.openVault(at: vault)
         XCTAssertEqual(state.templateAvailability, .loading)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
         XCTAssertEqual(state.availableTemplates, [summary])
 
@@ -2843,12 +2843,65 @@ final class AppStateTests: XCTestCase {
         state.templateListRunner = { _, _ in
             .failure(.Io(message: "templates unreadable"))
         }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .failed)
         XCTAssertTrue(state.availableTemplates.isEmpty)
 
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshUnavailableTemplateAvailability()?.value
+        state.refreshUnavailableTemplateAvailability()
+        await state.settleTemplateAvailability()
+        XCTAssertEqual(state.templateAvailability, .available)
+        XCTAssertEqual(state.availableTemplates, [summary])
+    }
+
+    /// Regression for the CI flake in this family: `await
+    /// templateAvailabilityTask?.value` is not a settle.
+    ///
+    /// A load publishes only while it is still the current generation, and
+    /// every `startTemplateAvailabilityLoad` retires the previous one — so a
+    /// superseded load runs its task to completion having published nothing,
+    /// leaving the state at the `.loading` its replacement set. On CI the
+    /// supersede arrived from the 75 ms passive-revalidation debounce (vault
+    /// events / scan completion / foreground activation) landing inside one of
+    /// these awaits under a starved `swift test --parallel` runner, and the
+    /// assertion that followed read `.loading` instead of the terminal state.
+    /// Here the supersede is injected directly, via the landing gates, so the
+    /// interleaving is deterministic rather than load-dependent.
+    func testSupersededAvailabilityLoadPublishesNothingUntilSettled() async throws {
+        let vault = tempDir.appendingPathComponent("template-supersede")
+        try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
+        let summary = TemplateSummary(
+            path: "Templates/Meeting.md", name: "Meeting", description: nil)
+        let state = try makeAppState()
+        state.templateListRunner = { _, _ in .success([summary]) }
+        state.openVault(at: vault)
+        await state.settleTemplateAvailability()
+        XCTAssertEqual(state.templateAvailability, .available)
+
+        // Park a load at its landing gate, then retire it with a second one —
+        // which we hold at its own gate so the state can't move on before the
+        // assertion below.
+        let parked = TestGate()
+        state.templateAvailabilityLandingGateForTesting = { _ in await parked.wait() }
+        let superseded = state.refreshTemplateAvailability()
+        await parked.waitUntilEntered()
+
+        let replacement = TestGate()
+        state.templateAvailabilityLandingGateForTesting = { _ in await replacement.wait() }
+        _ = state.refreshTemplateAvailability()
+        await parked.open()
+        await superseded?.value
+
+        // The awaited task is finished, yet nothing was published. This is
+        // exactly the state the old seam handed to the assertions after it.
+        XCTAssertEqual(
+            state.templateAvailability, .loading,
+            "a superseded load must complete without publishing — awaiting its handle is not a settle")
+
+        state.templateAvailabilityLandingGateForTesting = nil
+        await replacement.open()
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
         XCTAssertEqual(state.availableTemplates, [summary])
     }
@@ -2863,7 +2916,7 @@ final class AppStateTests: XCTestCase {
         let state = try makeAppState()
         state.templateListRunner = { _, _ in .success([summary]) }
         state.openVault(at: vault)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
 
         let gate = TestGate()
@@ -2894,10 +2947,10 @@ final class AppStateTests: XCTestCase {
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
         let state = try makeAppState()
         state.openVault(at: vault)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         await state.scanTask?.value
         await state.templateAvailabilityRefreshTaskForTesting?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
 
         let gate = TestGate()
         let invocations = LockedCounter()
@@ -2926,10 +2979,10 @@ final class AppStateTests: XCTestCase {
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
         let state = try makeAppState()
         state.openVault(at: vault)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         await state.scanTask?.value
         await state.templateAvailabilityRefreshTaskForTesting?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
 
         let started = LockedCounter()
         let observedCancellation = LockedCounter()
@@ -2969,10 +3022,10 @@ final class AppStateTests: XCTestCase {
         let state = try makeAppState()
         state.templateListRunner = { _, _ in .success([summary]) }
         state.openVault(at: vault)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         await state.scanTask?.value
         await state.templateAvailabilityRefreshTaskForTesting?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
         let session = try XCTUnwrap(state.currentSession)
 
@@ -2997,7 +3050,7 @@ final class AppStateTests: XCTestCase {
         XCTAssertEqual(invocations.value, 0, "a live template flow retains refresh work")
         XCTAssertEqual(state.templateAvailability, .available)
         state.cancelTemplateFlow()
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
 
         XCTAssertEqual(invocations.value, 1, "the retained burst drains once when idle")
         XCTAssertEqual(state.templateAvailability, .empty)
@@ -3033,7 +3086,7 @@ final class AppStateTests: XCTestCase {
 
         state.submitTemplateNoteName("created.md")
         await state.templateCreateTask?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
 
         XCTAssertTrue(
             FileManager.default.fileExists(atPath: vault.appendingPathComponent("created.md").path))
@@ -3051,16 +3104,16 @@ final class AppStateTests: XCTestCase {
         let state = try makeAppState()
         state.templateListRunner = { _, _ in .success([summary]) }
         state.openVault(at: vault)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         await state.scanTask?.value
         await state.templateAvailabilityRefreshTaskForTesting?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
 
         state.templateListRunner = { _, _ in .success([]) }
         state.scheduleTemplateAvailabilityRefresh()
         await state.templateAvailabilityRefreshTaskForTesting?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
 
         XCTAssertEqual(state.templateAvailability, .empty)
         XCTAssertTrue(state.availableTemplates.isEmpty)
@@ -3079,7 +3132,7 @@ final class AppStateTests: XCTestCase {
             encoding: .utf8)
         let state = try makeAppState()
         state.openVault(at: vault)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .empty)
         XCTAssertFalse(
             AppState.templateAvailabilityEmptyReason.contains("Templates"),
@@ -3099,7 +3152,7 @@ final class AppStateTests: XCTestCase {
             await Task.yield()
         }
         await state.templateAvailabilityRefreshTaskForTesting?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
         XCTAssertEqual(state.availableTemplates.map(\.path), ["Blueprints/Meeting.md"])
 
@@ -3112,7 +3165,7 @@ final class AppStateTests: XCTestCase {
             await Task.yield()
         }
         await state.templateAvailabilityRefreshTaskForTesting?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(
             state.templateAvailability, .empty,
             "deleting the last template must invalidate a cached available projection")
@@ -3142,7 +3195,7 @@ final class AppStateTests: XCTestCase {
         state.templateAvailabilityLandingGateForTesting = nil
         state.templateListRunner = { _, _ in .success([newSummary]) }
         state.openVault(at: vaultB)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.availableTemplates, [newSummary])
         XCTAssertEqual(state.templateAvailability, .available)
         XCTAssertFalse(state.isTemplatePickerOpen)
@@ -3209,7 +3262,7 @@ final class AppStateTests: XCTestCase {
         let state = try makeAppState()
         state.templateListRunner = { _, _ in .success([summary]) }
         state.openVault(at: vault)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         let snapshot = SidebarSelectionSnapshot(
             sessionIdentity: ObjectIdentifier(try XCTUnwrap(state.currentSession)),
             items: [SidebarSelectionItem(
@@ -3251,11 +3304,13 @@ final class AppStateTests: XCTestCase {
         assertUnavailable(AppState.templateAvailabilityEmptyReason)
 
         state.templateListRunner = { _, _ in .failure(.Io(message: "no access")) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         assertUnavailable(AppState.templateAvailabilityFailedReason)
 
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         state.sidebarActionStructuralDisabledReasonOverride = "Another file operation is running."
         assertUnavailable("Another file operation is running.")
     }
@@ -3265,7 +3320,7 @@ final class AppStateTests: XCTestCase {
 
         let picker = state.openTemplatePicker()
         await picker?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
 
         XCTAssertTrue(state.isTemplatePickerOpen)
         XCTAssertEqual(state.templateAvailability, .empty)
@@ -3281,7 +3336,7 @@ final class AppStateTests: XCTestCase {
         try FileManager.default.createDirectory(at: vault, withIntermediateDirectories: true)
         let state = try makeAppState()
         state.openVault(at: vault)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
 
         state.templateListRunner = { _, _ in
             .failure(.Io(message: "templates unavailable"))
@@ -3315,7 +3370,7 @@ final class AppStateTests: XCTestCase {
         let state = try makeAppState()
         state.templateListRunner = { _, _ in .success([summary]) }
         state.openVault(at: vault)
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         let gate = TestGate()
         state.templateAvailabilityLandingGateForTesting = { _ in await gate.wait() }
 
