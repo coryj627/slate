@@ -67,7 +67,7 @@ tree-sitter-cpp = "0.23"
 # Mermaid: pure-Rust SVG renderer + structured-description source.
 # Disable the cli + png features (we render to SVG-only and ship via
 # AppKit's SVG paths).
-mermaid-rs-renderer = { version = "0.2", default-features = false }
+mermaid-rs-renderer = { version = "0.3", default-features = false }
 
 # --- Milestone L citations + bibliography (#276 / #277) ---------------
 # Hayagriva (Typst) for BibTeX / BibLaTeX parsing in #276 and CSL
