@@ -1741,7 +1741,13 @@ extension AppState {
                     case .registry(let key):
                         ownsOwner = self.baseDocuments[key] === plan.document
                     case .dock(let target):
-                        ownsOwner = self.basesDock.target == target
+                        // #999: ownership is "same entity, same document" —
+                        // the reference check below is the real test. A
+                        // display-name change is not a retarget (setTarget
+                        // invalidates on `stableIdentity`, not on the name),
+                        // so matching on `==` released a good result and left
+                        // the dock on stale rows.
+                        ownsOwner = self.basesDock.target?.matchesEntity(target) == true
                             && self.basesDockDocument === plan.document
                     }
                     guard ownsOwner else {
@@ -1772,7 +1778,11 @@ extension AppState {
                     case .registry(let id):
                         ownsOwner = self.dashboardDocuments[id] === plan.dashboard
                     case .dock(let target):
-                        ownsOwner = self.basesDock.target == target
+                        // #999, as above: a dashboard rename retargets the
+                        // dock's name without touching this section's
+                        // reservation, so identity + reference identity is the
+                        // ownership test.
+                        ownsOwner = self.basesDock.target?.matchesEntity(target) == true
                             && self.basesDockDashboardDocument === plan.dashboard
                     }
                     guard ownsOwner,
@@ -1862,8 +1872,13 @@ extension AppState {
                 appendMembershipChange(
                     previous: plan.previousMembership,
                     result: plan.document.result)
+                // #999: rebase on the same identity predicate `setTarget` uses
+                // to invalidate the baseline. A rename leaves the baseline in
+                // place, so skipping the rebase here would leave it on the OLD
+                // rows and make the next follow-active publish re-announce a
+                // change the user already heard.
                 if case .dock(let target) = plan.owner,
-                    self.basesDock.target == target,
+                    self.basesDock.target?.matchesEntity(target) == true,
                     self.basesDockDocument === plan.document
                 {
                     self.basesDock.rebaseMembership(
@@ -1895,7 +1910,7 @@ extension AppState {
                 dockDashboardPlans.allSatisfy({ settledIndices.contains($0.workIndex) }),
                 let plan = dockDashboardPlans.first,
                 case .dock(let target) = plan.owner,
-                    self.basesDock.target == target,
+                    self.basesDock.target?.matchesEntity(target) == true,  // #999
                     self.basesDockDashboardDocument === plan.dashboard
             {
                 self.basesDock.rebaseMembership(plan.dashboard.membershipSignature)

@@ -79,10 +79,12 @@ enum BasesDockTarget: Equatable {
     }
 
     /// True when both targets name the same docked entity, ignoring the
-    /// display name. `==` is name-sensitive (a rename must invalidate a
-    /// published membership signature); callers that only need "is this still
-    /// the same thing?" — a pending dock refresh, say — use this instead so a
-    /// concurrent rename doesn't read as a retarget (#999).
+    /// display name — the same predicate `setTarget` uses to decide whether the
+    /// membership baseline survives. Every "is the dock still showing this
+    /// thing?" guard (a pending refresh, a post-write apply, a membership
+    /// rebase) belongs here, so a concurrent rename doesn't read as a retarget
+    /// (#999). `==` stays name-sensitive for equality/diffing of the target
+    /// value itself; it is not an ownership test.
     func matchesEntity(_ other: BasesDockTarget) -> Bool {
         stableIdentity == other.stableIdentity
     }
