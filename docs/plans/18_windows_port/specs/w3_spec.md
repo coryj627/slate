@@ -5,14 +5,16 @@ Program: [00_program.md](../00_program.md) (decisions 4, 6, 7; DoD §W-A/§W-C).
 
 **Execution order: W3-1 first (the container); W3-2..W3-5 parallel after.**
 
+**W3-1 prerequisite decided (owner, 2026-07-19): [#967](https://github.com/coryj627/slate/issues/967) → Option A.** Inline segments are canonical in core — executable spec: [w3_inline_runs_spec.md](w3_inline_runs_spec.md) (pre-unpark, mac-side; the mac `ReadingInlineMapper` migrates onto `reading_inline_segments_source`, and the §W-A harness gains the `inline_runs` artifact in both twins). W3-1 consumes that API; it never re-implements the retired mapper (prohibition list: inline-runs spec §10).
+
 ## W3-1 · Reading view — PR 1
 
-1. Block-model rendering from the core reading pipeline (same block/segment APIs the mac `ReadingView` consumes: headings, lists, tables via cell-segmentation, quotes, callouts-as-shipped, links, tags, tasks).
-2. Mode toggle parity (reading ⇄ editing, same command + per-leaf state), link routing (`ReadingLinkRouter` semantics), in-place block-embed expansion (#598 behavior).
+1. Block-model rendering from the core reading pipeline (same block/segment APIs the mac `ReadingView` consumes: headings, lists, tables via cell-segmentation, quotes, callouts-as-shipped), with inline content — links, tags, citations, unresolved state, per-run accessible text — arriving as core-computed runs from the canonical inline-segment API (#967 Option A; [w3_inline_runs_spec.md](w3_inline_runs_spec.md)). C# maps runs to WPF `Run`/`Hyperlink` inlines and applies attributes; no inline parsing, splitting, or resolution logic host-side.
+2. Mode toggle parity (reading ⇄ editing, same command + per-leaf state), link routing (`ReadingLinkRouter` semantics; activation record-matching via core `reading_match_link`), in-place block-embed expansion (#598 behavior; detection via the core `block_embed_key`).
 3. Tables render on the W4-1 grid substrate where mac uses `AccessibleDataGrid` (#566 parity) — a **deferred cross-wave row** (program wave table): W3-1 closes its wave with plain accessible table rendering, and the substrate-backed rows complete after W4-1 lands; matrix-tracked, not wave-blocking.
 4. UIA: document structure exposed so JAWS/NVDA heading/link/list navigation works natively (decision 6: no outline crutch); text ranges expose the reading order.
 
-- [ ] Block parity rows + mode toggle + link routing; §W-A structure rows green *(substrate-backed table rows excluded — they transfer to W4-1's acceptance and close, §W-C included, with Wave 4)*
+- [ ] Block parity rows + mode toggle + link routing; §W-A structure **and `inline_runs`** rows green *(substrate-backed table rows excluded — they transfer to W4-1's acceptance and close, §W-C included, with Wave 4)*
 - [ ] Heading/link/list AT navigation verified (§W-C)
 
 ## W3-2 · Math: WPFMath + the math AutomationPeer — PR 2
