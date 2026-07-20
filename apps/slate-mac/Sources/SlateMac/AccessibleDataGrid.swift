@@ -1037,7 +1037,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     }
 
     private func accessibilityLabel(for group: AccessibleDataGrid<Row>.Group) -> String {
-        let rowText = "\(group.rowCount) \(group.rowCount == 1 ? "row" : "rows")"
+        let rowText = "\(CountCopy.counted(group.rowCount, "row", "rows"))"
         if let summary = group.summary, !summary.isEmpty {
             return "Group: \(group.label), \(rowText). Summary: \(summary)"
         }

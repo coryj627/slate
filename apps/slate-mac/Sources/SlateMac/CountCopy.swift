@@ -15,6 +15,14 @@ import Foundation
 /// Generic over `BinaryInteger` because counts arrive as `Int` from
 /// Swift collections and as `UInt64`/`UInt32` across the FFI boundary;
 /// casting at every call site is what invites the next miss.
+///
+/// **Number formatting is NOT part of the contract.** `counted`
+/// interpolates the value plainly — it does not group thousands and
+/// does not localize. This is a deliberate divergence from core's
+/// `count_noun`, which DOES group ("1,000 tags"), so the two are not
+/// byte-identical at ≥ 1000. A caller that needs a grouped or
+/// locale-formatted number formats it itself and takes `noun` for the
+/// agreement alone (see `SidebarFileRow`'s word count).
 enum CountCopy {
     /// `"1 card"`, `"3 cards"`, `"0 cards"`.
     static func counted(

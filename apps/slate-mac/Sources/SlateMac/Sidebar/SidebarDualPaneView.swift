@@ -432,7 +432,7 @@ struct SidebarDualPaneView: View {
 
   private var headerCountText: String {
     let count = listModel.fileCount
-    let base = count == 1 ? "1 file" : "\(count) files"
+    let base = CountCopy.counted(count, "file", "files")
     return listModel.truncated ? "first \(base)" : base
   }
 
@@ -494,7 +494,7 @@ struct SidebarDualPaneView: View {
       ForEach(listModel.rows) { row in
         switch row {
         case .header(_, let label, let count):
-          Text("\(label) — \(count == 1 ? "1 file" : "\(count) files")")
+          Text("\(label) — \(CountCopy.counted(count, "file", "files"))")
             .font(Tokens.Typography.caption)
             .foregroundStyle(Tokens.ColorRole.textSecondary)
             .accessibilityAddTraits(.isHeader)

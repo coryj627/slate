@@ -331,7 +331,7 @@ struct BaseQueriesPanel: View {
                     Text(dashboard.name)
                         .font(Tokens.Typography.body)
                         .foregroundStyle(Tokens.ColorRole.textPrimary)
-                    Text("\(dashboard.sectionCount) \(dashboard.sectionCount == 1 ? "section" : "sections")")
+                    Text("\(CountCopy.counted(dashboard.sectionCount, "section", "sections"))")
                         .font(Tokens.Typography.caption)
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
                 }

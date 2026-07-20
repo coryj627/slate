@@ -1351,7 +1351,7 @@ struct MainSplitView: View {
         let list = report.skipped.joined(separator: "\n• ")
         let count = report.skipped.count
         return "The \(report.verb) succeeded, but links in "
-            + "\(count) \(count == 1 ? "note" : "notes") couldn't be updated "
+            + "\(CountCopy.counted(count, "note", "notes")) couldn't be updated "
             + "(they may have been edited externally):\n\n• \(list)"
     }
 }

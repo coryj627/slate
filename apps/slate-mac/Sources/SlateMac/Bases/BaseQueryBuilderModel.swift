@@ -981,7 +981,7 @@ enum BaseQueryBuilderRow: Hashable {
             return "Condition \(index + 1): \(condition.accessibilityPhrase)"
         case .group(let group):
             let count = group.rows.count
-            return "Group \(index + 1): \(group.combinator.groupLabel) of \(count) \(count == 1 ? "condition" : "conditions")"
+            return "Group \(index + 1): \(group.combinator.groupLabel) of \(CountCopy.counted(count, "condition", "conditions"))"
         case .advanced(let rawExpression, _):
             return "Advanced condition: \(rawExpression)"
         }

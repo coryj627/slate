@@ -758,8 +758,10 @@ impl A11yEvent {
 }
 
 /// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
+/// Delegates so the singular-at-exactly-one rule has one definition;
+/// the count is interpolated by the caller and stays ungrouped here.
 fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
-    if count == 1 { one } else { many }
+    crate::sidebar_filter::noun(count as u64, one, many)
 }
 
 /// One representative event per variant (parameterized variants use

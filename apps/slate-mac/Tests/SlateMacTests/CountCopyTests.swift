@@ -33,6 +33,17 @@ final class CountCopyTests: XCTestCase {
         XCTAssertEqual(CountCopy.counted(many, "result", "results"), "7 results")
     }
 
+    /// Contract: `counted` interpolates the number plainly — no
+    /// grouping, no localization. Core's `count_noun` DOES group, so
+    /// the two mirrors deliberately diverge at ≥ 1000. Pinned because
+    /// "make it match Rust" would silently reformat every count in the
+    /// UI, and a caller wanting a formatted number is supposed to take
+    /// `noun` and format it itself.
+    func testCountedDoesNotGroupOrLocalizeTheNumber() {
+        XCTAssertEqual(CountCopy.counted(1000, "tag", "tags"), "1000 tags")
+        XCTAssertEqual(CountCopy.counted(1_234_567, "row", "rows"), "1234567 rows")
+    }
+
     /// The composed shape used by the "X of Y" summaries: the noun
     /// agrees with the TOTAL, the verb with the shown count.
     func testOfTotalTemplateAgreesNounWithTotalAndVerbWithSubject() {

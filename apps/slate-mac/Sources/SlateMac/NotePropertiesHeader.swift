@@ -520,7 +520,7 @@ struct NotePropertiesHeader: View {
 
     private var regionLabel: String {
         let count = appState.currentNoteProperties.count
-        return "Properties, \(count) \(count == 1 ? "property" : "properties")"
+        return "Properties, \(CountCopy.counted(count, "property", "properties"))"
     }
 
     private func header(owner: NoteAuthoringOwner?) -> some View {

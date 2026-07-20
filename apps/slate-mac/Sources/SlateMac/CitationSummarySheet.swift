@@ -116,7 +116,7 @@ struct CitationSummarySheet: View {
             }
         }
         let unique = keys.count
-        let totalText = "\(total) \(total == 1 ? "citation" : "citations")"
+        let totalText = "\(CountCopy.counted(total, "citation", "citations"))"
         let uniqueText = "\(unique) unique \(unique == 1 ? "source" : "sources")"
         return (totalText, uniqueText)
     }

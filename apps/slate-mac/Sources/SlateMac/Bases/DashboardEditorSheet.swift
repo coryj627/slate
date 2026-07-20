@@ -364,7 +364,7 @@ struct DashboardEditorSheet: View {
 
     private var footer: some View {
         HStack {
-            Text("\(draft.sections.count) \(draft.sections.count == 1 ? "section" : "sections")")
+            Text("\(CountCopy.counted(draft.sections.count, "section", "sections"))")
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
             Spacer()

@@ -5022,7 +5022,7 @@ struct FileTreeSidebar: View {
 
     /// Spoken count for a section header ("3 notes").
     static func headerAccessibilityValue(for header: SidebarTreeHeaderRow) -> String {
-        header.fileCount == 1 ? "1 note" : "\(header.fileCount) notes"
+        CountCopy.counted(header.fileCount, "note", "notes")
     }
 
     /// Container summary for the tree list. Default organization stays
@@ -6425,9 +6425,7 @@ struct FileTreeSidebar: View {
         switch appState.scanProgress {
         case .started(let total):
             scanStrip(
-                label: total == 1
-                    ? "Scanning vault — 1 file to index."
-                    : "Scanning vault — \(total) files to index.",
+                label: "Scanning vault — \(CountCopy.counted(total, "file", "files")) to index.",
                 progress: total == 0 ? nil : 0,
                 total: total
             )
@@ -6763,7 +6761,7 @@ struct FileTreeSidebar: View {
     static func folderAccessibilityValue(for node: TreeNode, expanded: Bool) -> String {
         let state = expanded ? "expanded" : "collapsed"
         let count = node.itemCount
-        let items = count == 1 ? "1 item" : "\(count) items"
+        let items = CountCopy.counted(count, "item", "items")
         // Depth is 0-based internally; VoiceOver parity wants 1-based levels.
         let base = "\(state), \(items), level \(node.depth + 1)"
         // FL6-1 rule 7: presence is row identity, spoken in the value

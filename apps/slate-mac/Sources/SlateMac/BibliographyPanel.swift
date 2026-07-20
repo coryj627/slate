@@ -388,7 +388,7 @@ struct FilesCitingSheet: View {
         .frame(minWidth: 380, idealWidth: 460, maxWidth: 600, minHeight: 200, maxHeight: 500)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(
-            "Files citing this entry. \(paths.count) \(paths.count == 1 ? "file" : "files")."
+            "Files citing this entry. \(CountCopy.counted(paths.count, "file", "files"))."
         )
     }
 }

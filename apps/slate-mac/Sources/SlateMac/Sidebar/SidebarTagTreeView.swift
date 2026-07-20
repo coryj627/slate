@@ -43,7 +43,7 @@ enum SidebarTagTreeModel {
   /// Folder-row AX parity (#420 lesson: state baked into the value, not
   /// custom traits): `"12 notes, collapsed, level 1"`.
   static func accessibilityValue(for row: Row) -> String {
-    let notes = row.entry.fileCount == 1 ? "1 note" : "\(row.entry.fileCount) notes"
+    let notes = CountCopy.counted(row.entry.fileCount, "note", "notes")
     var parts = [notes]
     if row.hasChildren {
       parts.append(row.isExpanded ? "expanded" : "collapsed")
@@ -235,7 +235,7 @@ struct SidebarTagTreeView: View {
     .padding(.vertical, Tokens.Spacing.xxs)
     .accessibilityElement(children: .ignore)
     .accessibilityLabel("Untagged")
-    .accessibilityValue(count == 1 ? "1 note" : "\(count) notes")
+    .accessibilityValue(CountCopy.counted(count, "note", "notes"))
     .accessibilityHint("Shows notes with no tags. Other actions are in the context menu.")
     .accessibilityAddTraits(.isButton)
     .contextMenu {
