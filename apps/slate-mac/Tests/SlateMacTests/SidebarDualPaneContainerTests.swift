@@ -290,15 +290,26 @@ final class SidebarDualPaneContainerTests: XCTestCase {
             for raw in text.split(
                 separator: "\n", omittingEmptySubsequences: false)
             {
-                let line = String(raw)
-                // Prose naming the helper must not count as a call site.
-                if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") {
-                    continue
-                }
-                if line.contains(".onExitCommand") {
+                // Only CODE counts. Truncating at `//` drops whole-line
+                // prose AND trailing comments: a comment naming the
+                // helper would otherwise register as a phantom site,
+                // and a phantom can mask a deleted modifier by making
+                // the two counts agree — the one direction a census
+                // must never fail in.
+                let source = String(raw)
+                let line =
+                    source.range(of: "//").map { String(source[..<$0.lowerBound]) }
+                    ?? source
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix(".onExitCommand") {
                     handler = "exit"
-                } else if line.contains(".onMoveCommand") {
+                } else if trimmed.hasPrefix(".onMoveCommand") {
                     handler = "move"
+                } else if trimmed.hasPrefix(".") {
+                    // Any other modifier closes the window, so a call
+                    // further down the chain is reported as unattributed
+                    // rather than silently charged to the last handler.
+                    handler = nil
                 }
                 guard line.contains("\(surface.helper)()"),
                     !line.contains("func \(surface.helper)")
