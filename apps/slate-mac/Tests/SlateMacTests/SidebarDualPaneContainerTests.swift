@@ -249,6 +249,94 @@ final class SidebarDualPaneContainerTests: XCTestCase {
         XCTAssertTrue(SidebarDualPaneFocus.leftArrowReturnsToNavigation())
     }
 
+    /// FL-15 close-out regression: ←/Esc parity on EVERY sidebar list
+    /// surface, in both layouts.
+    ///
+    /// The dual-pane filter results and the tree-mode filter overlay
+    /// both shipped with `.onExitCommand` only, so ← was dead on two
+    /// surfaces visually identical to the container list beside them —
+    /// a keyboard/VoiceOver papercut in an accessibility-first app.
+    ///
+    /// This is a SOURCE census (the `A11yResidueCensusTests` pattern)
+    /// because the defect lives in a SwiftUI modifier chain: no
+    /// model-level assertion can observe whether `.onMoveCommand` is
+    /// attached, and `leftArrowReturnsToNavigation()` above is a
+    /// constant that cannot fail. The claim pinned here is the one
+    /// that actually broke — every site that routes Esc back to its
+    /// owning pane routes ← there too, in equal number.
+    func testEveryListSurfaceReturnsFocusOnLeftArrowAsWellAsEscape() throws {
+        // (file, focus-return helper, surfaces expected to call it)
+        let surfaces: [(file: String, helper: String, count: Int)] = [
+            // Container list + filter results, both → Folders pane.
+            ("Sidebar/SidebarDualPaneView.swift", "returnFocusToNavigation", 2),
+            // Tree-mode filter overlay → the filter field.
+            ("FileTreeSidebar.swift", "returnFocusToFilterField", 1),
+        ]
+        let sources = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()  // SlateMacTests
+            .deletingLastPathComponent()  // Tests
+            .deletingLastPathComponent()  // slate-mac
+            .appendingPathComponent("Sources/SlateMac")
+
+        for surface in surfaces {
+            let url = sources.appendingPathComponent(surface.file)
+            let text = try String(contentsOf: url, encoding: .utf8)
+            var escapeSites = 0
+            var leftArrowSites = 0
+            // Which modifier body we are inside. A one-liner such as
+            // `.onExitCommand { helper() }` opens and calls on the same
+            // line, so the opener is classified before the call is counted.
+            var handler: String?
+            for raw in text.split(
+                separator: "\n", omittingEmptySubsequences: false)
+            {
+                // Only CODE counts. Truncating at `//` drops whole-line
+                // prose AND trailing comments: a comment naming the
+                // helper would otherwise register as a phantom site,
+                // and a phantom can mask a deleted modifier by making
+                // the two counts agree — the one direction a census
+                // must never fail in.
+                let source = String(raw)
+                let line =
+                    source.range(of: "//").map { String(source[..<$0.lowerBound]) }
+                    ?? source
+                let trimmed = line.trimmingCharacters(in: .whitespaces)
+                if trimmed.hasPrefix(".onExitCommand") {
+                    handler = "exit"
+                } else if trimmed.hasPrefix(".onMoveCommand") {
+                    handler = "move"
+                } else if trimmed.hasPrefix(".") {
+                    // Any other modifier closes the window, so a call
+                    // further down the chain is reported as unattributed
+                    // rather than silently charged to the last handler.
+                    handler = nil
+                }
+                guard line.contains("\(surface.helper)()"),
+                    !line.contains("func \(surface.helper)")
+                else { continue }
+                switch handler {
+                case "exit": escapeSites += 1
+                case "move": leftArrowSites += 1
+                default:
+                    XCTFail(
+                        "\(surface.file): \(surface.helper)() is called "
+                            + "outside an Esc/← handler — the focus-return "
+                            + "seam has a third caller this census cannot "
+                            + "reason about.")
+                }
+            }
+            XCTAssertEqual(
+                escapeSites, surface.count,
+                "\(surface.file): expected \(surface.count) Esc "
+                    + "focus-return site(s) via \(surface.helper)()")
+            XCTAssertEqual(
+                leftArrowSites, escapeSites,
+                "\(surface.file): \(escapeSites) list surface(s) return "
+                    + "focus on Esc but only \(leftArrowSites) on ← — a "
+                    + "surface answers the two keys differently again")
+        }
+    }
+
     // MARK: - Divider persistence (rule 2)
 
     func testDividerFractionClampsAndRoundTrips() {

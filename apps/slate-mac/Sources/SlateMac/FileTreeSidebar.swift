@@ -3304,6 +3304,17 @@ struct FileTreeSidebar: View {
         filterResultsFocused = true
     }
 
+    /// The one way back out of the result list, shared by Esc and ←
+    /// (FL-15 close-out). Both keys hand focus to the field that owns
+    /// the query — the mirror of the dual-pane list's return to the
+    /// navigation pane. Extracted because the two keys drifted apart
+    /// once already: ← shipped dead on this surface while the
+    /// visually identical container list answered it.
+    private func returnFocusToFilterField() {
+        filterResultsFocused = false
+        filterFieldFocused = true
+    }
+
     /// Selection-snapshot ownership for the overlay (review round,
     /// high): a single-item snapshot for the selected result row, or an
     /// empty one while nothing is selected — never the hidden tree
@@ -3370,9 +3381,12 @@ struct FileTreeSidebar: View {
                 }
                 .listStyle(.sidebar)
                 .focused($filterResultsFocused)
-                .onExitCommand {
-                    filterResultsFocused = false
-                    filterFieldFocused = true
+                .onExitCommand { returnFocusToFilterField() }
+                // ← is the same way back as Esc (FL-15 close-out). The
+                // List keeps ↑/↓ for selection; only .left is consumed.
+                .onMoveCommand { direction in
+                    guard direction == .left else { return }
+                    returnFocusToFilterField()
                 }
                 .onChange(of: filterListSelection) { _, selected in
                     // Review round (high): while the overlay is active it
