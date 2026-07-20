@@ -101,7 +101,7 @@ jobs:
         # cargo-audit therefore recompiles per run, but the cached registry
         # keeps its dependency fetch fast, and audit is low-frequency (manifest
         # changes + weekly cron), so the recompile is a non-issue.
-        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: rust
 

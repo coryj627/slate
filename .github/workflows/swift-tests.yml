@@ -66,7 +66,7 @@ jobs:
         # (apps/slate-mac/.build) that no generic mode can know about, so the
         # SwiftPM deps (SwiftDraw, MathJaxSwift, LaTeXSwiftUI, SwiftMath) don't
         # recompile every run.
-        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: |
             rust
