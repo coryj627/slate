@@ -170,7 +170,8 @@ struct TasksReviewPanel: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(
-            count.map { "\(filter.displayName), \($0) tasks" } ?? filter.displayName
+            count.map { "\(filter.displayName), \(CountCopy.counted($0, "task", "tasks"))" }
+                ?? filter.displayName
         )
         .accessibilityIsSelected(isActive)
         .accessibilityHint("Filter the review to \(filter.displayName.lowercased()) tasks.")

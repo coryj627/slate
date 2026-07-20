@@ -286,7 +286,7 @@ struct BaseQueryBuilderSheet: View {
             }
         case .recent:
             Stepper(value: recentDaysBinding, in: 1...365) {
-                Text("Recently edited: \(recentDays) days")
+                Text("Recently edited: \(CountCopy.counted(recentDays, "day", "days"))")
             }
             .accessibilityLabel("Recently edited days")
             .accessibilityValue("\(recentDays)")

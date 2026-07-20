@@ -329,7 +329,10 @@ struct HistoryPanel: View {
     @ViewBuilder private var versionsSection: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("Version history, \(appState.historyTotalFiltered) versions")
+                Text(
+                    "Version history, "
+                        + CountCopy.counted(
+                            appState.historyTotalFiltered, "version", "versions"))
                     .font(.headline)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
