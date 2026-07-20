@@ -2,7 +2,7 @@
 
 **An accessibility-first knowledge workspace.** Reads existing Obsidian-style Markdown vaults. Built for blind, keyboard-only, and voice-control users from day one — not as an afterthought.
 
-> **Status: pre-release alpha, macOS.** The V1 feature set is built and tested on Mac — vault + file management, reading/editing editor, backlinks, properties, full-text search, tasks, templates, embeds, math/code/Mermaid pipelines, citations, command palette, sync detection, the `slate` CLI, a workspace shell (tabs + splits + right-pane leaves), and an accessible Canvas. It builds and runs from source (`make mac-app-run`); it is **not yet packaged as a downloadable release**, and Windows/iOS/Android are still ahead. See [Don't try to use this yet](#dont-try-to-use-this-yet).
+> **Status: pre-release alpha, macOS.** The V1 feature set is built and tested on Mac — vault + file management, a metadata-rich Files sidebar (multi-select batch operations, sort/group/pins, shortcuts + recents, a deterministic filter, tag tree + batch tagging, folder notes, optional dual-pane layout), reading/editing editor, backlinks, properties, full-text search, tasks, templates, embeds, math/code/Mermaid pipelines, citations, command palette, sync detection, the `slate` CLI, a workspace shell (tabs + splits + right-pane leaves), and an accessible Canvas. It builds and runs from source (`make mac-app-run`); it is **not yet packaged as a downloadable release**, and Windows/iOS/Android are still ahead. See [Don't try to use this yet](#dont-try-to-use-this-yet).
 
 ## What this is
 
@@ -20,7 +20,7 @@ Obsidian has had open screen-reader accessibility issues for [5+ years](https://
 
 The full justification — including a red-team review of the original Flutter-based plan, the decision to abandon webview-based UI stacks for stability reasons, the engagement strategy with the math accessibility community, and concrete release-gate performance targets — is in [`docs/plans/`](docs/plans/). Start with [`docs/README.md`](docs/README.md) for a status-tagged index of every program and milestone spec, or [`docs/plans/05_locked_architecture_decisions.md`](docs/plans/05_locked_architecture_decisions.md) for the canonical decisions.
 
-End-user feature guides live in [`docs/help/`](docs/help/) (first entry: [Canvas](docs/help/canvas.md), drafted with Milestone T's specs).
+End-user feature guides live in [`docs/help/`](docs/help/): the [Files sidebar](docs/help/sidebar.md), [Canvas](docs/help/canvas.md), [Graph](docs/help/graph.md), and [Bases](docs/help/bases.md).
 
 ## Repository layout
 

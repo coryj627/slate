@@ -53,7 +53,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
 
       - name: Cache Rust + SwiftPM + Xcode (Namespace NVMe cache)
         # Namespace cross-invocation cache. The action unions `cache:` modes
@@ -66,7 +66,7 @@ jobs:
         # (apps/slate-mac/.build) that no generic mode can know about, so the
         # SwiftPM deps (SwiftDraw, MathJaxSwift, LaTeXSwiftUI, SwiftMath) don't
         # recompile every run.
-        uses: namespacelabs/nscloud-cache-action@58bf6e08898e88803c098e2b522668541cd3b2e3  # v1
+        uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: |
             rust
