@@ -22,11 +22,9 @@ rust-version = "1.89"
 pulldown-cmark = { version = "0.13", default-features = false }
 thiserror = "2"
 uniffi = { version = "0.31", features = ["cli"] }
-# Held at 0.39 rather than 0.40: rusqlite 0.40 pulls libsqlite3-sys
-# 0.38.1, whose build script uses the still-unstable `cfg_select!`
-# macro and fails to compile on the pinned stable toolchain. 0.39
-# (libsqlite3-sys 0.37, bundled SQLite ~3.50) is the highest that
-# builds today; revisit 0.40 once a newer stable stabilizes cfg_select.
+# 0.40 pulls libsqlite3-sys 0.38.1 (bundled SQLite 3.53.x). Its build
+# script uses `cfg_select!`, which the pinned stable toolchain now
+# provides — the earlier hold at 0.39 was lifted once that landed.
 rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 tempfile = "3"
 blake3 = "1"
