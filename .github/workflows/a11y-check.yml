@@ -121,7 +121,7 @@ jobs:
 
       - name: Post score summary on PR
         if: github.event_name == 'pull_request' && !cancelled()
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9
         with:
           script: |
             const fs = require('fs');
@@ -186,7 +186,7 @@ jobs:
 
       - name: Enforce score floor
         if: ${{ !cancelled() }}
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b  # v7
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9
         env:
           MIN_SCORE: ${{ env.MIN_SCORE }}
         with:
