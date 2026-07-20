@@ -2011,7 +2011,7 @@ final class BatchHostQuarantineTests: XCTestCase {
             path: basePath,
             name: "Later",
             refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
         let lateDock = try XCTUnwrap(state.basesDockDocument)
         XCTAssertNil(
             lateDock.handle,

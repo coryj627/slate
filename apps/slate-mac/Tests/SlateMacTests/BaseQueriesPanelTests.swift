@@ -426,7 +426,7 @@ final class BaseQueriesPanelTests: XCTestCase {
         _ = await state.refreshBaseQueries()?.value
         state.selectedFilePath = "Projects/Alpha.md"
         state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
 
         XCTAssertEqual(state.workspace.activeLeaf, .basesDock)
         XCTAssertEqual(state.basesDock.target, .savedQuery(id: queryID, name: "Context query"))
@@ -435,7 +435,7 @@ final class BaseQueriesPanelTests: XCTestCase {
 
         state.selectedFilePath = "Projects/Beta.md"
         state.scheduleBasesDockFollowActiveRefresh(delayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
 
         dockDocument = try XCTUnwrap(state.basesDockDocument)
         XCTAssertEqual(try dockedActiveNoteValue(dockDocument), "Beta.md")
@@ -445,7 +445,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             path: "Queries/Docked.base")
         state.openBaseFile("Queries/Docked.base")
         state.scheduleBasesDockFollowActiveRefresh(delayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
 
         XCTAssertNil(state.basesDock.thisPath)
         dockDocument = try XCTUnwrap(state.basesDockDocument)
@@ -474,14 +474,14 @@ final class BaseQueriesPanelTests: XCTestCase {
         _ = await state.refreshBaseQueries()?.value
         state.selectedFilePath = "Projects/Alpha.md"
         state.dockSavedQueryToSidebar(id: queryID, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
         XCTAssertTrue(try XCTUnwrap(state.basesDockDocument?.result).rows.isEmpty)
         XCTAssertTrue(state.basesDock.hasPublishedBaseline)
 
         state.lastBaseActionAnnouncement = nil
         state.selectedFilePath = "Projects/Beta.md"
         state.scheduleBasesDockFollowActiveRefresh(delayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
 
         XCTAssertEqual(
             try XCTUnwrap(state.basesDockDocument?.result).rows.map(\.filePath),
@@ -510,7 +510,7 @@ final class BaseQueriesPanelTests: XCTestCase {
         _ = await state.refreshBaseQueries()?.value
         state.openDashboard(id: dashboardID, name: "Overview")
         state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
 
         XCTAssertEqual(state.workspace.activeTab?.item, .dashboard(id: dashboardID, name: "Overview"))
         XCTAssertEqual(state.basesDock.target, .dashboard(id: dashboardID, name: "Overview"))
@@ -549,7 +549,7 @@ final class BaseQueriesPanelTests: XCTestCase {
         let openDocument = try XCTUnwrap(state.activeDashboardDocument)
         XCTAssertFalse(openDocument.sections[0].isMissing)
         state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
 
         state.deleteSavedQuery(id: queryID)
 
@@ -593,7 +593,7 @@ final class BaseQueriesPanelTests: XCTestCase {
         _ = await state.refreshBaseQueries()?.value
         state.openDashboard(id: dashboardID, name: "Repairable")
         state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
         state.deleteSavedQuery(id: missingOne)
         state.deleteSavedQuery(id: missingTwo)
         XCTAssertTrue(try XCTUnwrap(state.activeDashboardDocument).sections.allSatisfy(\.isMissing))
@@ -828,7 +828,7 @@ final class BaseQueriesPanelTests: XCTestCase {
         try state.commandRegistry.invokeById(id: commandID)
         XCTAssertEqual(state.workspace.activeTab?.item, .savedQuery(id: id, name: "Active projects"))
         state.dockSavedQueryToSidebar(id: id, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
         let dockDocument = try XCTUnwrap(state.basesDockDocument)
 
         try session.renameSavedQuery(id: id, name: "Renamed")
@@ -918,10 +918,11 @@ final class BaseQueriesPanelTests: XCTestCase {
         state.openDashboard(id: dashboardID, name: "Overview", target: .newTab)
         let dashboard = try XCTUnwrap(state.activeDashboardDocument)
         state.dockSavedQueryToSidebar(id: id, refreshDelayNanoseconds: 0)
-        // #999: `await state.basesDockRefreshTask?.value` on a nil task is a
-        // no-op, which silently turns "the dock never refreshed" into a
-        // confusing unwrap failure two lines down. Unwrap the task instead.
-        await (try XCTUnwrap(state.basesDockRefreshTask)).value
+        // #999 unwrapped the task so a NIL handle fails loudly instead of
+        // no-opping. That is still right, and orthogonal: a non-nil handle
+        // can be superseded mid-await and return without refreshing, which
+        // is the flake this settles.
+        await state.settleBasesDockRefresh()
         let dock = try XCTUnwrap(state.basesDockDocument)
         XCTAssertEqual(tab.result?.rows.count, 3)
         XCTAssertEqual(dashboard.sections[0].result?.rows.count, 3)
@@ -1259,7 +1260,7 @@ final class BaseQueriesPanelTests: XCTestCase {
             ])
         _ = await state.refreshBaseQueries()?.value
         state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        await state.settleBasesDockRefresh()
         let dockedDashboard = try XCTUnwrap(state.basesDockDashboardDocument)
         XCTAssertEqual(dockedDashboard.sections[0].result?.rows.count, 3)
 
@@ -1431,6 +1432,53 @@ final class BaseQueriesPanelTests: XCTestCase {
 
         let source = try Self.sourceFile("Sources/SlateMac/Bases/DashboardViews.swift")
         XCTAssertTrue(source.contains("Dashboard section error"), source)
+    }
+
+    /// Regression for the intermittent CI failure in this file
+    /// (`XCTUnwrap failed: expected non-nil value of type "BaseDocument"`).
+    ///
+    /// Deterministic on purpose: the timing window is too narrow to
+    /// reproduce by repetition — this test stress-looped 25/25 green
+    /// locally while failing on a loaded CI runner. Rather than chase
+    /// the interleaving, force it. Nothing here suspends between
+    /// scheduling and superseding, so the first task provably has not
+    /// run when it is cancelled.
+    func testAwaitingASupersededDockRefreshObservesNoRefresh() async throws {
+        let (state, session) = try await makeState()
+        let id = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        _ = await state.refreshBaseQueries()?.value
+
+        state.dockSavedQueryToSidebar(id: id, refreshDelayNanoseconds: 0)
+        let superseded = try XCTUnwrap(state.basesDockRefreshTask)
+
+        // Exactly what a note load or tab activation does on its
+        // completion path while a caller sits in `await` — including the
+        // DEFAULT delay those callers use. The delay is load-bearing: a
+        // zero-delay replacement would finish inside the same suspension
+        // and hide the bug, which is precisely how the first version of
+        // this test fooled itself.
+        state.scheduleBasesDockFollowActiveRefresh()
+        XCTAssertNotEqual(
+            state.basesDockRefreshTask, superseded,
+            "a re-schedule must replace the in-flight task")
+
+        // The old idiom, spelled out: the superseded task returns through
+        // its own cancellation guard WITHOUT refreshing, so a caller that
+        // awaited only this would unwrap a document that was never built.
+        await superseded.value
+        XCTAssertNil(
+            state.basesDockDocument,
+            "the cancelled task must not refresh — this is the flake")
+
+        // Awaiting to quiescence waits for the refresh that stands.
+        await state.settleBasesDockRefresh()
+        XCTAssertNotNil(
+            state.basesDockDocument,
+            "the surviving refresh populates the dock")
     }
 
     private func makeState() async throws -> (AppState, VaultSession) {

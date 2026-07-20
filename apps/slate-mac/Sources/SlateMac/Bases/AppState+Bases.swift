@@ -1375,6 +1375,33 @@ extension AppState {
         }
     }
 
+    /// Settle the dock refresh: await until nothing new replaces the
+    /// task in flight. Same shape and purpose as
+    /// `settleTemplateAvailability` (#1004) — a real completion seam
+    /// rather than a task handle.
+    ///
+    /// Awaiting `basesDockRefreshTask` directly is not that seam, even
+    /// unwrapped (#999 made a nil handle fail loudly, which is
+    /// orthogonal and still right). `scheduleBasesDockFollowActiveRefresh`
+    /// opens by cancelling the pass in flight, and its concurrent callers
+    /// are the note-load and tab-activation completion paths in
+    /// `AppState`. One of those landing while a caller is suspended
+    /// cancels the awaited task, which returns through its own
+    /// `!Task.isCancelled` guard WITHOUT refreshing — so the caller reads
+    /// that as "the dock refreshed" and goes on to unwrap a document that
+    /// was never built. The replacement carries the default 500ms
+    /// debounce, so it has not run either. Whether that interleaving
+    /// happens depends on machine load, which is why it survived locally
+    /// and failed on CI.
+    func settleBasesDockRefresh() async {
+        var last: Task<Void, Never>?
+        for _ in 0..<64 {
+            guard let task = basesDockRefreshTask, task != last else { break }
+            last = task
+            await task.value
+        }
+    }
+
     func clearBasesDock() {
         basesDockRefreshTask?.cancel()
         basesDockRefreshTask = nil

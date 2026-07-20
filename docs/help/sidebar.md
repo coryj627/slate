@@ -158,8 +158,7 @@ The list-pane header's display menu sets, for the current folder only: **Preview
 | Key | Where | Action |
 | --- | --- | --- |
 | → | Folders pane | On a collapsed folder: disclose it. On an expanded or childless container: move focus into the Files pane (Navigator convention). On a leaf: nothing. |
-| ← | Files pane (container list) | Return focus to the Folders pane. |
-| Esc | Files pane | Return focus to the Folders pane — including from filter results, where Esc is the way back. |
+| ← / Esc | Files pane | Return focus to the Folders pane — from the container list and filter results alike. |
 | ↓ | Filter field | Enter the Files pane at its first row. |
 | ⏎ | Files pane | Open the selected note. |
 
@@ -180,7 +179,8 @@ The filter field stays topmost in both layouts; in dual-pane a committed query *
 | ⇧⌘M | Selection | Move To… |
 | ⌥⌘F | Anywhere | Focus the filter field. |
 | ↓ (in filter) | Filter field | Enter results at the first row. |
-| Esc | Filter / lists | Clear the filter and restore the tree; in dual-pane lists (container rows and filter results alike), return to the Folders pane. |
+| ← / Esc | Lists | Leave a list the same way everywhere: filter results hand focus back to the filter field; both dual-pane lists hand it back to the Folders pane. |
+| Esc | Filter field | Clear the filter and restore the tree. |
 | ⌃1–⌃9 | Sidebar focused | Activate Shortcut 1–9. |
 | ⌃⌘[ / ⌃⌘] | Anywhere | Selection history back / forward. |
 
