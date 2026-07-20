@@ -195,7 +195,7 @@ struct SidebarTagTreeView: View {
     }
     .contextMenu {
       Button {
-        appState.sidebarFilterModel.activateTagQuery("#\(row.entry.full)")
+        appState.activateSidebarTagScope(full: row.entry.full)
       } label: {
         SlateSymbol.search.label("Filter by Tag")
       }

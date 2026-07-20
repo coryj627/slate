@@ -503,6 +503,115 @@ final class SidebarDualPaneContainerTests: XCTestCase {
             "identical copy still ticks the funnel counter")
     }
 
+    func testSpacedTagShortcutRoutesOutOfBandInTreeMode() throws {
+        // Fix round (high): shortcuts (and the tag rows' Filter by
+        // Tag) must ride the same whitespace dispatch — text
+        // interpolation would re-tokenize the tag.
+        let state = makeState()
+        try openVault(state, named: "spaced-shortcut", files: ["a.md"])
+        XCTAssertEqual(state.sidebarLayout, .tree)
+        state.activateSidebarTagScope(full: "project alpha")
+        XCTAssertEqual(
+            state.sidebarFilterModel.tagScope, "project alpha",
+            "spaced tags activate the out-of-band scope")
+        XCTAssertEqual(state.sidebarFilterModel.fieldText, "")
+
+        state.activateSidebarTagScope(full: "plain")
+        XCTAssertNil(
+            state.sidebarFilterModel.tagScope,
+            "grammar-expressible tags keep the shipped text-fill UX")
+        XCTAssertEqual(state.sidebarFilterModel.fieldText, "#plain")
+    }
+
+    func testContainerSelectionOverridesPreservedModelTagScope() throws {
+        // Fix round (high): tree-mode scope for tag A must yield when
+        // dual-pane selects container B — the container owns scoping.
+        let state = makeState()
+        try openVault(
+            state, named: "scope-priority", files: ["P/a.md"])
+        state.activateSidebarTagScope(full: "spaced tag")
+        XCTAssertEqual(state.sidebarFilterModel.tagScope, "spaced tag")
+
+        state.setSidebarLayout(.dualPane)
+        XCTAssertNil(
+            state.sidebarFilterModel.tagScope,
+            "entering dual-pane drops the tree-mode scope")
+
+        state.activateSidebarTagScope(full: "other tag")
+        XCTAssertEqual(
+            state.sidebarSelectedContainer, .tag(full: "other tag"),
+            "dual-pane tag activation selects the container")
+        XCTAssertNil(state.sidebarFilterModel.tagScope)
+
+        state.setSidebarLayoutForInternalTesting(.tree)
+        state.activateSidebarTagScope(full: "third tag")
+        XCTAssertEqual(state.sidebarFilterModel.tagScope, "third tag")
+        state.setSidebarLayoutForInternalTesting(.dualPane)
+        state.sidebarSelectedContainer = .folder(path: "P")
+        XCTAssertNil(
+            state.sidebarFilterModel.tagScope,
+            "selecting ANY container clears the model scope")
+    }
+
+    func testTreeMutationRemapsContainerAndSelections() throws {
+        // Fix round (high): the publish funnel retargets the dual-pane
+        // container and pane selections — the tree list's consumer is
+        // unmounted in this layout.
+        let state = makeState()
+        try openVault(
+            state, named: "remap", files: ["P/a.md", "P/b.md", "Q/c.md"])
+        state.setSidebarLayoutForInternalTesting(.dualPane)
+        state.sidebarSelectedContainer = .folder(path: "P")
+        state.sidebarDualPaneMultiSelection = ["P/a.md", "P/b.md"]
+        state.sidebarDualPaneListSelection = "P/a.md"
+
+        state.remapDualPaneStateForTreeMutation(
+            .rename(oldPath: "P", newPath: "R"))
+        XCTAssertEqual(
+            state.sidebarSelectedContainer, .folder(path: "R"),
+            "the container follows the folder rename")
+        XCTAssertEqual(
+            state.sidebarDualPaneMultiSelection, ["R/a.md", "R/b.md"],
+            "pane selections are rewritten, not cleared")
+        XCTAssertEqual(state.sidebarDualPaneListSelection, "R/a.md")
+        // The immediate republish is conservative: the visible rows
+        // still hold pre-rename paths until the re-drain settles, so
+        // the batch target empties rather than vouching for either
+        // set. The load-bearing invariant: the snapshot NEVER carries
+        // the dead paths (post-settle reconciliation republishes the
+        // remapped selection once the rows exist).
+        let republished =
+            state.sidebarSelectionSnapshot?.items.map(\.path) ?? []
+        XCTAssertFalse(
+            republished.contains { $0.hasPrefix("P/") },
+            "no stale pre-rename path remains an action target")
+
+        state.remapDualPaneStateForTreeMutation(
+            .delete(path: "R", parent: "", wasDirectory: true))
+        XCTAssertNil(
+            state.sidebarSelectedContainer,
+            "a deleted container clears rather than dangling")
+        XCTAssertTrue(state.sidebarDualPaneMultiSelection.isEmpty)
+        XCTAssertNil(state.sidebarDualPaneListSelection)
+
+        // File-level batch move rewrites exact selection paths.
+        state.sidebarSelectedContainer = .folder(path: "Q")
+        state.sidebarDualPaneMultiSelection = ["Q/c.md"]
+        state.remapDualPaneStateForTreeMutation(
+            .batchMove(
+                standing: [
+                    BatchPathChange(
+                        oldPath: "Q/c.md", newPath: "Q/renamed.md",
+                        isDirectory: false)
+                ],
+                touched: []))
+        XCTAssertEqual(
+            state.sidebarDualPaneMultiSelection, ["Q/renamed.md"])
+        XCTAssertEqual(
+            state.sidebarSelectedContainer, .folder(path: "Q"),
+            "a file move never retargets a folder container")
+    }
+
     func testDividerDragMathIsAnchorBasedNotCumulative() {
         // Review round: translation is cumulative from gesture start —
         // three callbacks of 10/20/30pt must land at anchor+30pt, not

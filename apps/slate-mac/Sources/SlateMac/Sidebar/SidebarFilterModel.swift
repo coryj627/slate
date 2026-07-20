@@ -247,6 +247,10 @@ final class SidebarFilterModel: ObservableObject {
       let page = try dependencies.perform(
         "", full, [], Paging(cursor: nil, limit: Self.pageLimit))
       tagScope = full
+      // Fix round: pagination reuses activeWindows verbatim — a prior
+      // date query's windows would be rejected against this empty
+      // query and break paging past the first page.
+      activeWindows = []
       results = page
       inlineError = nil
       lastErrorAnnouncement = nil
@@ -260,6 +264,20 @@ final class SidebarFilterModel: ObservableObject {
       }
     } catch {
       setInlineError(errorMessage(for: error), dependencies: dependencies)
+    }
+  }
+
+  /// Fix round (high): dual-pane container selection OWNS scoping —
+  /// a tree-mode out-of-band tag scope preserved across the layout
+  /// switch must yield, or it would silently intersect (or replace)
+  /// the visibly selected container's scope. Silent: the container
+  /// flow announces its own state.
+  func exitTagScope() {
+    guard tagScope != nil else { return }
+    tagScope = nil
+    if committedQuery.isEmpty {
+      results = nil
+      inlineError = nil
     }
   }
 

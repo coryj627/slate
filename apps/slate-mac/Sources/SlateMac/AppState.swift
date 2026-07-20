@@ -6179,6 +6179,10 @@ final class AppState: ObservableObject {
                         items: [], focusedPath: nil, creationParent: ""))
             }
         } else {
+            // Fix round (high): entering dual-pane, the container is
+            // the scope authority — drop any tree-mode tag scope the
+            // preserved model carried across the switch.
+            sidebarFilterModel.exitTagScope()
             publishDualPaneSelectionSnapshot()
         }
     }
@@ -6199,6 +6203,9 @@ final class AppState: ObservableObject {
             guard oldValue != sidebarSelectedContainer else { return }
             sidebarDualPaneMultiSelection = []
             sidebarDualPaneListSelection = nil
+            // Fix round (high): the container owns scoping — a
+            // preserved tree-mode tag scope must never shadow it.
+            sidebarFilterModel.exitTagScope()
         }
     }
 
@@ -6260,6 +6267,107 @@ final class AppState: ObservableObject {
             now: Date(),
             calendar: .current,
             locale: .current)
+    }
+
+    /// One (old → new, isDirectory) rewrite of a vault-relative path.
+    private static func rewritten(
+        _ path: String, old: String, new: String, isDirectory: Bool
+    ) -> String? {
+        if path == old { return new }
+        if isDirectory, path.hasPrefix(old + "/") {
+            return new + path.dropFirst(old.count)
+        }
+        return nil
+    }
+
+    /// FL-15 fix round (high): structural transforms retarget the
+    /// dual-pane container and pane selections in the SAME funnel that
+    /// retargets pins/shortcuts — a folder rename must never leave the
+    /// container (and the published action target) on a dead path.
+    func remapDualPaneStateForTreeMutation(_ kind: TreeMutation.Kind) {
+        var renames: [(old: String, new: String, isDirectory: Bool)] = []
+        var removals: [(path: String, isDirectory: Bool)] = []
+        switch kind {
+        case let .rename(oldPath, newPath),
+            let .move(oldPath, newPath, _, _):
+            // Directory unknown at this granularity: treat as a
+            // directory for prefix purposes — file paths never have
+            // children, so the prefix branch simply never matches.
+            renames.append((oldPath, newPath, true))
+        case let .delete(path, _, wasDirectory):
+            removals.append((path, wasDirectory))
+        case let .batchMove(standing, _),
+            let .importBatch(_, standing, _):
+            renames = standing.map { ($0.oldPath, $0.newPath, $0.isDirectory) }
+        case let .batchTrash(trashed):
+            removals = trashed.map { ($0.path, $0.isDirectory) }
+        case .createFolder, .createNote, .batchReconcile:
+            return
+        }
+        guard !renames.isEmpty || !removals.isEmpty else { return }
+
+        // Container first (its didSet clears the selections), then the
+        // remapped selections are reinstated.
+        var container = sidebarSelectedContainer
+        if case .folder(let path) = container {
+            for change in renames {
+                if let mapped = Self.rewritten(
+                    path, old: change.old, new: change.new,
+                    isDirectory: change.isDirectory)
+                {
+                    container = .folder(path: mapped)
+                    break
+                }
+            }
+            if case .folder(let current) = container {
+                for removal in removals
+                where current == removal.path
+                    || (removal.isDirectory
+                        && current.hasPrefix(removal.path + "/"))
+                {
+                    container = nil
+                    break
+                }
+            }
+        }
+        let remapPath: (String) -> String? = { path in
+            for change in renames {
+                if let mapped = Self.rewritten(
+                    path, old: change.old, new: change.new,
+                    isDirectory: change.isDirectory)
+                {
+                    return mapped
+                }
+            }
+            for removal in removals
+            where path == removal.path
+                || (removal.isDirectory
+                    && path.hasPrefix(removal.path + "/"))
+            {
+                return nil
+            }
+            return path
+        }
+        let remappedMulti = Set(
+            sidebarDualPaneMultiSelection.compactMap(remapPath))
+        let remappedSingle = sidebarDualPaneListSelection.flatMap(remapPath)
+        let containerChanged = container != sidebarSelectedContainer
+        if containerChanged {
+            sidebarSelectedContainer = container
+        }
+        if remappedMulti != sidebarDualPaneMultiSelection
+            || containerChanged
+        {
+            sidebarDualPaneMultiSelection = remappedMulti
+        }
+        if remappedSingle != sidebarDualPaneListSelection
+            || containerChanged
+        {
+            sidebarDualPaneListSelection = remappedSingle
+        }
+        if sidebarLayout == .dualPane {
+            publishDualPaneSelectionSnapshot()
+        }
     }
 
     /// FL7-1 rule 3: publish the dual-pane selection into the ONE
@@ -6893,7 +7001,10 @@ final class AppState: ObservableObject {
             // FL5-2 rule 4: tag shortcuts are containers whose
             // activation drives the shared flat list with the tag query
             // (single-tree mode = the FL4 handoff).
-            sidebarFilterModel.activateTagQuery("#\(shortcut.path)")
+            // Fix round (high): shortcuts must ride the same dispatch
+            // as tag rows — a spaced tag interpolated into query text
+            // re-tokenizes into the WRONG scope.
+            activateSidebarTagScope(full: shortcut.path)
         case .untagged:
             sidebarFilterModel.activateUntaggedScope()
         }
@@ -16022,6 +16133,11 @@ final class AppState: ObservableObject {
         // FL-06: pins follow every structural transform before the tree
         // refetches, so the re-fetched levels already see consistent pins.
         applySidebarPinsMutation(kind, isDirectory: mutatedNodeIsDirectory)
+        // FL-15 fix round (high): the dual-pane container and pane
+        // selections follow the SAME transform — the tree list's
+        // mutation consumer is unmounted in dual-pane, so nothing else
+        // retargets them after a rename/move/delete.
+        remapDualPaneStateForTreeMutation(kind)
         treeMutationCounter += 1
         treeMutation = TreeMutation(
             token: treeMutationCounter,

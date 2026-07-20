@@ -554,6 +554,45 @@ final class SidebarFilterModelTests: XCTestCase {
         XCTAssertFalse(model.isActive)
     }
 
+    func testTagScopePagingCarriesNoStaleDateWindows() {
+        // Fix round (medium): a prior date query's windows must not
+        // ride into tag-scope pagination — core rejects unmatched
+        // windows and paging would break past page one.
+        let defaults = freshDefaults()
+        var performWindows: [[SidebarFilterDateWindow]] = []
+        let model = SidebarFilterModel()
+        let pageOne = SidebarFilterPage(
+            files: [], nextCursor: "cursor-2", total: 300,
+            audioSummary: "300 results for #spaced tag.")
+        model.bind(SidebarFilterModel.Dependencies(
+            requirements: { query in
+                query.contains("@today") ? ["@today"] : []
+            },
+            perform: { _, _, windows, _ in
+                performWindows.append(windows)
+                return pageOne
+            },
+            announce: { _ in },
+            now: { Date() },
+            timeZone: { TimeZone(identifier: "America/New_York")! },
+            resolver: SidebarProductionCivilDateResolver(),
+            defaults: defaults))
+
+        model.fieldText = "@today"
+        model.fieldTextChanged()
+        model.commitNow()
+        XCTAssertEqual(performWindows.last?.count, 1, "date query ran")
+
+        model.activateTagScope("spaced tag")
+        XCTAssertEqual(
+            performWindows.last?.count, 0,
+            "scope activation runs windowless")
+        model.loadNextPage()
+        XCTAssertEqual(
+            performWindows.last?.count, 0,
+            "page two of the scope carries NO stale windows")
+    }
+
     func testUntaggedScopeActivatesAnnouncesAndPages() {
         let recorder = Recorder()
         recorder.untaggedPages[nil] = SidebarFilterPage(

@@ -250,6 +250,20 @@ final class SidebarActionParityTests: XCTestCase {
         XCTAssertTrue(
             dual.contains("reconcileDualPaneSelectionWithVisibleRows"),
             "filter-surface changes reconcile the selection")
+        XCTAssertTrue(
+            dual.contains(
+                "onChange(of: filterModel.results.map { $0.files.map(\\.path) })"
+            ),
+            "the observed value preserves nil-vs-empty — a first "
+                + "zero-result page must still fire reconciliation")
+        XCTAssertFalse(
+            dual.contains(".map(\\.path) } ?? []"),
+            "collapsing nil results into [] regressed the zero-result case")
+        XCTAssertTrue(
+            dual.contains("onChange(of: appState.treeMutation?.token)"),
+            "the shared VM refetches from this surface while the tree "
+                + "list's consumer is unmounted")
+        XCTAssertTrue(dual.contains("tree.authoritativeTreeInvalidation()"))
     }
 
     private static func source(_ name: String) throws -> String {

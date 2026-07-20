@@ -357,6 +357,36 @@ struct SidebarDualPaneView: View {
     .onChange(of: appState.sidebarMutationToken) { _, _ in
       listModel.refreshAfterStructuralMutation()
     }
+    // Fix round (high): the tree list's treeMutation consumer is
+    // unmounted here, so the shared VM's folders projection must
+    // refetch (and keep expansion identity across renames) from THIS
+    // surface. AppState retargets the container/selections in the
+    // publish funnel; this handles the VM.
+    .onChange(of: appState.treeMutation?.token) { _, _ in
+      guard let mutation = appState.treeMutation else { return }
+      switch mutation.kind {
+      case let .rename(oldPath, newPath),
+        let .move(oldPath, newPath, _, _):
+        tree.remapExpansion(fromPrefix: oldPath, to: newPath)
+      case let .delete(path, _, wasDirectory):
+        if wasDirectory {
+          tree.removeExpansion(underPrefix: path)
+        }
+      case let .batchMove(standing, _),
+        let .importBatch(_, standing, _):
+        for change in standing where change.isDirectory {
+          tree.remapExpansion(
+            fromPrefix: change.oldPath, to: change.newPath)
+        }
+      case let .batchTrash(trashed):
+        for item in trashed where item.isDirectory {
+          tree.removeExpansion(underPrefix: item.path)
+        }
+      case .createFolder, .createNote, .batchReconcile:
+        break
+      }
+      tree.authoritativeTreeInvalidation()
+    }
     // Review round (high): once a drain settles, selections must be a
     // subset of the visible rows — republished if pruned.
     .onChange(of: listModel.rows) { _, _ in
@@ -366,7 +396,11 @@ struct SidebarDualPaneView: View {
     // clearing) the pane is a visibility change too — commit, page
     // refresh, and Esc all reconcile, so a selection hidden by the
     // filter can never stay the destructive-action target.
-    .onChange(of: filterModel.results.map { $0.files.map(\.path) } ?? []) {
+    // Optional-preserving value: nil (inactive) and an EMPTY result
+    // page are distinct — the fix round showed the first zero-result
+    // query after a container selection otherwise produced no change
+    // event, leaving a hidden row as the destructive target.
+    .onChange(of: filterModel.results.map { $0.files.map(\.path) }) {
       _, _ in
       appState.reconcileDualPaneSelectionWithVisibleRows()
     }
