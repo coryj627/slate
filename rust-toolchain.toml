@@ -5,5 +5,5 @@
 # rebuild on whichever PR is unlucky. Bump deliberately in a one-line PR
 # (expect exactly one cold CI rebuild on that PR, plus a toolchain
 # download if the runner image hasn't caught up yet).
-channel = "1.95.0"
+channel = "1.97.1"
 components = ["rustfmt", "clippy"]
