@@ -332,6 +332,7 @@ pub(crate) fn untagged_plan() -> SidebarFilterPlan {
 pub(crate) fn plan(
     terms: &[SidebarFilterQueryTerm],
     scope_dir: Option<&str>,
+    scope_tag: Option<&str>,
     windows: &std::collections::HashMap<String, (i64, i64)>,
 ) -> Result<SidebarFilterPlan, VaultError> {
     let mut plan = SidebarFilterPlan {
@@ -352,6 +353,28 @@ pub(crate) fn plan(
             .push("(f.path >= ? AND f.path < ?)".to_string());
         plan.files_params.push(format!("{normalized}/").into());
         plan.files_params.push(format!("{normalized}0").into());
+    }
+    if let Some(raw_tag) = scope_tag {
+        // FL-15 red team (high): a tag container's scope rides OUT OF
+        // BAND — never interpolated into query text. Frontmatter accepts
+        // tags containing whitespace ("project alpha"), which the
+        // whitespace-tokenized grammar would split into a tag term plus
+        // a name term, silently mis-scoping every downstream batch
+        // operation. The structural clause is byte-identical to a typed
+        // `#tag` term's (exact or nested descendant).
+        let Some(tag_norm) = crate::tags_db::normalize_tag(raw_tag) else {
+            return Err(VaultError::InvalidQuery {
+                message: format!("scope tag \"{raw_tag}\" is not a valid tag."),
+            });
+        };
+        plan.files_clauses.push(
+            "EXISTS (SELECT 1 FROM file_tags ft WHERE ft.file_id = f.id \
+             AND (ft.tag_norm = ? OR ft.tag_norm LIKE ? ESCAPE '\\'))"
+                .to_string(),
+        );
+        plan.files_params.push(tag_norm.clone().into());
+        plan.files_params
+            .push(format!("{}/%", escape_like(&tag_norm)).into());
     }
     for query_term in terms {
         let polarity = |clause: String| {
@@ -417,22 +440,27 @@ pub(crate) fn plan(
 }
 
 /// Normative summary strings (spec rule 6). Grouped decimals.
-pub fn sidebar_filter_audio_summary(total: u64, scope_dir: Option<&str>) -> String {
+pub fn sidebar_filter_audio_summary(
+    total: u64,
+    scope_dir: Option<&str>,
+    scope_tag: Option<&str>,
+) -> String {
     if total == 0 {
         return "No results.".to_string();
     }
     let grouped = group_thousands(total);
-    match scope_dir {
-        Some(scope) => {
-            let folder = scope
-                .trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .unwrap_or(scope);
-            format!("{grouped} results in {folder}.")
-        }
-        None => format!("{grouped} results."),
+    if let Some(scope) = scope_dir {
+        let folder = scope
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or(scope);
+        return format!("{grouped} results in {folder}.");
     }
+    if let Some(tag) = scope_tag {
+        return format!("{grouped} results for #{tag}.");
+    }
+    format!("{grouped} results.")
 }
 
 pub(crate) fn group_thousands(value: u64) -> String {
@@ -544,11 +572,14 @@ mod tests {
 
     #[test]
     fn audio_summary_shapes() {
-        assert_eq!(sidebar_filter_audio_summary(0, None), "No results.");
-        assert_eq!(sidebar_filter_audio_summary(1, None), "1 results.");
-        assert_eq!(sidebar_filter_audio_summary(1234, None), "1,234 results.");
+        assert_eq!(sidebar_filter_audio_summary(0, None, None), "No results.");
+        assert_eq!(sidebar_filter_audio_summary(1, None, None), "1 results.");
         assert_eq!(
-            sidebar_filter_audio_summary(2, Some("research/papers")),
+            sidebar_filter_audio_summary(1234, None, None),
+            "1,234 results."
+        );
+        assert_eq!(
+            sidebar_filter_audio_summary(2, Some("research/papers"), None),
             "2 results in papers."
         );
     }
