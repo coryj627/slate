@@ -96,7 +96,7 @@ The **Tags** section (below the tree; collapsed by default, and it remembers you
 
 Each tag row speaks its name, its note count, its expanded/collapsed state, and its level. The count is **distinct notes carrying the tag or any nested child** — a note tagged both `a` and `a/b` counts once toward `a`. The section header summarizes the vault ("12 tags, 3 untagged notes." — the untagged clause only when there are any); the tag count is real tags only, not synthesized intermediate levels.
 
-Activating a tag row shows its files: in tree mode as a filtered file list, in dual-pane as the Files-pane container. An **Untagged** row at the bottom (present when any Markdown note has no tags at all) does the same for untagged notes. Both tag rows and Untagged can be added to Shortcuts from their context menus.
+Activating a tag row shows its files: in tree mode as a filtered file list (plain tags fill the filter field as `#tag`, editable like any query; a tag containing spaces — legal in frontmatter — can't round-trip through the grammar, so it scopes like Untagged instead: field empty, results scoped, summary naming the whole tag), in dual-pane as the Files-pane container. An **Untagged** row at the bottom (present when any Markdown note has no tags at all) does the same for untagged notes. Both tag rows and Untagged can be added to Shortcuts from their context menus.
 
 ### Batch tagging
 
@@ -162,7 +162,7 @@ The list-pane header's display menu (also in a folder's context menu in either l
 | ↓ | Filter field | Enter the Files pane at its first row. |
 | ⏎ | Files pane | Open the selected note. |
 
-The filter field stays topmost in both layouts; in dual-pane a committed query **scopes to the selected container** (a folder scopes the search to that folder; a tag adds itself as a term) and its results replace the Files pane only — the Folders pane stays navigable. Untagged cannot be textually composed, so committing a query under it clears the container selection and searches the whole vault (the selection visibly reflects that).
+The filter field stays topmost in both layouts; in dual-pane a committed query **scopes to the selected container** (a folder scopes the search to that folder; a tag container scopes structurally — the tag never re-enters the query grammar, so tags the grammar can't express, like ones containing spaces, still scope exactly) and its results replace the Files pane only — the Folders pane stays navigable. Untagged cannot be textually composed, so committing a query under it clears the container selection and searches the whole vault (the selection visibly reflects that).
 
 ## Keyboard and VoiceOver reference
 

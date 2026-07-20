@@ -51,6 +51,10 @@ spoken string is heard and no focus dead-end occurs.
       focus arrival).
 - [ ] Select 3 notes → Add Tag… (editor sheet announced) → commit: the batch
       report is announced; any skipped file is listed with its reason.
+- [ ] A frontmatter tag containing a space (e.g. `project alpha`): activating
+      its row (tree AND dual-pane) shows exactly its files — the summary
+      names the whole tag ("N results for #project alpha.") and a file
+      merely NAMED "alpha" stays out.
 - [ ] Remove a tag that also appears inline in one note's body: the report
       speaks the inline-remainder honesty (frontmatter removed, body
       occurrence remains) rather than claiming full removal.

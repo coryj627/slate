@@ -49,16 +49,16 @@ scan time — not pre-built speculatively.
 
 ## FL close-out — 2026-07-20 (Milestone FL final verification, #670)
 
-Recorded on the merged tree (FL-14 @ a9c9b919), idle box. FL budgets from
-`docs/plans/15_files_sidebar/00_program.md` §NFR.
+Recorded on the merged tree (post-#965/#992), idle Apple M5 Pro. FL budgets
+from `docs/plans/15_files_sidebar/00_program.md` §NFR.
 
 | Bench | Median | Budget | Verdict |
 |---|---|---|---|
-| `sidebar_filter/10000` | _pending_ | ≤ 50 ms | |
-| `sidebar_filter/10000_mixed_terms` | _pending_ | ≤ 50 ms | |
-| `tag_tree/10000` | _pending_ | ≤ 25 ms | |
-| root metadata listing @10k | _pending_ | ≤ 10 ms | |
-| `first_open_and_scan/10000` vs pre-FL baseline | _pending_ | ≤ +5% | |
+| `sidebar_filter/10000` | 33.4 ms | ≤ 50 ms | ✅ |
+| `sidebar_filter/10000_mixed_terms` | 36.1 ms | ≤ 50 ms | ✅ |
+| `tag_tree/10000` | 5.2 ms | ≤ 25 ms | ✅ (was ~8.3 ms at FL-08 baseline) |
+| `list_dir_children_meta/10000` (root metadata listing) | 7.8 ms | ≤ 10 ms | ✅ |
+| `first_open_and_scan/10000` | 1.760 s | ≤ +5% vs recorded 1.7518 s | ✅ (+0.5%) |
 
 ## V1 release-gate targets
 
