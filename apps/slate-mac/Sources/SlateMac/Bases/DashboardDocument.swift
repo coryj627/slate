@@ -78,6 +78,15 @@ enum BasesDockTarget: Equatable {
         }
     }
 
+    /// True when both targets name the same docked entity, ignoring the
+    /// display name. `==` is name-sensitive (a rename must invalidate a
+    /// published membership signature); callers that only need "is this still
+    /// the same thing?" — a pending dock refresh, say — use this instead so a
+    /// concurrent rename doesn't read as a retarget (#999).
+    func matchesEntity(_ other: BasesDockTarget) -> Bool {
+        stableIdentity == other.stableIdentity
+    }
+
     fileprivate var stableIdentity: StableIdentity {
         switch self {
         case .base(let path, _): return .base(path)
