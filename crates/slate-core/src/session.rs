@@ -4624,20 +4624,21 @@ impl VaultSession {
         &self,
         query: &str,
         scope_dir: Option<&str>,
+        scope_tag: Option<&str>,
         date_windows: &[crate::sidebar_filter::SidebarFilterDateWindow],
         paging: Paging,
     ) -> Result<SidebarFilterPage, VaultError> {
         let terms = crate::sidebar_filter::parse_sidebar_filter(query)
             .map_err(|error| error.invalid_query())?;
-        if terms.is_empty() && scope_dir.is_none() {
+        if terms.is_empty() && scope_dir.is_none() && scope_tag.is_none() {
             return Err(VaultError::InvalidQuery {
-                message: "an empty query is valid only with a folder scope".to_string(),
+                message: "an empty query is valid only with a folder or tag scope".to_string(),
             });
         }
         let windows = crate::sidebar_filter::validate_date_windows(&terms, date_windows)?;
-        let plan = crate::sidebar_filter::plan(&terms, scope_dir, &windows)?;
+        let plan = crate::sidebar_filter::plan(&terms, scope_dir, scope_tag, &windows)?;
         let conn = self.conn.lock().expect("session connection mutex");
-        sidebar_filter_impl(&conn, plan, scope_dir, paging)
+        sidebar_filter_impl(&conn, plan, scope_dir, scope_tag, paging)
     }
 
     /// FL5-2 (#665): the reserved Untagged scope — markdown files with
@@ -4646,7 +4647,7 @@ impl VaultSession {
     pub fn untagged_files(&self, paging: Paging) -> Result<SidebarFilterPage, VaultError> {
         let plan = crate::sidebar_filter::untagged_plan();
         let conn = self.conn.lock().expect("session connection mutex");
-        sidebar_filter_impl(&conn, plan, None, paging)
+        sidebar_filter_impl(&conn, plan, None, None, paging)
     }
 
     /// FL5-3b (#666): the distinct tags carried by the given files, with
@@ -7901,6 +7902,7 @@ fn sidebar_filter_impl(
     conn: &Connection,
     plan: crate::sidebar_filter::SidebarFilterPlan,
     scope_dir: Option<&str>,
+    scope_tag: Option<&str>,
     paging: Paging,
 ) -> Result<SidebarFilterPage, VaultError> {
     let files_where = if plan.files_clauses.is_empty() {
@@ -8018,7 +8020,8 @@ fn sidebar_filter_impl(
             next_cursor = Some(encode_sidebar_filter_cursor(sort_key, &summary.path));
         }
     }
-    let audio_summary = crate::sidebar_filter::sidebar_filter_audio_summary(total, scope_dir);
+    let audio_summary =
+        crate::sidebar_filter::sidebar_filter_audio_summary(total, scope_dir, scope_tag);
     Ok(SidebarFilterPage {
         files: rows_with_keys
             .into_iter()
