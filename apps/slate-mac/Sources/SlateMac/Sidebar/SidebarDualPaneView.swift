@@ -533,17 +533,22 @@ struct SidebarDualPaneView: View {
         summary.path),
       selectionIsActive: listFocused)
       .tag(summary.path)
-      .accessibilityHint(
-        "Opens the file. Other available actions are in the context menu.")
+    // #951's checker lesson, dual-pane edition: the complex-gesture
+    // hint must ride the OUTERMOST chain holding .onDrag/.contextMenu,
+    // not an inner builder expression.
+    let hint =
+      "Opens the file. Other available actions are in the context menu."
     if let rowDragProvider,
       let provider = rowDragProvider(summary)
     {
       row
         .onDrag { provider }
         .contextMenu { rowContextMenu?(summary) }
+        .accessibilityHint(hint)
     } else {
       row
         .contextMenu { rowContextMenu?(summary) }
+        .accessibilityHint(hint)
     }
   }
 }
