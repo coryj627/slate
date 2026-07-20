@@ -1343,6 +1343,10 @@ extension AppState {
 
     func scheduleBasesDockFollowActiveRefresh(delayNanoseconds: UInt64 = 500_000_000) {
         basesDockRefreshTask?.cancel()
+        // #999: a cancelled task must not linger as the published handle —
+        // callers (and tests) read `basesDockRefreshTask` to know whether a
+        // refresh is pending, and a stale one answers that question wrong.
+        basesDockRefreshTask = nil
         guard let target = basesDock.target, let session = currentSession else { return }
         let thisPath = basesDockActiveNotePath
         basesDock.thisPath = thisPath
@@ -1354,8 +1358,20 @@ extension AppState {
             } catch {
                 return
             }
-            guard let self, !Task.isCancelled, self.basesDock.target == target else { return }
-            self.refreshBasesDockTarget(target, session: session, thisPath: thisPath)
+            // #999: the guard asks "is the dock still showing this ENTITY?",
+            // not "is the display name byte-identical?". An in-flight
+            // `refreshBaseQueries()` (e.g. the fire-and-forget one from
+            // `renameSavedQuery`) rewrites `basesDock.target` with the new
+            // name via `retargetOpenSavedQueries`; a full-equality guard read
+            // that rename as a retarget, bailed, and left the dock document
+            // permanently nil because nothing reschedules. Match on identity
+            // and refresh the LIVE target so the document carries the current
+            // name.
+            guard let self, !Task.isCancelled,
+                let current = self.basesDock.target,
+                current.matchesEntity(target)
+            else { return }
+            self.refreshBasesDockTarget(current, session: session, thisPath: thisPath)
         }
     }
 

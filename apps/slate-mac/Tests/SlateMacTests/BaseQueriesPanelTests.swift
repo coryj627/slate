@@ -918,7 +918,10 @@ final class BaseQueriesPanelTests: XCTestCase {
         state.openDashboard(id: dashboardID, name: "Overview", target: .newTab)
         let dashboard = try XCTUnwrap(state.activeDashboardDocument)
         state.dockSavedQueryToSidebar(id: id, refreshDelayNanoseconds: 0)
-        await state.basesDockRefreshTask?.value
+        // #999: `await state.basesDockRefreshTask?.value` on a nil task is a
+        // no-op, which silently turns "the dock never refreshed" into a
+        // confusing unwrap failure two lines down. Unwrap the task instead.
+        await (try XCTUnwrap(state.basesDockRefreshTask)).value
         let dock = try XCTUnwrap(state.basesDockDocument)
         XCTAssertEqual(tab.result?.rows.count, 3)
         XCTAssertEqual(dashboard.sections[0].result?.rows.count, 3)
@@ -956,6 +959,33 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertTrue(idEmbed.result?.rows.isEmpty == true)
         XCTAssertFalse(nativeEvents.events.isEmpty)
         XCTAssertFalse(nativeEvents.events.contains(where: \.ranOnMainThread))
+    }
+
+    /// #999: `renameSavedQuery` refreshes the query list fire-and-forget, and
+    /// that refresh rewrites the dock's target with the new display name. A
+    /// dock refresh scheduled before it landed must still run — a rename is
+    /// not a retarget — or the dock pane stays empty forever, silently, with
+    /// nothing left to reschedule it.
+    func testDockingSavedQuerySurvivesRenameRefreshLandingFirst() async throws {
+        let (state, session) = try await makeState()
+        let id = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        _ = await state.refreshBaseQueries()?.value
+
+        state.renameSavedQuery(id: id, name: "Renamed projects")
+        // The delay pins the interleaving the flake hit by chance: the dock
+        // refresh is still sleeping when the rename refresh awaited below
+        // retargets the dock's name.
+        state.dockSavedQueryToSidebar(id: id, refreshDelayNanoseconds: 5_000_000)
+        await state.baseQueriesRefreshTask?.value
+        XCTAssertEqual(state.basesDock.target, .savedQuery(id: id, name: "Renamed projects"))
+
+        await (try XCTUnwrap(state.basesDockRefreshTask)).value
+        let dock = try XCTUnwrap(state.basesDockDocument)
+        XCTAssertEqual(dock.result?.rows.count, 3)
     }
 
     func testUpdatingSavedQueryReopensDockedDashboardSection() async throws {
