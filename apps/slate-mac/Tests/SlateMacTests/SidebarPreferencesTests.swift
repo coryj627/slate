@@ -124,7 +124,7 @@ final class SidebarPreferencesTests: XCTestCase {
       SidebarSettingsControl.allCases.map(\.label),
       [
         "Date source", "Date format", "Preview lines", "Show task counts",
-        "Show word count", "Density",
+        "Show word count", "Density", "Sidebar layout",
       ])
   }
 

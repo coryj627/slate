@@ -84,8 +84,19 @@ struct SidebarOrganizationChoice: Equatable {
 struct SidebarOrganizationOverride: Equatable {
   var sort: SidebarSortOption?
   var grouping: SidebarGroupingOption?
+  /// FL7-2 (#669): per-folder display overrides — one storage, two
+  /// projections (the dual-pane list header and tree-mode rows read
+  /// the same values).
+  var previewLines: Int?
+  var density: SidebarRowPreferencesSnapshot.Density?
+  /// FL7-2 rule 2: folder containers only — the dual-pane list shows
+  /// the folder's whole subtree when on. Default off.
+  var descendants: Bool?
 
-  var isEmpty: Bool { sort == nil && grouping == nil }
+  var isEmpty: Bool {
+    sort == nil && grouping == nil && previewLines == nil && density == nil
+      && descendants == nil
+  }
 }
 
 /// Vault-wide default plus per-folder overrides (decision 5: overrides are UI
@@ -99,6 +110,27 @@ struct SidebarOrganizationPrefs: Equatable {
     return SidebarOrganizationChoice(
       sort: override.sort ?? vaultChoice.sort,
       grouping: override.grouping ?? vaultChoice.grouping)
+  }
+
+  /// FL7-2 rule 3: display overrides fall back to the device-local
+  /// defaults the caller supplies (density/preview are device prefs;
+  /// only the per-folder override lives vault-locally).
+  func effectivePreviewLines(forFolder folder: String, default value: Int)
+    -> Int
+  {
+    folderOverrides[folder]?.previewLines ?? value
+  }
+
+  func effectiveDensity(
+    forFolder folder: String,
+    default value: SidebarRowPreferencesSnapshot.Density
+  ) -> SidebarRowPreferencesSnapshot.Density {
+    folderOverrides[folder]?.density ?? value
+  }
+
+  /// FL7-2 rule 2: Include Subfolders, folder containers only.
+  func includesDescendants(forFolder folder: String) -> Bool {
+    folderOverrides[folder]?.descendants ?? false
   }
 
   /// A folder rename/move retargets every override keyed at or under the old
@@ -781,6 +813,10 @@ struct SidebarStructuralTransform: Equatable, Sendable, Identifiable {
 enum SidebarOrganizationSchema {
   static let sortKey = "sort"
   static let groupingKey = "grouping"
+  /// FL7-2 (#669) per-folder display/scope override keys.
+  static let previewLinesKey = "previewLines"
+  static let densityKey = "density"
+  static let descendantsKey = "descendants"
   static let folderOverridesKey = "folderOverrides"
   static let pinsKey = "pins"
   static let shortcutsKey = "shortcuts"
@@ -872,9 +908,20 @@ enum SidebarOrganizationSchema {
     if let overrides = root[folderOverridesKey] as? [String: Any] {
       for (folder, raw) in overrides {
         guard let entry = raw as? [String: Any] else { continue }
-        let override = SidebarOrganizationOverride(
+        var override = SidebarOrganizationOverride(
           sort: decodeSort(entry[sortKey]),
           grouping: decodeGrouping(entry[groupingKey]))
+        if let raw = entry[previewLinesKey] as? Int, (0...3).contains(raw) {
+          override.previewLines = raw
+        }
+        if let raw = entry[densityKey] as? String,
+          let density = SidebarRowPreferencesSnapshot.Density(rawValue: raw)
+        {
+          override.density = density
+        }
+        if let raw = entry[descendantsKey] as? Bool {
+          override.descendants = raw
+        }
         if !override.isEmpty {
           prefs.folderOverrides[folder] = override
         }
@@ -1033,6 +1080,31 @@ enum SidebarOrganizationSchema {
     entry[groupingKey] = grouping.rawValue
     overrides[folder] = entry
     root[folderOverridesKey] = overrides
+  }
+
+  /// FL7-2 display/scope override mutators — single-axis writes, and
+  /// clears drop the key (and the entry once no KNOWN key remains and
+  /// no unknown keys were authored — the FL-06 leniency discipline).
+  static func setFolderOverrideValue(
+    _ root: inout [String: Any], folder: String, key: String, value: Any?
+  ) {
+    var overrides = root[folderOverridesKey] as? [String: Any] ?? [:]
+    var entry = overrides[folder] as? [String: Any] ?? [:]
+    if let value {
+      entry[key] = value
+    } else {
+      entry.removeValue(forKey: key)
+    }
+    if entry.isEmpty {
+      overrides.removeValue(forKey: folder)
+    } else {
+      overrides[folder] = entry
+    }
+    if overrides.isEmpty {
+      root.removeValue(forKey: folderOverridesKey)
+    } else {
+      root[folderOverridesKey] = overrides
+    }
   }
 
   /// Removes only the folder's grouping override so the folder returns to
