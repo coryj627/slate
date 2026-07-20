@@ -29,22 +29,46 @@ final class AppStateTests: XCTestCase {
         }
     }
 
+    /// A parking gate for the `…GateForTesting` hooks.
+    ///
+    /// Both waiter lists are arrays, and `open()` latches, because a gate is
+    /// installed as one *shared* closure that every load started while it is
+    /// installed will run. A test starts one of those loads deliberately; the
+    /// 75 ms passive-refresh debounce can start another at any moment. With a
+    /// single continuation slot the second `wait()` silently overwrote the
+    /// first and orphaned it, so the awaited task never finished and the test
+    /// hung rather than failed — burning a CI job's whole timeout. The latch
+    /// covers the mirror case: a caller that arrives after `open()` passes
+    /// straight through instead of parking on a gate nobody will open again.
     private actor TestGate {
         private var entered = false
-        private var continuation: CheckedContinuation<Void, Never>?
+        private var opened = false
+        private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+        private var entranceWaiters: [CheckedContinuation<Void, Never>] = []
 
         func wait() async {
-            entered = true
-            await withCheckedContinuation { continuation = $0 }
+            if !entered {
+                entered = true
+                let waiting = entranceWaiters
+                entranceWaiters = []
+                for waiter in waiting { waiter.resume() }
+            }
+            guard !opened else { return }
+            await withCheckedContinuation { releaseWaiters.append($0) }
         }
 
+        /// Resumed by the first arrival at the gate — an event, not a poll, so
+        /// it costs nothing on a starved runner.
         func waitUntilEntered() async {
-            while !entered { await Task.yield() }
+            guard !entered else { return }
+            await withCheckedContinuation { entranceWaiters.append($0) }
         }
 
         func open() {
-            continuation?.resume()
-            continuation = nil
+            opened = true
+            let waiting = releaseWaiters
+            releaseWaiters = []
+            for waiter in waiting { waiter.resume() }
         }
     }
 
@@ -2882,6 +2906,13 @@ final class AppStateTests: XCTestCase {
         // Park a load at its landing gate, then retire it with a second one —
         // which we hold at its own gate so the state can't move on before the
         // assertion below.
+        //
+        // A gate is a shared closure, so the passive-refresh debounce can park
+        // an extra load alongside each of these. That is why `TestGate` takes
+        // any number of waiters: the `.loading` assertion still holds (every
+        // parked load has already re-entered `.loading` and none can publish
+        // while parked), and the settle at the end follows whichever load ends
+        // up newest.
         let parked = TestGate()
         state.templateAvailabilityLandingGateForTesting = { _ in await parked.wait() }
         let superseded = state.refreshTemplateAvailability()
