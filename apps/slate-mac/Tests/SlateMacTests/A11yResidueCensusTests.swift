@@ -20,7 +20,7 @@ final class A11yResidueCensusTests: XCTestCase {
     /// the diff is the reviewable claim that the copy cannot be a
     /// vocabulary template yet. Shrinking it (converting residue) is the
     /// intended direction.
-    private static let pinnedResidueSites = 49
+    private static let pinnedResidueSites = 48
 
     private struct SwiftSource {
         let path: String

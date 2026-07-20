@@ -70,8 +70,10 @@ final class QuickSwitcherModel: ObservableObject {
     /// `CommandPaletteModel.filterAnnouncement`, but it also announces
     /// the empty-query "N recent files" count — the quick switcher's
     /// opening list is recency-ordered and worth announcing, unlike the
-    /// palette's static full list.
-    @Published private(set) var resultAnnouncement: String?
+    /// palette's static full list. Typed since #963: the model decides
+    /// *when* and *which* event fires; core owns the rendered text
+    /// (W0.5-3 — the view posts the event, never composes strings).
+    @Published private(set) var resultAnnouncement: A11yEvent?
 
     /// Recency order (most-recent-first) of vault-relative paths, set
     /// on `load` from the vault's `FileRecentsStore`. Passed to core's
@@ -118,15 +120,13 @@ final class QuickSwitcherModel: ObservableObject {
     }
 
     private func refreshAnnouncement() {
-        let total = rankedRows().count
+        let total = UInt32(rankedRows().count)
         if query.isEmpty {
-            resultAnnouncement =
-                "\(total) recent file\(total == 1 ? "" : "s")"
+            resultAnnouncement = .switcherRecentCount(count: total)
         } else if total == 0 {
-            resultAnnouncement = "No files matching \"\(query)\""
+            resultAnnouncement = .switcherNoMatches(query: query)
         } else {
-            resultAnnouncement =
-                "\(total) file\(total == 1 ? "" : "s") matching \"\(query)\""
+            resultAnnouncement = .switcherMatchCount(count: total, query: query)
         }
     }
 

@@ -153,6 +153,11 @@ final class A11yCorpusCensusTests: XCTestCase {
             .noItemsSelected,
             .treeFolderSelected(name: "Archive"),
             .rowSelected(name: "notes"),
+            .switcherRecentCount(count: 2),
+            .switcherRecentCount(count: 1),
+            .switcherNoMatches(query: "zzz"),
+            .switcherMatchCount(count: 2, query: "foo"),
+            .switcherMatchCount(count: 1, query: "foo"),
             .paletteCommandSelected(label: "Save", disabledReason: nil),
             .paletteCommandSelected(
                 label: "Save",

@@ -332,6 +332,20 @@ pub enum A11yEvent {
     RowSelected {
         name: String,
     },
+    /// Quick-switcher result counts (#963, the #718 core-rendered
+    /// follow-up): the opening recents count, the no-match case, and
+    /// the per-keystroke match count. Strings moved verbatim from
+    /// `QuickSwitcherModel.refreshAnnouncement`.
+    SwitcherRecentCount {
+        count: u32,
+    },
+    SwitcherNoMatches {
+        query: String,
+    },
+    SwitcherMatchCount {
+        count: u32,
+        query: String,
+    },
     /// Palette selection echo: the command label, plus its
     /// unavailability reason when the row is disabled (the reason
     /// copy is host availability logic, carried as data).
@@ -682,6 +696,14 @@ impl A11yEvent {
             NoItemsSelected => "No items selected".to_owned(),
             TreeFolderSelected { name } => format!("Selected: {name}, folder"),
             RowSelected { name } => format!("Selected: {name}"),
+            SwitcherRecentCount { count } => {
+                format!("{count} recent {}", plural(*count, "file", "files"))
+            }
+            SwitcherNoMatches { query } => format!("No files matching \"{query}\""),
+            SwitcherMatchCount { count, query } => format!(
+                "{count} {} matching \"{query}\"",
+                plural(*count, "file", "files")
+            ),
             PaletteCommandSelected {
                 label,
                 disabled_reason,
@@ -995,6 +1017,19 @@ pub fn corpus() -> Vec<A11yEvent> {
         RowSelected {
             name: "notes".into(),
         },
+        SwitcherRecentCount { count: 2 },
+        SwitcherRecentCount { count: 1 },
+        SwitcherNoMatches {
+            query: "zzz".into(),
+        },
+        SwitcherMatchCount {
+            count: 2,
+            query: "foo".into(),
+        },
+        SwitcherMatchCount {
+            count: 1,
+            query: "foo".into(),
+        },
         PaletteCommandSelected {
             label: "Save".into(),
             disabled_reason: None,
@@ -1235,6 +1270,11 @@ mod tests {
             (Medium, "No items selected"),
             (Medium, "Selected: Archive, folder"),
             (Medium, "Selected: notes"),
+            (Medium, "2 recent files"),
+            (Medium, "1 recent file"),
+            (Medium, "No files matching \"zzz\""),
+            (Medium, "2 files matching \"foo\""),
+            (Medium, "1 file matching \"foo\""),
             (Medium, "Selected: Save"),
             (
                 Medium,

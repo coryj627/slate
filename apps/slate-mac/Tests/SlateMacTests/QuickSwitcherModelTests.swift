@@ -185,12 +185,18 @@ final class QuickSwitcherModelTests: XCTestCase {
 
     // MARK: - Result-count announcement
 
+    // #963: the model publishes typed events; core renders the text.
+    // Each test asserts BOTH the event choice (the model's trigger
+    // contract) and the exact rendered string (the shipped copy, now
+    // pinned core-side by the §W-D corpus goldens).
+
     @MainActor
     func testInitialAnnouncementReportsRecentCount() {
         let model = QuickSwitcherModel()
         model.load(files: rows([("a.md", "a.md"), ("b.md", "b.md")]), recents: [])
         model.announceInitialCount()
-        XCTAssertEqual(model.resultAnnouncement, "2 recent files")
+        XCTAssertEqual(model.resultAnnouncement, .switcherRecentCount(count: 2))
+        XCTAssertEqual(renderedText(model), "2 recent files")
     }
 
     @MainActor
@@ -198,7 +204,8 @@ final class QuickSwitcherModelTests: XCTestCase {
         let model = QuickSwitcherModel()
         model.load(files: rows([("a.md", "a.md")]), recents: [])
         model.announceInitialCount()
-        XCTAssertEqual(model.resultAnnouncement, "1 recent file")
+        XCTAssertEqual(model.resultAnnouncement, .switcherRecentCount(count: 1))
+        XCTAssertEqual(renderedText(model), "1 recent file")
     }
 
     @MainActor
@@ -207,7 +214,8 @@ final class QuickSwitcherModelTests: XCTestCase {
         model.load(files: rows([("foo.md", "foo.md"), ("food.md", "food.md")]), recents: [])
         model.query = "foo"
         model.handleQueryChange()
-        XCTAssertEqual(model.resultAnnouncement, "2 files matching \"foo\"")
+        XCTAssertEqual(model.resultAnnouncement, .switcherMatchCount(count: 2, query: "foo"))
+        XCTAssertEqual(renderedText(model), "2 files matching \"foo\"")
     }
 
     @MainActor
@@ -216,7 +224,8 @@ final class QuickSwitcherModelTests: XCTestCase {
         model.load(files: rows([("foo.md", "foo.md"), ("bar.md", "bar.md")]), recents: [])
         model.query = "foo"
         model.handleQueryChange()
-        XCTAssertEqual(model.resultAnnouncement, "1 file matching \"foo\"")
+        XCTAssertEqual(model.resultAnnouncement, .switcherMatchCount(count: 1, query: "foo"))
+        XCTAssertEqual(renderedText(model), "1 file matching \"foo\"")
     }
 
     @MainActor
@@ -225,7 +234,15 @@ final class QuickSwitcherModelTests: XCTestCase {
         model.load(files: rows([("foo.md", "foo.md")]), recents: [])
         model.query = "zzz"
         model.handleQueryChange()
-        XCTAssertEqual(model.resultAnnouncement, "No files matching \"zzz\"")
+        XCTAssertEqual(model.resultAnnouncement, .switcherNoMatches(query: "zzz"))
+        XCTAssertEqual(renderedText(model), "No files matching \"zzz\"")
+    }
+
+    /// Render the model's pending event through the canonical vocabulary
+    /// — the same call the view's poster makes.
+    @MainActor
+    private func renderedText(_ model: QuickSwitcherModel) -> String? {
+        model.resultAnnouncement.map { a11yRender(event: $0).text }
     }
 
     @MainActor
