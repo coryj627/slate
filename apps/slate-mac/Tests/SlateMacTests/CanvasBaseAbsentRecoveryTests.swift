@@ -17,11 +17,27 @@ final class CanvasBaseAbsentRecoveryTests: XCTestCase {
         private let condition = NSCondition()
         private var entered = false
         private var released = false
+        /// Fired the instant the preparation thread arrives, so a test can
+        /// await the entrance as an *event*. Polling for `hasEntered` instead
+        /// means racing the six scheduling hops between mount and the native
+        /// runner against a wall-clock deadline — and the poll runs on the main
+        /// actor, competing with the very work it waits for.
+        private let onEnter: () -> Void
+
+        init(onEnter: @escaping () -> Void = {}) {
+            self.onEnter = onEnter
+        }
 
         func run<T>(_ work: () -> T) -> T {
             condition.lock()
             entered = true
             condition.broadcast()
+            condition.unlock()
+            // Signal off-lock: this thread is about to block in `wait()`, and
+            // anything the callback wakes may want the same lock.
+            onEnter()
+
+            condition.lock()
             while !released { condition.wait() }
             condition.unlock()
             return work()
@@ -123,18 +139,6 @@ final class CanvasBaseAbsentRecoveryTests: XCTestCase {
         let document = try XCTUnwrap(fixture.state.activeBaseDocument)
         XCTAssertNotNil(document.handle)
         return document
-    }
-
-    private func eventually(
-        timeout: TimeInterval = 2,
-        _ condition: () -> Bool
-    ) async -> Bool {
-        let deadline = Date(timeIntervalSinceNow: timeout)
-        while Date() < deadline {
-            if condition() { return true }
-            await Task.yield()
-        }
-        return condition()
     }
 
     private func findTable(in view: NSView) -> NSTableView? {
@@ -373,7 +377,15 @@ final class CanvasBaseAbsentRecoveryTests: XCTestCase {
             fixture.session.closeBase(handle: replaced)
         }
 
-        let gate = NativePreparationGate()
+        // Event-driven entrance signal. Mount -> native runner crosses six
+        // scheduling hops (main-actor enqueue, two detached hops, a task group,
+        // and an actor-isolated limiter), so any deadline here is a bet on the
+        // scheduler; under `swift test --parallel` that bet loses. The
+        // expectation costs no CPU while it waits, so its timeout only trips on
+        // a genuine hang rather than on a slow runner.
+        let preparationEntered = expectation(description: "native Base preparation entered")
+        preparationEntered.assertForOverFulfill = false
+        let gate = NativePreparationGate { preparationEntered.fulfill() }
         let realPreloader = state.baseRetargetPreloadRunner
         state.baseRetargetPreloadRunner = { session, request, observer in
             gate.run {
@@ -404,15 +416,15 @@ final class CanvasBaseAbsentRecoveryTests: XCTestCase {
             return XCTFail(
                 "mounting must not synchronously load, cancel the reservation, or clear input")
         }
-        let preparationEntered = await eventually { gate.hasEntered }
-        XCTAssertTrue(
-            preparationEntered,
-            "mounting a pending Base must schedule its background preparation")
+        await fulfillment(of: [preparationEntered], timeout: 30)
         XCTAssertNil(document.handle)
         XCTAssertEqual(document.quickFilterText, "typed filter survives retarget")
-        let tableMounted = await eventually { self.findTable(in: host) != nil }
-        XCTAssertTrue(tableMounted)
-        let table = try XCTUnwrap(findTable(in: host))
+        // The grid renders from the retained `.ready` snapshot, so it is
+        // mounted by the time the window is ordered in; force layout rather
+        // than polling for it.
+        host.layoutSubtreeIfNeeded()
+        let table = try XCTUnwrap(
+            findTable(in: host), "the detached Base must keep its result grid mounted")
         XCTAssertTrue(
             table.tableColumns.allSatisfy { $0.sortDescriptorPrototype == nil },
             "a detached Base must not expose visually actionable sort headers")
