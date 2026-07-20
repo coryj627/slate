@@ -21,7 +21,7 @@ rust-version = "1.89"
 [workspace.dependencies]
 pulldown-cmark = { version = "0.13", default-features = false }
 thiserror = "2"
-uniffi = { version = "0.31", features = ["cli"] }
+uniffi = { version = "0.32", features = ["cli"] }
 # Held at 0.39 rather than 0.40: rusqlite 0.40 pulls libsqlite3-sys
 # 0.38.1, whose build script uses the still-unstable `cfg_select!`
 # macro and fails to compile on the pinned stable toolchain. 0.39
