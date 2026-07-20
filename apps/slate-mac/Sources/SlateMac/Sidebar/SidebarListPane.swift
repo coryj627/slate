@@ -15,7 +15,10 @@ final class SidebarListPaneModel: ObservableObject {
   struct Dependencies {
     /// FL4-1 scoped/queried listing (descendants + tags).
     var performQuery:
-      (_ query: String, _ scopeDir: String?, _ paging: Paging) throws
+      (
+        _ query: String, _ scopeDir: String?, _ scopeTag: String?,
+        _ paging: Paging
+      ) throws
         -> SidebarFilterPage
     var performUntagged: (_ paging: Paging) throws -> SidebarFilterPage
     /// One-level listing (the non-descendant folder default).
@@ -205,10 +208,13 @@ final class SidebarListPaneModel: ObservableObject {
         let listing = try dependencies.listLevel(path, paging)
         (page, next) = (listing.files.items, listing.files.nextCursor)
       case .folder(let path):
-        let result = try dependencies.performQuery("", path, paging)
+        let result = try dependencies.performQuery("", path, nil, paging)
         (page, next) = (result.files, result.nextCursor)
       case .tag(let full):
-        let result = try dependencies.performQuery("#\(full)", nil, paging)
+        // FL-15 red team (high): the tag scopes via the core
+        // parameter — text interpolation would re-tokenize a tag
+        // containing whitespace and drain the WRONG file set.
+        let result = try dependencies.performQuery("", nil, full, paging)
         (page, next) = (result.files, result.nextCursor)
       case .untagged:
         let result = try dependencies.performUntagged(paging)

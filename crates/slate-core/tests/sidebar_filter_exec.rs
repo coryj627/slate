@@ -63,7 +63,7 @@ fn paths_windowed(
     windows: &[SidebarFilterDateWindow],
 ) -> Vec<String> {
     session
-        .filter_files(query, None, windows, Paging::first(100))
+        .filter_files(query, None, None, windows, Paging::first(100))
         .unwrap()
         .files
         .into_iter()
@@ -116,7 +116,7 @@ fn every_term_class_filters_and_orders_deterministically() {
     // scan < top < beta's "beta" … full-vault scoped listing shows the
     // total order; Zebra Study sorts under 'z').
     let all = session
-        .filter_files("", Some("research"), &[], Paging::first(10))
+        .filter_files("", Some("research"), None, &[], Paging::first(10))
         .unwrap();
     assert_eq!(
         all.files
@@ -190,13 +190,14 @@ fn date_windows_are_exact_half_open_and_negatable() {
 fn window_pairing_is_validated_before_sql() {
     let (_tmp, session) = fixture();
     let err = session
-        .filter_files("@today", None, &[], Paging::first(10))
+        .filter_files("@today", None, None, &[], Paging::first(10))
         .unwrap_err();
     assert!(matches!(err, VaultError::InvalidQuery { .. }));
 
     let err = session
         .filter_files(
             "zebra",
+            None,
             None,
             &[SidebarFilterDateWindow {
                 term: "@today".into(),
@@ -245,7 +246,7 @@ fn hostile_inputs_bind_as_parameters_never_sql() {
     ] {
         // Whatever the term parses as, execution must not error and the
         // index must survive.
-        let _ = session.filter_files(hostile, None, &[], Paging::first(10));
+        let _ = session.filter_files(hostile, None, None, &[], Paging::first(10));
     }
     assert_eq!(paths(&session, "zebra"), ["research/alpha.md"]);
     // LIKE metacharacters in path terms are literal.
@@ -257,26 +258,26 @@ fn scoped_listing_contract() {
     let (_tmp, session) = fixture();
     // Unscoped empty query is invalid.
     assert!(matches!(
-        session.filter_files("", None, &[], Paging::first(10)),
+        session.filter_files("", None, None, &[], Paging::first(10)),
         Err(VaultError::InvalidQuery { .. })
     ));
     // Scoped empty query lists deterministically with the scoped summary.
     let page = session
-        .filter_files("", Some("notes/"), &[], Paging::first(10))
+        .filter_files("", Some("notes/"), None, &[], Paging::first(10))
         .unwrap();
     assert_eq!(page.total, 2);
     assert_eq!(page.audio_summary, "2 results in notes.");
     // Traversal/escape scopes fail before SQL.
     for scope in ["../up", "/abs", "a//b", "a/../b", ""] {
         assert!(matches!(
-            session.filter_files("", Some(scope), &[], Paging::first(10)),
+            session.filter_files("", Some(scope), None, &[], Paging::first(10)),
             Err(VaultError::InvalidQuery { .. })
         ));
     }
     // Scope composes with a query as an implicit path term.
     assert_eq!(
         session
-            .filter_files("gamma", Some("notes"), &[], Paging::first(10))
+            .filter_files("gamma", Some("notes"), None, &[], Paging::first(10))
             .unwrap()
             .files
             .len(),
@@ -291,7 +292,7 @@ fn pagination_is_stable_across_the_total_order() {
     // "." is rejected as a scope — walk two real scopes instead.
     assert!(
         session
-            .filter_files("", Some("."), &[], Paging::first(2))
+            .filter_files("", Some("."), None, &[], Paging::first(2))
             .is_err()
     );
     // Page through `research` + `notes` (2 each at limit 1).
@@ -303,6 +304,7 @@ fn pagination_is_stable_across_the_total_order() {
                 .filter_files(
                     "",
                     Some(scope),
+                    None,
                     &[],
                     Paging {
                         cursor: cursor.clone(),
@@ -338,14 +340,14 @@ fn audio_summary_is_normative() {
     let (_tmp, session) = fixture();
     assert_eq!(
         session
-            .filter_files("zebra", None, &[], Paging::first(10))
+            .filter_files("zebra", None, None, &[], Paging::first(10))
             .unwrap()
             .audio_summary,
         "1 results."
     );
     assert_eq!(
         session
-            .filter_files("nosuchword", None, &[], Paging::first(10))
+            .filter_files("nosuchword", None, None, &[], Paging::first(10))
             .unwrap()
             .audio_summary,
         "No results."
@@ -364,16 +366,16 @@ fn scope_and_path_bounds_are_binary_not_like_folded() {
         .scan_initial(&slate_core::CancelToken::new())
         .unwrap();
     let lower = session
-        .filter_files("", Some("research"), &[], Paging::first(10))
+        .filter_files("", Some("research"), None, &[], Paging::first(10))
         .unwrap();
     assert_eq!(lower.total, 0, "lowercase scope must not match 'Research/'");
     let exact = session
-        .filter_files("", Some("Research"), &[], Paging::first(10))
+        .filter_files("", Some("Research"), None, &[], Paging::first(10))
         .unwrap();
     assert_eq!(exact.total, 1);
     assert_eq!(
         session
-            .filter_files("path:research/", None, &[], Paging::first(10))
+            .filter_files("path:research/", None, None, &[], Paging::first(10))
             .unwrap()
             .total,
         0,
@@ -398,12 +400,12 @@ fn title_effective_name_matches_the_shared_decoder_rules() {
         .scan_initial(&slate_core::CancelToken::new())
         .unwrap();
     let by_stem = session
-        .filter_files("blankish", None, &[], Paging::first(10))
+        .filter_files("blankish", None, None, &[], Paging::first(10))
         .unwrap();
     assert_eq!(by_stem.total, 1, "a blank title falls back to the stem");
     assert_eq!(
         session
-            .filter_files("numeric", None, &[], Paging::first(10))
+            .filter_files("numeric", None, None, &[], Paging::first(10))
             .unwrap()
             .total,
         1,
@@ -411,7 +413,7 @@ fn title_effective_name_matches_the_shared_decoder_rules() {
     );
     // Ordering uses the stem too: blankish < numeric alphabetically.
     let page = session
-        .filter_files("ext:md", None, &[], Paging::first(10))
+        .filter_files("ext:md", None, None, &[], Paging::first(10))
         .unwrap();
     assert_eq!(
         page.files
@@ -428,13 +430,14 @@ fn cursors_are_length_prefixed_and_malformed_ones_are_rejected() {
     // Round-trip: page one, then resume — no repeats, no skips, even
     // though sort keys and paths are arbitrary user-authored text.
     let first = session
-        .filter_files("", Some("notes"), &[], Paging::first(1))
+        .filter_files("", Some("notes"), None, &[], Paging::first(1))
         .unwrap();
     let cursor = first.next_cursor.clone().expect("more pages");
     let second = session
         .filter_files(
             "",
             Some("notes"),
+            None,
             &[],
             Paging {
                 cursor: Some(cursor),
@@ -457,6 +460,7 @@ fn cursors_are_length_prefixed_and_malformed_ones_are_rejected() {
                 session.filter_files(
                     "",
                     Some("notes"),
+                    None,
                     &[],
                     Paging {
                         cursor: Some(bad.to_string()),
@@ -496,5 +500,136 @@ proptest! {
         for path in &full {
             prop_assert!(wider.contains(path), "{path} missing after drop");
         }
+    }
+}
+
+// FL-15 red team (high): tag CONTAINER scope is out-of-band — a
+// frontmatter tag containing whitespace must scope exactly, never be
+// re-tokenized through the query grammar.
+mod scope_tag {
+    use super::*;
+
+    fn spaced_fixture() -> (tempfile::TempDir, VaultSession) {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        write(
+            vault,
+            "a/spaced.md",
+            "---\ntags: [\"project alpha\"]\n---\nbody\n",
+        );
+        write(
+            vault,
+            "a/child.md",
+            "---\ntags: [\"project alpha/sub\"]\n---\nbody\n",
+        );
+        // The trap files the textual form would wrongly include or
+        // exclude: tagged `project` (the truncated tag) and a file
+        // whose NAME matches the tag's second token.
+        write(vault, "a/truncated.md", "#project\n");
+        write(vault, "b/alpha name.md", "no tags here\n");
+        let session = VaultSession::from_filesystem(vault.to_path_buf()).unwrap();
+        session
+            .scan_initial(&slate_core::CancelToken::new())
+            .unwrap();
+        (tmp, session)
+    }
+
+    fn scoped(session: &VaultSession, query: &str, scope_tag: Option<&str>) -> Vec<String> {
+        session
+            .filter_files(query, None, scope_tag, &[], Paging::first(100))
+            .unwrap()
+            .files
+            .into_iter()
+            .map(|summary| summary.path)
+            .collect()
+    }
+
+    #[test]
+    fn spaced_tag_scope_matches_exactly_and_includes_descendants() {
+        let (_tmp, session) = spaced_fixture();
+        assert_eq!(
+            scoped(&session, "", Some("project alpha")),
+            vec!["a/child.md".to_string(), "a/spaced.md".to_string()],
+            "the whole spaced tag scopes; descendants ride along; the \
+             truncated `project` file and the name-matching file stay out"
+        );
+        // The equivalent TYPED text demonstrates exactly the mis-parse
+        // the out-of-band scope exists to avoid: tag `project` AND name
+        // term `alpha`.
+        assert_eq!(
+            scoped(&session, "#project alpha", None),
+            Vec::<String>::new(),
+            "typed text tokenizes on whitespace (grammar semantics, \
+             unchanged) — which is why containers must never compose it"
+        );
+    }
+
+    #[test]
+    fn scope_tag_composes_with_query_terms_and_normalizes() {
+        let (_tmp, session) = spaced_fixture();
+        assert_eq!(
+            scoped(&session, "child", Some("#Project Alpha")),
+            vec!["a/child.md".to_string()],
+            "query terms AND with the scope; the scope normalizes \
+             (leading #, case) like every stored tag"
+        );
+    }
+
+    #[test]
+    fn empty_query_is_valid_with_a_tag_scope_and_summary_names_it() {
+        let (_tmp, session) = spaced_fixture();
+        let page = session
+            .filter_files("", None, Some("project alpha"), &[], Paging::first(10))
+            .unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.audio_summary, "2 results for #project alpha.");
+        let err = session
+            .filter_files("", None, None, &[], Paging::first(10))
+            .unwrap_err();
+        match err {
+            VaultError::InvalidQuery { message } => {
+                assert_eq!(
+                    message,
+                    "an empty query is valid only with a folder or tag scope"
+                );
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn invalid_scope_tag_is_refused_before_sql() {
+        let (_tmp, session) = spaced_fixture();
+        for hostile in ["", "   ", "#"] {
+            let err = session
+                .filter_files("x", None, Some(hostile), &[], Paging::first(10))
+                .unwrap_err();
+            match err {
+                VaultError::InvalidQuery { message } => {
+                    assert!(
+                        message.contains("is not a valid tag"),
+                        "hostile {hostile:?}: {message}"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn like_metacharacters_in_scope_tags_stay_literal() {
+        let tmp = tempfile::tempdir().unwrap();
+        let vault = tmp.path();
+        write(vault, "x/pct.md", "---\ntags: [\"pro%ject\"]\n---\n");
+        write(vault, "x/other.md", "---\ntags: [\"project\"]\n---\n");
+        let session = VaultSession::from_filesystem(vault.to_path_buf()).unwrap();
+        session
+            .scan_initial(&slate_core::CancelToken::new())
+            .unwrap();
+        assert_eq!(
+            scoped(&session, "", Some("pro%ject")),
+            vec!["x/pct.md".to_string()],
+            "% in the descendant LIKE pattern is escaped, not a wildcard"
+        );
     }
 }

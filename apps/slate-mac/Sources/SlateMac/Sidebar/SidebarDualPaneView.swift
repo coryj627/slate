@@ -216,7 +216,31 @@ struct SidebarDualPaneView: View {
     return rows
   }
 
+  @ViewBuilder
   private func folderRow(_ row: FolderRow) -> some View {
+    // FL-15 red team (medium): Rename on a folder container must
+    // enter editing HERE — the tree row that renders the editor is
+    // unmounted in this layout (and FL-12's compound folder+note
+    // rename rides the same commit path).
+    if let rename = appState.renamingNode, rename.path == row.node.path,
+      rename.isDirectory
+    {
+      RenameField(
+        initialName: rename.name,
+        isDirectory: true,
+        error: appState.structuralRenameError,
+        onCommit: { newName in
+          appState.commitPendingRename(id: rename.id, to: newName)
+        },
+        onCancel: {
+          appState.cancelPendingRename(id: rename.id)
+        })
+    } else {
+      plainFolderRow(row)
+    }
+  }
+
+  private func plainFolderRow(_ row: FolderRow) -> some View {
     let container = SidebarContainer.folder(path: row.node.path)
     let isSelected = appState.sidebarSelectedContainer == container
     return SidebarFolderRowContent(
@@ -325,20 +349,25 @@ struct SidebarDualPaneView: View {
         appState.openFile(path, target: .currentTab)
       }
     }
-    // Review round (medium): value-typed event sources, not
-    // announcement copy — two mutations announcing identical text
-    // ("Pinned.") must both refresh. treeMutation tokens every
-    // structural transform; sidebarOrganization changes on every
-    // pin/sort/group/override edit.
-    .onChange(of: appState.treeMutation) { _, _ in
-      listModel.refreshAfterStructuralMutation()
-    }
-    .onChange(of: appState.sidebarOrganization) { _, _ in
+    // FL-15 red team (medium): ONE monotonic funnel — the mutation
+    // token ticks on every announcement assignment (structural ops,
+    // organization edits, AND content mutations like batch tag edits,
+    // which fire neither treeMutation nor sidebarOrganization),
+    // identical copy included.
+    .onChange(of: appState.sidebarMutationToken) { _, _ in
       listModel.refreshAfterStructuralMutation()
     }
     // Review round (high): once a drain settles, selections must be a
     // subset of the visible rows — republished if pruned.
     .onChange(of: listModel.rows) { _, _ in
+      appState.reconcileDualPaneSelectionWithVisibleRows()
+    }
+    // FL-15 red team (high): the FILTER surface replacing (or
+    // clearing) the pane is a visibility change too — commit, page
+    // refresh, and Esc all reconcile, so a selection hidden by the
+    // filter can never stay the destructive-action target.
+    .onChange(of: filterModel.results.map { $0.files.map(\.path) } ?? []) {
+      _, _ in
       appState.reconcileDualPaneSelectionWithVisibleRows()
     }
   }

@@ -124,7 +124,7 @@ final class SidebarFilterModelTests: XCTestCase {
             requirements: { query in
                 recorder.requirementsByQuery[query] ?? []
             },
-            perform: { query, windows, paging in
+            perform: { query, _, windows, paging in
                 recorder.performCalls.append((query, windows, paging))
                 if let error = recorder.errors[query] { throw error }
                 if let cursor = paging.cursor {
@@ -192,7 +192,7 @@ final class SidebarFilterModelTests: XCTestCase {
         // the second edit arrives, and nothing runs.
         model.bind(SidebarFilterModel.Dependencies(
             requirements: { _ in [] },
-            perform: { query, windows, paging in
+            perform: { query, _, windows, paging in
                 recorder.performCalls.append((query, windows, paging))
                 return self.page([])
             },
@@ -493,6 +493,66 @@ final class SidebarFilterModelTests: XCTestCase {
     }
 
     // MARK: - Untagged scope (FL5-2, #665)
+
+    func testTagScopeRunsOutOfBandAndExitsOnTypedCommit() {
+        // FL-15 red team (high): a tag the grammar cannot express
+        // (whitespace) scopes via the core parameter — never
+        // re-tokenized — and follows the Untagged lifecycle.
+        let defaults = freshDefaults()
+        var scopeCalls: [(query: String, scopeTag: String?)] = []
+        var announcements: [String] = []
+        let model = SidebarFilterModel()
+        model.bind(SidebarFilterModel.Dependencies(
+            requirements: { _ in [] },
+            perform: { query, scopeTag, _, _ in
+                scopeCalls.append((query, scopeTag))
+                return SidebarFilterPage(
+                    files: [
+                        FileSummary(
+                            path: "a/spaced.md", name: "spaced.md",
+                            mtimeMs: 0, sizeBytes: 0, isMarkdown: true,
+                            displayName: nil, createdDate: nil,
+                            createdMs: nil, wordCount: nil, preview: nil,
+                            taskTotal: 0, taskOpen: 0)
+                    ],
+                    nextCursor: nil, total: 1,
+                    audioSummary: "1 results for #project alpha.")
+            },
+            announce: { announcements.append($0) },
+            now: { Date() },
+            timeZone: { TimeZone(identifier: "America/New_York")! },
+            resolver: SidebarProductionCivilDateResolver(),
+            defaults: defaults))
+
+        model.activateTagScope("project alpha")
+        XCTAssertEqual(model.tagScope, "project alpha")
+        XCTAssertTrue(model.isActive)
+        XCTAssertEqual(model.fieldText, "", "no textual grammar for it")
+        XCTAssertEqual(scopeCalls.last?.query, "")
+        XCTAssertEqual(scopeCalls.last?.scopeTag, "project alpha")
+        XCTAssertEqual(
+            announcements.last, "1 results for #project alpha.")
+        XCTAssertEqual(
+            defaults.string(forKey: SidebarFilterModel.persistedQueryKey),
+            "",
+            "reserved scopes are never persisted")
+
+        // A typed commit exits the scope — the field is the single
+        // source of the overlay's mode.
+        model.fieldText = "beta"
+        model.fieldTextChanged()
+        model.commitNow()
+        XCTAssertNil(model.tagScope)
+        XCTAssertEqual(scopeCalls.last?.query, "beta")
+        XCTAssertNil(scopeCalls.last?.scopeTag)
+
+        // Re-activate, then Esc clears everything.
+        model.activateTagScope("project alpha")
+        XCTAssertEqual(model.tagScope, "project alpha")
+        model.escapeInField()
+        XCTAssertNil(model.tagScope)
+        XCTAssertFalse(model.isActive)
+    }
 
     func testUntaggedScopeActivatesAnnouncesAndPages() {
         let recorder = Recorder()

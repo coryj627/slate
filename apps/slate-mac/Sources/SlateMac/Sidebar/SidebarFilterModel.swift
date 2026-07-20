@@ -74,7 +74,10 @@ final class SidebarFilterModel: ObservableObject {
   struct Dependencies {
     var requirements: (String) throws -> [String]
     var perform:
-      (_ query: String, _ windows: [SidebarFilterDateWindow], _ paging: Paging)
+      (
+        _ query: String, _ scopeTag: String?,
+        _ windows: [SidebarFilterDateWindow], _ paging: Paging
+      )
         throws -> SidebarFilterPage
     /// FL5-2 (#665): the reserved Untagged scope — same page shape,
     /// same presentation, dedicated core call.
@@ -101,14 +104,25 @@ final class SidebarFilterModel: ObservableObject {
   /// overlay. Not persisted (restore-not-apply covers query TEXT only);
   /// any field edit or Esc exits back to a normal query/tree.
   @Published private(set) var untaggedScope = false
+  /// FL-15 red team (high): a tag scope that CANNOT round-trip through
+  /// the whitespace-tokenized grammar (frontmatter tags may contain
+  /// spaces) rides out-of-band, exactly like Untagged: not persisted,
+  /// field empties, a typed commit or Esc exits.
+  @Published private(set) var tagScope: String?
 
   /// Announce-dedup sentinel for the Untagged scope; NUL cannot appear
   /// in a typed query, so it can never collide with one.
   private static let untaggedAnnounceKey = "\u{0}untagged"
+  /// Same NUL trick for tag scopes ("\0tag:<full>").
+  private static func tagScopeAnnounceKey(_ full: String) -> String {
+    "\u{0}tag:\(full)"
+  }
 
-  /// True while a committed non-empty query or the Untagged scope owns
+  /// True while a committed non-empty query or a reserved scope owns
   /// the result surface.
-  var isActive: Bool { !committedQuery.isEmpty || untaggedScope }
+  var isActive: Bool {
+    !committedQuery.isEmpty || untaggedScope || tagScope != nil
+  }
 
   private var dependencies: Dependencies?
   private var lastAnnouncement: (query: String, total: UInt64)?
@@ -188,9 +202,10 @@ final class SidebarFilterModel: ObservableObject {
   /// that fails to parse never becomes the restored text.
   func commit() {
     guard let dependencies else { return }
-    // A text commit (or an emptied field) always exits the Untagged
-    // scope: the field is the single source of the overlay's mode.
+    // A text commit (or an emptied field) always exits the reserved
+    // scopes: the field is the single source of the overlay's mode.
     untaggedScope = false
+    tagScope = nil
     let query = fieldText.trimmingCharacters(in: .whitespaces)
     guard !query.isEmpty else {
       committedQuery = ""
@@ -215,6 +230,39 @@ final class SidebarFilterModel: ObservableObject {
     commitNow()
   }
 
+  /// FL-15 red team: a tag whose name the grammar cannot express
+  /// (whitespace) activates as an out-of-band scope — same lifecycle
+  /// as Untagged, executed via the core `scope_tag` parameter so the
+  /// tag is never re-tokenized.
+  func activateTagScope(_ full: String) {
+    guard let dependencies else { return }
+    pendingCommitTaskForTesting?.cancel()
+    if !fieldText.isEmpty {
+      pendingProgrammaticFieldText = ""
+      fieldText = ""
+    }
+    committedQuery = ""
+    untaggedScope = false
+    do {
+      let page = try dependencies.perform(
+        "", full, [], Paging(cursor: nil, limit: Self.pageLimit))
+      tagScope = full
+      results = page
+      inlineError = nil
+      lastErrorAnnouncement = nil
+      dependencies.defaults.set("", forKey: Self.persistedQueryKey)
+      let key = Self.tagScopeAnnounceKey(full)
+      if lastAnnouncement?.query != key
+        || lastAnnouncement?.total != page.total
+      {
+        lastAnnouncement = (key, page.total)
+        dependencies.announce(page.audioSummary)
+      }
+    } catch {
+      setInlineError(errorMessage(for: error), dependencies: dependencies)
+    }
+  }
+
   /// FL5-2 rule 3: the reserved Untagged scope — a dedicated core call,
   /// the SAME flat-list presentation and announce seam. The field
   /// empties (there is no textual grammar for untagged); editing it
@@ -231,6 +279,7 @@ final class SidebarFilterModel: ObservableObject {
       let page = try dependencies.performUntagged(
         Paging(cursor: nil, limit: Self.pageLimit))
       untaggedScope = true
+      tagScope = nil
       results = page
       inlineError = nil
       lastErrorAnnouncement = nil
@@ -261,6 +310,7 @@ final class SidebarFilterModel: ObservableObject {
           Paging(cursor: cursor, limit: Self.pageLimit))
         : try dependencies.perform(
           committedQuery,
+          tagScope,
           activeWindows,
           Paging(cursor: cursor, limit: Self.pageLimit))
       results = SidebarFilterPage(
@@ -289,7 +339,7 @@ final class SidebarFilterModel: ObservableObject {
         return
       }
       let page = try dependencies.perform(
-        query, windows, Paging(cursor: nil, limit: Self.pageLimit))
+        query, tagScope, windows, Paging(cursor: nil, limit: Self.pageLimit))
       committedQuery = query
       activeWindows = windows
       results = page
@@ -340,6 +390,7 @@ final class SidebarFilterModel: ObservableObject {
     }
     committedQuery = ""
     untaggedScope = false
+    tagScope = nil
     results = nil
     inlineError = nil
     lastErrorAnnouncement = nil
@@ -358,6 +409,7 @@ final class SidebarFilterModel: ObservableObject {
     }
     committedQuery = ""
     untaggedScope = false
+    tagScope = nil
     results = nil
     inlineError = nil
     lastAnnouncement = nil
@@ -375,6 +427,14 @@ final class SidebarFilterModel: ObservableObject {
     if untaggedScope {
       if let page = try? dependencies.performUntagged(
         Paging(cursor: nil, limit: Self.pageLimit))
+      {
+        results = page
+      }
+      return
+    }
+    if let scope = tagScope, committedQuery.isEmpty {
+      if let page = try? dependencies.perform(
+        "", scope, [], Paging(cursor: nil, limit: Self.pageLimit))
       {
         results = page
       }

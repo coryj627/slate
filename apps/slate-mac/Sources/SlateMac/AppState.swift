@@ -6776,7 +6776,7 @@ final class AppState: ObservableObject {
                 }
                 return try session.sidebarFilterDateRequirements(query: query)
             },
-            perform: { [weak self, weak session] query, windows, paging in
+            perform: { [weak self, weak session] query, scopeTag, windows, paging in
                 guard let session else {
                     throw SidebarFilterSessionClosedError()
                 }
@@ -6786,19 +6786,27 @@ final class AppState: ObservableObject {
                 // query term. (Untagged has no textual composition;
                 // its filter runs vault-wide — documented v1 boundary.)
                 var scopeDir: String?
-                var composed = query
+                var effectiveScopeTag = scopeTag
                 if let self, self.sidebarLayout == .dualPane {
                     switch self.sidebarSelectedContainer {
                     case .folder(let path):
                         scopeDir = path
                     case .tag(let full):
-                        composed = "#\(full) \(query)"
+                        // FL-15 red team (high): the container's tag
+                        // scopes via the core parameter — text
+                        // interpolation would re-tokenize a tag
+                        // containing whitespace into a DIFFERENT query
+                        // and mis-scope every downstream batch action.
+                        if effectiveScopeTag == nil {
+                            effectiveScopeTag = full
+                        }
                     case .untagged, nil:
                         break
                     }
                 }
                 return try session.filterFiles(
-                    query: composed, scopeDir: scopeDir,
+                    query: query, scopeDir: scopeDir,
+                    scopeTag: effectiveScopeTag,
                     dateWindows: windows, paging: paging)
             },
             performUntagged: { [weak session] paging in
@@ -6896,6 +6904,11 @@ final class AppState: ObservableObject {
     func activateSidebarTagScope(full: String) {
         if sidebarLayout == .dualPane {
             sidebarSelectedContainer = .tag(full: full)
+        } else if full.contains(where: \.isWhitespace) {
+            // FL-15 red team (high): this tag cannot round-trip through
+            // the whitespace-tokenized grammar — scope it out-of-band
+            // (the Untagged lifecycle) instead of mis-parsing.
+            sidebarFilterModel.activateTagScope(full)
         } else {
             sidebarFilterModel.activateTagQuery("#\(full)")
         }
@@ -9661,12 +9674,13 @@ final class AppState: ObservableObject {
             // client-side pins/sort/group projection.
             sidebarListPaneModel.bind(
                 SidebarListPaneModel.Dependencies(
-                    performQuery: { [weak session] query, scopeDir, paging in
+                    performQuery: { [weak session] query, scopeDir, scopeTag, paging in
                         guard let session else {
                             throw SidebarFilterSessionClosedError()
                         }
                         return try session.filterFiles(
                             query: query, scopeDir: scopeDir,
+                            scopeTag: scopeTag,
                             dateWindows: [], paging: paging)
                     },
                     performUntagged: { [weak session] paging in
@@ -16056,7 +16070,18 @@ final class AppState: ObservableObject {
     /// the VERBATIM string here (spec §U2-6); `postAccessibilityAnnouncement` is
     /// a no-op under the XCTest runner — there's no `NSApp` — so the string must
     /// be observable without a live announcement.
-    @Published private(set) var lastMutationAnnouncement: String?
+    @Published private(set) var lastMutationAnnouncement: String? {
+        didSet {
+            // FL-15 red team (medium): announcement TEXT is not an
+            // event token — two identical consecutive operations must
+            // both invalidate. Observers refresh on this counter,
+            // which ticks on every assignment, equal copy or not.
+            sidebarMutationToken &+= 1
+        }
+    }
+    /// Monotonic funnel counter: increments on every mutation
+    /// announcement assignment (see didSet above).
+    @Published private(set) var sidebarMutationToken = 0
 
     /// Announce a completed (or failed) structural mutation to VoiceOver
     /// (spec §U2-6). The wrappers build the verbatim sentence; this seam routes

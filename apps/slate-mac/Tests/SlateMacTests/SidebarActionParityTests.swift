@@ -210,9 +210,60 @@ final class SidebarActionParityTests: XCTestCase {
         XCTAssertFalse(
             source.contains("onChange(of: appState.lastMutationAnnouncement)"),
             "refresh triggers are value-typed, never announcement copy")
-        XCTAssertTrue(source.contains("onChange(of: appState.treeMutation)"))
         XCTAssertTrue(
-            source.contains("onChange(of: appState.sidebarOrganization)"))
+            source.contains("onChange(of: appState.sidebarMutationToken)"),
+            "the FL-15 token funnel covers structural, organization, "
+                + "and content mutations alike")
+    }
+
+    func testLayoutIndependentSurfacesAreHoistedAboveTheBranch() throws {
+        // FL-15 red team (mediums): the tag-editor sheet and the
+        // mutation-refresh funnel must attach ABOVE the tree/dual-pane
+        // branch — attached to the tree mount they go dead the moment
+        // dual-pane mounts.
+        let tree = try Self.source("FileTreeSidebar.swift")
+        let sheetIndex = try XCTUnwrap(
+            tree.range(of: "get: { appState.sidebarTagEditorRequest }")
+        ).lowerBound
+        let navTitleIndex = try XCTUnwrap(
+            tree.range(of: ".navigationTitle(\"Files\")")).lowerBound
+        XCTAssertLessThan(
+            navTitleIndex, sheetIndex,
+            "the sheet mounts on the shared body chain, after "
+                + "navigationTitle — not inside a layout branch")
+        XCTAssertEqual(
+            tree.components(separatedBy: "sidebarTagEditorRequest }")
+                .count - 1,
+            1, "exactly one presenter")
+        XCTAssertFalse(
+            tree.contains("onChange(of: appState.lastMutationAnnouncement)"),
+            "refresh funnels ride the token, never announcement copy")
+        XCTAssertTrue(
+            tree.contains("onChange(of: appState.sidebarMutationToken)"))
+
+        let dual = try Self.dualPaneSource()
+        XCTAssertEqual(
+            dual.components(separatedBy: "RenameField(").count - 1, 2,
+            "both file AND folder rows render the shared rename editor")
+        XCTAssertTrue(
+            dual.contains("onChange(of: appState.sidebarMutationToken)"))
+        XCTAssertTrue(
+            dual.contains("reconcileDualPaneSelectionWithVisibleRows"),
+            "filter-surface changes reconcile the selection")
+    }
+
+    private static func source(_ name: String) throws -> String {
+        var cursor = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+        for _ in 0..<8 {
+            let candidate = cursor.appendingPathComponent(
+                "Sources/SlateMac/\(name)")
+            if FileManager.default.fileExists(atPath: candidate.path) {
+                return try String(contentsOf: candidate, encoding: .utf8)
+            }
+            cursor = cursor.deletingLastPathComponent()
+        }
+        throw XCTSkip("\(name) not found")
     }
 
     private static func dualPaneSource() throws -> String {
