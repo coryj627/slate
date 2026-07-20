@@ -27,7 +27,7 @@ uniffi = { version = "0.31", features = ["cli"] }
 # macro and fails to compile on the pinned stable toolchain. 0.39
 # (libsqlite3-sys 0.37, bundled SQLite ~3.50) is the highest that
 # builds today; revisit 0.40 once a newer stable stabilizes cfg_select.
-rusqlite = { version = "0.39", features = ["bundled", "functions"] }
+rusqlite = { version = "0.40", features = ["bundled", "functions"] }
 tempfile = "3"
 blake3 = "1"
 trash = "5"
