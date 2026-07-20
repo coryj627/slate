@@ -425,6 +425,12 @@ enum SidebarActionCatalog {
             SlateCommandID.sidebarFocusFilter, "Focus Sidebar Filter",
             .search, .anySelection,
             "Move focus to the sidebar filter field."),
+        // FL7-2 (#669): the public layout toggle (rule 6 — the FL-13
+        // internal gate opens with the complete list pane).
+        action(
+            SlateCommandID.sidebarToggleLayout, "Toggle Sidebar Layout",
+            .sortOrder, .anySelection,
+            "Switch the sidebar between the tree and dual-pane layouts."),
         // FL5-3b batch tag editors (#666): selection actions opening
         // the tag editor; per-file refusals ride the core report.
         action(

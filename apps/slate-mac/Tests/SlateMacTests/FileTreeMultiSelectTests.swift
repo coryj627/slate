@@ -1223,8 +1223,9 @@ final class FileTreeMultiSelectTests: XCTestCase {
             sidebar.components(
                 separatedBy: "sidebarCatalogActions(projection.evaluations)"
             ).count - 1,
-            3,
-            "both context menus and the folder rotor render through the shared owner")
+            4,
+            "both context menus, the folder rotor, and the FL-14 dual-pane "
+                + "multi-select menu render through the shared owner")
         XCTAssertEqual(
             sidebar.components(
                 separatedBy: "sidebarCatalogActions(voiceOverProjection.evaluations)"

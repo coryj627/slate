@@ -182,6 +182,10 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             hint: "Move focus to the sidebar filter field.",
             section: .sidebar, hotkey: "⌥⌘F"),
         .init(
+            id: "slate.sidebar.toggleLayout", label: "Toggle Sidebar Layout",
+            hint: "Switch the sidebar between the tree and dual-pane layouts.",
+            section: .sidebar, hotkey: nil),
+        .init(
             id: "slate.sidebar.addTag", label: "Add Tag…",
             hint: "Add a tag to the selected files' frontmatter.",
             section: .sidebar, hotkey: nil),
@@ -355,7 +359,10 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
                     SlateCommandID.sidebarHistoryBack,
                     SlateCommandID.sidebarHistoryForward,
                 ] + SlateCommandID.sidebarOpenShortcutSlots
-                + [SlateCommandID.sidebarFocusFilter]
+                + [
+                    SlateCommandID.sidebarFocusFilter,
+                    SlateCommandID.sidebarToggleLayout,
+                ]
                 + [SlateCommandID.deleteEntry],
             "multi-selection rejects single-destination actions; the FL-07 "
                 + "navigation family is selection-independent")
@@ -969,7 +976,13 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         try assertClosedCallExpressions(
             owner: "AppState projection",
             body: body,
-            allowedExact: ["SidebarActionCatalog.project"])
+            allowedExact: ["SidebarActionCatalog.project"],
+            // FL-14 review round: the explicit-snapshot form re-derives
+            // the organization overlay for the explicit target — both
+            // calls are pure in-memory dictionary computation (the same
+            // function the sidebarActionDisabledReasons var composes),
+            // no render-time I/O.
+            allowedTerminal: ["sidebarOrganizationActionReasons", "merge"])
 
         let catalog = try semanticSource("Sidebar/SidebarActionCatalog.swift")
         let tree = try semanticSource("FileTreeSidebar.swift")
@@ -1224,6 +1237,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
             // FL-09: the filter-focus chord (⌥⌘F) lives beside the other
             // sidebar navigation items in the View menu.
             SlateCommandID.sidebarFocusFilter,
+            // FL7-2 (#669): the layout toggle is a sidebar view control.
+            SlateCommandID.sidebarToggleLayout,
         ]
         let paletteOnlyIDs = Set(SlateCommandID.sidebarOpenShortcutSlots)
         let viewMenuIDs = viewMenuSortIDs.union(viewMenuNavigationIDs)

@@ -80,6 +80,9 @@ struct SidebarNavigationMenuItems: View {
     // FL-09 (#663): ⌥⌘F — ⌘F stays with content search.
     item(SlateCommandID.sidebarFocusFilter)
       .keyboardShortcut("f", modifiers: [.command, .option])
+    // FL7-2 (#669): the public tree/dual-pane toggle lives with the
+    // other sidebar view controls.
+    item(SlateCommandID.sidebarToggleLayout)
   }
 }
 
