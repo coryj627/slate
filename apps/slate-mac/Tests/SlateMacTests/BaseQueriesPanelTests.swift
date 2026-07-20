@@ -988,6 +988,174 @@ final class BaseQueriesPanelTests: XCTestCase {
         XCTAssertEqual(dock.result?.rows.count, 3)
     }
 
+    /// Holds every prepared native load off in a barrier so a test can pin the
+    /// interleaving exactly: the rename/re-dock below runs on the main actor
+    /// while the replacement result is provably still in flight.
+    private final class PreparedLoadBarrier: @unchecked Sendable {
+        private let condition = NSCondition()
+        private var released = false
+
+        func run<T>(_ work: () -> T) -> T {
+            condition.lock()
+            while !released { condition.wait() }
+            condition.unlock()
+            return work()
+        }
+
+        func release() {
+            condition.lock()
+            released = true
+            condition.broadcast()
+            condition.unlock()
+        }
+    }
+
+    /// #999 sibling: the post-write apply guard is an OWNERSHIP test — "is the
+    /// dock still showing this entity, and is this still its document?" A
+    /// display-name-only re-dock is neither a retarget nor a reason to throw
+    /// away a prepared result, and `BasesDockState.setTarget` agrees: it
+    /// invalidates the membership baseline on `stableIdentity`, not on the
+    /// name. A name-sensitive guard here released the result (stale rows) and
+    /// skipped the rebase, so the next follow-active publish announced a change
+    /// the user had already been told about.
+    func testDockedBaseAppliesInAppWriteResultWhenDisplayNameChangesMidPreparation()
+        async throws
+    {
+        let (state, session) = try await makeState()
+        let basePath = "Queries/Projects.base"
+        try #"""
+            views:
+              - type: table
+                name: All
+                filters: 'file.inFolder("Projects")'
+                order: [file.name]
+            """#.write(
+            to: tempDir.appendingPathComponent("vault/\(basePath)"),
+            atomically: true,
+            encoding: .utf8)
+        try session.scanInitial(cancel: CancelToken())
+        _ = await state.refreshBaseQueries()?.value
+
+        state.dockBaseFileToSidebar(path: basePath, name: "Projects", refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        let dock = try XCTUnwrap(state.basesDockDocument)
+        XCTAssertEqual(dock.result?.rows.count, 3, "the dock must start from the settled rows")
+        XCTAssertEqual(state.basesDock.lastMembershipSignature, BaseRowMembership(rows: dock.result?.rows ?? []))
+
+        _ = try session.createExclusive(path: "Projects/Delta.md", content: "# Delta\n")
+        let barrier = PreparedLoadBarrier()
+        state.baseRetargetPreloadRunner = { session, request, observer in
+            barrier.run {
+                BasePreparedLoader.prepare(
+                    session: session, request: request, observer: observer)
+            }
+        }
+        let refresh = try XCTUnwrap(
+            state.refreshVisibleBasesAfterInAppWrite(
+                session: session,
+                changedPath: "Projects/Delta.md"))
+
+        // Pinned interleaving: the replacement is parked in the barrier, so the
+        // re-dock below provably lands before the apply loop reads the target.
+        state.dockBaseFileToSidebar(
+            path: basePath,
+            name: "Projects renamed",
+            refreshDelayNanoseconds: 60_000_000_000)
+        XCTAssertEqual(
+            state.basesDock.target,
+            .base(path: basePath, name: "Projects renamed"))
+        XCTAssertTrue(state.basesDockDocument === dock, "the re-dock must keep the document")
+        barrier.release()
+        _ = await refresh.value
+        state.basesDockRefreshTask?.cancel()
+
+        XCTAssertEqual(
+            dock.result?.rows.count, 4,
+            "a display-name-only re-dock must not release the prepared result: the docked "
+                + "Base kept stale rows")
+        XCTAssertEqual(
+            state.basesDock.lastMembershipSignature, BaseRowMembership(rows: dock.result?.rows ?? []),
+            "the dock baseline must be rebased onto the applied rows, or the next "
+                + "follow-active publish re-announces a change the user already heard")
+
+        // The out-of-band change announced once, through the refresh itself.
+        XCTAssertEqual(state.lastBaseRefreshAnnouncements.count, 1)
+        state.lastBaseActionAnnouncement = nil
+        state.scheduleBasesDockFollowActiveRefresh(delayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        XCTAssertEqual(dock.result?.rows.count, 4)
+        XCTAssertNotEqual(
+            state.lastBaseActionAnnouncement, "Base dock updated for active note.",
+            "a follow-active refresh over unchanged rows must stay silent")
+    }
+
+    /// #999 sibling, dashboard half: a dashboard rename retargets the dock's
+    /// target name without touching the section reservations, so a
+    /// name-sensitive apply guard drops a perfectly good prepared section
+    /// result and leaves the docked dashboard on stale rows.
+    func testDockedDashboardAppliesInAppWriteResultWhenRenameLandsMidPreparation()
+        async throws
+    {
+        let (state, session) = try await makeState()
+        let queryID = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        let sections = [
+            DashboardSection(savedQueryId: queryID, headingOverride: nil, viewOverride: nil)
+        ]
+        let dashboardID = try session.saveDashboard(name: "Overview", sections: sections)
+        _ = await state.refreshBaseQueries()?.value
+
+        state.dockDashboardToSidebar(id: dashboardID, refreshDelayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        let docked = try XCTUnwrap(state.basesDockDashboardDocument)
+        XCTAssertEqual(docked.sections[0].result?.rows.count, 3)
+        XCTAssertEqual(state.basesDock.lastMembershipSignature, docked.membershipSignature)
+
+        _ = try session.createExclusive(path: "Projects/Delta.md", content: "# Delta\n")
+        let barrier = PreparedLoadBarrier()
+        state.baseRetargetPreloadRunner = { session, request, observer in
+            barrier.run {
+                BasePreparedLoader.prepare(
+                    session: session, request: request, observer: observer)
+            }
+        }
+        let refresh = try XCTUnwrap(
+            state.refreshVisibleBasesAfterInAppWrite(
+                session: session,
+                changedPath: "Projects/Delta.md"))
+
+        // Pinned interleaving: the rename lands (out of band, as another
+        // surface would do it) while the section result sits in the barrier.
+        try session.updateDashboard(
+            id: dashboardID, name: "Renamed overview", sections: sections)
+        _ = await state.refreshBaseQueries()?.value
+        XCTAssertEqual(
+            state.basesDock.target,
+            .dashboard(id: dashboardID, name: "Renamed overview"))
+        XCTAssertTrue(state.basesDockDashboardDocument === docked)
+        barrier.release()
+        _ = await refresh.value
+
+        XCTAssertEqual(
+            docked.sections[0].result?.rows.count, 4,
+            "a rename must not release the docked dashboard's prepared section result: "
+                + "the dock kept stale rows")
+        XCTAssertEqual(
+            state.basesDock.lastMembershipSignature, docked.membershipSignature,
+            "the dock baseline must be rebased onto the applied dashboard rows")
+
+        state.lastBaseActionAnnouncement = nil
+        state.scheduleBasesDockFollowActiveRefresh(delayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        XCTAssertEqual(docked.sections[0].result?.rows.count, 4)
+        XCTAssertNotEqual(
+            state.lastBaseActionAnnouncement, "Base dock updated for active note.",
+            "a follow-active refresh over unchanged rows must stay silent")
+    }
+
     func testUpdatingSavedQueryReopensDockedDashboardSection() async throws {
         let (state, session) = try await makeState()
         let id = try session.saveQuery(
