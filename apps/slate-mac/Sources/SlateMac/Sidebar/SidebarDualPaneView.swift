@@ -506,16 +506,22 @@ struct SidebarDualPaneView: View {
     }
     .listStyle(.sidebar)
     .focused($listFocused)
-    .onExitCommand {
-      listFocused = false
-      navigationFocused = true
-    }
+    .onExitCommand { returnFocusToNavigation() }
     .onMoveCommand { direction in
-      if direction == .left {
-        listFocused = false
-        navigationFocused = true
-      }
+      guard direction == .left else { return }
+      returnFocusToNavigation()
     }
+  }
+
+  /// The one way back out of the list pane, shared by Esc and ← on
+  /// BOTH list surfaces (FL-15 close-out). The filter results list
+  /// shipped with Esc only, so ← died on a surface visually identical
+  /// to the container list — an accessibility papercut, not a
+  /// cosmetic one. Extracted so the two keys, and the two surfaces,
+  /// cannot drift apart again.
+  private func returnFocusToNavigation() {
+    listFocused = false
+    navigationFocused = true
   }
 
   private var filterResults: some View {
@@ -540,9 +546,10 @@ struct SidebarDualPaneView: View {
         }
         .listStyle(.sidebar)
         .focused($listFocused)
-        .onExitCommand {
-          listFocused = false
-          navigationFocused = true
+        .onExitCommand { returnFocusToNavigation() }
+        .onMoveCommand { direction in
+          guard direction == .left else { return }
+          returnFocusToNavigation()
         }
       } else {
         Text("No results.")

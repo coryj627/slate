@@ -335,7 +335,11 @@ struct CanvasContainerView: View {
                     )
                 if document.filterActive {
                     // t0 §3: the result summary is pull-readable.
-                    Text("\(document.filteredOutline.count) of \(document.outline.count) cards match")
+                    Text(
+                        "\(document.filteredOutline.count) of "
+                            + "\(CountCopy.counted(document.outline.count, "card", "cards")) "
+                            + CountCopy.verb(
+                                document.filteredOutline.count, "matches", "match"))
                         .font(Tokens.Typography.caption)
                         .foregroundStyle(Tokens.ColorRole.textSecondary)
                     Button("Clear") { clearFilter() }
@@ -452,7 +456,9 @@ struct CanvasContainerView: View {
             guard document.filterActive || !document.filterText.isEmpty else { return }
             document.filterText = ""
             appState.canvasAnnouncer.announce(
-                .filter("Filter cleared — \(document.outline.count) cards."))
+                .filter(
+                    "Filter cleared — "
+                        + "\(CountCopy.counted(document.outline.count, "card", "cards"))."))
         } else {
             appState.canvasClearFilter()
         }

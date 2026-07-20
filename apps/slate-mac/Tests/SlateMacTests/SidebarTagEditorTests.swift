@@ -98,7 +98,7 @@ final class SidebarTagEditorTests: XCTestCase {
             return self.report(
                 changed: 1,
                 skipped: [SkippedFile(path: "b.md", reason: "changed on disk since it was indexed.")],
-                summary: "Tagged 1 files with #project.")
+                summary: "Tagged 1 file with #project.")
         }
         _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddTag)
         let request = try XCTUnwrap(state.sidebarTagEditorRequest)
@@ -113,7 +113,7 @@ final class SidebarTagEditorTests: XCTestCase {
         XCTAssertEqual(invocations[0].tag, "project")
         XCTAssertEqual(
             state.lastMutationAnnouncement,
-            "Tagged 1 files with #project. 1 skipped.",
+            "Tagged 1 file with #project. 1 skipped.",
             "one consolidated announcement: core summary + skip clause")
     }
 
@@ -123,7 +123,7 @@ final class SidebarTagEditorTests: XCTestCase {
         let gate = AsyncGate()
         state.sidebarTagAddRunner = { _, _, _ in
             await gate.wait()
-            return self.report(changed: 1, summary: "Tagged 1 files with #x.")
+            return self.report(changed: 1, summary: "Tagged 1 file with #x.")
         }
         _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddTag)
         let request = try XCTUnwrap(state.sidebarTagEditorRequest)
@@ -144,7 +144,7 @@ final class SidebarTagEditorTests: XCTestCase {
         state.sidebarTagRemoveRunner = { _, _, _ in
             self.report(
                 changed: 2, inline: 1,
-                summary: "Removed #project from 2 files. 1 still have it inline.")
+                summary: "Removed #project from 2 files. 1 still has it inline.")
         }
         _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarRemoveTag)
         let request = try XCTUnwrap(state.sidebarTagEditorRequest)
@@ -152,7 +152,7 @@ final class SidebarTagEditorTests: XCTestCase {
         await state.sidebarTagEditTaskForTesting?.value
         XCTAssertEqual(
             state.lastMutationAnnouncement,
-            "Removed #project from 2 files. 1 still have it inline.",
+            "Removed #project from 2 files. 1 still has it inline.",
             "the core summary passes through verbatim when nothing skipped")
     }
 
@@ -162,7 +162,7 @@ final class SidebarTagEditorTests: XCTestCase {
         var seen: [String] = []
         state.sidebarTagAddRunner = { _, _, tag in
             await MainActor.run { seen.append(tag) }
-            return self.report(changed: 1, summary: "Tagged 1 files with #x.")
+            return self.report(changed: 1, summary: "Tagged 1 file with #x.")
         }
         _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarAddTag)
         let request = try XCTUnwrap(state.sidebarTagEditorRequest)

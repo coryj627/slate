@@ -15,7 +15,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::sidebar_filter::group_thousands;
+use crate::sidebar_filter::count_noun;
 
 /// One node of the nested tag tree. `full` is the normalized full tag
 /// (`projects/reading`); display case recovery is deliberately absent
@@ -120,12 +120,12 @@ pub(crate) fn build_tag_tree(rows: &[(String, i64)], untagged_count: u32) -> Tag
 /// second clause omitted when nothing is untagged. The UI localizes
 /// visual formatting; core summaries stay stable for announcements.
 fn summary(tag_count: u64, untagged_count: u32) -> String {
-    let tags = group_thousands(tag_count);
+    let tags = count_noun(tag_count, "tag", "tags");
     if untagged_count == 0 {
-        format!("{tags} tags.")
+        format!("{tags}.")
     } else {
-        let untagged = group_thousands(untagged_count as u64);
-        format!("{tags} tags, {untagged} untagged notes.")
+        let untagged = count_noun(untagged_count as u64, "untagged note", "untagged notes");
+        format!("{tags}, {untagged}.")
     }
 }
 
@@ -191,7 +191,29 @@ mod tests {
         // 1200 real tags; the synthesized `bulk` intermediate is not one.
         assert_eq!(tree.audio_summary, "1,200 tags, 2,500 untagged notes.");
         let tree = build_tag_tree(&rows(&[("only", 1)]), 0);
-        assert_eq!(tree.audio_summary, "1 tags.");
+        assert_eq!(tree.audio_summary, "1 tag.");
+    }
+
+    #[test]
+    fn summary_pluralizes_each_count_independently() {
+        // Exactly one is singular; zero and many stay plural, and the
+        // two counts never borrow each other's agreement.
+        assert_eq!(
+            build_tag_tree(&rows(&[("only", 1)]), 1).audio_summary,
+            "1 tag, 1 untagged note."
+        );
+        assert_eq!(
+            build_tag_tree(&rows(&[("only", 1)]), 2).audio_summary,
+            "1 tag, 2 untagged notes."
+        );
+        assert_eq!(
+            build_tag_tree(&rows(&[("a", 1), ("b", 2)]), 1).audio_summary,
+            "2 tags, 1 untagged note."
+        );
+        assert_eq!(
+            build_tag_tree(&[], 1).audio_summary,
+            "0 tags, 1 untagged note."
+        );
     }
 
     #[test]

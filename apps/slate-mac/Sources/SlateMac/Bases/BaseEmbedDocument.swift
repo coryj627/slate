@@ -872,7 +872,7 @@ final class BaseEmbedDocument: ObservableObject {
     var quickFilterResultAnnouncement: String {
         guard let result else { return "0 of 0 results" }
         let total = quickFilterActive ? result.unfilteredShownCount : result.totalCount
-        return "\(result.shownCount) of \(total) results"
+        return "\(result.shownCount) of \(CountCopy.counted(total, "result", "results"))"
     }
 
     func load(session: VaultSession) {

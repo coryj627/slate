@@ -5301,14 +5301,17 @@ impl VaultSession {
             }
         }
 
-        let grouped = crate::sidebar_filter::group_thousands(changed as u64);
+        let files = crate::sidebar_filter::count_noun(changed as u64, "file", "files");
         let audio_summary = match kind {
-            TagEditKind::Add => format!("Tagged {grouped} files with #{norm}."),
+            TagEditKind::Add => format!("Tagged {files} with #{norm}."),
             TagEditKind::Remove => {
-                let mut message = format!("Removed #{norm} from {grouped} files.");
+                let mut message = format!("Removed #{norm} from {files}.");
                 if inline_remainder > 0 {
                     let inline = crate::sidebar_filter::group_thousands(inline_remainder as u64);
-                    message.push_str(&format!(" {inline} still have it inline."));
+                    // The subject noun stays elided, so only the verb
+                    // agrees: "… 1 still has it inline."
+                    let verb = if inline_remainder == 1 { "has" } else { "have" };
+                    message.push_str(&format!(" {inline} still {verb} it inline."));
                 }
                 message
             }
@@ -13133,9 +13136,15 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
         }
     }
     fn size_phrase(delta: i64) -> String {
+        // Plain `{n}`, not grouped decimals: this fragment sits beside
+        // the `{op_count} operation{s}` clause below and its number
+        // formatting is load-bearing for the CLI's TSV output.
+        fn bytes(count: i64) -> String {
+            format!("{count} byte{}", if count == 1 { "" } else { "s" })
+        }
         match delta.cmp(&0) {
-            std::cmp::Ordering::Greater => format!("{delta} bytes added"),
-            std::cmp::Ordering::Less => format!("{} bytes removed", -delta),
+            std::cmp::Ordering::Greater => format!("{} added", bytes(delta)),
+            std::cmp::Ordering::Less => format!("{} removed", bytes(-delta)),
             std::cmp::Ordering::Equal => "no size change".to_string(),
         }
     }
@@ -13241,7 +13250,8 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
         let audio_fragment = match inner_kind {
             OpKind::WholeFileReplace if is_marker => "anchor snapshot".to_string(),
             OpKind::WholeFileReplace => {
-                format!("snapshot, {} bytes", prev_len.unwrap_or(0))
+                let len = prev_len.unwrap_or(0);
+                format!("snapshot, {len} byte{}", if len == 1 { "" } else { "s" })
             }
             OpKind::EditBatch if op_count == 0 => "marker".to_string(),
             OpKind::EditBatch => format!(

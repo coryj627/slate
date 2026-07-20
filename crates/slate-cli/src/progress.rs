@@ -76,7 +76,11 @@ impl StderrProgress {
         // Ignore write errors: progress is diagnostic, never
         // load-bearing, and a closed stderr must not abort the scan.
         let mut err = std::io::stderr().lock();
-        let _ = writeln!(err, "Indexing… {count} files");
+        let _ = writeln!(
+            err,
+            "Indexing… {count} file{}",
+            if count == 1 { "" } else { "s" }
+        );
     }
 }
 

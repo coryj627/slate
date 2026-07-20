@@ -102,7 +102,7 @@ fn untagged_counts_markdown_without_tags_only() {
     let session = open(tmp.path());
     let tree = session.tag_tree().unwrap();
     assert_eq!(tree.untagged_count, 2, "the pdf is not an untagged note");
-    assert_eq!(tree.audio_summary, "1 tags, 2 untagged notes.");
+    assert_eq!(tree.audio_summary, "1 tag, 2 untagged notes.");
 }
 
 #[test]
@@ -161,7 +161,7 @@ fn add_creates_minimal_frontmatter_when_absent() {
     assert_eq!(report.changed, 1);
     assert!(report.skipped.is_empty());
     assert_eq!(report.inline_remainder, 0);
-    assert_eq!(report.audio_summary, "Tagged 1 files with #project.");
+    assert_eq!(report.audio_summary, "Tagged 1 file with #project.");
     let content = read(tmp.path(), "plain.md");
     assert!(
         content.starts_with("---\n"),
@@ -315,7 +315,7 @@ fn remove_edits_frontmatter_only_and_counts_inline_remainder() {
     assert_eq!(report.inline_remainder, 1);
     assert_eq!(
         report.audio_summary,
-        "Removed #project from 2 files. 1 still have it inline."
+        "Removed #project from 2 files. 1 still has it inline."
     );
     let both = read(tmp.path(), "both.md");
     assert!(
@@ -344,7 +344,7 @@ fn remove_matches_under_normalization() {
         .remove_tag_from_files(vec!["note.md".into()], "reading".into())
         .unwrap();
     assert_eq!(report.changed, 1);
-    assert_eq!(report.audio_summary, "Removed #reading from 1 files.");
+    assert_eq!(report.audio_summary, "Removed #reading from 1 file.");
     assert!(
         !read(tmp.path(), "note.md")
             .to_lowercase()
@@ -382,7 +382,7 @@ fn remove_counts_inline_remainder_on_unchanged_files_too() {
     assert_eq!(report.inline_remainder, 1);
     assert_eq!(
         report.audio_summary,
-        "Removed #project from 0 files. 1 still have it inline."
+        "Removed #project from 0 files. 1 still has it inline."
     );
 }
 
