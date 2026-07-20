@@ -27,6 +27,27 @@ enum BaseDocumentSource: Hashable, Sendable {
         }
     }
 
+    /// True when both sources name the same Base entity, ignoring the display
+    /// name — the identity `key` registries are keyed by, as a predicate.
+    /// Ownership guards ("is this document still the thing the reservation was
+    /// taken against?") belong here (#999): `retargetSavedQueryName` rewrites
+    /// `source` on a rename WITHOUT bumping `contentRefreshGeneration`, while
+    /// both real `retarget(to:)` overloads bump it as their first statement —
+    /// so the type's own rule is that a rename is not a content invalidation.
+    /// `==` stays name-sensitive: it is `hash(into:)`'s partner and the
+    /// equality/diffing test for the source value itself, not an ownership
+    /// test.
+    func matchesEntity(_ other: BaseDocumentSource) -> Bool {
+        switch (self, other) {
+        case (.file(let lhs), .file(let rhs)):
+            return BaseExactIdentity.matches(lhs, rhs)
+        case (.savedQuery(let lhsID, _), .savedQuery(let rhsID, _)):
+            return BaseExactIdentity.matches(lhsID, rhsID)
+        default:
+            return false
+        }
+    }
+
     static func == (lhs: BaseDocumentSource, rhs: BaseDocumentSource) -> Bool {
         switch (lhs, rhs) {
         case (.file(let lhs), .file(let rhs)):
@@ -822,9 +843,18 @@ final class BaseDocument: ObservableObject {
                 thisPath: thisPath))
     }
 
+    /// Every conjunct here answers one question: would this invalidate the rows
+    /// the reservation prepared? A saved query's display name would not — and
+    /// `retargetSavedQueryName` proves the type agrees, rewriting `source` on a
+    /// rename without bumping the generation. So this is `matchesEntity`, not
+    /// `==` (#999): a rename landing mid-preparation used to make the apply
+    /// return `.stale`, releasing a good result and leaving the document on
+    /// stale rows with nothing left to reschedule it. Real retargets still fail
+    /// the test — both `retarget(to:)` overloads and `beginBatchRetarget` bump
+    /// `contentRefreshGeneration` first.
     func ownsContentRefresh(_ reservation: BaseContentRefreshReservation) -> Bool {
         contentRefreshGeneration == reservation.generation
-            && source == reservation.request.source
+            && source.matchesEntity(reservation.request.source)
             && handle == reservation.replacedHandle
             && activeViewIndex == reservation.request.previousViewIndex
             && activeViewName == reservation.request.previousViewName
