@@ -59,16 +59,30 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
         // debounced pass (the last keystroke's), and await it. NO healing
         // loop — a single windowed pass that strands must be caught here, not
         // papered over by repeated re-applies.
-        await coordinator.highlightTask?.value
+        //
+        // `settleHighlight()` rather than `await highlightTask?.value`: it
+        // follows a pass that some *other* main-actor caller cancelled (the
+        // appearance observer) to the one that replaced it, instead of handing
+        // back an unpainted layout manager. It never schedules a pass of its
+        // own, so the no-healing guarantee above is intact. The first drain is
+        // deliberately unasserted — several tests here leave an in-flight pass
+        // that the staleness guard is *supposed* to drop.
+        await coordinator.settleHighlight()
         let lm = textView.layoutManager!
         coordinator.scheduleHighlight(debounced: true)
-        await coordinator.highlightTask?.value
+        let windowedApplied = await coordinator.settleHighlight()
+        XCTAssertTrue(
+            windowedApplied,
+            "trailing windowed pass: no recolor reached the layout manager", file: file, line: line)
 
         let len = textView.textStorage!.length
         let wFg = foregroundMap(lm, len)
         let wUl = underlineMap(lm, len)
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        let referenceApplied = await coordinator.settleHighlight()
+        XCTAssertTrue(
+            referenceApplied,
+            "whole-doc reference: no recolor reached the layout manager", file: file, line: line)
         let fullFg = foregroundMap(lm, len)
         let fullUl = underlineMap(lm, len)
         if wFg != fullFg || wUl != fullUl {
@@ -94,7 +108,7 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
         let (coordinator, textView, storage) = makeCoordinator(
             text: "head\n\nalpha `c` beta\n\ngamma [[L]] delta\n\nfoot\n")
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         // Edit 1 → dirtyRange set. Schedule (begins 40ms sleep).
         let a = (storage.string as NSString).range(of: "alpha").location
@@ -120,7 +134,7 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
         let (coordinator, textView, storage) = makeCoordinator(
             text: "p0\n\nfoo bar baz\n\nqux quux\n\nend\n")
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         let f = (storage.string as NSString).range(of: "foo").location
         storage.replaceCharacters(in: NSRange(location: f, length: 0), with: "`x` ")
@@ -143,7 +157,7 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
         let (coordinator, textView, storage) = makeCoordinator(
             text: "top\n\nleft `c` mid right\n\nbottom para\n")
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         let r = (storage.string as NSString).range(of: "right").location
         storage.replaceCharacters(in: NSRange(location: r, length: 0), with: "QQ ")
@@ -165,7 +179,7 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
         let (coordinator, textView, storage) = makeCoordinator(
             text: "h\n\nL1 word one\n\nL2 word two\n\nL3 word three\n\nL4 word four\n\nf\n")
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         let targets = ["L1", "L2", "L3", "L4", "L1", "L3"]
         let inserts = ["**a** ", "`b` ", "![[E]] ", "[[w]] ", "#t ", "X "]
@@ -185,7 +199,7 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
     func testSwapWhileTypingPassInFlight() async {
         let (coordinator, textView, storage) = makeCoordinator(text: "old `c` body\n\ntwo\n")
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         // Begin a typing pass.
         storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "Z")
@@ -196,6 +210,60 @@ final class NoteEditorRangedHighlightConcurrencyTests: XCTestCase {
             textView.string = "new **bold** doc\n\nsecond ![[E]] block\n\nthird [[L]] block\n"
         }
         coordinator.scheduleHighlight(debounced: false)  // cancels typing pass
+
+        await assertSettledMatchesWholeDoc(coordinator, textView)
+    }
+
+    // MARK: - The settle seam itself
+
+    /// The seam, stated directly: a pass cancelled before it applies finishes
+    /// its task having stamped NOTHING, so `await highlightTask?.value` is not
+    /// "the recolor landed". `settleHighlight()` follows the reschedule to the
+    /// pass that replaced it and reports the repaint.
+    func testAwaitingACancelledPassAppliesNothingButSettleFollowsIt() async {
+        let doc = "alpha bold here\n\nbeta [[L]] gamma\n\ndelta code epsilon\n"
+        let (coordinator, textView, _) = makeCoordinator(text: doc)
+        let lm = textView.layoutManager!
+        let len = (doc as NSString).length
+
+        coordinator.scheduleHighlight(debounced: false)
+        let seed = coordinator.highlightTask
+        // Whatever else calls scheduleHighlight — here standing in for the
+        // appearance observer — cancels `seed` before it ever applies.
+        coordinator.scheduleHighlight(debounced: false)
+        await seed?.value
+
+        XCTAssertEqual(
+            foregroundMap(lm, len).compactMap { $0 }.count, 0,
+            "awaiting the cancelled task must return with nothing stamped — the flake")
+        let settled = await coordinator.settleHighlight()
+        XCTAssertTrue(settled, "settle must follow the reschedule and land a recolor")
+        XCTAssertGreaterThan(
+            foregroundMap(lm, len).compactMap { $0 }.count, 0,
+            "the replacement pass must have painted the wikilink")
+    }
+
+    /// End-to-end regression for the CI flake: a system appearance change lands
+    /// while the differential suite is settling its whole-document seed. The
+    /// observer `attach` registers calls `scheduleHighlight`, cancelling the
+    /// seed; with the old task-handle await the seed's colours never landed and
+    /// the windowed map came back entirely `nil` against a correct reference.
+    func testAppearanceChangeDuringSeedSettleStillMatchesWholeDoc() async {
+        let doc = "alpha bold here\n\nbeta [[L]] gamma\n\ndelta code epsilon\n"
+        let (coordinator, textView, storage) = makeCoordinator(text: doc)
+
+        coordinator.scheduleHighlight(debounced: false)
+        // Delivered synchronously to the observer, exactly as the real
+        // notification is when it lands on the main actor mid-settle.
+        NotificationCenter.default.post(
+            name: NSColor.systemColorsDidChangeNotification, object: nil)
+        let seedApplied = await coordinator.settleHighlight()
+        XCTAssertTrue(seedApplied, "seed: no recolor reached the layout manager")
+
+        // Then the same windowed edits the differential suite drives.
+        let bold = (storage.string as NSString).range(of: "bold").location
+        storage.replaceCharacters(in: NSRange(location: bold, length: 0), with: "**")
+        storage.replaceCharacters(in: NSRange(location: bold + 6, length: 0), with: "**")
 
         await assertSettledMatchesWholeDoc(coordinator, textView)
     }

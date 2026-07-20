@@ -22866,6 +22866,47 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Drive template-availability work to quiescence — the settle seam for
+    /// anything that asserts on `templateAvailability` / `availableTemplates`
+    /// or on a projection gated by them.
+    ///
+    /// `await templateAvailabilityTask?.value` is not that seam. A load
+    /// publishes only if it is still the current generation, and
+    /// `startTemplateAvailabilityLoad` bumps that generation (and re-enters
+    /// `.loading`) on every call — so a superseded load finishes its task
+    /// having published nothing, and awaiting the handle hands back state that
+    /// reads `.loading` rather than the terminal value the caller asked for.
+    ///
+    /// The supersede arrives on nobody's schedule: `scheduleTemplateAvailability
+    /// Refresh` coalesces vault events, scan completion, and foreground
+    /// activation behind a 75 ms timer, then drains into a fresh load. Under a
+    /// starved `swift test --parallel` runner (one process per test method)
+    /// that timer lands between an await and the assertion after it.
+    ///
+    /// So settle on the work: await the debounce timer, then the load it
+    /// drains into, following the chain while either produces something new.
+    /// Each distinct task is awaited once, so this terminates as soon as
+    /// nothing further is scheduled; it never starts work of its own. A
+    /// `pending` flag with no timer means the drain is gated (picker open, or a
+    /// template flow in progress) and nothing more will happen unprompted.
+    func settleTemplateAvailability() async {
+        var lastRefresh: Task<Void, Never>?
+        var lastLoad: Task<Void, Never>?
+        for _ in 0..<64 {
+            if let refresh = templateAvailabilityRefreshTaskForTesting, refresh != lastRefresh {
+                lastRefresh = refresh
+                await refresh.value
+                continue
+            }
+            if let load = templateAvailabilityTask, load != lastLoad {
+                lastLoad = load
+                await load.value
+                continue
+            }
+            break
+        }
+    }
+
     private func drainPendingTemplateAvailabilityRefreshIfIdle() {
         guard templateAvailabilityRefreshPending,
             templateCreationDestinationOwner == nil,

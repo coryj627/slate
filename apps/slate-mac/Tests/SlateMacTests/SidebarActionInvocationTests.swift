@@ -472,7 +472,8 @@ final class SidebarActionInvocationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
         var parents: [String] = []
         state.sidebarActionDispatchOverrides.openTemplatePicker = {
@@ -669,18 +670,20 @@ final class SidebarActionInvocationTests: XCTestCase {
 
         XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
 
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .empty)
         XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
 
         state.templateListRunner = { _, _ in .failure(.Io(message: "no access")) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
 
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         state.sidebarActionStructuralDisabledReasonOverride =
             AppState.structuralMutationBusyReason
         XCTAssertTrue(state.invokeSidebarKeyboardAction(SlateCommandID.newFromTemplate))
@@ -711,14 +714,15 @@ final class SidebarActionInvocationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
 
         state.templateListRunner = { _, _ in .success([]) }
         let emptyRelist = state.openTemplatePicker()
         XCTAssertNotNil(emptyRelist)
         await emptyRelist?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .empty)
         XCTAssertEqual(
             state.templateAnnouncementLastMessage,
@@ -731,12 +735,13 @@ final class SidebarActionInvocationTests: XCTestCase {
         state.cancelTemplateFlow()
 
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         state.templateListRunner = { _, _ in .failure(.Io(message: "no access")) }
         let failedRelist = state.openTemplatePicker()
         XCTAssertNotNil(failedRelist)
         await failedRelist?.value
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .failed)
         XCTAssertEqual(
             state.templateAnnouncementLastMessage,
@@ -763,7 +768,8 @@ final class SidebarActionInvocationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         let folder = try snapshot(
             on: state,
             [item("Projects", directory: true)],
@@ -789,7 +795,8 @@ final class SidebarActionInvocationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         let projects = try snapshot(
             on: state,
             [item("Projects", directory: true)],
@@ -829,7 +836,8 @@ final class SidebarActionInvocationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         let projects = try snapshot(
             on: state,
             [item("Projects", directory: true)],
@@ -860,7 +868,8 @@ final class SidebarActionInvocationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         let projects = try snapshot(
             on: state,
             [item("Projects", directory: true)],
@@ -956,7 +965,8 @@ final class SidebarActionInvocationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         let projects = try snapshot(
             on: state,
             [item("Projects", directory: true)],
@@ -1075,7 +1085,8 @@ final class SidebarActionInvocationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         state.installTemplateDestinationForTesting("Projects")
 
         let host = NSWindow()
@@ -1143,7 +1154,8 @@ final class SidebarActionInvocationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         XCTAssertEqual(state.templateAvailability, .available)
 
         let host = NSWindow()

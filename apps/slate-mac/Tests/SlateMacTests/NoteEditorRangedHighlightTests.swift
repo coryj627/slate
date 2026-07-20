@@ -44,6 +44,34 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
         }
     }
 
+    /// Settle the highlighter and require that a recolor actually reached the
+    /// layout manager.
+    ///
+    /// `await coordinator.highlightTask?.value` looks like the settle seam but
+    /// isn't: a pass that a concurrent `scheduleHighlight` cancelled — and the
+    /// appearance observer wired up in `attach` issues one whenever the system
+    /// publishes an appearance change, at no particular moment — finishes
+    /// immediately having stamped nothing. Awaiting the handle then returns
+    /// with the temporary-attribute map empty, and every later assertion reads
+    /// an unpainted document. That is the CI flake this suite hit: under a
+    /// starved `swift test --parallel` runner the notification landed inside
+    /// one of these awaits, and the differential compared a blank map against
+    /// a correct one.
+    ///
+    /// `settleHighlight()` follows the reschedule to the pass that replaced
+    /// the cancelled one, and reports whether any of them repainted — so a
+    /// missing recolor fails here, naming the pass, instead of surfacing as an
+    /// inscrutable all-`nil` attribute diff.
+    private func assertRecolorLanded(
+        _ coordinator: NoteEditorView.Coordinator,
+        _ what: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        let applied = await coordinator.settleHighlight()
+        XCTAssertTrue(applied, "\(what): no recolor reached the layout manager", file: file, line: line)
+    }
+
     /// Apply `editGroups` (each group = edits applied back-to-back, then ONE
     /// debounced windowed pass — so a multi-edit group exercises burst
     /// coalescing), then assert the whole-document temp-attribute map equals
@@ -58,14 +86,14 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
         let lm = textView.layoutManager!
 
         coordinator.scheduleHighlight(debounced: false)  // whole-doc seed
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "seed", file: file, line: line)
 
         for group in editGroups {
             for (range, replacement) in group {
                 storage.replaceCharacters(in: range, with: replacement)
             }
             coordinator.scheduleHighlight(debounced: true)  // windowed
-            await coordinator.highlightTask?.value
+            await assertRecolorLanded(coordinator, "windowed pass", file: file, line: line)
         }
 
         let len = storage.length
@@ -74,7 +102,7 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
 
         // Force a clean whole-doc apply on the identical final buffer.
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "whole-doc reference", file: file, line: line)
         let wholeFg = foregroundMap(lm, len)
         let wholeUl = underlineMap(lm, len)
 
@@ -213,31 +241,31 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
             text: "first **doc** body\n\nsecond para\n")
         let lm = textView.layoutManager!
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "seed")
 
         // A windowed edit on the original buffer.
         storage.replaceCharacters(in: NSRange(location: 0, length: 0), with: "X ")
         coordinator.scheduleHighlight(debounced: true)
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "pre-reload windowed")
 
         // Simulate a file reload: a suppressed whole-document swap (the
         // updateNSView path), which must rebuild the mirror buffer.
         let reloaded = "# Reloaded\n\nbrand new [[Wiki]] body\n\ntail ![[Embed]] line\n"
         coordinator.withSuppressedDirtyTracking { textView.string = reloaded }
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "post-reload whole-doc")
 
         // A windowed edit on the reloaded buffer — diverges if the mirror is stale.
         storage.replaceCharacters(
             in: NSRange(location: reloaded.utf16Offset(of: "tail"), length: 0), with: "Z ")
         coordinator.scheduleHighlight(debounced: true)
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "post-reload windowed")
 
         let len = storage.length
         let windowedFg = foregroundMap(lm, len)
         let windowedUl = underlineMap(lm, len)
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "whole-doc reference")
         XCTAssertEqual(windowedFg, foregroundMap(lm, len), "windowed != whole-doc after reload")
         XCTAssertEqual(windowedUl, underlineMap(lm, len), "underline windowed != whole-doc after reload")
     }
@@ -252,7 +280,7 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
             text: "alpha **beta** gamma\n\ndelta [[Link]] para\n")
         let lm = textView.layoutManager!
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "seed")
 
         // Force a desync: detach the storage delegate, insert (so the mirror
         // never sees the delta), reattach. The buffer is now shorter than the
@@ -267,12 +295,12 @@ final class NoteEditorRangedHighlightTests: XCTestCase {
         // mismatch, rebuild from the live text, and repaint whole-document.
         storage.replaceCharacters(in: NSRange(location: storage.length, length: 0), with: " END")
         coordinator.scheduleHighlight(debounced: true)
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "drift-guard pass")
 
         let len = storage.length
         let healedFg = foregroundMap(lm, len)
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await assertRecolorLanded(coordinator, "whole-doc reference")
         XCTAssertEqual(healedFg, foregroundMap(lm, len), "drift guard must rebuild + repaint correctly")
     }
 

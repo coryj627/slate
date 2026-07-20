@@ -209,8 +209,16 @@ final class BatchRetargetPerformanceTests: XCTestCase {
         return (state, vault)
     }
 
+    /// Poll until `condition` holds. The default budget is deliberately far
+    /// larger than the work it waits on: every caller that takes it is a
+    /// *positive* wait on detached native prepare/close work, so the loop exits
+    /// as soon as the condition flips and a big deadline costs a healthy run
+    /// nothing — it only stops a genuine hang from waiting forever. A tight
+    /// budget here is a bet on the scheduler, and under `swift test --parallel`
+    /// (one process per test method) that bet loses. Callers asserting a
+    /// condition does NOT hold within a window pass their own short timeout.
     private func eventually(
-        timeout: TimeInterval = 1.0,
+        timeout: TimeInterval = 30,
         _ condition: () -> Bool
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)

@@ -134,8 +134,14 @@ final class StructuralWriterGateTests: XCTestCase {
             encoding: .utf8)
     }
 
+    /// Poll until `condition` holds. The budget is deliberately far larger
+    /// than the work it waits on: the loop exits as soon as the condition
+    /// flips, so a big deadline costs a healthy run nothing and only stops a
+    /// genuine hang from waiting forever. A tight budget is a bet on the
+    /// scheduler, and under `swift test --parallel` (one process per test
+    /// method) that bet loses.
     private func eventually(
-        timeout: TimeInterval = 1,
+        timeout: TimeInterval = 30,
         _ condition: () -> Bool
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(timeout)

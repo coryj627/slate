@@ -812,7 +812,7 @@ final class FileTreeMultiSelectTests: XCTestCase {
         let (state, _) = try await makeVault(
             named: "c1-registry-busy",
             files: ["a.md", "busy.md", "dest/keep.md", "Templates/base.md"])
-        await state.templateAvailabilityTask?.value
+        await state.settleTemplateAvailability()
         state.batchMoveRunner = { _, _ in
             await gate.enter()
             return busyReport

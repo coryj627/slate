@@ -277,7 +277,7 @@ final class SidebarImportProgressStripTests: XCTestCase {
             keyPath: "enabled",
             expectedValue: false)
         XCTAssertTrue(cancelButton.performKeyEquivalent(with: escapeEvent))
-        await fulfillment(of: [cancelDisabled], timeout: 1)
+        await fulfillment(of: [cancelDisabled], timeout: 30)
         XCTAssertEqual(cancellationCount, 1)
         XCTAssertTrue(hosted.window.firstResponder === hosted.focusProbe)
 
@@ -306,7 +306,7 @@ final class SidebarImportProgressStripTests: XCTestCase {
         progress.setCancellationAvailability(false)
         await fulfillment(
             of: [progressUpdated, hintUpdated],
-            timeout: 1)
+            timeout: 30)
         XCTAssertTrue(hosted.window.firstResponder === hosted.focusProbe)
 
         let updatedProgress = try XCTUnwrap(
@@ -352,8 +352,14 @@ final class SidebarImportProgressStripTests: XCTestCase {
         window.isReleasedWhenClosed = false
         window.contentView = contentView
         window.makeKeyAndOrderFront(nil)
-        window.makeFirstResponder(focusProbe)
-        await fulfillment(of: [appeared], timeout: 1)
+        XCTAssertTrue(
+            window.makeFirstResponder(focusProbe),
+            "the focus probe must take first responder before the strip mounts")
+        // A cold first render (makeNSView + the initial update pass) is gated
+        // on a main run-loop turn. The expectation costs nothing while it
+        // waits, so a generous budget only trips on a real hang instead of on a
+        // runner running ~20 test processes at once.
+        await fulfillment(of: [appeared], timeout: 30)
         host.layoutSubtreeIfNeeded()
         return (host, window, focusProbe)
     }

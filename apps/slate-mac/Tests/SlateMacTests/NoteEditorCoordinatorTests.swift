@@ -53,7 +53,7 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         let layoutManager = textView.layoutManager!
 
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         let proseOffsets: [Int] = Array(0..<6) + Array(17..<storage.length)
         for offset in proseOffsets {
@@ -86,9 +86,9 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         let layoutManager = textView.layoutManager!
 
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
         coordinator.scheduleHighlight(debounced: false)  // twice — must not accumulate
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         // Embed span: offset 7..18 (`![[target]]`, all ASCII so byte ==
         // UTF-16). Read the palette via the same instance entry point
@@ -113,7 +113,7 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         let layoutManager = textView.layoutManager!
 
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         let underline = layoutManager.temporaryAttribute(
             .underlineStyle, atCharacterIndex: 8, effectiveRange: nil
@@ -237,7 +237,7 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         let (coordinator, textView, _) = makeCoordinator(text: "edge ![[a]] case")
         let layoutManager = textView.layoutManager!
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
         // Clear the underline so we can detect the re-apply.
         layoutManager.removeTemporaryAttribute(
             .underlineStyle,
@@ -255,7 +255,7 @@ final class NoteEditorCoordinatorTests: XCTestCase {
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil
         )
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         // Embed span `![[a]]` starts at offset 5, length 6.
         let underline = layoutManager.temporaryAttribute(
@@ -276,7 +276,7 @@ final class NoteEditorCoordinatorTests: XCTestCase {
         let (coordinator, textView, _) = makeCoordinator(text: "edge ![[a]] case")
         let layoutManager = textView.layoutManager!
         coordinator.scheduleHighlight(debounced: false)
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
         layoutManager.removeTemporaryAttribute(
             .underlineStyle,
             forCharacterRange: NSRange(location: 0, length: (textView.string as NSString).length)
@@ -286,7 +286,7 @@ final class NoteEditorCoordinatorTests: XCTestCase {
             name: NSColor.systemColorsDidChangeNotification,
             object: nil
         )
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         let underline = layoutManager.temporaryAttribute(
             .underlineStyle, atCharacterIndex: 6, effectiveRange: nil
@@ -529,7 +529,7 @@ final class NoteEditorCoordinatorTests: XCTestCase {
             name: NSWorkspace.accessibilityDisplayOptionsDidChangeNotification,
             object: nil
         )
-        await coordinator.highlightTask?.value
+        await coordinator.settleHighlight()
 
         // The originally-attached view MUST NOT have been highlighted
         // (the coordinator now points at newTextView, and the old view

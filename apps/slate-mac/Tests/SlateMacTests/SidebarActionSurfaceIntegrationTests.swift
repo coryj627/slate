@@ -789,7 +789,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         let owner = ObjectIdentifier(try XCTUnwrap(state.currentSession))
         let folder = SidebarSelectionSnapshot(
             sessionIdentity: owner,
@@ -835,7 +836,8 @@ final class SidebarActionSurfaceIntegrationTests: XCTestCase {
         let summary = TemplateSummary(
             path: "Templates/Meeting.md", name: "Meeting", description: nil)
         state.templateListRunner = { _, _ in .success([summary]) }
-        await state.refreshTemplateAvailability()?.value
+        _ = state.refreshTemplateAvailability()
+        await state.settleTemplateAvailability()
         let owner = ObjectIdentifier(try XCTUnwrap(state.currentSession))
         let markdown = SidebarSelectionSnapshot(
             sessionIdentity: owner,

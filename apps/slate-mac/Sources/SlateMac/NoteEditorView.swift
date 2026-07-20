@@ -447,8 +447,18 @@ struct NoteEditorView: NSViewRepresentable {
         /// `scheduleHighlight` cancels the previous one, so a burst of
         /// keystrokes collapses into a single span computation. Held so
         /// `deinit` can cancel a pass that outlived the view — and so
-        /// tests can `await` a deterministic completion.
+        /// `settleHighlight()` can drive the highlighter to quiescence.
+        ///
+        /// Awaiting this handle is **not** a "the recolor landed" seam — see
+        /// `settleHighlight()`, which is.
         private(set) var highlightTask: Task<Void, Never>?
+
+        /// Monotonic count of passes that reached the end of `applyHighlight`
+        /// — the real "temporary attributes are now stamped" seam, and the
+        /// one `settleHighlight()` reports on. Every early return in the pass
+        /// body finishes `highlightTask` having stamped nothing, so task
+        /// completion alone can't distinguish "repainted" from "gave up".
+        private(set) var highlightApplyCount: UInt64 = 0
 
         /// Accumulated edited region since the last successful highlight
         /// apply, in **current-buffer UTF-16** coords — the `dirty` range
@@ -834,6 +844,44 @@ struct NoteEditorView: NSViewRepresentable {
             }
         }
 
+        /// Drive the highlighter to quiescence, reporting whether a recolor
+        /// actually landed. This — not `await highlightTask?.value` — is the
+        /// settle seam.
+        ///
+        /// A pass has three ways to finish having stamped nothing: it is
+        /// cancelled before the compute, cancelled after it, or dropped by the
+        /// `textView.string == snapshot` staleness guard. Cancellation comes
+        /// from the *next* `scheduleHighlight`, and callers other than the
+        /// keystroke path reach it on their own schedule — the appearance
+        /// observer (`systemColorPreferencesChanged`, which fires when the
+        /// system publishes `NSColor.systemColorsDidChangeNotification` /
+        /// `NSWorkspace.accessibilityDisplayOptionsDidChangeNotification`) is
+        /// the one that can land at an arbitrary moment. Awaiting the task
+        /// handle across such a reschedule returns the instant the *cancelled*
+        /// pass unwinds, with the layout manager still untouched and its
+        /// replacement barely started.
+        ///
+        /// So follow the chain: await the in-flight pass; if a reschedule
+        /// installed a successor while we were suspended, await that too, and
+        /// stop once a pass completes without being replaced. Purely
+        /// event-driven — no wall-clock waiting, and no healing re-schedule of
+        /// our own, so a pass that legitimately strands still strands (the
+        /// differential suites depend on that).
+        ///
+        /// The bound only exists so a pathological reschedule storm surfaces
+        /// as `false` at the call site instead of an XCTest-timeout hang.
+        @discardableResult
+        func settleHighlight() async -> Bool {
+            let before = highlightApplyCount
+            var awaited: Task<Void, Never>?
+            for _ in 0..<64 {
+                guard let task = highlightTask, task != awaited else { break }
+                await task.value
+                awaited = task
+            }
+            return highlightApplyCount > before
+        }
+
         /// A computed highlight ready to stamp: the UTF-16 foreground spans,
         /// the embed underline spans, and the UTF-16 range the foreground
         /// spans authoritatively cover (`appliedUTF16` == the whole document
@@ -967,6 +1015,8 @@ struct NoteEditorView: NSViewRepresentable {
                     .underlineColor, value: underlineColor, forCharacterRange: clamped
                 )
             }
+
+            highlightApplyCount &+= 1
         }
 
         /// Widen `range` to fully include any temporary `.foregroundColor` /
