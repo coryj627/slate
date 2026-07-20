@@ -121,12 +121,11 @@ struct QuickSwitcherView: View {
             postAccessibilityAnnouncement(.rowSelected(name: row.displayName))
         }
         .onChange(of: model.resultAnnouncement) { _, announcement in
-            // `.medium` so per-keystroke count announcements coalesce
-            // rather than interrupting mid-word — same as the palette's
-            // filter-count announcement.
-            guard let announcement, !announcement.isEmpty else { return }
-            // W0.5-3 residue: switcher model announcement strings (#718 core-rendered follow-up)
-            postAccessibilityAnnouncement(.hostComposed(text: announcement, priority: .medium))
+            // Core renders the switcher-count events at medium priority,
+            // so per-keystroke counts coalesce rather than interrupting
+            // mid-word — same as the palette's filter-count announcement.
+            guard let announcement else { return }
+            postAccessibilityAnnouncement(announcement)
             model.clearAnnouncement()
         }
     }
