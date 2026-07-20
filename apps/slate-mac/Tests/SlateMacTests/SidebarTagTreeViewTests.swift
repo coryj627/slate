@@ -176,7 +176,7 @@ final class SidebarTagTreeViewTests: XCTestCase {
         let state = makeState()
         var next: TagTree? = TagTree(
             entries: [entry("keep", depth: 0)],
-            untaggedCount: 0, audioSummary: "1 tags.")
+            untaggedCount: 0, audioSummary: "1 tag.")
         state.sidebarTagTreeProvider = { next }
         state.sidebarTagsSectionExpanded = true
         XCTAssertEqual(state.sidebarTagTree?.entries.first?.full, "keep")

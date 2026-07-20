@@ -5301,14 +5301,17 @@ impl VaultSession {
             }
         }
 
-        let grouped = crate::sidebar_filter::group_thousands(changed as u64);
+        let files = crate::sidebar_filter::count_noun(changed as u64, "file", "files");
         let audio_summary = match kind {
-            TagEditKind::Add => format!("Tagged {grouped} files with #{norm}."),
+            TagEditKind::Add => format!("Tagged {files} with #{norm}."),
             TagEditKind::Remove => {
-                let mut message = format!("Removed #{norm} from {grouped} files.");
+                let mut message = format!("Removed #{norm} from {files}.");
                 if inline_remainder > 0 {
                     let inline = crate::sidebar_filter::group_thousands(inline_remainder as u64);
-                    message.push_str(&format!(" {inline} still have it inline."));
+                    // The subject noun stays elided, so only the verb
+                    // agrees: "… 1 still has it inline."
+                    let verb = if inline_remainder == 1 { "has" } else { "have" };
+                    message.push_str(&format!(" {inline} still {verb} it inline."));
                 }
                 message
             }
