@@ -159,7 +159,7 @@ final class SidebarListPaneTests: XCTestCase {
         let model = SidebarListPaneModel()
         model.bind(
             SidebarListPaneModel.Dependencies(
-                performQuery: { _, _, _ in throw StubError() },
+                performQuery: { _, _, _, _ in throw StubError() },
                 performUntagged: { _ in throw StubError() },
                 listLevel: { _, paging in
                     let index = paging.cursor.flatMap(Int.init) ?? 0
@@ -230,7 +230,7 @@ final class SidebarListPaneTests: XCTestCase {
         let model = SidebarListPaneModel()
         model.bind(
             SidebarListPaneModel.Dependencies(
-                performQuery: { _, _, _ in throw StubError() },
+                performQuery: { _, _, _, _ in throw StubError() },
                 performUntagged: { _ in throw StubError() },
                 listLevel: { _, _ in throw StubError() }),
             organization: { FileTreeViewModel.OrganizationContext() },

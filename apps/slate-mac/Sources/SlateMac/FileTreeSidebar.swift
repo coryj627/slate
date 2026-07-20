@@ -2946,6 +2946,34 @@ struct FileTreeSidebar: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle("Files")
+        // FL-15 red team (mediums): these are LAYOUT-INDEPENDENT and
+        // must live above the tree/dual-pane branch — attached to the
+        // tree mount they went dead the moment dual-pane mounted
+        // (stranded tag-editor requests, stale filter results and tag
+        // tree after mutations).
+        // Mutation completions re-run the committed query and refresh
+        // the Tags section. The token ticks on EVERY announcement
+        // assignment — identical copy included (the announcement
+        // STRING is not an event token).
+        .onChange(of: appState.sidebarMutationToken) { _, _ in
+            filterModel.refreshAfterStructuralMutation()
+            appState.refreshSidebarTagTree()
+        }
+        // Scan completion re-derives file_tags wholesale; a tree
+        // fetched mid-scan would otherwise stay stale (review round).
+        .onChange(of: appState.isScanning) { _, scanning in
+            if !scanning {
+                appState.refreshSidebarTagTree()
+            }
+        }
+        .sheet(
+            item: Binding(
+                get: { appState.sidebarTagEditorRequest },
+                set: { appState.sidebarTagEditorRequest = $0 })
+        ) { request in
+            SidebarTagEditor(request: request)
+                .environmentObject(appState)
+        }
         // U4-4 (#473): ⌘⌥← off the leftmost editor group routes focus into the
         // file tree (the westernmost terminal region). AppState can't assign
         // this view's `@FocusState` directly, so it bumps `treeFocusRequest`;
@@ -3214,31 +3242,6 @@ struct FileTreeSidebar: View {
                 filterListSelection = nil
                 republishTreeSelectionSnapshot()
             }
-        }
-        // Rename/move/trash/duplicate completions re-run the committed
-        // query so the flat list can't keep a renamed or deleted row
-        // (review round). Announcement changes are the one funnel every
-        // structural completion already passes through.
-        .onChange(of: appState.lastMutationAnnouncement) { _, _ in
-            filterModel.refreshAfterStructuralMutation()
-            // FL5-2 rule 1: the Tags section refreshes on the same
-            // funnel while expanded (no-op otherwise).
-            appState.refreshSidebarTagTree()
-        }
-        // Scan completion re-derives file_tags wholesale; a tree
-        // fetched mid-scan would otherwise stay stale (review round).
-        .onChange(of: appState.isScanning) { _, scanning in
-            if !scanning {
-                appState.refreshSidebarTagTree()
-            }
-        }
-        .sheet(
-            item: Binding(
-                get: { appState.sidebarTagEditorRequest },
-                set: { appState.sidebarTagEditorRequest = $0 })
-        ) { request in
-            SidebarTagEditor(request: request)
-                .environmentObject(appState)
         }
         .onChange(of: filterFieldFocused) { _, _ in
             syncSidebarRegionFocus()

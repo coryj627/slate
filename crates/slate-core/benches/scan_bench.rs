@@ -692,7 +692,7 @@ fn bench_sidebar_filter(c: &mut Criterion) {
         session.scan_initial(&CancelToken::new()).expect("prime");
         b.iter(|| {
             let page = session
-                .filter_files("note", None, &[], slate_core::Paging::first(50))
+                .filter_files("note", None, None, &[], slate_core::Paging::first(50))
                 .expect("filter");
             black_box((page.total, page.files.len()))
         });
@@ -707,6 +707,7 @@ fn bench_sidebar_filter(c: &mut Criterion) {
             let page = session
                 .filter_files(
                     "note ext:md -has:task",
+                    None,
                     None,
                     &[],
                     slate_core::Paging::first(50),

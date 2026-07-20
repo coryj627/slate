@@ -619,6 +619,7 @@ impl VaultSession {
         &self,
         query: String,
         scope_dir: Option<String>,
+        scope_tag: Option<String>,
         date_windows: Vec<SidebarFilterDateWindow>,
         paging: Paging,
     ) -> Result<SidebarFilterPage, VaultError> {
@@ -630,9 +631,13 @@ impl VaultSession {
                 end_ms: window.end_ms,
             })
             .collect();
-        let page =
-            self.inner
-                .filter_files(&query, scope_dir.as_deref(), &windows, paging.into())?;
+        let page = self.inner.filter_files(
+            &query,
+            scope_dir.as_deref(),
+            scope_tag.as_deref(),
+            &windows,
+            paging.into(),
+        )?;
         Ok(SidebarFilterPage {
             files: page.files.into_iter().map(Into::into).collect(),
             next_cursor: page.next_cursor,
