@@ -200,6 +200,17 @@ final class QuickSwitcherModelTests: XCTestCase {
     }
 
     @MainActor
+    func testAnnouncementZeroRecents() {
+        // The copy decision, locked (Codoki on #971): an empty recency
+        // list announces "0 recent files" rather than staying silent.
+        let model = QuickSwitcherModel()
+        model.load(files: [], recents: [])
+        model.announceInitialCount()
+        XCTAssertEqual(model.resultAnnouncement, .switcherRecentCount(count: 0))
+        XCTAssertEqual(renderedText(model), "0 recent files")
+    }
+
+    @MainActor
     func testAnnouncementSingularRecent() {
         let model = QuickSwitcherModel()
         model.load(files: rows([("a.md", "a.md")]), recents: [])

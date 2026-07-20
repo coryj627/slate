@@ -1019,6 +1019,10 @@ pub fn corpus() -> Vec<A11yEvent> {
         },
         SwitcherRecentCount { count: 2 },
         SwitcherRecentCount { count: 1 },
+        // Zero recents announces too (shipped behavior): an empty vault's
+        // switcher tells the user the recency list is empty rather than
+        // staying silent.
+        SwitcherRecentCount { count: 0 },
         SwitcherNoMatches {
             query: "zzz".into(),
         },
@@ -1272,6 +1276,7 @@ mod tests {
             (Medium, "Selected: notes"),
             (Medium, "2 recent files"),
             (Medium, "1 recent file"),
+            (Medium, "0 recent files"),
             (Medium, "No files matching \"zzz\""),
             (Medium, "2 files matching \"foo\""),
             (Medium, "1 file matching \"foo\""),

@@ -535,6 +535,11 @@
     "text": "1 recent file"
   },
   {
+    "event": "SwitcherRecentCount { count: 0 }",
+    "priority": "medium",
+    "text": "0 recent files"
+  },
+  {
     "event": "SwitcherNoMatches { query: \"zzz\" }",
     "priority": "medium",
     "text": "No files matching \"zzz\""
