@@ -654,7 +654,7 @@ extension AppState {
             baseQueries.savedQueries.count + baseQueries.baseFiles.count
             + baseQueries.dashboards.count
         let pinned = baseQueries.pinnedSavedQueryIDs.count
-        return "Queries, \(count) items, \(pinned) pinned"
+        return "Queries, \(CountCopy.counted(count, "item", "items")), \(pinned) pinned"
     }
 
     @discardableResult

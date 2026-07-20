@@ -13136,9 +13136,15 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
         }
     }
     fn size_phrase(delta: i64) -> String {
+        // Plain `{n}`, not grouped decimals: this fragment sits beside
+        // the `{op_count} operation{s}` clause below and its number
+        // formatting is load-bearing for the CLI's TSV output.
+        fn bytes(count: i64) -> String {
+            format!("{count} byte{}", if count == 1 { "" } else { "s" })
+        }
         match delta.cmp(&0) {
-            std::cmp::Ordering::Greater => format!("{delta} bytes added"),
-            std::cmp::Ordering::Less => format!("{} bytes removed", -delta),
+            std::cmp::Ordering::Greater => format!("{} added", bytes(delta)),
+            std::cmp::Ordering::Less => format!("{} removed", bytes(-delta)),
             std::cmp::Ordering::Equal => "no size change".to_string(),
         }
     }
@@ -13244,7 +13250,8 @@ fn version_summaries(entries: &[crate::oplog::OpLogEntry]) -> Vec<VersionSummary
         let audio_fragment = match inner_kind {
             OpKind::WholeFileReplace if is_marker => "anchor snapshot".to_string(),
             OpKind::WholeFileReplace => {
-                format!("snapshot, {} bytes", prev_len.unwrap_or(0))
+                let len = prev_len.unwrap_or(0);
+                format!("snapshot, {len} byte{}", if len == 1 { "" } else { "s" })
             }
             OpKind::EditBatch if op_count == 0 => "marker".to_string(),
             OpKind::EditBatch => format!(

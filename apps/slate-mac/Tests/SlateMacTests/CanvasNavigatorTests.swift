@@ -1690,6 +1690,6 @@ extension CanvasNavigatorTests {
         state.canvasWhereAmI()
         let readback = try XCTUnwrap(state.canvasWhereAmIReadback)
         XCTAssertTrue(
-            readback.contains("Filter active: 1 of 5 cards match."), readback)
+            readback.contains("Filter active: 1 of 5 cards matches."), readback)
     }
 }

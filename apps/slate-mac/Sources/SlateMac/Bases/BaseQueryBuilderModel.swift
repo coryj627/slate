@@ -88,7 +88,7 @@ enum BaseQuerySource: Hashable {
         case .allNotes: return "All notes"
         case .folder(let path): return "Folder \(path)"
         case .tag(let tag): return "Tag \(tag)"
-        case .recent(let days): return "Recently edited, \(days) days"
+        case .recent(let days): return "Recently edited, \(CountCopy.counted(days, "day", "days"))"
         case .linked(let path): return "Linked from \(path)"
         case .tasks: return "Tasks"
         case .unsupported(let label, _): return "\(label), read only"
@@ -631,7 +631,7 @@ enum BaseQueryValue: Hashable {
             ?? String(number)
         case .bool(let value): return value ? "true" : "false"
         case .absoluteDate(let value): return value
-        case .relativeDays(let days): return "\(days) days ago"
+        case .relativeDays(let days): return "\(CountCopy.counted(days, "day", "days")) ago"
         case .tokens(let values): return values.joined(separator: ", ")
         case .wikilink(let target): return target
         case .file(let path): return path

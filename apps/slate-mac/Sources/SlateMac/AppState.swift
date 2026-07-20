@@ -18760,8 +18760,9 @@ final class AppState: ObservableObject {
             let subject = absent == 1 ? "The item is" : "The items are"
             return "Checked again. \(subject) no longer in the vault."
         }
-        return "Checked again. \(present) items are still in the vault and writable; "
-            + "\(absent) are no longer in the vault."
+        return "Checked again. \(CountCopy.counted(present, "item", "items")) "
+            + "\(CountCopy.verb(present, "is", "are")) still in the vault and writable; "
+            + "\(absent) \(CountCopy.verb(absent, "is", "are")) no longer in the vault."
     }
 
     private func retireResolvedBatchTrashUnknownResult() {
@@ -22708,7 +22709,7 @@ final class AppState: ObservableObject {
             // criteria, so VoiceOver flow stays polite even on a
             // 50k-file vault.
             announceScan(
-                message: "Indexed \(indexed) of \(total) files.",
+                message: "Indexed \(indexed) of \(CountCopy.counted(total, "file", "files")).",
                 force: false
             )
         case .finished(let report):

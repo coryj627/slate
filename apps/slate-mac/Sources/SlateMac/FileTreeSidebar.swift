@@ -6420,8 +6420,8 @@ struct FileTreeSidebar: View {
         case .fileIndexed(_, let indexed, let total):
             scanStrip(
                 label: total == 0
-                    ? "Indexed \(indexed) files."
-                    : "Indexed \(indexed) of \(total) files.",
+                    ? "Indexed \(CountCopy.counted(indexed, "file", "files"))."
+                    : "Indexed \(indexed) of \(CountCopy.counted(total, "file", "files")).",
                 progress: total == 0 ? nil : Double(indexed) / Double(total),
                 total: total
             )

@@ -408,7 +408,8 @@ struct CanvasPromptSheet: View {
         .frame(minHeight: 180, maxHeight: 280)
         .accessibilityLabel("\(heading): \(filtered.count) file\(filtered.count == 1 ? "" : "s")")
         HStack {
-            Text("\(filtered.count) of \(files.count) files")
+            Text(
+                "\(filtered.count) of \(CountCopy.counted(files.count, "file", "files"))")
                 .font(Tokens.Typography.caption)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
             Spacer()

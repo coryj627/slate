@@ -322,7 +322,9 @@ extension AppState {
             var full = text
             if doc.filterActive {
                 full +=
-                    " Filter active: \(doc.filteredOutline.count) of \(doc.outline.count) cards match."
+                    " Filter active: \(doc.filteredOutline.count) of "
+                    + "\(CountCopy.counted(doc.outline.count, "card", "cards")) "
+                    + CountCopy.verb(doc.filteredOutline.count, "matches", "match") + "."
             }
             canvasWhereAmIReadback = full
             canvasAnnouncer.announce(.status(full))

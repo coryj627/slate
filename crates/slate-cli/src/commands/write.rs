@@ -191,8 +191,11 @@ fn build_output(note_path: &str, report: &SaveReport) -> CommandOutput {
     });
 
     let human = format!(
-        "Wrote {} ({} bytes, hash {}).",
-        note_path, report.new_size_bytes, report.new_content_hash
+        "Wrote {} ({} byte{}, hash {}).",
+        note_path,
+        report.new_size_bytes,
+        if report.new_size_bytes == 1 { "" } else { "s" },
+        report.new_content_hash
     );
 
     let tsv = [

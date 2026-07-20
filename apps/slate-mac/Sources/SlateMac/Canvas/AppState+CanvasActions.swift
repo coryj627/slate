@@ -709,7 +709,7 @@ extension AppState {
         let count = doc.selection.marked.count
         doc.selection.marked = []
         canvasAnnouncer.announce(
-            .status(count == 0 ? "No marks." : "Cleared \(count) marks."))
+            .status(count == 0 ? "No marks." : "Cleared \(CountCopy.counted(count, "mark", "marks"))."))
     }
 
     /// The marks list (t0 §3: the pull-based counterpart to mark
@@ -740,14 +740,17 @@ extension AppState {
         }
         let ops = marked.map { CanvasOp.deleteNode(id: $0) }
         let ok = canvasApply(
-            CanvasAction(name: "delete \(marked.count) cards", ops: ops), to: doc)
+            CanvasAction(
+                name: "delete \(CountCopy.counted(marked.count, "card", "cards"))",
+                ops: ops), to: doc)
         guard ok else { return }
         doc.selection.marked = []
         if doc.selection.selected.map(marked.contains) == true {
             doc.selection.selected = nil
         }
         canvasAnnouncer.announce(
-            .destructiveConfirmation("Deleted \(marked.count) cards"))
+            .destructiveConfirmation(
+                "Deleted \(CountCopy.counted(marked.count, "card", "cards"))"))
     }
 
     /// Bulk color: one action, one summary.
@@ -766,9 +769,12 @@ extension AppState {
             CanvasOp.setNodeColor(id: $0, color: preset.map(String.init))
         }
         let ok = canvasApply(
-            CanvasAction(name: "color \(marked.count) cards", ops: ops), to: doc)
+            CanvasAction(
+                name: "color \(CountCopy.counted(marked.count, "card", "cards"))",
+                ops: ops), to: doc)
         guard ok else { return }
-        canvasAnnouncer.announce(.bulk("Set \(marked.count) cards to \(name)."))
+        canvasAnnouncer.announce(.bulk(
+                "Set \(CountCopy.counted(marked.count, "card", "cards")) to \(name)."))
     }
 
     /// Group the marked set: one group sized to the set's padded
@@ -795,7 +801,7 @@ extension AppState {
         let pad = 40.0
         let ok = canvasApply(
             CanvasAction(
-                name: "group \(marked.count) cards",
+                name: "group \(CountCopy.counted(marked.count, "card", "cards"))",
                 ops: [
                     .createGroup(
                         id: Self.newCanvasEntityID(),
@@ -810,7 +816,8 @@ extension AppState {
         doc.selection.marked = []
         canvasAnnouncer.announce(
             .bulk(
-                "Grouped \(marked.count) cards into \"\(label.isEmpty ? "Untitled" : label)\"."
+                "Grouped \(CountCopy.counted(marked.count, "card", "cards")) into "
+                    + "\"\(label.isEmpty ? "Untitled" : label)\"."
             ))
     }
 

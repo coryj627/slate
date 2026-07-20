@@ -386,7 +386,8 @@ extension AppState {
         guard doc.filterActive || !doc.filterText.isEmpty else { return }
         doc.filterText = ""
         canvasAnnouncer.announce(
-            .filter("Filter cleared — \(doc.outline.count) cards."))
+            .filter(
+                "Filter cleared — \(CountCopy.counted(doc.outline.count, "card", "cards"))."))
     }
 
     /// Debounced result count (t0 §1.5 — the announcer's filter
