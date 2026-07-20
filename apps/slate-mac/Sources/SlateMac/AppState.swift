@@ -18745,11 +18745,25 @@ final class AppState: ObservableObject {
     ) -> String {
         let present = results.filter { $0.presence == .present }.count
         let absent = results.filter { $0.presence == .absent }.count
-        let unresolved = results.count - present - absent
+        return Self.batchTrashRetryAnnouncement(
+            present: present,
+            absent: absent,
+            unresolved: results.count - present - absent)
+    }
+
+    /// The retry copy itself, over plain counts. Split out from the
+    /// presence-result filtering above — and internal rather than private —
+    /// so every branch's singular/plural is pinned by tests without building
+    /// `BatchTrashPresenceResult` values, which are file-private.
+    /// `nonisolated` because it reads no state: the copy is a pure function of
+    /// its three counts, and saying so keeps it callable from a plain test.
+    nonisolated static func batchTrashRetryAnnouncement(
+        present: Int, absent: Int, unresolved: Int
+    ) -> String {
         if unresolved > 0 {
-            let subject = unresolved == 1 ? "1 item" : "\(unresolved) items"
             let pronoun = unresolved == 1 ? "It remains" : "They remain"
-            return "Slate still couldn’t verify whether \(subject) moved to Trash. "
+            return "Slate still couldn’t verify whether "
+                + "\(CountCopy.counted(unresolved, "item", "items")) moved to Trash. "
                 + "\(pronoun) read-only."
         }
         if absent == 0 {
@@ -18760,9 +18774,14 @@ final class AppState: ObservableObject {
             let subject = absent == 1 ? "The item is" : "The items are"
             return "Checked again. \(subject) no longer in the vault."
         }
+        // Both halves name the noun. Leaving the absent count bare produced
+        // "3 items are still in the vault and writable; 1 is no longer in the
+        // vault." — the elision is only recoverable from the earlier clause,
+        // which is a poor bet for a listener hearing this once.
         return "Checked again. \(CountCopy.counted(present, "item", "items")) "
             + "\(CountCopy.verb(present, "is", "are")) still in the vault and writable; "
-            + "\(absent) \(CountCopy.verb(absent, "is", "are")) no longer in the vault."
+            + "\(CountCopy.counted(absent, "item", "items")) "
+            + "\(CountCopy.verb(absent, "is", "are")) no longer in the vault."
     }
 
     private func retireResolvedBatchTrashUnknownResult() {
