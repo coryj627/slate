@@ -64,7 +64,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
 
       - name: Assert runner architecture matches the cache lineage
         # The NVMe cache volume is keyed per profile+repo, NOT per
@@ -104,7 +104,7 @@ jobs:
       ROOT_LISTING_PERF_GUARD: session::tests::dir_tree::perf_guard_root_listing_under_100ms_on_10k_files
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
 
       - name: Assert runner architecture matches the cache lineage
         # See the lint lane's twin step for the rationale.
@@ -193,7 +193,7 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
 
       - name: Assert runner architecture matches the cache lineage
         # See the lint lane's twin step for the rationale.
