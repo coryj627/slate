@@ -1156,6 +1156,92 @@ final class BaseQueriesPanelTests: XCTestCase {
             "a follow-active refresh over unchanged rows must stay silent")
     }
 
+    /// #999, third site: the same name-sensitive-vs-identity confusion, one
+    /// layer deeper. `BaseDocument.ownsContentRefresh` compared `source` with
+    /// `==`, which is name-sensitive for a saved query — but
+    /// `retargetSavedQueryName` rewrites `source` on a rename WITHOUT bumping
+    /// `contentRefreshGeneration`, while both real `retarget(to:)` overloads
+    /// bump it first thing. The type's own rule is therefore "a rename is not a
+    /// content invalidation", so a rename landing mid-preparation made the
+    /// ownership test fail, `applyContentRefresh` returned `.stale`, and both
+    /// the open tab and the docked pane kept stale rows with nothing left to
+    /// reschedule them. (This is why #1005's dock-ownership fix could not save
+    /// the saved-query path on its own: ownership passed, then the apply
+    /// refused.)
+    func testOpenAndDockedSavedQueryApplyInAppWriteResultWhenRenameLandsMidPreparation()
+        async throws
+    {
+        let (state, session) = try await makeState()
+        let id = try session.saveQuery(
+            name: "Active projects",
+            description: nil,
+            queryJson: queryJSON(folder: "Projects"),
+            sourceSyntax: .builder)
+        _ = await state.refreshBaseQueries()?.value
+
+        state.openSavedQuery(id: id, name: "Active projects")
+        let tab = try XCTUnwrap(state.activeBaseDocument)
+        state.dockSavedQueryToSidebar(id: id, refreshDelayNanoseconds: 0)
+        await (try XCTUnwrap(state.basesDockRefreshTask)).value
+        let dock = try XCTUnwrap(state.basesDockDocument)
+        XCTAssertEqual(tab.result?.rows.count, 3, "the tab must start from the settled rows")
+        XCTAssertEqual(dock.result?.rows.count, 3, "the dock must start from the settled rows")
+        XCTAssertEqual(
+            state.basesDock.lastMembershipSignature,
+            BaseRowMembership(rows: dock.result?.rows ?? []))
+
+        _ = try session.createExclusive(path: "Projects/Delta.md", content: "# Delta\n")
+        let barrier = PreparedLoadBarrier()
+        state.baseRetargetPreloadRunner = { session, request, observer in
+            barrier.run {
+                BasePreparedLoader.prepare(
+                    session: session, request: request, observer: observer)
+            }
+        }
+        let refresh = try XCTUnwrap(
+            state.refreshVisibleBasesAfterInAppWrite(
+                session: session,
+                changedPath: "Projects/Delta.md"))
+
+        // Pinned interleaving: both replacements are parked in the barrier, so
+        // the rename below provably lands before the apply loop runs. The
+        // rename arrives out of band, exactly as `renameSavedQuery`'s
+        // fire-and-forget `refreshBaseQueries()` delivers it.
+        try session.renameSavedQuery(id: id, name: "Renamed projects")
+        _ = await state.refreshBaseQueries()?.value
+        XCTAssertEqual(tab.source, .savedQuery(id: id, name: "Renamed projects"))
+        XCTAssertEqual(dock.source, .savedQuery(id: id, name: "Renamed projects"))
+        XCTAssertTrue(state.activeBaseDocument === tab, "a rename must keep the tab document")
+        XCTAssertTrue(state.basesDockDocument === dock, "a rename must keep the dock document")
+        barrier.release()
+        _ = await refresh.value
+        state.basesDockRefreshTask?.cancel()
+
+        XCTAssertEqual(
+            tab.result?.rows.count, 4,
+            "a saved-query rename must not release the prepared result: the open "
+                + "Base kept stale rows")
+        XCTAssertEqual(
+            dock.result?.rows.count, 4,
+            "a saved-query rename must not release the prepared result: the docked "
+                + "Base kept stale rows")
+        XCTAssertEqual(
+            state.basesDock.lastMembershipSignature,
+            BaseRowMembership(rows: dock.result?.rows ?? []),
+            "the dock baseline must be rebased onto the applied rows, or the next "
+                + "follow-active publish re-announces a change the user already heard")
+
+        // The out-of-band change announced once, through the refresh itself.
+        XCTAssertEqual(state.lastBaseRefreshAnnouncements.count, 1)
+        state.lastBaseActionAnnouncement = nil
+        state.scheduleBasesDockFollowActiveRefresh(delayNanoseconds: 0)
+        await state.basesDockRefreshTask?.value
+        XCTAssertEqual(dock.result?.rows.count, 4)
+        XCTAssertNotEqual(
+            state.lastBaseActionAnnouncement, "Base dock updated for active note.",
+            "a follow-active refresh over unchanged rows must stay silent")
+    }
+
     func testUpdatingSavedQueryReopensDockedDashboardSection() async throws {
         let (state, session) = try await makeState()
         let id = try session.saveQuery(
