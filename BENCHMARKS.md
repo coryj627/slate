@@ -47,6 +47,19 @@ Per fl4_spec FL4-1 rule 7: if a regression pushes the name term past
 budget, the remedy is a casefolded effective-name column maintained at
 scan time — not pre-built speculatively.
 
+## FL close-out — 2026-07-20 (Milestone FL final verification, #670)
+
+Recorded on the merged tree (FL-14 @ a9c9b919), idle box. FL budgets from
+`docs/plans/15_files_sidebar/00_program.md` §NFR.
+
+| Bench | Median | Budget | Verdict |
+|---|---|---|---|
+| `sidebar_filter/10000` | _pending_ | ≤ 50 ms | |
+| `sidebar_filter/10000_mixed_terms` | _pending_ | ≤ 50 ms | |
+| `tag_tree/10000` | _pending_ | ≤ 25 ms | |
+| root metadata listing @10k | _pending_ | ≤ 10 ms | |
+| `first_open_and_scan/10000` vs pre-FL baseline | _pending_ | ≤ +5% | |
+
 ## V1 release-gate targets
 
 From `docs/plans/05_locked_architecture_decisions.md` §9.5. **Regressions below these thresholds are V1 release blockers.**
