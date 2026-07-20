@@ -448,19 +448,28 @@ pub fn sidebar_filter_audio_summary(
     if total == 0 {
         return "No results.".to_string();
     }
-    let grouped = group_thousands(total);
+    let counted = count_noun(total, "result", "results");
     if let Some(scope) = scope_dir {
         let folder = scope
             .trim_end_matches('/')
             .rsplit('/')
             .next()
             .unwrap_or(scope);
-        return format!("{grouped} results in {folder}.");
+        return format!("{counted} in {folder}.");
     }
     if let Some(tag) = scope_tag {
-        return format!("{grouped} results for #{tag}.");
+        return format!("{counted} for #{tag}.");
     }
-    format!("{grouped} results.")
+    format!("{counted}.")
+}
+
+/// A grouped count plus its English noun, taking the singular only at
+/// exactly one — zero stays plural (`"0 tags."`). Announcement copy is
+/// assembled from this so noun agreement has a single definition.
+pub(crate) fn count_noun(value: u64, singular: &str, plural: &str) -> String {
+    let grouped = group_thousands(value);
+    let noun = if value == 1 { singular } else { plural };
+    format!("{grouped} {noun}")
 }
 
 pub(crate) fn group_thousands(value: u64) -> String {
@@ -573,7 +582,7 @@ mod tests {
     #[test]
     fn audio_summary_shapes() {
         assert_eq!(sidebar_filter_audio_summary(0, None, None), "No results.");
-        assert_eq!(sidebar_filter_audio_summary(1, None, None), "1 results.");
+        assert_eq!(sidebar_filter_audio_summary(1, None, None), "1 result.");
         assert_eq!(
             sidebar_filter_audio_summary(1234, None, None),
             "1,234 results."
@@ -581,6 +590,19 @@ mod tests {
         assert_eq!(
             sidebar_filter_audio_summary(2, Some("research/papers"), None),
             "2 results in papers."
+        );
+        // Exactly one is singular in every shape; everything else is plural.
+        assert_eq!(
+            sidebar_filter_audio_summary(1, Some("research/papers"), None),
+            "1 result in papers."
+        );
+        assert_eq!(
+            sidebar_filter_audio_summary(1, None, Some("project alpha")),
+            "1 result for #project alpha."
+        );
+        assert_eq!(
+            sidebar_filter_audio_summary(2, None, Some("project alpha")),
+            "2 results for #project alpha."
         );
     }
 

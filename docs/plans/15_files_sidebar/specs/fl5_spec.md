@@ -33,7 +33,7 @@ Rules:
 2. Counts are **distinct files**; `file_count` uses the settled nested-prefix semantics (`tag_norm = t OR LIKE t || '/%'`). `untagged_count` = markdown files with zero `file_tags` rows.
 3. Order: children alphabetical by segment (casefold; already lowercase by normalization). Deterministic.
 4. Display case: `tag_norm` is lowercase by design (#564–#567); nodes display the normalized form. **No** original-case recovery in v1 (would require a new column; note as deferred).
-5. `audio_summary`: `"{n} tags, {u} untagged notes."` (grouped decimals; omit second clause when `u = 0`).
+5. `audio_summary`: `"{n} tags, {u} untagged notes."` (grouped decimals; omit second clause when `u = 0`). Each count takes the singular independently at exactly one — `"1 tag."`, `"1 tag, 1 untagged note."`, `"2 tags, 1 untagged note."`; zero is plural (`"0 tags."`).
 6. Budget: ≤ 25 ms at 10k (bench `tag_tree/{10k}`); no caching in v1 — rebuilt per call, the sidebar refreshes it on the existing scoped-invalidation events, not per keystroke.
 
 Tests: fixture with nested/deep/sibling tags + intermediate-only segments; count semantics (nested vs direct, distinct-file dedup); untagged; permutation invariance; bench.
@@ -72,7 +72,7 @@ Rules:
 2. **Add**: ensure frontmatter exists (create a minimal block when absent), append to the `tags:` list iff not already present under normalization; preserve the rest of the frontmatter byte-for-byte where possible (edit via the parsed property list + serializer used by the in-note properties widget (U3) — locate and reuse; if none is exposed in core, this issue extracts one, flagged in the PR).
 3. **Remove**: remove matching entries (normalized compare) from the frontmatter `tags:` list only. Inline body `#tag` occurrences are **counted, not edited** (`inline_remainder` = files still carrying the tag inline) — honest partial semantics surfaced to the user, body munging deferred.
 4. Each file edit rides the normal core save path (one transaction per file: content write + derived-data refresh incl. `file_tags`), the whole batch in one API call with one report. Files whose on-disk hash changed underneath (conflict convention) are skipped into `skipped`, not overwritten.
-5. `audio_summary`: add `"Tagged {n} files with #{tag}."`; remove `"Removed #{tag} from {n} files."` + `" {m} still have it inline."` when `inline_remainder > 0`.
+5. `audio_summary`: add `"Tagged {n} files with #{tag}."`; remove `"Removed #{tag} from {n} files."` + `" {m} still have it inline."` when `inline_remainder > 0`. At exactly one the file noun is singular (`"Tagged 1 file with #project."`, `"Removed #project from 1 file."`) and the remainder clause keeps its elided subject but agrees the verb (`" 1 still has it inline."`); zero is plural.
 Tests: add idempotence + frontmatter-creation fixture; remove leaves inline + `inline_remainder` count; normalization collisions (`#Reading` vs `reading`); conflict-skip; report strings verbatim; metadata/tag census extension.
 
 - [ ] Core add/remove + report + serializer reuse

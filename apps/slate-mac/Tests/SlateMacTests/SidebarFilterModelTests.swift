@@ -516,7 +516,7 @@ final class SidebarFilterModelTests: XCTestCase {
                             taskTotal: 0, taskOpen: 0)
                     ],
                     nextCursor: nil, total: 1,
-                    audioSummary: "1 results for #project alpha.")
+                    audioSummary: "1 result for #project alpha.")
             },
             announce: { announcements.append($0) },
             now: { Date() },
@@ -531,7 +531,7 @@ final class SidebarFilterModelTests: XCTestCase {
         XCTAssertEqual(scopeCalls.last?.query, "")
         XCTAssertEqual(scopeCalls.last?.scopeTag, "project alpha")
         XCTAssertEqual(
-            announcements.last, "1 results for #project alpha.")
+            announcements.last, "1 result for #project alpha.")
         XCTAssertEqual(
             defaults.string(forKey: SidebarFilterModel.persistedQueryKey),
             "",
