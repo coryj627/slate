@@ -233,8 +233,9 @@ public sealed class ShellAccessibilityTests
                 rightPaneLeaves.FindAllDescendants(
                     automation.ConditionFactory.ByControlType(ControlType.ListItem)).Length);
 
-            AutomationElement splitRight = WaitForElement(
+            AutomationElement splitRight = WaitForMenuItem(
                 window,
+                "WorkspaceMenu",
                 "SplitRightMenuItem",
                 TimeSpan.FromSeconds(10));
             Assert.True(splitRight.IsEnabled);
@@ -279,8 +280,9 @@ public sealed class ShellAccessibilityTests
 
             AssertAxeClean(process);
 
-            AutomationElement quickOpen = WaitForElement(
+            AutomationElement quickOpen = WaitForMenuItem(
                 window,
+                "FileMenu",
                 "QuickOpenMenuItem",
                 TimeSpan.FromSeconds(10));
             Assert.True(quickOpen.Patterns.Invoke.IsSupported);
@@ -346,8 +348,9 @@ public sealed class ShellAccessibilityTests
                 editor,
                 "Committing Quick Open did not focus the destination editor.");
 
-            AutomationElement closeVault = WaitForElement(
+            AutomationElement closeVault = WaitForMenuItem(
                 window,
+                "FileMenu",
                 "CloseVaultMenuItem",
                 TimeSpan.FromSeconds(10));
             Assert.True(closeVault.IsEnabled);
@@ -497,6 +500,20 @@ public sealed class ShellAccessibilityTests
                 timeout),
             $"The UIA element named '{name}' did not appear.");
         return element!;
+    }
+
+    private static AutomationElement WaitForMenuItem(
+        Window window,
+        string menuAutomationId,
+        string itemAutomationId,
+        TimeSpan timeout)
+    {
+        AutomationElement menu = WaitForElement(window, menuAutomationId, timeout);
+        Assert.True(
+            menu.Patterns.ExpandCollapse.IsSupported,
+            $"Menu {menuAutomationId} does not expose ExpandCollapse.");
+        menu.Patterns.ExpandCollapse.Pattern.Expand();
+        return WaitForElement(window, itemAutomationId, timeout);
     }
 
     private static string ReadSharedLog(string path)

@@ -57,7 +57,8 @@
                     </Style.Triggers>
                 </Style>
             </Menu.Style>
-            <MenuItem Header="_File">
+            <MenuItem Header="_File"
+                      AutomationProperties.AutomationId="FileMenu">
                 <MenuItem Header="_Open Vault…"
                           AutomationProperties.AutomationId="OpenVaultMenuItem"
                           InputGestureText="Ctrl+Shift+O"
@@ -73,7 +74,8 @@
                 <Separator />
                 <MenuItem Header="E_xit" Command="{x:Static ApplicationCommands.Close}" />
             </MenuItem>
-            <MenuItem Header="_Workspace">
+            <MenuItem Header="_Workspace"
+                      AutomationProperties.AutomationId="WorkspaceMenu">
                 <MenuItem Header="_Duplicate Tab" InputGestureText="Ctrl+T" Command="{Binding Workspace.DuplicateTabCommand}" />
                 <MenuItem Header="_Close Tab" InputGestureText="Ctrl+W" Command="{Binding Workspace.CloseActiveTabCommand}" />
                 <MenuItem Header="_Reopen Closed Tab" InputGestureText="Ctrl+Shift+T" Command="{Binding Workspace.ReopenClosedTabCommand}" />
