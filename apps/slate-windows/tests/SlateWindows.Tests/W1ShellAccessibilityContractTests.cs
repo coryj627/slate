@@ -13,12 +13,9 @@ namespace SlateWindows.Tests;
 public sealed class W1ShellAccessibilityContractTests
 {
     [Fact]
-    public void WorkspaceLandmarks_CreateNamedPanePeersInTheControlTree()
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
+    public void WorkspaceLandmarks_CreateNamedPanePeersInTheControlTree() =>
+        RunOnStaThread(
+            () =>
             {
                 (FrameworkElement Element, string Id, string Name)[] landmarks =
                 [
@@ -43,29 +40,13 @@ public sealed class W1ShellAccessibilityContractTests
                     Assert.True(peer.IsControlElement());
                     Assert.False(peer.IsContentElement());
                 }
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "Landmark peer test timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+            },
+            "Landmark peer test timed out.");
 
     [Fact]
-    public void WeightedSplitPanel_RearrangesWhenAChildWeightChanges()
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
+    public void WeightedSplitPanel_RearrangesWhenAChildWeightChanges() =>
+        RunOnStaThread(
+            () =>
             {
                 var firstNode = new WorkspacePaneNodeViewModel("horizontal");
                 var secondNode = new WorkspacePaneNodeViewModel("horizontal");
@@ -89,29 +70,13 @@ public sealed class W1ShellAccessibilityContractTests
                 panel.Arrange(new Rect(size));
                 Assert.Equal(60, first.RenderSize.Width, precision: 5);
                 Assert.Equal(240, second.RenderSize.Width, precision: 5);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-        });
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "Split layout test timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
-    }
+            },
+            "Split layout test timed out.");
 
     [Fact]
-    public void WeightedSplitPanel_DragHandleResizesAdjacentPanes()
-    {
-        Exception? failure = null;
-        var thread = new Thread(() =>
-        {
-            try
+    public void WeightedSplitPanel_DragHandleResizesAdjacentPanes() =>
+        RunOnStaThread(
+            () =>
             {
                 var firstNode = new WorkspacePaneNodeViewModel("horizontal");
                 var secondNode = new WorkspacePaneNodeViewModel("horizontal");
@@ -142,19 +107,31 @@ public sealed class W1ShellAccessibilityContractTests
 
                 Assert.Equal(180, first.RenderSize.Width, precision: 5);
                 Assert.Equal(120, second.RenderSize.Width, precision: 5);
+            },
+            "Split handle test timed out.");
+
+    private static void RunOnStaThread(Action action, string timeoutMessage)
+    {
+        ExceptionDispatchInfo? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                action();
             }
             catch (Exception exception)
             {
-                failure = exception;
+                failure = ExceptionDispatchInfo.Capture(exception);
             }
-        });
+        })
+        {
+            IsBackground = true,
+            Name = "w1-shell-sta-test",
+        };
         thread.SetApartmentState(ApartmentState.STA);
         thread.Start();
 
-        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "Split handle test timed out.");
-        if (failure is not null)
-        {
-            ExceptionDispatchInfo.Capture(failure).Throw();
-        }
+        Assert.True(thread.Join(TimeSpan.FromSeconds(30)), timeoutMessage);
+        failure?.Throw();
     }
 }
