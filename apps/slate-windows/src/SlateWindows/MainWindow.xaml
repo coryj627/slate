@@ -139,13 +139,14 @@
         </StatusBar>
 
         <Grid>
-            <Grid x:Name="WelcomeRoot"
+            <local:AutomationLandmarkGrid x:Name="WelcomeRoot"
                   Background="{DynamicResource Slate.WindowBackgroundBrush}"
                   AutomationProperties.AutomationId="WelcomeView"
+                  AutomationProperties.Name="Welcome"
                   Visibility="{Binding IsWelcomeVisible, Converter={StaticResource BooleanToVisibilityConverter}}"
                   FocusManager.FocusedElement="{Binding ElementName=OpenVaultButton}">
-                <Grid.Style>
-                    <Style TargetType="Grid">
+                <local:AutomationLandmarkGrid.Style>
+                    <Style TargetType="{x:Type local:AutomationLandmarkGrid}">
                         <Setter Property="IsEnabled" Value="True" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
@@ -153,7 +154,7 @@
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
-                </Grid.Style>
+                </local:AutomationLandmarkGrid.Style>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="36" />
                     <ColumnDefinition Width="520" />
@@ -192,7 +193,7 @@
                         </ItemsControl>
                     </StackPanel>
                 </StackPanel>
-            </Grid>
+            </local:AutomationLandmarkGrid>
 
             <local:AutomationLandmarkGrid x:Name="WorkspaceRoot"
                   AutomationProperties.AutomationId="WorkspaceView"
@@ -472,6 +473,7 @@
                                      ItemsSource="{Binding LeafOptions}"
                                      SelectedItem="{Binding ActiveLeaf, Mode=TwoWay}"
                                      DisplayMemberPath="Title"
+                                     VirtualizingStackPanel.IsVirtualizing="False"
                                      AutomationProperties.AutomationId="RightPaneLeaves"
                                      AutomationProperties.Name="Right pane panels" />
                         </Grid>
@@ -483,7 +485,7 @@
                  cannot invoke commands behind the visible overlay either. -->
             <Border Background="Transparent"
                     Visibility="{Binding QuickSwitcher.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}" />
-            <Border x:Name="QuickSwitcherOverlay"
+            <local:AutomationLandmarkBorder x:Name="QuickSwitcherOverlay"
                     Width="600"
                     MaxHeight="430"
                     Padding="16"
@@ -501,9 +503,9 @@
                     AutomationProperties.AutomationId="QuickSwitcher"
                     AutomationProperties.Name="Quick Open"
                     AutomationProperties.IsDialog="True">
-                <Border.Effect>
+                <local:AutomationLandmarkBorder.Effect>
                     <DropShadowEffect BlurRadius="18" ShadowDepth="4" Opacity="0.28" />
-                </Border.Effect>
+                </local:AutomationLandmarkBorder.Effect>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
@@ -569,7 +571,7 @@
                                    Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     </DockPanel>
                 </Grid>
-            </Border>
+            </local:AutomationLandmarkBorder>
         </Grid>
     </DockPanel>
 </Window>

@@ -22,10 +22,12 @@ public sealed class W1ShellAccessibilityContractTests
             {
                 (FrameworkElement Element, string Id, string Name)[] landmarks =
                 [
+                    (new AutomationLandmarkGrid(), "WelcomeView", "Welcome"),
                     (new AutomationLandmarkGrid(), "WorkspaceView", "Workspace"),
                     (new AutomationLandmarkBorder(), "FilesPane", "Files pane"),
                     (new AutomationLandmarkBorder(), "ContentPane", "Editor workspace"),
                     (new AutomationLandmarkBorder(), "InspectorPane", "Right pane"),
+                    (new AutomationLandmarkBorder(), "QuickSwitcher", "Quick Open"),
                 ];
 
                 foreach ((FrameworkElement element, string id, string name) in landmarks)
