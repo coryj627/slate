@@ -32,7 +32,8 @@ internal sealed class AutomationLandmarkPeer(FrameworkElement owner)
 
     protected override string GetClassNameCore() => "SlateLandmark";
 
-    protected override bool IsControlElementCore() => true;
+    protected override bool IsControlElementCore() =>
+        Owner is UIElement { Visibility: Visibility.Visible };
 
     protected override bool IsContentElementCore() => false;
 }
