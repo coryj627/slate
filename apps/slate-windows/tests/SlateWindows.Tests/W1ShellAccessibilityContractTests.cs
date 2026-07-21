@@ -3,6 +3,8 @@
 
 using System.Runtime.ExceptionServices;
 using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 
@@ -10,6 +12,51 @@ namespace SlateWindows.Tests;
 
 public sealed class W1ShellAccessibilityContractTests
 {
+    [Fact]
+    public void WorkspaceLandmarks_CreateNamedPanePeersInTheControlTree()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                (FrameworkElement Element, string Id, string Name)[] landmarks =
+                [
+                    (new AutomationLandmarkGrid(), "WorkspaceView", "Workspace"),
+                    (new AutomationLandmarkBorder(), "FilesPane", "Files pane"),
+                    (new AutomationLandmarkBorder(), "ContentPane", "Editor workspace"),
+                    (new AutomationLandmarkBorder(), "InspectorPane", "Right pane"),
+                ];
+
+                foreach ((FrameworkElement element, string id, string name) in landmarks)
+                {
+                    AutomationProperties.SetAutomationId(element, id);
+                    AutomationProperties.SetName(element, name);
+
+                    AutomationPeer peer = Assert.IsType<AutomationLandmarkPeer>(
+                        UIElementAutomationPeer.CreatePeerForElement(element));
+                    Assert.Equal(AutomationControlType.Pane, peer.GetAutomationControlType());
+                    Assert.Equal(id, peer.GetAutomationId());
+                    Assert.Equal(name, peer.GetName());
+                    Assert.True(peer.IsControlElement());
+                    Assert.False(peer.IsContentElement());
+                }
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+
+        Assert.True(thread.Join(TimeSpan.FromSeconds(10)), "Landmark peer test timed out.");
+        if (failure is not null)
+        {
+            ExceptionDispatchInfo.Capture(failure).Throw();
+        }
+    }
+
     [Fact]
     public void WeightedSplitPanel_RearrangesWhenAChildWeightChanges()
     {

@@ -194,11 +194,12 @@
                 </StackPanel>
             </Grid>
 
-            <Grid x:Name="WorkspaceRoot"
+            <local:AutomationLandmarkGrid x:Name="WorkspaceRoot"
                   AutomationProperties.AutomationId="WorkspaceView"
+                  AutomationProperties.Name="Workspace"
                   Visibility="{Binding IsWorkspaceVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
-                <Grid.Style>
-                    <Style TargetType="Grid">
+                <local:AutomationLandmarkGrid.Style>
+                    <Style TargetType="{x:Type local:AutomationLandmarkGrid}">
                         <Setter Property="IsEnabled" Value="True" />
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding QuickSwitcher.IsOpen}" Value="True">
@@ -206,7 +207,7 @@
                             </DataTrigger>
                         </Style.Triggers>
                     </Style>
-                </Grid.Style>
+                </local:AutomationLandmarkGrid.Style>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
@@ -225,9 +226,10 @@
                         <ColumnDefinition Width="5" />
                         <ColumnDefinition Width="280" MinWidth="200" />
                     </Grid.ColumnDefinitions>
-                    <Border x:Name="FilesPaneBorder"
+                    <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             Grid.Column="0"
                             AutomationProperties.AutomationId="FilesPane"
+                            AutomationProperties.Name="Files pane"
                             Background="{DynamicResource Slate.SurfaceBrush}"
                             BorderBrush="{DynamicResource Slate.BorderBrush}"
                             BorderThickness="0,0,1,0"
@@ -420,29 +422,31 @@
                                          AutomationProperties.Name="Files in selected folder" />
                             </Grid>
                         </DockPanel>
-                    </Border>
+                    </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="1"
                                   Background="{DynamicResource Slate.BorderBrush}"
                                   HorizontalAlignment="Stretch"
                                   ResizeDirection="Columns"
                                   AutomationProperties.Name="Resize files sidebar" />
-                    <Border x:Name="ContentPaneBorder"
+                    <local:AutomationLandmarkBorder x:Name="ContentPaneBorder"
                             Grid.Column="2"
                             AutomationProperties.AutomationId="ContentPane"
+                            AutomationProperties.Name="Editor workspace"
                             Background="{DynamicResource Slate.WindowBackgroundBrush}"
                             DataContext="{Binding Workspace}">
                         <ContentControl Content="{Binding Root}"
                                         ContentTemplate="{StaticResource WorkspaceNodeTemplate}"
                                         GotKeyboardFocus="WorkspaceContent_GotKeyboardFocus"
                                         AutomationProperties.Name="Workspace editor panes" />
-                    </Border>
+                    </local:AutomationLandmarkBorder>
                     <GridSplitter Grid.Column="3"
                                   Background="{DynamicResource Slate.BorderBrush}"
                                   HorizontalAlignment="Stretch"
                                   ResizeDirection="Columns"
                                   AutomationProperties.Name="Resize right pane" />
-                    <Border Grid.Column="4"
+                    <local:AutomationLandmarkBorder Grid.Column="4"
                             AutomationProperties.AutomationId="InspectorPane"
+                            AutomationProperties.Name="Right pane"
                             Background="{DynamicResource Slate.SurfaceBrush}"
                             BorderBrush="{DynamicResource Slate.BorderBrush}"
                             BorderThickness="1,0,0,0"
@@ -471,9 +475,9 @@
                                      AutomationProperties.AutomationId="RightPaneLeaves"
                                      AutomationProperties.Name="Right pane panels" />
                         </Grid>
-                    </Border>
+                    </local:AutomationLandmarkBorder>
                 </Grid>
-            </Grid>
+            </local:AutomationLandmarkGrid>
             <!-- A full-window hit-test layer makes Quick Open modal for pointer
                  input. The underlying shell is disabled above, so UIA clients
                  cannot invoke commands behind the visible overlay either. -->
