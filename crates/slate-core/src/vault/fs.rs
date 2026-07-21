@@ -464,6 +464,7 @@ pub fn content_hash(bytes: &[u8]) -> String {
 /// Reject path spellings Win32 aliases or rewrites before they reach the
 /// filesystem. Without this guard, names such as `CON.md` can address a device
 /// and trailing dots/spaces can alias a different on-disk entry.
+#[cfg(any(windows, test))]
 fn validate_windows_relative_path(relative: &str) -> Result<(), &'static str> {
     for component in relative.split(['/', '\\']) {
         if component.is_empty() || component == "." || component == ".." {

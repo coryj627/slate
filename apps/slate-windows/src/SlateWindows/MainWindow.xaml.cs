@@ -420,7 +420,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.F2
             && FilesTree.IsKeyboardFocusWithin
             && _viewModel.FileSidebar?.SelectedNode is
-                { IsPlaceholder: false, IsGroupHeader: false })
+            { IsPlaceholder: false, IsGroupHeader: false })
         {
             SidebarFileActionsExpander.IsExpanded = true;
             _ = Dispatcher.InvokeAsync(() =>

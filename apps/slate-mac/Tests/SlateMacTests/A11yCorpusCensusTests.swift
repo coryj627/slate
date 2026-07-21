@@ -165,6 +165,11 @@ final class A11yCorpusCensusTests: XCTestCase {
                 disabledReason: "A structural operation is in progress."
             ),
             .recentSearchFocused(query: "fox"),
+            .quickSwitcherCount(count: 2, query: nil),
+            .quickSwitcherCount(count: 1, query: nil),
+            .quickSwitcherCount(count: 2, query: "foo"),
+            .quickSwitcherCount(count: 1, query: "foo"),
+            .quickSwitcherCount(count: 0, query: "zzz"),
             .baseViewMode(mode: "cards"),
             .baseViewSwitcher(viewCount: 1),
             .baseViewSwitcher(viewCount: 2),

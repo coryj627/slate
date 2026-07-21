@@ -966,6 +966,7 @@ internal sealed class FilesSidebarViewModel : BindableBase
                 SidebarFilterPage page = _session.FilterFiles(
                     query,
                     null,
+                    null,
                     windows,
                     new Paging(cursor, PageLimit));
                 files.AddRange(page.Files.Take((int)PageLimit - files.Count));
