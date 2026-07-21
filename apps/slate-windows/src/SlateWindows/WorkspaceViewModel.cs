@@ -84,6 +84,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase
     public bool? PropsCollapsed { get; }
     public string? ActiveCanvasSurface { get; }
     public string Title => Item.Title;
+    public string EditorAutomationName =>
+        $"{System.IO.Path.GetFileName(Path)} editor";
     public string Path => Item.Path;
     public bool IsMarkdown => Item.Kind == WorkspaceItemKind.Markdown;
     public bool IsPlaceholder => !IsMarkdown;
@@ -240,6 +242,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase
     {
         OnPropertyChanged(nameof(Item));
         OnPropertyChanged(nameof(Title));
+        OnPropertyChanged(nameof(EditorAutomationName));
         OnPropertyChanged(nameof(Path));
         OnPropertyChanged(nameof(IsMarkdown));
         OnPropertyChanged(nameof(IsPlaceholder));

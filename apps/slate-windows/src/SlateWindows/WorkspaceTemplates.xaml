@@ -72,7 +72,7 @@
                      FontSize="14"
                      Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
                      Visibility="{Binding IsMarkdown, Converter={StaticResource BooleanToVisibilityConverter}}"
-                     AutomationProperties.Name="{Binding Title, StringFormat={}{0} editor}" />
+                     AutomationProperties.Name="{Binding EditorAutomationName}" />
             <StackPanel Grid.Row="0"
                         Margin="32"
                         HorizontalAlignment="Center"

@@ -178,6 +178,27 @@ public sealed class W1WorkspaceModelTests
         Assert.EndsWith("Exact edit.\n", File.ReadAllText(Path.Combine(fixture.Root, "note0.md")));
     }
 
+    [Fact]
+    public void EditorAutomationName_IncludesExtensionAndTracksCurrentTabReplacement()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "workspace-editor-a11y-name");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        using var workspace = new WorkspaceViewModel(session, fixture.Root, () => [], _ => { });
+        workspace.OpenPath("note0.md");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        var changed = new List<string?>();
+        tab.PropertyChanged += (_, args) => changed.Add(args.PropertyName);
+
+        Assert.Equal("note0.md editor", tab.EditorAutomationName);
+        workspace.OpenPath("note1.md");
+
+        Assert.Same(tab, workspace.ActiveGroup.ActiveTab);
+        Assert.Equal("note1.md editor", tab.EditorAutomationName);
+        Assert.Contains(nameof(WorkspaceTabViewModel.EditorAutomationName), changed);
+    }
+
     private static IEnumerable<WorkspaceGroupState> Groups(WorkspaceNodeState node) =>
         node is WorkspaceGroupState group
             ? [group]
