@@ -314,6 +314,7 @@ public sealed class ShellAccessibilityTests
                 "Quick Open did not publish its asynchronously ranked results.");
             Assert.False(string.IsNullOrWhiteSpace(quickResult!.Name));
             Assert.False(string.IsNullOrWhiteSpace(quickResult.HelpText));
+            Assert.False(string.IsNullOrWhiteSpace(quickResults.ItemStatus));
             AssertEventuallyFocused(
                 quickSearch,
                 "Quick Open did not move focus to its search field.");

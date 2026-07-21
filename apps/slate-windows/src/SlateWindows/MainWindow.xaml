@@ -553,7 +553,8 @@
                              Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
                              MouseDoubleClick="QuickSwitcherResults_MouseDoubleClick"
                              AutomationProperties.AutomationId="QuickSwitcherResults"
-                             AutomationProperties.Name="Quick Open results">
+                             AutomationProperties.Name="Quick Open results"
+                             AutomationProperties.ItemStatus="{Binding ResultSummary}">
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding DisplayName}" />
@@ -578,13 +579,13 @@
                         </ListBox.ItemTemplate>
                     </local:AutomationVisibilityListBox>
                     <DockPanel Grid.Row="2">
-                        <TextBlock Text="{Binding ResultSummary}"
-                                   Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
-                        <TextBlock DockPanel.Dock="Right"
-                                   Text="Enter open · Ctrl+Enter tab · Ctrl+Alt+Enter split · Esc close"
-                                   Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                   Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        <local:AutomationPresentationTextBlock Text="{Binding ResultSummary}"
+                                                               Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                               Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                        <local:AutomationPresentationTextBlock DockPanel.Dock="Right"
+                                                               Text="Enter open · Ctrl+Enter tab · Ctrl+Alt+Enter split · Esc close"
+                                                               Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                                               Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
                     </DockPanel>
                 </Grid>
             </local:AutomationLandmarkBorder>
