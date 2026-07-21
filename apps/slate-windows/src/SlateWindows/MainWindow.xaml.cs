@@ -389,6 +389,22 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 return;
             }
+
+            // TextBox editing owns several arrow-key gestures before a
+            // Window-level InputBinding can execute. Route pane navigation
+            // from the preview phase so the shortcut remains reliable while
+            // an editor has keyboard focus.
+            if (WorkspaceRoot.IsKeyboardFocusWithin
+                && _viewModel.Workspace is WorkspaceViewModel workspace)
+            {
+                string axis = e.Key is Key.Left or Key.Right
+                    ? "horizontal"
+                    : "vertical";
+                int direction = e.Key is Key.Left or Key.Up ? -1 : 1;
+                workspace.FocusDirectionalPane(axis, direction);
+                e.Handled = true;
+                return;
+            }
         }
 
         if (e.Key == Key.Escape
