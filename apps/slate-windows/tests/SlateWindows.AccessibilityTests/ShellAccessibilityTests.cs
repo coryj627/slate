@@ -323,7 +323,7 @@ public sealed class ShellAccessibilityTests
                 closeQuick,
                 "Tab did not remain inside Quick Open or reach its Close button.");
             Keyboard.Press(VirtualKeyShort.ESCAPE);
-            AssertElementDisappears(window, automation, "QuickSwitcher");
+            AssertQuickSwitcherDisappears(window, automation);
             AssertEventuallyFocused(
                 sidebarFilter,
                 "Escape did not restore the element focused before Quick Open.");
@@ -338,7 +338,7 @@ public sealed class ShellAccessibilityTests
                 quickSearch,
                 "Quick Open did not refocus search on its second invocation.");
             Keyboard.Press(VirtualKeyShort.ENTER);
-            AssertElementDisappears(window, automation, "QuickSwitcher");
+            AssertQuickSwitcherDisappears(window, automation);
             editor = WaitForNamedElement(
                 window,
                 automation,
@@ -437,6 +437,22 @@ public sealed class ShellAccessibilityTests
                     automation.ConditionFactory.ByAutomationId(automationId)) is null,
                 TimeSpan.FromSeconds(10)),
             $"UIA element {automationId} remained visible.");
+    }
+
+    private static void AssertQuickSwitcherDisappears(
+        Window window,
+        UIA3Automation automation)
+    {
+        foreach (string automationId in new[]
+        {
+            "QuickSwitcher",
+            "QuickSwitcherSearch",
+            "QuickSwitcherResults",
+            "QuickSwitcherClose",
+        })
+        {
+            AssertElementDisappears(window, automation, automationId);
+        }
     }
 
     private static Window WaitForMainWindow(
