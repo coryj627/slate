@@ -43,6 +43,7 @@
             <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
             <TextBlock Text="{Binding DirtyMarker}"
                        VerticalAlignment="Center"
+                       Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
                        AutomationProperties.Name="Unsaved changes" />
             <Button Margin="8,0,0,0"
                     Padding="3,0"

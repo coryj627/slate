@@ -46,7 +46,8 @@
 
     <DockPanel>
         <Menu x:Name="MainMenu"
-              DockPanel.Dock="Top">
+              DockPanel.Dock="Top"
+              AutomationProperties.Name="Application commands">
             <Menu.Style>
                 <Style TargetType="Menu">
                     <Setter Property="IsEnabled" Value="True" />
@@ -232,7 +233,7 @@
                     <local:AutomationLandmarkBorder x:Name="FilesPaneBorder"
                             Grid.Column="0"
                             AutomationProperties.AutomationId="FilesPane"
-                            AutomationProperties.Name="Files pane"
+                            AutomationProperties.Name="Files"
                             Background="{DynamicResource Slate.SurfaceBrush}"
                             BorderBrush="{DynamicResource Slate.BorderBrush}"
                             BorderThickness="0,0,1,0"
@@ -296,7 +297,11 @@
                                     </TreeView.ItemContainerStyle>
                                 </TreeView>
                             </StackPanel>
-                            <StackPanel DockPanel.Dock="Bottom">
+                            <ScrollViewer DockPanel.Dock="Bottom"
+                                          MaxHeight="210"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          VerticalScrollBarVisibility="Auto">
+                              <StackPanel>
                                 <TextBlock Margin="0,6,0,2"
                                            Text="{Binding BatchSelectionSummary}"
                                            FontSize="11"
@@ -374,7 +379,8 @@
                                            FontSize="11"
                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}"
                                            TextWrapping="Wrap" />
-                            </StackPanel>
+                              </StackPanel>
+                            </ScrollViewer>
                             <Grid>
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="*" />
@@ -449,7 +455,7 @@
                                   AutomationProperties.Name="Resize right pane" />
                     <local:AutomationLandmarkBorder Grid.Column="4"
                             AutomationProperties.AutomationId="InspectorPane"
-                            AutomationProperties.Name="Right pane"
+                            AutomationProperties.Name="Inspector"
                             Background="{DynamicResource Slate.SurfaceBrush}"
                             BorderBrush="{DynamicResource Slate.BorderBrush}"
                             BorderThickness="1,0,0,0"
@@ -497,7 +503,7 @@
                     Background="{DynamicResource Slate.SurfaceBrush}"
                     BorderBrush="{DynamicResource Slate.BorderBrush}"
                     BorderThickness="1"
-                    Visibility="{Binding QuickSwitcher.IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                    Visibility="{Binding DataContext.QuickSwitcher.IsOpen, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanToVisibilityConverter}}"
                     DataContext="{Binding QuickSwitcher}"
                     FocusManager.IsFocusScope="True"
                     KeyboardNavigation.TabNavigation="Cycle"

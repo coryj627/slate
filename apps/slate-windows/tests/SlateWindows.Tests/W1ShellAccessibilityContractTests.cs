@@ -21,9 +21,9 @@ public sealed class W1ShellAccessibilityContractTests
                 [
                     (new AutomationLandmarkGrid(), "WelcomeView", "Welcome"),
                     (new AutomationLandmarkGrid(), "WorkspaceView", "Workspace"),
-                    (new AutomationLandmarkBorder(), "FilesPane", "Files pane"),
+                    (new AutomationLandmarkBorder(), "FilesPane", "Files"),
                     (new AutomationLandmarkBorder(), "ContentPane", "Editor workspace"),
-                    (new AutomationLandmarkBorder(), "InspectorPane", "Right pane"),
+                    (new AutomationLandmarkBorder(), "InspectorPane", "Inspector"),
                     (new AutomationLandmarkBorder(), "QuickSwitcher", "Quick Open"),
                 ];
 
