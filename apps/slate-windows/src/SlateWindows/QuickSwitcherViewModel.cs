@@ -153,10 +153,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
             return;
         }
 
-        IsOpen = false;
-        CancelRanking();
-        Results.Clear();
-        SelectedRow = null;
+        CloseSwitcher();
         Dismissed?.Invoke(this, EventArgs.Empty);
         RaiseCommandStates();
     }
@@ -180,8 +177,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
 
         _recents = _recentsStore.Add(row.Path);
-        IsOpen = false;
-        CancelRanking();
+        CloseSwitcher();
         OpenRequested?.Invoke(this, (row.Path, target));
         Dismissed?.Invoke(this, EventArgs.Empty);
         RaiseCommandStates();
@@ -190,6 +186,16 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     public void RecordOpen(string path)
     {
         _recents = _recentsStore.Add(path);
+    }
+
+    private void CloseSwitcher()
+    {
+        CancelRanking();
+        // Remove result peers while their parent is still visible so UIA
+        // clients do not retain orphaned children after the overlay collapses.
+        Results.Clear();
+        SelectedRow = null;
+        IsOpen = false;
     }
 
     public void ClearRecents()

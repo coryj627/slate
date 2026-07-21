@@ -24,6 +24,28 @@ internal sealed class AutomationLandmarkBorder : Border
         new AutomationLandmarkPeer(this);
 }
 
+/// <summary>
+/// Keeps a collapsed list out of the UI Automation control tree even when a
+/// provider retains its peer after the surrounding popup has closed.
+/// </summary>
+internal sealed class AutomationVisibilityListBox : ListBox
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationVisibilityListBoxPeer(this);
+}
+
+internal sealed class AutomationVisibilityListBoxPeer(AutomationVisibilityListBox owner)
+    : ListBoxAutomationPeer(owner)
+{
+    protected override bool IsControlElementCore() =>
+        Owner is UIElement { Visibility: Visibility.Visible }
+        && base.IsControlElementCore();
+
+    protected override bool IsContentElementCore() =>
+        Owner is UIElement { Visibility: Visibility.Visible }
+        && base.IsContentElementCore();
+}
+
 internal sealed class AutomationLandmarkPeer(FrameworkElement owner)
     : FrameworkElementAutomationPeer(owner)
 {

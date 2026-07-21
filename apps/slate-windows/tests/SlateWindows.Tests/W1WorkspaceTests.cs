@@ -479,6 +479,9 @@ public sealed class W1QuickSwitcherAndChordTests
         quick.OpenRequested += (_, request) => opened = request;
         quick.OpenSelected(WorkspaceOpenTarget.SplitDown);
         Assert.Equal(("alpha.md", WorkspaceOpenTarget.SplitDown), opened);
+        Assert.False(quick.IsOpen);
+        Assert.Empty(quick.Results);
+        Assert.Null(quick.SelectedRow);
 
         quick.ApplyFileChange(new FileChangeEvent(FileChangeKind.Created, "gamma.md", null));
         quick.Open();

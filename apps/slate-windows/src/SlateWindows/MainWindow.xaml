@@ -545,7 +545,7 @@
                                 AutomationProperties.AutomationId="QuickSwitcherClose"
                                 AutomationProperties.Name="Close Quick Open" />
                     </Grid>
-                    <ListBox x:Name="QuickSwitcherResultsList"
+                    <local:AutomationVisibilityListBox x:Name="QuickSwitcherResultsList"
                              Grid.Row="1"
                              Margin="0,8"
                              ItemsSource="{Binding Results}"
@@ -574,7 +574,7 @@
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
-                    </ListBox>
+                    </local:AutomationVisibilityListBox>
                     <DockPanel Grid.Row="2">
                         <TextBlock Text="{Binding ResultSummary}"
                                    Visibility="{Binding IsOpen, Converter={StaticResource BooleanToVisibilityConverter}}"

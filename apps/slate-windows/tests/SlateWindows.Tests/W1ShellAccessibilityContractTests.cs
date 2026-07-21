@@ -43,6 +43,14 @@ public sealed class W1ShellAccessibilityContractTests
                     element.Visibility = Visibility.Collapsed;
                     Assert.False(peer.IsControlElement());
                 }
+
+                var results = new AutomationVisibilityListBox();
+                AutomationPeer resultsPeer = Assert.IsType<AutomationVisibilityListBoxPeer>(
+                    UIElementAutomationPeer.CreatePeerForElement(results));
+                Assert.Equal(AutomationControlType.List, resultsPeer.GetAutomationControlType());
+                results.Visibility = Visibility.Collapsed;
+                Assert.False(resultsPeer.IsControlElement());
+                Assert.False(resultsPeer.IsContentElement());
             },
             "Landmark peer test timed out.");
 
