@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-19 at `b691617` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-07-21 at `4211245` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -26,7 +26,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 
 ## Command inventory
 
-181 stable command ids from the `SlateCommandID` catalog (drift-test-enforced), 52 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
+182 stable command ids from the `SlateCommandID` catalog (drift-test-enforced), 52 carrying chords from the registration blocks and definition-table chord switches (blank chord = palette/menu-only or focus-scoped by design; the generator fails if a `hotkey:` literal goes unattributed). Spoken hotkeys derive from chords via the `HotkeySpoken` glyph walk (mirrored here); Windows chord mapping is by platform convention (⌘→Ctrl, ⌥→Alt; decision 12), declared in one table in W5-1 with spoken strings substituted per-platform through the canonical vocabulary.
 
 | command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |
 |---|---|---|---|---|---|
@@ -123,11 +123,11 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.editor.toggleViewMode` | Toggle Reading Mode | ⇧⌘E | Shift Command E | #728 (W3-1) | pending |
 | `slate.editor.zoomIn` | Editor: Zoom In | — | — | #725 (W2-3) | pending |
 | `slate.editor.zoomOut` | Editor: Zoom Out | — | — | #725 (W2-3) | pending |
-| `slate.file.cancelImport` | Cancel Import | ⌘. | Command Period | #721 (W1-2) | pending |
+| `slate.file.cancelImport` | Cancel Import | ⌘. | Command Period | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.file.copyPath` | Copy Path | — | — | #744 (W5-4) | pending |
 | `slate.file.delete` | Move to Trash | — | — | #744 (W5-4) | pending |
 | `slate.file.duplicate` | Duplicate | — | — | #744 (W5-4) | pending |
-| `slate.file.importFilesAndFolders` | Import Files and Folders… | — | — | #721 (W1-2) | pending |
+| `slate.file.importFilesAndFolders` | Import Files and Folders… | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.file.moveTo` | Move To… | ⇧⌘M | Shift Command M | #744 (W5-4) | pending |
 | `slate.file.newCanvas` | New Canvas | — | — | #745 (W6-1) | pending |
 | `slate.file.newFolder` | New Folder | — | — | #744 (W5-4) | pending |
@@ -152,65 +152,66 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.history.showPanel` | Show History Panel | — | — | #739 (W4-7) | pending |
 | `slate.navigation.jumpToBibliography` | Jump to Bibliography | ⌘J | Command J | #737 (W4-5) | pending |
 | `slate.settings.open` | Settings… | ⌘, | Command Comma | #751 (W8-1) | pending |
-| `slate.sidebar.addShortcut` | Add to Shortcuts | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.addTag` | Add Tag… | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.clearRecents` | Clear Recents | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.collapseAll` | Collapse All Folders | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.copyWikilink` | Copy Wikilink | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.createFolderNote` | Create Folder Note | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.deleteFolderNote` | Delete Folder Note | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.expandLoaded` | Expand Loaded Folders | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.focusFilter` | Focus Sidebar Filter | ⌥⌘F | Option Command F | #721 (W1-2) | pending |
-| `slate.sidebar.historyBack` | Back in Sidebar History | ⌃⌘[ | Control Command Left Bracket | #721 (W1-2) | pending |
-| `slate.sidebar.historyForward` | Forward in Sidebar History | ⌃⌘] | Control Command Right Bracket | #721 (W1-2) | pending |
-| `slate.sidebar.open` | Open | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openFolderNote` | Open Folder Note | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut1` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut2` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut3` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut4` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut5` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut6` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut7` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut8` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.openShortcut9` | — | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.pinNote` | Pin to Top of Folder | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.removeShortcut` | Remove from Shortcuts | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.removeTag` | Remove Tag… | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortCreatedAsc` | Sort by Created (Oldest First) | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortCreatedDesc` | Sort by Created (Newest First) | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortModifiedAsc` | Sort by Modified (Oldest First) | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortModifiedDesc` | Sort by Modified (Newest First) | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortNameAsc` | Sort by Name (A to Z) | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.sortNameDesc` | Sort by Name (Z to A) | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.toggleDateGrouping` | Group by Date | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.unpinAllInFolder` | Unpin All in Folder | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.unpinNote` | Unpin | — | — | #721 (W1-2) | pending |
-| `slate.sidebar.useVaultDefaultSort` | Use Vault Default Sort | — | — | #721 (W1-2) | pending |
+| `slate.sidebar.addShortcut` | Add to Shortcuts | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.addTag` | Add Tag… | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.clearRecents` | Clear Recents | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.collapseAll` | Collapse All Folders | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.copyWikilink` | Copy Wikilink | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.createFolderNote` | Create Folder Note | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.deleteFolderNote` | Delete Folder Note | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.expandLoaded` | Expand Loaded Folders | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.focusFilter` | Focus Sidebar Filter | ⌥⌘F | Option Command F | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.historyBack` | Back in Sidebar History | ⌃⌘[ | Control Command Left Bracket | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.historyForward` | Forward in Sidebar History | ⌃⌘] | Control Command Right Bracket | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.open` | Open | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openFolderNote` | Open Folder Note | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openShortcut1` | — | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openShortcut2` | — | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openShortcut3` | — | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openShortcut4` | — | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openShortcut5` | — | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openShortcut6` | — | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openShortcut7` | — | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openShortcut8` | — | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.openShortcut9` | — | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.pinNote` | Pin to Top of Folder | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.removeShortcut` | Remove from Shortcuts | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.removeTag` | Remove Tag… | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.sortCreatedAsc` | Sort by Created (Oldest First) | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.sortCreatedDesc` | Sort by Created (Newest First) | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.sortModifiedAsc` | Sort by Modified (Oldest First) | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.sortModifiedDesc` | Sort by Modified (Newest First) | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.sortNameAsc` | Sort by Name (A to Z) | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.sortNameDesc` | Sort by Name (Z to A) | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.toggleDateGrouping` | Group by Date | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.toggleLayout` | Toggle Sidebar Layout | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.unpinAllInFolder` | Unpin All in Folder | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.unpinNote` | Unpin | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.sidebar.useVaultDefaultSort` | Use Vault Default Sort | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.tasks.review` | Tasks Review | ⌘R | Command R | #735 (W4-3) | pending |
-| `slate.vault.close` | Close Vault | — | — | #720 (W1-1) | pending |
-| `slate.vault.open` | Open Vault… | ⇧⌘O | Shift Command O | #720 (W1-1) | pending |
-| `slate.view.toggleRightPane` | Toggle Right Pane | ⌥⌘I | Option Command I | #722 (W1-3) | pending |
+| `slate.vault.close` | Close Vault | — | — | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.vault.open` | Open Vault… | ⇧⌘O | Shift Command O | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.view.toggleRightPane` | Toggle Right Pane | ⌥⌘I | Option Command I | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.view.toggleSearch` | Search Vault | ⇧⌘F | Shift Command F | #742 (W5-2) | pending |
-| `slate.workspace.closePane` | Close Pane | — | — | #722 (W1-3) | pending |
-| `slate.workspace.closeTab` | Close Tab | ⌘W | Command W | #722 (W1-3) | pending |
-| `slate.workspace.focusPaneAbove` | Focus Pane Above | ⌥⌘↑ | Option Command Up Arrow | #722 (W1-3) | pending |
-| `slate.workspace.focusPaneBelow` | Focus Pane Below | ⌥⌘↓ | Option Command Down Arrow | #722 (W1-3) | pending |
-| `slate.workspace.focusPaneLeft` | Focus Pane Left | ⌥⌘← | Option Command Left Arrow | #722 (W1-3) | pending |
-| `slate.workspace.focusPaneRight` | Focus Pane Right | ⌥⌘→ | Option Command Right Arrow | #722 (W1-3) | pending |
-| `slate.workspace.growPane` | Grow Pane | ⌥⌘= | Option Command Equals | #722 (W1-3) | pending |
-| `slate.workspace.moveTabLeft` | Move Tab Left | ⌃⌘← | Control Command Left Arrow | #722 (W1-3) | pending |
-| `slate.workspace.moveTabRight` | Move Tab Right | ⌃⌘→ | Control Command Right Arrow | #722 (W1-3) | pending |
-| `slate.workspace.newTab` | Duplicate Tab | ⌘T | Command T | #722 (W1-3) | pending |
-| `slate.workspace.nextTab` | Show Next Tab | ⇧⌘] | Shift Command Right Bracket | #722 (W1-3) | pending |
-| `slate.workspace.openInNewTab` | Open Selected File in New Tab | — | — | #722 (W1-3) | pending |
-| `slate.workspace.openInSplit` | Open Selected File in Split | — | — | #722 (W1-3) | pending |
-| `slate.workspace.previousTab` | Show Previous Tab | ⇧⌘[ | Shift Command Left Bracket | #722 (W1-3) | pending |
-| `slate.workspace.quickOpen` | Quick Open… | ⌘O | Command O | #723 (W1-4) | pending |
-| `slate.workspace.reopenClosedTab` | Reopen Closed Tab | ⇧⌘T | Shift Command T | #722 (W1-3) | pending |
-| `slate.workspace.shrinkPane` | Shrink Pane | ⌥⌘- | Option Command Minus | #722 (W1-3) | pending |
-| `slate.workspace.splitDown` | Split Down | ⌥⌘\ | Option Command Backslash | #722 (W1-3) | pending |
-| `slate.workspace.splitRight` | Split Right | ⌘\ | Command Backslash | #722 (W1-3) | pending |
+| `slate.workspace.closePane` | Close Pane | — | — | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.closeTab` | Close Tab | ⌘W | Command W | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.focusPaneAbove` | Focus Pane Above | ⌥⌘↑ | Option Command Up Arrow | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.focusPaneBelow` | Focus Pane Below | ⌥⌘↓ | Option Command Down Arrow | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.focusPaneLeft` | Focus Pane Left | ⌥⌘← | Option Command Left Arrow | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.focusPaneRight` | Focus Pane Right | ⌥⌘→ | Option Command Right Arrow | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.growPane` | Grow Pane | ⌥⌘= | Option Command Equals | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.moveTabLeft` | Move Tab Left | ⌃⌘← | Control Command Left Arrow | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.moveTabRight` | Move Tab Right | ⌃⌘→ | Control Command Right Arrow | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.newTab` | Duplicate Tab | ⌘T | Command T | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.nextTab` | Show Next Tab | ⇧⌘] | Shift Command Right Bracket | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.openInNewTab` | Open Selected File in New Tab | — | — | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.openInSplit` | Open Selected File in Split | — | — | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.previousTab` | Show Previous Tab | ⇧⌘[ | Shift Command Left Bracket | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.quickOpen` | Quick Open… | ⌘O | Command O | #723 (W1-4) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.reopenClosedTab` | Reopen Closed Tab | ⇧⌘T | Shift Command T | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.shrinkPane` | Shrink Pane | ⌥⌘- | Option Command Minus | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.splitDown` | Split Down | ⌥⌘\ | Option Command Backslash | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `slate.workspace.splitRight` | Split Right | ⌘\ | Command Backslash | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 
 The palette surface itself (ranking via the W0.5-1 core engine, sections, recents, chord display) is **#741 (W5-1)**; the quick switcher is **#723 (W1-4)**.
 
@@ -241,21 +242,21 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 
 | tab kind | consuming W issue | status |
 |---|---|---|
-| `markdown` | #722 (W1-3) | pending |
-| `canvas` | #722 (W1-3) | pending |
-| `base` | #722 (W1-3) | pending |
-| `savedQuery` | #722 (W1-3) | pending |
-| `dashboard` | #722 (W1-3) | pending |
-| `graph` | #722 (W1-3) | pending |
+| `markdown` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `canvas` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `base` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `savedQuery` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `dashboard` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| `graph` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 
 ## Primary surfaces
 
 | surface | source | consuming W issue | status |
 |---|---|---|---|
-| App shell, window chrome, vault lifecycle | `SlateMacApp.swift` | #720 (W1-1) | pending |
-| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | pending |
-| Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | pending |
-| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | pending |
+| App shell, window chrome, vault lifecycle | `SlateMacApp.swift` | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
+| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | pending |
 | Editor canonical spans | #381 span API consumers | #381 (W2-2) | pending |
 | In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | pending |

@@ -5,6 +5,7 @@
 //! of the root it opened, as one observation made inside the open
 //! itself. Hosts anchor their own per-surface root checks to it.
 
+#[cfg(unix)]
 use slate_core::VaultSession;
 
 #[cfg(unix)]

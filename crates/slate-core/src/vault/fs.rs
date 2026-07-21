@@ -52,6 +52,8 @@ impl FsVaultProvider {
     /// intentional — the provider doesn't enforce vault-existence
     /// semantics, the calling `VaultSession::open` does.
     pub fn new(root: PathBuf) -> Self {
+        #[cfg(windows)]
+        let root = windows_extended_path(&root);
         Self { root }
     }
 
@@ -105,10 +107,8 @@ impl FsVaultProvider {
 
         #[cfg(not(unix))]
         {
-            if create_missing_parents {
-                if let Some(parent) = path.parent() {
-                    fs::create_dir_all(parent).map_err(VaultError::Io)?;
-                }
+            if create_missing_parents && let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).map_err(VaultError::Io)?;
             }
             Ok(PinnedMutationTarget { path })
         }
@@ -461,6 +461,89 @@ pub fn content_hash(bytes: &[u8]) -> String {
     blake3::hash(bytes).to_hex().to_string()
 }
 
+/// Reject path spellings Win32 aliases or rewrites before they reach the
+/// filesystem. Without this guard, names such as `CON.md` can address a device
+/// and trailing dots/spaces can alias a different on-disk entry.
+fn validate_windows_relative_path(relative: &str) -> Result<(), &'static str> {
+    for component in relative.split(['/', '\\']) {
+        if component.is_empty() || component == "." || component == ".." {
+            continue;
+        }
+        if component.ends_with(['.', ' ']) {
+            return Err("Windows path components may not end with a dot or space");
+        }
+        if component.chars().any(|character| {
+            character <= '\u{1f}' || matches!(character, '<' | '>' | ':' | '"' | '|' | '?' | '*')
+        }) {
+            return Err("Windows path component contains a reserved character");
+        }
+
+        let stem = component
+            .split('.')
+            .next()
+            .unwrap_or_default()
+            .trim_end_matches(['.', ' ']);
+        let upper = stem.to_ascii_uppercase();
+        let numbered_device = upper
+            .strip_prefix("COM")
+            .or_else(|| upper.strip_prefix("LPT"))
+            .is_some_and(|number| {
+                matches!(number, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")
+            });
+        if matches!(
+            upper.as_str(),
+            "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$"
+        ) || numbered_device
+        {
+            return Err("Windows reserved device names are not valid vault paths");
+        }
+    }
+
+    Ok(())
+}
+
+/// Put an absolute Windows vault root into the verbatim namespace so every
+/// descendant operation can cross the legacy `MAX_PATH` boundary. Vault paths
+/// are validated before joining, which is important because verbatim paths
+/// otherwise permit Win32 spellings such as trailing dots and spaces.
+#[cfg(windows)]
+fn windows_extended_path(path: &Path) -> PathBuf {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    if !path.is_absolute() {
+        return path.to_owned();
+    }
+
+    let mut path_wide = path.as_os_str().encode_wide().collect::<Vec<_>>();
+    const BACKSLASH: u16 = b'\\' as u16;
+    const SLASH: u16 = b'/' as u16;
+    const QUESTION: u16 = b'?' as u16;
+    const DOT: u16 = b'.' as u16;
+
+    if path_wide.starts_with(&[BACKSLASH, BACKSLASH, QUESTION, BACKSLASH])
+        || path_wide.starts_with(&[BACKSLASH, BACKSLASH, DOT, BACKSLASH])
+    {
+        return path.to_owned();
+    }
+
+    for separator in &mut path_wide {
+        if *separator == SLASH {
+            *separator = BACKSLASH;
+        }
+    }
+
+    let mut extended = "\\\\?\\".encode_utf16().collect::<Vec<_>>();
+    if path_wide.starts_with(&[BACKSLASH, BACKSLASH]) {
+        extended.extend("UNC\\".encode_utf16());
+        extended.extend_from_slice(&path_wide[2..]);
+    } else {
+        extended.extend(path_wide);
+    }
+
+    PathBuf::from(OsString::from_wide(&extended))
+}
+
 /// Normalize a vault-relative path string against a root directory.
 ///
 /// Returns `VaultError::InvalidPath` if the input is absolute, contains
@@ -495,6 +578,12 @@ fn resolve_relative(root: &Path, relative: &str) -> Result<PathBuf, VaultError> 
             }
         }
     }
+
+    #[cfg(windows)]
+    validate_windows_relative_path(relative).map_err(|reason| VaultError::InvalidPath {
+        path: relative.to_string(),
+        reason: reason.into(),
+    })?;
 
     Ok(root.join(normalized))
 }
@@ -861,9 +950,10 @@ fn unlink_dangling_symlink(path: &Path, _meta: &fs::Metadata) -> io::Result<()> 
 /// exists (#871 Codex round 4). Unlike `fs::rename` — which silently REPLACES
 /// its target — this closes the check-to-rename TOCTOU window: an external
 /// process that creates the destination after the caller's lstat pre-check can
-/// no longer be clobbered. macOS uses `renamex_np(RENAME_EXCL)`, Linux
-/// `renameat2(RENAME_NOREPLACE)`. Other targets (Windows is parked) fall back
-/// to a plain `fs::rename` guarded only by the caller's pre-check.
+/// no longer be clobbered. macOS uses `renamex_np(RENAME_EXCL)`, Linux uses
+/// `renameat2(RENAME_NOREPLACE)`, and Windows uses `MoveFileExW` without
+/// `MOVEFILE_REPLACE_EXISTING`. Targets without a wired atomic primitive fail
+/// closed instead of silently falling back to replacing `fs::rename`.
 #[cfg(target_os = "macos")]
 fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
@@ -880,8 +970,7 @@ fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-// GNU only — `libc 0.2` exposes the `renameat2` wrapper under Linux glibc but
-// not musl (#871 Codex round 5), so musl falls to the portable branch below.
+// GNU only — `libc 0.2` exposes the `renameat2` wrapper under Linux glibc.
 #[cfg(all(target_os = "linux", target_env = "gnu"))]
 fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     use std::os::unix::ffi::OsStrExt;
@@ -905,14 +994,71 @@ fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
     Ok(())
 }
 
-// Portable fallback: no atomic no-replace primitive is wired for this target
-// (Windows — parked — and Linux musl). The caller's lstat pre-check is the
-// best-effort guard, with the residual check-to-rename TOCTOU window `fs::rename`
-// inherently has. None of slate's SHIPPING targets (macOS, Linux glibc) land
-// here; they take the atomic branches above.
-#[cfg(not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))))]
+// Linux libc does not expose a `renameat2` wrapper on every non-GNU target
+// (notably musl), but the kernel syscall is the same atomic primitive. Calling
+// it directly closes #911 without reintroducing the check-then-rename race.
+#[cfg(all(target_os = "linux", not(target_env = "gnu")))]
 fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
-    fs::rename(from, to)
+    use std::os::unix::ffi::OsStrExt;
+    let from_c = std::ffi::CString::new(from.as_os_str().as_bytes())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    let to_c = std::ffi::CString::new(to.as_os_str().as_bytes())
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+    // SAFETY: valid NUL-terminated paths; the Linux renameat2 syscall takes
+    // the same arguments as the glibc wrapper above.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            from_c.as_ptr(),
+            libc::AT_FDCWD,
+            to_c.as_ptr(),
+            libc::RENAME_NOREPLACE,
+        )
+    };
+    if rc != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn rename_no_replace(from: &Path, to: &Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::MoveFileExW;
+
+    fn wide_path(path: &Path) -> io::Result<Vec<u16>> {
+        let wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        if wide.contains(&0) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "Windows path contains an interior NUL",
+            ));
+        }
+        Ok(wide.into_iter().chain(std::iter::once(0)).collect())
+    }
+
+    let from_wide = wide_path(from)?;
+    let to_wide = wide_path(to)?;
+    // SAFETY: both UTF-16 buffers are NUL-terminated and live through the
+    // call. Passing zero flags deliberately omits MOVEFILE_REPLACE_EXISTING,
+    // so an occupied destination fails atomically instead of being replaced.
+    let moved = unsafe { MoveFileExW(from_wide.as_ptr(), to_wide.as_ptr(), 0) };
+    if moved == 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+// Fail closed on targets where Slate has not wired an atomic no-replace
+// primitive. A plain `fs::rename` is never an acceptable fallback because it
+// can replace a destination created after the provider's lstat pre-check.
+#[cfg(not(any(target_os = "macos", target_os = "linux", windows)))]
+fn rename_no_replace(_from: &Path, _to: &Path) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "atomic no-clobber rename is unsupported on this target",
+    ))
 }
 
 /// Extract inode change time (ctime) as Unix epoch milliseconds.
@@ -1361,6 +1507,105 @@ mod tests {
     }
 
     #[test]
+    fn windows_path_validator_rejects_device_aliases_and_rewritten_names() {
+        for path in [
+            "CON",
+            "con.md",
+            "folder/NUL.txt",
+            "AUX.notes.md",
+            "COM1",
+            "com9.log",
+            "LPT1.md",
+            "lpt9",
+            "CONIN$",
+            "conout$.md",
+            "trailing-dot.",
+            "trailing-space ",
+            "alternate:stream.md",
+            "question?.md",
+            "wild*.md",
+            "control\u{001f}.md",
+        ] {
+            assert!(
+                validate_windows_relative_path(path).is_err(),
+                "Windows-reserved path unexpectedly accepted: {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn windows_path_validator_accepts_device_name_near_misses() {
+        for path in [
+            "console.md",
+            "null.md",
+            "com0.md",
+            "com10.md",
+            "lpt0.md",
+            "lpt10.md",
+            "notes/ordinary file.md",
+        ] {
+            validate_windows_relative_path(path)
+                .unwrap_or_else(|reason| panic!("valid Windows path {path:?} rejected: {reason}"));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_provider_surfaces_reserved_names_as_invalid_paths() {
+        let (_tmp, provider) = vault();
+        for path in ["CON.md", "notes/NUL", "LPT9.txt", "trailing-dot."] {
+            let error = provider
+                .write_file(path, b"must not be written")
+                .unwrap_err();
+            assert!(
+                matches!(error, VaultError::InvalidPath { path: ref invalid, .. } if invalid == path),
+                "expected InvalidPath for {path:?}, got {error:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_provider_is_case_insensitive_and_case_preserving() {
+        let (_tmp, provider) = vault();
+        provider.write_file("MixedCase.md", b"original").unwrap();
+
+        assert_eq!(provider.read_file("mixedcase.md").unwrap(), b"original");
+        let entries = provider.list_dir("").unwrap();
+        assert!(entries.iter().any(|entry| entry.name == "MixedCase.md"));
+
+        let error = provider
+            .write_file_if_absent("MIXEDCASE.md", b"replacement")
+            .unwrap_err();
+        assert!(matches!(error, VaultError::DestinationExists { .. }));
+        assert_eq!(provider.read_file("MixedCase.md").unwrap(), b"original");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_provider_round_trips_paths_longer_than_max_path() {
+        let (tmp, provider) = vault();
+        let directory = (0..8)
+            .map(|index| format!("segment-{index}-{}", "x".repeat(28)))
+            .collect::<Vec<_>>()
+            .join("/");
+        let relative = format!("{directory}/long-note.md");
+        assert!(
+            tmp.path().join(&relative).as_os_str().len() > 260,
+            "fixture must cross the legacy MAX_PATH boundary"
+        );
+
+        provider
+            .write_file(&relative, b"long path contents")
+            .unwrap();
+
+        assert_eq!(
+            provider.read_file(&relative).unwrap(),
+            b"long path contents"
+        );
+    }
+
+    #[test]
     fn current_directory_component_is_stripped() {
         let (_tmp, p) = vault();
         p.write_file("./inside.md", b"ok").unwrap();
@@ -1770,7 +2015,7 @@ mod tests {
     /// check-to-rename TOCTOU window (an external writer winning the race after
     /// `provider.rename`'s lstat pre-check). Tested directly, bypassing that
     /// pre-check, since the window itself is inherently non-deterministic.
-    #[cfg(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))]
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
     #[test]
     fn rename_no_replace_atomic_refuses_occupied_destination() {
         let (tmp, _p) = vault();
@@ -1784,6 +2029,78 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::AlreadyExists);
         assert_eq!(std::fs::read(tmp.path().join("dst.md")).unwrap(), b"victim");
         assert!(tmp.path().join("src.md").exists());
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    #[test]
+    fn rename_no_replace_atomic_moves_files_and_directories() {
+        let (tmp, _p) = vault();
+        let source_file = tmp.path().join("source.md");
+        let moved_file = tmp.path().join("moved.md");
+        std::fs::write(&source_file, b"source").unwrap();
+
+        rename_no_replace(&source_file, &moved_file).expect("file rename should succeed");
+        assert!(!source_file.exists());
+        assert_eq!(std::fs::read(&moved_file).unwrap(), b"source");
+
+        let source_dir = tmp.path().join("source-dir");
+        let moved_dir = tmp.path().join("moved-dir");
+        std::fs::create_dir(&source_dir).unwrap();
+        std::fs::write(source_dir.join("child.md"), b"child").unwrap();
+
+        rename_no_replace(&source_dir, &moved_dir).expect("directory rename should succeed");
+        assert!(!source_dir.exists());
+        assert_eq!(std::fs::read(moved_dir.join("child.md")).unwrap(), b"child");
+    }
+
+    #[cfg(any(target_os = "macos", target_os = "linux", windows))]
+    #[test]
+    fn rename_no_replace_destination_creation_race_never_clobbers() {
+        use std::io::Write;
+        use std::sync::{Arc, Barrier};
+
+        let (tmp, _p) = vault();
+        for attempt in 0..128 {
+            let source = tmp.path().join(format!("race-source-{attempt}.md"));
+            let destination = tmp.path().join(format!("race-destination-{attempt}.md"));
+            std::fs::write(&source, b"source").unwrap();
+
+            let barrier = Arc::new(Barrier::new(2));
+            let writer_barrier = Arc::clone(&barrier);
+            let writer_destination = destination.clone();
+            let writer = std::thread::spawn(move || {
+                writer_barrier.wait();
+                let mut file = match std::fs::OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(&writer_destination)
+                {
+                    Ok(file) => file,
+                    Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                        return Ok(false);
+                    }
+                    Err(error) => return Err(error),
+                };
+                file.write_all(b"victim")?;
+                file.sync_all()?;
+                Ok(true)
+            });
+
+            barrier.wait();
+            let rename_result = rename_no_replace(&source, &destination);
+            let writer_created = writer.join().expect("destination writer panicked").unwrap();
+
+            if writer_created {
+                let error = rename_result.expect_err("occupied destination must reject rename");
+                assert_eq!(error.kind(), io::ErrorKind::AlreadyExists);
+                assert_eq!(std::fs::read(&destination).unwrap(), b"victim");
+                assert_eq!(std::fs::read(&source).unwrap(), b"source");
+            } else {
+                rename_result.expect("rename winner should complete");
+                assert_eq!(std::fs::read(&destination).unwrap(), b"source");
+                assert!(!source.exists());
+            }
+        }
     }
 
     #[cfg(unix)]

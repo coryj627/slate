@@ -570,6 +570,31 @@
     "text": "Recent search: fox"
   },
   {
+    "event": "QuickSwitcherCount { count: 2, query: None }",
+    "priority": "medium",
+    "text": "2 recent files"
+  },
+  {
+    "event": "QuickSwitcherCount { count: 1, query: None }",
+    "priority": "medium",
+    "text": "1 recent file"
+  },
+  {
+    "event": "QuickSwitcherCount { count: 2, query: Some(\"foo\") }",
+    "priority": "medium",
+    "text": "2 files matching \"foo\""
+  },
+  {
+    "event": "QuickSwitcherCount { count: 1, query: Some(\"foo\") }",
+    "priority": "medium",
+    "text": "1 file matching \"foo\""
+  },
+  {
+    "event": "QuickSwitcherCount { count: 0, query: Some(\"zzz\") }",
+    "priority": "medium",
+    "text": "No files matching \"zzz\""
+  },
+  {
     "event": "BaseViewMode { mode: \"cards\" }",
     "priority": "medium",
     "text": "Base view as cards."

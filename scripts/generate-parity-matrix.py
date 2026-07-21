@@ -40,6 +40,7 @@ Usage: python3 scripts/generate-parity-matrix.py  (from the repo root)
 from __future__ import annotations
 
 import datetime
+import json
 import re
 import subprocess
 import sys
@@ -53,6 +54,7 @@ LEAF_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/Workspace/RightPaneView.swi
 WORKSPACE_SWIFT = REPO / "apps/slate-mac/Sources/SlateMac/Workspace/WorkspaceModel.swift"
 HELP_DIR = REPO / "docs/help"
 OUT = REPO / "docs/plans/18_windows_port/parity_matrix.md"
+WINDOWS_CHORDS = REPO / "apps/slate-windows/chords.json"
 
 # Registered-section (the `section:` field of the actual registration,
 # not the id namespace) -> consuming W issue. Palette/chords themselves
@@ -411,8 +413,104 @@ def cli_verbs() -> list[str]:
     return cli_verbs_live() or cli_verbs_fallback()
 
 
+IMPLEMENTED_STATUS = (
+    "implemented; local gates green 2026-07-20; interactive CI + human AT pending"
+)
+
+
+def load_delivery_evidence(
+    cmd_rows: list[tuple[str, str, str, str, str]],
+) -> dict[str, dict[str, str]]:
+    """Load and validate explicit W1 delivery evidence.
+
+    Status is evidence-driven, never inferred from an issue-number prefix. The
+    exact command-key comparison is intentional: a new W1 inventory row makes
+    generation fail until a reviewer maps it to checked implementation and
+    test anchors.
+    """
+    try:
+        catalog = json.loads(WINDOWS_CHORDS.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exception:
+        fail(f"could not load Windows chord/evidence catalog: {exception}")
+
+    evidence = catalog.get("deliveryEvidence")
+    if not isinstance(evidence, dict):
+        fail("chords.json has no deliveryEvidence object")
+    groups = evidence.get("groups")
+    command_map = evidence.get("commands")
+    issue_map = evidence.get("issues")
+    if not all(isinstance(value, dict) for value in (groups, command_map, issue_map)):
+        fail("deliveryEvidence groups, commands, and issues must be objects")
+
+    for group_name, group in groups.items():
+        if not isinstance(group, dict):
+            fail(f"delivery-evidence group {group_name!r} must be an object")
+        for kind in ("implementation", "tests"):
+            references = group.get(kind)
+            if not isinstance(references, list) or not references:
+                fail(f"delivery-evidence group {group_name!r} has no {kind} references")
+            for reference in references:
+                if not isinstance(reference, str) or "#" not in reference:
+                    fail(f"invalid delivery-evidence reference: {reference!r}")
+                relative, marker = reference.split("#", 1)
+                path = REPO / relative
+                if not path.is_file():
+                    fail(f"delivery-evidence file does not exist: {relative}")
+                if not marker or marker not in path.read_text(encoding="utf-8"):
+                    fail(f"delivery-evidence marker {marker!r} missing from {relative}")
+
+    w1_commands = {
+        cid for cid, _, _, _, issue in cmd_rows
+        if issue.startswith(("#720", "#721", "#722", "#723"))
+    }
+    mapped_commands = set(command_map)
+    if mapped_commands != w1_commands:
+        missing = sorted(w1_commands - mapped_commands)
+        extra = sorted(mapped_commands - w1_commands)
+        fail(f"W1 delivery-evidence command drift: missing={missing}, extra={extra}")
+
+    for command_id, group_name in command_map.items():
+        if group_name not in groups:
+            fail(f"command {command_id} references unknown evidence group {group_name!r}")
+
+    expected_issues = {"#720", "#721", "#722", "#723"}
+    if set(issue_map) != expected_issues:
+        fail(
+            "W1 delivery-evidence issue drift: expected "
+            f"{sorted(expected_issues)}, got {sorted(issue_map)}"
+        )
+    for issue, group_name in issue_map.items():
+        if group_name not in groups:
+            fail(f"issue {issue} references unknown evidence group {group_name!r}")
+
+    return {"commands": command_map, "issues": issue_map}
+
+
+def command_delivery_status(
+    command_id: str,
+    evidence: dict[str, dict[str, str]],
+) -> str:
+    return IMPLEMENTED_STATUS if command_id in evidence["commands"] else "pending"
+
+
+def issue_delivery_status(
+    issue: str,
+    evidence: dict[str, dict[str, str]],
+) -> str:
+    issue_number = issue.split(" ", 1)[0]
+    return IMPLEMENTED_STATUS if issue_number in evidence["issues"] else "pending"
+
+
 def main() -> int:
     cmd_rows = commands()
+    delivery_evidence = load_delivery_evidence(cmd_rows)
+    if "--validate-delivery-evidence" in sys.argv:
+        print(
+            "W1 delivery evidence verified "
+            f"({len(delivery_evidence['commands'])} command rows, "
+            f"{len(delivery_evidence['issues'])} issue surfaces)"
+        )
+        return 0
     leaf_rows = leaves()
     head = subprocess.run(
         ["git", "rev-parse", "--short", "HEAD"], cwd=REPO,
@@ -486,7 +584,7 @@ def main() -> int:
     a("| command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |")
     a("|---|---|---|---|---|---|")
     for cid, label, chord, spoke, issue in cmd_rows:
-        a(f"| `{cid}` | {label or '—'} | {chord or '—'} | {spoke or '—'} | {issue} | pending |")
+        a(f"| `{cid}` | {label or '—'} | {chord or '—'} | {spoke or '—'} | {issue} | {command_delivery_status(cid, delivery_evidence)} |")
     a("")
     a("The palette surface itself (ranking via the W0.5-1 core engine, "
       "sections, recents, chord display) is **#741 (W5-1)**; the quick "
@@ -510,16 +608,17 @@ def main() -> int:
     a("| tab kind | consuming W issue | status |")
     a("|---|---|---|")
     for kind in editor_item_kinds():
-        a(f"| `{kind}` | #722 (W1-3) | pending |")
+        issue = "#722 (W1-3)"
+        a(f"| `{kind}` | {issue} | {issue_delivery_status(issue, delivery_evidence)} |")
     a("")
     a("## Primary surfaces")
     a("")
     a("| surface | source | consuming W issue | status |")
     a("|---|---|---|---|")
-    a("| App shell, window chrome, vault lifecycle | `SlateMacApp.swift` | #720 (W1-1) | pending |")
-    a("| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | pending |")
-    a("| Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | pending |")
-    a("| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | pending |")
+    a(f"| App shell, window chrome, vault lifecycle | `SlateMacApp.swift` | #720 (W1-1) | {issue_delivery_status('#720 (W1-1)', delivery_evidence)} |")
+    a(f"| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | {issue_delivery_status('#721 (W1-2)', delivery_evidence)} |")
+    a(f"| Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | {issue_delivery_status('#722 (W1-3)', delivery_evidence)} |")
+    a(f"| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | {issue_delivery_status('#723 (W1-4)', delivery_evidence)} |")
     a("| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | pending |")
     a("| Editor canonical spans | #381 span API consumers | #381 (W2-2) | pending |")
     a("| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | pending |")

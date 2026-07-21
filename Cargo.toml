@@ -107,6 +107,10 @@ petgraph = { version = "0.8", default-features = false, features = [
     "stable_graph",
     "std",
 ] }
+# W1-0 (#911): the Windows vault provider uses MoveFileExW without
+# MOVEFILE_REPLACE_EXISTING for an atomic no-clobber rename. Keep the API
+# surface narrow rather than taking the full Win32 feature set.
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 # --- Diagnostics facade (#507) ----------------------------------------
 # `log` is the crate-wide logging facade slate-core routes its non-fatal

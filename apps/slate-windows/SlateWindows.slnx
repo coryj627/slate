@@ -4,6 +4,7 @@
     <Project Path="src/SlateWindows/SlateWindows.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj" />
     <Project Path="tests/SlateWindows.Tests/SlateWindows.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">

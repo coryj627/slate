@@ -356,6 +356,12 @@ pub enum A11yEvent {
     RecentSearchFocused {
         query: String,
     },
+    /// Quick-switcher result count. `query == None` is the opening,
+    /// recents-first list; a present query is the filtered state.
+    QuickSwitcherCount {
+        count: u32,
+        query: Option<String>,
+    },
 
     // --- Bases ---
     BaseViewMode {
@@ -712,6 +718,14 @@ impl A11yEvent {
                 None => format!("Selected: {label}"),
             },
             RecentSearchFocused { query } => format!("Recent search: {query}"),
+            QuickSwitcherCount { count, query } => match query {
+                None => format!("{count} recent {}", plural(*count, "file", "files")),
+                Some(query) if *count == 0 => format!("No files matching \"{query}\""),
+                Some(query) => format!(
+                    "{count} {} matching \"{query}\"",
+                    plural(*count, "file", "files")
+                ),
+            },
 
             BaseViewMode { mode } => format!("Base view as {mode}."),
             BaseViewSwitcher { view_count } => format!(
@@ -1047,6 +1061,26 @@ pub fn corpus() -> Vec<A11yEvent> {
         RecentSearchFocused {
             query: "fox".into(),
         },
+        QuickSwitcherCount {
+            count: 2,
+            query: None,
+        },
+        QuickSwitcherCount {
+            count: 1,
+            query: None,
+        },
+        QuickSwitcherCount {
+            count: 2,
+            query: Some("foo".into()),
+        },
+        QuickSwitcherCount {
+            count: 1,
+            query: Some("foo".into()),
+        },
+        QuickSwitcherCount {
+            count: 0,
+            query: Some("zzz".into()),
+        },
         BaseViewMode {
             mode: "cards".into(),
         },
@@ -1288,6 +1322,11 @@ mod tests {
                 "Selected: Save. Unavailable: A structural operation is in progress.",
             ),
             (Medium, "Recent search: fox"),
+            (Medium, "2 recent files"),
+            (Medium, "1 recent file"),
+            (Medium, "2 files matching \"foo\""),
+            (Medium, "1 file matching \"foo\""),
+            (Medium, "No files matching \"zzz\""),
             (Medium, "Base view as cards."),
             (Medium, "Base view switcher. 1 view."),
             (Medium, "Base view switcher. 2 views."),

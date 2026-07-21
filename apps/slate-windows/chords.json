@@ -1,0 +1,142 @@
+{
+  "schemaVersion": 1,
+  "commands": [
+    { "id": "slate.vault.open", "mac": "Shift Command O", "windows": "Ctrl+Shift+O", "windowsSpoken": "Control Shift O" },
+    { "id": "slate.vault.close", "mac": null, "windows": null, "windowsSpoken": null },
+    { "id": "slate.workspace.quickOpen", "mac": "Command O", "windows": "Ctrl+O", "windowsSpoken": "Control O" },
+    { "id": "slate.workspace.newTab", "mac": "Command T", "windows": "Ctrl+T", "windowsSpoken": "Control T" },
+    { "id": "slate.workspace.closeTab", "mac": "Command W", "windows": "Ctrl+W", "windowsSpoken": "Control W" },
+    { "id": "slate.workspace.reopenClosedTab", "mac": "Shift Command T", "windows": "Ctrl+Shift+T", "windowsSpoken": "Control Shift T" },
+    { "id": "slate.workspace.nextTab", "mac": "Shift Command Right Bracket", "windows": "Ctrl+Shift+]", "windowsSpoken": "Control Shift Right Bracket" },
+    { "id": "slate.workspace.previousTab", "mac": "Shift Command Left Bracket", "windows": "Ctrl+Shift+[", "windowsSpoken": "Control Shift Left Bracket" },
+    { "id": "slate.workspace.splitRight", "mac": "Command Backslash", "windows": "Ctrl+\\", "windowsSpoken": "Control Backslash" },
+    { "id": "slate.workspace.splitDown", "mac": "Option Command Backslash", "windows": "Ctrl+Alt+\\", "windowsSpoken": "Control Alt Backslash" },
+    { "id": "slate.workspace.focusPaneLeft", "mac": "Option Command Left Arrow", "windows": "Ctrl+Alt+Left", "windowsSpoken": "Control Alt Left Arrow" },
+    { "id": "slate.workspace.focusPaneRight", "mac": "Option Command Right Arrow", "windows": "Ctrl+Alt+Right", "windowsSpoken": "Control Alt Right Arrow" },
+    { "id": "slate.workspace.focusPaneAbove", "mac": "Option Command Up Arrow", "windows": "Ctrl+Alt+Up", "windowsSpoken": "Control Alt Up Arrow" },
+    { "id": "slate.workspace.focusPaneBelow", "mac": "Option Command Down Arrow", "windows": "Ctrl+Alt+Down", "windowsSpoken": "Control Alt Down Arrow" },
+    { "id": "slate.workspace.moveTabLeft", "mac": "Control Command Left Arrow", "windows": "Ctrl+Alt+Shift+Left", "windowsSpoken": "Control Alt Shift Left Arrow", "note": "Shift resolves the Windows collision with focus-pane-left." },
+    { "id": "slate.workspace.moveTabRight", "mac": "Control Command Right Arrow", "windows": "Ctrl+Alt+Shift+Right", "windowsSpoken": "Control Alt Shift Right Arrow", "note": "Shift resolves the Windows collision with focus-pane-right." },
+    { "id": "slate.workspace.growPane", "mac": "Option Command Equals", "windows": "Ctrl+Alt+=", "windowsSpoken": "Control Alt Equals" },
+    { "id": "slate.workspace.shrinkPane", "mac": "Option Command Minus", "windows": "Ctrl+Alt+-", "windowsSpoken": "Control Alt Minus" },
+    { "id": "slate.workspace.closePane", "mac": null, "windows": null, "windowsSpoken": null },
+    { "id": "slate.view.toggleRightPane", "mac": "Option Command I", "windows": "Ctrl+Alt+I", "windowsSpoken": "Control Alt I" },
+    { "id": "slate.sidebar.focusFilter", "mac": "Option Command F", "windows": "Ctrl+Alt+F", "windowsSpoken": "Control Alt F" },
+    { "id": "slate.sidebar.historyBack", "mac": "Control Command Left Bracket", "windows": "Ctrl+Alt+[", "windowsSpoken": "Control Alt Left Bracket" },
+    { "id": "slate.sidebar.historyForward", "mac": "Control Command Right Bracket", "windows": "Ctrl+Alt+]", "windowsSpoken": "Control Alt Right Bracket" },
+    { "id": "slate.file.cancelImport", "mac": "Command Period", "windows": "Escape", "windowsSpoken": "Escape", "note": "Windows cancellation convention while import owns the operation." },
+    { "id": "slate.sidebar.openShortcut1", "mac": null, "windows": "Ctrl+1", "windowsSpoken": "Control 1" },
+    { "id": "slate.sidebar.openShortcut2", "mac": null, "windows": "Ctrl+2", "windowsSpoken": "Control 2" },
+    { "id": "slate.sidebar.openShortcut3", "mac": null, "windows": "Ctrl+3", "windowsSpoken": "Control 3" },
+    { "id": "slate.sidebar.openShortcut4", "mac": null, "windows": "Ctrl+4", "windowsSpoken": "Control 4" },
+    { "id": "slate.sidebar.openShortcut5", "mac": null, "windows": "Ctrl+5", "windowsSpoken": "Control 5" },
+    { "id": "slate.sidebar.openShortcut6", "mac": null, "windows": "Ctrl+6", "windowsSpoken": "Control 6" },
+    { "id": "slate.sidebar.openShortcut7", "mac": null, "windows": "Ctrl+7", "windowsSpoken": "Control 7" },
+    { "id": "slate.sidebar.openShortcut8", "mac": null, "windows": "Ctrl+8", "windowsSpoken": "Control 8" },
+    { "id": "slate.sidebar.openShortcut9", "mac": null, "windows": "Ctrl+9", "windowsSpoken": "Control 9" }
+  ],
+  "deliveryEvidence": {
+    "groups": {
+      "vault": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/VaultLifecycleViewModel.cs#OpenVaultAsync"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#OpenVaultButton"
+        ]
+      },
+      "sidebar": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/FilesSidebarViewModel.cs#FilesSidebarViewModel"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/W1WorkspaceTests.cs#Sidebar_UsesCoreForFilterBatchTagsExclusiveCreateAndFolderNotes"
+        ]
+      },
+      "workspace": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs#WorkspaceViewModel"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/W1WorkspaceTests.cs#TabsSplitsLeavesReopenAndPersistence_RoundTripThroughRealSession"
+        ]
+      },
+      "quickSwitcher": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/QuickSwitcherViewModel.cs#QuickSwitcherViewModel"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/W1WorkspaceTests.cs#QuickSwitcher_UsesCoreRankingTypedCountsTargetsWrapAndIncrementalChanges"
+        ]
+      }
+    },
+    "commands": {
+      "slate.file.cancelImport": "sidebar",
+      "slate.file.importFilesAndFolders": "sidebar",
+      "slate.sidebar.addShortcut": "sidebar",
+      "slate.sidebar.addTag": "sidebar",
+      "slate.sidebar.clearRecents": "sidebar",
+      "slate.sidebar.collapseAll": "sidebar",
+      "slate.sidebar.copyWikilink": "sidebar",
+      "slate.sidebar.createFolderNote": "sidebar",
+      "slate.sidebar.deleteFolderNote": "sidebar",
+      "slate.sidebar.expandLoaded": "sidebar",
+      "slate.sidebar.focusFilter": "sidebar",
+      "slate.sidebar.historyBack": "sidebar",
+      "slate.sidebar.historyForward": "sidebar",
+      "slate.sidebar.open": "sidebar",
+      "slate.sidebar.openFolderNote": "sidebar",
+      "slate.sidebar.openShortcut1": "sidebar",
+      "slate.sidebar.openShortcut2": "sidebar",
+      "slate.sidebar.openShortcut3": "sidebar",
+      "slate.sidebar.openShortcut4": "sidebar",
+      "slate.sidebar.openShortcut5": "sidebar",
+      "slate.sidebar.openShortcut6": "sidebar",
+      "slate.sidebar.openShortcut7": "sidebar",
+      "slate.sidebar.openShortcut8": "sidebar",
+      "slate.sidebar.openShortcut9": "sidebar",
+      "slate.sidebar.pinNote": "sidebar",
+      "slate.sidebar.removeShortcut": "sidebar",
+      "slate.sidebar.removeTag": "sidebar",
+      "slate.sidebar.sortCreatedAsc": "sidebar",
+      "slate.sidebar.sortCreatedDesc": "sidebar",
+      "slate.sidebar.sortModifiedAsc": "sidebar",
+      "slate.sidebar.sortModifiedDesc": "sidebar",
+      "slate.sidebar.sortNameAsc": "sidebar",
+      "slate.sidebar.sortNameDesc": "sidebar",
+      "slate.sidebar.toggleDateGrouping": "sidebar",
+      "slate.sidebar.toggleLayout": "sidebar",
+      "slate.sidebar.unpinAllInFolder": "sidebar",
+      "slate.sidebar.unpinNote": "sidebar",
+      "slate.sidebar.useVaultDefaultSort": "sidebar",
+      "slate.vault.close": "vault",
+      "slate.vault.open": "vault",
+      "slate.view.toggleRightPane": "workspace",
+      "slate.workspace.closePane": "workspace",
+      "slate.workspace.closeTab": "workspace",
+      "slate.workspace.focusPaneAbove": "workspace",
+      "slate.workspace.focusPaneBelow": "workspace",
+      "slate.workspace.focusPaneLeft": "workspace",
+      "slate.workspace.focusPaneRight": "workspace",
+      "slate.workspace.growPane": "workspace",
+      "slate.workspace.moveTabLeft": "workspace",
+      "slate.workspace.moveTabRight": "workspace",
+      "slate.workspace.newTab": "workspace",
+      "slate.workspace.nextTab": "workspace",
+      "slate.workspace.openInNewTab": "workspace",
+      "slate.workspace.openInSplit": "workspace",
+      "slate.workspace.previousTab": "workspace",
+      "slate.workspace.quickOpen": "quickSwitcher",
+      "slate.workspace.reopenClosedTab": "workspace",
+      "slate.workspace.shrinkPane": "workspace",
+      "slate.workspace.splitDown": "workspace",
+      "slate.workspace.splitRight": "workspace"
+    },
+    "issues": {
+      "#720": "vault",
+      "#721": "sidebar",
+      "#722": "workspace",
+      "#723": "quickSwitcher"
+    }
+  }
+}

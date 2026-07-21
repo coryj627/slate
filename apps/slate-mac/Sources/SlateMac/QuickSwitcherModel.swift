@@ -65,7 +65,7 @@ final class QuickSwitcherModel: ObservableObject {
     /// hover, and the snap-to-first-on-query-change rule.
     @Published var selectedID: String? = nil
 
-    /// Result-count announcement string. The view posts it at
+    /// Result-count announcement event. The view posts it at
     /// `.medium` priority whenever the filtered set changes. Mirrors
     /// `CommandPaletteModel.filterAnnouncement`, but it also announces
     /// the empty-query "N recent files" count — the quick switcher's
