@@ -51,6 +51,16 @@ public sealed class W1ShellAccessibilityContractTests
                 results.Visibility = Visibility.Collapsed;
                 Assert.False(resultsPeer.IsControlElement());
                 Assert.False(resultsPeer.IsContentElement());
+
+                var presentationText = new AutomationPresentationTextBlock
+                {
+                    Text = "Duplicated by its parent",
+                };
+                AutomationPeer presentationTextPeer =
+                    Assert.IsType<AutomationPresentationTextBlockPeer>(
+                        UIElementAutomationPeer.CreatePeerForElement(presentationText));
+                Assert.False(presentationTextPeer.IsControlElement());
+                Assert.False(presentationTextPeer.IsContentElement());
             },
             "Landmark peer test timed out.");
 

@@ -46,6 +46,25 @@ internal sealed class AutomationVisibilityListBoxPeer(AutomationVisibilityListBo
         && base.IsContentElementCore();
 }
 
+/// <summary>
+/// Visual text whose accessible name and help text are supplied by its parent
+/// control. Excluding the duplicate peer also prevents detached item-template
+/// text from lingering in the UI Automation control tree.
+/// </summary>
+internal sealed class AutomationPresentationTextBlock : TextBlock
+{
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new AutomationPresentationTextBlockPeer(this);
+}
+
+internal sealed class AutomationPresentationTextBlockPeer(AutomationPresentationTextBlock owner)
+    : TextBlockAutomationPeer(owner)
+{
+    protected override bool IsControlElementCore() => false;
+
+    protected override bool IsContentElementCore() => false;
+}
+
 internal sealed class AutomationLandmarkPeer(FrameworkElement owner)
     : FrameworkElementAutomationPeer(owner)
 {

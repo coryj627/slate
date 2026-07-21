@@ -300,12 +300,20 @@ public sealed class ShellAccessibilityTests
                 "QuickSwitcherResults",
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.List, quickResults.ControlType);
+            AutomationElement? quickResult = null;
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => quickResults.FindAllDescendants(
-                        automation.ConditionFactory.ByControlType(ControlType.ListItem)).Length > 0,
+                    () =>
+                    {
+                        quickResult = quickResults.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                            .FirstOrDefault();
+                        return quickResult is not null;
+                    },
                     TimeSpan.FromSeconds(10)),
                 "Quick Open did not publish its asynchronously ranked results.");
+            Assert.False(string.IsNullOrWhiteSpace(quickResult!.Name));
+            Assert.False(string.IsNullOrWhiteSpace(quickResult.HelpText));
             AssertEventuallyFocused(
                 quickSearch,
                 "Quick Open did not move focus to its search field.");

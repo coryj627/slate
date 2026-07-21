@@ -557,6 +557,7 @@
                         <ListBox.ItemContainerStyle>
                             <Style TargetType="ListBoxItem">
                                 <Setter Property="AutomationProperties.Name" Value="{Binding DisplayName}" />
+                                <Setter Property="AutomationProperties.HelpText" Value="{Binding Path}" />
                             </Style>
                         </ListBox.ItemContainerStyle>
                         <ListBox.ItemTemplate>
@@ -566,11 +567,12 @@
                                         <ColumnDefinition Width="180" />
                                         <ColumnDefinition Width="*" />
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold" />
-                                    <TextBlock Grid.Column="1"
-                                               Text="{Binding Path}"
-                                               Foreground="{DynamicResource Slate.SecondaryTextBrush}"
-                                               TextTrimming="CharacterEllipsis" />
+                                    <local:AutomationPresentationTextBlock Text="{Binding DisplayName}"
+                                                                           FontWeight="SemiBold" />
+                                    <local:AutomationPresentationTextBlock Grid.Column="1"
+                                                                           Text="{Binding Path}"
+                                                                           Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                                           TextTrimming="CharacterEllipsis" />
                                 </Grid>
                             </DataTemplate>
                         </ListBox.ItemTemplate>
