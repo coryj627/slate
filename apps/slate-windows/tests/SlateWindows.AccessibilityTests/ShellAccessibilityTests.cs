@@ -280,28 +280,6 @@ public sealed class ShellAccessibilityTests
                 leftEditor,
                 "Ctrl+Alt+Left changed the model but did not move keyboard focus to the left editor.");
 
-            AutomationElement splitDown = WaitForMenuItem(
-                window,
-                "WorkspaceMenu",
-                "SplitDownMenuItem",
-                TimeSpan.FromSeconds(10));
-            Assert.True(splitDown.IsEnabled);
-            Assert.True(splitDown.Patterns.Invoke.IsSupported);
-            splitDown.Patterns.Invoke.Pattern.Invoke();
-            Assert.True(SpinWait.SpinUntil(
-                () => window.FindAllDescendants(
-                    automation.ConditionFactory.ByAutomationId("WorkspaceTabs")).Length == 3,
-                TimeSpan.FromSeconds(10)),
-                "Split Down did not expose a third navigable TabControl.");
-            AutomationElement verticalSplitHandle = WaitForElement(
-                window,
-                "WorkspaceSplitHandleVertical",
-                TimeSpan.FromSeconds(10));
-            Assert.Single(window.FindAllDescendants(
-                automation.ConditionFactory.ByAutomationId("WorkspaceSplitHandleVertical")));
-            Assert.Contains("vertically", verticalSplitHandle.Name, StringComparison.Ordinal);
-            Assert.True(verticalSplitHandle.Properties.IsKeyboardFocusable.Value);
-
             AssertAxeClean(process);
 
             AutomationElement quickOpen = WaitForMenuItem(
@@ -380,6 +358,29 @@ public sealed class ShellAccessibilityTests
             AssertEventuallyFocused(
                 editor,
                 "Committing Quick Open did not focus the destination editor.");
+
+            AutomationElement splitDown = WaitForMenuItem(
+                window,
+                "WorkspaceMenu",
+                "SplitDownMenuItem",
+                TimeSpan.FromSeconds(10));
+            Assert.True(splitDown.IsEnabled);
+            Assert.True(splitDown.Patterns.Invoke.IsSupported);
+            splitDown.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(SpinWait.SpinUntil(
+                () => window.FindAllDescendants(
+                    automation.ConditionFactory.ByAutomationId("WorkspaceTabs")).Length == 3,
+                TimeSpan.FromSeconds(10)),
+                "Split Down did not expose a third navigable TabControl.");
+            AutomationElement verticalSplitHandle = WaitForElement(
+                window,
+                "WorkspaceSplitHandleVertical",
+                TimeSpan.FromSeconds(10));
+            Assert.Single(window.FindAllDescendants(
+                automation.ConditionFactory.ByAutomationId("WorkspaceSplitHandleVertical")));
+            Assert.Contains("vertically", verticalSplitHandle.Name, StringComparison.Ordinal);
+            Assert.True(verticalSplitHandle.Properties.IsKeyboardFocusable.Value);
+            AssertAxeClean(process);
 
             AutomationElement closeVault = WaitForMenuItem(
                 window,
