@@ -117,7 +117,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 - Callback paths marshal asynchronously to the UI dispatcher. File-change refreshes coalesce for 150 ms; Quick Open ranks after a 60 ms debounce and cancels stale work; sidebar filtering debounces for 200 ms and rejects stale generations.
 - Structural mutation commands are disabled while import owns the mutation lane; vault close/switch requests cancel import or bulk expansion and wait for their barriers.
 - Store decoders are bounded and fail closed for malformed or forward schema versions. File imports bound breadth, count and file size and reject reparse traversal.
-- No W1 surface adds an unbounded keystroke-size algorithm; W2 owns the formal §W-B editor benchmark. Quick Open, sidebar filtering and bulk Expand Loaded provider work run off the UI thread. Initial refresh and an ordinary single-folder expansion remain synchronously bounded to 5,000 items per opened level with explicit overflow state; their worst-case UI latency is a documented P2 performance residual, not an unbounded traversal.
+- No W1 surface adds an unbounded keystroke-size algorithm; W2 owns the formal §W-B editor benchmark. Quick Open, initial/root sidebar refresh, sidebar filtering and bulk Expand Loaded provider work run off the UI thread. Root refresh publishes one prebuilt, generation-guarded collection and the large file controls use recycling virtualization. An ordinary single-folder expansion remains synchronously bounded to 5,000 items per opened level with explicit overflow state; its worst-case UI latency remains a documented P2 performance residual, not an unbounded traversal.
 
 ## Remaining release evidence
 

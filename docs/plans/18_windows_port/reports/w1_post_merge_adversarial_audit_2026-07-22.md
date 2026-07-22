@@ -106,12 +106,22 @@ Codoki explicitly safe to merge, then squash merge before the next group.
   session, and secondary-instance frame writes and flushes share the caller's
   remaining deadline. Deterministic teardown-order and stalled-primary tests
   cover both paths.
-- W1-RT-05 remediation is in progress on
-  `agent/w1-quick-open-top-k`: core retains only the deterministic top K while
+- W1-RT-05 closed by PR #1014: core retains only the deterministic top K while
   returning an exact total, and Windows/macOS request their 50-row display
   page through the same UniFFI result. The compatibility corpus covers zero,
   partial, exact, and oversized limits; empty and fuzzy queries; missing and
   duplicate recents; and canonical Unicode path ties. On this Windows host,
   the committed 50,000-file Criterion pair measured full ranking at
   362.87–365.60 ms versus top-50 at 335.30–338.32 ms, before accounting for
-  the much larger avoided FFI marshalling and host allocation.
+  the much larger avoided FFI marshalling and host allocation. The final
+  Codoki review reported 5/5 confidence and safe to merge; every CI lane was
+  green.
+- W1-RT-06 remediation is in progress on
+  `agent/w1-sidebar-responsiveness`: WPF-dispatched root refreshes build,
+  page, sort, restore expanded descendants, and project tags on a serialized
+  background worker. A generation guard publishes one prebuilt collection,
+  close/disposal joins the session-backed provider, and the files tree,
+  filtered list, and dual-pane list explicitly use recycling virtualization.
+  Deterministic tests pin a <100 ms UI-dispatch budget with a blocked
+  5,001-item provider, reject queued stale publication, preserve later
+  restored branches after a truncated branch, and cover both close barriers.

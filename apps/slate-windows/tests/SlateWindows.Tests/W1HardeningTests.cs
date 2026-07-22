@@ -3,8 +3,10 @@
 
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text.Json;
+using System.Xml.Linq;
 using SlateWindows;
 using uniffi.slate_uniffi;
 
@@ -112,6 +114,66 @@ public sealed class W1BoundedFileIoTests
 public sealed class W1VaultCloseBarrierTests
 {
     [Fact]
+    public async Task PendingTreeRefreshMustFinishBeforeTheVaultSessionCloses()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "tree-close-barrier");
+        using var providerStarted = new ManualResetEventSlim();
+        using var releaseProvider = new ManualResetEventSlim();
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            treeUiContext: new PumpSynchronizationContext(),
+            treeWorker: (work, _) => Task.Run(() =>
+            {
+                providerStarted.Set();
+                releaseProvider.Wait();
+                work();
+            }));
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+
+        Assert.False(lifecycle.PrepareForApplicationClose());
+        Assert.Contains("tree refresh cancellation requested", lifecycle.StatusText, StringComparison.OrdinalIgnoreCase);
+
+        releaseProvider.Set();
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(lifecycle.PrepareForApplicationClose());
+        lifecycle.Dispose();
+    }
+
+    [Fact]
+    public async Task DirectDisposalJoinsAPendingTreeRefreshBeforeReleasingTheSession()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "tree-dispose-barrier");
+        using var providerStarted = new ManualResetEventSlim();
+        using var releaseProvider = new ManualResetEventSlim();
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            treeUiContext: new PumpSynchronizationContext(),
+            treeWorker: (work, _) => Task.Run(() =>
+            {
+                providerStarted.Set();
+                releaseProvider.Wait();
+                work();
+            }));
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
+
+        Task dispose = Task.Run(lifecycle.Dispose);
+        await Task.Delay(100);
+        Assert.False(dispose.IsCompleted);
+
+        releaseProvider.Set();
+        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
     public async Task PendingSidebarFilterMustFinishBeforeTheVaultSessionCloses()
     {
         using FixtureVault fixture = FixtureVault.Create(2, "filter-close-barrier");
@@ -168,6 +230,138 @@ public sealed class W1VaultCloseBarrierTests
 
 public sealed class W1SidebarHardeningTests
 {
+    [Fact]
+    [Trait("census", "moderate")]
+    public async Task FiveThousandItemRefreshReturnsWithinTheUiDispatchBudget()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "sidebar-refresh-budget");
+        for (int index = 0; index < FilesSidebarViewModel.MaxMaterializedDirectoryItems + 1; index++)
+        {
+            File.WriteAllText(Path.Combine(fixture.Root, $"note-{index:D5}.md"), string.Empty);
+        }
+
+        using VaultSession session = OpenScanned(fixture.Root);
+        var context = new PumpSynchronizationContext();
+        using var providerStarted = new ManualResetEventSlim();
+        using var releaseProvider = new ManualResetEventSlim();
+        int uiThread = Environment.CurrentManagedThreadId;
+        int providerThread = 0;
+        var stopwatch = Stopwatch.StartNew();
+        var sidebar = CreateSidebar(
+            session,
+            fixture.Root,
+            treeUiContext: context,
+            treeWorker: (work, _) => Task.Run(() =>
+            {
+                providerThread = Environment.CurrentManagedThreadId;
+                providerStarted.Set();
+                releaseProvider.Wait();
+                work();
+            }));
+        stopwatch.Stop();
+
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromMilliseconds(100),
+            $"UI dispatch took {stopwatch.Elapsed.TotalMilliseconds:N1} ms.");
+        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
+        Assert.NotEqual(uiThread, providerThread);
+        Assert.Empty(sidebar.RootNodes);
+        Assert.True(sidebar.IsRefreshingTree);
+
+        releaseProvider.Set();
+        Assert.True(SpinWait.SpinUntil(
+            () =>
+            {
+                context.Drain();
+                return sidebar.TreeRefreshCompletion.IsCompleted;
+            },
+            TimeSpan.FromSeconds(10)));
+        await sidebar.TreeRefreshCompletion;
+
+        Assert.Equal(
+            FilesSidebarViewModel.MaxMaterializedDirectoryItems,
+            sidebar.RootNodes.Count(node => !node.IsPlaceholder));
+        Assert.Single(sidebar.RootNodes, node => node.IsPlaceholder);
+    }
+
+    [Fact]
+    public async Task QueuedStaleTreePublicationCannotReplaceTheLatestGeneration()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "sidebar-tree-generation");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var context = new PumpSynchronizationContext();
+        using var secondProviderStarted = new ManualResetEventSlim();
+        using var releaseSecondProvider = new ManualResetEventSlim();
+        int run = 0;
+        var sidebar = CreateSidebar(
+            session,
+            fixture.Root,
+            treeUiContext: context,
+            treeWorker: (work, _) => Task.Run(() =>
+            {
+                if (Interlocked.Increment(ref run) == 2)
+                {
+                    secondProviderStarted.Set();
+                    releaseSecondProvider.Wait();
+                }
+
+                work();
+            }));
+        Task first = sidebar.TreeRefreshCompletion;
+        Assert.True(SpinWait.SpinUntil(
+            () => context.PendingCount > 0,
+            TimeSpan.FromSeconds(5)));
+
+        sidebar.Refresh();
+        Task second = sidebar.TreeRefreshCompletion;
+        Assert.True(secondProviderStarted.Wait(TimeSpan.FromSeconds(5)));
+        context.Drain();
+        Assert.Empty(sidebar.RootNodes);
+
+        releaseSecondProvider.Set();
+        Assert.True(SpinWait.SpinUntil(
+            () =>
+            {
+                context.Drain();
+                return second.IsCompleted;
+            },
+            TimeSpan.FromSeconds(5)));
+        await first;
+        await second;
+        Assert.Equal(2, sidebar.RootNodes.Count);
+    }
+
+    [Fact]
+    public void LargeSidebarCollectionsUseRecyclingVirtualization()
+    {
+        XDocument xaml = XDocument.Load(Path.Combine(
+            RepoRoot(),
+            "apps",
+            "slate-windows",
+            "src",
+            "SlateWindows",
+            "MainWindow.xaml"));
+        XNamespace x = "http://schemas.microsoft.com/winfx/2006/xaml";
+
+        foreach (string name in new[] { "FilesTree", "FilterResultsList" })
+        {
+            XElement element = Assert.Single(
+                xaml.Descendants(),
+                candidate => (string?)candidate.Attribute(x + "Name") == name);
+            Assert.Equal("True", (string?)element.Attribute("ScrollViewer.CanContentScroll"));
+            Assert.Equal("True", (string?)element.Attribute("VirtualizingStackPanel.IsVirtualizing"));
+            Assert.Equal("Recycling", (string?)element.Attribute("VirtualizingStackPanel.VirtualizationMode"));
+        }
+
+        XElement dualPane = Assert.Single(
+            xaml.Descendants(),
+            candidate => (string?)candidate.Attribute("AutomationProperties.AutomationId")
+                == "SidebarDualPane");
+        Assert.Equal("True", (string?)dualPane.Attribute("ScrollViewer.CanContentScroll"));
+        Assert.Equal("True", (string?)dualPane.Attribute("VirtualizingStackPanel.IsVirtualizing"));
+        Assert.Equal("Recycling", (string?)dualPane.Attribute("VirtualizingStackPanel.VirtualizationMode"));
+    }
+
     [Fact]
     public void DirectoryListing_DrainsPagesAndReportsTheMaterializationBound()
     {
@@ -254,6 +448,33 @@ public sealed class W1SidebarHardeningTests
     }
 
     [Fact]
+    public void TruncatedRestoredBranchDoesNotSkipLaterExpandedBranches()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "sidebar-expanded-overflow");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "A"));
+        for (int index = 0; index < FilesSidebarViewModel.MaxMaterializedDirectoryItems + 1; index++)
+        {
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "A", $"note-{index:D5}.md"),
+                string.Empty);
+        }
+
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "Z", "Child"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var sidebar = CreateSidebar(
+            session,
+            fixture.Root,
+            restoredExpandedPaths: ["A", "Z"]);
+
+        FileTreeNodeViewModel a = Assert.Single(sidebar.RootNodes, node => node.Path == "A");
+        Assert.True(a.IsExpanded);
+        Assert.Single(a.Children, node => node.IsPlaceholder);
+        FileTreeNodeViewModel z = Assert.Single(sidebar.RootNodes, node => node.Path == "Z");
+        Assert.True(z.IsExpanded);
+        Assert.Contains(z.Children, node => node.Path == "Z/Child");
+    }
+
+    [Fact]
     public void FilterDebouncePublishesOnlyTheLatestGeneration()
     {
         using FixtureVault fixture = FixtureVault.Create(2, "sidebar-filter-generation");
@@ -295,16 +516,35 @@ public sealed class W1SidebarHardeningTests
     private static FilesSidebarViewModel CreateSidebar(
         VaultSession session,
         string root,
-        SynchronizationContext? filterUiContext = null) => new(
+        SynchronizationContext? filterUiContext = null,
+        SynchronizationContext? treeUiContext = null,
+        Func<Action, CancellationToken, Task>? treeWorker = null,
+        IEnumerable<string>? restoredExpandedPaths = null) => new(
         session,
         _ => { },
+        restoredExpandedPaths: restoredExpandedPaths,
         vaultRoot: root,
         localAppDataRoot: Path.Combine(root, "device-state"),
-        filterUiContext: filterUiContext);
+        filterUiContext: filterUiContext,
+        treeUiContext: treeUiContext,
+        treeWorker: treeWorker);
+
+    private static string RepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Cargo.toml")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new InvalidOperationException("Could not locate repository root.");
+    }
 
     private sealed class PumpSynchronizationContext : SynchronizationContext
     {
         private readonly ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _queue = [];
+        public int PendingCount => _queue.Count;
 
         public override void Post(SendOrPostCallback d, object? state) => _queue.Enqueue((d, state));
 
