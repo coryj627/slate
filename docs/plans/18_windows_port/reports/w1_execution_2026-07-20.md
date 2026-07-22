@@ -82,6 +82,22 @@ rejection, collision handling and completion summary. Constructor wiring and
 command policy remain in the primary partial; a structure census guards
 representative declarations at the operation boundary.
 
+Native-session lifetime admission is isolated in
+`FilesSidebarViewModel.SessionWork.cs`. Every filter, tree, tag, dual-pane,
+import, mutation, wikilink and batch entry either acquires its sidebar-owned
+lease or becomes a no-op after shutdown closes admission. Teardown cancels all
+producers only after closing admission and waits for the admitted-work drain
+before releasing the shared `VaultSession`; UI collection changes,
+announcements and other callbacks run outside synchronous leases. Behavioral
+tests force superseded filter chains, tree-task publication, cancellation versus
+completion, pending source pickers, import/expansion workers, throwing
+cancellation callbacks, and retained-sidebar calls after direct disposal. A
+structure census guards representative ownership declarations without treating
+source strings as a substitute for those behavioral guarantees. Lifecycle
+disposal is marshalled to the owning WPF dispatcher in production and joins an
+active scan/file-list loading task before releasing the session, so synchronous
+workspace/open events and initialization cannot race background disposal.
+
 Workspace restore and persistence are isolated in
 `WorkspaceViewModel.Persistence.cs`. The partial owns the store and expanded
 path provider, restore suppression, mutation batching/pending-save state,
@@ -139,7 +155,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Gate | Result |
 |---|---|
 | `dotnet format ... --verify-no-changes` | Pass |
-| Windows unit/integration suite | 132 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes sidebar-operation plus workspace-persistence and workspace-layout ownership censuses |
+| Windows unit/integration suite | 152 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes behavioral sidebar session-lifetime, owner-context, WPF-dispatcher disposal, active-load joining, task-publication, cancellation-ownership, and unexpected-failure races plus representative sidebar-operation, session-work, workspace-persistence, and workspace-layout ownership censuses |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
 | Interactive FlaUI + axe-windows | Pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
@@ -150,7 +166,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | `cargo fmt --check` | Pass |
 | `cargo clippy -p slate-core -p slate-uniffi --lib --locked -- -D warnings` | Pass |
 | `python scripts/generate-parity-matrix.py --validate-delivery-evidence` | Pass; 60 command rows and four issue surfaces |
-| Complete `slate-core --lib` (1,645 tests on rebased `main`) | The pre-rebase 1,644-test runner did not terminate within 15 minutes on this Windows host in parallel or serial mode; process remained responsive and CPU-active; no broad pass claimed |
+| Complete `slate-core --lib` (1,647 tests on rebased `main`) | The pre-rebase 1,644-test runner did not terminate within 15 minutes on this Windows host in parallel or serial mode; process remained responsive and CPU-active; no broad pass claimed |
 | mac Swift Quick Open tests | Source updated; unavailable on Windows, so mac CI is required |
 
 ## Reliability, performance and security notes

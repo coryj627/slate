@@ -6,6 +6,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Pipes;
 using System.Text.Json;
+using System.Windows.Threading;
 using System.Xml.Linq;
 using SlateWindows;
 using uniffi.slate_uniffi;
@@ -168,6 +169,119 @@ public sealed class W1BoundedFileIoTests
 public sealed class W1VaultCloseBarrierTests
 {
     [Fact]
+    public async Task DirectDisposalJoinsActiveSessionLoadingBeforeRelease()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "session-load-dispose-barrier");
+        using var loadStarted = new ManualResetEventSlim();
+        using var releaseLoad = new ManualResetEventSlim();
+        using var disposeEntered = new ManualResetEventSlim();
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            sessionLoadWorker: work => Task.Run(() =>
+            {
+                loadStarted.Set();
+                releaseLoad.Wait();
+                return work();
+            }));
+
+        Task open = lifecycle.OpenVaultAsync(fixture.Root);
+        Assert.True(loadStarted.Wait(TimeSpan.FromSeconds(5)));
+        Task dispose = Task.Run(() =>
+        {
+            disposeEntered.Set();
+            lifecycle.Dispose();
+        });
+        Assert.True(disposeEntered.Wait(TimeSpan.FromSeconds(5)));
+        Assert.False(dispose.Wait(TimeSpan.FromMilliseconds(200)));
+
+        releaseLoad.Set();
+        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+        await open.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(lifecycle.FileSidebar);
+        Assert.Null(lifecycle.Workspace);
+    }
+
+    [Fact]
+    public async Task OffThreadDisposalRunsOnTheCapturedWpfDispatcher()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "dispatcher-dispose-affinity");
+        using var ready = new ManualResetEventSlim();
+        using var filterStarted = new ManualResetEventSlim();
+        Dispatcher? ownerDispatcher = null;
+        VaultLifecycleViewModel? lifecycle = null;
+        Exception? setupException = null;
+        int ownerThreadId = 0;
+        int cancellationThreadId = 0;
+        var ownerThread = new Thread(() =>
+        {
+            ownerThreadId = Environment.CurrentManagedThreadId;
+            ownerDispatcher = Dispatcher.CurrentDispatcher;
+            SynchronizationContext.SetSynchronizationContext(
+                new DispatcherSynchronizationContext(ownerDispatcher));
+            lifecycle = new VaultLifecycleViewModel(
+                pickVault: () => Task.FromResult<string?>(fixture.Root),
+                enqueueUi: action => ownerDispatcher.BeginInvoke(action),
+                recentVaultsStore: new RecentVaultsStore(
+                    Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+                filterUiContext: SynchronizationContext.Current,
+                treeUiContext: SynchronizationContext.Current,
+                filterWorker: (_, cancellationToken) =>
+                {
+                    cancellationToken.Register(
+                        () => Volatile.Write(
+                            ref cancellationThreadId,
+                            Environment.CurrentManagedThreadId));
+                    filterStarted.Set();
+                    return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                });
+            ownerDispatcher.BeginInvoke(async () =>
+            {
+                try
+                {
+                    await lifecycle.OpenVaultAsync(fixture.Root);
+                    FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(
+                        lifecycle.FileSidebar);
+                    sidebar.FilterText = "note";
+                }
+                catch (Exception exception)
+                {
+                    setupException = exception;
+                }
+                finally
+                {
+                    ready.Set();
+                }
+            });
+            Dispatcher.Run();
+        })
+        {
+            IsBackground = true,
+        };
+        ownerThread.SetApartmentState(ApartmentState.STA);
+        ownerThread.Start();
+
+        try
+        {
+            Assert.True(ready.Wait(TimeSpan.FromSeconds(10)));
+            Assert.Null(setupException);
+            Assert.True(filterStarted.Wait(TimeSpan.FromSeconds(5)));
+            VaultLifecycleViewModel activeLifecycle = Assert.IsType<VaultLifecycleViewModel>(lifecycle);
+
+            await Task.Run(activeLifecycle.Dispose).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(ownerThreadId, Volatile.Read(ref cancellationThreadId));
+        }
+        finally
+        {
+            ownerDispatcher?.BeginInvokeShutdown(DispatcherPriority.Send);
+            Assert.True(ownerThread.Join(TimeSpan.FromSeconds(5)));
+        }
+    }
+
+    [Fact]
     public async Task PendingTreeRefreshMustFinishBeforeTheVaultSessionCloses()
     {
         using FixtureVault fixture = FixtureVault.Create(2, "tree-close-barrier");
@@ -218,13 +332,203 @@ public sealed class W1VaultCloseBarrierTests
             }));
         await lifecycle.OpenVaultAsync(fixture.Root);
         Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
 
         Task dispose = Task.Run(lifecycle.Dispose);
-        await Task.Delay(100);
+        Assert.True(SpinWait.SpinUntil(
+            () => sidebar.SessionShutdownStarted,
+            TimeSpan.FromSeconds(5)));
         Assert.False(dispose.IsCompleted);
 
         releaseProvider.Set();
         await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task DirectDisposalCancelsTreeRefreshAcrossCompletionPublication()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "tree-publication-barrier");
+        using var providerStarted = new ManualResetEventSlim();
+        int workerInvocations = 0;
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            treeUiContext: new PumpSynchronizationContext(),
+            treeWorker: (work, cancellationToken) =>
+            {
+                if (Interlocked.Increment(ref workerInvocations) == 1)
+                {
+                    work();
+                    return Task.CompletedTask;
+                }
+
+                providerStarted.Set();
+                cancellationToken.WaitHandle.WaitOne();
+                cancellationToken.ThrowIfCancellationRequested();
+                work();
+                return Task.CompletedTask;
+            });
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Task refreshCall = Task.Run(() => sidebar.Refresh());
+        Assert.True(providerStarted.Wait(TimeSpan.FromSeconds(5)));
+        Task dispose = Task.Run(lifecycle.Dispose);
+
+        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+        await refreshCall.WaitAsync(TimeSpan.FromSeconds(5));
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task TreePublicationDoesNotDependOnPumpingTheAmbientContext()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "tree-publication-context");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var scanCancellation = new CancelToken())
+        {
+            session.ScanInitial(scanCancellation);
+        }
+        var ambientContext = new NonPumpingSynchronizationContext();
+        FilesSidebarViewModel sidebar;
+        SynchronizationContext? prior = SynchronizationContext.Current;
+        try
+        {
+            SynchronizationContext.SetSynchronizationContext(ambientContext);
+            sidebar = new FilesSidebarViewModel(
+                session,
+                _ => { },
+                vaultRoot: fixture.Root,
+                localAppDataRoot: Path.Combine(fixture.Root, "device-state"),
+                treeUiContext: new PumpSynchronizationContext());
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(prior);
+        }
+
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(0, ambientContext.PostCount);
+    }
+
+    [Fact]
+    public async Task OwnerContextDisposeDoesNotWaitOnImportOrExpansionUiContinuations()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "sidebar-owner-context-dispose");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
+        string source = Path.GetTempFileName();
+        try
+        {
+            using var expansionStarted = new ManualResetEventSlim();
+            using var importStarted = new ManualResetEventSlim();
+            using var completed = new ManualResetEventSlim();
+            int delayExpansion = 0;
+            Exception? threadException = null;
+            var lifecycle = new VaultLifecycleViewModel(
+                pickVault: () => Task.FromResult<string?>(fixture.Root),
+                enqueueUi: action => action(),
+                recentVaultsStore: new RecentVaultsStore(
+                    Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+                treeUiContext: new PumpSynchronizationContext(),
+                pickImportSources: () => Task.FromResult<IReadOnlyList<string>>([source]),
+                treeWorker: (work, cancellationToken) =>
+                {
+                    if (Volatile.Read(ref delayExpansion) == 0)
+                    {
+                        return Task.Run(work, cancellationToken);
+                    }
+
+                    expansionStarted.Set();
+                    return Task.Run(async () =>
+                    {
+                        await Task.Delay(100);
+                        work();
+                    });
+                },
+                importWorker: (work, _) => Task.Run(async () =>
+                {
+                    importStarted.Set();
+                    await Task.Delay(100);
+                    work();
+                }));
+            await lifecycle.OpenVaultAsync(fixture.Root);
+            FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+            await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+            Volatile.Write(ref delayExpansion, 1);
+
+            var ownerThread = new Thread(() =>
+            {
+                var context = new QueueingSynchronizationContext();
+                SynchronizationContext.SetSynchronizationContext(context);
+                try
+                {
+                    sidebar.ExpandLoadedCommand.Execute(null);
+                    sidebar.ImportCommand.Execute(null);
+                    Assert.True(expansionStarted.Wait(TimeSpan.FromSeconds(5)));
+                    Assert.True(importStarted.Wait(TimeSpan.FromSeconds(5)));
+                    lifecycle.Dispose();
+                    Assert.True(SpinWait.SpinUntil(
+                        () =>
+                        {
+                            context.Drain();
+                            return sidebar.ExpandLoadedCompletion.IsCompleted
+                                && sidebar.ImportCompletion.IsCompleted;
+                        },
+                        TimeSpan.FromSeconds(5)));
+                }
+                catch (Exception exception)
+                {
+                    threadException = exception;
+                }
+                finally
+                {
+                    completed.Set();
+                }
+            })
+            {
+                IsBackground = true,
+            };
+            ownerThread.Start();
+
+            Assert.True(completed.Wait(TimeSpan.FromSeconds(5)));
+            Assert.Null(threadException);
+        }
+        finally
+        {
+            File.Delete(source);
+        }
+    }
+
+    [Fact]
+    public async Task CancellationAtTreeAndBulkCompletionNeverAbortsCleanup()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "tree-cancellation-ownership");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            treeUiContext: new PumpSynchronizationContext());
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        for (int attempt = 0; attempt < 25; attempt++)
+        {
+            sidebar.Refresh();
+            Task refresh = sidebar.TreeRefreshCompletion;
+            await Task.WhenAll(Task.Run(sidebar.CancelTreeRefresh), refresh)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+
+            sidebar.ExpandLoadedCommand.Execute(null);
+            Task expansion = sidebar.ExpandLoadedCompletion;
+            await Task.WhenAll(Task.Run(sidebar.CancelExpandLoaded), expansion)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+        }
     }
 
     [Fact]
@@ -275,10 +579,361 @@ public sealed class W1VaultCloseBarrierTests
         Assert.True(pendingFilter.IsCompleted);
     }
 
+    [Theory]
+    [InlineData("note1")]
+    [InlineData("")]
+    public async Task DirectDisposalJoinsASupersededSidebarFilter(
+        string replacementQuery)
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "superseded-filter-dispose-barrier");
+        using var firstWorkerStarted = new ManualResetEventSlim();
+        using var releaseFirstWorker = new ManualResetEventSlim();
+        int workerInvocations = 0;
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            filterUiContext: new PumpSynchronizationContext(),
+            filterWorker: (work, _) => Task.Run(() =>
+            {
+                if (Interlocked.Increment(ref workerInvocations) == 1)
+                {
+                    firstWorkerStarted.Set();
+                    releaseFirstWorker.Wait();
+                }
+
+                work();
+            }));
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        sidebar.FilterText = "note0";
+        Assert.True(firstWorkerStarted.Wait(TimeSpan.FromSeconds(5)));
+        Task firstFilter = sidebar.FilterCompletion;
+
+        sidebar.FilterText = replacementQuery;
+        Task transitiveBarrier = sidebar.FilterCompletion;
+        Task dispose = Task.Run(lifecycle.Dispose);
+
+        Assert.True(SpinWait.SpinUntil(
+            () => sidebar.SessionShutdownStarted,
+            TimeSpan.FromSeconds(5)));
+        Assert.False(dispose.IsCompleted);
+        Assert.False(firstFilter.IsCompleted);
+
+        releaseFirstWorker.Set();
+        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+        await transitiveBarrier.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(firstFilter.IsCompleted);
+    }
+
+    [Fact]
+    public async Task DirectDisposalJoinsBulkExpansionSessionWork()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "expand-dispose-barrier");
+        string folder = Path.Combine(fixture.Root, "folder");
+        Directory.CreateDirectory(folder);
+        File.WriteAllText(Path.Combine(folder, "child.md"), string.Empty);
+        using var expansionWorkerStarted = new ManualResetEventSlim();
+        using var releaseExpansionWorker = new ManualResetEventSlim();
+        int blockWorker = 0;
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            treeUiContext: new PumpSynchronizationContext(),
+            treeWorker: (work, cancellationToken) => Task.Run(() =>
+            {
+                if (Volatile.Read(ref blockWorker) != 0)
+                {
+                    expansionWorkerStarted.Set();
+                    releaseExpansionWorker.Wait();
+                }
+
+                work();
+            }, cancellationToken));
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Volatile.Write(ref blockWorker, 1);
+        sidebar.ExpandLoadedCommand.Execute(null);
+        Assert.True(expansionWorkerStarted.Wait(TimeSpan.FromSeconds(5)));
+
+        Task dispose = Task.Run(lifecycle.Dispose);
+        Assert.True(SpinWait.SpinUntil(
+            () => sidebar.SessionShutdownStarted,
+            TimeSpan.FromSeconds(5)));
+        Assert.False(dispose.IsCompleted);
+
+        releaseExpansionWorker.Set();
+        await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+        await sidebar.ExpandLoadedCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task DirectDisposalJoinsImportSessionWork()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "import-dispose-barrier");
+        string source = Path.GetTempFileName();
+        try
+        {
+            await File.WriteAllTextAsync(source, "imported");
+            using var importWorkerStarted = new ManualResetEventSlim();
+            using var releaseImportWorker = new ManualResetEventSlim();
+            var lifecycle = new VaultLifecycleViewModel(
+                pickVault: () => Task.FromResult<string?>(fixture.Root),
+                enqueueUi: action => action(),
+                recentVaultsStore: new RecentVaultsStore(
+                    Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+                pickImportSources: () => Task.FromResult<IReadOnlyList<string>>([source]),
+                importWorker: (work, _) => Task.Run(() =>
+                {
+                    importWorkerStarted.Set();
+                    releaseImportWorker.Wait();
+                    work();
+                }));
+            await lifecycle.OpenVaultAsync(fixture.Root);
+            FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+            sidebar.ImportCommand.Execute(null);
+            Assert.True(importWorkerStarted.Wait(TimeSpan.FromSeconds(5)));
+            Task import = sidebar.ImportCompletion;
+
+            Task dispose = Task.Run(lifecycle.Dispose);
+            Assert.True(SpinWait.SpinUntil(
+                () => sidebar.SessionShutdownStarted,
+                TimeSpan.FromSeconds(5)));
+            Assert.False(dispose.IsCompleted);
+
+            releaseImportWorker.Set();
+            await dispose.WaitAsync(TimeSpan.FromSeconds(5));
+            await import.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            File.Delete(source);
+        }
+    }
+
+    [Fact]
+    public async Task ImportIsCloseVisibleWhileTheSourcePickerIsPending()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "import-picker-close-barrier");
+        var selectedSources = new TaskCompletionSource<IReadOnlyList<string>>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            pickImportSources: () => selectedSources.Task);
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        sidebar.ImportCommand.Execute(null);
+
+        Assert.True(sidebar.IsImporting);
+        Assert.False(lifecycle.PrepareForApplicationClose());
+        Assert.Contains("import cancellation requested", lifecycle.StatusText, StringComparison.OrdinalIgnoreCase);
+
+        selectedSources.SetResult([]);
+        await sidebar.ImportCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(sidebar.IsImporting);
+    }
+
+    [Fact]
+    public async Task PickerCompletionAfterDirectDisposalCannotAdmitImportWork()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "import-picker-shutdown-admission");
+        string source = Path.GetTempFileName();
+        try
+        {
+            var selectedSources = new TaskCompletionSource<IReadOnlyList<string>>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            int workerInvocations = 0;
+            var lifecycle = new VaultLifecycleViewModel(
+                pickVault: () => Task.FromResult<string?>(fixture.Root),
+                enqueueUi: action => action(),
+                recentVaultsStore: new RecentVaultsStore(
+                    Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+                pickImportSources: () => selectedSources.Task,
+                importWorker: (work, cancellationToken) =>
+                {
+                    Interlocked.Increment(ref workerInvocations);
+                    return Task.Run(work, cancellationToken);
+                });
+            await lifecycle.OpenVaultAsync(fixture.Root);
+            FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+            sidebar.ImportCommand.Execute(null);
+            Task import = sidebar.ImportCompletion;
+            Assert.True(sidebar.IsImporting);
+
+            await Task.Run(lifecycle.Dispose).WaitAsync(TimeSpan.FromSeconds(5));
+            selectedSources.SetResult([source]);
+            await import.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal(0, Volatile.Read(ref workerInvocations));
+        }
+        finally
+        {
+            File.Delete(source);
+        }
+    }
+
+    [Fact]
+    public async Task ShutdownRejectsEveryRepresentativeSidebarSessionEntry()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "sidebar-shutdown-admission");
+        string folderPath = Path.Combine(fixture.Root, "folder");
+        Directory.CreateDirectory(folderPath);
+        File.WriteAllText(Path.Combine(folderPath, "child.md"), string.Empty);
+        int treeWorkerInvocations = 0;
+        int filterWorkerInvocations = 0;
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            treeUiContext: new PumpSynchronizationContext(),
+            filterUiContext: new PumpSynchronizationContext(),
+            treeWorker: (work, cancellationToken) => Task.Run(() =>
+            {
+                Interlocked.Increment(ref treeWorkerInvocations);
+                work();
+            }, cancellationToken),
+            filterWorker: (work, cancellationToken) => Task.Run(() =>
+            {
+                Interlocked.Increment(ref filterWorkerInvocations);
+                work();
+            }, cancellationToken));
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        int initialTreeWorkers = Volatile.Read(ref treeWorkerInvocations);
+        FileTreeNodeViewModel folder = Assert.Single(
+            sidebar.RootNodes,
+            node => node.IsDirectory && node.Path == "folder");
+        FileTreeNodeViewModel file = Assert.Single(
+            sidebar.RootNodes,
+            node => !node.IsDirectory && node.Path == "note0.md");
+        int initialFolderChildren = folder.Children.Count;
+
+        lifecycle.Dispose();
+        Exception? exception = Record.Exception(() =>
+        {
+            sidebar.FilterText = "note";
+            sidebar.Refresh();
+            sidebar.ShowTags = true;
+            sidebar.SelectedNode = folder;
+            sidebar.IsDualPaneEnabled = true;
+            sidebar.LoadChildren(folder);
+            sidebar.ExpandLoadedCommand.Execute(null);
+            sidebar.ImportCommand.Execute(null);
+
+            sidebar.MutationName = "after-shutdown";
+            sidebar.CreateFolderCommand.Execute(null);
+            sidebar.CreateNoteCommand.Execute(null);
+            sidebar.CreateFolderNoteCommand.Execute(null);
+            sidebar.DeleteFolderNoteCommand.Execute(null);
+
+            sidebar.SelectedNode = file;
+            sidebar.MutationName = "renamed-after-shutdown.md";
+            sidebar.RenameCommand.Execute(null);
+            sidebar.CopyWikilinkCommand.Execute(null);
+            sidebar.DeleteCommand.Execute(null);
+            file.IsBatchSelected = true;
+            sidebar.TagInput = "after-shutdown";
+            sidebar.AddTagCommand.Execute(null);
+            sidebar.RemoveTagCommand.Execute(null);
+            sidebar.MoveDestination = "folder";
+            sidebar.BatchMoveCommand.Execute(null);
+            sidebar.BatchTrashCommand.Execute(null);
+        });
+
+        await sidebar.ImportCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        await sidebar.ExpandLoadedCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Null(exception);
+        Assert.Equal(initialTreeWorkers, Volatile.Read(ref treeWorkerInvocations));
+        Assert.Equal(0, Volatile.Read(ref filterWorkerInvocations));
+        Assert.Equal(initialFolderChildren, folder.Children.Count);
+        Assert.False(Directory.Exists(Path.Combine(fixture.Root, "after-shutdown")));
+        Assert.False(File.Exists(Path.Combine(fixture.Root, "after-shutdown.md")));
+        Assert.True(File.Exists(Path.Combine(fixture.Root, "note0.md")));
+    }
+
+    [Fact]
+    public async Task ThrowingFilterCancellationCallbackDoesNotSkipImportCancellation()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "sidebar-cancel-callback-failure");
+        string source = Path.GetTempFileName();
+        try
+        {
+            using var filterStarted = new ManualResetEventSlim();
+            using var importStarted = new ManualResetEventSlim();
+            var lifecycle = new VaultLifecycleViewModel(
+                pickVault: () => Task.FromResult<string?>(fixture.Root),
+                enqueueUi: action => action(),
+                recentVaultsStore: new RecentVaultsStore(
+                    Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+                filterUiContext: new PumpSynchronizationContext(),
+                pickImportSources: () => Task.FromResult<IReadOnlyList<string>>([source]),
+                filterWorker: (_, cancellationToken) =>
+                {
+                    cancellationToken.Register(
+                        () => throw new InvalidOperationException("sensitive cancellation detail"));
+                    filterStarted.Set();
+                    return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                },
+                importWorker: (_, cancellationToken) =>
+                {
+                    importStarted.Set();
+                    return Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                });
+            await lifecycle.OpenVaultAsync(fixture.Root);
+            FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+            sidebar.FilterText = "note";
+            sidebar.ImportCommand.Execute(null);
+            Assert.True(filterStarted.Wait(TimeSpan.FromSeconds(5)));
+            Assert.True(importStarted.Wait(TimeSpan.FromSeconds(5)));
+
+            await Task.Run(lifecycle.Dispose).WaitAsync(TimeSpan.FromSeconds(5));
+            await sidebar.FilterCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+            await sidebar.ImportCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            File.Delete(source);
+        }
+    }
+
     private sealed class PumpSynchronizationContext : SynchronizationContext
     {
         public override void Post(SendOrPostCallback callback, object? state) =>
             ThreadPool.QueueUserWorkItem(_ => callback(state));
+    }
+
+    private sealed class NonPumpingSynchronizationContext : SynchronizationContext
+    {
+        private int _postCount;
+        public int PostCount => Volatile.Read(ref _postCount);
+
+        public override void Post(SendOrPostCallback callback, object? state) =>
+            Interlocked.Increment(ref _postCount);
+    }
+
+    private sealed class QueueingSynchronizationContext : SynchronizationContext
+    {
+        private readonly ConcurrentQueue<(SendOrPostCallback Callback, object? State)> _queue = [];
+
+        public override void Post(SendOrPostCallback callback, object? state) =>
+            _queue.Enqueue((callback, state));
+
+        public void Drain()
+        {
+            while (_queue.TryDequeue(out var work))
+            {
+                work.Callback(work.State);
+            }
+        }
     }
 }
 
@@ -305,7 +960,9 @@ public sealed class W1SidebarHardeningTests
         foreach (string ownedMember in new[]
         {
             "_filterCancellation",
+            "_filterCancellationGate",
             "_filterCompletion",
+            "Func<Action, CancellationToken, Task> _runFilterWorker",
             "_filterGeneration",
             "FilterAfterDelayAsync",
             "BuildDateWindows",
@@ -367,6 +1024,9 @@ public sealed class W1SidebarHardeningTests
             "Func<Task<IReadOnlyList<string>>> _pickImportSources",
             "string? _vaultRoot",
             "CancellationTokenSource? _importCancellation",
+            "object _importCancellationGate",
+            "Task _importCompletion",
+            "Func<Action, CancellationToken, Task> _runImportWorker",
             "bool _isImporting",
             "private async Task ImportAsync",
             "private ImportResult ImportSources",
@@ -375,6 +1035,36 @@ public sealed class W1SidebarHardeningTests
         {
             Assert.DoesNotContain(ownedMember, primary, StringComparison.Ordinal);
             Assert.Contains(ownedMember, import, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void SessionWorkAdmissionIsOwnedByTheDedicatedPartial()
+    {
+        string sourceDirectory = Path.Combine(
+            RepoRoot(),
+            "apps",
+            "slate-windows",
+            "src",
+            "SlateWindows");
+        string primary = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.cs"));
+        string sessionWork = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.SessionWork.cs"));
+
+        foreach (string ownedMember in new[]
+        {
+            "object _sessionWorkGate",
+            "int _activeSessionWork",
+            "bool _sessionShutdownStarted",
+            "BeginSessionShutdownAndCaptureWork",
+            "TryBeginSessionWork",
+            "class SessionWorkLease",
+            "record SidebarSessionShutdown",
+        })
+        {
+            Assert.DoesNotContain(ownedMember, primary, StringComparison.Ordinal);
+            Assert.Contains(ownedMember, sessionWork, StringComparison.Ordinal);
         }
     }
 
@@ -398,6 +1088,145 @@ public sealed class W1SidebarHardeningTests
 
         Assert.Equal("Could not load files.", sidebar.Status);
         Assert.DoesNotContain("sensitive detail", sidebar.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UnexpectedFilterWorkerFailureIsReportedWithoutFaultingCompletion()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "sidebar-filter-failure");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var context = new PumpSynchronizationContext();
+        var announcements = new List<A11yEvent>();
+        var sidebar = CreateSidebar(
+            session,
+            fixture.Root,
+            filterUiContext: context,
+            filterWorker: (_, _) =>
+                Task.FromException(new InvalidOperationException("sensitive detail")),
+            announce: announcements.Add);
+        announcements.Clear();
+
+        sidebar.FilterText = "note";
+        Assert.True(SpinWait.SpinUntil(
+            () => context.PendingCount > 0,
+            TimeSpan.FromSeconds(5)));
+        context.Drain();
+        await sidebar.FilterCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("Could not filter files.", sidebar.Status);
+        Assert.DoesNotContain("sensitive detail", sidebar.Status, StringComparison.Ordinal);
+        Assert.Contains(announcements, item => item is A11yEvent.HostComposed);
+        Assert.All(
+            announcements,
+            item => Assert.DoesNotContain(
+                "sensitive detail",
+                item.ToString(),
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ThrowingFilterPresentationContextDoesNotFaultCompletion()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "sidebar-filter-context-failure");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var sidebar = CreateSidebar(
+            session,
+            fixture.Root,
+            filterUiContext: new ThrowingSynchronizationContext());
+
+        sidebar.FilterText = "note";
+        await sidebar.FilterCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ImportPickerFailureUsesGenericAccessibleCopy()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "sidebar-import-picker-failure");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announcements = new List<A11yEvent>();
+        var sidebar = CreateSidebar(
+            session,
+            fixture.Root,
+            announce: announcements.Add,
+            pickImportSources: () => Task.FromException<IReadOnlyList<string>>(
+                new IOException("sensitive picker path")));
+        announcements.Clear();
+
+        sidebar.ImportCommand.Execute(null);
+        await sidebar.ImportCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("Could not choose import sources.", sidebar.Status);
+        Assert.Contains(announcements, item => item is A11yEvent.HostComposed);
+        Assert.All(
+            announcements,
+            item => Assert.DoesNotContain(
+                "sensitive picker path",
+                item.ToString(),
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ImportWorkerFailureUsesGenericAccessibleCopy()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "sidebar-import-worker-failure");
+        string source = Path.GetTempFileName();
+        try
+        {
+            using VaultSession session = OpenScanned(fixture.Root);
+            var announcements = new List<A11yEvent>();
+            var sidebar = CreateSidebar(
+                session,
+                fixture.Root,
+                announce: announcements.Add,
+                pickImportSources: () => Task.FromResult<IReadOnlyList<string>>([source]),
+                importWorker: (_, _) =>
+                    Task.FromException(new ApplicationException("sensitive import path")));
+            announcements.Clear();
+
+            sidebar.ImportCommand.Execute(null);
+            await sidebar.ImportCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.Equal("Could not import the selected items.", sidebar.Status);
+            Assert.Contains(announcements, item => item is A11yEvent.HostComposed);
+            Assert.All(
+                announcements,
+                item => Assert.DoesNotContain(
+                    "sensitive import path",
+                    item.ToString(),
+                    StringComparison.Ordinal));
+        }
+        finally
+        {
+            File.Delete(source);
+        }
+    }
+
+    [Fact]
+    public async Task UnexpectedBulkExpansionFailureUsesGenericAccessibleCopy()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "sidebar-expansion-worker-failure");
+        Directory.CreateDirectory(Path.Combine(fixture.Root, "folder"));
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announcements = new List<A11yEvent>();
+        var sidebar = CreateSidebar(
+            session,
+            fixture.Root,
+            treeWorker: (_, _) =>
+                Task.FromException(new ApplicationException("sensitive expansion detail")),
+            announce: announcements.Add);
+        announcements.Clear();
+
+        sidebar.ExpandLoadedCommand.Execute(null);
+        await sidebar.ExpandLoadedCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("Could not expand loaded folders.", sidebar.Status);
+        Assert.Contains(announcements, item => item is A11yEvent.HostComposed);
+        Assert.All(
+            announcements,
+            item => Assert.DoesNotContain(
+                "sensitive expansion detail",
+                item.ToString(),
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -689,15 +1518,22 @@ public sealed class W1SidebarHardeningTests
         SynchronizationContext? filterUiContext = null,
         SynchronizationContext? treeUiContext = null,
         Func<Action, CancellationToken, Task>? treeWorker = null,
-        IEnumerable<string>? restoredExpandedPaths = null) => new(
+        Func<Action, CancellationToken, Task>? filterWorker = null,
+        IEnumerable<string>? restoredExpandedPaths = null,
+        Action<A11yEvent>? announce = null,
+        Func<Task<IReadOnlyList<string>>>? pickImportSources = null,
+        Func<Action, CancellationToken, Task>? importWorker = null) => new(
         session,
-        _ => { },
+        announce ?? (_ => { }),
         restoredExpandedPaths: restoredExpandedPaths,
         vaultRoot: root,
         localAppDataRoot: Path.Combine(root, "device-state"),
         filterUiContext: filterUiContext,
         treeUiContext: treeUiContext,
-        treeWorker: treeWorker);
+        treeWorker: treeWorker,
+        filterWorker: filterWorker,
+        pickImportSources: pickImportSources,
+        importWorker: importWorker);
 
     private static string RepoRoot()
     {
@@ -725,6 +1561,12 @@ public sealed class W1SidebarHardeningTests
                 work.Callback(work.State);
             }
         }
+    }
+
+    private sealed class ThrowingSynchronizationContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback d, object? state) =>
+            throw new InvalidOperationException("presentation context unavailable");
     }
 }
 

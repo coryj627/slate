@@ -35,7 +35,7 @@ green.
 |---|---|---|---|---|
 | W1-RT-01 | High / P1 | Security, privacy | `HostLog` redirects managed stderr into `%LOCALAPPDATA%\Slate\logs\slate-windows.log`, while W1 writes vault-relative file-change paths and raw exception messages to `Console.Error`. Note names and filesystem paths can therefore persist in a default durable log, bypassing core's release privacy floor. | Default durable diagnostics contain stable event names and exception types only. Sentinel vault paths/messages never appear in unit or startup-census logs. |
 | W1-RT-02 | High / P1 | Reliability, security | Import, workspace, sidebar settings, and file-recents readers check `FileInfo.Length` and then use an unbounded second read/parse. A replacement between check and open can bypass the cap; import can allocate beyond 256 MiB before its after-read validation runs. | Every affected read enforces its limit on the opened stream, reads at most limit + 1, and has boundary/replacement regression coverage. |
-| W1-RT-03 | High / P1 | Correctness, concurrency | Vault close barriers cover import and bulk expansion, but not the sidebar filter task. `CloseSession` can dispose the shared `VaultSession` while a background filter is inside FFI. | Teardown first cancels all session-backed work and cannot dispose the session until those tasks have reached a terminal state; a deterministic race test proves ordering. |
+| W1-RT-03 | High / P1 | Correctness, concurrency | The initial close barrier omitted filtering. A final re-audit also found that superseded filter work, direct disposal, import/source-picker and bulk-expansion work, synchronous mutations/providers, task publication, and cancellation-source disposal did not share one complete lifetime boundary. | One sidebar-owned admission/drain barrier closes before producer cancellation, rejects every later native-session entry, joins every admitted native operation before disposal, makes cancellation failure non-fatal, and has deterministic publication, supersession, retained-sidebar, import, expansion, and cancellation-race coverage. |
 | W1-RT-04 | Medium / P2 | Reliability | Single-instance activation applies a timeout to pipe connection and server reads, but client writes/flush are synchronous and have no deadline. A connected primary that stops reading can stall secondary startup. | Frame write and flush share the caller's remaining deadline; a stalled-server test completes within a bounded tolerance. |
 | W1-RT-05 | Medium / P2 | Performance | Quick Open displays 50 rows, but every keystroke ranks, sorts, allocates, and crosses FFI with every matching row. Work is O(N log N) and output allocation is O(N), even when only top 50 plus the total count are consumed. | Core returns exact total plus the deterministic top K; results match full-ranking goldens and a large-corpus benchmark demonstrates bounded output and O(N log K) selection. |
 | W1-RT-06 | Medium / P2 | Performance, accessibility | Initial/root directory refresh synchronously creates and sorts up to 5,000 view models on the UI thread, and the large file collections do not explicitly enable recycling virtualization. The execution report already records the latency residual. | Provider work runs off the UI thread, stale generations cannot publish, recycling virtualization is asserted, and a 5,000-item responsiveness census meets the agreed UI-thread budget. |
@@ -43,7 +43,7 @@ green.
 | W1-RT-08 | Medium / release blocker | Accessibility, completeness | Interactive FlaUI/axe is CI-only, and Narrator, NVDA, JAWS, four built-in Contrast themes, and a customized Contrast theme remain unrecorded. Code contracts are strong, but the milestone cannot claim human AT acceptance without this evidence. | Automated evidence retention is implemented and verified by Actions run 29926688975: its retained TRX and three dated, revision-bound JSON summaries passed with zero axe errors. Main-window discovery retries transient UIA COM timeouts only within its existing bounded window, with regression coverage. Human-only AT and Contrast-theme rows remain explicitly pending until performed by a named human operator; this release blocker cannot be closed by code alone. |
 | W1-RT-09 | Low / P3 | Reliability | Several temporary-file cleanup blocks catch `IOException` but not `UnauthorizedAccessException`, allowing cleanup failure to mask an earlier primary exception. | Shared cleanup is best-effort for both exception classes and preserves the original failure; unit coverage pins this behavior. |
 | W1-RT-10 | Low / P3 | Maintainability, CI | The test project executes `HostLogProbe.dll` without a build dependency. `dotnet test` from a clean tree fails unless the full solution build happened first. | Remediated in the release-evidence PR: the test project declares and contract-tests a build-only `HostLogProbe` project reference. A clean standalone Release invocation rebuilt the probe and passed 127/127 tests on 2026-07-22. |
-| W1-RT-11 | Low / P3 | Maintainability | After security/performance remediation, `FilesSidebarViewModel.cs` had grown to 2,653 lines while `WorkspaceViewModel.cs` remained 1,612 lines, with persistence, asynchronous work, command policy, and presentation projection colocated. This raises review and race-analysis cost, although no defect follows from size alone. | Complete. Sidebar filter/tree/import ownership is isolated in 258/493/340-line partials, reducing the primary sidebar file to 1,614 lines. Workspace persistence and layout policy now have 212/773-line owners, reducing the primary workspace file to 659 lines. Structure censuses guard representative declarations against accidental boundary collapse. Each behavior-neutral extraction remained within the authored-file cap. |
+| W1-RT-11 | Low / P3 | Maintainability | After security/performance remediation, `FilesSidebarViewModel.cs` had grown to 2,653 lines while `WorkspaceViewModel.cs` remained 1,612 lines, with persistence, asynchronous work, command policy, and presentation projection colocated. This raises review and race-analysis cost, although no defect follows from size alone. | Complete. Sidebar filter/tree/import/session-work ownership is isolated in 432/665/472/133-line partials, leaving the primary sidebar file at 1,688 lines after the complete synchronous admission wiring. Workspace persistence and layout policy occupy 212/773-line owners, leaving the primary workspace file at 659 lines. Structure censuses guard representative declarations against accidental boundary collapse. Each extraction/remediation remained within the authored-file cap. |
 
 ## Remediation PR groups
 
@@ -84,8 +84,11 @@ than that ceiling.
 
 Every group follows the same gate: focused tests, full applicable local gates,
 an adversarial diff review across all eight audit dimensions, correction of any
-new finding, draft PR publication, 120-second CI/Codoki polling, all CI green,
-Codoki explicitly safe to merge, then squash merge before the next group.
+new finding, PR publication, 120-second CI/review polling, all CI green, then
+squash merge before the next group. Codoki is quota-unavailable through
+2026-08-01. PRs handled during that outage use a documented exception requiring
+three independent read-only adversarial reviews and fully green CI; they do not
+claim a Codoki score or “safe to merge” verdict that was not produced.
 
 ## Remediation progress
 
@@ -100,12 +103,18 @@ Codoki explicitly safe to merge, then squash merge before the next group.
   chunks, stable reads allocate one final buffer, and temporary cleanup cannot
   mask the primary failure. Exact-limit, limit + 1, under-reported growth,
   cancellation, cleanup, and production-store diagnostics are covered.
-- W1-RT-03 and W1-RT-04 closed by PR #1013: normal vault close now cancels
-  sidebar filtering and defers disposal until the task is terminal, direct
-  teardown joins the bounded filter operation before disposing the native
-  session, and secondary-instance frame writes and flushes share the caller's
-  remaining deadline. Deterministic teardown-order and stalled-primary tests
-  cover both paths.
+- W1-RT-04 closed and W1-RT-03 was initially addressed by PR #1013. The final
+  post-merge audit reopened W1-RT-03 after finding superseded filter, direct
+  import/expansion, synchronous provider/mutation, task-publication, and
+  cancellation-source races. The follow-up remediation gives every sidebar
+  native-session entry one admission/drain owner, closes admission before
+  canceling all producers, joins already-admitted work before session disposal,
+  scopes UI publication outside leases, and gives unexpected asynchronous
+  failures privacy-safe terminal handling. Production disposal is serialized
+  through the owning dispatcher and joins any active session-loading task.
+  Deterministic regressions cover supersession, publication, retained
+  post-disposal calls, cancellation/disposal races, picker admission, and
+  cancellation callbacks that throw without preventing later cancellation.
 - W1-RT-05 closed by PR #1014: core retains only the deterministic top K while
   returning an exact total, and Windows/macOS request their 50-row display
   page through the same UniFFI result. The compatibility corpus covers zero,
@@ -126,11 +135,11 @@ Codoki explicitly safe to merge, then squash merge before the next group.
   branch, and cover both close barriers. Unexpected worker faults are
   privacy-safe, user-visible, and terminal without faulting teardown joins.
   CI was green and Codoki reported 5/5 confidence and safe to merge.
-- W1-RT-07 remediation is in progress on `agent/w1-anchored-stores`: workspace,
-  sidebar settings, and legacy per-vault recents operations hold and revalidate
-  opened vault and `.slate` identities, reject final reparse handles, verify
-  child final paths, and replace by renaming the flushed temporary-file handle
-  only while the directory identity remains fixed. Eighteen focused persistence
-  tests pass, including three external-sentinel reparse cases, deterministic
-  read/write directory-swap attempts, forward-compatible round trips, valid
-  legacy migration, denied-replacement cleanup, and bounded serialization.
+- W1-RT-07 was initially remediated by PR #1016: workspace, sidebar settings,
+  and legacy per-vault recents operations hold and revalidate opened vault and
+  `.slate` identities, reject final reparse handles, verify child final paths,
+  and use temporary-file handles for replacement. The final post-merge audit
+  reopened the destination rename itself: it still names the target through an
+  absolute path, leaving an ancestor-junction swap window. A follow-up
+  directory-handle-relative rename and external-sentinel race test remain in
+  the ranked remediation queue; this ledger does not claim final RT-07 closure.

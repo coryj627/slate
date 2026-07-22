@@ -42,6 +42,12 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     private readonly SynchronizationContext? _filterUiContext;
     private readonly SynchronizationContext? _treeUiContext;
     private readonly Func<Action, CancellationToken, Task>? _treeWorker;
+    private readonly Func<Action, CancellationToken, Task>? _filterWorker;
+    private readonly Func<Action, CancellationToken, Task>? _importWorker;
+    private readonly Func<
+        Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
+        Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>> _runSessionLoad;
+    private readonly Dispatcher? _lifecycleDispatcher;
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
     private readonly RelayCommand _closeVaultCommand;
@@ -63,6 +69,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     private FilesSidebarViewModel? _fileSidebar;
     private WorkspaceViewModel? _workspace;
     private QuickSwitcherViewModel? _quickSwitcher;
+    private Task _sessionLoadCompletion = Task.CompletedTask;
     private int _sidebarRefreshTicket;
 
     public VaultLifecycleViewModel(
@@ -81,7 +88,12 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         Func<DateTimeOffset>? scanClock = null,
         SynchronizationContext? filterUiContext = null,
         SynchronizationContext? treeUiContext = null,
-        Func<Action, CancellationToken, Task>? treeWorker = null)
+        Func<Action, CancellationToken, Task>? treeWorker = null,
+        Func<Action, CancellationToken, Task>? filterWorker = null,
+        Func<Action, CancellationToken, Task>? importWorker = null,
+        Func<
+            Func<(ScanReport Report, SwitcherFile[] SwitcherFiles)>,
+            Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)>>? sessionLoadWorker = null)
     {
         _pickVault = pickVault;
         _enqueueUi = enqueueUi;
@@ -100,9 +112,15 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         _scanAnnouncements = new ScanAnnouncementGate(scanClock);
         _filterUiContext = filterUiContext;
         SynchronizationContext? currentUiContext = SynchronizationContext.Current;
+        _lifecycleDispatcher = currentUiContext is DispatcherSynchronizationContext
+            ? Dispatcher.CurrentDispatcher
+            : null;
         _treeUiContext = treeUiContext
             ?? (currentUiContext is DispatcherSynchronizationContext ? currentUiContext : null);
         _treeWorker = treeWorker;
+        _filterWorker = filterWorker;
+        _importWorker = importWorker;
+        _runSessionLoad = sessionLoadWorker ?? (work => Task.Run(work));
         _openVaultCommand = new AsyncRelayCommand(PickAndOpenVaultAsync, () => !IsBusy);
         _openRecentCommand = new AsyncRelayCommand(
             OpenRecentAsync,
@@ -270,11 +288,13 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             VaultSession activeSession = _session;
             CancelToken activeCancel = _scanCancel;
             UiProgressListener activeProgressListener = _progressListener;
-            (ScanReport Report, SwitcherFile[] SwitcherFiles) loaded = await Task.Run(() =>
+            Task<(ScanReport Report, SwitcherFile[] SwitcherFiles)> loadTask = _runSessionLoad(() =>
             {
                 ScanReport report = activeSession.ScanInitialWithProgress(activeCancel, activeProgressListener);
                 return (report, LoadSwitcherFiles(activeSession));
             });
+            _sessionLoadCompletion = loadTask;
+            (ScanReport Report, SwitcherFile[] SwitcherFiles) loaded = await loadTask;
             if (generation == _generation)
             {
                 StatusText = $"Scan finished: {loaded.Report.FilesIndexed} files indexed.";
@@ -306,6 +326,11 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         finally
         {
             openedSession?.Dispose();
+            if (_sessionLoadCompletion.IsCompleted)
+            {
+                _sessionLoadCompletion = Task.CompletedTask;
+            }
+
             if (generation == _generation)
             {
                 _scanCancel?.Dispose();
@@ -359,8 +384,18 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
 
     public void Dispose()
     {
+        if (_lifecycleDispatcher is Dispatcher dispatcher && !dispatcher.CheckAccess())
+        {
+            dispatcher.Invoke(DisposeCore);
+            return;
+        }
+
+        DisposeCore();
+    }
+
+    private void DisposeCore()
+    {
         ++_generation;
-        _scanCancel?.Cancel();
         CloseSession();
     }
 
@@ -539,20 +574,19 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     {
         if (FileSidebar is FilesSidebarViewModel sidebar)
         {
-            sidebar.CancelTreeRefresh();
+            SidebarSessionShutdown shutdown = sidebar.BeginSessionShutdownAndCaptureWork();
             try
             {
-                sidebar.TreeRefreshCompletion.GetAwaiter().GetResult();
+                shutdown.TreeRefresh.GetAwaiter().GetResult();
             }
             catch (Exception exception)
             {
                 HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshShutdownFailed, exception);
             }
 
-            sidebar.CancelFilter();
             try
             {
-                sidebar.FilterCompletion.GetAwaiter().GetResult();
+                shutdown.Filter.GetAwaiter().GetResult();
             }
             catch (Exception exception)
             {
@@ -560,14 +594,36 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
                 // released without racing live FFI work.
                 HostLog.Write(HostDiagnosticEvent.SidebarFilterShutdownFailed, exception);
             }
+
+            shutdown.SessionWork.GetAwaiter().GetResult();
         }
 
-        // TryCloseWorkspace normally supplies the asynchronous barrier. This
-        // cancellation is the fail-safe for direct disposal/error teardown so
-        // no queued bulk-expansion page begins after session shutdown starts.
-        FileSidebar?.CancelExpandLoaded();
         _scanAnnouncements.Reset();
-        _scanCancel?.Cancel();
+        try
+        {
+            _scanCancel?.Cancel();
+        }
+        catch (Exception exception)
+        {
+            HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+        }
+
+        try
+        {
+            _sessionLoadCompletion.GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (VaultException.Cancelled)
+        {
+        }
+        catch (Exception exception)
+        {
+            HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
+        }
+
+        _sessionLoadCompletion = Task.CompletedTask;
         _scanCancel?.Dispose();
         _scanCancel = null;
         _progressListener = null;
@@ -637,7 +693,9 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             _pickImportSources,
             filterUiContext: _filterUiContext,
             treeUiContext: _treeUiContext,
-            treeWorker: _treeWorker);
+            treeWorker: _treeWorker,
+            filterWorker: _filterWorker,
+            importWorker: _importWorker);
         var switcher = new QuickSwitcherViewModel(session, root, _announce, switcherFiles);
 
         workspace.FileOpened += Workspace_FileOpened;

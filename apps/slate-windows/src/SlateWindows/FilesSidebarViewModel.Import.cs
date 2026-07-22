@@ -15,9 +15,14 @@ internal sealed partial class FilesSidebarViewModel
     internal const int MaxImportEntries = 10_000;
     internal const long MaxImportFileBytes = 256L * 1024 * 1024;
     private readonly Func<Task<IReadOnlyList<string>>> _pickImportSources;
+    private readonly Func<Action, CancellationToken, Task> _runImportWorker;
     private readonly string? _vaultRoot;
+    private readonly object _importCancellationGate = new();
     private CancellationTokenSource? _importCancellation;
+    private Task _importCompletion = Task.CompletedTask;
     private bool _isImporting;
+
+    internal Task ImportCompletion => _importCompletion;
 
     public bool IsImporting
     {
@@ -34,52 +39,179 @@ internal sealed partial class FilesSidebarViewModel
 
     public string ImportStatus => IsImporting ? "Import in progress" : "Import is idle";
 
-    public void CancelImport() => _importCancellation?.Cancel();
+    public void CancelImport()
+    {
+        CancellationTokenSource? cancellation;
+        lock (_importCancellationGate)
+        {
+            cancellation = _importCancellation;
+            _importCancellation = null;
+        }
+
+        if (cancellation is null)
+        {
+            return;
+        }
+
+        try
+        {
+            try
+            {
+                cancellation.Cancel();
+            }
+            catch (Exception exception)
+            {
+                // Cancellation is best-effort during teardown. A callback
+                // failure must not prevent later producers from being canceled.
+                HostLog.Write(HostDiagnosticEvent.SidebarImportShutdownFailed, exception);
+            }
+        }
+        finally
+        {
+            cancellation.Dispose();
+        }
+    }
 
     private async Task ImportAsync()
     {
-        IReadOnlyList<string> sources;
-        try
+        var cancellation = new CancellationTokenSource();
+        CancellationToken cancellationToken = cancellation.Token;
+        lock (_importCancellationGate)
         {
-            sources = await _pickImportSources();
-        }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
-        {
-            ReportFailure($"Could not choose import sources: {exception.Message}");
-            return;
+            if (SessionShutdownStarted)
+            {
+                cancellation.Dispose();
+                return;
+            }
+
+            _importCancellation = cancellation;
         }
 
-        if (sources.Count == 0 || _vaultRoot is null)
-        {
-            return;
-        }
-
-        string destination = SelectedNode?.IsDirectory == true
-            ? SelectedNode.Path
-            : ParentPath(SelectedNode?.Path);
-        _importCancellation = new CancellationTokenSource();
         IsImporting = true;
         try
         {
+            IReadOnlyList<string> sources;
+            try
+            {
+                sources = await _pickImportSources();
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                ReportImportFailure(
+                    HostDiagnosticEvent.SidebarImportPickerFailed,
+                    exception,
+                    "Could not choose import sources.");
+                return;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (sources.Count == 0 || _vaultRoot is null)
+            {
+                return;
+            }
+
+            string destination = SelectedNode?.IsDirectory == true
+                ? SelectedNode.Path
+                : ParentPath(SelectedNode?.Path);
             string[] acceptedSources = sources.Take(256).ToArray();
             int omittedSources = sources.Count - acceptedSources.Length;
-            ImportResult result = await Task.Run(
-                () => ImportSources(
-                    acceptedSources,
-                    destination,
-                    _importCancellation.Token,
-                    omittedSources));
+            (bool admitted, ImportResult? result) = await RunImportWorkerAsync(
+                acceptedSources,
+                destination,
+                omittedSources,
+                cancellationToken);
+            if (!admitted)
+            {
+                return;
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (result is null)
+            {
+                throw new InvalidOperationException("Import worker completed without a result.");
+            }
+
             Status = ImportSummary(result, destination);
             // W0.5-3 residue: Windows import-engine completion copy.
             _announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
             Refresh();
         }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            ReportImportFailure(
+                HostDiagnosticEvent.SidebarImportFailed,
+                exception,
+                "Could not import the selected items.");
+        }
         finally
         {
-            _importCancellation.Dispose();
-            _importCancellation = null;
+            bool ownsCancellation = false;
+            lock (_importCancellationGate)
+            {
+                if (ReferenceEquals(_importCancellation, cancellation))
+                {
+                    _importCancellation = null;
+                    ownsCancellation = true;
+                }
+            }
+
+            if (ownsCancellation)
+            {
+                cancellation.Dispose();
+            }
+
             IsImporting = false;
+        }
+    }
+
+    private async Task<(bool Admitted, ImportResult? Result)> RunImportWorkerAsync(
+        string[] acceptedSources,
+        string destination,
+        int omittedSources,
+        CancellationToken cancellationToken)
+    {
+        if (!TryBeginSessionWork(out SessionWorkLease? lease))
+        {
+            return (false, null);
+        }
+
+        ImportResult? result = null;
+        using (lease)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await _runImportWorker(
+                () => result = ImportSources(
+                    acceptedSources,
+                    destination,
+                    cancellationToken,
+                    omittedSources),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return (true, result);
+    }
+
+    private void ReportImportFailure(
+        HostDiagnosticEvent diagnosticEvent,
+        Exception exception,
+        string message)
+    {
+        HostLog.Write(diagnosticEvent, exception);
+        try
+        {
+            ReportFailure(message);
+        }
+        catch (Exception callbackException)
+        {
+            HostLog.Write(diagnosticEvent, callbackException);
         }
     }
 
