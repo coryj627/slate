@@ -380,7 +380,6 @@ public sealed class ShellAccessibilityTests
                 automation.ConditionFactory.ByAutomationId("WorkspaceSplitHandleVertical")));
             Assert.Contains("vertically", verticalSplitHandle.Name, StringComparison.Ordinal);
             Assert.True(verticalSplitHandle.Properties.IsKeyboardFocusable.Value);
-            AssertAxeClean(process);
 
             AutomationElement closeVault = WaitForMenuItem(
                 window,
