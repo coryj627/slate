@@ -27,6 +27,11 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\SlateUniffi\SlateUniffi.csproj" />
     <ProjectReference Include="..\..\src\SlateWindows\SlateWindows.csproj" />
+    <!-- HostLoggingCensus launches this executable from its project output.
+         ReferenceOutputAssembly=false makes the dependency build-ordered
+         without treating the probe as a test assembly dependency. -->
+    <ProjectReference Include="..\..\tools\HostLogProbe\HostLogProbe.csproj"
+                      ReferenceOutputAssembly="false" />
     <ProjectReference Include="..\..\tools\ParityHarness\ParityHarness.csproj" />
   </ItemGroup>
 

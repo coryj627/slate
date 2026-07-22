@@ -3,6 +3,8 @@
 
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
+using System.Runtime.InteropServices;
+using System.Text.Json;
 using Axe.Windows.Automation;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
@@ -15,6 +17,50 @@ namespace SlateWindows.AccessibilityTests;
 [Trait("gate", "W-C")]
 public sealed class ShellAccessibilityTests
 {
+    private const int AutomationTimeoutHResult = unchecked((int)0x80131505);
+
+    [Fact]
+    public void MainWindowDiscovery_RetriesTransientComTimeouts()
+    {
+        int attempts = 0;
+        COMException? lastAutomationError = null;
+        string? result = null;
+
+        bool found = SpinWait.SpinUntil(
+            () =>
+            {
+                result = TryAutomationQuery(
+                    () =>
+                    {
+                        if (Interlocked.Increment(ref attempts) == 1)
+                        {
+                            throw new COMException(
+                                "Operation timed out.",
+                                AutomationTimeoutHResult);
+                        }
+
+                        return "main-window";
+                    },
+                    ref lastAutomationError);
+                return result is not null;
+            },
+            TimeSpan.FromSeconds(1));
+
+        Assert.True(found);
+        Assert.Equal("main-window", result);
+        Assert.Equal(2, attempts);
+        Assert.NotNull(lastAutomationError);
+        Assert.Equal(AutomationTimeoutHResult, lastAutomationError.HResult);
+
+        COMException nonTimeout = Assert.Throws<COMException>(
+            () => TryAutomationQuery<string>(
+                () => throw new COMException(
+                    "Unexpected UIA failure.",
+                    unchecked((int)0x80004005)),
+                ref lastAutomationError));
+        Assert.Equal(unchecked((int)0x80004005), nonTimeout.HResult);
+    }
+
     [Fact]
     public void FluentShell_UiaPatternsKeyboardFocusAndAxe_AreClean()
     {
@@ -280,7 +326,7 @@ public sealed class ShellAccessibilityTests
                 leftEditor,
                 "Ctrl+Alt+Left changed the model but did not move keyboard focus to the left editor.");
 
-            AssertAxeClean(process);
+            AssertAxeClean(process, "workspace");
 
             AutomationElement quickOpen = WaitForMenuItem(
                 window,
@@ -322,7 +368,7 @@ public sealed class ShellAccessibilityTests
                 "Quick Open did not move focus to its search field.");
             Assert.False(sidebarFilter.IsEnabled);
             Assert.False(tabs.IsEnabled);
-            AssertAxeClean(process);
+            AssertAxeClean(process, "quick-open");
 
             AutomationElement closeQuick = WaitForElement(
                 window,
@@ -411,7 +457,7 @@ public sealed class ShellAccessibilityTests
                     "Accessible Vault",
                     StringComparison.Ordinal));
 
-            AssertAxeClean(process);
+            AssertAxeClean(process, "welcome");
         }
         finally
         {
@@ -436,7 +482,7 @@ public sealed class ShellAccessibilityTests
         }
     }
 
-    private static void AssertAxeClean(Process process)
+    private static void AssertAxeClean(Process process, string surface)
     {
         var config = Config.Builder.ForProcessId(process.Id).Build();
         var output = ScannerFactory.CreateScanner(config).Scan(null);
@@ -444,6 +490,18 @@ public sealed class ShellAccessibilityTests
         var errors = output.WindowScanOutputs
             .SelectMany(result => result.Errors)
             .ToArray();
+        object[] evidenceErrors = errors.Select(error => (object)new
+        {
+            ruleId = error.Rule.ID,
+            description = error.Rule.Description,
+            elementProperties = error.Element.Properties
+                .Select(property => property.ToString())
+                .ToArray(),
+        }).ToArray();
+        WriteAxeEvidence(
+            surface,
+            output.WindowScanOutputs.Count,
+            evidenceErrors);
         Assert.True(
             errors.Length == 0,
             string.Join(
@@ -451,6 +509,40 @@ public sealed class ShellAccessibilityTests
                 errors.Select(error =>
                     $"{error.Rule.ID}: {error.Rule.Description}; " +
                     string.Join(", ", error.Element.Properties))));
+    }
+
+    private static void WriteAxeEvidence(
+        string surface,
+        int windowCount,
+        object[] errors)
+    {
+        string? directory = Environment.GetEnvironmentVariable(
+            "SLATE_ACCESSIBILITY_EVIDENCE_DIR");
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(directory);
+        var evidence = new
+        {
+            schemaVersion = 1,
+            surface,
+            recordedAtUtc = DateTimeOffset.UtcNow,
+            sourceRevision = Environment.GetEnvironmentVariable("GITHUB_SHA"),
+            operatingSystem = Environment.OSVersion.VersionString,
+            dotnetRuntime = Environment.Version.ToString(),
+            userInteractive = Environment.UserInteractive,
+            scannedWindowCount = windowCount,
+            outcome = errors.Length == 0 ? "pass" : "fail",
+            errors,
+        };
+        string path = Path.Combine(directory, $"axe-{surface}.json");
+        File.WriteAllText(
+            path,
+            JsonSerializer.Serialize(
+                evidence,
+                new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static void AssertEventuallyFocused(AutomationElement element, string message)
@@ -504,6 +596,7 @@ public sealed class ShellAccessibilityTests
         TimeSpan timeout)
     {
         Window? window = null;
+        COMException? lastAutomationError = null;
         bool found = SpinWait.SpinUntil(
             () =>
             {
@@ -512,11 +605,13 @@ public sealed class ShellAccessibilityTests
                     return true;
                 }
 
-                window = automation
-                    .GetDesktop()
-                    .FindFirstChild(
-                        automation.ConditionFactory.ByProcessId(process.Id))
-                    ?.AsWindow();
+                window = TryAutomationQuery(
+                    () => automation
+                        .GetDesktop()
+                        .FindFirstChild(
+                            automation.ConditionFactory.ByProcessId(process.Id))
+                        ?.AsWindow(),
+                    ref lastAutomationError);
                 return window is not null;
             },
             timeout);
@@ -534,10 +629,28 @@ public sealed class ShellAccessibilityTests
         {
             throw new Xunit.Sdk.XunitException(
                 "Slate main window did not become available through UIA3. " +
+                $"Last UIA HRESULT: {lastAutomationError?.HResult:X8}. " +
                 $"app log: {ReadSharedLog(logFile)}");
         }
 
         return window;
+    }
+
+    private static T? TryAutomationQuery<T>(
+        Func<T?> query,
+        ref COMException? lastAutomationError)
+        where T : class
+    {
+        try
+        {
+            return query();
+        }
+        catch (COMException exception)
+            when (exception.HResult == AutomationTimeoutHResult)
+        {
+            lastAutomationError = exception;
+            return null;
+        }
     }
 
     private static AutomationElement WaitForNamedElement(
