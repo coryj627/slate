@@ -89,8 +89,14 @@ Codoki explicitly safe to merge, then squash merge before the next group.
 
 ## Remediation progress
 
-- W1-RT-01 closed by PR #1011: default durable diagnostics now accept only
-  closed event identifiers, exception type names, and explicitly safe numeric
-  size fields. All production stderr writes route through that boundary;
-  per-file vault change logging was removed. CI was green and Codoki reported
-  5/5 confidence and safe to merge.
+- W1-RT-01 closed by PR #1011, with safe numeric size context added in PR
+  #1012: default durable diagnostics now accept only closed event identifiers,
+  exception type names, and explicitly safe numeric size fields. All production
+  stderr writes route through that boundary; per-file vault change logging was
+  removed. Both PRs had green CI and Codoki reported 5/5 confidence and safe to
+  merge.
+- W1-RT-02 and W1-RT-09 closed by PR #1012: affected readers enforce their
+  limits against the opened stream, import checks cancellation between bounded
+  chunks, stable reads allocate one final buffer, and temporary cleanup cannot
+  mask the primary failure. Exact-limit, limit + 1, under-reported growth,
+  cancellation, cleanup, and production-store diagnostics are covered.

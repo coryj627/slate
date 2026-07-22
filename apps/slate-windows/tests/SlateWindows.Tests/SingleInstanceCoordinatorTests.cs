@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Diagnostics;
+using System.IO.Pipes;
 using SlateWindows;
 
 namespace SlateWindows.Tests;
@@ -35,6 +37,33 @@ public sealed class SingleInstanceCoordinatorTests
 
         string oversized = new('x', SingleInstanceCoordinator.MaxMessageBytes + 1);
         Assert.False(secondary.SendActivation([oversized], TimeSpan.FromMilliseconds(100)));
+    }
+
+    [Fact]
+    public async Task ConnectedPrimaryThatStopsReadingCannotExceedTheSendDeadline()
+    {
+        string identity = $"slate-single-instance-write-deadline-{Guid.NewGuid():N}";
+        using var primary = new SingleInstanceCoordinator(identity);
+        using var secondary = new SingleInstanceCoordinator(identity);
+        await using var stalledPrimary = new NamedPipeServerStream(
+            primary.PipeNameForTesting,
+            PipeDirection.In,
+            maxNumberOfServerInstances: 1,
+            PipeTransmissionMode.Byte,
+            PipeOptions.Asynchronous | PipeOptions.CurrentUserOnly,
+            inBufferSize: 1,
+            outBufferSize: 1);
+        Task connection = stalledPrimary.WaitForConnectionAsync();
+        string payload = new('x', SingleInstanceCoordinator.MaxMessageBytes - 128);
+        TimeSpan deadline = TimeSpan.FromMilliseconds(300);
+        var stopwatch = Stopwatch.StartNew();
+
+        Task<bool> send = Task.Run(() => secondary.SendActivation([payload], deadline));
+        await connection.WaitAsync(TimeSpan.FromSeconds(5));
+        bool delivered = await send.WaitAsync(TimeSpan.FromSeconds(3));
+
+        Assert.False(delivered);
+        Assert.InRange(stopwatch.Elapsed, TimeSpan.Zero, deadline + TimeSpan.FromSeconds(2));
     }
 
     [Fact]

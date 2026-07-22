@@ -338,6 +338,7 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
     internal Task FilterCompletion => _filterCompletion;
     internal Task ExpandLoadedCompletion => _expandLoadedCompletion;
+    internal bool IsFiltering => !_filterCompletion.IsCompleted;
 
     public IReadOnlyList<SidebarSortMode> SortModes { get; } = Enum.GetValues<SidebarSortMode>();
 
@@ -885,9 +886,7 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
     private void ScheduleFilter()
     {
-        _filterCancellation?.Cancel();
-        _filterCancellation?.Dispose();
-        _filterCancellation = null;
+        CancelFilterCore();
         int generation = ++_filterGeneration;
         string query = FilterText.Trim();
         if (query.Length == 0)
@@ -908,6 +907,42 @@ internal sealed class FilesSidebarViewModel : BindableBase
         _filterCancellation = cancellation;
         Status = "Filtering files…";
         _filterCompletion = FilterAfterDelayAsync(query, generation, cancellation.Token);
+    }
+
+    internal bool CancelFilter()
+    {
+        bool wasPending = IsFiltering;
+        if (_filterCancellation is not null)
+        {
+            ++_filterGeneration;
+            CancelFilterCore();
+        }
+
+        return wasPending;
+    }
+
+    private void CancelFilterCore()
+    {
+        CancellationTokenSource? cancellation = _filterCancellation;
+        _filterCancellation = null;
+        if (cancellation is null)
+        {
+            return;
+        }
+
+        cancellation.Cancel();
+        Task completion = _filterCompletion;
+        if (completion.IsCompleted)
+        {
+            cancellation.Dispose();
+            return;
+        }
+
+        _ = completion.ContinueWith(
+            _ => cancellation.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private async Task FilterAfterDelayAsync(

@@ -96,12 +96,23 @@ internal sealed class SingleInstanceCoordinator : IDisposable
                     PipeOptions.Asynchronous);
                 pipe.Connect(remainingMilliseconds);
 
-                Span<byte> length = stackalloc byte[sizeof(int)];
+                byte[] length = new byte[sizeof(int)];
                 BinaryPrimitives.WriteInt32LittleEndian(length, payload.Length);
-                pipe.Write(length);
-                pipe.Write(payload);
-                pipe.Flush();
+                TimeSpan writeTimeout = timeout - stopwatch.Elapsed;
+                if (writeTimeout <= TimeSpan.Zero)
+                {
+                    return false;
+                }
+
+                using var writeDeadline = new CancellationTokenSource(writeTimeout);
+                WriteFrameAsync(pipe, length, payload, writeDeadline.Token)
+                    .GetAwaiter()
+                    .GetResult();
                 return true;
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
             }
             catch (TimeoutException)
             {
@@ -114,6 +125,17 @@ internal sealed class SingleInstanceCoordinator : IDisposable
         }
 
         return false;
+    }
+
+    private static async Task WriteFrameAsync(
+        Stream stream,
+        byte[] length,
+        byte[] payload,
+        CancellationToken cancellationToken)
+    {
+        await stream.WriteAsync(length, cancellationToken).ConfigureAwait(false);
+        await stream.WriteAsync(payload, cancellationToken).ConfigureAwait(false);
+        await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
     }
 
     public void Dispose()

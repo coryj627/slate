@@ -109,6 +109,63 @@ public sealed class W1BoundedFileIoTests
     }
 }
 
+public sealed class W1VaultCloseBarrierTests
+{
+    [Fact]
+    public async Task PendingSidebarFilterMustFinishBeforeTheVaultSessionCloses()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "filter-close-barrier");
+        var filterContext = new PumpSynchronizationContext();
+        var recents = new RecentVaultsStore(
+            Path.Combine(fixture.Root, "device-state", "recent-vaults.json"));
+        using var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: recents,
+            filterUiContext: filterContext);
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        sidebar.FilterText = "note";
+        Assert.True(sidebar.IsFiltering);
+
+        Assert.False(lifecycle.PrepareForApplicationClose());
+        Assert.Contains("filter cancellation requested", lifecycle.StatusText, StringComparison.OrdinalIgnoreCase);
+
+        await sidebar.FilterCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(sidebar.IsFiltering);
+        Assert.True(lifecycle.PrepareForApplicationClose());
+    }
+
+    [Fact]
+    public async Task DirectDisposalJoinsAPendingSidebarFilterBeforeReleasingTheSession()
+    {
+        using FixtureVault fixture = FixtureVault.Create(2, "filter-dispose-barrier");
+        var filterContext = new PumpSynchronizationContext();
+        var lifecycle = new VaultLifecycleViewModel(
+            pickVault: () => Task.FromResult<string?>(fixture.Root),
+            enqueueUi: action => action(),
+            recentVaultsStore: new RecentVaultsStore(
+                Path.Combine(fixture.Root, "device-state", "recent-vaults.json")),
+            filterUiContext: filterContext);
+        await lifecycle.OpenVaultAsync(fixture.Root);
+        FilesSidebarViewModel sidebar = Assert.IsType<FilesSidebarViewModel>(lifecycle.FileSidebar);
+        sidebar.FilterText = "note";
+        Task pendingFilter = sidebar.FilterCompletion;
+        Assert.False(pendingFilter.IsCompleted);
+
+        Exception? exception = Record.Exception(lifecycle.Dispose);
+
+        Assert.Null(exception);
+        Assert.True(pendingFilter.IsCompleted);
+    }
+
+    private sealed class PumpSynchronizationContext : SynchronizationContext
+    {
+        public override void Post(SendOrPostCallback callback, object? state) =>
+            ThreadPool.QueueUserWorkItem(_ => callback(state));
+    }
+}
+
 public sealed class W1SidebarHardeningTests
 {
     [Fact]
