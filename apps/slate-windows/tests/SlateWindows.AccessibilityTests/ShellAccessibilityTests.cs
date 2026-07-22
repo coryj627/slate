@@ -203,6 +203,50 @@ public sealed class ShellAccessibilityTests
                 item.Name.StartsWith("Folder", StringComparison.OrdinalIgnoreCase))
                 ?? throw new Xunit.Sdk.XunitException("The folder TreeItem is absent.");
             Assert.True(folderItem.Patterns.ExpandCollapse.IsSupported);
+            var folderExpansion = folderItem.Patterns.ExpandCollapse.Pattern;
+            folderItem.Focus();
+            folderExpansion.Expand();
+            _ = WaitForNamedElement(
+                window,
+                automation,
+                "child.md, file",
+                TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => folderExpansion.ExpandCollapseState.Value == ExpandCollapseState.Expanded,
+                    TimeSpan.FromSeconds(5)),
+                "The folder did not expose the expanded UIA state.");
+            AssertEventuallyFocused(
+                folderItem,
+                "Expanding the folder through UIA moved focus away from its TreeItem.");
+            folderExpansion.Collapse();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => folderExpansion.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,
+                    TimeSpan.FromSeconds(5)),
+                "The folder did not expose the collapsed UIA state.");
+
+            folderItem.Focus();
+            Keyboard.Press(VirtualKeyShort.RIGHT);
+            _ = WaitForNamedElement(
+                window,
+                automation,
+                "child.md, file",
+                TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => folderExpansion.ExpandCollapseState.Value == ExpandCollapseState.Expanded,
+                    TimeSpan.FromSeconds(5)),
+                "Right Arrow did not expose the expanded UIA state.");
+            AssertEventuallyFocused(
+                folderItem,
+                "Right Arrow expansion moved focus away from its TreeItem.");
+            Keyboard.Press(VirtualKeyShort.LEFT);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => folderExpansion.ExpandCollapseState.Value == ExpandCollapseState.Collapsed,
+                    TimeSpan.FromSeconds(5)),
+                "Left Arrow did not expose the collapsed UIA state.");
 
             AutomationElement sidebarFilter = WaitForElement(
                 window,

@@ -991,15 +991,47 @@ public sealed class W1SidebarHardeningTests
         {
             "CancellationTokenSource? _treeRefreshCancellation",
             "CancellationTokenSource? _bulkExpandCancellation",
+            "SemaphoreSlim _treeProviderLane",
             "Task _treeRefreshCompletion",
             "Task _expandLoadedCompletion",
             "int _treeGeneration",
             "private async Task RefreshTreeAsync",
             "private async Task ExpandLoadedAsync",
+            "private async Task<bool> RunAdmittedTreeWorkerAsync",
         })
         {
             Assert.DoesNotContain(ownedMember, primary, StringComparison.Ordinal);
             Assert.Contains(ownedMember, tree, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void ChildExpansionStateIsOwnedByTheDedicatedPartial()
+    {
+        string sourceDirectory = Path.Combine(
+            RepoRoot(),
+            "apps",
+            "slate-windows",
+            "src",
+            "SlateWindows");
+        string primary = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.cs"));
+        string childExpansion = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.ChildExpansion.cs"));
+
+        foreach (string ownedMember in new[]
+        {
+            "object _childExpansionGate",
+            "Dictionary<FileTreeNodeViewModel, ChildExpansionOperation> _childExpansions",
+            "int _activeChildExpansions",
+            "TaskCompletionSource? _childExpansionsIdle",
+            "private async Task LoadChildrenAsync",
+            "internal void CancelChildExpansions",
+            "record ChildExpansionOutcome",
+        })
+        {
+            Assert.DoesNotContain(ownedMember, primary, StringComparison.Ordinal);
+            Assert.Contains(ownedMember, childExpansion, StringComparison.Ordinal);
         }
     }
 
@@ -1362,7 +1394,7 @@ public sealed class W1SidebarHardeningTests
     }
 
     [Fact]
-    public void DirectoryListing_DrainsPagesAndReportsTheMaterializationBound()
+    public void DirectoryListing_UsesBoundedLookaheadAndReportsTheMaterializationBound()
     {
         using FixtureVault fixture = FixtureVault.Create(0, "sidebar-pages");
         for (int index = 0; index < FilesSidebarViewModel.MaxMaterializedDirectoryItems + 1; index++)
