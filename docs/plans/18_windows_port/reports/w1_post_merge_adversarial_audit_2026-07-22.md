@@ -201,8 +201,11 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   provider serialization with canceled queued work, generic private failures
   and retry, canceled-close retry, restored descendants, interactive close,
   direct disposal, and native UIA expansion/collapse. Three independent final
-  read-only adversarial reviews now report no remaining actionable finding and
-  `CODE-READY: YES`; closure still requires green CI.
+  read-only adversarial reviews report no remaining actionable finding and
+  `CODE-READY: YES`. Every CI lane passed for revision
+  `7a860ca962b33bfe50d348ae1efb46c12679e3ce`; Windows Actions run 29956533198
+  includes the live ExpandCollapse/Right/Left accessibility gate and evidence
+  upload. W1-RT-13 is closed under the documented Codoki-outage exception.
 - W1-RT-14 remains open and deliberately separate from the host remediation:
   the existing core result still materializes the complete directory-summary
   array. Hiding that core/API limit inside the Windows PR would overstate the
