@@ -479,6 +479,38 @@ public sealed class W1SidebarCompletionTests : IDisposable
 public sealed class W1QuickSwitcherAndChordTests
 {
     [Fact]
+    public void QuickSwitcher_TotalClampCannotOverflow()
+    {
+        Assert.Equal(17, QuickSwitcherViewModel.ClampTotal(17));
+        Assert.Equal(int.MaxValue, QuickSwitcherViewModel.ClampTotal(ulong.MaxValue));
+    }
+
+    [Fact]
+    public void QuickSwitcher_BoundsVisibleRowsButReportsExactTotal()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "quick-switcher-cap");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        SwitcherFile[] files = Enumerable.Range(0, QuickSwitcherViewModel.DisplayCap + 25)
+            .Select(index => new SwitcherFile($"folder/note-{index:D3}.md", $"note-{index:D3}.md"))
+            .ToArray();
+        var announcements = new List<A11yEvent>();
+        using var quick = new QuickSwitcherViewModel(
+            session,
+            fixture.Root,
+            announcements.Add,
+            files,
+            Path.Combine(Path.GetTempPath(), $"slate-quick-cap-{Guid.NewGuid():N}"),
+            debounceRanking: false);
+
+        quick.Open();
+
+        Assert.Equal(files.Length, quick.TotalResults);
+        Assert.Equal(QuickSwitcherViewModel.DisplayCap, quick.Results.Count);
+        var count = Assert.IsType<A11yEvent.QuickSwitcherCount>(announcements[^1]);
+        Assert.Equal((uint)files.Length, count.Count);
+    }
+
+    [Fact]
     public void QuickSwitcher_UsesCoreRankingTypedCountsTargetsWrapAndIncrementalChanges()
     {
         using FixtureVault fixture = FixtureVault.Create(2, "quick-switcher");

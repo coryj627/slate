@@ -100,3 +100,18 @@ Codoki explicitly safe to merge, then squash merge before the next group.
   chunks, stable reads allocate one final buffer, and temporary cleanup cannot
   mask the primary failure. Exact-limit, limit + 1, under-reported growth,
   cancellation, cleanup, and production-store diagnostics are covered.
+- W1-RT-03 and W1-RT-04 closed by PR #1013: normal vault close now cancels
+  sidebar filtering and defers disposal until the task is terminal, direct
+  teardown joins the bounded filter operation before disposing the native
+  session, and secondary-instance frame writes and flushes share the caller's
+  remaining deadline. Deterministic teardown-order and stalled-primary tests
+  cover both paths.
+- W1-RT-05 remediation is in progress on
+  `agent/w1-quick-open-top-k`: core retains only the deterministic top K while
+  returning an exact total, and Windows/macOS request their 50-row display
+  page through the same UniFFI result. The compatibility corpus covers zero,
+  partial, exact, and oversized limits; empty and fuzzy queries; missing and
+  duplicate recents; and canonical Unicode path ties. On this Windows host,
+  the committed 50,000-file Criterion pair measured full ranking at
+  362.87–365.60 ms versus top-50 at 335.30–338.32 ms, before accounting for
+  the much larger avoided FFI marshalling and host allocation.

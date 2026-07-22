@@ -120,7 +120,7 @@ final class QuickSwitcherModel: ObservableObject {
     }
 
     private func refreshAnnouncement() {
-        let total = UInt32(rankedRows().count)
+        let total = UInt32(clamping: rankedTotal())
         if query.isEmpty {
             resultAnnouncement = .switcherRecentCount(count: total)
         } else if total == 0 {
@@ -142,42 +142,51 @@ final class QuickSwitcherModel: ObservableObject {
     /// keystroke re-rank doesn't rebuild N input records first.
     private var ffiFiles: [SwitcherFile] = []
 
-    /// Ranked-row cache: core ranks once per input change, not once
-    /// per property access — `displayOrder`, `matches`, selection
-    /// snapping, and the count announcement all read the same result.
-    /// Keyed by the query (files/recents invalidate via `load`).
+    /// Bounded ranked-row cache: core ranks once per input change, not
+    /// once per property access. It returns only the display page plus
+    /// the exact total used by announcements. Keyed by the query
+    /// (files/recents invalidate via `load`).
     private var rankedCache: [SwitcherRow] = []
+    private var rankedCacheTotal: UInt64 = 0
     private var rankedCacheQuery: String? = nil
 
-    /// The full ranked match set BEFORE the display cap, computed by
-    /// `slate_core::switcher::switcher_rank` through the FFI — the
-    /// name-over-path score bias, recency blending, prune-on-rank, and
-    /// every tie-break live core-side so both hosts rank identically.
-    private func rankedRows() -> [SwitcherRow] {
+    private func refreshRankedCache() {
         if rankedCacheQuery != query {
-            rankedCache = switcherRank(
+            let page = switcherRankTop(
                 files: ffiFiles,
                 query: query,
-                recentPaths: recentPaths
+                recentPaths: recentPaths,
+                limit: UInt32(Self.displayCap)
             )
+            rankedCache = page.rows
+            rankedCacheTotal = page.total
             rankedCacheQuery = query
         }
+    }
+
+    /// The ranked display page. Scoring, recency blending, and every
+    /// tie-break remain core-owned and identical across both hosts.
+    private func rankedRows() -> [SwitcherRow] {
+        refreshRankedCache()
         return rankedCache
     }
 
-    /// The full ranked match set as `FileRow`s (display names carried
-    /// back from core — no per-row FFI). `matches.count` is what the
-    /// announcement reports.
+    private func rankedTotal() -> UInt64 {
+        refreshRankedCache()
+        return rankedCacheTotal
+    }
+
+    /// The bounded ranked display page as `FileRow`s (display names
+    /// carried back from core — no per-row FFI).
     var matches: [FileRow] {
         rankedRows().map {
             FileRow(path: $0.path, name: $0.name, displayName: $0.displayName)
         }
     }
 
-    /// The rows the view renders — the ranked set clipped to
-    /// `displayCap`. Arrow nav cycles this exact list so selection
-    /// matches the visible rows. The cap is view virtualization policy
-    /// and stays host-side; core returns the full ranked list.
+    /// The rows the view renders. Arrow nav cycles this exact list so
+    /// selection matches the visible rows. Core already bounds the page
+    /// to `displayCap`; the prefix is a defensive host-side invariant.
     var displayOrder: [FileRow] {
         rankedRows().prefix(Self.displayCap).map {
             FileRow(path: $0.path, name: $0.name, displayName: $0.displayName)

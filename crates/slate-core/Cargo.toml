@@ -113,3 +113,7 @@ harness = false
 [[bench]]
 name = "layout_bench"
 harness = false
+
+[[bench]]
+name = "switcher_bench"
+harness = false

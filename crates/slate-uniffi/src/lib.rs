@@ -5841,6 +5841,14 @@ impl From<core::switcher::SwitcherRow> for SwitcherRow {
     }
 }
 
+/// A display-bounded quick-switcher page plus the exact total match
+/// count used for visible summaries and assistive announcements.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct SwitcherRankPage {
+    pub rows: Vec<SwitcherRow>,
+    pub total: u64,
+}
+
 /// Rank a file snapshot for the quick switcher — the name-over-path
 /// score bias and the recency-blended orderings all live core-side
 /// (`slate_core::switcher::switcher_rank`). Empty query returns the
@@ -5860,6 +5868,23 @@ pub fn switcher_rank(
         .into_iter()
         .map(Into::into)
         .collect()
+}
+
+/// Rank a file snapshot while retaining and marshalling at most
+/// `limit` rows. `total` remains the exact full match count.
+#[uniffi::export]
+pub fn switcher_rank_top(
+    files: Vec<SwitcherFile>,
+    query: String,
+    recent_paths: Vec<String>,
+    limit: u32,
+) -> SwitcherRankPage {
+    let files: Vec<core::switcher::SwitcherFile> = files.into_iter().map(Into::into).collect();
+    let page = core::switcher::switcher_rank_top(&files, &query, &recent_paths, limit as usize);
+    SwitcherRankPage {
+        rows: page.rows.into_iter().map(Into::into).collect(),
+        total: page.total as u64,
+    }
 }
 
 /// Canonical extension-stripped display label for a file name (the
@@ -9581,6 +9606,20 @@ mod tests {
             switcher_display_name("2026.01.notes.md".into()),
             "2026.01.notes"
         );
+
+        let page = switcher_rank_top(
+            (0..75)
+                .map(|index| SwitcherFile {
+                    path: format!("folder/note-{index:02}.md"),
+                    name: format!("note-{index:02}.md"),
+                })
+                .collect(),
+            "note".into(),
+            vec![],
+            50,
+        );
+        assert_eq!(page.total, 75);
+        assert_eq!(page.rows.len(), 50);
     }
 
     #[test]
