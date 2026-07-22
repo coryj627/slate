@@ -78,6 +78,21 @@ W1 introduced recursive workspace split handles and their UI Automation identifi
 
 Automation clients should select the orientation-specific entry above and may additionally verify `AutomationProperties.Name` (`Resize editor panes horizontally` or `Resize editor panes vertically`). The hosted FlaUI gate creates both split orientations, asserts that each identifier resolves exactly once, and checks the handles' accessible names and keyboard focusability.
 
+Automation written against the transient W1 review build should migrate its selector as follows:
+
+```csharp
+// Before: transient review-only identifier.
+conditionFactory.ByAutomationId("WorkspaceSplitHandleHorizontal");
+
+// After: stable, backward-compatible horizontal identifier.
+conditionFactory.ByAutomationId("WorkspaceSplitHandle");
+
+// Vertical split handles are now addressable without ambiguity.
+conditionFactory.ByAutomationId("WorkspaceSplitHandleVertical");
+```
+
+The repository contains no remaining automation consumer of `WorkspaceSplitHandleHorizontal`; the local resource-contract test and hosted FlaUI gate enforce the stable selectors above.
+
 ## Verification evidence
 
 | Gate | Result |

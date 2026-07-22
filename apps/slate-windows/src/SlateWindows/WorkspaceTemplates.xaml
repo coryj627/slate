@@ -161,6 +161,13 @@
         <Grid>
             <ContentControl Content="{Binding}"
                             ContentTemplate="{DynamicResource WorkspaceNodeTemplate}" />
+            <!-- UI Automation migration contract:
+                 WorkspaceSplitHandleHorizontal -> WorkspaceSplitHandle
+                 former shared WorkspaceSplitHandle -> WorkspaceSplitHandle (horizontal)
+                                                     or WorkspaceSplitHandleVertical (vertical)
+                 Example: ByAutomationId("WorkspaceSplitHandleHorizontal") becomes
+                          ByAutomationId("WorkspaceSplitHandle"). See the W1 execution
+                 report's UI Automation release and migration note. -->
             <Thumb Width="8"
                    HorizontalAlignment="Left"
                    VerticalAlignment="Stretch"
@@ -187,9 +194,6 @@
                     </Style>
                 </Thumb.Style>
             </Thumb>
-            <!-- The horizontal handle retains the former shared WorkspaceSplitHandle
-                 ID for UI-automation compatibility. Vertical consumers must migrate
-                 to the distinct ID below. -->
             <Thumb Height="8"
                    HorizontalAlignment="Stretch"
                    VerticalAlignment="Top"
