@@ -43,7 +43,7 @@ internal static class RecentVaultJumpList
         {
             // Jump Lists may be disabled by group policy. Recents remain fully
             // available in the welcome screen and must not block startup.
-            Console.Error.WriteLine($"Could not update recent-vault Jump List: {exception.Message}");
+            HostLog.Write(HostDiagnosticEvent.RecentVaultJumpListUpdateFailed, exception);
         }
     }
 }

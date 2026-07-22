@@ -243,8 +243,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
                 (code, eventPath, message) => _enqueueUi(
                     () => HandleVaultError(generation, code, eventPath, message)),
                 @event => _enqueueUi(() => HandleFileChange(generation, @event)),
-                (phase, filesSeen) => _enqueueUi(
-                    () => HandleIndexPhase(generation, phase, filesSeen)));
+                (_, _) => { });
             _eventListenerToken = _session.RegisterEventListener(_eventListener);
 
             IsVaultOpen = true;
@@ -440,7 +439,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         string path,
         string message)
     {
-        Console.Error.WriteLine($"Vault event error ({code}) {path}: {message}");
+        HostLog.Write(HostDiagnosticEvent.VaultEventFailed);
         if (generation == _generation)
         {
             ReportTerminalStatus(message, A11yPriority.High);
@@ -451,7 +450,6 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     {
         if (generation == _generation)
         {
-            Console.Error.WriteLine($"Vault file change: {@event.Kind} {@event.Path}");
             if (@event.Kind == FileChangeKind.Renamed
                 && @event.PreviousPath is string previousPath)
             {
@@ -476,14 +474,6 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         }
     }
 
-    private void HandleIndexPhase(int generation, IndexPhase phase, ulong filesSeen)
-    {
-        if (generation == _generation)
-        {
-            Console.Error.WriteLine($"Vault index phase: {phase}; files seen: {filesSeen}");
-        }
-    }
-
     private void AddRecentVault(string root)
     {
         try
@@ -494,7 +484,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             string message = $"Could not save recent vaults: {exception.Message}";
-            Console.Error.WriteLine(message);
+            HostLog.Write(HostDiagnosticEvent.RecentVaultsPersistFailed, exception);
             ReportTerminalStatus(message, A11yPriority.High);
         }
     }
@@ -576,7 +566,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             }
             catch (Exception exception)
             {
-                Console.Error.WriteLine($"Could not unregister vault listener: {exception.Message}");
+                HostLog.Write(HostDiagnosticEvent.VaultListenerUnregisterFailed, exception);
             }
         }
 
@@ -801,7 +791,7 @@ internal sealed class AsyncRelayCommand : ICommand
         }
         catch (Exception exception)
         {
-            Console.Error.WriteLine($"Command failed: {exception}");
+            HostLog.Write(HostDiagnosticEvent.VaultCommandFailed, exception);
         }
         finally
         {

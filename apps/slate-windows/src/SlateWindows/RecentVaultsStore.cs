@@ -80,8 +80,7 @@ internal sealed class RecentVaultsStore
 
             if (bytesRead > MaxFileBytes)
             {
-                Console.Error.WriteLine(
-                    $"RecentVaultsStore: recent-vaults file exceeds the {MaxFileBytes}-byte threshold; treating as malformed.");
+                HostLog.Write(HostDiagnosticEvent.RecentVaultsPayloadRejected);
                 return [];
             }
 

@@ -1403,7 +1403,7 @@ internal sealed class WorkspaceViewModel : BindableBase, IDisposable
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            Console.Error.WriteLine($"Could not persist workspace: {exception.Message}");
+            HostLog.Write(HostDiagnosticEvent.WorkspacePersistFailed, exception);
         }
     }
 

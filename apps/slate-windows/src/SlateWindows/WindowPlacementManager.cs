@@ -57,8 +57,7 @@ internal sealed class WindowPlacementManager
                 plan.Bounds.Height,
                 flags))
         {
-            Console.Error.WriteLine(
-                $"WindowPlacementManager: SetWindowPos failed ({Marshal.GetLastWin32Error()}).");
+            HostLog.Write(HostDiagnosticEvent.WindowPositionFailed);
             return;
         }
 
@@ -107,11 +106,11 @@ internal sealed class WindowPlacementManager
         }
         catch (IOException exception)
         {
-            Console.Error.WriteLine($"WindowPlacementManager: could not persist window state: {exception.Message}");
+            HostLog.Write(HostDiagnosticEvent.WindowStatePersistFailed, exception);
         }
         catch (UnauthorizedAccessException exception)
         {
-            Console.Error.WriteLine($"WindowPlacementManager: could not persist window state: {exception.Message}");
+            HostLog.Write(HostDiagnosticEvent.WindowStatePersistFailed, exception);
         }
     }
 
@@ -161,8 +160,7 @@ internal sealed class WindowPlacementManager
 
         if (!NativeMethods.EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, callback, IntPtr.Zero))
         {
-            Console.Error.WriteLine(
-                $"WindowPlacementManager: monitor enumeration failed ({Marshal.GetLastWin32Error()}).");
+            HostLog.Write(HostDiagnosticEvent.MonitorEnumerationFailed);
         }
 
         GC.KeepAlive(callback);

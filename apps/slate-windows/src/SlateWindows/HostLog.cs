@@ -14,6 +14,31 @@ using System.Runtime.InteropServices;
 
 namespace SlateWindows;
 
+internal enum HostDiagnosticEvent
+{
+    ActivationDeliveryFailed,
+    ClipboardCopyFailed,
+    DpiAwarenessFailed,
+    DpiCensusFailed,
+    FileRecentsPersistFailed,
+    MonitorEnumerationFailed,
+    QuickOpenRankingFailed,
+    RecentVaultJumpListUpdateFailed,
+    RecentVaultsPayloadRejected,
+    RecentVaultsPersistFailed,
+    SidebarOrganizationPersistFailed,
+    SidebarPinsPersistFailed,
+    SidebarShortcutsPersistFailed,
+    SingleInstanceActivationFailed,
+    SingleInstanceActivationTimedOut,
+    VaultCommandFailed,
+    VaultEventFailed,
+    VaultListenerUnregisterFailed,
+    WindowPositionFailed,
+    WindowStatePersistFailed,
+    WorkspacePersistFailed,
+}
+
 internal static class HostLog
 {
     private const int StdErrorHandle = -12; // STD_ERROR_HANDLE
@@ -69,5 +94,24 @@ internal static class HostLog
         catch (UnauthorizedAccessException)
         {
         }
+    }
+
+    /// <summary>
+    /// Writes a privacy-safe host diagnostic. The durable release log must
+    /// never receive exception messages, vault paths, note names, or other
+    /// user-authored text. Callers choose a closed event id; exception type is
+    /// useful for diagnosis without serializing the exception payload.
+    /// </summary>
+    public static void Write(
+        HostDiagnosticEvent diagnosticEvent,
+        Exception? exception = null)
+    {
+        string message = $"SlateWindows.{diagnosticEvent}";
+        if (exception is not null)
+        {
+            message += $" ({exception.GetType().Name})";
+        }
+
+        Console.Error.WriteLine(message);
     }
 }

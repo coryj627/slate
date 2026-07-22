@@ -325,7 +325,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
                             _rankingError,
                             A11yPriority.High));
                         RaiseCommandStates();
-                        Console.Error.WriteLine($"Quick Open ranking failed: {exception}");
+                        HostLog.Write(HostDiagnosticEvent.QuickOpenRankingFailed, exception);
                     }
                 },
                 null);

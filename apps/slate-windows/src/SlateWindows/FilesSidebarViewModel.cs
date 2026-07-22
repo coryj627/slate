@@ -2090,7 +2090,7 @@ internal sealed class FilesSidebarViewModel : BindableBase
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             ReportFailure($"Could not save sidebar organization: {exception.Message}");
-            Console.Error.WriteLine(Status);
+            HostLog.Write(HostDiagnosticEvent.SidebarOrganizationPersistFailed, exception);
             return false;
         }
     }
@@ -2145,7 +2145,7 @@ internal sealed class FilesSidebarViewModel : BindableBase
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             ReportFailure($"Could not save pins: {exception.Message}");
-            Console.Error.WriteLine(Status);
+            HostLog.Write(HostDiagnosticEvent.SidebarPinsPersistFailed, exception);
             return false;
         }
     }
@@ -2162,7 +2162,7 @@ internal sealed class FilesSidebarViewModel : BindableBase
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             ReportFailure($"Could not save shortcuts: {exception.Message}");
-            Console.Error.WriteLine(Status);
+            HostLog.Write(HostDiagnosticEvent.SidebarShortcutsPersistFailed, exception);
             return false;
         }
     }

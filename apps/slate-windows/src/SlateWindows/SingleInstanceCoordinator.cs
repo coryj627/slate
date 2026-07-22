@@ -203,13 +203,12 @@ internal sealed class SingleInstanceCoordinator : IDisposable
             }
             catch (OperationCanceledException)
             {
-                Console.Error.WriteLine(
-                    "Single-instance activation timed out while reading a connection.");
+                HostLog.Write(HostDiagnosticEvent.SingleInstanceActivationTimedOut);
             }
             catch (Exception exception) when (
                 exception is IOException or JsonException or UnauthorizedAccessException)
             {
-                Console.Error.WriteLine($"Single-instance activation failed: {exception.Message}");
+                HostLog.Write(HostDiagnosticEvent.SingleInstanceActivationFailed, exception);
             }
         }
     }

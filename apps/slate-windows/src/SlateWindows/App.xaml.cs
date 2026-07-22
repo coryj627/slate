@@ -25,7 +25,7 @@ public partial class App : Application
             true);
         if (!DpiAwarenessProbe.EnsurePerMonitorV2())
         {
-            Console.Error.WriteLine("Slate could not establish PerMonitorV2 DPI awareness on its UI thread.");
+            HostLog.Write(HostDiagnosticEvent.DpiAwarenessFailed);
         }
 
         // Standing host obligation (w0 baseline): route native stderr into
@@ -91,8 +91,7 @@ public partial class App : Application
                 TimeSpan.FromSeconds(3));
             if (!delivered)
             {
-                Console.Error.WriteLine(
-                    "Could not deliver activation to the running Slate instance.");
+                HostLog.Write(HostDiagnosticEvent.ActivationDeliveryFailed);
             }
 
             Shutdown(delivered ? 0 : 1);
