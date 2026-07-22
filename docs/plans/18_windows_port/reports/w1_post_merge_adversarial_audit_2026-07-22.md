@@ -139,7 +139,15 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   and legacy per-vault recents operations hold and revalidate opened vault and
   `.slate` identities, reject final reparse handles, verify child final paths,
   and use temporary-file handles for replacement. The final post-merge audit
-  reopened the destination rename itself: it still names the target through an
-  absolute path, leaving an ancestor-junction swap window. A follow-up
-  directory-handle-relative rename and external-sentinel race test remain in
-  the ranked remediation queue; this ledger does not claim final RT-07 closure.
+  reopened the destination rename itself because it still named the target
+  through an absolute path. The follow-up remediation closes that window with
+  `NtSetInformationFile(FileRenameInformation)`: a null root plus a simple
+  destination leaf tells Windows to rename within the already-open temporary
+  source handle's directory, so no ancestor path is reopened and the request
+  remains valid for SMB. Deterministic x86/x64 buffer tests pin the simple-name
+  and null-root protocol, while an adversarial test attempts an ancestor
+  redirect immediately before rename and proves the external sentinel is
+  unchanged whether Windows blocks the namespace swap or permits it. A
+  separate post-commit-failure regression proves cleanup cannot delete an
+  already-replaced store file. RT-07 is code-complete, subject to the PR's
+  independent review and CI gates.

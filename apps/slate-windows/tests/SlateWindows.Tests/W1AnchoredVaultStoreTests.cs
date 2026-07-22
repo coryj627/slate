@@ -207,6 +207,140 @@ public sealed class W1AnchoredVaultStoreTests
         }
     }
 
+    [Theory]
+    [InlineData(4, 4, 8, 12, 16)]
+    [InlineData(8, 8, 16, 20, 24)]
+    public void AtomicRenameInformationUsesASimpleSameDirectoryName(
+        int pointerSize,
+        int rootOffset,
+        int nameLengthOffset,
+        int nameOffset,
+        int structureSize)
+    {
+        const string destinationName = "workspace.json";
+        byte[] expectedName = Encoding.Unicode.GetBytes(destinationName);
+
+        byte[] information = AnchoredVaultStore.BuildRenameInformation(
+            destinationName,
+            pointerSize);
+
+        Assert.Equal(1, information[0]);
+        Assert.All(
+            information.AsSpan(rootOffset, pointerSize).ToArray(),
+            value => Assert.Equal(0, value));
+        Assert.Equal(expectedName.Length, BitConverter.ToInt32(information, nameLengthOffset));
+        Assert.Equal(expectedName, information.AsSpan(nameOffset, expectedName.Length).ToArray());
+        Assert.Equal(structureSize + expectedName.Length, information.Length);
+    }
+
+    [Fact]
+    public void CommittedReplacementSurvivesAPostRenameFailure()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "rename-commit-cleanup");
+        string directory = Path.Combine(fixture.Root, ".slate");
+        string target = Path.Combine(directory, "workspace.json");
+        Directory.CreateDirectory(directory);
+        File.WriteAllText(target, "before");
+        using AnchoredVaultStore store = Assert.IsType<AnchoredVaultStore>(
+            AnchoredVaultStore.Open(
+                fixture.Root,
+                createDirectory: true,
+                afterRename: () => throw new IOException("Simulated post-rename validation failure.")));
+
+        IOException failure = Assert.Throws<IOException>(() => store.WriteAtomically(
+            "workspace.json",
+            Encoding.UTF8.GetBytes("after")));
+
+        Assert.Contains("post-rename", failure.Message, StringComparison.Ordinal);
+        Assert.Equal("after", File.ReadAllText(target));
+        Assert.Empty(Directory.EnumerateFiles(directory, "workspace.json.tmp-*"));
+    }
+
+    [Fact]
+    public void AtomicReplacementCannotBeRedirectedByAnAncestorSwap()
+    {
+        using FixtureVault external = FixtureVault.Create(0, "rename-anchor-external");
+        using FixtureVault local = FixtureVault.Create(0, "rename-anchor-local");
+        string externalVault = Path.Combine(external.Root, "vault");
+        string externalDirectory = Path.Combine(externalVault, ".slate");
+        Directory.CreateDirectory(externalDirectory);
+        string externalPath = Path.Combine(externalDirectory, "workspace.json");
+        byte[] sentinel = Encoding.UTF8.GetBytes("external sentinel");
+        File.WriteAllBytes(externalPath, sentinel);
+
+        string container = Path.Combine(local.Root, "container");
+        string parkedContainer = Path.Combine(local.Root, "container-parked");
+        string localVault = Path.Combine(container, "vault");
+        string localDirectory = Path.Combine(localVault, ".slate");
+        Directory.CreateDirectory(localDirectory);
+        File.WriteAllText(Path.Combine(localDirectory, "workspace.json"), "local before");
+        bool swapAttempted = false;
+        bool swapped = false;
+        void SwapAncestor()
+        {
+            swapAttempted = true;
+            Directory.Move(container, parkedContainer);
+            Directory.CreateSymbolicLink(container, external.Root);
+            swapped = true;
+        }
+
+        AnchoredVaultStore store = Assert.IsType<AnchoredVaultStore>(
+            AnchoredVaultStore.Open(
+                localVault,
+                createDirectory: true,
+                beforeRename: SwapAncestor));
+        Exception? failure;
+        try
+        {
+            failure = Record.Exception(() => store.WriteAtomically(
+                "workspace.json",
+                Encoding.UTF8.GetBytes("local after")));
+        }
+        finally
+        {
+            store.Dispose();
+        }
+
+        try
+        {
+            Assert.True(swapAttempted);
+            if (swapped)
+            {
+                Assert.True(
+                    failure is null or IOException,
+                    $"Expected success or a fail-closed IOException, got {failure?.GetType().Name}.");
+            }
+            else
+            {
+                Assert.True(
+                    failure is IOException or UnauthorizedAccessException,
+                    $"Expected Windows to reject the swap, got {failure?.GetType().Name}.");
+            }
+
+            Assert.Equal(sentinel, File.ReadAllBytes(externalPath));
+            string anchoredPath = swapped
+                ? Path.Combine(parkedContainer, "vault", ".slate", "workspace.json")
+                : Path.Combine(localDirectory, "workspace.json");
+            Assert.True(File.Exists(anchoredPath));
+            Assert.Contains(
+                File.ReadAllText(anchoredPath),
+                new[] { "local before", "local after" });
+        }
+        finally
+        {
+            if (Directory.Exists(container)
+                && (File.GetAttributes(container) & FileAttributes.ReparsePoint) != 0)
+            {
+                Directory.Delete(container);
+            }
+
+            if (Directory.Exists(parkedContainer) && !Directory.Exists(container))
+            {
+                Directory.Move(parkedContainer, container);
+            }
+        }
+    }
+
     private static WorkspaceSnapshot Snapshot(
         string activeLeaf,
         string path = "note0.md")
