@@ -156,7 +156,9 @@ public class HostLoggingCensus
             AppContext.BaseDirectory, "..", "..", "..", "..", "..",
             "tools", "HostLogProbe", "bin", BuildConfiguration(), "net10.0", "HostLogProbe.dll");
         probeDll = Path.GetFullPath(probeDll);
-        Assert.True(File.Exists(probeDll), $"HostLogProbe not built at {probeDll} (build the solution first)");
+        Assert.True(
+            File.Exists(probeDll),
+            $"The declared HostLogProbe project dependency did not build {probeDll}");
 
         var psi = new ProcessStartInfo("dotnet", $"\"{probeDll}\"")
         {

@@ -52,6 +52,60 @@ public sealed class W1HostLoggingPrivacyTests
     }
 }
 
+public sealed class W1ReleaseEvidenceContractTests
+{
+    [Fact]
+    public void TestProjectGraphDeclaresHostLogProbeBuildDependency()
+    {
+        XDocument project = XDocument.Load(Path.Combine(
+            RepoRoot(),
+            "apps",
+            "slate-windows",
+            "tests",
+            "SlateWindows.Tests",
+            "SlateWindows.Tests.csproj"));
+        XNamespace xmlNamespace = project.Root?.Name.Namespace ?? XNamespace.None;
+        XElement reference = Assert.Single(
+            project.Descendants(xmlNamespace + "ProjectReference"),
+            element => string.Equals(
+                ((string?)element.Attribute("Include"))?.Replace('\\', '/'),
+                "../../tools/HostLogProbe/HostLogProbe.csproj",
+                StringComparison.Ordinal));
+
+        Assert.Equal(
+            "false",
+            ((string?)reference.Attribute("ReferenceOutputAssembly"))?.ToLowerInvariant());
+    }
+
+    [Fact]
+    public void WindowsWorkflowRetainsAccessibilityEvidenceAfterGateFailure()
+    {
+        string workflow = File.ReadAllText(Path.Combine(
+            RepoRoot(),
+            ".github",
+            "workflows",
+            "windows.yml"));
+
+        Assert.Contains("SLATE_ACCESSIBILITY_EVIDENCE_DIR:", workflow, StringComparison.Ordinal);
+        Assert.Contains("--logger \"trx;LogFileName=slate-windows-accessibility.trx\"", workflow, StringComparison.Ordinal);
+        Assert.Contains("if: ${{ always() }}", workflow, StringComparison.Ordinal);
+        Assert.Contains("slate-windows-accessibility-${{ github.sha }}", workflow, StringComparison.Ordinal);
+        Assert.Contains("retention-days: 30", workflow, StringComparison.Ordinal);
+    }
+
+    private static string RepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Cargo.toml")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new InvalidOperationException("Could not locate repository root.");
+    }
+}
+
 public sealed class W1BoundedFileIoTests
 {
     [Fact]

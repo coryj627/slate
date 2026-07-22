@@ -3,6 +3,7 @@
 
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
+using System.Text.Json;
 using Axe.Windows.Automation;
 using FlaUI.Core.AutomationElements;
 using FlaUI.Core.Definitions;
@@ -280,7 +281,7 @@ public sealed class ShellAccessibilityTests
                 leftEditor,
                 "Ctrl+Alt+Left changed the model but did not move keyboard focus to the left editor.");
 
-            AssertAxeClean(process);
+            AssertAxeClean(process, "workspace");
 
             AutomationElement quickOpen = WaitForMenuItem(
                 window,
@@ -322,7 +323,7 @@ public sealed class ShellAccessibilityTests
                 "Quick Open did not move focus to its search field.");
             Assert.False(sidebarFilter.IsEnabled);
             Assert.False(tabs.IsEnabled);
-            AssertAxeClean(process);
+            AssertAxeClean(process, "quick-open");
 
             AutomationElement closeQuick = WaitForElement(
                 window,
@@ -411,7 +412,7 @@ public sealed class ShellAccessibilityTests
                     "Accessible Vault",
                     StringComparison.Ordinal));
 
-            AssertAxeClean(process);
+            AssertAxeClean(process, "welcome");
         }
         finally
         {
@@ -436,7 +437,7 @@ public sealed class ShellAccessibilityTests
         }
     }
 
-    private static void AssertAxeClean(Process process)
+    private static void AssertAxeClean(Process process, string surface)
     {
         var config = Config.Builder.ForProcessId(process.Id).Build();
         var output = ScannerFactory.CreateScanner(config).Scan(null);
@@ -444,6 +445,18 @@ public sealed class ShellAccessibilityTests
         var errors = output.WindowScanOutputs
             .SelectMany(result => result.Errors)
             .ToArray();
+        object[] evidenceErrors = errors.Select(error => (object)new
+        {
+            ruleId = error.Rule.ID,
+            description = error.Rule.Description,
+            elementProperties = error.Element.Properties
+                .Select(property => property.ToString())
+                .ToArray(),
+        }).ToArray();
+        WriteAxeEvidence(
+            surface,
+            output.WindowScanOutputs.Count,
+            evidenceErrors);
         Assert.True(
             errors.Length == 0,
             string.Join(
@@ -451,6 +464,40 @@ public sealed class ShellAccessibilityTests
                 errors.Select(error =>
                     $"{error.Rule.ID}: {error.Rule.Description}; " +
                     string.Join(", ", error.Element.Properties))));
+    }
+
+    private static void WriteAxeEvidence(
+        string surface,
+        int windowCount,
+        object[] errors)
+    {
+        string? directory = Environment.GetEnvironmentVariable(
+            "SLATE_ACCESSIBILITY_EVIDENCE_DIR");
+        if (string.IsNullOrWhiteSpace(directory))
+        {
+            return;
+        }
+
+        Directory.CreateDirectory(directory);
+        var evidence = new
+        {
+            schemaVersion = 1,
+            surface,
+            recordedAtUtc = DateTimeOffset.UtcNow,
+            sourceRevision = Environment.GetEnvironmentVariable("GITHUB_SHA"),
+            operatingSystem = Environment.OSVersion.VersionString,
+            dotnetRuntime = Environment.Version.ToString(),
+            userInteractive = Environment.UserInteractive,
+            scannedWindowCount = windowCount,
+            outcome = errors.Length == 0 ? "pass" : "fail",
+            errors,
+        };
+        string path = Path.Combine(directory, $"axe-{surface}.json");
+        File.WriteAllText(
+            path,
+            JsonSerializer.Serialize(
+                evidence,
+                new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static void AssertEventuallyFocused(AutomationElement element, string message)

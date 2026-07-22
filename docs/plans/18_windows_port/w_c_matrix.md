@@ -1,6 +1,6 @@
 # §W-C accessibility matrix — W1 shell and workspace
 
-Updated 2026-07-20. This is the wave-close instrument required by `w7_spec.md`. “CI-required” means the scenario is implemented in `SlateWindows.AccessibilityTests` and `windows.yml` fails if an interactive Windows desktop is unavailable; it does not claim that the current non-interactive local session exercised UI Automation. Human screen-reader cells remain release-blocking until a named tester records a build, Windows version, AT version, result, and evidence link.
+Updated 2026-07-22. This is the wave-close instrument required by `w7_spec.md`. “CI-required” means the scenario is implemented in `SlateWindows.AccessibilityTests` and `windows.yml` fails if an interactive Windows desktop is unavailable; it does not claim that the current non-interactive local session exercised UI Automation. Every CI attempt retains a 30-day `slate-windows-accessibility-<commit>` artifact containing the VSTest TRX plus dated, revision-bound JSON summaries for the workspace, Quick Open, and welcome axe scans. Human screen-reader cells remain release-blocking until a named tester records a build, Windows version, AT version, result, and evidence link.
 
 | Surface | UIA control type | Name / HelpText source | Required patterns | Focus order and keyboard route | Notification contract | Automated evidence | Narrator | NVDA | JAWS |
 |---|---|---|---|---|---|---|---|---|---|
@@ -19,7 +19,7 @@ Updated 2026-07-20. This is the wave-close instrument required by `w7_spec.md`. 
 
 ## Wave-close status
 
-- Automated local: 95/95 Windows tests, 1/1 non-interactive production-startup accessibility smoke, 5/5 Windows path-adapter tests, evidence validation for 60 command rows/four surfaces, and all W1 accessibility code compiles.
-- Automated interactive: required by Windows CI with `SLATE_REQUIRE_UI_AUTOMATION=1`; not executable in this session and therefore not recorded as green here.
+- Automated local: 127/127 Windows tests, 1/1 non-interactive production-startup accessibility smoke, 5/5 Windows path-adapter tests, evidence validation for 60 command rows/four surfaces, and all W1 accessibility code compiles. Repository-contract tests pin both accessibility artifact retention and the HostLogProbe build-only dependency, so the suite no longer relies on solution build order.
+- Automated interactive: required by Windows CI with `SLATE_REQUIRE_UI_AUTOMATION=1`; each run retains its TRX and three per-surface axe JSON summaries. It is not executable in this session and therefore is not recorded as green here until the first artifact-producing CI run completes.
 - Human AT: Narrator, NVDA, and JAWS are pending for every row. Per WGA-9, the milestone cannot be called release-complete until NVDA/JAWS evidence is recorded; Narrator is smoke scope.
 - Contrast themes: runtime two-layer Fluent + Slate switching is implemented. The four built-in themes plus one customized-theme human pass remains pending.

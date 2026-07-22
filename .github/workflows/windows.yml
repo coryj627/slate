@@ -110,9 +110,29 @@ jobs:
       # Keep this process-owning gate separate from the in-process censuses so
       # the two test hosts cannot race for Slate's single-instance identity.
       - name: Shell accessibility gate (FlaUI + axe-windows)
-        run: dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --no-build
+        run: >-
+          dotnet test
+          apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj
+          --no-build
+          --logger "trx;LogFileName=slate-windows-accessibility.trx"
+          --results-directory "${{ runner.temp }}\slate-accessibility-results"
         env:
           SLATE_REQUIRE_UI_AUTOMATION: '1'
+          SLATE_ACCESSIBILITY_EVIDENCE_DIR: '${{ runner.temp }}\slate-accessibility-evidence'
+
+      # Keep both the runner result and the per-surface axe summaries. This
+      # runs after a failing gate as well so an accessibility regression leaves
+      # actionable evidence instead of only an ephemeral console transcript.
+      - name: Upload shell accessibility evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: slate-windows-accessibility-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}\slate-accessibility-results\**\*
+            ${{ runner.temp }}\slate-accessibility-evidence\**\*
+          if-no-files-found: warn
+          retention-days: 30
 
       - name: Format gate (dotnet format --verify-no-changes)
         run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes
