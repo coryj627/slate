@@ -220,6 +220,10 @@ internal sealed class FilesSidebarViewModel : BindableBase
     private readonly FileRecentsStore? _recentsStore;
     private readonly string? _settingsNotice;
     private readonly SynchronizationContext? _filterUiContext;
+    // When present, tree providers and projection run through _runTreeWorker,
+    // which must not execute inline on this context. RootNodes, Tags, Status,
+    // and announcements are published only after posting back to this context.
+    // A null context is the explicit synchronous/headless fallback.
     private readonly SynchronizationContext? _treeUiContext;
     private readonly Func<Action, CancellationToken, Task> _runTreeWorker;
     private readonly HashSet<string> _expandedPaths;
@@ -720,6 +724,20 @@ internal sealed class FilesSidebarViewModel : BindableBase
                 ReportFailure($"Could not load files: {exception.Message}");
                 _treeRefreshCompletion = Task.CompletedTask;
             }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+                try
+                {
+                    ReportFailure("Could not load files.");
+                }
+                catch (Exception callbackException)
+                {
+                    HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, callbackException);
+                }
+
+                _treeRefreshCompletion = Task.CompletedTask;
+            }
 
             return;
         }
@@ -810,38 +828,23 @@ internal sealed class FilesSidebarViewModel : BindableBase
         }
         catch (VaultException exception)
         {
+            await ReportTreeRefreshFailureAsync(
+                generation,
+                $"Could not load files: {exception.Message}",
+                token).ConfigureAwait(false);
+        }
+        catch (Exception exception)
+        {
             if (token.IsCancellationRequested)
             {
                 return;
             }
 
-            var applied = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously);
-            _treeUiContext!.Post(
-                _ =>
-                {
-                    try
-                    {
-                        if (generation == _treeGeneration)
-                        {
-                            ReportFailure($"Could not load files: {exception.Message}");
-                        }
-
-                        applied.TrySetResult();
-                    }
-                    catch (Exception callbackException)
-                    {
-                        applied.TrySetException(callbackException);
-                    }
-                },
-                null);
-            try
-            {
-                await applied.Task.WaitAsync(token).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-            }
+            HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+            await ReportTreeRefreshFailureAsync(
+                generation,
+                "Could not load files.",
+                token).ConfigureAwait(false);
         }
         finally
         {
@@ -851,6 +854,51 @@ internal sealed class FilesSidebarViewModel : BindableBase
             }
 
             cancellation.Dispose();
+        }
+    }
+
+    private async Task ReportTreeRefreshFailureAsync(
+        int generation,
+        string message,
+        CancellationToken token)
+    {
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var applied = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            _treeUiContext!.Post(
+                _ =>
+                {
+                    try
+                    {
+                        if (generation == _treeGeneration)
+                        {
+                            ReportFailure(message);
+                        }
+
+                        applied.TrySetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        applied.TrySetException(exception);
+                    }
+                },
+                null);
+            await applied.Task.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            // Refresh is terminal even when dispatch or presentation fails.
+            // Teardown joins this task, so retain diagnostics without faulting it.
+            HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
         }
     }
 

@@ -231,6 +231,28 @@ public sealed class W1VaultCloseBarrierTests
 public sealed class W1SidebarHardeningTests
 {
     [Fact]
+    public async Task UnexpectedTreeWorkerFailureIsReportedWithoutFaultingRefreshCompletion()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "sidebar-refresh-failure");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var context = new PumpSynchronizationContext();
+        var sidebar = CreateSidebar(
+            session,
+            fixture.Root,
+            treeUiContext: context,
+            treeWorker: (_, _) => Task.FromException(new InvalidOperationException("sensitive detail")));
+
+        Assert.True(SpinWait.SpinUntil(
+            () => context.PendingCount > 0,
+            TimeSpan.FromSeconds(5)));
+        context.Drain();
+        await sidebar.TreeRefreshCompletion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal("Could not load files.", sidebar.Status);
+        Assert.DoesNotContain("sensitive detail", sidebar.Status, StringComparison.Ordinal);
+    }
+
+    [Fact]
     [Trait("census", "moderate")]
     public async Task FiveThousandItemRefreshReturnsWithinTheUiDispatchBudget()
     {
