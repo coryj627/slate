@@ -82,6 +82,13 @@ rejection, collision handling and completion summary. Constructor wiring and
 command policy remain in the primary partial; a structure census pins the
 operation boundary.
 
+Workspace restore and persistence are isolated in
+`WorkspaceViewModel.Persistence.cs`. The partial owns the store and expanded
+path provider, restore suppression, mutation batching/pending-save state,
+duplicate-graph pruning, empty-group normalization and snapshot serialization.
+Constructor wiring and layout policy remain outside the unit; a structure
+census pins the boundary.
+
 Two per-vault host stores are deliberate same-shape implementations because no canonical core store exists:
 
 - `.slate/workspace.json`: mac schema version 1, bounded recursive decode, unknown-tab forward compatibility.
@@ -125,7 +132,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Gate | Result |
 |---|---|
 | `dotnet format ... --verify-no-changes` | Pass |
-| Windows unit/integration suite | 130 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes filter-, tree- and import-ownership structure censuses |
+| Windows unit/integration suite | 131 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes sidebar-operation and workspace-persistence ownership censuses |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
 | Interactive FlaUI + axe-windows | Pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |

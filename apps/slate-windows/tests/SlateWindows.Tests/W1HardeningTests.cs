@@ -728,6 +728,57 @@ public sealed class W1SidebarHardeningTests
     }
 }
 
+public sealed class W1WorkspaceOwnershipTests
+{
+    [Fact]
+    public void PersistenceStateIsOwnedByTheDedicatedPartial()
+    {
+        string sourceDirectory = Path.Combine(
+            RepoRoot(),
+            "apps",
+            "slate-windows",
+            "src",
+            "SlateWindows");
+        string primary = File.ReadAllText(
+            Path.Combine(sourceDirectory, "WorkspaceViewModel.cs"));
+        string persistence = File.ReadAllText(
+            Path.Combine(sourceDirectory, "WorkspaceViewModel.Persistence.cs"));
+
+        Assert.Contains(
+            "internal sealed partial class WorkspaceViewModel",
+            primary,
+            StringComparison.Ordinal);
+        foreach (string ownedMember in new[]
+        {
+            "WorkspacePersistence _persistence",
+            "Func<IReadOnlyList<string>> _expandedDirectoryPaths",
+            "bool _restoring",
+            "int _persistenceBatchDepth",
+            "bool _persistencePending",
+            "private (WorkspacePaneNodeViewModel Root, WorkspaceGroupViewModel Active) Restore",
+            "private void RunWorkspaceMutation",
+            "private void PersistCore",
+            "private static WorkspaceNodeState SnapshotNode",
+        })
+        {
+            Assert.DoesNotContain(ownedMember, primary, StringComparison.Ordinal);
+            Assert.Contains(ownedMember, persistence, StringComparison.Ordinal);
+        }
+    }
+
+    private static string RepoRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Cargo.toml")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName
+            ?? throw new InvalidOperationException("Could not locate repository root.");
+    }
+}
+
 public sealed class W1SidebarSettingsHardeningTests
 {
     [Fact]
