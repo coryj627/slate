@@ -60,6 +60,14 @@ Three read-only reviewers independently inspected all W1 code, tests, CI, fixtur
 
 The WPF host is MVVM over the generated UniFFI boundary. Product logic remains in Rust: ranking, file mutation/link rewrites, scans, tag editing, structural reports and canonical accessibility strings. C# owns native-control state, Windows lifecycle and device-local adapters.
 
+The sidebar filter pipeline is isolated in
+`FilesSidebarViewModel.Filter.cs`: that partial unit exclusively owns the
+filter UI context, cancellation token, completion task, generation guard,
+background query, UI publication and local date-window conversion. The
+extraction is behavior-neutral and a repository-structure census prevents
+those operation-ownership members from drifting back into the primary view
+model file.
+
 Two per-vault host stores are deliberate same-shape implementations because no canonical core store exists:
 
 - `.slate/workspace.json`: mac schema version 1, bounded recursive decode, unknown-tab forward compatibility.
@@ -103,7 +111,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Gate | Result |
 |---|---|
 | `dotnet format ... --verify-no-changes` | Pass |
-| Windows unit/integration suite | 127 passed, 0 failed; a clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency before running the suite |
+| Windows unit/integration suite | 128 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite adds the filter-ownership structure census |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
 | Interactive FlaUI + axe-windows | Pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |

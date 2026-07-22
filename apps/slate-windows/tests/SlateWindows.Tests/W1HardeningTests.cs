@@ -285,6 +285,38 @@ public sealed class W1VaultCloseBarrierTests
 public sealed class W1SidebarHardeningTests
 {
     [Fact]
+    public void FilterOperationStateIsOwnedByTheDedicatedPartial()
+    {
+        string sourceDirectory = Path.Combine(
+            RepoRoot(),
+            "apps",
+            "slate-windows",
+            "src",
+            "SlateWindows");
+        string primary = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.cs"));
+        string filter = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.Filter.cs"));
+
+        Assert.Contains(
+            "internal sealed partial class FilesSidebarViewModel",
+            primary,
+            StringComparison.Ordinal);
+        foreach (string ownedMember in new[]
+        {
+            "_filterCancellation",
+            "_filterCompletion",
+            "_filterGeneration",
+            "FilterAfterDelayAsync",
+            "BuildDateWindows",
+        })
+        {
+            Assert.DoesNotContain(ownedMember, primary, StringComparison.Ordinal);
+            Assert.Contains(ownedMember, filter, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task UnexpectedTreeWorkerFailureIsReportedWithoutFaultingRefreshCompletion()
     {
         using FixtureVault fixture = FixtureVault.Create(0, "sidebar-refresh-failure");
