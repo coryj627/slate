@@ -27,6 +27,10 @@ public sealed class W1HostLoggingPrivacyTests
                     diagnosticEvent,
                     new IOException($"Could not access {sentinelPath}: authored detail"));
             }
+
+            HostLog.WriteSizeLimit(
+                HostDiagnosticEvent.RecentVaultsPayloadRejected,
+                new FileSizeLimitExceededException(65_537, 65_536));
         }
         finally
         {
@@ -37,10 +41,71 @@ public sealed class W1HostLoggingPrivacyTests
         Assert.DoesNotContain(sentinelPath, logged, StringComparison.Ordinal);
         Assert.DoesNotContain("authored detail", logged, StringComparison.Ordinal);
         Assert.Contains(nameof(IOException), logged, StringComparison.Ordinal);
+        Assert.Contains("observedBytes=65537", logged, StringComparison.Ordinal);
+        Assert.Contains("maximumBytes=65536", logged, StringComparison.Ordinal);
         foreach (HostDiagnosticEvent diagnosticEvent in Enum.GetValues<HostDiagnosticEvent>())
         {
             Assert.Contains($"SlateWindows.{diagnosticEvent}", logged, StringComparison.Ordinal);
         }
+    }
+}
+
+public sealed class W1BoundedFileIoTests
+{
+    [Fact]
+    public void OpenedStreamBound_AllowsTheLimitAndRejectsLimitPlusOne()
+    {
+        byte[] expected = Enumerable.Range(0, 16).Select(value => (byte)value).ToArray();
+        using var exact = new MemoryStream(expected);
+        Assert.Equal(expected, SafeFile.ReadAllBytesBounded(exact, expected.Length));
+
+        using var oversized = new MemoryStream(new byte[expected.Length + 1]);
+        FileSizeLimitExceededException exception = Assert.Throws<FileSizeLimitExceededException>(
+            () => SafeFile.ReadAllBytesBounded(oversized, expected.Length));
+        Assert.Equal(expected.Length + 1, exception.ObservedBytes);
+        Assert.Equal(expected.Length, exception.MaximumBytes);
+    }
+
+    [Fact]
+    public void OpenedStreamBound_RejectsGrowthBeyondTheLimit()
+    {
+        using var grewAfterLengthCheck = new UnderreportedLengthStream(new byte[5], 3);
+
+        FileSizeLimitExceededException exception = Assert.Throws<FileSizeLimitExceededException>(
+            () => SafeFile.ReadAllBytesBounded(grewAfterLengthCheck, 4));
+
+        Assert.Equal(5, exception.ObservedBytes);
+        Assert.Equal(4, exception.MaximumBytes);
+    }
+
+    [Fact]
+    public void OpenedStreamBound_HonorsPreCancelledReads()
+    {
+        using var input = new MemoryStream(new byte[16]);
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Assert.Throws<OperationCanceledException>(
+            () => SafeFile.ReadAllBytesBounded(input, 16, cancellation.Token));
+    }
+
+    [Fact]
+    public void BestEffortCleanup_DoesNotThrowForADirectoryTarget()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "safe-file-cleanup");
+        string directory = Path.Combine(fixture.Root, "still-a-directory");
+        Directory.CreateDirectory(directory);
+
+        Exception? exception = Record.Exception(() => SafeFile.TryDelete(directory));
+
+        Assert.Null(exception);
+        Assert.True(Directory.Exists(directory));
+    }
+
+    private sealed class UnderreportedLengthStream(byte[] bytes, long reportedLength)
+        : MemoryStream(bytes)
+    {
+        public override long Length => reportedLength;
     }
 }
 
@@ -310,28 +375,6 @@ public sealed class W1ImportSafeguardTests
         Assert.DoesNotContain(root, inspected, StringComparer.OrdinalIgnoreCase);
     }
 
-    [Fact]
-    public void ImportSizeGuardRechecksTheBytesRead()
-    {
-        FilesSidebarViewModel.ValidateImportFileSize(
-            FilesSidebarViewModel.MaxImportFileBytes,
-            afterRead: false);
-        FilesSidebarViewModel.ValidateImportFileSize(
-            FilesSidebarViewModel.MaxImportFileBytes,
-            afterRead: true);
-
-        IOException beforeRead = Assert.Throws<IOException>(() =>
-            FilesSidebarViewModel.ValidateImportFileSize(
-                FilesSidebarViewModel.MaxImportFileBytes + 1,
-                afterRead: false));
-        Assert.Contains("exceeds", beforeRead.Message, StringComparison.Ordinal);
-
-        IOException afterRead = Assert.Throws<IOException>(() =>
-            FilesSidebarViewModel.ValidateImportFileSize(
-                FilesSidebarViewModel.MaxImportFileBytes + 1,
-                afterRead: true));
-        Assert.Contains("grew beyond", afterRead.Message, StringComparison.Ordinal);
-    }
 }
 
 public sealed class W1SingleInstanceHardeningTests

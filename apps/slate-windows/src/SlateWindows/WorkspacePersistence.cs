@@ -105,22 +105,14 @@ internal sealed class WorkspacePersistence
                 RejectReparsePoint(directory);
             }
 
-            var info = new FileInfo(_workspacePath);
-            if (!info.Exists || info.Length > MaxFileBytes)
+            if (!File.Exists(_workspacePath))
             {
                 return null;
             }
 
             RejectReparsePoint(_workspacePath);
-
-            using FileStream stream = new(
-                _workspacePath,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.Read,
-                bufferSize: 16 * 1024,
-                FileOptions.SequentialScan);
-            using JsonDocument document = JsonDocument.Parse(stream, new JsonDocumentOptions
+            byte[] input = SafeFile.ReadAllBytesBounded(_workspacePath, MaxFileBytes);
+            using JsonDocument document = JsonDocument.Parse(input, new JsonDocumentOptions
             {
                 MaxDepth = MaxNodeDepth * 2,
             });
@@ -235,13 +227,7 @@ internal sealed class WorkspacePersistence
         }
         finally
         {
-            try
-            {
-                File.Delete(temporary);
-            }
-            catch (IOException)
-            {
-            }
+            SafeFile.TryDelete(temporary);
         }
     }
 

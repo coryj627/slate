@@ -53,7 +53,32 @@ public sealed class RecentVaultsStoreTests : IDisposable
         Assert.Empty(CreateStore().Load());
 
         File.WriteAllBytes(StorePath, new byte[RecentVaultsStore.MaxFileBytes + 1]);
-        Assert.Empty(CreateStore().Load());
+        var output = new StringWriter();
+        TextWriter original = Console.Error;
+        try
+        {
+            Console.SetError(output);
+            Assert.Empty(CreateStore().Load());
+        }
+        finally
+        {
+            Console.SetError(original);
+        }
+
+        string logged = output.ToString();
+        Assert.Contains(
+            $"SlateWindows.{HostDiagnosticEvent.RecentVaultsPayloadRejected}",
+            logged,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"observedBytes={RecentVaultsStore.MaxFileBytes + 1}",
+            logged,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            $"maximumBytes={RecentVaultsStore.MaxFileBytes}",
+            logged,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(StorePath, logged, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -159,31 +159,13 @@ internal sealed class WindowStateStore
     {
         try
         {
-            using var stream = new FileStream(
+            byte[] buffer = SafeFile.ReadAllBytesBounded(
                 _filePath,
-                FileMode.Open,
-                FileAccess.Read,
+                MaxFileBytes,
                 FileShare.ReadWrite | FileShare.Delete);
-            byte[] buffer = new byte[MaxFileBytes + 1];
-            int bytesRead = 0;
-            while (bytesRead < buffer.Length)
-            {
-                int count = stream.Read(buffer, bytesRead, buffer.Length - bytesRead);
-                if (count == 0)
-                {
-                    break;
-                }
-
-                bytesRead += count;
-            }
-
-            if (bytesRead > MaxFileBytes)
-            {
-                return null;
-            }
 
             WindowPlacementState? state = JsonSerializer.Deserialize<WindowPlacementState>(
-                buffer.AsSpan(0, bytesRead),
+                buffer,
                 JsonOptions);
             return state?.IsValid == true ? state : null;
         }
@@ -232,13 +214,7 @@ internal sealed class WindowStateStore
         }
         finally
         {
-            try
-            {
-                File.Delete(temporaryPath);
-            }
-            catch (IOException)
-            {
-            }
+            SafeFile.TryDelete(temporaryPath);
         }
     }
 }

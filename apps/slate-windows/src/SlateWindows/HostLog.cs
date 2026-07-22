@@ -114,4 +114,14 @@ internal static class HostLog
 
         Console.Error.WriteLine(message);
     }
+
+    public static void WriteSizeLimit(
+        HostDiagnosticEvent diagnosticEvent,
+        FileSizeLimitExceededException exception)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        Console.Error.WriteLine(
+            $"SlateWindows.{diagnosticEvent} "
+            + $"(observedBytes={exception.ObservedBytes}, maximumBytes={exception.MaximumBytes})");
+    }
 }
