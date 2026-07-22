@@ -380,6 +380,9 @@ public sealed class ShellAccessibilityTests
                 automation.ConditionFactory.ByAutomationId("WorkspaceSplitHandleVertical")));
             Assert.Contains("vertically", verticalSplitHandle.Name, StringComparison.Ordinal);
             Assert.True(verticalSplitHandle.Properties.IsKeyboardFocusable.Value);
+            // The workspace and Quick Open states are Axe-scanned above. The
+            // split-specific contract is asserted directly here; a third full-tree
+            // scan adds runtime and flake exposure without covering another state.
 
             AutomationElement closeVault = WaitForMenuItem(
                 window,
