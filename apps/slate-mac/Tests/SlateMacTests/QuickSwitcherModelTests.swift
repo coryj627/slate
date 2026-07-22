@@ -2,274 +2,558 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 import AppKit
+import Dispatch
 import XCTest
 
 @testable import SlateMac
 
-/// Tests for the quick switcher view-model (#495).
-///
-/// Mirrors `CommandPaletteViewTests`' model coverage: fuzzy scoring
-/// (here with the name-over-path bias), ordering (recency-first empty
-/// query, score-then-recency tie-break), snap-to-first, arrow-wrap
-/// navigation, and the result-count announcement.
+/// Quick Open model coverage: canonical core ordering, bounded publication,
+/// selection, announcements, and the background generation owner.
 final class QuickSwitcherModelTests: XCTestCase {
 
-    private func row(_ path: String, _ name: String) -> QuickSwitcherModel.FileRow {
-        QuickSwitcherModel.FileRow(path: path, name: name)
+    private final class LockedBool: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = false
+
+        var value: Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+
+        func set(_ value: Bool) {
+            lock.lock()
+            storage = value
+            lock.unlock()
+        }
     }
 
-    private func rows(_ pairs: [(String, String)]) -> [QuickSwitcherModel.FileRow] {
-        pairs.map { row($0.0, $0.1) }
+    private final class ConcurrencyProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var active = 0
+        private var maximum = 0
+
+        var maximumObserved: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return maximum
+        }
+
+        func enter() {
+            lock.lock()
+            active += 1
+            maximum = max(maximum, active)
+            lock.unlock()
+        }
+
+        func leave() {
+            lock.lock()
+            active -= 1
+            lock.unlock()
+        }
     }
 
-    // The displayName + score unit tests moved to Rust with the logic
-    // itself (W0.5-2 #718): `slate_core::switcher::tests` carries the
-    // same cases as goldens — extension stripping, the name-over-path
-    // bias with the exact `NAME_MATCH_BONUS` pin, path-only matches,
-    // case-insensitivity, and the non-match `None`. Ranking behavior
-    // through the model is still exercised end-to-end below.
+    private func candidate(
+        _ path: String,
+        _ name: String
+    ) -> QuickSwitcherModel.CandidateFile {
+        QuickSwitcherModel.CandidateFile(path: path, name: name)
+    }
 
-    // MARK: - Ordering: empty query = recency first
+    private func candidates(
+        _ pairs: [(String, String)]
+    ) -> [QuickSwitcherModel.CandidateFile] {
+        pairs.map { candidate($0.0, $0.1) }
+    }
 
     @MainActor
-    func testEmptyQueryOrdersRecentsFirstThenIncomingOrder() {
-        let model = QuickSwitcherModel()
+    private func makeModel() -> QuickSwitcherModel {
+        QuickSwitcherModel(debounceNanoseconds: 0)
+    }
+
+    // MARK: - Ordering
+
+    @MainActor
+    func testEmptyQueryOrdersRecentsFirstThenIncomingOrder() async {
+        let model = makeModel()
         model.load(
-            files: rows([
-                ("a.md", "a.md"), ("b.md", "b.md"), ("c.md", "c.md"), ("d.md", "d.md"),
+            files: candidates([
+                ("a.md", "a.md"), ("b.md", "b.md"),
+                ("c.md", "c.md"), ("d.md", "d.md"),
             ]),
             recents: ["c.md", "a.md"])
-        // Recents in recency order, then the rest in incoming order.
+        await model.settleRanking()
+
         XCTAssertEqual(
             model.displayOrder.map(\.path),
             ["c.md", "a.md", "b.md", "d.md"])
     }
 
     @MainActor
-    func testEmptyQueryPrunesRecentsMissingFromFiles() {
-        let model = QuickSwitcherModel()
+    func testEmptyQueryPrunesRecentsMissingFromFiles() async {
+        let model = makeModel()
         model.load(
-            files: rows([("a.md", "a.md"), ("b.md", "b.md")]),
-            // "gone.md" was deleted since last session.
+            files: candidates([("a.md", "a.md"), ("b.md", "b.md")]),
             recents: ["gone.md", "b.md"])
-        XCTAssertEqual(
-            model.displayOrder.map(\.path), ["b.md", "a.md"],
-            "a recent whose file no longer exists is pruned from the order")
+        await model.settleRanking()
+
+        XCTAssertEqual(model.displayOrder.map(\.path), ["b.md", "a.md"])
     }
 
-    // MARK: - Ordering: non-empty query = score, recency only breaks ties
-
     @MainActor
-    func testNonEmptyQuerySortsByScoreThenRecencyTiebreak() {
-        let model = QuickSwitcherModel()
-        // Two files with an identical name → identical fuzzy score for
-        // "note"; recency breaks the tie.
+    func testNonEmptyQuerySortsByScoreThenRecencyTiebreak() async {
+        let model = makeModel()
         model.load(
-            files: rows([
+            files: candidates([
                 ("alpha/note.md", "note.md"),
                 ("beta/note.md", "note.md"),
             ]),
             recents: ["beta/note.md"])
+        await model.settleRanking()
         model.query = "note"
+        await model.settleRanking()
+
         XCTAssertEqual(
             model.displayOrder.map(\.path),
-            ["beta/note.md", "alpha/note.md"],
-            "equal scores → the more recently opened file sorts first")
+            ["beta/note.md", "alpha/note.md"])
     }
 
     @MainActor
-    func testRecencyDoesNotBeatAMateriallyBetterFuzzyScore() {
-        let model = QuickSwitcherModel()
-        // "meeting-notes.md" is a far weaker match for "notes" than
-        // "notes.md", yet it was opened recently. Score must still win.
+    func testRecencyDoesNotBeatAMateriallyBetterFuzzyScore() async {
+        let model = makeModel()
         model.load(
-            files: rows([
+            files: candidates([
                 ("notes.md", "notes.md"),
                 ("archive/meeting-notes.md", "meeting-notes.md"),
             ]),
             recents: ["archive/meeting-notes.md"])
+        await model.settleRanking()
         model.query = "notes"
-        XCTAssertEqual(
-            model.displayOrder.first?.path, "notes.md",
-            "a materially better fuzzy match must outrank a recent-but-worse one")
+        await model.settleRanking()
+
+        XCTAssertEqual(model.displayOrder.first?.path, "notes.md")
     }
 
     @MainActor
-    func testNonEmptyQueryExcludesNonMatches() {
-        let model = QuickSwitcherModel()
+    func testNonEmptyQueryExcludesNonMatches() async {
+        let model = makeModel()
         model.load(
-            files: rows([("foo.md", "foo.md"), ("bar.md", "bar.md")]),
+            files: candidates([("foo.md", "foo.md"), ("bar.md", "bar.md")]),
             recents: [])
+        await model.settleRanking()
         model.query = "foo"
-        XCTAssertEqual(
-            model.displayOrder.map(\.path), ["foo.md"],
-            "non-matching files are excluded from a non-empty query")
+        await model.settleRanking()
+
+        XCTAssertEqual(model.displayOrder.map(\.path), ["foo.md"])
     }
 
-    // MARK: - Snap-to-first + arrow nav
+    // MARK: - Selection
 
     @MainActor
-    func testLoadSelectsFirstRow() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("a.md", "a.md"), ("b.md", "b.md")]), recents: [])
+    func testLoadSelectsFirstRow() async {
+        let model = makeModel()
+        model.load(
+            files: candidates([("a.md", "a.md"), ("b.md", "b.md")]),
+            recents: [])
+        await model.settleRanking()
         XCTAssertEqual(model.selectedID, "a.md")
     }
 
     @MainActor
-    func testQueryChangeSnapsSelectionToFirstMatch() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("a.md", "a.md"), ("b.md", "b.md")]), recents: [])
+    func testQueryChangeSnapsSelectionToFirstMatch() async {
+        let model = makeModel()
+        model.load(
+            files: candidates([("a.md", "a.md"), ("b.md", "b.md")]),
+            recents: [])
+        await model.settleRanking()
         model.selectedID = "b.md"
         model.query = "a"
-        model.handleQueryChange()
-        XCTAssertEqual(model.selectedID, "a.md", "selection snaps to the first remaining match")
+        await model.settleRanking()
+        XCTAssertEqual(model.selectedID, "a.md")
     }
 
     @MainActor
-    func testQueryChangeWithNoMatchesNilsSelection() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("a.md", "a.md")]), recents: [])
+    func testQueryChangeRetainsSelectionWhenItRemainsRanked() async {
+        let model = makeModel()
+        model.load(
+            files: candidates([
+                ("alpha/note.md", "note.md"), ("beta/note.md", "note.md"),
+            ]),
+            recents: [])
+        await model.settleRanking()
+        model.selectedID = "beta/note.md"
+
+        model.query = "note"
+        XCTAssertEqual(model.selectedID, "beta/note.md")
+        XCTAssertNil(model.selectedRow)
+        await model.settleRanking()
+
+        XCTAssertEqual(model.displayOrder.first?.id, "alpha/note.md")
+        XCTAssertEqual(model.selectedID, "beta/note.md")
+    }
+
+    @MainActor
+    func testQueryChangeWithNoMatchesNilsSelection() async {
+        let model = makeModel()
+        model.load(files: candidates([("a.md", "a.md")]), recents: [])
+        await model.settleRanking()
         model.query = "zzz"
-        model.handleQueryChange()
+        await model.settleRanking()
         XCTAssertNil(model.selectedID)
     }
 
     @MainActor
-    func testSelectNextWrapsAtEnd() {
-        let model = QuickSwitcherModel()
+    func testSelectNextWrapsAtEnd() async {
+        let model = makeModel()
         model.load(
-            files: rows([("a.md", "a.md"), ("b.md", "b.md"), ("c.md", "c.md")]),
+            files: candidates([
+                ("a.md", "a.md"), ("b.md", "b.md"), ("c.md", "c.md"),
+            ]),
             recents: [])
-        XCTAssertEqual(model.selectedID, "a.md")
+        await model.settleRanking()
         model.selectNext(); XCTAssertEqual(model.selectedID, "b.md")
         model.selectNext(); XCTAssertEqual(model.selectedID, "c.md")
         model.selectNext(); XCTAssertEqual(model.selectedID, "a.md")
     }
 
     @MainActor
-    func testSelectPreviousWrapsAtStart() {
-        let model = QuickSwitcherModel()
+    func testSelectPreviousWrapsAtStart() async {
+        let model = makeModel()
         model.load(
-            files: rows([("a.md", "a.md"), ("b.md", "b.md"), ("c.md", "c.md")]),
+            files: candidates([
+                ("a.md", "a.md"), ("b.md", "b.md"), ("c.md", "c.md"),
+            ]),
             recents: [])
-        XCTAssertEqual(model.selectedID, "a.md")
-        model.selectPrevious(); XCTAssertEqual(model.selectedID, "c.md")
+        await model.settleRanking()
+        model.selectPrevious()
+        XCTAssertEqual(model.selectedID, "c.md")
     }
 
     @MainActor
-    func testSelectedRowResolvesToDisplayedRow() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("a.md", "a.md"), ("b.md", "b.md")]), recents: [])
+    func testSelectedRowResolvesToDisplayedRow() async {
+        let model = makeModel()
+        model.load(
+            files: candidates([("a.md", "a.md"), ("b.md", "b.md")]),
+            recents: [])
+        await model.settleRanking()
         model.selectedID = "b.md"
         XCTAssertEqual(model.selectedRow?.path, "b.md")
     }
 
-    // MARK: - Display cap
+    // MARK: - Bounded background publication
 
     @MainActor
-    func testDisplayOrderCapsButAnnouncementReportsTotal() {
-        let model = QuickSwitcherModel()
+    func testDefaultModelsShareProcessScopedWorker() {
+        let first = makeModel()
+        let second = makeModel()
+
+        XCTAssertTrue(first.rankingWorkerForTesting === second.rankingWorkerForTesting)
+    }
+
+    @MainActor
+    func testDisplayOrderCapsButAnnouncementReportsTotal() async {
+        let model = makeModel()
         let many = (0..<(QuickSwitcherModel.displayCap + 20)).map {
             ("note\($0).md", "note\($0).md")
         }
-        model.load(files: rows(many), recents: [])
+        model.load(files: candidates(many), recents: [])
+        await model.settleRanking()
         model.query = "note"
-        model.handleQueryChange()
-        XCTAssertEqual(
-            model.displayOrder.count, QuickSwitcherModel.displayCap,
-            "rendered rows are capped")
-        XCTAssertEqual(
-            model.matches.count, QuickSwitcherModel.displayCap,
-            "the host receives only the bounded display page")
+        await model.settleRanking()
+
+        XCTAssertEqual(model.displayOrder.count, QuickSwitcherModel.displayCap)
+        XCTAssertEqual(model.matches.count, QuickSwitcherModel.displayCap)
         XCTAssertEqual(
             model.resultAnnouncement,
             .switcherMatchCount(
                 count: UInt32(QuickSwitcherModel.displayCap + 20),
                 query: "note"
-            ),
-            "the announcement still reflects the exact TOTAL")
+            ))
     }
 
-    // MARK: - Result-count announcement
+    @MainActor
+    func testRankingRunsOffMainAndPublishesAfterTheWorkerCompletes() async {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let ranOnMain = LockedBool()
+        let worker = QuickSwitcherModel.RankingWorker {
+            files, _, _, _ in
+            ranOnMain.set(Thread.isMainThread)
+            entered.signal()
+            _ = release.wait(timeout: .now() + 15)
+            let file = files[0]
+            return QuickSwitcherModel.RankingPage(
+                rows: [
+                    QuickSwitcherModel.FileRow(
+                        path: file.path,
+                        name: file.name,
+                        displayName: "A"
+                    )
+                ],
+                total: 1
+            )
+        }
+        let model = QuickSwitcherModel(debounceNanoseconds: 0, rankingWorker: worker)
 
-    // #963: the model publishes typed events; core renders the text.
-    // Each test asserts BOTH the event choice (the model's trigger
-    // contract) and the exact rendered string (the shipped copy, now
-    // pinned core-side by the §W-D corpus goldens).
+        model.load(files: candidates([("a.md", "a.md")]), recents: [])
+        let enteredInTime = await Task.detached {
+            entered.wait(timeout: .now() + 10) == .success
+        }.value
+        XCTAssertTrue(enteredInTime)
+        XCTAssertFalse(ranOnMain.value)
+        XCTAssertTrue(model.isRanking)
+        XCTAssertTrue(model.displayOrder.isEmpty)
+
+        release.signal()
+        await model.settleRanking()
+        XCTAssertFalse(model.isRanking)
+        XCTAssertEqual(model.displayOrder.map(\.path), ["a.md"])
+    }
 
     @MainActor
-    func testInitialAnnouncementReportsRecentCount() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("a.md", "a.md"), ("b.md", "b.md")]), recents: [])
+    func testSupersededWorkerCannotPublishAfterANewerQuery() async {
+        let oldEntered = DispatchSemaphore(value: 0)
+        let releaseOld = DispatchSemaphore(value: 0)
+        let oldFinished = DispatchSemaphore(value: 0)
+        let concurrency = ConcurrencyProbe()
+        let worker = QuickSwitcherModel.RankingWorker {
+            files, query, _, _ in
+            concurrency.enter()
+            defer { concurrency.leave() }
+            if query == "old" {
+                oldEntered.signal()
+                _ = releaseOld.wait(timeout: .now() + 15)
+                oldFinished.signal()
+            }
+            let path = query == "new" ? "new.md" : files[0].path
+            return QuickSwitcherModel.RankingPage(
+                rows: [
+                    QuickSwitcherModel.FileRow(
+                        path: path,
+                        name: path,
+                        displayName: query.isEmpty ? "Old" : query
+                    )
+                ],
+                total: 1
+            )
+        }
+        let model = QuickSwitcherModel(debounceNanoseconds: 0, rankingWorker: worker)
+        model.load(
+            files: candidates([("old.md", "old.md"), ("new.md", "new.md")]),
+            recents: [])
+        await model.settleRanking()
+
+        model.query = "old"
+        let oldEnteredInTime = await Task.detached {
+            oldEntered.wait(timeout: .now() + 10) == .success
+        }.value
+        XCTAssertTrue(oldEnteredInTime)
+        model.query = "new"
+        XCTAssertTrue(model.displayOrder.isEmpty)
+        XCTAssertNil(model.resultAnnouncement)
+
+        releaseOld.signal()
+        let oldFinishedInTime = await Task.detached {
+            oldFinished.wait(timeout: .now() + 10) == .success
+        }.value
+        XCTAssertTrue(oldFinishedInTime)
+        await model.settleSupersededRanking()
+        await model.settleRanking()
+        XCTAssertEqual(model.displayOrder.map(\.path), ["new.md"])
+        XCTAssertEqual(model.rankingPublicationCountForTesting, 2)
+        XCTAssertEqual(concurrency.maximumObserved, 1)
+    }
+
+    @MainActor
+    func testSharedWorkerSerializesRanksAcrossModelLifetimes() async {
+        let firstEntered = DispatchSemaphore(value: 0)
+        let releaseFirst = DispatchSemaphore(value: 0)
+        let secondRequested = DispatchSemaphore(value: 0)
+        let concurrency = ConcurrencyProbe()
+        let worker = QuickSwitcherModel.RankingWorker { files, _, _, _ in
+            concurrency.enter()
+            defer { concurrency.leave() }
+            if files[0].path == "first.md" {
+                firstEntered.signal()
+                _ = releaseFirst.wait(timeout: .now() + 15)
+            }
+            let file = files[0]
+            return QuickSwitcherModel.RankingPage(
+                rows: [
+                    QuickSwitcherModel.FileRow(
+                        path: file.path, name: file.name, displayName: file.name)
+                ],
+                total: 1)
+        }
+        let first = QuickSwitcherModel(debounceNanoseconds: 0, rankingWorker: worker)
+        let second = QuickSwitcherModel(
+            debounceNanoseconds: 0,
+            rankingWorker: worker,
+            rankingRequestObserverForTesting: { secondRequested.signal() })
+
+        first.load(files: candidates([("first.md", "first.md")]), recents: [])
+        let enteredInTime = await Task.detached {
+            firstEntered.wait(timeout: .now() + 10) == .success
+        }.value
+        XCTAssertTrue(enteredInTime)
+        first.cancel()
+        second.load(files: candidates([("second.md", "second.md")]), recents: [])
+        let secondRequestedInTime = await Task.detached {
+            secondRequested.wait(timeout: .now() + 10) == .success
+        }.value
+        XCTAssertTrue(secondRequestedInTime)
+        XCTAssertEqual(concurrency.maximumObserved, 1)
+
+        releaseFirst.signal()
+        await first.settleSupersededRanking()
+        await second.settleRanking()
+
+        XCTAssertEqual(concurrency.maximumObserved, 1)
+        XCTAssertEqual(first.rankingPublicationCountForTesting, 0)
+        XCTAssertEqual(second.displayOrder.map(\.path), ["second.md"])
+        XCTAssertEqual(second.rankingPublicationCountForTesting, 1)
+    }
+
+    @MainActor
+    func testCancellationDuringNativeRankPreventsLatePublication() async {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let worker = QuickSwitcherModel.RankingWorker { files, _, _, _ in
+            entered.signal()
+            _ = release.wait(timeout: .now() + 15)
+            let file = files[0]
+            return QuickSwitcherModel.RankingPage(
+                rows: [
+                    QuickSwitcherModel.FileRow(
+                        path: file.path, name: file.name, displayName: file.name)
+                ],
+                total: 1)
+        }
+        let model = QuickSwitcherModel(debounceNanoseconds: 0, rankingWorker: worker)
+        model.load(files: candidates([("a.md", "a.md")]), recents: [])
         model.announceInitialCount()
+        let enteredInTime = await Task.detached {
+            entered.wait(timeout: .now() + 10) == .success
+        }.value
+        XCTAssertTrue(enteredInTime)
+
+        model.cancel()
+        XCTAssertNil(model.resultAnnouncement)
+        XCTAssertFalse(model.isRanking)
+        XCTAssertTrue(model.displayOrder.isEmpty)
+        release.signal()
+        await model.settleSupersededRanking()
+
+        XCTAssertNil(model.resultAnnouncement)
+        XCTAssertTrue(model.displayOrder.isEmpty)
+        XCTAssertEqual(model.rankingPublicationCountForTesting, 0)
+    }
+
+    // MARK: - Result-count announcements
+
+    @MainActor
+    func testInitialAnnouncementWaitsForTheOpeningRank() async {
+        let model = makeModel()
+        model.load(
+            files: candidates([("a.md", "a.md"), ("b.md", "b.md")]),
+            recents: [])
+        model.announceInitialCount()
+        XCTAssertNil(model.resultAnnouncement)
+        await model.settleRanking()
         XCTAssertEqual(model.resultAnnouncement, .switcherRecentCount(count: 2))
         XCTAssertEqual(renderedText(model), "2 recent files")
     }
 
     @MainActor
-    func testAnnouncementZeroRecents() {
-        // The copy decision, locked (Codoki on #971): an empty recency
-        // list announces "0 recent files" rather than staying silent.
-        let model = QuickSwitcherModel()
+    func testSupersessionAndDismissalClearPendingAnnouncements() async {
+        let model = makeModel()
+        model.load(files: candidates([("a.md", "a.md")]), recents: [])
+        model.announceInitialCount()
+        await model.settleRanking()
+        XCTAssertNotNil(model.resultAnnouncement)
+        let publications = model.rankingPublicationCountForTesting
+
+        model.query = "a"
+        XCTAssertNil(model.resultAnnouncement)
+        model.cancel()
+        await model.settleSupersededRanking()
+
+        XCTAssertNil(model.resultAnnouncement)
+        XCTAssertFalse(model.isRanking)
+        XCTAssertTrue(model.displayOrder.isEmpty)
+        XCTAssertEqual(model.rankingPublicationCountForTesting, publications)
+    }
+
+    @MainActor
+    func testAnnouncementZeroRecents() async {
+        let model = makeModel()
         model.load(files: [], recents: [])
         model.announceInitialCount()
+        await model.settleRanking()
         XCTAssertEqual(model.resultAnnouncement, .switcherRecentCount(count: 0))
         XCTAssertEqual(renderedText(model), "0 recent files")
     }
 
     @MainActor
-    func testAnnouncementSingularRecent() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("a.md", "a.md")]), recents: [])
+    func testAnnouncementSingularRecent() async {
+        let model = makeModel()
+        model.load(files: candidates([("a.md", "a.md")]), recents: [])
         model.announceInitialCount()
+        await model.settleRanking()
         XCTAssertEqual(model.resultAnnouncement, .switcherRecentCount(count: 1))
         XCTAssertEqual(renderedText(model), "1 recent file")
     }
 
     @MainActor
-    func testAnnouncementReportsMatchCount() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("foo.md", "foo.md"), ("food.md", "food.md")]), recents: [])
+    func testAnnouncementReportsMatchCount() async {
+        let model = makeModel()
+        model.load(
+            files: candidates([("foo.md", "foo.md"), ("food.md", "food.md")]),
+            recents: [])
+        await model.settleRanking()
         model.query = "foo"
-        model.handleQueryChange()
+        await model.settleRanking()
         XCTAssertEqual(model.resultAnnouncement, .switcherMatchCount(count: 2, query: "foo"))
         XCTAssertEqual(renderedText(model), "2 files matching \"foo\"")
     }
 
     @MainActor
-    func testAnnouncementSingularMatch() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("foo.md", "foo.md"), ("bar.md", "bar.md")]), recents: [])
+    func testAnnouncementSingularMatch() async {
+        let model = makeModel()
+        model.load(
+            files: candidates([("foo.md", "foo.md"), ("bar.md", "bar.md")]),
+            recents: [])
+        await model.settleRanking()
         model.query = "foo"
-        model.handleQueryChange()
+        await model.settleRanking()
         XCTAssertEqual(model.resultAnnouncement, .switcherMatchCount(count: 1, query: "foo"))
         XCTAssertEqual(renderedText(model), "1 file matching \"foo\"")
     }
 
     @MainActor
-    func testAnnouncementNoMatches() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("foo.md", "foo.md")]), recents: [])
+    func testAnnouncementNoMatches() async {
+        let model = makeModel()
+        model.load(files: candidates([("foo.md", "foo.md")]), recents: [])
+        await model.settleRanking()
         model.query = "zzz"
-        model.handleQueryChange()
+        await model.settleRanking()
         XCTAssertEqual(model.resultAnnouncement, .switcherNoMatches(query: "zzz"))
         XCTAssertEqual(renderedText(model), "No files matching \"zzz\"")
     }
 
-    /// Render the model's pending event through the canonical vocabulary
-    /// — the same call the view's poster makes.
     @MainActor
-    private func renderedText(_ model: QuickSwitcherModel) -> String? {
-        model.resultAnnouncement.map { a11yRender(event: $0).text }
-    }
-
-    @MainActor
-    func testClearAnnouncementResetsToNil() {
-        let model = QuickSwitcherModel()
-        model.load(files: rows([("a.md", "a.md")]), recents: [])
+    func testClearAnnouncementResetsToNil() async {
+        let model = makeModel()
+        model.load(files: candidates([("a.md", "a.md")]), recents: [])
         model.announceInitialCount()
+        await model.settleRanking()
         XCTAssertNotNil(model.resultAnnouncement)
         model.clearAnnouncement()
         XCTAssertNil(model.resultAnnouncement)
+    }
+
+    @MainActor
+    private func renderedText(_ model: QuickSwitcherModel) -> String? {
+        model.resultAnnouncement.map { a11yRender(event: $0).text }
     }
 }

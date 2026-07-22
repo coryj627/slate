@@ -28,7 +28,8 @@ import SwiftUI
 ///   keyDown monitor (the field's `onSubmit` can't see modifiers).
 /// - `Esc` dismisses via the same monitor (a focused field editor eats
 ///   raw Escape before `.onExitCommand`).
-/// - Hover updates selection, debounced against recent keyboard nav.
+/// - Hover updates selection only after physical pointer movement following
+///   the latest result publication or keyboard navigation.
 ///
 /// ## Colours
 ///
@@ -50,10 +51,12 @@ struct QuickSwitcherView: View {
     /// modifiers that pick the open target.
     @State private var keyDownMonitor: Any? = nil
 
-    /// Timestamp of the most recent arrow-key selection change. Hover
-    /// only updates selection when the mouse moves AFTER this, so a
-    /// stationary cursor doesn't yank the keyboard-driven choice.
-    @State private var lastKeyboardNavAt: Date = .distantPast
+    /// Hover can take selection ownership only after the pointer physically
+    /// moves following the current result publication or keyboard navigation.
+    /// SwiftUI may synthesize hover when a List materializes beneath a
+    /// stationary pointer, so elapsed time alone is not an admission signal.
+    @State private var hoverAdmissionRevision: UInt64?
+    @State private var hoverPointerLocation: CGPoint?
 
     /// True between `.onAppear` and the first user-driven selection
     /// change. Suppresses the polite selection announcement at open
@@ -88,7 +91,7 @@ struct QuickSwitcherView: View {
         }
         .frame(minWidth: 560, idealWidth: 560, minHeight: 360, idealHeight: 360)
         .background(Color(nsColor: .controlBackgroundColor))
-        .onExitCommand { dismiss() }
+        .onExitCommand { cancelAndDismiss() }
         .onAppear {
             searchFocused = true
             isInitialLoad = true
@@ -99,18 +102,23 @@ struct QuickSwitcherView: View {
                             || file.path.lowercased().hasSuffix(".canvas")
                             || file.path.lowercased().hasSuffix(".base")
                     }
-                    .map { QuickSwitcherModel.FileRow(path: $0.path, name: $0.name) },
+                    .map { QuickSwitcherModel.CandidateFile(path: $0.path, name: $0.name) },
                 recents: appState.fileRecents)
             model.announceInitialCount()
             installKeyDownMonitor()
         }
-        .onDisappear { removeKeyDownMonitor() }
-        .onChange(of: model.query) {
-            model.handleQueryChange()
+        .onDisappear {
+            model.cancel()
+            removeKeyDownMonitor()
         }
         .onChange(of: model.selectedID) { _, newID in
             guard !isInitialLoad else {
-                isInitialLoad = false
+                // A retained StateObject can publish an intermediate nil when
+                // the sheet reopens. Suppress through the first real row,
+                // rather than spending the guard on that reset.
+                if newID != nil {
+                    isInitialLoad = false
+                }
                 return
             }
             guard let newID,
@@ -156,7 +164,9 @@ struct QuickSwitcherView: View {
     @ViewBuilder
     private var results: some View {
         let rows = model.displayOrder
-        if rows.isEmpty {
+        if model.isRanking {
+            rankingState
+        } else if rows.isEmpty {
             if model.files.isEmpty {
                 emptyState
             } else {
@@ -179,6 +189,19 @@ struct QuickSwitcherView: View {
                             proxy.scrollTo(newID, anchor: .center)
                         }
                     }
+                }
+                .task(id: model.resultRevision) {
+                    // Ranking temporarily replaces the List with its loading
+                    // state. Reveal a retained, unchanged selection when the
+                    // rebuilt lazy list appears so Return never targets an
+                    // off-screen row.
+                    armHoverAdmission()
+                    await Task.yield()
+                    guard let target = Self.selectionScrollTarget(
+                        selectedID: model.selectedID,
+                        rowIDs: rows.map(\.id))
+                    else { return }
+                    proxy.scrollTo(target, anchor: .center)
                 }
             }
         }
@@ -217,11 +240,18 @@ struct QuickSwitcherView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .onHover { hovering in
-            guard hovering else { return }
-            if Date().timeIntervalSince(lastKeyboardNavAt) > 0.25 {
-                model.selectedID = row.id
-            }
+        .onContinuousHover { phase in
+            guard case .active = phase else { return }
+            let pointerLocation = NSEvent.mouseLocation
+            let shouldAdmit = Self.shouldAdmitHoverSelection(
+                resultRevision: model.resultRevision,
+                armedRevision: hoverAdmissionRevision,
+                baselineLocation: hoverPointerLocation,
+                currentLocation: pointerLocation)
+            hoverAdmissionRevision = model.resultRevision
+            hoverPointerLocation = pointerLocation
+            guard shouldAdmit, model.selectedID != row.id else { return }
+            model.selectedID = row.id
         }
         // "<name>, <path>" per spec — the display name then the
         // vault-relative path so VoiceOver disambiguates same-named
@@ -290,6 +320,28 @@ struct QuickSwitcherView: View {
         return nil
     }
 
+    /// The current selection is the post-publication viewport target only
+    /// when it is present in the newly published bounded page.
+    nonisolated static func selectionScrollTarget(
+        selectedID: String?, rowIDs: [String]
+    ) -> String? {
+        guard let selectedID, rowIDs.contains(selectedID) else { return nil }
+        return selectedID
+    }
+
+    /// Reject synthesized hover on publication/list reconstruction. A hover
+    /// may own selection only after the current pointer position differs from
+    /// the position armed for the same result revision.
+    nonisolated static func shouldAdmitHoverSelection(
+        resultRevision: UInt64,
+        armedRevision: UInt64?,
+        baselineLocation: CGPoint?,
+        currentLocation: CGPoint
+    ) -> Bool {
+        guard armedRevision == resultRevision, let baselineLocation else { return false }
+        return baselineLocation != currentLocation
+    }
+
     private func installKeyDownMonitor() {
         guard keyDownMonitor == nil else { return }
         keyDownMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
@@ -303,7 +355,7 @@ struct QuickSwitcherView: View {
             if Self.isDismissKey(
                 keyCode: event.keyCode, modifierFlags: event.modifierFlags)
             {
-                appState.isQuickSwitcherOpen = false
+                cancelAndDismiss()
                 return nil
             }
             // Return chords: bare onSubmit handles the currentTab case
@@ -321,7 +373,7 @@ struct QuickSwitcherView: View {
             {
                 return event
             }
-            lastKeyboardNavAt = Date()
+            armHoverAdmission()
             switch event.keyCode {
             case Key.up: model.selectPrevious()
             case Key.down: model.selectNext()
@@ -329,6 +381,11 @@ struct QuickSwitcherView: View {
             }
             return nil
         }
+    }
+
+    private func armHoverAdmission() {
+        hoverAdmissionRevision = model.resultRevision
+        hoverPointerLocation = NSEvent.mouseLocation
     }
 
     private func removeKeyDownMonitor() {
@@ -352,11 +409,32 @@ struct QuickSwitcherView: View {
     /// dismissing sheet. `openFile` records the open into file-recents
     /// at AppState's single choke point.
     private func open(_ row: QuickSwitcherModel.FileRow, target: AppState.OpenTarget) {
-        dismiss()
+        cancelAndDismiss()
         appState.openFile(row.path, target: target)
     }
 
-    // MARK: - Empty / no-match states
+    /// Invalidate asynchronous publication before asking SwiftUI to remove
+    /// the sheet. `onDisappear` remains a defensive fallback for dismissal
+    /// initiated outside this view.
+    private func cancelAndDismiss() {
+        model.cancel()
+        dismiss()
+    }
+
+    // MARK: - Ranking / empty / no-match states
+
+    private var rankingState: some View {
+        VStack(spacing: 8) {
+            Spacer()
+            ProgressView()
+            Text("Searching files…")
+                .foregroundStyle(Color(nsColor: .secondaryLabelColor))
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Searching files")
+    }
 
     private var emptyState: some View {
         VStack(spacing: 8) {

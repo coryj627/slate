@@ -36,6 +36,7 @@ W1-0 through W1-4 are implemented in the repository. Three independent agents re
 
 - Ctrl+O opens a recents-first, 50-result overlay. Only core `SwitcherRank` determines ordering; C# performs no fuzzy scoring or display-name derivation.
 - Initial indexing runs after scan; vault Created/Renamed/Deleted events update the cache incrementally, including folder descendants. Ranking is debounced and cancellable off the UI thread.
+- The mac consumer uses the same top-50 contract through a 60 ms debounced, process-scoped serial background actor. Candidate capture performs no per-file FFI on `MainActor`; at most one native rank is active across sheet lifetimes; query assignment synchronously invalidates older publication while retaining and re-revealing a still-valid selection in the rebuilt lazy list; synthesized hover under a stationary pointer cannot steal that selection; explicit dismissal cancels before sheet removal; and the sheet shows an accessible loading state until the current query publishes.
 - Enter, Ctrl+Enter and Ctrl+Alt+Enter target current tab, new tab and split. Arrow selection wraps; Esc restores prior focus; tab traversal stays in the overlay.
 - Result counts use the new typed core `A11yEvent::QuickSwitcherCount`; core goldens, corpus, UniFFI bindings and the mac consumer were updated together.
 
@@ -164,7 +165,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
 | `cargo test -p slate-core vault::fs::tests::windows_ --locked -q` | 5 passed, 0 failed |
 | Focused core accessibility tests | 3 passed, 0 failed |
-| Focused core switcher tests | 18 passed, 0 failed |
+| Focused core switcher tests | 20 passed, 0 failed |
 | `cargo test -p slate-uniffi --lib --locked -q` | 71 passed, 0 failed |
 | `cargo fmt --check` | Pass |
 | `cargo clippy -p slate-core -p slate-uniffi --lib --locked -- -D warnings` | Pass |
