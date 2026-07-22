@@ -86,3 +86,11 @@ Every group follows the same gate: focused tests, full applicable local gates,
 an adversarial diff review across all eight audit dimensions, correction of any
 new finding, draft PR publication, 120-second CI/Codoki polling, all CI green,
 Codoki explicitly safe to merge, then squash merge before the next group.
+
+## Remediation progress
+
+- W1-RT-01 closed by PR #1011: default durable diagnostics now accept only
+  closed event identifiers, exception type names, and explicitly safe numeric
+  size fields. All production stderr writes route through that boundary;
+  per-file vault change logging was removed. CI was green and Codoki reported
+  5/5 confidence and safe to merge.

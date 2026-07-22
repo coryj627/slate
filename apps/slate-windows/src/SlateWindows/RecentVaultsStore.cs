@@ -60,34 +60,20 @@ internal sealed class RecentVaultsStore
     {
         try
         {
-            using var stream = new FileStream(
+            byte[] buffer = SafeFile.ReadAllBytesBounded(
                 _filePath,
-                FileMode.Open,
-                FileAccess.Read,
+                MaxFileBytes,
                 FileShare.ReadWrite | FileShare.Delete);
-            byte[] buffer = new byte[MaxFileBytes + 1];
-            int bytesRead = 0;
-            while (bytesRead < buffer.Length)
-            {
-                int count = stream.Read(buffer, bytesRead, buffer.Length - bytesRead);
-                if (count == 0)
-                {
-                    break;
-                }
-
-                bytesRead += count;
-            }
-
-            if (bytesRead > MaxFileBytes)
-            {
-                HostLog.Write(HostDiagnosticEvent.RecentVaultsPayloadRejected);
-                return [];
-            }
 
             List<RecentVault>? decoded = JsonSerializer.Deserialize<List<RecentVault>>(
-                buffer.AsSpan(0, bytesRead),
+                buffer,
                 JsonOptions);
             return decoded?.Take(MaxEntries).ToArray() ?? [];
+        }
+        catch (FileSizeLimitExceededException exception)
+        {
+            HostLog.WriteSizeLimit(HostDiagnosticEvent.RecentVaultsPayloadRejected, exception);
+            return [];
         }
         catch (FileNotFoundException)
         {
@@ -129,13 +115,7 @@ internal sealed class RecentVaultsStore
         }
         finally
         {
-            try
-            {
-                File.Delete(temporaryPath);
-            }
-            catch (IOException)
-            {
-            }
+            SafeFile.TryDelete(temporaryPath);
         }
     }
 

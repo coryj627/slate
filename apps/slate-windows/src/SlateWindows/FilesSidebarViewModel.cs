@@ -1711,13 +1711,10 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
     private void ImportFile(string source, string destination, CancellationToken cancellationToken)
     {
-        long length = new FileInfo(source).Length;
-        ValidateImportFileSize(length, afterRead: false);
-
-        byte[] bytes = File.ReadAllBytes(source);
-        ValidateImportFileSize(bytes.LongLength, afterRead: true);
-
-        cancellationToken.ThrowIfCancellationRequested();
+        byte[] bytes = SafeFile.ReadAllBytesBounded(
+            source,
+            MaxImportFileBytes,
+            cancellationToken: cancellationToken);
         string originalName = Path.GetFileName(source);
         for (int suffix = 1; suffix <= 100; suffix++)
         {
@@ -1770,18 +1767,6 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
         visitedEntries++;
         return true;
-    }
-
-    internal static void ValidateImportFileSize(long length, bool afterRead)
-    {
-        if (length <= MaxImportFileBytes)
-        {
-            return;
-        }
-
-        throw new IOException(afterRead
-            ? "An import file grew beyond the 256 MiB host safety limit while being read."
-            : "An import file exceeds the 256 MiB host safety limit.");
     }
 
     internal static bool HasReparsePointInPath(

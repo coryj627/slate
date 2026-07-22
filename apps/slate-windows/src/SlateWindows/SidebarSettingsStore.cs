@@ -287,13 +287,7 @@ internal sealed class SidebarSettingsStore
         }
         finally
         {
-            try
-            {
-                File.Delete(temporary);
-            }
-            catch (IOException)
-            {
-            }
+            SafeFile.TryDelete(temporary);
         }
     }
 
@@ -314,14 +308,8 @@ internal sealed class SidebarSettingsStore
             }
 
             RejectReparsePoint(_path);
-            var info = new FileInfo(_path);
-            if (info.Length > MaxReadBytes)
-            {
-                blocked = "Sidebar settings exceed the 2 MiB safety limit and are read-only.";
-                return new JsonObject { ["version"] = SchemaVersion };
-            }
-
-            JsonNode? parsed = JsonNode.Parse(File.ReadAllBytes(_path));
+            JsonNode? parsed = JsonNode.Parse(
+                SafeFile.ReadAllBytesBounded(_path, MaxReadBytes));
             if (parsed is not JsonObject root || !KnownShapesAreValid(root))
             {
                 blocked = "Sidebar settings are malformed and are read-only.";
@@ -336,6 +324,11 @@ internal sealed class SidebarSettingsStore
             }
 
             return root;
+        }
+        catch (FileSizeLimitExceededException)
+        {
+            blocked = "Sidebar settings exceed the 2 MiB safety limit and are read-only.";
+            return new JsonObject { ["version"] = SchemaVersion };
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or JsonException

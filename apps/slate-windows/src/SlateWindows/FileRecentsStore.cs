@@ -90,13 +90,13 @@ internal sealed class FileRecentsStore
     {
         try
         {
-            var info = new FileInfo(path);
-            if (!info.Exists || info.Length > MaxPayloadBytes)
+            if (!File.Exists(path))
             {
                 return [];
             }
 
-            string[]? paths = JsonSerializer.Deserialize<string[]>(File.ReadAllBytes(path));
+            string[]? paths = JsonSerializer.Deserialize<string[]>(
+                SafeFile.ReadAllBytesBounded(path, MaxPayloadBytes));
             return Sanitize(paths ?? []);
         }
         catch (Exception exception) when (
@@ -149,13 +149,5 @@ internal sealed class FileRecentsStore
     }
 
     private static void TryDelete(string path)
-    {
-        try
-        {
-            File.Delete(path);
-        }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-        {
-        }
-    }
+        => SafeFile.TryDelete(path);
 }
