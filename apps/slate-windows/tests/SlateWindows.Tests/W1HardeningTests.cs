@@ -347,6 +347,38 @@ public sealed class W1SidebarHardeningTests
     }
 
     [Fact]
+    public void ImportOperationStateIsOwnedByTheDedicatedPartial()
+    {
+        string sourceDirectory = Path.Combine(
+            RepoRoot(),
+            "apps",
+            "slate-windows",
+            "src",
+            "SlateWindows");
+        string primary = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.cs"));
+        string import = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.Import.cs"));
+
+        foreach (string ownedMember in new[]
+        {
+            "MaxImportEntries =",
+            "MaxImportFileBytes =",
+            "Func<Task<IReadOnlyList<string>>> _pickImportSources",
+            "string? _vaultRoot",
+            "CancellationTokenSource? _importCancellation",
+            "bool _isImporting",
+            "private async Task ImportAsync",
+            "private ImportResult ImportSources",
+            "internal static bool HasReparsePointInPath",
+        })
+        {
+            Assert.DoesNotContain(ownedMember, primary, StringComparison.Ordinal);
+            Assert.Contains(ownedMember, import, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task UnexpectedTreeWorkerFailureIsReportedWithoutFaultingRefreshCompletion()
     {
         using FixtureVault fixture = FixtureVault.Create(0, "sidebar-refresh-failure");
