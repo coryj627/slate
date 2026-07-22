@@ -6,6 +6,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
+using System.Windows.Threading;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -39,6 +40,8 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     private readonly RecentVaultsStore _recentVaultsStore;
     private readonly ScanAnnouncementGate _scanAnnouncements;
     private readonly SynchronizationContext? _filterUiContext;
+    private readonly SynchronizationContext? _treeUiContext;
+    private readonly Func<Action, CancellationToken, Task>? _treeWorker;
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
     private readonly RelayCommand _closeVaultCommand;
@@ -76,7 +79,9 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         Func<string, bool>? confirmDestructive = null,
         Func<Task<IReadOnlyList<string>>>? pickImportSources = null,
         Func<DateTimeOffset>? scanClock = null,
-        SynchronizationContext? filterUiContext = null)
+        SynchronizationContext? filterUiContext = null,
+        SynchronizationContext? treeUiContext = null,
+        Func<Action, CancellationToken, Task>? treeWorker = null)
     {
         _pickVault = pickVault;
         _enqueueUi = enqueueUi;
@@ -94,6 +99,10 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         _recentVaultsStore = recentVaultsStore ?? new RecentVaultsStore();
         _scanAnnouncements = new ScanAnnouncementGate(scanClock);
         _filterUiContext = filterUiContext;
+        SynchronizationContext? currentUiContext = SynchronizationContext.Current;
+        _treeUiContext = treeUiContext
+            ?? (currentUiContext is DispatcherSynchronizationContext ? currentUiContext : null);
+        _treeWorker = treeWorker;
         _openVaultCommand = new AsyncRelayCommand(PickAndOpenVaultAsync, () => !IsBusy);
         _openRecentCommand = new AsyncRelayCommand(
             OpenRecentAsync,
@@ -530,6 +539,16 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     {
         if (FileSidebar is FilesSidebarViewModel sidebar)
         {
+            sidebar.CancelTreeRefresh();
+            try
+            {
+                sidebar.TreeRefreshCompletion.GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshShutdownFailed, exception);
+            }
+
             sidebar.CancelFilter();
             try
             {
@@ -616,7 +635,9 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             root,
             _confirmDestructive,
             _pickImportSources,
-            filterUiContext: _filterUiContext);
+            filterUiContext: _filterUiContext,
+            treeUiContext: _treeUiContext,
+            treeWorker: _treeWorker);
         var switcher = new QuickSwitcherViewModel(session, root, _announce, switcherFiles);
 
         workspace.FileOpened += Workspace_FileOpened;
@@ -633,6 +654,14 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
 
     private bool TryCloseWorkspace()
     {
+        if (FileSidebar?.CancelTreeRefresh() == true)
+        {
+            ReportTerminalStatus(
+                "File tree refresh cancellation requested. Close the vault again after the current directory read finishes.",
+                A11yPriority.Medium);
+            return false;
+        }
+
         if (FileSidebar?.IsExpandingLoaded == true)
         {
             FileSidebar.CancelExpandLoaded();

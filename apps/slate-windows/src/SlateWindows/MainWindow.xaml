@@ -394,6 +394,9 @@
                                               TextSearch.TextPath="DisplayName"
                                               SelectedItemChanged="FilesTree_SelectedItemChanged"
                                               Visibility="{Binding IsFilterActive, Converter={StaticResource InverseBooleanToVisibilityConverter}}"
+                                              ScrollViewer.CanContentScroll="True"
+                                              VirtualizingStackPanel.IsVirtualizing="True"
+                                              VirtualizingStackPanel.VirtualizationMode="Recycling"
                                               AutomationProperties.AutomationId="FilesTree"
                                               AutomationProperties.Name="Files">
                                         <TreeView.ItemContainerStyle>
@@ -407,6 +410,9 @@
                                              ItemsSource="{Binding FilterResults}"
                                              SelectionChanged="FilterResults_SelectionChanged"
                                              Visibility="{Binding IsFilterActive, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                             ScrollViewer.CanContentScroll="True"
+                                             VirtualizingStackPanel.IsVirtualizing="True"
+                                             VirtualizingStackPanel.VirtualizationMode="Recycling"
                                              AutomationProperties.AutomationId="SidebarFilterResults"
                                              AutomationProperties.Name="Filtered files">
                                         <ListBox.ItemTemplate>
@@ -428,6 +434,9 @@
                                          SelectionChanged="DualPaneFiles_SelectionChanged"
                                          DisplayMemberPath="DisplayName"
                                          Visibility="{Binding IsDualPaneEnabled, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                         ScrollViewer.CanContentScroll="True"
+                                         VirtualizingStackPanel.IsVirtualizing="True"
+                                         VirtualizingStackPanel.VirtualizationMode="Recycling"
                                          AutomationProperties.AutomationId="SidebarDualPane"
                                          AutomationProperties.Name="Files in selected folder" />
                             </Grid>

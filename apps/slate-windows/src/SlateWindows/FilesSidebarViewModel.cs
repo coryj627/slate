@@ -4,6 +4,7 @@
 using System.Collections.ObjectModel;
 using System.Globalization;
 using System.IO;
+using System.Windows.Threading;
 using System.Windows.Input;
 using uniffi.slate_uniffi;
 
@@ -219,6 +220,12 @@ internal sealed class FilesSidebarViewModel : BindableBase
     private readonly FileRecentsStore? _recentsStore;
     private readonly string? _settingsNotice;
     private readonly SynchronizationContext? _filterUiContext;
+    // When present, tree providers and projection run through _runTreeWorker,
+    // which must not execute inline on this context. RootNodes, Tags, Status,
+    // and announcements are published only after posting back to this context.
+    // A null context is the explicit synchronous/headless fallback.
+    private readonly SynchronizationContext? _treeUiContext;
+    private readonly Func<Action, CancellationToken, Task> _runTreeWorker;
     private readonly HashSet<string> _expandedPaths;
     private readonly HashSet<string> _pinned = new(StringComparer.Ordinal);
     private readonly List<string> _recents = [];
@@ -226,11 +233,15 @@ internal sealed class FilesSidebarViewModel : BindableBase
     private int _historyIndex = -1;
     private CancellationTokenSource? _importCancellation;
     private CancellationTokenSource? _filterCancellation;
+    private CancellationTokenSource? _treeRefreshCancellation;
     private CancellationTokenSource? _bulkExpandCancellation;
     private Task _filterCompletion = Task.CompletedTask;
+    private Task _treeRefreshCompletion = Task.CompletedTask;
     private Task _expandLoadedCompletion = Task.CompletedTask;
     private int _filterGeneration;
     private int _treeGeneration;
+    private int _tagGeneration;
+    private ObservableCollection<FileTreeNodeViewModel> _rootNodes = [];
     private FileTreeNodeViewModel? _selectedNode;
     private SidebarShortcutViewModel? _selectedShortcut;
     private string _filterText = string.Empty;
@@ -255,14 +266,20 @@ internal sealed class FilesSidebarViewModel : BindableBase
         Func<string, bool>? confirmDestructive = null,
         Func<Task<IReadOnlyList<string>>>? pickImportSources = null,
         string? localAppDataRoot = null,
-        SynchronizationContext? filterUiContext = null)
+        SynchronizationContext? filterUiContext = null,
+        SynchronizationContext? treeUiContext = null,
+        Func<Action, CancellationToken, Task>? treeWorker = null)
     {
         _session = session;
         _announce = announce;
         _copyText = copyText ?? (_ => { });
         _confirmDestructive = confirmDestructive ?? (_ => true);
         _pickImportSources = pickImportSources ?? (() => Task.FromResult<IReadOnlyList<string>>([]));
-        _filterUiContext = filterUiContext ?? SynchronizationContext.Current;
+        SynchronizationContext? currentUiContext = SynchronizationContext.Current;
+        _filterUiContext = filterUiContext ?? currentUiContext;
+        _treeUiContext = treeUiContext
+            ?? (currentUiContext is DispatcherSynchronizationContext ? currentUiContext : null);
+        _runTreeWorker = treeWorker ?? ((work, token) => Task.Run(work, token));
         _vaultRoot = vaultRoot;
         if (vaultRoot is not null)
         {
@@ -329,12 +346,19 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
     public event EventHandler<(string Path, WorkspaceOpenTarget Target)>? OpenTargetRequested;
 
-    public ObservableCollection<FileTreeNodeViewModel> RootNodes { get; } = [];
+    public ObservableCollection<FileTreeNodeViewModel> RootNodes
+    {
+        get => _rootNodes;
+        private set => SetField(ref _rootNodes, value);
+    }
+
     public ObservableCollection<FileTreeNodeViewModel> FilterResults { get; } = [];
     public ObservableCollection<FileTreeNodeViewModel> DualPaneFiles { get; } = [];
     public ObservableCollection<SidebarTagViewModel> Tags { get; } = [];
     public ObservableCollection<SidebarShortcutViewModel> Shortcuts { get; } = [];
     public IReadOnlySet<string> RestoredExpandedPaths => _expandedPaths;
+    internal Task TreeRefreshCompletion => _treeRefreshCompletion;
+    internal bool IsRefreshingTree => !_treeRefreshCompletion.IsCompleted;
 
     internal Task FilterCompletion => _filterCompletion;
     internal Task ExpandLoadedCompletion => _expandLoadedCompletion;
@@ -671,51 +695,333 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
     public void Refresh(bool reportCount = false)
     {
+        CancelBulkExpansion();
+        CancelTreeRefreshCore();
+        if (RootNodes.Count > 0)
+        {
+            string[] liveExpansions = ExpandedDirectoryPaths().ToArray();
+            _expandedPaths.Clear();
+            _expandedPaths.UnionWith(liveExpansions);
+        }
+
+        int generation = ++_treeGeneration;
+        DirectoryOrdering ordering = CaptureDirectoryOrdering();
+        var expandedPaths = _expandedPaths.ToHashSet(StringComparer.Ordinal);
+        int tagGeneration = _tagGeneration;
+        if (_treeUiContext is null)
+        {
+            try
+            {
+                ApplyTreeRefresh(BuildTreeRefresh(
+                    ordering,
+                    expandedPaths,
+                    tagGeneration,
+                    CancellationToken.None), reportCount);
+                _treeRefreshCompletion = Task.CompletedTask;
+            }
+            catch (VaultException exception)
+            {
+                ReportFailure($"Could not load files: {exception.Message}");
+                _treeRefreshCompletion = Task.CompletedTask;
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+                try
+                {
+                    ReportFailure("Could not load files.");
+                }
+                catch (Exception callbackException)
+                {
+                    HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, callbackException);
+                }
+
+                _treeRefreshCompletion = Task.CompletedTask;
+            }
+
+            return;
+        }
+
+        var cancellation = new CancellationTokenSource();
+        _treeRefreshCancellation = cancellation;
+        Task previous = _treeRefreshCompletion;
+        Status = "Loading files…";
+        _treeRefreshCompletion = RefreshTreeAsync(
+            previous,
+            generation,
+            ordering,
+            expandedPaths,
+            tagGeneration,
+            reportCount,
+            cancellation);
+    }
+
+    private async Task RefreshTreeAsync(
+        Task previous,
+        int generation,
+        DirectoryOrdering ordering,
+        IReadOnlySet<string> expandedPaths,
+        int tagGeneration,
+        bool reportCount,
+        CancellationTokenSource cancellation)
+    {
+        CancellationToken token = cancellation.Token;
         try
         {
-            CancelBulkExpansion();
-            _treeGeneration++;
-            if (RootNodes.Count > 0)
+            try
             {
-                string[] liveExpansions = ExpandedDirectoryPaths().ToArray();
-                _expandedPaths.Clear();
-                _expandedPaths.UnionWith(liveExpansions);
+                await previous.ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                // A prior request is terminal even when its UI callback
+                // faulted. Keep the newest refresh moving and retain a
+                // privacy-safe diagnostic for the unexpected fault.
+                HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
             }
 
-            RootNodes.Clear();
-            DirectoryLevel level = LoadDirectoryLevel(string.Empty, 1);
-            foreach (FileTreeNodeViewModel node in level.Nodes)
+            token.ThrowIfCancellationRequested();
+            TreeRefreshOutcome? outcome = null;
+            await _runTreeWorker(
+                () => outcome = BuildTreeRefresh(
+                    ordering,
+                    expandedPaths,
+                    tagGeneration,
+                    token),
+                token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            if (outcome is null)
             {
-                RootNodes.Add(node);
+                throw new InvalidOperationException("Tree worker completed without an outcome.");
             }
 
-            RestoreExpansions(RootNodes);
-            LoadTags();
-            ScheduleFilter();
-            if (level.Truncated)
+            var applied = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _treeUiContext!.Post(
+                _ =>
+                {
+                    try
+                    {
+                        if (!token.IsCancellationRequested && generation == _treeGeneration)
+                        {
+                            ApplyTreeRefresh(outcome, reportCount);
+                        }
+
+                        applied.TrySetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        applied.TrySetException(exception);
+                    }
+                },
+                null);
+            try
             {
-                Status = DirectoryOverflowStatus(string.Empty);
+                await applied.Task.WaitAsync(token).ConfigureAwait(false);
             }
-            else if (reportCount || _settingsNotice is not null)
+            catch (OperationCanceledException)
             {
-                Status = $"{level.MaterializedCount:N0} top-level items."
-                    + (_settingsNotice is null ? string.Empty : $" {_settingsNotice}");
             }
+        }
+        catch (OperationCanceledException)
+        {
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not load files: {exception.Message}");
+            await ReportTreeRefreshFailureAsync(
+                generation,
+                $"Could not load files: {exception.Message}",
+                token).ConfigureAwait(false);
         }
+        catch (Exception exception)
+        {
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+            await ReportTreeRefreshFailureAsync(
+                generation,
+                "Could not load files.",
+                token).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (ReferenceEquals(_treeRefreshCancellation, cancellation))
+            {
+                _treeRefreshCancellation = null;
+            }
+
+            cancellation.Dispose();
+        }
+    }
+
+    private async Task ReportTreeRefreshFailureAsync(
+        int generation,
+        string message,
+        CancellationToken token)
+    {
+        if (token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var applied = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            _treeUiContext!.Post(
+                _ =>
+                {
+                    try
+                    {
+                        if (generation == _treeGeneration)
+                        {
+                            ReportFailure(message);
+                        }
+
+                        applied.TrySetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        applied.TrySetException(exception);
+                    }
+                },
+                null);
+            await applied.Task.WaitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            // Refresh is terminal even when dispatch or presentation fails.
+            // Teardown joins this task, so retain diagnostics without faulting it.
+            HostLog.Write(HostDiagnosticEvent.SidebarTreeRefreshFailed, exception);
+        }
+    }
+
+    private TreeRefreshOutcome BuildTreeRefresh(
+        DirectoryOrdering ordering,
+        IReadOnlySet<string> expandedPaths,
+        int tagGeneration,
+        CancellationToken cancellationToken)
+    {
+        DirectoryLevel level = LoadDirectoryLevel(
+            string.Empty,
+            1,
+            ordering: ordering,
+            cancellationToken: cancellationToken);
+        string? restoredOverflowPath = RestoreExpansionsForRefresh(
+            level.Nodes,
+            expandedPaths,
+            ordering,
+            cancellationToken);
+        TagLoadOutcome tags = BuildTags(cancellationToken);
+        return new TreeRefreshOutcome(
+            new ObservableCollection<FileTreeNodeViewModel>(level.Nodes),
+            level,
+            restoredOverflowPath,
+            tags,
+            tagGeneration);
+    }
+
+    private string? RestoreExpansionsForRefresh(
+        IEnumerable<FileTreeNodeViewModel> nodes,
+        IReadOnlySet<string> expandedPaths,
+        DirectoryOrdering ordering,
+        CancellationToken cancellationToken)
+    {
+        string? overflowPath = null;
+        foreach (FileTreeNodeViewModel node in nodes.Where(node => node.IsDirectory))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!expandedPaths.Contains(node.Path))
+            {
+                continue;
+            }
+
+            node.MarkExpandedWithoutLoading();
+            if (node.Children.Count > 0 && node.Children[0].IsPlaceholder)
+            {
+                DirectoryLevel childLevel = LoadDirectoryLevel(
+                    node.Path,
+                    node.Level + 1,
+                    ordering: ordering,
+                    cancellationToken: cancellationToken);
+                node.ReplaceChildren(childLevel.Nodes);
+                if (childLevel.Truncated)
+                {
+                    overflowPath ??= node.Path;
+                }
+            }
+
+            string? descendantOverflowPath = RestoreExpansionsForRefresh(
+                node.Children,
+                expandedPaths,
+                ordering,
+                cancellationToken);
+            overflowPath ??= descendantOverflowPath;
+        }
+
+        return overflowPath;
+    }
+
+    private void ApplyTreeRefresh(TreeRefreshOutcome outcome, bool reportCount)
+    {
+        RootNodes = outcome.RootNodes;
+        if (outcome.TagGeneration == _tagGeneration)
+        {
+            ApplyTags(outcome.Tags);
+        }
+
+        ScheduleFilter();
+        if (outcome.Level.Truncated)
+        {
+            Status = DirectoryOverflowStatus(string.Empty);
+        }
+        else if (reportCount || _settingsNotice is not null)
+        {
+            Status = $"{outcome.Level.MaterializedCount:N0} top-level items."
+                + (_settingsNotice is null ? string.Empty : $" {_settingsNotice}");
+        }
+        else if (outcome.RestoredOverflowPath is string overflowPath)
+        {
+            Status = DirectoryOverflowStatus(overflowPath);
+        }
+    }
+
+    internal bool CancelTreeRefresh()
+    {
+        bool wasPending = IsRefreshingTree;
+        if (wasPending)
+        {
+            ++_treeGeneration;
+            CancelTreeRefreshCore();
+        }
+
+        return wasPending;
+    }
+
+    private void CancelTreeRefreshCore()
+    {
+        CancellationTokenSource? cancellation = _treeRefreshCancellation;
+        _treeRefreshCancellation = null;
+        cancellation?.Cancel();
     }
 
     private DirectoryLevel LoadDirectoryLevel(
         string parentPath,
         int level,
         bool includeDirectories = true,
-        DirectoryOrdering? ordering = null)
+        DirectoryOrdering? ordering = null,
+        CancellationToken cancellationToken = default)
     {
+        cancellationToken.ThrowIfCancellationRequested();
         ordering ??= CaptureDirectoryOrdering();
         DirListing listing = _session.ListDirChildren(parentPath, new Paging(null, PageLimit));
+        cancellationToken.ThrowIfCancellationRequested();
         FileTreeNodeViewModel[] directories = includeDirectories
             ? listing.Dirs
                 .Take(MaxMaterializedDirectoryItems)
@@ -738,6 +1044,7 @@ internal sealed class FilesSidebarViewModel : BindableBase
             int filesTaken = Math.Min(listing.Files.Items.Length, Math.Max(0, remaining));
             foreach (FileSummary summary in listing.Files.Items.Take(filesTaken))
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 files.Add(new FileTreeNodeViewModel(
                     this,
                     summary.Path,
@@ -757,6 +1064,7 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
             if (cursor is not null)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 listing = _session.ListDirChildren(parentPath, new Paging(cursor, PageLimit));
             }
         }
@@ -793,6 +1101,13 @@ internal sealed class FilesSidebarViewModel : BindableBase
         int MaterializedCount,
         bool Truncated);
 
+    private sealed record TreeRefreshOutcome(
+        ObservableCollection<FileTreeNodeViewModel> RootNodes,
+        DirectoryLevel Level,
+        string? RestoredOverflowPath,
+        TagLoadOutcome Tags,
+        int TagGeneration);
+
     private IEnumerable<FileTreeNodeViewModel> GroupFilesByDate(
         IEnumerable<FileTreeNodeViewModel> files,
         DirectoryOrdering ordering)
@@ -800,14 +1115,17 @@ internal sealed class FilesSidebarViewModel : BindableBase
         DateTime today = DateTime.Today;
         string[] order = ["Today", "Yesterday", "Previous 7 days", "Previous 30 days", "Older", "Unknown date"];
         return files
-            .GroupBy(node => DateBucket(node, today))
+            .GroupBy(node => DateBucket(node, today, ordering.SortMode))
             .OrderBy(group => Array.IndexOf(order, group.Key))
             .Select(group => FileTreeNodeViewModel.Group(group.Key, SortNodes(group, ordering)));
     }
 
-    private string DateBucket(FileTreeNodeViewModel node, DateTime today)
+    private static string DateBucket(
+        FileTreeNodeViewModel node,
+        DateTime today,
+        SidebarSortMode sortMode)
     {
-        long? milliseconds = SortMode is SidebarSortMode.CreatedNewest or SidebarSortMode.CreatedOldest
+        long? milliseconds = sortMode is SidebarSortMode.CreatedNewest or SidebarSortMode.CreatedOldest
             ? node.Summary?.CreatedMs
             : node.Summary?.MtimeMs;
         if (milliseconds is null)
@@ -1101,13 +1419,21 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
     private void LoadTags()
     {
+        ++_tagGeneration;
+        ApplyTags(BuildTags(CancellationToken.None));
+    }
+
+    private TagLoadOutcome BuildTags(CancellationToken cancellationToken)
+    {
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             TagTree tree = _session.TagTree();
-            Tags.Clear();
+            var roots = new List<SidebarTagViewModel>();
             var ancestors = new List<SidebarTagViewModel>();
             foreach (TagTreeEntry entry in tree.Entries)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var tag = new SidebarTagViewModel(
                     entry.Segment,
                     entry.Full,
@@ -1121,7 +1447,7 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
                 if (entry.Depth == 0 || ancestors.Count == 0)
                 {
-                    Tags.Add(tag);
+                    roots.Add(tag);
                 }
                 else
                 {
@@ -1130,12 +1456,32 @@ internal sealed class FilesSidebarViewModel : BindableBase
 
                 ancestors.Add(tag);
             }
+
+            return new TagLoadOutcome(roots, null);
         }
         catch (VaultException exception)
         {
-            ReportFailure($"Could not load tags: {exception.Message}");
+            return new TagLoadOutcome([], $"Could not load tags: {exception.Message}");
         }
     }
+
+    private void ApplyTags(TagLoadOutcome outcome)
+    {
+        Tags.Clear();
+        foreach (SidebarTagViewModel tag in outcome.Tags)
+        {
+            Tags.Add(tag);
+        }
+
+        if (outcome.Error is not null)
+        {
+            ReportFailure(outcome.Error);
+        }
+    }
+
+    private sealed record TagLoadOutcome(
+        IReadOnlyList<SidebarTagViewModel> Tags,
+        string? Error);
 
     private void EditTag(bool add)
     {
@@ -2011,7 +2357,8 @@ internal sealed class FilesSidebarViewModel : BindableBase
                     () => LoadDirectoryLevel(
                         node.Path,
                         node.Level + 1,
-                        ordering: ordering),
+                        ordering: ordering,
+                        cancellationToken: cancellation.Token),
                     cancellation.Token);
                 cancellation.Token.ThrowIfCancellationRequested();
                 if (generation != _treeGeneration || !node.IsExpanded)
