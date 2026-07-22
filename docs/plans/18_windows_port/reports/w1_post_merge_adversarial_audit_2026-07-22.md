@@ -44,6 +44,7 @@ green.
 | W1-RT-09 | Low / P3 | Reliability | Several temporary-file cleanup blocks catch `IOException` but not `UnauthorizedAccessException`, allowing cleanup failure to mask an earlier primary exception. | Shared cleanup is best-effort for both exception classes and preserves the original failure; unit coverage pins this behavior. |
 | W1-RT-10 | Low / P3 | Maintainability, CI | The test project executes `HostLogProbe.dll` without a build dependency. `dotnet test` from a clean tree fails unless the full solution build happened first. | Remediated in the release-evidence PR: the test project declares and contract-tests a build-only `HostLogProbe` project reference. A clean standalone Release invocation rebuilt the probe and passed 127/127 tests on 2026-07-22. |
 | W1-RT-11 | Low / P3 | Maintainability | After security/performance remediation, `FilesSidebarViewModel.cs` had grown to 2,653 lines while `WorkspaceViewModel.cs` remained 1,612 lines, with persistence, asynchronous work, command policy, and presentation projection colocated. This raises review and race-analysis cost, although no defect follows from size alone. | Complete. Sidebar filter/tree/import/session-work ownership is isolated in 432/665/472/133-line partials, leaving the primary sidebar file at 1,688 lines after the complete synchronous admission wiring. Workspace persistence and layout policy occupy 212/773-line owners, leaving the primary workspace file at 659 lines. Structure censuses guard representative declarations against accidental boundary collapse. Each extraction/remediation remained within the authored-file cap. |
+| W1-RT-12 | Medium / P2 | Performance, reliability | After the top-K core contract landed, macOS `QuickSwitcherModel` still called ranking synchronously from `@MainActor`; candidate construction also made one display-name FFI call per file. Opening or typing in a large vault could therefore block keyboard and assistive-technology interaction, and superseded work had no publication owner. | Candidate capture is value-only; a 60 ms debounced, process-scoped serial background actor constructs FFI inputs and ranks with at most one native call active across sheet lifetimes; query mutation synchronously advances a monotonic publication generation; a surviving selection is retained, revealed in the rebuilt lazy list, and kept inert while stale rows are absent; synthesized stationary-pointer hover cannot steal it; and every explicit dismissal synchronously cancels publication before removing the sheet. The sheet exposes an accessible loading state. Deterministic blocked-worker, default-worker-identity, cross-model queue-admission/serialization, queued-supersession, selection-retention, viewport-target and hover-admission decision, dismissal-cancellation, announcement-cancellation, and max-concurrency tests pin their respective contracts; mac CI remains the view-integration compile gate. |
 
 ## Remediation PR groups
 
@@ -81,6 +82,11 @@ than that ceiling.
    extractions in small PRs, starting with asynchronous operation ownership;
    never combine a refactor with a semantic fix. Expected: fewer than 12
    authored files per extraction PR.
+9. **macOS Quick Open responsiveness** — W1-RT-12. Move candidate conversion
+   and top-K ranking off `MainActor`, debounce and generation-guard query work,
+   serialize native calls, make the transient loading state accessible, and
+   pin blocked-worker plus queued-supersession behavior. Expected: 4–7
+   authored files.
 
 Every group follows the same gate: focused tests, full applicable local gates,
 an adversarial diff review across all eight audit dimensions, correction of any
@@ -149,5 +155,23 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   redirect immediately before rename and proves the external sentinel is
   unchanged whether Windows blocks the namespace swap or permits it. A
   separate post-commit-failure regression proves cleanup cannot delete an
-  already-replaced store file. RT-07 is code-complete, subject to the PR's
-  independent review and CI gates.
+  already-replaced store file. PR #1024 passed 156 Windows and two
+  non-interactive accessibility tests, three independent final adversarial
+  reviews, and every CI lane under the documented Codoki-outage exception;
+  RT-07 is closed.
+- W1-RT-12 is remediated in the current small PR: macOS candidate capture no
+  longer calls FFI on `MainActor`; top-K ranking runs on a debounced,
+  process-scoped serial background actor with at most one native rank active
+  across sheet lifetimes; query assignment and generation invalidation share
+  one main-actor turn; a surviving selection remains stable, is revealed when
+  the lazy results list returns, stays inert while stale rows are absent, and
+  cannot be replaced by synthesized hover under a stationary pointer;
+  explicit dismissal cancels before sheet removal; cancellation
+  makes stale completion inert and clears pending announcements; and an
+  accessible loading state prevents stale rows from being opened under newer
+  query text. Focused
+  tests block the worker to prove the main actor returns, queue a replacement
+  to prove newest-query-only publication and max concurrency one, and retain
+  the existing ordering, selection, cap, and announcement contracts. This
+  ledger does not claim closure until mac CI and the final three-agent review
+  are green.

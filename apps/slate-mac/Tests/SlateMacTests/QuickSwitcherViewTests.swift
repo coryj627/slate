@@ -115,6 +115,56 @@ final class QuickSwitcherViewTests: XCTestCase {
             QuickSwitcherView.openTarget(forReturnKeyCode: 125 /* ↓ */, modifierFlags: []))
     }
 
+    // MARK: - Post-ranking viewport restoration
+
+    func testRetainedNonFirstSelectionIsPostRankingScrollTarget() {
+        XCTAssertEqual(
+            QuickSwitcherView.selectionScrollTarget(
+                selectedID: "later.md", rowIDs: ["first.md", "later.md"]),
+            "later.md")
+    }
+
+    func testMissingSelectionIsNotPostRankingScrollTarget() {
+        XCTAssertNil(
+            QuickSwitcherView.selectionScrollTarget(
+                selectedID: "missing.md", rowIDs: ["first.md", "later.md"]))
+        XCTAssertNil(
+            QuickSwitcherView.selectionScrollTarget(
+                selectedID: nil, rowIDs: ["first.md", "later.md"]))
+    }
+
+    func testStationaryPointerCannotOwnSelectionAfterListReconstruction() {
+        let stationary = CGPoint(x: 100, y: 200)
+        XCTAssertFalse(
+            QuickSwitcherView.shouldAdmitHoverSelection(
+                resultRevision: 9,
+                armedRevision: 8,
+                baselineLocation: stationary,
+                currentLocation: CGPoint(x: 101, y: 200)),
+            "movement from an older publication must not take selection")
+        XCTAssertFalse(
+            QuickSwitcherView.shouldAdmitHoverSelection(
+                resultRevision: 9,
+                armedRevision: 9,
+                baselineLocation: stationary,
+                currentLocation: stationary))
+    }
+
+    func testActualPointerMovementCanOwnSelectionForCurrentPublication() {
+        XCTAssertTrue(
+            QuickSwitcherView.shouldAdmitHoverSelection(
+                resultRevision: 9,
+                armedRevision: 9,
+                baselineLocation: CGPoint(x: 100, y: 200),
+                currentLocation: CGPoint(x: 101, y: 200)))
+        XCTAssertFalse(
+            QuickSwitcherView.shouldAdmitHoverSelection(
+                resultRevision: 9,
+                armedRevision: 9,
+                baselineLocation: nil,
+                currentLocation: CGPoint(x: 101, y: 200)))
+    }
+
     // MARK: - APCA contrast (row text roles)
     //
     // The quick switcher reuses the palette's exact colour roles:
