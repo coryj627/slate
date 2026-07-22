@@ -166,7 +166,7 @@
                    VerticalAlignment="Stretch"
                    Cursor="SizeWE"
                    Focusable="True"
-                   AutomationProperties.AutomationId="WorkspaceSplitHandleHorizontal"
+                   AutomationProperties.AutomationId="WorkspaceSplitHandle"
                    AutomationProperties.Name="Resize editor panes horizontally"
                    AutomationProperties.ItemStatus="{Binding Weight, StringFormat={}{0:P0} of split space}"
                    AutomationProperties.LiveSetting="Polite"
@@ -187,6 +187,9 @@
                     </Style>
                 </Thumb.Style>
             </Thumb>
+            <!-- The horizontal handle retains the former shared WorkspaceSplitHandle
+                 ID for UI-automation compatibility. Vertical consumers must migrate
+                 to the distinct ID below. -->
             <Thumb Height="8"
                    HorizontalAlignment="Stretch"
                    VerticalAlignment="Top"

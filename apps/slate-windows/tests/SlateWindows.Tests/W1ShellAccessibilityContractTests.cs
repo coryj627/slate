@@ -81,6 +81,49 @@ public sealed class W1ShellAccessibilityContractTests
             "Landmark peer test timed out.");
 
     [Fact]
+    public void WorkspaceSplitHandles_KeepLegacyHorizontalIdAndExposeDistinctVerticalId() =>
+        RunOnStaThread(
+            () =>
+            {
+                var resourceUri = new Uri(
+                    "/SlateWindows;component/WorkspaceTemplates.xaml",
+                    UriKind.Relative);
+                ResourceDictionary resources = Assert.IsType<ResourceDictionary>(
+                    Application.LoadComponent(resourceUri));
+                DataTemplate template = Assert.IsType<DataTemplate>(
+                    resources["WorkspaceNodeChildTemplate"]);
+                Grid root = Assert.IsType<Grid>(template.LoadContent());
+                Thumb[] handles = root.Children.OfType<Thumb>().ToArray();
+
+                Assert.Collection(
+                    handles,
+                    horizontal =>
+                    {
+                        Assert.Equal(
+                            "WorkspaceSplitHandle",
+                            AutomationProperties.GetAutomationId(horizontal));
+                        Assert.Equal(
+                            "Resize editor panes horizontally",
+                            AutomationProperties.GetName(horizontal));
+                    },
+                    vertical =>
+                    {
+                        Assert.Equal(
+                            "WorkspaceSplitHandleVertical",
+                            AutomationProperties.GetAutomationId(vertical));
+                        Assert.Equal(
+                            "Resize editor panes vertically",
+                            AutomationProperties.GetName(vertical));
+                    });
+                Assert.Equal(
+                    handles.Length,
+                    handles.Select(AutomationProperties.GetAutomationId)
+                        .Distinct(StringComparer.Ordinal)
+                        .Count());
+            },
+            "Split handle automation contract test timed out.");
+
+    [Fact]
     public void WeightedSplitPanel_RearrangesWhenAChildWeightChanges() =>
         RunOnStaThread(
             () =>

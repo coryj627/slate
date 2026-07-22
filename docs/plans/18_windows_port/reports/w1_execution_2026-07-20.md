@@ -67,6 +67,17 @@ Two per-vault host stores are deliberate same-shape implementations because no c
 
 Both reject reparse-point store paths and use same-directory temporary replacement. They do not provide the descriptor-relative traversal guarantee a future core store could provide; G17 records that residual.
 
+## UI Automation release and migration note
+
+W1 introduced recursive workspace split handles and their UI Automation identifiers. During review, the original shared `WorkspaceSplitHandle` identifier was made unique without removing the legacy lookup path:
+
+| Handle | AutomationId | Compatibility guidance |
+|---|---|---|
+| Horizontal (left/right resize) | `WorkspaceSplitHandle` | Retained as the legacy identifier so existing automation continues to find the historically first handle. |
+| Vertical (up/down resize) | `WorkspaceSplitHandleVertical` | Use this identifier for vertical handles. The former shared identifier could not distinguish this orientation reliably. |
+
+Automation clients should select the orientation-specific entry above and may additionally verify `AutomationProperties.Name` (`Resize editor panes horizontally` or `Resize editor panes vertically`). The hosted FlaUI gate creates both split orientations, asserts that each identifier resolves exactly once, and checks the handles' accessible names and keyboard focusability.
+
 ## Verification evidence
 
 | Gate | Result |

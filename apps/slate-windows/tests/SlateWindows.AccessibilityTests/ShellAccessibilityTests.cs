@@ -250,8 +250,10 @@ public sealed class ShellAccessibilityTests
                 automation.ConditionFactory.ByAutomationId("WorkspaceTabs"));
             AutomationElement splitHandle = WaitForElement(
                 window,
-                "WorkspaceSplitHandleHorizontal",
+                "WorkspaceSplitHandle",
                 TimeSpan.FromSeconds(10));
+            Assert.Single(window.FindAllDescendants(
+                automation.ConditionFactory.ByAutomationId("WorkspaceSplitHandle")));
             Assert.Contains("Resize editor panes", splitHandle.Name, StringComparison.Ordinal);
             Assert.True(splitHandle.Properties.IsKeyboardFocusable.Value);
             splitHandle.Focus();
@@ -277,6 +279,28 @@ public sealed class ShellAccessibilityTests
             AssertEventuallyFocused(
                 leftEditor,
                 "Ctrl+Alt+Left changed the model but did not move keyboard focus to the left editor.");
+
+            AutomationElement splitDown = WaitForMenuItem(
+                window,
+                "WorkspaceMenu",
+                "SplitDownMenuItem",
+                TimeSpan.FromSeconds(10));
+            Assert.True(splitDown.IsEnabled);
+            Assert.True(splitDown.Patterns.Invoke.IsSupported);
+            splitDown.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(SpinWait.SpinUntil(
+                () => window.FindAllDescendants(
+                    automation.ConditionFactory.ByAutomationId("WorkspaceTabs")).Length == 3,
+                TimeSpan.FromSeconds(10)),
+                "Split Down did not expose a third navigable TabControl.");
+            AutomationElement verticalSplitHandle = WaitForElement(
+                window,
+                "WorkspaceSplitHandleVertical",
+                TimeSpan.FromSeconds(10));
+            Assert.Single(window.FindAllDescendants(
+                automation.ConditionFactory.ByAutomationId("WorkspaceSplitHandleVertical")));
+            Assert.Contains("vertically", verticalSplitHandle.Name, StringComparison.Ordinal);
+            Assert.True(verticalSplitHandle.Properties.IsKeyboardFocusable.Value);
 
             AssertAxeClean(process);
 
