@@ -105,7 +105,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | `dotnet format ... --verify-no-changes` | Pass |
 | Windows unit/integration suite | 127 passed, 0 failed; a clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency before running the suite |
 | Accessibility project, non-interactive local branch | 1 passed, 0 failed; production executable survived XAML load and initial scan |
-| Interactive FlaUI + axe-windows | Implemented and CI-required; each attempt retains a 30-day TRX plus dated, revision-bound axe JSON for the workspace, Quick Open and welcome surfaces; not runnable in this non-interactive session |
+| Interactive FlaUI + axe-windows | Pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
 | `cargo test -p slate-core vault::fs::tests::windows_ --locked -q` | 5 passed, 0 failed |
 | Focused core accessibility tests | 3 passed, 0 failed |
@@ -126,10 +126,9 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 
 ## Remaining release evidence
 
-1. Complete the first artifact-producing interactive Windows CI accessibility gate and record its retained FlaUI + axe-windows result in the §W-C matrix.
-2. Record Narrator smoke plus NVDA and JAWS passes row-by-row in `w_c_matrix.md`.
-3. Exercise all four built-in Windows Contrast themes and one customized theme, including runtime switching, selection/disabled states, visible boundaries and non-color cues.
-4. Obtain a mac CI result for the migrated Quick Open model/view tests.
-5. Diagnose or shard the non-terminating full `slate-core --lib` Windows run; focused W1 core gates are green, but the broad runner is not evidence of a pass.
+1. Record Narrator smoke plus NVDA and JAWS passes row-by-row in `w_c_matrix.md`.
+2. Exercise all four built-in Windows Contrast themes and one customized theme, including runtime switching, selection/disabled states, visible boundaries and non-color cues.
+3. Obtain a mac CI result for the migrated Quick Open model/view tests.
+4. Diagnose or shard the non-terminating full `slate-core --lib` Windows run; focused W1 core gates are green, but the broad runner is not evidence of a pass.
 
 These are explicit verification residuals. They do not conceal missing W1 implementation, but the human AT items remain milestone release blockers under WGA-9.
