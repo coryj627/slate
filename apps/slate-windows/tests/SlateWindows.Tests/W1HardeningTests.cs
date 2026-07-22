@@ -766,6 +766,39 @@ public sealed class W1WorkspaceOwnershipTests
         }
     }
 
+    [Fact]
+    public void LayoutStateIsOwnedByTheDedicatedPartial()
+    {
+        string sourceDirectory = Path.Combine(
+            RepoRoot(),
+            "apps",
+            "slate-windows",
+            "src",
+            "SlateWindows");
+        string primary = File.ReadAllText(
+            Path.Combine(sourceDirectory, "WorkspaceViewModel.cs"));
+        string layout = File.ReadAllText(
+            Path.Combine(sourceDirectory, "WorkspaceViewModel.Layout.cs"));
+
+        foreach (string ownedMember in new[]
+        {
+            "record struct PaneRect",
+            "const int ClosedTabCapacity",
+            "List<(WorkspaceItemState Item, Guid Group)> _closedTabs",
+            "WorkspacePaneNodeViewModel _root",
+            "WorkspaceGroupViewModel _activeGroup",
+            "private bool AddSplitWithItem",
+            "public bool FocusDirectionalPane",
+            "private void ResizeActivePane",
+            "private static bool TryFindParent",
+            "private void RaiseCommandStates",
+        })
+        {
+            Assert.DoesNotContain(ownedMember, primary, StringComparison.Ordinal);
+            Assert.Contains(ownedMember, layout, StringComparison.Ordinal);
+        }
+    }
+
     private static string RepoRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

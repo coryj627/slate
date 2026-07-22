@@ -64,30 +64,37 @@ The sidebar filter pipeline is isolated in
 `FilesSidebarViewModel.Filter.cs`: that partial unit exclusively owns the
 filter UI context, cancellation token, completion task, generation guard,
 background query, UI publication and local date-window conversion. The
-extraction is behavior-neutral and a repository-structure census prevents
-those operation-ownership members from drifting back into the primary view
-model file.
+extraction is behavior-neutral and a repository-structure census guards
+representative operation-ownership declarations against drifting back into the
+primary view-model file.
 
 Tree refresh and snapshot-based “Expand Loaded” are isolated in
 `FilesSidebarViewModel.TreeOperations.cs`. They intentionally share the same
 tree-generation boundary; the partial owns both cancellation sources,
 completion tasks, the worker/UI contexts, stale-generation rejection and
-bounded UI publication. A second structure census prevents those members from
-drifting back into the primary view model.
+bounded UI publication. A second structure census guards representative
+tree-operation declarations against drifting back into the primary view model.
 
 Bounded source import is isolated in `FilesSidebarViewModel.Import.cs`. The
 partial owns source selection, cancellation and importing state, the 256-source
 and 10,000-entry traversal caps, the 256 MiB per-file read bound, reparse/vault
 rejection, collision handling and completion summary. Constructor wiring and
-command policy remain in the primary partial; a structure census pins the
-operation boundary.
+command policy remain in the primary partial; a structure census guards
+representative declarations at the operation boundary.
 
 Workspace restore and persistence are isolated in
 `WorkspaceViewModel.Persistence.cs`. The partial owns the store and expanded
 path provider, restore suppression, mutation batching/pending-save state,
 duplicate-graph pruning, empty-group normalization and snapshot serialization.
-Constructor wiring and layout policy remain outside the unit; a structure
-census pins the boundary.
+Workspace layout policy is isolated in `WorkspaceViewModel.Layout.cs`. That
+partial owns the pane tree, closed-tab stack and reopening policy, tab placement
+and movement, split/close policy, normalized directional focus geometry,
+focus-boundary and resize announcements, weight normalization and
+layout-command refresh. Constructor wiring, document/path identity (including
+retargeting or invalidating path-backed closed-tab entries) and right-pane leaf
+state remain in the 659-line primary unit; persistence and layout occupy 212-
+and 773-line partials. Separate structure censuses guard representative
+declarations at both ownership boundaries.
 
 Two per-vault host stores are deliberate same-shape implementations because no canonical core store exists:
 
@@ -132,7 +139,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Gate | Result |
 |---|---|
 | `dotnet format ... --verify-no-changes` | Pass |
-| Windows unit/integration suite | 131 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes sidebar-operation and workspace-persistence ownership censuses |
+| Windows unit/integration suite | 132 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes sidebar-operation plus workspace-persistence and workspace-layout ownership censuses |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
 | Interactive FlaUI + axe-windows | Pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
