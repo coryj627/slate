@@ -35,24 +35,32 @@ internal sealed class AnchoredVaultStore : IDisposable
     private readonly SafeFileHandle _directoryHandle;
     private readonly string _directoryPath;
     private readonly string _directoryFinalPath;
+    private readonly Action? _beforeRename;
+    private readonly Action? _afterRename;
     private bool _disposed;
 
     private AnchoredVaultStore(
         SafeFileHandle vaultHandle,
         SafeFileHandle directoryHandle,
         string directoryPath,
-        string directoryFinalPath)
+        string directoryFinalPath,
+        Action? beforeRename,
+        Action? afterRename)
     {
         _vaultHandle = vaultHandle;
         _directoryHandle = directoryHandle;
         _directoryPath = directoryPath;
         _directoryFinalPath = directoryFinalPath;
+        _beforeRename = beforeRename;
+        _afterRename = afterRename;
     }
 
     public static AnchoredVaultStore? Open(
         string vaultRoot,
         bool createDirectory,
-        Action? afterDirectoryAnchored = null)
+        Action? afterDirectoryAnchored = null,
+        Action? beforeRename = null,
+        Action? afterRename = null)
     {
         string fullRoot = Path.GetFullPath(vaultRoot);
         SafeFileHandle vaultHandle = OpenRequiredDirectory(fullRoot);
@@ -88,7 +96,9 @@ internal sealed class AnchoredVaultStore : IDisposable
                 vaultHandle,
                 directoryHandle,
                 directoryPath,
-                directoryFinalPath);
+                directoryFinalPath,
+                beforeRename,
+                afterRename);
             directoryHandle = null;
             try
             {
@@ -168,20 +178,22 @@ internal sealed class AnchoredVaultStore : IDisposable
             FileShare.Read,
             FileMode.CreateNew,
             FileAttributeNormal | FileFlagOpenReparsePoint | FileFlagWriteThrough);
-        bool renamed = false;
+        bool renameCommitted = false;
         try
         {
             EnsureRegularChild(handle, temporaryName);
             RandomAccess.Write(handle, contents, 0);
             RandomAccess.FlushToDisk(handle);
             VerifyDirectoryIdentity();
+            _beforeRename?.Invoke();
             RenameAnchored(handle, fileName);
+            renameCommitted = true;
+            _afterRename?.Invoke();
             EnsureRegularChild(handle, fileName);
-            renamed = true;
         }
         finally
         {
-            if (!renamed)
+            if (!renameCommitted)
             {
                 _ = TryDeleteByHandle(handle, out _);
             }
@@ -352,38 +364,51 @@ internal sealed class AnchoredVaultStore : IDisposable
 
     private void RenameAnchored(SafeFileHandle handle, string destinationName)
     {
-        byte[] name = Encoding.Unicode.GetBytes(
-            Path.Combine(_directoryPath, destinationName));
-        int rootOffset = IntPtr.Size == 8 ? 8 : 4;
-        int nameLengthOffset = rootOffset + IntPtr.Size;
-        int nameOffset = nameLengthOffset + sizeof(uint);
-        int bufferSize = nameOffset + name.Length + sizeof(char);
-        IntPtr buffer = Marshal.AllocHGlobal(bufferSize);
+        byte[] information = BuildRenameInformation(destinationName, IntPtr.Size);
+        IntPtr buffer = Marshal.AllocHGlobal(information.Length);
         try
         {
-            Marshal.Copy(new byte[bufferSize], 0, buffer, bufferSize);
-            Marshal.WriteByte(buffer, 0, 1);
-            // The temporary child remains open and the directory identity was
-            // revalidated immediately before this same-volume replacement.
-            Marshal.WriteIntPtr(buffer, rootOffset, IntPtr.Zero);
-            Marshal.WriteInt32(buffer, nameLengthOffset, name.Length);
-            Marshal.Copy(name, 0, IntPtr.Add(buffer, nameOffset), name.Length);
-            Marshal.WriteInt16(buffer, nameOffset + name.Length, 0);
-            if (!SetFileInformationByHandle(
+            Marshal.Copy(information, 0, buffer, information.Length);
+            int status = NtSetInformationFile(
                 handle,
-                FileInfoByHandleClass.FileRenameInfo,
+                out _,
                 buffer,
-                (uint)bufferSize))
+                (uint)information.Length,
+                NtFileInformationClass.FileRenameInformation);
+            if (status < 0)
             {
                 throw IoException(
                     "Could not atomically replace the vault store file.",
-                    Marshal.GetLastPInvokeError());
+                    unchecked((int)RtlNtStatusToDosError(status)));
             }
         }
         finally
         {
             Marshal.FreeHGlobal(buffer);
         }
+    }
+
+    internal static byte[] BuildRenameInformation(string destinationName, int pointerSize)
+    {
+        ValidateFileName(destinationName);
+        if (pointerSize is not (4 or 8))
+        {
+            throw new ArgumentOutOfRangeException(nameof(pointerSize));
+        }
+
+        byte[] name = Encoding.Unicode.GetBytes(destinationName);
+        int rootOffset = pointerSize == 8 ? 8 : 4;
+        int nameLengthOffset = rootOffset + pointerSize;
+        int nameOffset = nameLengthOffset + sizeof(uint);
+        int structureSize = pointerSize == 8 ? 24 : 16;
+        byte[] information = new byte[checked(structureSize + name.Length)];
+        information[0] = 1;
+        BitConverter.GetBytes(name.Length).CopyTo(information, nameLengthOffset);
+        name.CopyTo(information, nameOffset);
+        // A null root plus a simple name tells the kernel to rename within the
+        // already-open source handle's directory. This form neither reopens an
+        // ancestor path nor sends an invalid directory handle over SMB.
+        return information;
     }
 
     private static bool TryDeleteByHandle(SafeFileHandle handle, out int error)
@@ -451,9 +476,20 @@ internal sealed class AnchoredVaultStore : IDisposable
 
     private enum FileInfoByHandleClass
     {
-        FileRenameInfo = 3,
         FileDispositionInfo = 4,
         FileAttributeTagInfo = 9,
+    }
+
+    private enum NtFileInformationClass
+    {
+        FileRenameInformation = 10,
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct IoStatusBlock
+    {
+        public IntPtr Status;
+        public UIntPtr Information;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -495,4 +531,15 @@ internal sealed class AnchoredVaultStore : IDisposable
         FileInfoByHandleClass informationClass,
         IntPtr information,
         uint bufferSize);
+
+    [DllImport("ntdll.dll")]
+    private static extern int NtSetInformationFile(
+        SafeFileHandle file,
+        out IoStatusBlock ioStatusBlock,
+        IntPtr information,
+        uint bufferSize,
+        NtFileInformationClass informationClass);
+
+    [DllImport("ntdll.dll")]
+    private static extern uint RtlNtStatusToDosError(int status);
 }

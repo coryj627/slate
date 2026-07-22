@@ -121,8 +121,11 @@ Both use the Windows anchored-store boundary: each operation holds and
 revalidates vault and `.slate` directory identities, opens final children
 without following reparse points, reads through the verified child handle, and
 atomically renames the written temporary handle only after confirming the
-directory identity is still fixed. The legacy per-vault file-recents migration
-uses the same read/delete boundary.
+directory identity is still fixed. The replacement request uses a null root
+and a simple destination leaf, which renames within the already-open temporary
+source handle's directory without reopening any ancestor path and remains a
+valid request over SMB. The legacy per-vault file-recents migration uses the
+same read/delete boundary.
 
 ## UI Automation release and migration note
 
@@ -155,7 +158,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Gate | Result |
 |---|---|
 | `dotnet format ... --verify-no-changes` | Pass |
-| Windows unit/integration suite | 152 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes behavioral sidebar session-lifetime, owner-context, WPF-dispatcher disposal, active-load joining, task-publication, cancellation-ownership, and unexpected-failure races plus representative sidebar-operation, session-work, workspace-persistence, and workspace-layout ownership censuses |
+| Windows unit/integration suite | 156 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes behavioral sidebar session-lifetime, owner-context, WPF-dispatcher disposal, active-load joining, task-publication, cancellation-ownership, unexpected-failure, anchored replacement-redirection, native rename-layout, and post-commit cleanup cases plus representative sidebar-operation, session-work, workspace-persistence, and workspace-layout ownership censuses |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
 | Interactive FlaUI + axe-windows | Pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
