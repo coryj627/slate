@@ -1,0 +1,246 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:local="clr-namespace:SlateWindows">
+    <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
+    <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
+    <local:NullToVisibilityConverter x:Key="NullToVisibilityConverter" />
+    <local:SidebarSortModeLabelConverter x:Key="SidebarSortModeLabelConverter" />
+
+    <HierarchicalDataTemplate x:Key="SidebarTagTemplate"
+                              DataType="{x:Type local:SidebarTagViewModel}"
+                              ItemsSource="{Binding Children}">
+        <TextBlock Text="{Binding DisplayLabel}" />
+    </HierarchicalDataTemplate>
+
+    <HierarchicalDataTemplate x:Key="FileTreeNodeTemplate"
+                              DataType="{x:Type local:FileTreeNodeViewModel}"
+                              ItemsSource="{Binding Children}">
+        <Grid Margin="1" ToolTip="{Binding Path}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <CheckBox Grid.Column="0"
+                      Margin="0,0,6,0"
+                      VerticalAlignment="Center"
+                      IsChecked="{Binding IsBatchSelected}"
+                      Visibility="{Binding IsBatchSelectable, Converter={StaticResource BooleanToVisibilityConverter}}"
+                      AutomationProperties.Name="{Binding AutomationName, StringFormat=Select {0} for batch actions}" />
+            <StackPanel Grid.Column="1">
+                <TextBlock Text="{Binding DisplayName}" TextTrimming="CharacterEllipsis" />
+                <TextBlock Text="{Binding MetadataText}"
+                           FontSize="11"
+                           Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                           TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+        </Grid>
+    </HierarchicalDataTemplate>
+
+    <DataTemplate x:Key="WorkspaceTabHeaderTemplate"
+                  DataType="{x:Type local:WorkspaceTabViewModel}">
+        <StackPanel Orientation="Horizontal">
+            <TextBlock Text="{Binding Title}" VerticalAlignment="Center" />
+            <TextBlock Text="{Binding DirtyMarker}"
+                       VerticalAlignment="Center"
+                       Visibility="{Binding IsDirty, Converter={StaticResource BooleanToVisibilityConverter}}"
+                       AutomationProperties.Name="Unsaved changes" />
+            <Button Margin="8,0,0,0"
+                    Padding="3,0"
+                    Content="×"
+                    AutomationProperties.Name="{Binding Title, StringFormat=Close {0}}"
+                    Command="{Binding DataContext.Workspace.CloseTabCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                    CommandParameter="{Binding}" />
+        </StackPanel>
+    </DataTemplate>
+
+    <DataTemplate x:Key="WorkspaceTabContentTemplate"
+                  DataType="{x:Type local:WorkspaceTabViewModel}">
+        <Grid Background="{DynamicResource Slate.WindowBackgroundBrush}">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <TextBox Grid.Row="0"
+                     Margin="12"
+                     Padding="12"
+                     AcceptsReturn="True"
+                     AcceptsTab="True"
+                     TextWrapping="Wrap"
+                     VerticalScrollBarVisibility="Auto"
+                     HorizontalScrollBarVisibility="Auto"
+                     FontFamily="Consolas"
+                     FontSize="14"
+                     Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
+                     Visibility="{Binding IsMarkdown, Converter={StaticResource BooleanToVisibilityConverter}}"
+                     AutomationProperties.Name="{Binding EditorAutomationName}" />
+            <StackPanel Grid.Row="0"
+                        Margin="32"
+                        HorizontalAlignment="Center"
+                        VerticalAlignment="Center"
+                        Visibility="{Binding IsPlaceholder, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <TextBlock Text="{Binding KindLabel}"
+                           FontSize="22"
+                           FontWeight="SemiBold"
+                           HorizontalAlignment="Center"
+                           AutomationProperties.HeadingLevel="Level2" />
+                <TextBlock Margin="0,8,0,0"
+                           MaxWidth="420"
+                           Text="{Binding PlaceholderText}"
+                           Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                           TextAlignment="Center"
+                           TextWrapping="Wrap" />
+            </StackPanel>
+            <TextBlock Grid.Row="1"
+                       Margin="12,0,12,8"
+                       Text="{Binding Status}"
+                       Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                       TextTrimming="CharacterEllipsis" />
+        </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="WorkspaceGroupTemplate"
+                  DataType="{x:Type local:WorkspaceGroupViewModel}">
+        <Border Margin="2"
+                BorderBrush="{DynamicResource Slate.BorderBrush}"
+                BorderThickness="1"
+                Background="{DynamicResource Slate.WindowBackgroundBrush}"
+                AutomationProperties.Name="Editor pane">
+            <TabControl ItemsSource="{Binding Tabs}"
+                        SelectedItem="{Binding ActiveTab, Mode=TwoWay}"
+                        ItemTemplate="{StaticResource WorkspaceTabHeaderTemplate}"
+                        ContentTemplate="{StaticResource WorkspaceTabContentTemplate}"
+                        AutomationProperties.AutomationId="WorkspaceTabs"
+                        AutomationProperties.Name="Workspace tabs">
+                <TabControl.ContextMenu>
+                    <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                        <MenuItem Header="Duplicate Tab" Command="{Binding Owner.DuplicateTabCommand}" />
+                        <MenuItem Header="Close Tab" Command="{Binding Owner.CloseActiveTabCommand}" />
+                        <Separator />
+                        <MenuItem Header="Split Right" Command="{Binding Owner.SplitRightCommand}" />
+                        <MenuItem Header="Split Down" Command="{Binding Owner.SplitDownCommand}" />
+                        <MenuItem Header="Close Pane" Command="{Binding Owner.ClosePaneCommand}" />
+                    </ContextMenu>
+                </TabControl.ContextMenu>
+                <TabControl.ItemContainerStyle>
+                    <Style TargetType="TabItem">
+                        <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                        <Setter Property="AutomationProperties.ItemStatus" Value="Saved" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsDirty}" Value="True">
+                                <Setter Property="AutomationProperties.Name"
+                                        Value="{Binding Title, StringFormat='{}{0}, unsaved changes'}" />
+                                <Setter Property="AutomationProperties.ItemStatus"
+                                        Value="Unsaved changes" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsMissingFromDisk}" Value="True">
+                                <Setter Property="AutomationProperties.Name"
+                                        Value="{Binding Title, StringFormat='{}{0}, missing from disk'}" />
+                                <Setter Property="AutomationProperties.ItemStatus"
+                                        Value="Missing from disk" />
+                            </DataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsDirty}" Value="True" />
+                                    <Condition Binding="{Binding IsMissingFromDisk}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="AutomationProperties.Name"
+                                        Value="{Binding Title, StringFormat='{}{0}, missing from disk, unsaved changes'}" />
+                                <Setter Property="AutomationProperties.ItemStatus"
+                                        Value="Missing from disk; unsaved changes" />
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TabControl.ItemContainerStyle>
+            </TabControl>
+        </Border>
+    </DataTemplate>
+
+    <DataTemplate x:Key="WorkspaceNodeChildTemplate"
+                  DataType="{x:Type local:WorkspacePaneNodeViewModel}">
+        <Grid>
+            <ContentControl Content="{Binding}"
+                            ContentTemplate="{DynamicResource WorkspaceNodeTemplate}" />
+            <!-- UI Automation migration contract:
+                 WorkspaceSplitHandleHorizontal -> WorkspaceSplitHandle
+                 former shared WorkspaceSplitHandle -> WorkspaceSplitHandle (horizontal)
+                                                     or WorkspaceSplitHandleVertical (vertical)
+                 Both Thumb declarations below set these IDs explicitly.
+                 Example: ByAutomationId("WorkspaceSplitHandleHorizontal") becomes
+                          ByAutomationId("WorkspaceSplitHandle"). See the W1 execution
+                 report's UI Automation release and migration note. -->
+            <Thumb AutomationProperties.AutomationId="WorkspaceSplitHandle"
+                   Width="8"
+                   HorizontalAlignment="Left"
+                   VerticalAlignment="Stretch"
+                   Cursor="SizeWE"
+                   Focusable="True"
+                   AutomationProperties.Name="Resize editor panes horizontally"
+                   AutomationProperties.ItemStatus="{Binding Weight, StringFormat={}{0:P0} of split space}"
+                   AutomationProperties.LiveSetting="Polite"
+                   AutomationProperties.HelpText="Drag, or use Left and Right Arrow, to resize adjacent editor panes.">
+                <Thumb.Style>
+                    <Style TargetType="Thumb">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                         Value="horizontal">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding (ItemsControl.AlternationIndex), RelativeSource={RelativeSource AncestorType=ContentPresenter}}"
+                                         Value="0">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Thumb.Style>
+            </Thumb>
+            <Thumb AutomationProperties.AutomationId="WorkspaceSplitHandleVertical"
+                   Height="8"
+                   HorizontalAlignment="Stretch"
+                   VerticalAlignment="Top"
+                   Cursor="SizeNS"
+                   Focusable="True"
+                   AutomationProperties.Name="Resize editor panes vertically"
+                   AutomationProperties.ItemStatus="{Binding Weight, StringFormat={}{0:P0} of split space}"
+                   AutomationProperties.LiveSetting="Polite"
+                   AutomationProperties.HelpText="Drag, or use Up and Down Arrow, to resize adjacent editor panes.">
+                <Thumb.Style>
+                    <Style TargetType="Thumb">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                         Value="vertical">
+                                <Setter Property="Visibility" Value="Visible" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding (ItemsControl.AlternationIndex), RelativeSource={RelativeSource AncestorType=ContentPresenter}}"
+                                         Value="0">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Thumb.Style>
+            </Thumb>
+        </Grid>
+    </DataTemplate>
+
+    <DataTemplate x:Key="WorkspaceNodeTemplate"
+                  DataType="{x:Type local:WorkspacePaneNodeViewModel}">
+        <Grid>
+            <ContentControl Content="{Binding Group}"
+                            ContentTemplate="{StaticResource WorkspaceGroupTemplate}"
+                            Visibility="{Binding IsGroup, Converter={StaticResource BooleanToVisibilityConverter}}" />
+            <ItemsControl ItemsSource="{Binding Children}"
+                          ItemTemplate="{StaticResource WorkspaceNodeChildTemplate}"
+                          AlternationCount="2147483647"
+                          Visibility="{Binding IsSplit, Converter={StaticResource BooleanToVisibilityConverter}}"
+                          AutomationProperties.Name="Split editor panes">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <local:WeightedSplitPanel Orientation="{Binding DataContext.Axis, RelativeSource={RelativeSource AncestorType=ItemsControl}, Converter={StaticResource AxisToOrientationConverter}}" />
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+            </ItemsControl>
+        </Grid>
+    </DataTemplate>
+</ResourceDictionary>

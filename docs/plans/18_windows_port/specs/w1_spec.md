@@ -18,6 +18,8 @@ Program: [00_program.md](../00_program.md) (decisions 1, 2, 9, 15; DoD §W-C). B
 
 Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral spec** (states, transitions, announcements, keyboard model — including any Reduce Motion equivalents); the WPF implementation is idiomatic WPF (MVVM view models over the FFI), **not** a SwiftUI transliteration. Where mac behavior encodes an AppKit workaround (documented in memory/PRs), port the *intent*, and record the divergence in gap_analysis.
 
+**Execution status (2026-07-20): repository implementation complete; independent red-team closure audit complete with no remaining P0/P1 code defect.** Three independent reviewers audited every W1 workstream across completeness, correctness, maintainability, documentation, reliability, performance, security, and accessibility, then re-audited the integrated remediations read-only. Their confirmed blockers—tab target/dirty/buffer semantics, exact path identity, workspace restore invariants, real pane focus, modal Quick Open, F2 rename, paged sidebar completeness, filtering/expansion responsiveness, persistence bounds, import walking, IPC deadlines, UIA state, and evidence overclaim—were fixed and regression-tested. The generated parity matrix now requires inventory-complete implementation/test evidence for every W1 command row rather than inferring status from issue ownership; the anchors remain surface-level, not a substitute for command-specific behavior tests. Local evidence is 95/95 Windows tests, 1/1 production-startup accessibility smoke, 5/5 Windows path-adapter tests, 71/71 UniFFI library tests, 7/7 atomic-rename tests, focused core accessibility/switcher tests, formatting, and warning-free core/UniFFI library clippy. The then-current complete 1,644-test `slate-core --lib` runner remained CPU-active but did not terminate within 15 minutes on this Windows host in either parallel or serial scheduling; rebasing onto current `main` increased that inventory to 1,645, and no broad pass is claimed. This is recorded as a reliability/test-infrastructure residual. Interactive FlaUI + axe-windows is wired as a required CI gate (`SLATE_REQUIRE_UI_AUTOMATION=1`) but this local session has no interactive desktop. Human Narrator/NVDA/JAWS and the four built-in plus customized Contrast-theme pass remain release-blocking §W-C evidence; see [`../w_c_matrix.md`](../w_c_matrix.md) and [`../reports/w1_execution_2026-07-20.md`](../reports/w1_execution_2026-07-20.md). Checkboxes that combine implemented code with that external evidence intentionally remain open.
+
 ## W1-0 · Atomic no-clobber rename on Windows/portable fallbacks — prerequisite PR
 
 1. Replace the Windows `rename_no_replace` fallback in `crates/slate-core/src/vault/fs.rs` with a native atomic no-clobber primitive (`MoveFileExW` without `MOVEFILE_REPLACE_EXISTING`, or an equally strong documented API). Destination-exists maps through the existing typed conflict/error contract; no UI-side pre-check is accepted.
@@ -26,8 +28,8 @@ Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral 
 4. W1-2's rename/move UI depends on this issue. W1-1 may proceed in parallel because shell/vault-open work does not expose file rename.
 5. **Windows rename-semantics evidence from W0:** the oplog compaction worker's tmp+rename-over rewrite genuinely fails against a read-only destination on Windows (the `EventKindsCensus` on_error trigger exploits exactly this). Treat it as a reminder that `MoveFileExW` failure modes (read-only destinations, sharing violations from AV/indexer holds) need typed mapping and a retry-free contract — surface them as the existing conflict/error types, never a silent fallback to replace semantics.
 
-- [ ] Atomic no-clobber semantics proven on Windows; portable fallback cannot silently clobber
-- [ ] Typed error mapping and race regression tests green
+- [x] Atomic no-clobber semantics proven on Windows; portable fallback cannot silently clobber
+- [x] Typed error mapping and race regression tests green
 
 ## W1-1 · App shell, window chrome, vault lifecycle — PR 1
 
@@ -45,8 +47,8 @@ Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral 
    - **§W-C under Fluent:** the axe-windows/FlaUI gate runs against the Fluent-styled controls from this first PR — Fluent restyles stock templates, so keyboard focus visuals, name/pattern exposure, and DPI behavior are asserted on what actually ships, not on Aero defaults.
    - Fluent is upstream-experimental: record behavior observations in the PR (the theme dictionaries version with the .NET 10 SDK pinned in `global.json`) and re-check at each wave close.
 
-- [ ] Shell + vault open/close/welcome/recents + scan progress, keyboard-complete
-- [ ] Path adapter gaps filed/fixed core-side with censuses
+- [x] Shell + vault open/close/welcome/recents + scan progress, keyboard-complete
+- [x] Path adapter gaps filed/fixed core-side with censuses
 - [ ] §W-C rows for shell surfaces green (axe-windows + FlaUI smoke, introduced this PR) under the Fluent theme
 - [ ] Fluent adoption per item 8: light/dark dictionaries wired to theme state, HC acceptance run, Mica policy recorded, `--census-log-probe` startup mode preserved
 
@@ -59,7 +61,7 @@ Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral 
 3. UIA: TreeView peer with level/position/expandability; type-ahead; the mac announcement grammar via canonical events.
 4. Selection model: single-click opens (label and row — the mac onDrag/selection lesson is a *behavioral* requirement: clicking a row's label must open it), keyboard parity (arrows, expand/collapse, F2 rename).
 
-- [ ] Full tree CRUD + link-rewrite parity (§W-A rows)
+- [x] Full tree CRUD + link-rewrite parity (§W-A rows)
 - [ ] UIA tree semantics + announcements; §W-C green
 
 ## W1-3 · Workspace: tabs, splits, leaves, persistence — PR 3
@@ -68,7 +70,7 @@ Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral 
 2. The workspace *model* semantics (what may dock where, leaf context matrix) mirror `WorkspaceModel`/`WorkspaceState` behavior; persistence format is the same schema `WorkspaceStore` persists (shared store read/written via core if canonicalized by then; else same-shape JSON with a recorded schema pin) so a synced vault restores equivalent layouts cross-platform where feasible; divergences recorded. **Status at W0-4: the store is not canonicalized in core** — plan for the same-shape-JSON path with the schema pin unless a core canonicalization lands first. **Two distinct kind inventories, both in scope:** (a) the **persisted tab-content kinds** — `enum EditorItem`: `markdown`, `canvas`, `base`, `savedQuery`, `dashboard`, `graph` (a path-less singleton) — which is what `WorkspaceStore` round-trips, including the U1-6 forward-compatibility contract (an unknown discriminator drops that tab, never fails the workspace — mirror it); and (b) the 16-row right-pane `enum Leaf` inventory (outline, backlinks, outgoingLinks, connections, embeds, math, code, diagrams, tasks, tasksReview, history, citations, bibliography, queries, basesDock, syncDiagnostics). Acceptance adds **cross-platform persistence round-trip fixtures** (mac-written JSON restores equivalently on Windows and vice versa where kinds are shipped) plus the unknown-kind graceful-drop test.
 3. UIA: tabs as TabControl peers with SelectionPattern; splits navigable; focus events fire on route changes (mac focus-routing tests' scenarios re-expressed in FlaUI).
 
-- [ ] Tabs/splits/leaves + persistence + focus routing parity
+- [x] Tabs/splits/leaves + persistence + focus routing parity
 - [ ] §W-C green; workspace FlaUI scenario suite
 
 ## W1-4 · Quick switcher — PR 4

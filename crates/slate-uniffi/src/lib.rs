@@ -6157,6 +6157,10 @@ pub enum A11yEvent {
     RecentSearchFocused {
         query: String,
     },
+    QuickSwitcherCount {
+        count: u32,
+        query: Option<String>,
+    },
     BaseViewMode {
         mode: String,
     },
@@ -6386,6 +6390,7 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
                 disabled_reason,
             },
             F::RecentSearchFocused { query } => C::RecentSearchFocused { query },
+            F::QuickSwitcherCount { count, query } => C::QuickSwitcherCount { count, query },
             F::BaseViewMode { mode } => C::BaseViewMode { mode },
             F::BaseViewSwitcher { view_count } => C::BaseViewSwitcher { view_count },
             F::BasesNewQueryBuilder => C::BasesNewQueryBuilder,

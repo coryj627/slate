@@ -36,13 +36,15 @@ public class CallbackConcurrencyCensus
         // UI-thread-simulated load §W-E names, with thread identities
         // recorded so per-trait dispatch affinity is asserted below.
         using var pump = new WorkPump();
-        var stop = new CancellationTokenSource();
+        using var stop = new CancellationTokenSource();
+        using var startBarrier = new Barrier(3);
 
         Exception? failure = null;
         int scanThreadId = 0;
         using var scanToken = new CancelToken();
-        var scanTask = Task.Run(() =>
+        var scanTask = StartDedicated(() =>
         {
+            startBarrier.SignalAndWait();
             Volatile.Write(ref scanThreadId, Environment.CurrentManagedThreadId);
             try
             {
@@ -54,8 +56,9 @@ public class CallbackConcurrencyCensus
             }
         });
         int saveThreadId = 0;
-        var saveTask = Task.Run(() =>
+        var saveTask = StartDedicated(() =>
         {
+            startBarrier.SignalAndWait();
             Volatile.Write(ref saveThreadId, Environment.CurrentManagedThreadId);
             try
             {
@@ -73,8 +76,9 @@ public class CallbackConcurrencyCensus
                 return -1;
             }
         });
-        var invokeTask = Task.Run(() =>
+        var invokeTask = StartDedicated(() =>
         {
+            startBarrier.SignalAndWait();
             try
             {
                 int n = 0;
@@ -170,6 +174,23 @@ public class CallbackConcurrencyCensus
 
         session.UnregisterEventListener(registration);
     }
+
+    // The census deliberately blocks all three workers in native calls or a
+    // sustained loop. Dedicated threads keep a low-core CI host's ThreadPool
+    // minimum from deciding which trait gets to participate in the storm.
+    private static Task StartDedicated(Action action) =>
+        Task.Factory.StartNew(
+            action,
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+
+    private static Task<T> StartDedicated<T>(Func<T> action) =>
+        Task.Factory.StartNew(
+            action,
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
 
     [Fact]
     public void ListenerChurnUnderFire_UnregisterReleasesForeignHandles()

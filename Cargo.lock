@@ -2040,6 +2040,7 @@ dependencies = [
  "tree-sitter-yaml",
  "unicode-normalization",
  "unicode-segmentation",
+ "windows-sys",
  "yaml-rust2",
 ]
 

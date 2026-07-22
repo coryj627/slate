@@ -1,0 +1,65 @@
+{
+  "activeGroup" : "11111111-1111-1111-1111-111111111111",
+  "activeLeaf" : "tasksReview",
+  "expandedDirPaths" : [
+    "Projects",
+    "Projects/Slate"
+  ],
+  "root" : {
+    "axis" : "horizontal",
+    "children" : [
+      {
+        "activeTab" : "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+        "id" : "11111111-1111-1111-1111-111111111111",
+        "kind" : "group",
+        "tabs" : [
+          {
+            "id" : "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1",
+            "item" : { "kind" : "markdown", "path" : "Notes/Welcome.md" }
+          },
+          {
+            "activeCanvasSurface" : "visual",
+            "id" : "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2",
+            "item" : { "kind" : "canvas", "path" : "Boards/Roadmap.canvas" }
+          },
+          {
+            "id" : "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3",
+            "item" : { "kind" : "base", "path" : "Data/Tasks.base" }
+          }
+        ]
+      },
+      {
+        "activeTab" : "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+        "id" : "22222222-2222-2222-2222-222222222222",
+        "kind" : "group",
+        "tabs" : [
+          {
+            "id" : "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb1",
+            "item" : {
+              "id" : "open-tasks",
+              "kind" : "savedQuery",
+              "name" : "Open tasks",
+              "path" : "open-tasks"
+            }
+          },
+          {
+            "id" : "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb2",
+            "item" : {
+              "id" : "weekly",
+              "kind" : "dashboard",
+              "name" : "Weekly",
+              "path" : "weekly"
+            }
+          },
+          {
+            "id" : "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbb3",
+            "item" : { "kind" : "graph", "path" : "graph:singleton" }
+          }
+        ]
+      }
+    ],
+    "kind" : "split",
+    "weights" : [ 0.6, 0.4 ]
+  },
+  "version" : 1
+}

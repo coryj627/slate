@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "activeGroup": "33333333-3333-3333-3333-333333333333",
+  "root": {
+    "kind": "split",
+    "axis": "vertical",
+    "weights": [0.5, 0.5],
+    "children": [
+      {
+        "kind": "group",
+        "id": "33333333-3333-3333-3333-333333333333",
+        "activeTab": "cccccccc-cccc-cccc-cccc-ccccccccccc1",
+        "tabs": [
+          {
+            "id": "cccccccc-cccc-cccc-cccc-ccccccccccc1",
+            "item": { "kind": "markdown", "path": "Inbox.md" },
+            "mode": "reading",
+            "propsCollapsed": true
+          }
+        ]
+      },
+      {
+        "kind": "group",
+        "id": "44444444-4444-4444-4444-444444444444",
+        "activeTab": "dddddddd-dddd-dddd-dddd-ddddddddddd1",
+        "tabs": [
+          {
+            "id": "dddddddd-dddd-dddd-dddd-ddddddddddd1",
+            "item": { "kind": "graph", "path": "graph:singleton" }
+          }
+        ]
+      }
+    ]
+  },
+  "activeLeaf": "outline",
+  "expandedDirPaths": ["Archive"]
+}

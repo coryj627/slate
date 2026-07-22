@@ -16,12 +16,99 @@
 // W1-1 app-shell scope, not W0-3's.
 
 using System.Diagnostics;
+using System.Text.Json;
 
 namespace SlateWindows.Tests.Censuses;
 
 [Trait("census", "host-logging")]
 public class HostLoggingCensus
 {
+    [Fact]
+    public void ProductionWinExe_SecondLaunchForwardsActivationToPrimary()
+    {
+        string exe = SlateWindowsExe();
+        string directory = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-single-instance-census-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        string output = Path.Combine(directory, "activation.json");
+        string vaultPath = Path.Combine(directory, "Forwarded Vault");
+        Directory.CreateDirectory(vaultPath);
+        string identity = $"slate-census-{Guid.NewGuid():N}";
+
+        try
+        {
+            var primaryInfo = new ProcessStartInfo(exe)
+            {
+                UseShellExecute = false,
+            };
+            primaryInfo.ArgumentList.Add("--census-single-instance-primary");
+            primaryInfo.ArgumentList.Add(output);
+            primaryInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = identity;
+            primaryInfo.Environment["SLATE_LOG_DIR"] = Path.Combine(directory, "logs");
+            using var primary = Process.Start(primaryInfo)!;
+
+            Assert.True(
+                SpinWait.SpinUntil(() => File.Exists(output + ".ready"), 30_000),
+                "primary instance did not start its activation listener");
+
+            var secondaryInfo = new ProcessStartInfo(exe)
+            {
+                UseShellExecute = false,
+            };
+            secondaryInfo.ArgumentList.Add(vaultPath);
+            secondaryInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] = identity;
+            secondaryInfo.Environment["SLATE_LOG_DIR"] = Path.Combine(directory, "logs");
+            using var secondary = Process.Start(secondaryInfo)!;
+            Assert.True(secondary.WaitForExit(30_000), "secondary Slate instance did not exit");
+            Assert.Equal(0, secondary.ExitCode);
+
+            Assert.True(primary.WaitForExit(30_000), "primary Slate census did not exit");
+            Assert.Equal(0, primary.ExitCode);
+            string[] forwarded = JsonSerializer.Deserialize<string[]>(File.ReadAllBytes(output))
+                ?? throw new Xunit.Sdk.XunitException("activation payload decoded as null");
+            Assert.Equal([vaultPath], forwarded);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
+    [Fact]
+    public void ProductionWinExeStartupPath_AllThemeDictionariesResolve()
+    {
+        string exe = SlateWindowsExe();
+        string logDir = Path.Combine(Path.GetTempPath(), $"slate-theme-census-{Guid.NewGuid():N}");
+        try
+        {
+            var psi = new ProcessStartInfo(exe, "--census-theme-probe")
+            {
+                UseShellExecute = false,
+            };
+            psi.Environment["SLATE_LOG_DIR"] = logDir;
+            using var app = Process.Start(psi)!;
+            Assert.True(app.WaitForExit(60_000), "SlateWindows.exe theme probe did not exit");
+            Assert.Equal(0, app.ExitCode);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(logDir, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+        }
+    }
+
     [Fact]
     public void ProductionWinExeStartupPath_DiagnosticReachesTheAppLog()
     {
@@ -30,11 +117,7 @@ public class HostLoggingCensus
         // here), installs the sink, triggers the deterministic warn, and
         // exits before any window shows — the exact production startup
         // path, windowless so it runs on CI.
-        string exe = Path.Combine(
-            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
-            "src", "SlateWindows", "bin", BuildConfiguration(), "net10.0-windows", "SlateWindows.exe");
-        exe = Path.GetFullPath(exe);
-        Assert.True(File.Exists(exe), $"SlateWindows.exe not built at {exe} (build the solution first)");
+        string exe = SlateWindowsExe();
 
         string logDir = Path.Combine(Path.GetTempPath(), $"slate-log-census-{Guid.NewGuid():N}");
         try
@@ -101,5 +184,15 @@ public class HostLoggingCensus
 #else
         return "Release";
 #endif
+    }
+
+    private static string SlateWindowsExe()
+    {
+        string exe = Path.Combine(
+            AppContext.BaseDirectory, "..", "..", "..", "..", "..",
+            "src", "SlateWindows", "bin", BuildConfiguration(), "net10.0-windows", "SlateWindows.exe");
+        exe = Path.GetFullPath(exe);
+        Assert.True(File.Exists(exe), $"SlateWindows.exe not built at {exe} (build the solution first)");
+        return exe;
     }
 }

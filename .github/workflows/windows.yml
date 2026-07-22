@@ -78,6 +78,18 @@ jobs:
           rustup target add aarch64-pc-windows-msvc
           cargo check -p slate-uniffi --target aarch64-pc-windows-msvc --locked
 
+      # W1-0 / #911: Windows is the load-bearing witness for the native
+      # MoveFileExW no-clobber primitive. The filter runs the complete vault/fs
+      # rename group, including occupied-destination, directory, and race cases.
+      - name: slate-core atomic rename tests
+        run: cargo test -p slate-core vault::fs::tests::rename --locked
+
+      # W1-2 / #721: exercise the Windows lexical-path adapter on an actual
+      # Windows host. These tests cover reserved-name validation, near misses,
+      # case-insensitive identity, case preservation, and long-path round-trips.
+      - name: slate-core Windows path adapter tests
+        run: cargo test -p slate-core vault::fs::tests::windows_ --locked
+
       # Program decision 19 / w0_spec §W0-3 item 3: the CLI builds and its
       # suite runs on the Windows runner — the full extent of Windows CLI
       # scope (distribution reserved as W-E5).
@@ -91,7 +103,16 @@ jobs:
         run: dotnet build apps/slate-windows/SlateWindows.slnx
 
       - name: Test
-        run: dotnet test apps/slate-windows/SlateWindows.slnx --no-build
+        run: dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build
+
+      # W1-1 / §W-C: launch the real Fluent-styled WinExe, drive its shell
+      # through UIA3, and run the axe-windows rule set against the live tree.
+      # Keep this process-owning gate separate from the in-process censuses so
+      # the two test hosts cannot race for Slate's single-instance identity.
+      - name: Shell accessibility gate (FlaUI + axe-windows)
+        run: dotnet test apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj --no-build
+        env:
+          SLATE_REQUIRE_UI_AUTOMATION: '1'
 
       - name: Format gate (dotnet format --verify-no-changes)
         run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes

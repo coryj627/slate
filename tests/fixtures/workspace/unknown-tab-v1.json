@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "activeGroup": "55555555-5555-5555-5555-555555555555",
+  "root": {
+    "kind": "group",
+    "id": "55555555-5555-5555-5555-555555555555",
+    "activeTab": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee2",
+    "tabs": [
+      {
+        "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee1",
+        "item": { "kind": "futureSurface", "path": "future:item" }
+      },
+      {
+        "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeee2",
+        "item": { "kind": "markdown", "path": "Survives.md" }
+      }
+    ]
+  },
+  "activeLeaf": "futureLeaf",
+  "expandedDirPaths": ["Good", "../escape", "/absolute", "Good"]
+}
