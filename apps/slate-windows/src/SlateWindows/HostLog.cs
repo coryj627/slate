@@ -26,6 +26,7 @@ internal enum HostDiagnosticEvent
     RecentVaultJumpListUpdateFailed,
     RecentVaultsPayloadRejected,
     RecentVaultsPersistFailed,
+    SidebarFilterShutdownFailed,
     SidebarOrganizationPersistFailed,
     SidebarPinsPersistFailed,
     SidebarShortcutsPersistFailed,

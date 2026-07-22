@@ -38,6 +38,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     private readonly Func<Task<IReadOnlyList<string>>> _pickImportSources;
     private readonly RecentVaultsStore _recentVaultsStore;
     private readonly ScanAnnouncementGate _scanAnnouncements;
+    private readonly SynchronizationContext? _filterUiContext;
     private readonly AsyncRelayCommand _openVaultCommand;
     private readonly AsyncRelayCommand _openRecentCommand;
     private readonly RelayCommand _closeVaultCommand;
@@ -74,7 +75,8 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>? confirmDirtyClose = null,
         Func<string, bool>? confirmDestructive = null,
         Func<Task<IReadOnlyList<string>>>? pickImportSources = null,
-        Func<DateTimeOffset>? scanClock = null)
+        Func<DateTimeOffset>? scanClock = null,
+        SynchronizationContext? filterUiContext = null)
     {
         _pickVault = pickVault;
         _enqueueUi = enqueueUi;
@@ -91,6 +93,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             ?? (_ => Task.FromResult(false));
         _recentVaultsStore = recentVaultsStore ?? new RecentVaultsStore();
         _scanAnnouncements = new ScanAnnouncementGate(scanClock);
+        _filterUiContext = filterUiContext;
         _openVaultCommand = new AsyncRelayCommand(PickAndOpenVaultAsync, () => !IsBusy);
         _openRecentCommand = new AsyncRelayCommand(
             OpenRecentAsync,
@@ -525,6 +528,21 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
 
     private void CloseSession()
     {
+        if (FileSidebar is FilesSidebarViewModel sidebar)
+        {
+            sidebar.CancelFilter();
+            try
+            {
+                sidebar.FilterCompletion.GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                // A faulted task is terminal, so the session can now be
+                // released without racing live FFI work.
+                HostLog.Write(HostDiagnosticEvent.SidebarFilterShutdownFailed, exception);
+            }
+        }
+
         // TryCloseWorkspace normally supplies the asynchronous barrier. This
         // cancellation is the fail-safe for direct disposal/error teardown so
         // no queued bulk-expansion page begins after session shutdown starts.
@@ -597,7 +615,8 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             persisted?.ExpandedDirPaths,
             root,
             _confirmDestructive,
-            _pickImportSources);
+            _pickImportSources,
+            filterUiContext: _filterUiContext);
         var switcher = new QuickSwitcherViewModel(session, root, _announce, switcherFiles);
 
         workspace.FileOpened += Workspace_FileOpened;
@@ -628,6 +647,14 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             FileSidebar.CancelImport();
             ReportTerminalStatus(
                 "Import cancellation requested. Close the vault again after completed copies finish reconciling.",
+                A11yPriority.Medium);
+            return false;
+        }
+
+        if (FileSidebar?.CancelFilter() == true)
+        {
+            ReportTerminalStatus(
+                "File filter cancellation requested. Close the vault again after the current query finishes.",
                 A11yPriority.Medium);
             return false;
         }
