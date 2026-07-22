@@ -84,34 +84,31 @@ internal sealed class WorkspacePersistence
     internal const double MinGroupWeight = 0.15;
     private const int MaxNodeDepth = 32;
     private const int MaxTabs = 4096;
+    private const string WorkspaceFileName = "workspace.json";
 
-    private readonly string _workspacePath;
     private readonly string _vaultRoot;
+    private readonly Action? _afterDirectoryAnchored;
 
-    public WorkspacePersistence(string vaultRoot)
+    public WorkspacePersistence(string vaultRoot, Action? afterDirectoryAnchored = null)
     {
         _vaultRoot = Path.GetFullPath(vaultRoot);
-        _workspacePath = Path.Combine(_vaultRoot, ".slate", "workspace.json");
+        _afterDirectoryAnchored = afterDirectoryAnchored;
     }
 
     public WorkspaceSnapshot? Load()
     {
         try
         {
-            RejectReparsePoint(_vaultRoot);
-            string directory = Path.GetDirectoryName(_workspacePath)!;
-            if (Directory.Exists(directory))
-            {
-                RejectReparsePoint(directory);
-            }
-
-            if (!File.Exists(_workspacePath))
+            using AnchoredVaultStore? store = AnchoredVaultStore.Open(
+                _vaultRoot,
+                createDirectory: false,
+                _afterDirectoryAnchored);
+            byte[]? input = store?.ReadAllBytesBounded(WorkspaceFileName, MaxFileBytes);
+            if (input is null)
             {
                 return null;
             }
 
-            RejectReparsePoint(_workspacePath);
-            byte[] input = SafeFile.ReadAllBytesBounded(_workspacePath, MaxFileBytes);
             using JsonDocument document = JsonDocument.Parse(input, new JsonDocumentOptions
             {
                 MaxDepth = MaxNodeDepth * 2,
@@ -171,64 +168,48 @@ internal sealed class WorkspacePersistence
     public void Save(WorkspaceSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        RejectReparsePoint(_vaultRoot);
-        string directory = Path.GetDirectoryName(_workspacePath)!;
-        Directory.CreateDirectory(directory);
-        RejectReparsePoint(directory);
-        if (File.Exists(_workspacePath))
+        using AnchoredVaultStore store = AnchoredVaultStore.Open(
+            _vaultRoot,
+            createDirectory: true,
+            _afterDirectoryAnchored)
+            ?? throw new IOException("Could not anchor the workspace store directory.");
+        using var output = new BoundedMemoryStream(MaxFileBytes);
+        using (var writer = new Utf8JsonWriter(output, new JsonWriterOptions { Indented = true }))
         {
-            RejectReparsePoint(_workspacePath);
-        }
-
-        string temporary = Path.Combine(directory, $"workspace.json.tmp-{Guid.NewGuid():N}");
-        try
-        {
-            using (FileStream stream = new(
-                temporary,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: 16 * 1024,
-                FileOptions.WriteThrough))
-            using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
+            writer.WriteStartObject();
+            writer.WriteNumber("version", SchemaVersion);
+            writer.WriteString("activeGroup", snapshot.ActiveGroup);
+            writer.WritePropertyName("root");
+            WriteNode(writer, snapshot.Root);
+            if (!string.IsNullOrWhiteSpace(snapshot.ActiveLeaf))
             {
-                writer.WriteStartObject();
-                writer.WriteNumber("version", SchemaVersion);
-                writer.WriteString("activeGroup", snapshot.ActiveGroup);
-                writer.WritePropertyName("root");
-                WriteNode(writer, snapshot.Root);
-                if (!string.IsNullOrWhiteSpace(snapshot.ActiveLeaf))
-                {
-                    writer.WriteString("activeLeaf", snapshot.ActiveLeaf);
-                }
-
-                IReadOnlyList<string> expanded = NormalizeExpandedPaths(snapshot.ExpandedDirPaths ?? []);
-                if (expanded.Count > 0)
-                {
-                    writer.WritePropertyName("expandedDirPaths");
-                    writer.WriteStartArray();
-                    foreach (string path in expanded)
-                    {
-                        writer.WriteStringValue(path);
-                    }
-
-                    writer.WriteEndArray();
-                }
-
-                writer.WriteEndObject();
+                writer.WriteString("activeLeaf", snapshot.ActiveLeaf);
             }
 
-            if (new FileInfo(temporary).Length > MaxFileBytes)
+            IReadOnlyList<string> expanded = NormalizeExpandedPaths(snapshot.ExpandedDirPaths ?? []);
+            if (expanded.Count > 0)
             {
-                throw new InvalidOperationException("Workspace state exceeds the 256 KiB safety limit.");
+                writer.WritePropertyName("expandedDirPaths");
+                writer.WriteStartArray();
+                foreach (string path in expanded)
+                {
+                    writer.WriteStringValue(path);
+                }
+
+                writer.WriteEndArray();
             }
 
-            File.Move(temporary, _workspacePath, overwrite: true);
+            writer.WriteEndObject();
         }
-        finally
+
+        if (output.Length > MaxFileBytes)
         {
-            SafeFile.TryDelete(temporary);
+            throw new InvalidOperationException("Workspace state exceeds the 256 KiB safety limit.");
         }
+
+        store.WriteAtomically(
+            WorkspaceFileName,
+            output.GetBuffer().AsSpan(0, checked((int)output.Length)));
     }
 
     internal static IReadOnlyList<string> NormalizeExpandedPaths(IEnumerable<string> paths)
@@ -600,11 +581,42 @@ internal sealed class WorkspacePersistence
             && child.TryGetInt32(out value);
     }
 
-    private static void RejectReparsePoint(string path)
+    private sealed class BoundedMemoryStream : MemoryStream
     {
-        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
+        private readonly long _maximumBytes;
+
+        public BoundedMemoryStream(int maximumBytes)
+            : base(Math.Min(maximumBytes, 16 * 1024))
         {
-            throw new IOException("Workspace settings path is a reparse point.");
+            _maximumBytes = maximumBytes;
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            EnsureCapacityFor(count);
+            base.Write(buffer, offset, count);
+        }
+
+        public override void Write(ReadOnlySpan<byte> buffer)
+        {
+            EnsureCapacityFor(buffer.Length);
+            base.Write(buffer);
+        }
+
+        public override void WriteByte(byte value)
+        {
+            EnsureCapacityFor(1);
+            base.WriteByte(value);
+        }
+
+        private void EnsureCapacityFor(int count)
+        {
+            if (count < 0 || Position > _maximumBytes - count)
+            {
+                throw new InvalidOperationException(
+                    "Workspace state exceeds the 256 KiB safety limit.");
+            }
         }
     }
+
 }

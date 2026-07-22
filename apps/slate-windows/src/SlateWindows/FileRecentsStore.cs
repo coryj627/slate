@@ -15,16 +15,18 @@ internal sealed class FileRecentsStore
     internal const int MaxEntries = 50;
     internal const int MaxEntryLength = 4096;
     internal const int MaxPayloadBytes = 256 * 1024;
+    private const string LegacyFileName = "file-recents.json";
     private readonly string _path;
-    private readonly string _legacyPath;
+    private readonly string _vaultRoot;
 
     public FileRecentsStore(
         string vaultRoot,
         VaultRootIdentity? identity = null,
         string? localAppDataRoot = null)
     {
+        _vaultRoot = Path.GetFullPath(vaultRoot);
         string identityText = identity is null
-            ? Path.GetFullPath(vaultRoot).ToUpperInvariant()
+            ? _vaultRoot.ToUpperInvariant()
             : $"{identity.Device}-{identity.Inode}";
         string key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identityText)));
         string root = localAppDataRoot ?? Path.Combine(
@@ -32,19 +34,13 @@ internal sealed class FileRecentsStore
             "Slate",
             "file-recents");
         _path = Path.Combine(root, $"{key}.json");
-        _legacyPath = Path.Combine(vaultRoot, ".slate", "file-recents.json");
     }
 
     public IReadOnlyList<string> Load()
     {
         if (!File.Exists(_path))
         {
-            IReadOnlyList<string> legacy = CanReadLegacy() ? Read(_legacyPath) : [];
-            Save(legacy);
-            if (File.Exists(_path))
-            {
-                TryDelete(_legacyPath);
-            }
+            MigrateLegacy();
         }
 
         return Read(_path);
@@ -70,19 +66,41 @@ internal sealed class FileRecentsStore
         return sanitized;
     }
 
-    private bool CanReadLegacy()
+    private void MigrateLegacy()
     {
+        IReadOnlyList<string> legacy = [];
+        AnchoredVaultStore? store = null;
         try
         {
-            string directory = Path.GetDirectoryName(_legacyPath)!;
-            return Directory.Exists(directory)
-                && (File.GetAttributes(directory) & FileAttributes.ReparsePoint) == 0
-                && (!File.Exists(_legacyPath)
-                    || (File.GetAttributes(_legacyPath) & FileAttributes.ReparsePoint) == 0);
+            store = AnchoredVaultStore.Open(_vaultRoot, createDirectory: false);
+            byte[]? input = store?.ReadAllBytesBounded(LegacyFileName, MaxPayloadBytes);
+            legacy = input is null
+                ? []
+                : Sanitize(JsonSerializer.Deserialize<string[]>(input) ?? []);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or JsonException)
         {
-            return false;
+        }
+
+        try
+        {
+            Save(legacy);
+            if (File.Exists(_path))
+            {
+                try
+                {
+                    store?.DeleteRegularFileIfExists(LegacyFileName);
+                }
+                catch (Exception exception) when (
+                    exception is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        finally
+        {
+            store?.Dispose();
         }
     }
 

@@ -590,12 +590,22 @@ public sealed class W1SidebarSettingsHardeningTests
         store.Load();
 
         store.SetOrganization(SidebarSortMode.CreatedOldest, groupByDate: true);
+        string settingsPath = Path.Combine(fixture.Root, ".slate", "sidebar.json");
+        using (JsonDocument written = JsonDocument.Parse(File.ReadAllBytes(settingsPath)))
+        {
+            Assert.Equal(
+                "dateBuckets",
+                written.RootElement.GetProperty("grouping").GetString());
+        }
+
         SidebarSettingsSnapshot created = new SidebarSettingsStore(fixture.Root).Load();
+        Assert.Null(created.ReadOnlyReason);
         Assert.True(created.GroupByDate);
         Assert.Equal(SidebarSortMode.CreatedOldest, created.SortMode);
 
         store.SetOrganization(SidebarSortMode.ModifiedOldest, groupByDate: true);
         SidebarSettingsSnapshot modified = new SidebarSettingsStore(fixture.Root).Load();
+        Assert.Null(modified.ReadOnlyReason);
         Assert.True(modified.GroupByDate);
         Assert.Equal(SidebarSortMode.ModifiedOldest, modified.SortMode);
     }

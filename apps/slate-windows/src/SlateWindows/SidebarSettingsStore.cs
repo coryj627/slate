@@ -29,19 +29,17 @@ internal sealed class SidebarSettingsStore
     internal const int MaxPins = 10_000;
     internal const int MaxPinsPerFolder = 1_000;
     internal const int MaxShortcuts = 200;
-    private readonly string _slateDirectory;
+    private const string SettingsFileName = "sidebar.json";
+    private const string LockFileName = "sidebar.json.lock";
     private readonly string _vaultRoot;
-    private readonly string _path;
-    private readonly string _lockPath;
+    private readonly Action? _afterDirectoryAnchored;
     private JsonObject _root = new() { ["version"] = SchemaVersion };
     private string? _readOnlyReason;
 
-    public SidebarSettingsStore(string vaultRoot)
+    public SidebarSettingsStore(string vaultRoot, Action? afterDirectoryAnchored = null)
     {
         _vaultRoot = Path.GetFullPath(vaultRoot);
-        _slateDirectory = Path.Combine(_vaultRoot, ".slate");
-        _path = Path.Combine(_slateDirectory, "sidebar.json");
-        _lockPath = Path.Combine(_slateDirectory, "sidebar.json.lock");
+        _afterDirectoryAnchored = afterDirectoryAnchored;
     }
 
     public SidebarSettingsSnapshot Load()
@@ -241,16 +239,15 @@ internal sealed class SidebarSettingsStore
             throw new InvalidOperationException(_readOnlyReason);
         }
 
-        RejectReparsePoint(_vaultRoot);
-        Directory.CreateDirectory(_slateDirectory);
-        RejectReparsePoint(_slateDirectory);
-        if (File.Exists(_lockPath))
-        {
-            RejectReparsePoint(_lockPath);
-        }
-
-        using var gate = new FileStream(_lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        JsonObject current = ReadRoot(out string? blocked);
+        using AnchoredVaultStore store = AnchoredVaultStore.Open(
+            _vaultRoot,
+            createDirectory: true,
+            _afterDirectoryAnchored)
+            ?? throw new IOException("Could not anchor the sidebar settings directory.");
+        using FileStream gate = store.OpenExclusiveLock(LockFileName);
+        JsonObject current = ReadRoot(
+            () => store.ReadAllBytesBounded(SettingsFileName, MaxReadBytes),
+            out string? blocked);
         if (blocked is not null)
         {
             _readOnlyReason = blocked;
@@ -267,49 +264,38 @@ internal sealed class SidebarSettingsStore
             throw new InvalidOperationException("Sidebar settings would exceed the 2 MiB safety limit.");
         }
 
-        string temporary = Path.Combine(_slateDirectory, $"sidebar.tmp-{Guid.NewGuid():N}");
-        try
-        {
-            using (var stream = new FileStream(
-                temporary,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                64 * 1024,
-                FileOptions.WriteThrough))
-            {
-                stream.Write(output);
-                stream.Flush(flushToDisk: true);
-            }
-
-            File.Move(temporary, _path, overwrite: true);
-            _root = current;
-        }
-        finally
-        {
-            SafeFile.TryDelete(temporary);
-        }
+        store.WriteAtomically(SettingsFileName, output);
+        _root = current;
     }
 
     private JsonObject ReadRoot(out string? blocked)
     {
+        return ReadRoot(
+            () =>
+            {
+                using AnchoredVaultStore? store = AnchoredVaultStore.Open(
+                    _vaultRoot,
+                    createDirectory: false,
+                    _afterDirectoryAnchored);
+                return store?.ReadAllBytesBounded(SettingsFileName, MaxReadBytes);
+            },
+            out blocked);
+    }
+
+    private static JsonObject ReadRoot(
+        Func<byte[]?> read,
+        out string? blocked)
+    {
         blocked = null;
         try
         {
-            RejectReparsePoint(_vaultRoot);
-            if (Directory.Exists(_slateDirectory))
-            {
-                RejectReparsePoint(_slateDirectory);
-            }
-
-            if (!File.Exists(_path))
+            byte[]? input = read();
+            if (input is null)
             {
                 return new JsonObject { ["version"] = SchemaVersion };
             }
 
-            RejectReparsePoint(_path);
-            JsonNode? parsed = JsonNode.Parse(
-                SafeFile.ReadAllBytesBounded(_path, MaxReadBytes));
+            JsonNode? parsed = JsonNode.Parse(input);
             if (parsed is not JsonObject root || !KnownShapesAreValid(root))
             {
                 blocked = "Sidebar settings are malformed and are read-only.";
@@ -443,14 +429,6 @@ internal sealed class SidebarSettingsStore
 
     private static string? StringValue(JsonNode? node) =>
         node is JsonValue value && value.TryGetValue<string>(out string? text) ? text : null;
-
-    private static void RejectReparsePoint(string path)
-    {
-        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-        {
-            throw new IOException("Sidebar settings path is a reparse point.");
-        }
-    }
 
     private static string ParentPath(string path)
     {

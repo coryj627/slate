@@ -116,12 +116,21 @@ Codoki explicitly safe to merge, then squash merge before the next group.
   the much larger avoided FFI marshalling and host allocation. The final
   Codoki review reported 5/5 confidence and safe to merge; every CI lane was
   green.
-- W1-RT-06 remediation is in progress on
-  `agent/w1-sidebar-responsiveness`: WPF-dispatched root refreshes build,
-  page, sort, restore expanded descendants, and project tags on a serialized
-  background worker. A generation guard publishes one prebuilt collection,
-  close/disposal joins the session-backed provider, and the files tree,
-  filtered list, and dual-pane list explicitly use recycling virtualization.
-  Deterministic tests pin a <100 ms UI-dispatch budget with a blocked
-  5,001-item provider, reject queued stale publication, preserve later
-  restored branches after a truncated branch, and cover both close barriers.
+- W1-RT-06 closed by PR #1015: WPF-dispatched root refreshes build, page, sort,
+  restore expanded descendants, and project tags on a serialized background
+  worker. A generation guard publishes one prebuilt collection, close/disposal
+  joins the session-backed provider, and the files tree, filtered list, and
+  dual-pane list explicitly use recycling virtualization. Deterministic tests
+  pin a <100 ms UI-dispatch budget with a blocked 5,001-item provider, reject
+  queued stale publication, preserve later restored branches after a truncated
+  branch, and cover both close barriers. Unexpected worker faults are
+  privacy-safe, user-visible, and terminal without faulting teardown joins.
+  CI was green and Codoki reported 5/5 confidence and safe to merge.
+- W1-RT-07 remediation is in progress on `agent/w1-anchored-stores`: workspace,
+  sidebar settings, and legacy per-vault recents operations hold and revalidate
+  opened vault and `.slate` identities, reject final reparse handles, verify
+  child final paths, and replace by renaming the flushed temporary-file handle
+  only while the directory identity remains fixed. Eighteen focused persistence
+  tests pass, including three external-sentinel reparse cases, deterministic
+  read/write directory-swap attempts, forward-compatible round trips, valid
+  legacy migration, denied-replacement cleanup, and bounded serialization.
