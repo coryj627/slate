@@ -19,6 +19,8 @@ internal sealed partial class FilesSidebarViewModel
     private readonly SynchronizationContext? _treeUiContext;
     private readonly Func<Action, CancellationToken, Task> _runTreeWorker;
     private readonly HashSet<string> _expandedPaths;
+    private readonly object _treeRefreshCancellationGate = new();
+    private readonly object _bulkExpandCancellationGate = new();
     private CancellationTokenSource? _treeRefreshCancellation;
     private CancellationTokenSource? _bulkExpandCancellation;
     private Task _treeRefreshCompletion = Task.CompletedTask;
@@ -52,16 +54,27 @@ internal sealed partial class FilesSidebarViewModel
 
     public void LoadChildren(FileTreeNodeViewModel node)
     {
-        if (!node.IsDirectory || node.IsPlaceholder
+        if (SessionShutdownStarted
+            || !node.IsDirectory || node.IsPlaceholder
             || (node.Children.Count > 0 && !node.Children[0].IsPlaceholder))
+        {
+            return;
+        }
+
+        if (!TryBeginSessionWork(out SessionWorkLease? lease))
         {
             return;
         }
 
         try
         {
+            DirectoryLevel level;
+            using (lease)
+            {
+                level = LoadDirectoryLevel(node.Path, node.Level + 1);
+            }
+
             node.Children.Clear();
-            DirectoryLevel level = LoadDirectoryLevel(node.Path, node.Level + 1);
             foreach (FileTreeNodeViewModel child in level.Nodes)
             {
                 node.Children.Add(child);
@@ -81,6 +94,11 @@ internal sealed partial class FilesSidebarViewModel
 
     public void Refresh(bool reportCount = false)
     {
+        if (SessionShutdownStarted)
+        {
+            return;
+        }
+
         CancelBulkExpansion();
         CancelTreeRefreshCore();
         if (RootNodes.Count > 0)
@@ -96,13 +114,24 @@ internal sealed partial class FilesSidebarViewModel
         int tagGeneration = _tagGeneration;
         if (_treeUiContext is null)
         {
+            if (!TryBeginSessionWork(out SessionWorkLease? lease))
+            {
+                return;
+            }
+
             try
             {
-                ApplyTreeRefresh(BuildTreeRefresh(
-                    ordering,
-                    expandedPaths,
-                    tagGeneration,
-                    CancellationToken.None), reportCount);
+                TreeRefreshOutcome outcome;
+                using (lease)
+                {
+                    outcome = BuildTreeRefresh(
+                        ordering,
+                        expandedPaths,
+                        tagGeneration,
+                        CancellationToken.None);
+                }
+
+                ApplyTreeRefresh(outcome, reportCount);
                 _treeRefreshCompletion = Task.CompletedTask;
             }
             catch (VaultException exception)
@@ -129,7 +158,12 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         var cancellation = new CancellationTokenSource();
-        _treeRefreshCancellation = cancellation;
+        CancellationToken token = cancellation.Token;
+        lock (_treeRefreshCancellationGate)
+        {
+            _treeRefreshCancellation = cancellation;
+        }
+
         Task previous = _treeRefreshCompletion;
         Status = "Loading files…";
         _treeRefreshCompletion = RefreshTreeAsync(
@@ -139,7 +173,8 @@ internal sealed partial class FilesSidebarViewModel
             expandedPaths,
             tagGeneration,
             reportCount,
-            cancellation);
+            cancellation,
+            token);
     }
 
     private async Task RefreshTreeAsync(
@@ -149,9 +184,12 @@ internal sealed partial class FilesSidebarViewModel
         IReadOnlySet<string> expandedPaths,
         int tagGeneration,
         bool reportCount,
-        CancellationTokenSource cancellation)
+        CancellationTokenSource cancellation,
+        CancellationToken token)
     {
-        CancellationToken token = cancellation.Token;
+        // Publish the completion task before provider work can begin. Shutdown
+        // can then cancel and observe a single coherent operation boundary.
+        await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
         try
         {
             try
@@ -167,14 +205,23 @@ internal sealed partial class FilesSidebarViewModel
             }
 
             token.ThrowIfCancellationRequested();
+            if (!TryBeginSessionWork(out SessionWorkLease? lease))
+            {
+                return;
+            }
+
             TreeRefreshOutcome? outcome = null;
-            await _runTreeWorker(
-                () => outcome = BuildTreeRefresh(
-                    ordering,
-                    expandedPaths,
-                    tagGeneration,
-                    token),
-                token).ConfigureAwait(false);
+            using (lease)
+            {
+                await _runTreeWorker(
+                    () => outcome = BuildTreeRefresh(
+                        ordering,
+                        expandedPaths,
+                        tagGeneration,
+                        token),
+                    token).ConfigureAwait(false);
+            }
+
             token.ThrowIfCancellationRequested();
             if (outcome is null)
             {
@@ -234,12 +281,20 @@ internal sealed partial class FilesSidebarViewModel
         }
         finally
         {
-            if (ReferenceEquals(_treeRefreshCancellation, cancellation))
+            bool ownsCancellation = false;
+            lock (_treeRefreshCancellationGate)
             {
-                _treeRefreshCancellation = null;
+                if (ReferenceEquals(_treeRefreshCancellation, cancellation))
+                {
+                    _treeRefreshCancellation = null;
+                    ownsCancellation = true;
+                }
             }
 
-            cancellation.Dispose();
+            if (ownsCancellation)
+            {
+                cancellation.Dispose();
+            }
         }
     }
 
@@ -384,17 +439,31 @@ internal sealed partial class FilesSidebarViewModel
         if (wasPending)
         {
             ++_treeGeneration;
-            CancelTreeRefreshCore();
         }
+
+        CancelTreeRefreshCore();
 
         return wasPending;
     }
 
+    internal Task CancelTreeRefreshAndGetCompletion()
+    {
+        CancelTreeRefresh();
+        return TreeRefreshCompletion;
+    }
+
     private void CancelTreeRefreshCore()
     {
-        CancellationTokenSource? cancellation = _treeRefreshCancellation;
-        _treeRefreshCancellation = null;
-        cancellation?.Cancel();
+        CancellationTokenSource? cancellation;
+        lock (_treeRefreshCancellationGate)
+        {
+            cancellation = _treeRefreshCancellation;
+            _treeRefreshCancellation = null;
+        }
+
+        CancelAndDisposeWithoutThrowing(
+            cancellation,
+            HostDiagnosticEvent.SidebarTreeRefreshShutdownFailed);
     }
 
     private void CollapseAll()
@@ -409,8 +478,19 @@ internal sealed partial class FilesSidebarViewModel
     private async Task ExpandLoadedAsync()
     {
         CancelBulkExpansion();
-        using var cancellation = new CancellationTokenSource();
-        _bulkExpandCancellation = cancellation;
+        var cancellation = new CancellationTokenSource();
+        CancellationToken token = cancellation.Token;
+        if (SessionShutdownStarted)
+        {
+            cancellation.Dispose();
+            return;
+        }
+
+        lock (_bulkExpandCancellationGate)
+        {
+            _bulkExpandCancellation = cancellation;
+        }
+
         int generation = _treeGeneration;
         DirectoryOrdering ordering = CaptureDirectoryOrdering();
         FileTreeNodeViewModel[] materializedDirectories = Flatten(RootNodes)
@@ -421,7 +501,7 @@ internal sealed partial class FilesSidebarViewModel
         {
             foreach (FileTreeNodeViewModel node in materializedDirectories)
             {
-                cancellation.Token.ThrowIfCancellationRequested();
+                token.ThrowIfCancellationRequested();
                 if (generation != _treeGeneration)
                 {
                     return;
@@ -435,14 +515,22 @@ internal sealed partial class FilesSidebarViewModel
                     continue;
                 }
 
-                DirectoryLevel level = await Task.Run(
-                    () => LoadDirectoryLevel(
-                        node.Path,
-                        node.Level + 1,
-                        ordering: ordering,
-                        cancellationToken: cancellation.Token),
-                    cancellation.Token);
-                cancellation.Token.ThrowIfCancellationRequested();
+                (bool admitted, DirectoryLevel? level) = await LoadExpandedLevelAsync(
+                    node,
+                    ordering,
+                    token);
+                if (!admitted)
+                {
+                    return;
+                }
+
+                token.ThrowIfCancellationRequested();
+                if (level is null)
+                {
+                    throw new InvalidOperationException(
+                        "Tree worker completed without an expanded directory level.");
+                }
+
                 if (generation != _treeGeneration || !node.IsExpanded)
                 {
                     return;
@@ -462,24 +550,108 @@ internal sealed partial class FilesSidebarViewModel
         catch (OperationCanceledException)
         {
         }
-        catch (VaultException exception)
+        catch (Exception exception)
         {
-            ReportFailure($"Could not expand loaded folders: {exception.Message}");
+            ReportExpansionFailure(exception);
         }
         finally
         {
             IsExpandingLoaded = false;
-            if (ReferenceEquals(_bulkExpandCancellation, cancellation))
+            bool ownsCancellation = false;
+            lock (_bulkExpandCancellationGate)
             {
-                _bulkExpandCancellation = null;
+                if (ReferenceEquals(_bulkExpandCancellation, cancellation))
+                {
+                    _bulkExpandCancellation = null;
+                    ownsCancellation = true;
+                }
             }
+
+            if (ownsCancellation)
+            {
+                cancellation.Dispose();
+            }
+        }
+    }
+
+    private async Task<(bool Admitted, DirectoryLevel? Level)> LoadExpandedLevelAsync(
+        FileTreeNodeViewModel node,
+        DirectoryOrdering ordering,
+        CancellationToken cancellationToken)
+    {
+        if (!TryBeginSessionWork(out SessionWorkLease? lease))
+        {
+            return (false, null);
+        }
+
+        DirectoryLevel? level = null;
+        using (lease)
+        {
+            await _runTreeWorker(
+                () => level = LoadDirectoryLevel(
+                    node.Path,
+                    node.Level + 1,
+                    ordering: ordering,
+                    cancellationToken: cancellationToken),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        return (true, level);
+    }
+
+    private void ReportExpansionFailure(Exception exception)
+    {
+        HostLog.Write(HostDiagnosticEvent.SidebarBulkExpansionFailed, exception);
+        try
+        {
+            ReportFailure("Could not expand loaded folders.");
+        }
+        catch (Exception callbackException)
+        {
+            HostLog.Write(HostDiagnosticEvent.SidebarBulkExpansionFailed, callbackException);
         }
     }
 
     private void CancelBulkExpansion()
     {
-        _bulkExpandCancellation?.Cancel();
-        _bulkExpandCancellation = null;
+        CancellationTokenSource? cancellation;
+        lock (_bulkExpandCancellationGate)
+        {
+            cancellation = _bulkExpandCancellation;
+            _bulkExpandCancellation = null;
+        }
+
+        CancelAndDisposeWithoutThrowing(
+            cancellation,
+            HostDiagnosticEvent.SidebarBulkExpansionShutdownFailed);
+    }
+
+    private static void CancelAndDisposeWithoutThrowing(
+        CancellationTokenSource? cancellation,
+        HostDiagnosticEvent failureEvent)
+    {
+        if (cancellation is null)
+        {
+            return;
+        }
+
+        try
+        {
+            try
+            {
+                cancellation.Cancel();
+            }
+            catch (Exception exception)
+            {
+                // Cancellation is best-effort during teardown. A callback
+                // failure must not prevent later producers from being canceled.
+                HostLog.Write(failureEvent, exception);
+            }
+        }
+        finally
+        {
+            cancellation.Dispose();
+        }
     }
 
     public void CancelExpandLoaded() => CancelBulkExpansion();

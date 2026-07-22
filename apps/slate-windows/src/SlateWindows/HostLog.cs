@@ -26,7 +26,13 @@ internal enum HostDiagnosticEvent
     RecentVaultJumpListUpdateFailed,
     RecentVaultsPayloadRejected,
     RecentVaultsPersistFailed,
+    SidebarBulkExpansionFailed,
+    SidebarBulkExpansionShutdownFailed,
+    SidebarFilterFailed,
     SidebarFilterShutdownFailed,
+    SidebarImportFailed,
+    SidebarImportPickerFailed,
+    SidebarImportShutdownFailed,
     SidebarTreeRefreshFailed,
     SidebarTreeRefreshShutdownFailed,
     SidebarOrganizationPersistFailed,
@@ -115,7 +121,7 @@ internal static class HostLog
             message += $" ({exception.GetType().Name})";
         }
 
-        Console.Error.WriteLine(message);
+        WriteWithoutThrowing(message);
     }
 
     public static void WriteSizeLimit(
@@ -123,8 +129,21 @@ internal static class HostLog
         FileSizeLimitExceededException exception)
     {
         ArgumentNullException.ThrowIfNull(exception);
-        Console.Error.WriteLine(
+        WriteWithoutThrowing(
             $"SlateWindows.{diagnosticEvent} "
             + $"(observedBytes={exception.ObservedBytes}, maximumBytes={exception.MaximumBytes})");
+    }
+
+    private static void WriteWithoutThrowing(string message)
+    {
+        try
+        {
+            Console.Error.WriteLine(message);
+        }
+        catch (Exception)
+        {
+            // Diagnostics are best-effort. A failed sink must never replace
+            // the application failure being reported or abort teardown.
+        }
     }
 }

@@ -241,7 +241,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         string? localAppDataRoot = null,
         SynchronizationContext? filterUiContext = null,
         SynchronizationContext? treeUiContext = null,
-        Func<Action, CancellationToken, Task>? treeWorker = null)
+        Func<Action, CancellationToken, Task>? treeWorker = null,
+        Func<Action, CancellationToken, Task>? filterWorker = null,
+        Func<Action, CancellationToken, Task>? importWorker = null)
     {
         _session = session;
         _announce = announce;
@@ -253,6 +255,8 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         _treeUiContext = treeUiContext
             ?? (currentUiContext is DispatcherSynchronizationContext ? currentUiContext : null);
         _runTreeWorker = treeWorker ?? ((work, token) => Task.Run(work, token));
+        _runFilterWorker = filterWorker ?? ((work, token) => Task.Run(work, token));
+        _runImportWorker = importWorker ?? ((work, token) => Task.Run(work, token));
         _vaultRoot = vaultRoot;
         if (vaultRoot is not null)
         {
@@ -305,7 +309,9 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         OpenSplitCommand = new RelayCommand(_ => OpenSelected(WorkspaceOpenTarget.SplitRight), _ => CanOpenSelected());
         BatchMoveCommand = new RelayCommand(_ => BatchMove(), _ => !IsImporting && BatchSelectionCount > 0 && MoveDestination.Length > 0);
         BatchTrashCommand = new RelayCommand(_ => BatchTrash(), _ => !IsImporting && BatchSelectionCount > 0);
-        ImportCommand = new AsyncRelayCommand(_ => ImportAsync(), () => !IsImporting);
+        ImportCommand = new AsyncRelayCommand(
+            _ => _importCompletion = ImportAsync(),
+            () => !IsImporting);
         CancelImportCommand = new RelayCommand(_ => CancelImport(), _ => IsImporting);
         ClearRecentsCommand = new RelayCommand(_ => ClearRecents(), _ => _recents.Count > 0);
         CollapseAllCommand = new RelayCommand(_ => CollapseAll(), _ => true);
@@ -766,8 +772,18 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void LoadTags()
     {
-        ++_tagGeneration;
-        ApplyTags(BuildTags(CancellationToken.None));
+        if (!TryRunSessionWork(
+            () =>
+            {
+                ++_tagGeneration;
+                return BuildTags(CancellationToken.None);
+            },
+            out TagLoadOutcome outcome))
+        {
+            return;
+        }
+
+        ApplyTags(outcome);
     }
 
     private TagLoadOutcome BuildTags(CancellationToken cancellationToken)
@@ -843,9 +859,15 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         try
         {
-            TagEditReport report = add
-                ? _session.AddTagToFiles(paths, TagInput)
-                : _session.RemoveTagFromFiles(paths, TagInput);
+            if (!TryRunSessionWork(
+                () => add
+                    ? _session.AddTagToFiles(paths, TagInput)
+                    : _session.RemoveTagFromFiles(paths, TagInput),
+                out TagEditReport report))
+            {
+                return;
+            }
+
             Status = report.AudioSummary;
             // W0.5-3 residue: core tag report carries engine-composed audio copy.
             _announce(new A11yEvent.HostComposed(report.AudioSummary, A11yPriority.Medium));
@@ -863,7 +885,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         string path = CombineVaultPath(parent, MutationName);
         try
         {
-            _session.CreateFolderExclusive(path);
+            if (!TryRunSessionWork(() => _session.CreateFolderExclusive(path)))
+            {
+                return;
+            }
+
             ReportResult($"Created folder {path}.");
             Refresh();
         }
@@ -882,7 +908,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         string path = CombineVaultPath(parent, name);
         try
         {
-            _session.CreateExclusive(path, string.Empty);
+            if (!TryRunSessionWork(() => _session.CreateExclusive(path, string.Empty)))
+            {
+                return;
+            }
+
             ReportResult($"Created {path}.");
             Refresh();
             RequestOpen(path);
@@ -904,20 +934,26 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         {
             string oldPath = node.Path;
             string newPath = CombineVaultPath(ParentPath(oldPath), MutationName);
-            if (node.IsDirectory)
+            if (!TryRunSessionWork(() =>
             {
-                if (node.HasFolderNote)
+                if (node.IsDirectory)
                 {
-                    _session.RenameFolderWithNote(node.Path, MutationName);
+                    if (node.HasFolderNote)
+                    {
+                        _session.RenameFolderWithNote(node.Path, MutationName);
+                    }
+                    else
+                    {
+                        _session.RenameFolder(node.Path, MutationName);
+                    }
                 }
                 else
                 {
-                    _session.RenameFolder(node.Path, MutationName);
+                    _session.RenameFile(node.Path, MutationName);
                 }
-            }
-            else
+            }))
             {
-                _session.RenameFile(node.Path, MutationName);
+                return;
             }
 
             TransformStoredPaths(oldPath, newPath, node.IsDirectory, deleted: false);
@@ -945,8 +981,14 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         try
         {
-            BatchTrashReport report = _session.BatchTrash(new BatchTrashRequest(
-                [new StructuralBatchItem(node.Path, node.IsDirectory)]));
+            if (!TryRunSessionWork(
+                () => _session.BatchTrash(new BatchTrashRequest(
+                    [new StructuralBatchItem(node.Path, node.IsDirectory)])),
+                out BatchTrashReport report))
+            {
+                return;
+            }
+
             foreach (StructuralBatchItem trashed in report.Trashed)
             {
                 TransformStoredPaths(trashed.Path, trashed.Path, trashed.IsDirectory, deleted: true);
@@ -978,7 +1020,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
         try
         {
             string path = FolderNotePath(node);
-            _session.CreateExclusive(path, $"# {node.Name}\n");
+            if (!TryRunSessionWork(() => _session.CreateExclusive(path, $"# {node.Name}\n")))
+            {
+                return;
+            }
+
             ReportResult($"Created folder note {path}.");
             Refresh();
             RequestOpen(path);
@@ -1003,7 +1049,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         try
         {
-            _session.DeleteFile(FolderNotePath(node));
+            if (!TryRunSessionWork(() => _session.DeleteFile(FolderNotePath(node))))
+            {
+                return;
+            }
+
             ReportResult($"Deleted the {node.DisplayName} folder note.");
             Refresh();
         }
@@ -1022,7 +1072,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         try
         {
-            string? link = _session.WikilinkForPath(node.Path);
+            if (!TryRunSessionWork(
+                () => _session.WikilinkForPath(node.Path),
+                out string? link))
+            {
+                return;
+            }
+
             if (link is not null)
             {
                 _copyText(link);
@@ -1163,7 +1219,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         try
         {
-            BatchMoveReport report = _session.BatchMove(new BatchMoveRequest(items, MoveDestination));
+            if (!TryRunSessionWork(
+                () => _session.BatchMove(new BatchMoveRequest(items, MoveDestination)),
+                out BatchMoveReport report))
+            {
+                return;
+            }
+
             foreach (BatchPathChange change in report.Standing)
             {
                 TransformStoredPaths(change.OldPath, change.NewPath, change.IsDirectory, deleted: false);
@@ -1192,7 +1254,13 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         try
         {
-            BatchTrashReport report = _session.BatchTrash(new BatchTrashRequest(items));
+            if (!TryRunSessionWork(
+                () => _session.BatchTrash(new BatchTrashRequest(items)),
+                out BatchTrashReport report))
+            {
+                return;
+            }
+
             foreach (StructuralBatchItem item in report.Trashed)
             {
                 TransformStoredPaths(item.Path, item.Path, item.IsDirectory, deleted: true);
@@ -1333,7 +1401,6 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
     private void LoadDualPane(string parentPath)
     {
-        DualPaneFiles.Clear();
         if (!IsDualPaneEnabled)
         {
             return;
@@ -1341,10 +1408,17 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
 
         try
         {
-            DirectoryLevel level = LoadDirectoryLevel(
-                parentPath,
-                1,
-                includeDirectories: false);
+            if (!TryRunSessionWork(
+                () => LoadDirectoryLevel(
+                    parentPath,
+                    1,
+                    includeDirectories: false),
+                out DirectoryLevel level))
+            {
+                return;
+            }
+
+            DualPaneFiles.Clear();
             foreach (FileTreeNodeViewModel item in level.FileNodes)
             {
                 DualPaneFiles.Add(item);

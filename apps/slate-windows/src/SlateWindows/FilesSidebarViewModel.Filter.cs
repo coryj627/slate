@@ -15,14 +15,26 @@ internal sealed partial class FilesSidebarViewModel
 {
     private const int FilterDebounceMilliseconds = 200;
     private readonly SynchronizationContext? _filterUiContext;
+    private readonly Func<Action, CancellationToken, Task> _runFilterWorker;
+    private readonly object _filterCancellationGate = new();
     private CancellationTokenSource? _filterCancellation;
     private Task _filterCompletion = Task.CompletedTask;
     private int _filterGeneration;
     private string _filterText = string.Empty;
 
     public ObservableCollection<FileTreeNodeViewModel> FilterResults { get; } = [];
-    internal Task FilterCompletion => _filterCompletion;
-    internal bool IsFiltering => !_filterCompletion.IsCompleted;
+    internal Task FilterCompletion
+    {
+        get
+        {
+            lock (_filterCancellationGate)
+            {
+                return _filterCompletion;
+            }
+        }
+    }
+
+    internal bool IsFiltering => !FilterCompletion.IsCompleted;
 
     public string FilterText
     {
@@ -42,76 +54,172 @@ internal sealed partial class FilesSidebarViewModel
 
     private void ScheduleFilter()
     {
+        Task previous = FilterCompletion;
         CancelFilterCore();
         int generation = ++_filterGeneration;
         string query = FilterText.Trim();
         if (query.Length == 0)
         {
             FilterResults.Clear();
-            _filterCompletion = Task.CompletedTask;
+            lock (_filterCancellationGate)
+            {
+                _filterCompletion = previous;
+            }
+
             return;
         }
 
         if (_filterUiContext is null)
         {
-            ApplyFilterOutcome(RunFilterQuery(query, CancellationToken.None));
-            _filterCompletion = Task.CompletedTask;
+            if (!TryBeginSessionWork(out SessionWorkLease? lease))
+            {
+                return;
+            }
+
+            try
+            {
+                FilterOutcome outcome;
+                using (lease)
+                {
+                    outcome = RunFilterQuery(query, CancellationToken.None);
+                }
+
+                ApplyFilterOutcome(outcome);
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.SidebarFilterFailed, exception);
+                ReportFailure("Could not filter files.");
+            }
+
+            lock (_filterCancellationGate)
+            {
+                _filterCompletion = Task.CompletedTask;
+            }
+
             return;
         }
 
         var cancellation = new CancellationTokenSource();
-        _filterCancellation = cancellation;
+        CancellationToken cancellationToken = cancellation.Token;
+        lock (_filterCancellationGate)
+        {
+            if (SessionShutdownStarted)
+            {
+                cancellation.Dispose();
+                _filterCompletion = previous;
+                return;
+            }
+
+            _filterCancellation = cancellation;
+        }
+
         Status = "Filtering files…";
-        _filterCompletion = FilterAfterDelayAsync(query, generation, cancellation.Token);
+        Task completion = FilterAfterDelayAsync(
+            previous,
+            query,
+            generation,
+            cancellation,
+            cancellationToken);
+        lock (_filterCancellationGate)
+        {
+            _filterCompletion = completion;
+        }
     }
 
     internal bool CancelFilter()
     {
         bool wasPending = IsFiltering;
-        if (_filterCancellation is not null)
+        if (wasPending)
         {
             ++_filterGeneration;
-            CancelFilterCore();
         }
 
+        CancelFilterCore();
         return wasPending;
+    }
+
+    internal Task CancelFilterAndGetCompletion()
+    {
+        CancelFilter();
+        return FilterCompletion;
     }
 
     private void CancelFilterCore()
     {
-        CancellationTokenSource? cancellation = _filterCancellation;
-        _filterCancellation = null;
+        CancellationTokenSource? cancellation;
+        lock (_filterCancellationGate)
+        {
+            cancellation = _filterCancellation;
+            _filterCancellation = null;
+        }
+
         if (cancellation is null)
         {
             return;
         }
 
-        cancellation.Cancel();
-        Task completion = _filterCompletion;
-        if (completion.IsCompleted)
+        try
+        {
+            try
+            {
+                cancellation.Cancel();
+            }
+            catch (Exception exception)
+            {
+                // Cancellation is best-effort during teardown. A callback
+                // failure must not prevent later producers from being canceled.
+                HostLog.Write(HostDiagnosticEvent.SidebarFilterShutdownFailed, exception);
+            }
+        }
+        finally
         {
             cancellation.Dispose();
-            return;
         }
-
-        _ = completion.ContinueWith(
-            _ => cancellation.Dispose(),
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
     }
 
     private async Task FilterAfterDelayAsync(
+        Task previous,
         string query,
         int generation,
+        CancellationTokenSource cancellation,
         CancellationToken cancellationToken)
     {
         try
         {
+            try
+            {
+                await previous.ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                // A prior request is terminal even when its UI callback
+                // faulted. Keep the newest filter moving and retain a
+                // privacy-safe diagnostic for the unexpected fault.
+                HostLog.Write(HostDiagnosticEvent.SidebarFilterFailed, exception);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
             await Task.Delay(FilterDebounceMilliseconds, cancellationToken).ConfigureAwait(false);
-            FilterOutcome outcome = await Task.Run(
-                () => RunFilterQuery(query, cancellationToken),
-                cancellationToken).ConfigureAwait(false);
+            if (!TryBeginSessionWork(out SessionWorkLease? lease))
+            {
+                return;
+            }
+
+            FilterOutcome? outcome = null;
+            using (lease)
+            {
+                await _runFilterWorker(
+                    () => outcome = RunFilterQuery(query, cancellationToken),
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            if (outcome is null)
+            {
+                throw new InvalidOperationException("Filter worker completed without an outcome.");
+            }
+
             var applied = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             _filterUiContext!.Post(
@@ -138,6 +246,71 @@ internal sealed partial class FilesSidebarViewModel
         }
         catch (OperationCanceledException)
         {
+        }
+        catch (Exception exception)
+        {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                HostLog.Write(HostDiagnosticEvent.SidebarFilterFailed, exception);
+                await ReportFilterFailureAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            bool ownsCancellation = false;
+            lock (_filterCancellationGate)
+            {
+                if (ReferenceEquals(_filterCancellation, cancellation))
+                {
+                    _filterCancellation = null;
+                    ownsCancellation = true;
+                }
+            }
+
+            if (ownsCancellation)
+            {
+                cancellation.Dispose();
+            }
+        }
+    }
+
+    private async Task ReportFilterFailureAsync(CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested)
+        {
+            return;
+        }
+
+        var applied = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            _filterUiContext!.Post(
+                _ =>
+                {
+                    try
+                    {
+                        if (!cancellationToken.IsCancellationRequested)
+                        {
+                            ReportFailure("Could not filter files.");
+                        }
+
+                        applied.TrySetResult();
+                    }
+                    catch (Exception exception)
+                    {
+                        applied.TrySetException(exception);
+                    }
+                },
+                null);
+            await applied.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception exception)
+        {
+            HostLog.Write(HostDiagnosticEvent.SidebarFilterFailed, exception);
         }
     }
 
@@ -172,7 +345,8 @@ internal sealed partial class FilesSidebarViewModel
         catch (Exception exception) when (
             exception is VaultException or FormatException or ArgumentOutOfRangeException)
         {
-            return new FilterOutcome([], 0, string.Empty, $"Filter not applied: {exception.Message}");
+            HostLog.Write(HostDiagnosticEvent.SidebarFilterFailed, exception);
+            return new FilterOutcome([], 0, string.Empty, "Filter could not be applied.");
         }
     }
 
