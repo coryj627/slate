@@ -50,7 +50,7 @@ Three read-only reviewers independently inspected all W1 code, tests, CI, fixtur
 - Rename/move/delete events retarget or invalidate open tabs, including folder descendants, while preserving dirty buffers.
 - Model pane focus now moves real WPF focus for Markdown and placeholder kinds, and real keyboard focus updates the active model group. Recursive split handles expose size state, accept pointer/arrow resizing, persist on completion and announce the result.
 - Quick Open is modal for keyboard, pointer and background command routing; cancel validates/restores prior focus with an active-pane fallback, and commit focuses the destination.
-- Tree/dual-pane listings drain core paging to a 5,000-item bound with an accessible overflow row, including mixed directory/file final pages. Expansion snapshots survive refresh; Expand Loaded is snapshot-only, cancellable, generation-guarded, uses immutable ordering state off-thread, and participates in the vault-close barrier.
+- Tree/dual-pane listings use a single bounded file lookahead request to enforce a 5,000-item host materialization bound with an accessible overflow row, including mixed directory/file results. Expansion snapshots survive refresh; Expand Loaded is snapshot-only, cancellable, generation-guarded, uses immutable ordering state off-thread, and participates in the vault-close barrier. The complete core directory array remains the separately tracked W1-RT-14 residual.
 - Files-tree F2 expands and focuses the rename editor, selects the filename stem, commits on Enter and cancels on Escape; placeholder/group rows cannot enter rename.
 - Filtering is a cancellable, generation-checked 200 ms background operation. Import enumeration is streaming and bounded, checks ancestor reparse points, rechecks file size after reading, and reports omitted items accurately.
 - Sidebar forward-compatibility bounds cannot write a file the next read rejects; grouped oldest-first sort persists correctly. Single-instance frames have a read deadline.
@@ -159,9 +159,9 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Gate | Result |
 |---|---|
 | `dotnet format ... --verify-no-changes` | Pass |
-| Windows unit/integration suite | 156 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes behavioral sidebar session-lifetime, owner-context, WPF-dispatcher disposal, active-load joining, task-publication, cancellation-ownership, unexpected-failure, anchored replacement-redirection, native rename-layout, and post-commit cleanup cases plus representative sidebar-operation, session-work, workspace-persistence, and workspace-layout ownership censuses |
+| Windows unit/integration suite | 170 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes behavioral sidebar session-lifetime, owner-context, WPF-dispatcher disposal, active-load joining, task-publication, cancellation-ownership, unexpected-failure, anchored replacement-redirection, native rename-layout, post-commit cleanup, and ordinary child-expansion blocked-provider return/supersession/refresh/refresh precedence/refresh-cancellation cascade/detached-admission/provider-serialization/canceled-queue/failure/restoration/close/retry/disposal cases plus representative sidebar-operation, session-work, workspace-persistence, and workspace-layout ownership censuses |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
-| Interactive FlaUI + axe-windows | Pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors |
+| Interactive FlaUI + axe-windows | Baseline pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors. The new RT13 live ExpandCollapse/Right/Left assertions postdate that revision and remain pending current-PR CI. |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
 | `cargo test -p slate-core vault::fs::tests::windows_ --locked -q` | 5 passed, 0 failed |
 | Focused core accessibility tests | 3 passed, 0 failed |
@@ -171,20 +171,19 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | `cargo clippy -p slate-core -p slate-uniffi --lib --locked -- -D warnings` | Pass |
 | `python scripts/generate-parity-matrix.py --validate-delivery-evidence` | Pass; 60 command rows and four issue surfaces |
 | Complete `slate-core --lib` (1,647 tests on rebased `main`) | The pre-rebase 1,644-test runner did not terminate within 15 minutes on this Windows host in parallel or serial mode; process remained responsive and CPU-active; no broad pass claimed |
-| mac Swift Quick Open tests | Source updated; unavailable on Windows, so mac CI is required |
+| mac Swift Quick Open tests | Pass in Actions run 29950708145 for PR #1025; mac XCTest and SwiftUI accessibility were green before squash merge |
 
 ## Reliability, performance and security notes
 
 - Callback paths marshal asynchronously to the UI dispatcher. File-change refreshes coalesce for 150 ms; Quick Open ranks after a 60 ms debounce and cancels stale work; sidebar filtering debounces for 200 ms and rejects stale generations.
-- Structural mutation commands are disabled while import owns the mutation lane; vault close/switch requests cancel import or bulk expansion and wait for their barriers.
+- Structural mutation commands are disabled while import owns the mutation lane; vault close/switch requests cancel import, bulk expansion, or ordinary child expansion and wait for their barriers.
 - Store decoders are bounded and fail closed for malformed or forward schema versions. Per-vault store reads, locks, migration cleanup, and atomic replacement are anchored to opened Windows directory/file identities; reparse sentinels and deterministic directory-swap attempts are covered. File imports bound breadth, count and file size and reject reparse traversal.
-- No W1 surface adds an unbounded keystroke-size algorithm; W2 owns the formal §W-B editor benchmark. Quick Open, initial/root sidebar refresh, sidebar filtering and bulk Expand Loaded provider work run off the UI thread. Root refresh publishes one prebuilt, generation-guarded collection and the large file controls use recycling virtualization. An ordinary single-folder expansion remains synchronously bounded to 5,000 items per opened level with explicit overflow state; its worst-case UI latency remains a documented P2 performance residual, not an unbounded traversal.
+- No W1 surface adds an unbounded keystroke-size algorithm; W2 owns the formal §W-B editor benchmark. Quick Open, initial/root sidebar refresh, sidebar filtering, bulk Expand Loaded provider work, and ordinary child-folder provider/projection/restored-descendant work run off the UI thread. Root refresh and child expansion publish prebuilt, generation- and identity-guarded collections; all large file controls use recycling virtualization. A deterministic 5,001-child test proves the expansion caller returns before a blocked provider is released, and the host uses one request with bounded file lookahead. Ordinary and bulk work requested during refresh await its UI publication before taking a provider turn. The remaining P2 residual is the core contract: `DirListing.dirs` still materializes a complete directory-summary array and can recompute descendant summaries before the host limit is applied; W1-RT-14 tracks a bounded, snapshot-consistent directory page separately.
 
 ## Remaining release evidence
 
 1. Record Narrator smoke plus NVDA and JAWS passes row-by-row in `w_c_matrix.md`.
 2. Exercise all four built-in Windows Contrast themes and one customized theme, including runtime switching, selection/disabled states, visible boundaries and non-color cues.
-3. Obtain a mac CI result for the migrated Quick Open model/view tests.
-4. Diagnose or shard the non-terminating full `slate-core --lib` Windows run; focused W1 core gates are green, but the broad runner is not evidence of a pass.
+3. Diagnose or shard the non-terminating full `slate-core --lib` Windows run; focused W1 core gates are green, but the broad runner is not evidence of a pass.
 
 These are explicit verification residuals. They do not conceal missing W1 implementation, but the human AT items remain milestone release blockers under WGA-9.

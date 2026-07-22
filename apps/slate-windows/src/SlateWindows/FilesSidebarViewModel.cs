@@ -19,17 +19,29 @@ internal enum SidebarSortMode
     CreatedOldest,
 }
 
+internal enum FileTreeChildLoadState
+{
+    Unloaded,
+    Loading,
+    Loaded,
+    Failed,
+}
+
 internal sealed class FileTreeNodeViewModel : BindableBase
 {
     private readonly FilesSidebarViewModel? _owner;
     private bool _isExpanded;
     private bool _isBatchSelected;
+    private ObservableCollection<FileTreeNodeViewModel> _children = [];
+    private FileTreeChildLoadState _childLoadState;
+    private object? _treeIdentity;
 
     private FileTreeNodeViewModel(string loadingLabel)
     {
         Name = loadingLabel;
         Path = string.Empty;
         IsPlaceholder = true;
+        _childLoadState = FileTreeChildLoadState.Loaded;
     }
 
     private FileTreeNodeViewModel(string groupLabel, IEnumerable<FileTreeNodeViewModel> children)
@@ -38,6 +50,7 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         Path = string.Empty;
         IsGroupHeader = true;
         _isExpanded = true;
+        _childLoadState = FileTreeChildLoadState.Loaded;
         foreach (FileTreeNodeViewModel child in children)
         {
             Children.Add(child);
@@ -64,10 +77,16 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         if (isDirectory && hasChildren)
         {
             Children.Add(new FileTreeNodeViewModel("Loading…"));
+            _childLoadState = FileTreeChildLoadState.Unloaded;
+        }
+        else
+        {
+            _childLoadState = FileTreeChildLoadState.Loaded;
         }
     }
 
     public static FileTreeNodeViewModel Loading() => new("Loading…");
+    public static FileTreeNodeViewModel Error(string label) => new(label);
     public static FileTreeNodeViewModel Overflow(string label) => new(label);
     public static FileTreeNodeViewModel Group(
         string label,
@@ -82,7 +101,10 @@ internal sealed class FileTreeNodeViewModel : BindableBase
     public int Level { get; }
     public bool HasFolderNote { get; private set; }
     public FileSummary? Summary { get; }
-    public ObservableCollection<FileTreeNodeViewModel> Children { get; } = [];
+    public ObservableCollection<FileTreeNodeViewModel> Children => _children;
+    internal FileTreeChildLoadState ChildLoadState => _childLoadState;
+    internal bool IsAttachedToTree(object treeIdentity) =>
+        ReferenceEquals(_treeIdentity, treeIdentity);
 
     public string DisplayName => Summary?.DisplayName ?? Name;
     public string KindLabel => IsGroupHeader ? "group" : IsDirectory ? "folder" : "file";
@@ -123,9 +145,19 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         get => _isExpanded;
         set
         {
-            if (SetField(ref _isExpanded, value) && value)
+            if (!SetField(ref _isExpanded, value))
+            {
+                return;
+            }
+
+            if (value)
             {
                 _owner?.LoadChildren(this);
+            }
+            else
+            {
+                ResetChildLoadAfterCollapse();
+                _owner?.CancelChildExpansion(this);
             }
         }
     }
@@ -155,13 +187,83 @@ internal sealed class FileTreeNodeViewModel : BindableBase
         return SetField(ref _isExpanded, true, nameof(IsExpanded));
     }
 
+    internal bool PrepareChildLoad()
+    {
+        if (!IsDirectory || _childLoadState is FileTreeChildLoadState.Loading or FileTreeChildLoadState.Loaded)
+        {
+            return false;
+        }
+
+        _childLoadState = FileTreeChildLoadState.Loading;
+        if (Children.Count != 1 || !Children[0].IsPlaceholder || Children[0].Name != "Loading…")
+        {
+            ReplaceChildrenCore(new ObservableCollection<FileTreeNodeViewModel> { Loading() });
+        }
+
+        return true;
+    }
+
+    internal void ResetChildLoadAfterCollapse()
+    {
+        if (_childLoadState == FileTreeChildLoadState.Loading)
+        {
+            _childLoadState = FileTreeChildLoadState.Unloaded;
+        }
+        else if (_childLoadState == FileTreeChildLoadState.Failed)
+        {
+            _childLoadState = FileTreeChildLoadState.Unloaded;
+        }
+    }
+
+    internal void FailChildLoad(string label)
+    {
+        _childLoadState = FileTreeChildLoadState.Failed;
+        ReplaceChildrenCore(new ObservableCollection<FileTreeNodeViewModel> { Error(label) });
+    }
+
+    internal void CancelChildLoad(string label)
+    {
+        if (IsExpanded && _childLoadState == FileTreeChildLoadState.Loading)
+        {
+            FailChildLoad(label);
+        }
+    }
+
+    internal void AttachToTree(object treeIdentity)
+    {
+        _treeIdentity = treeIdentity;
+        foreach (FileTreeNodeViewModel child in Children)
+        {
+            child.AttachToTree(treeIdentity);
+        }
+    }
+
     internal void ReplaceChildren(IEnumerable<FileTreeNodeViewModel> children)
     {
-        Children.Clear();
+        var replacement = new ObservableCollection<FileTreeNodeViewModel>();
         foreach (FileTreeNodeViewModel child in children)
         {
-            Children.Add(child);
+            if (_treeIdentity is object treeIdentity)
+            {
+                child.AttachToTree(treeIdentity);
+            }
+
+            replacement.Add(child);
         }
+
+        ReplaceChildren(replacement);
+    }
+
+    internal void ReplaceChildren(ObservableCollection<FileTreeNodeViewModel> children)
+    {
+        _childLoadState = FileTreeChildLoadState.Loaded;
+        ReplaceChildrenCore(children);
+    }
+
+    private void ReplaceChildrenCore(ObservableCollection<FileTreeNodeViewModel> children)
+    {
+        _children = children;
+        OnPropertyChanged(nameof(Children));
     }
 }
 
@@ -595,55 +697,45 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         cancellationToken.ThrowIfCancellationRequested();
         ordering ??= CaptureDirectoryOrdering();
-        DirListing listing = _session.ListDirChildren(parentPath, new Paging(null, PageLimit));
+        uint requestedFiles = checked((uint)(MaxMaterializedDirectoryItems + 1));
+        DirListing listing = _session.ListDirChildren(
+            parentPath,
+            new Paging(null, requestedFiles));
         cancellationToken.ThrowIfCancellationRequested();
         FileTreeNodeViewModel[] directories = includeDirectories
             ? listing.Dirs
                 .Take(MaxMaterializedDirectoryItems)
                 .Select(directory =>
-                new FileTreeNodeViewModel(
-                    this,
-                    directory.Path,
-                    directory.Name,
-                    isDirectory: true,
-                    level,
-                    directory.ChildDirCount + directory.ChildFileCount > 0,
-                    directory.HasFolderNote)).ToArray()
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    return new FileTreeNodeViewModel(
+                        this,
+                        directory.Path,
+                        directory.Name,
+                        isDirectory: true,
+                        level,
+                        directory.ChildDirCount + directory.ChildFileCount > 0,
+                        directory.HasFolderNote);
+                }).ToArray()
             : [];
         var files = new List<FileTreeNodeViewModel>();
-        string? cursor = null;
         bool truncated = includeDirectories && listing.Dirs.Length > directories.Length;
-        do
+        int remaining = MaxMaterializedDirectoryItems - directories.Length;
+        int filesTaken = Math.Min(listing.Files.Items.Length, Math.Max(0, remaining));
+        foreach (FileSummary summary in listing.Files.Items.Take(filesTaken))
         {
-            int remaining = MaxMaterializedDirectoryItems - directories.Length - files.Count;
-            int filesTaken = Math.Min(listing.Files.Items.Length, Math.Max(0, remaining));
-            foreach (FileSummary summary in listing.Files.Items.Take(filesTaken))
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                files.Add(new FileTreeNodeViewModel(
-                    this,
-                    summary.Path,
-                    summary.Name,
-                    isDirectory: false,
-                    level,
-                    hasChildren: false,
-                    summary: summary));
-            }
-
-            cursor = listing.Files.NextCursor;
-            if (directories.Length + files.Count >= MaxMaterializedDirectoryItems)
-            {
-                truncated |= filesTaken < listing.Files.Items.Length || cursor is not null;
-                break;
-            }
-
-            if (cursor is not null)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                listing = _session.ListDirChildren(parentPath, new Paging(cursor, PageLimit));
-            }
+            cancellationToken.ThrowIfCancellationRequested();
+            files.Add(new FileTreeNodeViewModel(
+                this,
+                summary.Path,
+                summary.Name,
+                isDirectory: false,
+                level,
+                hasChildren: false,
+                summary: summary));
         }
-        while (cursor is not null);
+
+        truncated |= filesTaken < listing.Files.Items.Length || listing.Files.NextCursor is not null;
 
         IEnumerable<FileTreeNodeViewModel> sortedDirectories = SortNodes(directories, ordering);
         IEnumerable<FileTreeNodeViewModel> nodes;

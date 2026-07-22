@@ -50,9 +50,10 @@ internal sealed partial class FilesSidebarViewModel
         // admitting a late tree refresh behind the shutdown snapshot.
         Task treeRefresh = CancelTreeRefreshAndGetCompletion();
         Task filter = CancelFilterAndGetCompletion();
+        Task childExpansions = CancelChildExpansionsAndGetCompletion();
         CancelExpandLoaded();
         CancelImport();
-        return new SidebarSessionShutdown(sessionWork, treeRefresh, filter);
+        return new SidebarSessionShutdown(sessionWork, treeRefresh, filter, childExpansions);
     }
 
     private bool TryBeginSessionWork(out SessionWorkLease? lease)
@@ -130,4 +131,5 @@ internal sealed partial class FilesSidebarViewModel
 internal sealed record SidebarSessionShutdown(
     Task SessionWork,
     Task TreeRefresh,
-    Task Filter);
+    Task Filter,
+    Task ChildExpansions);

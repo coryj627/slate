@@ -28,6 +28,8 @@ internal enum HostDiagnosticEvent
     RecentVaultsPersistFailed,
     SidebarBulkExpansionFailed,
     SidebarBulkExpansionShutdownFailed,
+    SidebarChildExpansionFailed,
+    SidebarChildExpansionShutdownFailed,
     SidebarFilterFailed,
     SidebarFilterShutdownFailed,
     SidebarImportFailed,

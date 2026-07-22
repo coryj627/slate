@@ -21,6 +21,7 @@ internal sealed partial class FilesSidebarViewModel
     private readonly HashSet<string> _expandedPaths;
     private readonly object _treeRefreshCancellationGate = new();
     private readonly object _bulkExpandCancellationGate = new();
+    private readonly SemaphoreSlim _treeProviderLane = new(1, 1);
     private CancellationTokenSource? _treeRefreshCancellation;
     private CancellationTokenSource? _bulkExpandCancellation;
     private Task _treeRefreshCompletion = Task.CompletedTask;
@@ -52,46 +53,6 @@ internal sealed partial class FilesSidebarViewModel
             .Select(node => node.Path)
             .ToArray();
 
-    public void LoadChildren(FileTreeNodeViewModel node)
-    {
-        if (SessionShutdownStarted
-            || !node.IsDirectory || node.IsPlaceholder
-            || (node.Children.Count > 0 && !node.Children[0].IsPlaceholder))
-        {
-            return;
-        }
-
-        if (!TryBeginSessionWork(out SessionWorkLease? lease))
-        {
-            return;
-        }
-
-        try
-        {
-            DirectoryLevel level;
-            using (lease)
-            {
-                level = LoadDirectoryLevel(node.Path, node.Level + 1);
-            }
-
-            node.Children.Clear();
-            foreach (FileTreeNodeViewModel child in level.Nodes)
-            {
-                node.Children.Add(child);
-            }
-
-            RestoreExpansions(node.Children);
-            if (level.Truncated)
-            {
-                Status = DirectoryOverflowStatus(node.Path);
-            }
-        }
-        catch (VaultException exception)
-        {
-            ReportFailure($"Could not load {node.Path}: {exception.Message}");
-        }
-    }
-
     public void Refresh(bool reportCount = false)
     {
         if (SessionShutdownStarted)
@@ -100,6 +61,7 @@ internal sealed partial class FilesSidebarViewModel
         }
 
         CancelBulkExpansion();
+        CancelChildExpansions();
         CancelTreeRefreshCore();
         if (RootNodes.Count > 0)
         {
@@ -205,21 +167,17 @@ internal sealed partial class FilesSidebarViewModel
             }
 
             token.ThrowIfCancellationRequested();
-            if (!TryBeginSessionWork(out SessionWorkLease? lease))
+            TreeRefreshOutcome? outcome = null;
+            bool admitted = await RunAdmittedTreeWorkerAsync(
+                () => outcome = BuildTreeRefresh(
+                    ordering,
+                    expandedPaths,
+                    tagGeneration,
+                    token),
+                token).ConfigureAwait(false);
+            if (!admitted)
             {
                 return;
-            }
-
-            TreeRefreshOutcome? outcome = null;
-            using (lease)
-            {
-                await _runTreeWorker(
-                    () => outcome = BuildTreeRefresh(
-                        ordering,
-                        expandedPaths,
-                        tagGeneration,
-                        token),
-                    token).ConfigureAwait(false);
             }
 
             token.ThrowIfCancellationRequested();
@@ -360,8 +318,14 @@ internal sealed partial class FilesSidebarViewModel
             ordering,
             cancellationToken);
         TagLoadOutcome tags = BuildTags(cancellationToken);
+        var rootNodes = new ObservableCollection<FileTreeNodeViewModel>(level.Nodes);
+        foreach (FileTreeNodeViewModel node in rootNodes)
+        {
+            node.AttachToTree(rootNodes);
+        }
+
         return new TreeRefreshOutcome(
-            new ObservableCollection<FileTreeNodeViewModel>(level.Nodes),
+            rootNodes,
             level,
             restoredOverflowPath,
             tags,
@@ -438,6 +402,8 @@ internal sealed partial class FilesSidebarViewModel
         bool wasPending = IsRefreshingTree;
         if (wasPending)
         {
+            CancelBulkExpansion();
+            CancelChildExpansions();
             ++_treeGeneration;
         }
 
@@ -469,6 +435,7 @@ internal sealed partial class FilesSidebarViewModel
     private void CollapseAll()
     {
         CancelBulkExpansion();
+        CancelChildExpansions();
         foreach (FileTreeNodeViewModel node in Flatten(RootNodes).Where(node => node.IsDirectory))
         {
             node.IsExpanded = false;
@@ -478,6 +445,7 @@ internal sealed partial class FilesSidebarViewModel
     private async Task ExpandLoadedAsync()
     {
         CancelBulkExpansion();
+        CancelChildExpansions();
         var cancellation = new CancellationTokenSource();
         CancellationToken token = cancellation.Token;
         if (SessionShutdownStarted)
@@ -491,14 +459,17 @@ internal sealed partial class FilesSidebarViewModel
             _bulkExpandCancellation = cancellation;
         }
 
-        int generation = _treeGeneration;
-        DirectoryOrdering ordering = CaptureDirectoryOrdering();
-        FileTreeNodeViewModel[] materializedDirectories = Flatten(RootNodes)
-            .Where(node => node.IsDirectory)
-            .ToArray();
+        Task treeRefresh = _treeRefreshCompletion;
         IsExpandingLoaded = true;
         try
         {
+            await treeRefresh.WaitAsync(token);
+            token.ThrowIfCancellationRequested();
+            int generation = _treeGeneration;
+            DirectoryOrdering ordering = CaptureDirectoryOrdering();
+            FileTreeNodeViewModel[] materializedDirectories = Flatten(RootNodes)
+                .Where(node => node.IsDirectory)
+                .ToArray();
             foreach (FileTreeNodeViewModel node in materializedDirectories)
             {
                 token.ThrowIfCancellationRequested();
@@ -579,24 +550,41 @@ internal sealed partial class FilesSidebarViewModel
         DirectoryOrdering ordering,
         CancellationToken cancellationToken)
     {
-        if (!TryBeginSessionWork(out SessionWorkLease? lease))
-        {
-            return (false, null);
-        }
-
         DirectoryLevel? level = null;
-        using (lease)
-        {
-            await _runTreeWorker(
-                () => level = LoadDirectoryLevel(
-                    node.Path,
-                    node.Level + 1,
-                    ordering: ordering,
-                    cancellationToken: cancellationToken),
-                cancellationToken).ConfigureAwait(false);
-        }
+        bool admitted = await RunAdmittedTreeWorkerAsync(
+            () => level = LoadDirectoryLevel(
+                node.Path,
+                node.Level + 1,
+                ordering: ordering,
+                cancellationToken: cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 
-        return (true, level);
+        return (admitted, level);
+    }
+
+    private async Task<bool> RunAdmittedTreeWorkerAsync(
+        Action work,
+        CancellationToken cancellationToken)
+    {
+        await _treeProviderLane.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!TryBeginSessionWork(out SessionWorkLease? lease))
+            {
+                return false;
+            }
+
+            using (lease)
+            {
+                await _runTreeWorker(work, cancellationToken).ConfigureAwait(false);
+            }
+
+            return true;
+        }
+        finally
+        {
+            _treeProviderLane.Release();
+        }
     }
 
     private void ReportExpansionFailure(Exception exception)

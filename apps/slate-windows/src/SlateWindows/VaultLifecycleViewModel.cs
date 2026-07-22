@@ -595,6 +595,15 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
                 HostLog.Write(HostDiagnosticEvent.SidebarFilterShutdownFailed, exception);
             }
 
+            try
+            {
+                shutdown.ChildExpansions.GetAwaiter().GetResult();
+            }
+            catch (Exception exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.SidebarChildExpansionShutdownFailed, exception);
+            }
+
             shutdown.SessionWork.GetAwaiter().GetResult();
         }
 
@@ -720,9 +729,10 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             return false;
         }
 
-        if (FileSidebar?.IsExpandingLoaded == true)
+        if (FileSidebar?.IsExpandingLoaded == true || FileSidebar?.IsLoadingChildren == true)
         {
             FileSidebar.CancelExpandLoaded();
+            FileSidebar.CancelChildExpansions();
             ReportTerminalStatus(
                 "Folder expansion cancellation requested. Close the vault again after the current directory read finishes.",
                 A11yPriority.Medium);
