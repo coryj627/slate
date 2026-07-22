@@ -317,6 +317,36 @@ public sealed class W1SidebarHardeningTests
     }
 
     [Fact]
+    public void TreeOperationStateIsOwnedByTheDedicatedPartial()
+    {
+        string sourceDirectory = Path.Combine(
+            RepoRoot(),
+            "apps",
+            "slate-windows",
+            "src",
+            "SlateWindows");
+        string primary = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.cs"));
+        string tree = File.ReadAllText(
+            Path.Combine(sourceDirectory, "FilesSidebarViewModel.TreeOperations.cs"));
+
+        foreach (string ownedMember in new[]
+        {
+            "CancellationTokenSource? _treeRefreshCancellation",
+            "CancellationTokenSource? _bulkExpandCancellation",
+            "Task _treeRefreshCompletion",
+            "Task _expandLoadedCompletion",
+            "int _treeGeneration",
+            "private async Task RefreshTreeAsync",
+            "private async Task ExpandLoadedAsync",
+        })
+        {
+            Assert.DoesNotContain(ownedMember, primary, StringComparison.Ordinal);
+            Assert.Contains(ownedMember, tree, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
     public async Task UnexpectedTreeWorkerFailureIsReportedWithoutFaultingRefreshCompletion()
     {
         using FixtureVault fixture = FixtureVault.Create(0, "sidebar-refresh-failure");

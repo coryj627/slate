@@ -68,6 +68,13 @@ extraction is behavior-neutral and a repository-structure census prevents
 those operation-ownership members from drifting back into the primary view
 model file.
 
+Tree refresh and snapshot-based “Expand Loaded” are isolated in
+`FilesSidebarViewModel.TreeOperations.cs`. They intentionally share the same
+tree-generation boundary; the partial owns both cancellation sources,
+completion tasks, the worker/UI contexts, stale-generation rejection and
+bounded UI publication. A second structure census prevents those members from
+drifting back into the primary view model.
+
 Two per-vault host stores are deliberate same-shape implementations because no canonical core store exists:
 
 - `.slate/workspace.json`: mac schema version 1, bounded recursive decode, unknown-tab forward compatibility.
@@ -111,7 +118,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Gate | Result |
 |---|---|
 | `dotnet format ... --verify-no-changes` | Pass |
-| Windows unit/integration suite | 128 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite adds the filter-ownership structure census |
+| Windows unit/integration suite | 129 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes filter- and tree-ownership structure censuses |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
 | Interactive FlaUI + axe-windows | Pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
