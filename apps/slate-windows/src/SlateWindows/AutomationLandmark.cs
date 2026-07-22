@@ -34,9 +34,13 @@ internal sealed class AutomationVisibilityListBox : ListBox
         new AutomationVisibilityListBoxPeer(this);
 }
 
-internal sealed class AutomationVisibilityListBoxPeer(AutomationVisibilityListBox owner)
-    : ListBoxAutomationPeer(owner)
+internal sealed class AutomationVisibilityListBoxPeer : ListBoxAutomationPeer
 {
+    internal AutomationVisibilityListBoxPeer(AutomationVisibilityListBox owner)
+        : base(owner)
+    {
+    }
+
     protected override bool IsControlElementCore() =>
         Owner is UIElement { Visibility: Visibility.Visible }
         && base.IsControlElementCore();
@@ -57,17 +61,25 @@ internal sealed class AutomationPresentationTextBlock : TextBlock
         new AutomationPresentationTextBlockPeer(this);
 }
 
-internal sealed class AutomationPresentationTextBlockPeer(AutomationPresentationTextBlock owner)
-    : TextBlockAutomationPeer(owner)
+internal sealed class AutomationPresentationTextBlockPeer : TextBlockAutomationPeer
 {
+    internal AutomationPresentationTextBlockPeer(AutomationPresentationTextBlock owner)
+        : base(owner)
+    {
+    }
+
     protected override bool IsControlElementCore() => false;
 
     protected override bool IsContentElementCore() => false;
 }
 
-internal sealed class AutomationLandmarkPeer(FrameworkElement owner)
-    : FrameworkElementAutomationPeer(owner)
+internal sealed class AutomationLandmarkPeer : FrameworkElementAutomationPeer
 {
+    internal AutomationLandmarkPeer(FrameworkElement owner)
+        : base(owner)
+    {
+    }
+
     protected override AutomationControlType GetAutomationControlTypeCore() =>
         AutomationControlType.Pane;
 

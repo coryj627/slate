@@ -69,6 +69,19 @@ public sealed class W1WorkspacePersistenceTests : IDisposable
         Assert.Null(new WorkspacePersistence(_root).Load());
     }
 
+    [Fact]
+    public void ExpandedDirectories_RetainTheNewestBoundedTailInOrder()
+    {
+        string[] paths = Enumerable.Range(0, WorkspacePersistence.MaxExpandedDirectories + 3)
+            .Select(index => $"Folder-{index:D3}")
+            .ToArray();
+
+        IReadOnlyList<string> normalized = WorkspacePersistence.NormalizeExpandedPaths(paths);
+
+        Assert.Equal(WorkspacePersistence.MaxExpandedDirectories, normalized.Count);
+        Assert.Equal(paths[^WorkspacePersistence.MaxExpandedDirectories..], normalized);
+    }
+
     private void CopyFixture(string name) => File.Copy(
         Path.Combine(RepoRoot(), "tests", "fixtures", "workspace", name),
         Path.Combine(_root, ".slate", "workspace.json"),
@@ -240,13 +253,27 @@ public sealed class W1SidebarAndRecentsTests
         {
             store.Add($"note{index}.md");
         }
-        store.Add("note42.md");
+        store.Add("NOTE42.md");
 
         IReadOnlyList<string> recents = store.Load();
         Assert.Equal(FileRecentsStore.MaxEntries, recents.Count);
-        Assert.Equal("note42.md", recents[0]);
-        Assert.Equal(recents.Count, recents.Distinct(StringComparer.Ordinal).Count());
+        Assert.Equal("NOTE42.md", recents[0]);
+        Assert.Equal(recents.Count, recents.Distinct(StringComparer.OrdinalIgnoreCase).Count());
         Assert.False(File.Exists(Path.Combine(fixture.Root, ".slate", "file-recents.json")));
+    }
+
+    [Fact]
+    public void FileRecents_LegacyCleanupToleratesAProtectedOrNonFilePath()
+    {
+        using FixtureVault fixture = FixtureVault.Create(1, "legacy-recents-cleanup");
+        string legacyPath = Path.Combine(fixture.Root, ".slate", "file-recents.json");
+        Directory.CreateDirectory(legacyPath);
+        var store = new FileRecentsStore(
+            fixture.Root,
+            localAppDataRoot: Path.Combine(fixture.Root, "device-state"));
+
+        Assert.Empty(store.Load());
+        Assert.True(Directory.Exists(legacyPath));
     }
 
     [Fact]

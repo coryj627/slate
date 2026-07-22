@@ -545,6 +545,8 @@
                                 AutomationProperties.AutomationId="QuickSwitcherClose"
                                 AutomationProperties.Name="Close Quick Open" />
                     </Grid>
+                    <!-- ResultSummary describes the collection, so expose it once on
+                         the list rather than repeating it on every result row. -->
                     <local:AutomationVisibilityListBox x:Name="QuickSwitcherResultsList"
                              Grid.Row="1"
                              Margin="0,8"

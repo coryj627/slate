@@ -27,14 +27,16 @@ internal sealed class SingleInstanceCoordinator : IDisposable
     private Task? _listenerTask;
     private bool _disposed;
 
-    internal SingleInstanceCoordinator(string identity)
+    internal SingleInstanceCoordinator(string identity, int? sessionId = null)
     {
         string suffix = Convert.ToHexString(
             SHA256.HashData(Encoding.UTF8.GetBytes(identity)))[..24];
-        _pipeName = $"Slate-{suffix}";
+        int effectiveSessionId = sessionId ?? Process.GetCurrentProcess().SessionId;
+        string sessionSuffix = $"{suffix}-S{effectiveSessionId}";
+        _pipeName = $"Slate-{sessionSuffix}";
         _mutex = new Mutex(
             initiallyOwned: true,
-            name: $@"Local\Slate-{suffix}",
+            name: $@"Local\Slate-{sessionSuffix}",
             createdNew: out bool createdNew);
         IsPrimary = createdNew;
     }

@@ -43,13 +43,7 @@ internal sealed class FileRecentsStore
             Save(legacy);
             if (File.Exists(_path))
             {
-                try
-                {
-                    File.Delete(_legacyPath);
-                }
-                catch (IOException)
-                {
-                }
+                TryDelete(_legacyPath);
             }
         }
 
@@ -59,7 +53,8 @@ internal sealed class FileRecentsStore
     public IReadOnlyList<string> Add(string path)
     {
         var entries = Load().ToList();
-        entries.RemoveAll(candidate => string.Equals(candidate, path, StringComparison.Ordinal));
+        entries.RemoveAll(candidate =>
+            string.Equals(candidate, path, StringComparison.OrdinalIgnoreCase));
         entries.Insert(0, path);
         IReadOnlyList<string> sanitized = Sanitize(entries);
         Save(sanitized);
@@ -125,13 +120,7 @@ internal sealed class FileRecentsStore
             }
             finally
             {
-                try
-                {
-                    File.Delete(temporary);
-                }
-                catch (IOException)
-                {
-                }
+                TryDelete(temporary);
             }
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -142,7 +131,7 @@ internal sealed class FileRecentsStore
 
     private static IReadOnlyList<string> Sanitize(IEnumerable<string> paths)
     {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var output = new List<string>(MaxEntries);
         foreach (string path in paths)
         {
@@ -157,5 +146,16 @@ internal sealed class FileRecentsStore
         }
 
         return output;
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            File.Delete(path);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+        }
     }
 }

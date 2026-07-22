@@ -357,8 +357,7 @@ public partial class MainWindow : Window
             }
         }
 
-        if (modifiers == (ModifierKeys.Control | ModifierKeys.Alt)
-            && e.Key is Key.Left or Key.Right or Key.Up or Key.Down)
+        if (IsPaneNavigationGesture(e.Key, modifiers))
         {
             if (FilesPaneBorder.IsKeyboardFocusWithin)
             {
@@ -460,6 +459,10 @@ public partial class MainWindow : Window
             e.Handled = true;
         }
     }
+
+    internal static bool IsPaneNavigationGesture(Key key, ModifierKeys modifiers) =>
+        modifiers == (ModifierKeys.Control | ModifierKeys.Alt)
+        && key is Key.Left or Key.Right or Key.Up or Key.Down;
 
     private void SidebarMutationNameTextBox_PreviewKeyDown(object sender, KeyEventArgs e)
     {

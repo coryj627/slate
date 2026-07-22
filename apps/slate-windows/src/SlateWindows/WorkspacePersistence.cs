@@ -260,7 +260,9 @@ internal sealed class WorkspacePersistence
         newestFirst.Reverse();
         return newestFirst.Count <= MaxExpandedDirectories
             ? newestFirst
-            : newestFirst[^MaxExpandedDirectories..];
+            : newestFirst.GetRange(
+                newestFirst.Count - MaxExpandedDirectories,
+                MaxExpandedDirectories);
     }
 
     private static WorkspaceNodeState? ReadNode(

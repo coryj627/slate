@@ -7,11 +7,27 @@ using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 
 namespace SlateWindows.Tests;
 
 public sealed class W1ShellAccessibilityContractTests
 {
+    [Fact]
+    public void PaneNavigationGesture_RequiresExactModifiersAndAnArrowKey()
+    {
+        ModifierKeys paneModifiers = ModifierKeys.Control | ModifierKeys.Alt;
+
+        Assert.True(MainWindow.IsPaneNavigationGesture(Key.Left, paneModifiers));
+        Assert.True(MainWindow.IsPaneNavigationGesture(Key.Down, paneModifiers));
+        Assert.False(MainWindow.IsPaneNavigationGesture(Key.Tab, paneModifiers));
+        Assert.False(MainWindow.IsPaneNavigationGesture(Key.Escape, paneModifiers));
+        Assert.False(MainWindow.IsPaneNavigationGesture(Key.Left, ModifierKeys.Control));
+        Assert.False(MainWindow.IsPaneNavigationGesture(
+            Key.Left,
+            paneModifiers | ModifierKeys.Shift));
+    }
+
     [Fact]
     public void WorkspaceLandmarks_CreateNamedPanePeersInTheControlTree() =>
         RunOnStaThread(

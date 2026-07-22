@@ -250,7 +250,7 @@ public sealed class ShellAccessibilityTests
                 automation.ConditionFactory.ByAutomationId("WorkspaceTabs"));
             AutomationElement splitHandle = WaitForElement(
                 window,
-                "WorkspaceSplitHandle",
+                "WorkspaceSplitHandleHorizontal",
                 TimeSpan.FromSeconds(10));
             Assert.Contains("Resize editor panes", splitHandle.Name, StringComparison.Ordinal);
             Assert.True(splitHandle.Properties.IsKeyboardFocusable.Value);
@@ -295,17 +295,17 @@ public sealed class ShellAccessibilityTests
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.Edit, quickSearch.ControlType);
             Assert.True(quickSearch.Patterns.Value.IsSupported);
-            AutomationElement quickResults = WaitForElement(
+            AutomationElement quickResultsList = WaitForElement(
                 window,
                 "QuickSwitcherResults",
                 TimeSpan.FromSeconds(10));
-            Assert.Equal(ControlType.List, quickResults.ControlType);
+            Assert.Equal(ControlType.List, quickResultsList.ControlType);
             AutomationElement? quickResult = null;
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
                     {
-                        quickResult = quickResults.FindAllDescendants(
+                        quickResult = quickResultsList.FindAllDescendants(
                             automation.ConditionFactory.ByControlType(ControlType.ListItem))
                             .FirstOrDefault();
                         return quickResult is not null;
@@ -314,7 +314,7 @@ public sealed class ShellAccessibilityTests
                 "Quick Open did not publish its asynchronously ranked results.");
             Assert.False(string.IsNullOrWhiteSpace(quickResult!.Name));
             Assert.False(string.IsNullOrWhiteSpace(quickResult.HelpText));
-            Assert.False(string.IsNullOrWhiteSpace(quickResults.ItemStatus));
+            Assert.False(string.IsNullOrWhiteSpace(quickResultsList.ItemStatus));
             AssertEventuallyFocused(
                 quickSearch,
                 "Quick Open did not move focus to its search field.");
@@ -440,6 +440,12 @@ public sealed class ShellAccessibilityTests
         UIA3Automation automation,
         string automationId)
     {
+        if (window.FindFirstDescendant(
+            automation.ConditionFactory.ByAutomationId(automationId)) is null)
+        {
+            return;
+        }
+
         Assert.True(
             SpinWait.SpinUntil(
                 () => window.FindFirstDescendant(

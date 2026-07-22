@@ -38,6 +38,20 @@ public sealed class SingleInstanceCoordinatorTests
     }
 
     [Fact]
+    public void IdentityIsScopedToTheCurrentWindowsSession()
+    {
+        string identity = $"slate-single-instance-session-{Guid.NewGuid():N}";
+        using var firstSession = new SingleInstanceCoordinator(identity, sessionId: 101);
+        using var secondSession = new SingleInstanceCoordinator(identity, sessionId: 202);
+
+        Assert.True(firstSession.IsPrimary);
+        Assert.True(secondSession.IsPrimary);
+        Assert.NotEqual(firstSession.PipeNameForTesting, secondSession.PipeNameForTesting);
+        Assert.EndsWith("-S101", firstSession.PipeNameForTesting, StringComparison.Ordinal);
+        Assert.EndsWith("-S202", secondSession.PipeNameForTesting, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void VaultPathRoutingSkipsOptionsAndHonorsSeparator()
     {
         Assert.Equal(
