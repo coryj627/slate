@@ -19,7 +19,7 @@ Updated 2026-07-22. This is the wave-close instrument required by `w7_spec.md`. 
 
 ## Wave-close status
 
-- Automated local: 127/127 Windows tests, 1/1 non-interactive production-startup accessibility smoke, 5/5 Windows path-adapter tests, evidence validation for 60 command rows/four surfaces, and all W1 accessibility code compiles. Repository-contract tests pin both accessibility artifact retention and the HostLogProbe build-only dependency, so the suite no longer relies on solution build order.
+- Automated local: 128/128 Windows tests, 1/1 non-interactive production-startup accessibility smoke, 5/5 Windows path-adapter tests, evidence validation for 60 command rows/four surfaces, and all W1 accessibility code compiles. Repository-contract tests pin accessibility artifact retention, the HostLogProbe build-only dependency, and sidebar filter-operation ownership, so the suite no longer relies on solution build order or an undocumented responsibility boundary.
 - Automated interactive: pass on 2026-07-22 for revision `4e05cd73a1f3ca1b6821337af1832dd8785bf308` in [Windows Actions run 29926688975](https://github.com/coryj627/slate/actions/runs/29926688975). The retained `slate-windows-accessibility-4e05cd73a1f3ca1b6821337af1832dd8785bf308` artifact contains the passing TRX and dated, revision-bound `workspace`, `quick-open`, and `welcome` axe summaries; each scanned one interactive window and reported zero errors.
 - Human AT: Narrator, NVDA, and JAWS are pending for every row. Per WGA-9, the milestone cannot be called release-complete until NVDA/JAWS evidence is recorded; Narrator is smoke scope.
 - Contrast themes: runtime two-layer Fluent + Slate switching is implemented. The four built-in themes plus one customized-theme human pass remains pending.
