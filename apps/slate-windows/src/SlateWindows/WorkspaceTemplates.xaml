@@ -165,15 +165,16 @@
                  WorkspaceSplitHandleHorizontal -> WorkspaceSplitHandle
                  former shared WorkspaceSplitHandle -> WorkspaceSplitHandle (horizontal)
                                                      or WorkspaceSplitHandleVertical (vertical)
+                 Both Thumb declarations below set these IDs explicitly.
                  Example: ByAutomationId("WorkspaceSplitHandleHorizontal") becomes
                           ByAutomationId("WorkspaceSplitHandle"). See the W1 execution
                  report's UI Automation release and migration note. -->
-            <Thumb Width="8"
+            <Thumb AutomationProperties.AutomationId="WorkspaceSplitHandle"
+                   Width="8"
                    HorizontalAlignment="Left"
                    VerticalAlignment="Stretch"
                    Cursor="SizeWE"
                    Focusable="True"
-                   AutomationProperties.AutomationId="WorkspaceSplitHandle"
                    AutomationProperties.Name="Resize editor panes horizontally"
                    AutomationProperties.ItemStatus="{Binding Weight, StringFormat={}{0:P0} of split space}"
                    AutomationProperties.LiveSetting="Polite"
@@ -194,12 +195,12 @@
                     </Style>
                 </Thumb.Style>
             </Thumb>
-            <Thumb Height="8"
+            <Thumb AutomationProperties.AutomationId="WorkspaceSplitHandleVertical"
+                   Height="8"
                    HorizontalAlignment="Stretch"
                    VerticalAlignment="Top"
                    Cursor="SizeNS"
                    Focusable="True"
-                   AutomationProperties.AutomationId="WorkspaceSplitHandleVertical"
                    AutomationProperties.Name="Resize editor panes vertically"
                    AutomationProperties.ItemStatus="{Binding Weight, StringFormat={}{0:P0} of split space}"
                    AutomationProperties.LiveSetting="Polite"
