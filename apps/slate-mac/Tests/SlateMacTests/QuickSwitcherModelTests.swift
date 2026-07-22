@@ -179,8 +179,15 @@ final class QuickSwitcherModelTests: XCTestCase {
             model.displayOrder.count, QuickSwitcherModel.displayCap,
             "rendered rows are capped")
         XCTAssertEqual(
-            model.matches.count, QuickSwitcherModel.displayCap + 20,
-            "matches (and thus the announcement) reflect the TOTAL")
+            model.matches.count, QuickSwitcherModel.displayCap,
+            "the host receives only the bounded display page")
+        XCTAssertEqual(
+            model.resultAnnouncement,
+            .switcherMatchCount(
+                count: UInt32(QuickSwitcherModel.displayCap + 20),
+                query: "note"
+            ),
+            "the announcement still reflects the exact TOTAL")
     }
 
     // MARK: - Result-count announcement

@@ -261,7 +261,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
         if (_uiContext is null)
         {
-            ApplyRanked(SlateUniffiMethods.SwitcherRank(_files, Query, [.. _recents]), Query);
+            ApplyRanked(
+                SlateUniffiMethods.SwitcherRankTop(_files, Query, [.. _recents], DisplayCap),
+                Query);
             return;
         }
 
@@ -291,8 +293,8 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         try
         {
             await Task.Delay(60, cancellationToken);
-            SwitcherRow[] ranked = await Task.Run(
-                () => SlateUniffiMethods.SwitcherRank(files, query, recents),
+            SwitcherRankPage ranked = await Task.Run(
+                () => SlateUniffiMethods.SwitcherRankTop(files, query, recents, DisplayCap),
                 cancellationToken);
             _uiContext!.Post(
                 _ =>
@@ -332,14 +334,14 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         }
     }
 
-    private void ApplyRanked(SwitcherRow[] ranked, string query)
+    private void ApplyRanked(SwitcherRankPage ranked, string query)
     {
         IsRanking = false;
         _rankingError = null;
 
-        TotalResults = ranked.Length;
+        TotalResults = ClampTotal(ranked.Total);
         Results.Clear();
-        foreach (SwitcherRow row in ranked.Take(DisplayCap))
+        foreach (SwitcherRow row in ranked.Rows.Take(DisplayCap))
         {
             Results.Add(new QuickSwitcherRowViewModel(
                 row.Path,
@@ -356,6 +358,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
             query.Length == 0 ? null : query));
         RaiseCommandStates();
     }
+
+    internal static int ClampTotal(ulong total) =>
+        (int)Math.Min(total, (ulong)int.MaxValue);
 
     private void CancelRanking()
     {
