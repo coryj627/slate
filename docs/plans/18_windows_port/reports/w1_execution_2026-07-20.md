@@ -104,7 +104,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 |---|---|
 | `dotnet format ... --verify-no-changes` | Pass |
 | Windows unit/integration suite | 127 passed, 0 failed; a clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency before running the suite |
-| Accessibility project, non-interactive local branch | 1 passed, 0 failed; production executable survived XAML load and initial scan |
+| Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
 | Interactive FlaUI + axe-windows | Pass in Actions run 29926688975 on 2026-07-22; retained artifact includes a passing TRX and dated, revision-bound workspace, Quick Open and welcome JSON, each with one interactive window scanned and zero axe errors |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
 | `cargo test -p slate-core vault::fs::tests::windows_ --locked -q` | 5 passed, 0 failed |
