@@ -125,7 +125,7 @@ internal sealed class FileRecentsStore
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
-            Console.Error.WriteLine($"Could not persist file recents: {exception.Message}");
+            HostLog.Write(HostDiagnosticEvent.FileRecentsPersistFailed, exception);
         }
     }
 

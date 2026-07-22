@@ -50,8 +50,7 @@ internal static class DpiAwarenessProbe
         int awareness = current == IntPtr.Zero
             ? -1
             : NativeMethods.GetAwarenessFromDpiAwarenessContext(current);
-        Console.Error.WriteLine(
-            $"DPI census: context={current}, awareness={awareness}, perMonitorV1={isV1}, perMonitorV2=false");
+        HostLog.Write(HostDiagnosticEvent.DpiCensusFailed);
     }
 
     private static class NativeMethods

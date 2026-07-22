@@ -201,7 +201,7 @@ public partial class MainWindow : Window
         }
         catch (Exception exception) when (exception is System.Runtime.InteropServices.ExternalException)
         {
-            Console.Error.WriteLine($"Could not copy to the clipboard: {exception.Message}");
+            HostLog.Write(HostDiagnosticEvent.ClipboardCopyFailed, exception);
         }
     }
 

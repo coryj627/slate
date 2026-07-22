@@ -10,6 +10,40 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
+public sealed class W1HostLoggingPrivacyTests
+{
+    [Fact]
+    public void DurableDiagnostics_OmitExceptionMessagesAndVaultPaths()
+    {
+        const string sentinelPath = @"C:\Vaults\Private\medical-notes.md";
+        var output = new StringWriter();
+        TextWriter original = Console.Error;
+        try
+        {
+            Console.SetError(output);
+            foreach (HostDiagnosticEvent diagnosticEvent in Enum.GetValues<HostDiagnosticEvent>())
+            {
+                HostLog.Write(
+                    diagnosticEvent,
+                    new IOException($"Could not access {sentinelPath}: authored detail"));
+            }
+        }
+        finally
+        {
+            Console.SetError(original);
+        }
+
+        string logged = output.ToString();
+        Assert.DoesNotContain(sentinelPath, logged, StringComparison.Ordinal);
+        Assert.DoesNotContain("authored detail", logged, StringComparison.Ordinal);
+        Assert.Contains(nameof(IOException), logged, StringComparison.Ordinal);
+        foreach (HostDiagnosticEvent diagnosticEvent in Enum.GetValues<HostDiagnosticEvent>())
+        {
+            Assert.Contains($"SlateWindows.{diagnosticEvent}", logged, StringComparison.Ordinal);
+        }
+    }
+}
+
 public sealed class W1SidebarHardeningTests
 {
     [Fact]
