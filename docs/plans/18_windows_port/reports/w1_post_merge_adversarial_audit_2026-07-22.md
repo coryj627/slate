@@ -47,6 +47,7 @@ green.
 | W1-RT-12 | Medium / P2 | Performance, reliability | After the top-K core contract landed, macOS `QuickSwitcherModel` still called ranking synchronously from `@MainActor`; candidate construction also made one display-name FFI call per file. Opening or typing in a large vault could therefore block keyboard and assistive-technology interaction, and superseded work had no publication owner. | Candidate capture is value-only; a 60 ms debounced, process-scoped serial background actor constructs FFI inputs and ranks with at most one native call active across sheet lifetimes; query mutation synchronously advances a monotonic publication generation; a surviving selection is retained, revealed in the rebuilt lazy list, and kept inert while stale rows are absent; synthesized stationary-pointer hover cannot steal it; and every explicit dismissal synchronously cancels publication before removing the sheet. The sheet exposes an accessible loading state. Deterministic blocked-worker, default-worker-identity, cross-model queue-admission/serialization, queued-supersession, selection-retention, viewport-target and hover-admission decision, dismissal-cancellation, announcement-cancellation, and max-concurrency tests pin their respective contracts; mac CI remains the view-integration compile gate. |
 | W1-RT-13 | Medium / P2 | Performance, reliability, accessibility | Ordinary Windows file-tree folder expansion called the native child provider, restored descendant state, sorted and projected as many as 5,000 rows, and appended them to the live `ObservableCollection` synchronously on the UI thread. A large folder could stall keyboard and UI Automation interaction even though root refresh and bulk expansion were already asynchronous. | Native provider work, projection, sorting, and restored-descendant construction run off the UI thread through the shared serial tree-provider lane. Collapse, refresh, bulk expansion, close, and shutdown cancel or supersede work into an honest accessible retry state. Attachment identity rejects detached nodes before provider admission; operation identity, tree generation, and root identity reject stale publication; and the UI receives one prebuilt child collection swap. Ordinary and bulk requests begun during refresh await its UI publication before snapshot/provider work, while canceling that refresh cascades to both deferred dependents. Deterministic 5,001-item blocked-provider return, supersession, refresh precedence/cancellation cascade, post-refresh detached admission, sibling serialization/canceled queue, failure/retry, canceled-close retry, restoration, close, and direct-disposal tests pin the contract; interactive UIA covers ExpandCollapse and native Right/Left behavior with focus retention. |
 | W1-RT-14 | Medium / P2 | Performance, reliability | Core `DirListing.dirs` is still returned as one complete directory array, and directory summaries can recompute descendant state before any host-level page limit is applied. The Windows caller can bound file lookahead to 5,001 in one request, but it cannot place a true bound on a directory-heavy level or guarantee a stable multi-page snapshot. | Core exposes a bounded, deterministic, snapshot-consistent directory-page contract with explicit continuation/truncation state and no repeated descendant-summary traversal. Rust/UniFFI/host goldens cover directory-only overflow, mixed ordering, cancellation and mutation between pages; a large-directory benchmark demonstrates bounded output and work per page. |
+| W1-RT-15 | High / P1 | Correctness, reliability, security, CI portability | Windows CI ran only 7 atomic-rename and 5 path-adapter core tests. Separating the intentionally long census tier exposed five Windows-only fixture/assertion failures. Independent review then found a Windows LiveSync reparse/parent-swap escape and a real save/compaction/rebuild event-index race that could duplicate, orphan, or lose repair obligations. | Windows CI runs the complete bounded non-census `slate-core` package plus doctests. Fixtures and platform assertions are honest; Windows LiveSync walks pinned no-follow handles and reopens only the validated object; save and compaction hold their per-log guard from before durable marker publication through event-index commit; atomic rebuilds use one deadlock-safe try-locked log at a time. Escape, contention rollback/retry, and 100-run race stress regressions pass. |
 
 ## Remediation PR groups
 
@@ -95,9 +96,16 @@ than that ceiling.
     publication; publish one prebuilt collection; and exercise native UIA
     expansion/collapse. Expected: 9–13 authored files.
 11. **Bounded directory-listing contract** — W1-RT-14. Add a bounded,
-    snapshot-consistent core/UniFFI directory page, migrate both hosts without
-    ordering drift, and pin directory-heavy performance and mutation behavior.
-    Expected: 8–14 authored files.
+   snapshot-consistent core/UniFFI directory page, migrate both hosts without
+   ordering drift, and pin directory-heavy performance and mutation behavior.
+   Expected: 8–14 authored files.
+12. **Windows core-suite portability and synchronization** — W1-RT-15. Separate the intentionally
+   long census tier from the ordinary Windows run, repair platform-invalid
+   fixtures and assertions without relaxing production validation, harden
+   LiveSync handle containment, close the event-index mutation/rebuild races,
+   and gate the full non-census core package in `windows.yml`. Actual: 13
+   authored files; the independent security and synchronization findings
+   expanded the original 7–10 estimate while remaining below the 22-file cap.
 
 Every group follows the same gate: focused tests, full applicable local gates,
 an adversarial diff review across all eight audit dimensions, correction of any
@@ -206,7 +214,7 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   `7a860ca962b33bfe50d348ae1efb46c12679e3ce`; Windows Actions run 29956533198
   includes the live ExpandCollapse/Right/Left accessibility gate and evidence
   upload. W1-RT-13 is closed under the documented Codoki-outage exception.
-- W1-RT-14 is remediated in the current 22-authored-file PR. Its first three
+- W1-RT-14 closed by PR #1027, a 22-authored-file change. Its first three
   independent reviews blocked publication: macOS dropped continuation
   directories; page reads had an external-writer TOCTOU; nullable cursor
   predicates still prefix-scanned; raw-connection migration lacked the new
@@ -236,5 +244,27 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   153.04/158.20/167.96 µs; the late page is only 9.8% above the first.
   Three fresh independent closure reviews (core, hosts/accessibility, and
   cross-cutting quality) each returned CODE-READY: YES. Local focused gates
-  are green, including 20 consecutive parallel runs of the formerly racy core
-  page module; CI remains pending under the documented Codoki-outage exception.
+  were green, including 20 consecutive parallel runs of the formerly racy
+  core page module. CI first exposed a migration-replay collision in an older
+  fixture; migration 033 now transactionally rebuilds both owned indexes and
+  a regression seeds stale same-name definitions before replay. All ten CI
+  checks passed, and the PR was squash-merged as
+  `985061e9198d00db319701aed8f1d2b63ac86f0d` under the documented
+  Codoki-outage exception.
+- W1-RT-15 is remediated in the current small PR. The full non-census Windows
+  run no longer asks NTFS for POSIX-only `*`, `?`, or `|` names; those cases
+  remain covered on supporting hosts while cross-platform SQL wildcard and
+  punctuated-parent cases still run on Windows. The ctime backfill regression
+  asserts the documented zero sentinel off Unix, Dropbox evidence uses the
+  host separator, and Windows LiveSync opens and retains the root and every
+  fixed component without delete/write sharing, rejects reparses and special
+  targets before reading, and uses `ReOpenFile` for the validated object.
+  Save and compaction now acquire the per-log mutation guard before publishing
+  their durable marker and retain it through the matching event transaction.
+  A rebuild holds an immediate SQLite writer, try-locks one log at a time, and
+  rolls back with markers intact on contention; deterministic rollback/retry
+  coverage and 100/100 race-stress repetitions pass. `windows.yml` replaces
+  its two narrow filters with the complete non-census package command. Repeated
+  exact local gates passed in 30.1–31.9 seconds: 1,615 unit, 364 integration,
+  and 2 doctests passed; 2 intentionally ignored and 50 census/timing tests
+  were excluded from the unit binary.

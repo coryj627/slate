@@ -208,7 +208,25 @@ pub fn compact_log(
     now_ms: i64,
 ) -> io::Result<CompactionOutcome> {
     let path = oplog_path_for_name(cache_dir, log_name);
-    let _lock = crate::oplog::lock_oplog(&path)?;
+    let lock = crate::oplog::lock_oplog(&path)?;
+    compact_log_with_lock(cache_dir, log_name, current_path, limits, now_ms, &lock)
+}
+
+/// Compact with the caller's per-log mutation guard already held.
+///
+/// The background worker acquires this guard before its durable staleness
+/// marker and retains it through post-rewrite event regeneration. This closes
+/// the window where a scan rebuild could clear a marker against the old log
+/// before the worker acquired the lock and published the rewrite.
+pub(crate) fn compact_log_with_lock(
+    cache_dir: &Path,
+    log_name: &str,
+    current_path: &str,
+    limits: &CompactionLimits,
+    now_ms: i64,
+    _lock: &crate::oplog::OplogLock,
+) -> io::Result<CompactionOutcome> {
+    let path = oplog_path_for_name(cache_dir, log_name);
     // Read-only: the rewrite goes through the tmp file, never this
     // handle. A missing log is a no-op run.
     let mut file = match OpenOptions::new().read(true).open(&path) {

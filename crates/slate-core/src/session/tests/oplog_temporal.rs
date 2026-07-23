@@ -1784,39 +1784,107 @@ fn compaction_racing_saves_never_loses_indexed_events() {
             .new_content_hash;
     }
 
-    // Settle: worker drained (no marker rows) AND the index matches
-    // the final log exactly on (ts_ms, event_class).
-    let settled = wait_for(|| {
-        let no_markers: bool = {
-            let conn = session.conn.lock().unwrap();
-            conn.query_row(
-                "SELECT NOT EXISTS(SELECT 1 FROM oplog_events_stale)",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap()
-        };
-        if !no_markers {
-            return false;
-        }
-        let indexed: Vec<(i64, u8)> = events_for(&session, "n.md")
-            .iter()
-            .map(|e| (e.0, e.1))
-            .collect();
-        let entries = session.read_oplog("n.md").unwrap();
-        let derived: Vec<(i64, u8)> = crate::oplog_events::derive_events_for_log(&entries)
-            .iter()
-            .map(|e| (e.ts_ms, e.event_class))
-            .collect();
-        indexed == derived
-    });
-    assert!(
-        settled,
-        "index must converge to exactly the final log's derivation"
+    // Drain through a worker-owned FIFO barrier. A compaction can requeue
+    // itself after its fairness limit, so polling marker state on a wall-clock
+    // deadline was not proof of completion under full-suite contention.
+    session.drain_compaction_worker_for_test();
+    let no_markers: bool = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT NOT EXISTS(SELECT 1 FROM oplog_events_stale)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert!(no_markers, "the drained worker must leave no stale marker");
+    let indexed: Vec<(i64, u8)> = events_for(&session, "n.md")
+        .iter()
+        .map(|e| (e.0, e.1))
+        .collect();
+    let entries = session.read_oplog("n.md").unwrap();
+    let derived: Vec<(i64, u8)> = crate::oplog_events::derive_events_for_log(&entries)
+        .iter()
+        .map(|e| (e.ts_ms, e.event_class))
+        .collect();
+    assert_eq!(
+        indexed, derived,
+        "the drained index must equal the final log's derivation"
     );
     // The newest save is queryable — the row a lost-update would drop.
     let (paths, _) = filter_paths(&session, r#"oplog.has_change_since("1h")"#);
     assert_eq!(paths, vec!["n.md"]);
+}
+
+#[test]
+fn contended_event_rebuild_rolls_back_rows_and_markers_then_retries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache_dir = tmp.path().join(".slate");
+    let mut config = SessionConfig::new(cache_dir.clone());
+    config.oplog_compaction_threshold_bytes = u32::MAX;
+    config.oplog_compaction_threshold_entries = u32::MAX;
+    let provider = std::sync::Arc::new(FsVaultProvider::new(tmp.path().to_path_buf()));
+    let session = VaultSession::open(provider, config).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("n.md", "one\n", None).unwrap();
+
+    let stem: String = {
+        let conn = session.conn.lock().unwrap();
+        conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", [])
+            .unwrap();
+        conn.query_row(
+            "SELECT oplog_name FROM files WHERE path = 'n.md'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+    let rows_before = events_for(&session, "n.md");
+    let log_path = crate::oplog::oplog_path_for_name(&cache_dir, &stem);
+    let held = crate::oplog::lock_oplog(&log_path).unwrap();
+
+    let rebuild = {
+        let mut conn = session.conn.lock().unwrap();
+        session.rebuild_oplog_events_inner(&mut conn, true)
+    };
+    assert!(rebuild.is_err(), "a contended log must abort the rebuild");
+    assert_eq!(
+        events_for(&session, "n.md"),
+        rows_before,
+        "the global DELETE must roll back on lock contention"
+    );
+    let marker_count: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM oplog_events_stale", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(marker_count, 1, "the repair obligation must survive");
+
+    drop(held);
+    {
+        let mut conn = session.conn.lock().unwrap();
+        session.rebuild_oplog_events_inner(&mut conn, true).unwrap();
+    }
+    let marker_count: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM oplog_events_stale", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(marker_count, 0, "successful retry clears the obligation");
+    let indexed: Vec<(i64, u8)> = events_for(&session, "n.md")
+        .iter()
+        .map(|event| (event.0, event.1))
+        .collect();
+    let entries = session.read_oplog("n.md").unwrap();
+    let derived: Vec<(i64, u8)> = crate::oplog_events::derive_events_for_log(&entries)
+        .iter()
+        .map(|event| (event.ts_ms, event.event_class))
+        .collect();
+    assert_eq!(indexed, derived, "retry regenerates the exact log state");
 }
 
 #[test]

@@ -78,17 +78,16 @@ jobs:
           rustup target add aarch64-pc-windows-msvc
           cargo check -p slate-uniffi --target aarch64-pc-windows-msvc --locked
 
-      # W1-0 / #911: Windows is the load-bearing witness for the native
-      # MoveFileExW no-clobber primitive. The filter runs the complete vault/fs
-      # rename group, including occupied-destination, directory, and race cases.
-      - name: slate-core atomic rename tests
-        run: cargo test -p slate-core vault::fs::tests::rename --locked
-
-      # W1-2 / #721: exercise the Windows lexical-path adapter on an actual
-      # Windows host. These tests cover reserved-name validation, near misses,
-      # case-insensitive identity, case preservation, and long-path round-trips.
-      - name: slate-core Windows path adapter tests
-        run: cargo test -p slate-core vault::fs::tests::windows_ --locked
+      # Windows is the load-bearing witness for MoveFileExW no-clobber,
+      # reserved-name validation, case-insensitive identity, long paths, and
+      # every other platform-sensitive core contract. Run the complete package
+      # suite except the intentionally long randomized censuses and the
+      # hardware-timing guard (both remain covered by the Rust lanes).
+      - name: slate-core non-census test suite
+        run: >-
+          cargo test -p slate-core --locked
+          -- --skip census_
+          --skip perf_guard_root_listing_under_100ms_on_10k_files
 
       # Program decision 19 / w0_spec §W0-3 item 3: the CLI builds and its
       # suite runs on the Windows runner — the full extent of Windows CLI
