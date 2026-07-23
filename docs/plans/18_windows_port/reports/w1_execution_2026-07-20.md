@@ -4,14 +4,13 @@
 
 W1-0 through W1-4 are implemented in the repository. Three independent agents red-teamed the complete wave, found no P0 issue but several P1/P2 correctness, performance, reliability, documentation, and accessibility defects, and then performed repeated read-only audits after remediation. The Windows shell now opens and closes vaults, persists recents/window state, exposes a native files sidebar, restores recursive tab/split workspaces, hosts the full right-pane leaf registry, and provides a core-ranked Quick Open surface. Interactive CI and human assistive-technology evidence remain explicit release gates, not implied passes.
 
-The post-merge remediation sequence through W1-RT-16 is merged through PR
-#1029 and squash commit `ce19b0ebe9def05c2d55febf807e5c75f2e77a83`.
-W1-RT-17's bounded progress semantics and live UIA census are implemented in
-PR #1030; three independent final reviewers returned code-ready, while
-revision-bound interactive CI remains pending.
-W1-RT-18 and W1-RT-19—Windows Quick Open
-process-wide serialization and macOS file-tree page-one responsiveness—remain
-open. These follow-ups are tracked in the adversarial audit and must merge
+The post-merge remediation sequence through W1-RT-17 is merged through PR
+#1030 and squash commit `268953adcaede360429dc41483604a175cff4333`.
+W1-RT-18's Windows Quick Open process-wide ranking lane is implemented on the
+current remediation branch. Three independent final reviewers returned
+code-ready; publication and CI remain pending.
+W1-RT-19—macOS file-tree page-one responsiveness—remains open. These
+follow-ups are tracked in the adversarial audit and must merge
 before W1 code or automated acceptance is called complete. Named-human
 Narrator/NVDA/JAWS and Contrast-theme evidence remains a separate release
 blocker.
@@ -47,14 +46,14 @@ blocker.
 ### W1-4 — Quick Open
 
 - Ctrl+O opens a recents-first, 50-result overlay. Only core `SwitcherRank` determines ordering; C# performs no fuzzy scoring or display-name derivation.
-- Initial indexing runs after scan; vault Created/Renamed/Deleted events update the cache incrementally, including folder descendants. Ranking is debounced and cancellable off the UI thread.
+- Initial indexing runs after scan; vault Created/Renamed/Deleted events update the cache incrementally, including folder descendants. Windows ranking is debounced off the UI thread through one process-lifetime native lane; canceled queued queries never enter FFI, an admitted rank retains the lane until it returns, and generation and cancellation-token guards reject stale publication across vault/view-model lifetimes.
 - The mac consumer uses the same top-50 contract through a 60 ms debounced, process-scoped serial background actor. Candidate capture performs no per-file FFI on `MainActor`; at most one native rank is active across sheet lifetimes; query assignment synchronously invalidates older publication while retaining and re-revealing a still-valid selection in the rebuilt lazy list; synthesized hover under a stationary pointer cannot steal that selection; explicit dismissal cancels before sheet removal; and the sheet shows an accessible loading state until the current query publishes.
 - Enter, Ctrl+Enter and Ctrl+Alt+Enter target current tab, new tab and split. Arrow selection wraps; Esc restores prior focus; tab traversal stays in the overlay.
 - Result counts use the new typed core `A11yEvent::QuickSwitcherCount`; core goldens, corpus, UniFFI bindings and the mac consumer were updated together.
 
 ## Independent red team and remediation
 
-Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19. RT16 is now closed, RT17's independent review is complete with PR #1030 CI pending, and RT18–RT19 remain open as tracked above. The prior remediation closed these confirmed findings:
+Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19. RT16–RT17 are closed, RT18 is locally implemented and independently code-ready pending publication/CI, and RT19 remains open as tracked above. The prior remediation closed these confirmed findings:
 
 - Current-tab replacement is dirty-gated and selects an exact existing same-group target; new-tab deduplicates; close-tab/pane uses Save/Discard/Cancel. Duplicate/split Markdown tabs share live dirty buffers. Path identity is exact and case-sensitive.
 - Graph is a global singleton, restore prunes graph-created empty panes, and workspaces stop at six panes. Persistence rejects hostile structure, duplicate IDs, invalid group counts and its own size bound without escaping UI commands.
@@ -171,12 +170,12 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Gate | Result |
 |---|---|
 | `dotnet format ... --verify-no-changes` | Pass |
-| Windows unit/integration suite | 171 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes behavioral sidebar session-lifetime, owner-context, WPF-dispatcher disposal, active-load joining, task-publication, cancellation-ownership, unexpected-failure, anchored replacement-redirection, native rename-layout, post-commit cleanup, and ordinary child-expansion blocked-provider return/supersession/refresh/refresh precedence/refresh-cancellation cascade/detached-admission/provider-serialization/canceled-queue/failure/restoration/close/retry/disposal cases plus representative sidebar-operation, session-work, workspace-persistence, and workspace-layout ownership censuses |
+| Windows unit/integration suite | 179 passed, 0 failed; the latest clean standalone invocation includes bounded/reentrant scan-progress semantics plus blocked-ranker return, 20-query newest-only supersession with stale-failure suppression, default cross-lifetime maximum-concurrency-one and disposed-model nonpublication, canceled-queue rejection, exception release, and generic high-priority rank-failure publication coverage, alongside the existing sidebar/session/workspace behavioral and structure contracts |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
-| Interactive FlaUI + axe-windows | Pass for final PR #1028 revision `9fac9b2007d0cc7c12ef17fe12c36938796af826` in Windows Actions run 29980921181. The live RT13 ExpandCollapse and native Right/Left focus-retention assertions, retained artifact upload, TRX, and dated revision-bound workspace, Quick Open, and welcome axe evidence steps were green alongside the complete non-census core package. |
+| Interactive FlaUI + axe-windows | Pass for final PR #1030 revision `86443682e7e2d41eebf6e660c9b5393ea713696a` in Windows Actions run 29988127038. Live RT17 scan RangeValue and exact sidebar pattern assertions passed after preserving initial-focus test ordering and giving the expanded empty shortcuts list nonzero accessible geometry. Retained artifact `slate-windows-accessibility-83c2185ecd7314a9eda98a314f3b1b6c5464dca3`, TRX, and dated revision-bound workspace, Quick Open, and welcome axe evidence were green alongside the complete non-census core package. |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
 | `cargo test -p slate-core vault::fs::tests::windows_ --locked -q` | 5 passed, 0 failed |
-| `cargo test -p slate-core --locked -- --skip census_ --skip perf_guard_root_listing_under_100ms_on_10k_files` on Windows | Repeated passes in 30.1–31.9 seconds: 1,615 unit, 364 integration, and 2 doctests; zero failures. The long randomized censuses and hardware-timing guard remain in their dedicated Rust lanes. |
+| `cargo test -p slate-core --locked -- --skip census_ --skip perf_guard_root_listing_under_100ms_on_10k_files` on Windows | Current bounded-package evidence: 1,616 unit, 364 integration, and 2 doctests; zero failures. The long randomized censuses and hardware-timing guard remain in their dedicated Rust lanes. |
 | Focused core accessibility tests | 3 passed, 0 failed |
 | Focused bounded-directory core tests | 12 passed, 0 failed; includes range plans, in-flight mutation, post-admission cancellation, cursor replay/scope/size, and Unicode ties |
 | Focused database/migration tests | 128 passed, 0 failed; includes raw connections and populated Unicode v32→v33 upgrade/reopen |
@@ -189,10 +188,11 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Complete Windows `slate-core` verification | Closed: the apparent nontermination came from mixing intentionally long randomized censuses into the ordinary local run. The separated non-census package tier passes completely and is now required by Windows CI. |
 | mac Swift Quick Open tests | Pass in Actions run 29950708145 for PR #1025; the final W1 PR #1028 Mac XCTest suite also passed in Actions run 29980921180 |
 | Final PR #1028 rollup | Seven of seven checks passed on `9fac9b2007d0cc7c12ef17fe12c36938796af826`: Mac XCTest, workspace fmt/Clippy, nextest, bench compile, SPDX, Windows x64, and Semgrep |
+| RT17 PR #1030 rollup | Three of three path-selected checks passed on `86443682e7e2d41eebf6e660c9b5393ea713696a`: SPDX, Semgrep, and Windows x64 including full core, 174 Windows tests, live UIA/axe, retained evidence, and formatting |
 
 ## Reliability, performance and security notes
 
-- Callback paths marshal asynchronously to the UI dispatcher. File-change refreshes coalesce for 150 ms; Quick Open ranks after a 60 ms debounce and cancels stale work; sidebar filtering debounces for 200 ms and rejects stale generations.
+- Callback paths marshal asynchronously to the UI dispatcher. File-change refreshes coalesce for 150 ms; Quick Open ranks after a 60 ms debounce through one process-wide native lane, rejects canceled queued work before FFI, and suppresses stale publication; sidebar filtering debounces for 200 ms and rejects stale generations.
 - Structural mutation commands are disabled while import owns the mutation lane; vault close/switch requests cancel import, bulk expansion, or ordinary child expansion and wait for their barriers.
 - Store decoders are bounded and fail closed for malformed or forward schema versions. Per-vault store reads, locks, migration cleanup, and atomic replacement are anchored to opened Windows directory/file identities; reparse sentinels and deterministic directory-swap attempts are covered. File imports bound breadth, count and file size and reject reparse traversal.
 - The LiveSync reader applies the same containment discipline on Windows: it pins the resolved vault root and each fixed child without following reparses, rejects non-disk/reparse targets before reading, and reopens the validated object rather than its pathname. Op-log saves and compaction hold their per-log mutation guard from before durable staleness-marker publication through event-index commit. Full event-index rebuilds remain atomic while try-locking only one log at a time; contention rolls back rows and markers for a later retry. The confirmed duplicate-row race now passes 100/100 stress repetitions and a deterministic contended-rebuild rollback/retry regression.
