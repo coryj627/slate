@@ -2460,15 +2460,20 @@ final class FileTreeViewModel: ObservableObject {
         _ candidates: [(id: NodeID, path: String)],
         componentVisits: inout Int
     ) -> [(id: NodeID, path: String)] {
-        let ordered = candidates.map { candidate in
-            let depth = candidate.path.split(separator: "/").count
-            componentVisits += depth
-            (
-                id: candidate.id,
-                path: candidate.path,
-                depth: depth
-            )
-        }.sorted { $0.depth < $1.depth }
+        let ordered: [(id: NodeID, path: String, depth: Int)] =
+            candidates.map { candidate in
+                let depth = candidate.path.split(separator: "/").count
+                componentVisits += depth
+                return (
+                    id: candidate.id,
+                    path: candidate.path,
+                    depth: depth
+                )
+            }.sorted(by: {
+                (lhs: (id: NodeID, path: String, depth: Int),
+                 rhs: (id: NodeID, path: String, depth: Int)) in
+                lhs.depth < rhs.depth
+            })
         return ordered.map { (id: $0.id, path: $0.path) }
     }
 
@@ -2556,15 +2561,17 @@ final class FileTreeViewModel: ObservableObject {
         expansionRecency.removeAll { $0 == node.path }
         if usesAsyncLevelLoading {
             let prefix = node.path + "/"
-            let loadingSubtree = levelDrainTokens.keys.compactMap { key in
-                guard let requestedPath = requestedLevelPathByKey[key] else {
-                    return nil
+            let loadingSubtree: [(key: NodeID, path: String)] =
+                levelDrainTokens.keys.compactMap {
+                    key -> (key: NodeID, path: String)? in
+                    guard let requestedPath = requestedLevelPathByKey[key] else {
+                        return nil
+                    }
+                    guard requestedPath == node.path
+                        || requestedPath.hasPrefix(prefix)
+                    else { return nil }
+                    return (key: key, path: requestedPath)
                 }
-                guard requestedPath == node.path
-                    || requestedPath.hasPrefix(prefix)
-                else { return nil }
-                return (key: key, path: requestedPath)
-            }
             for load in loadingSubtree
             where fetchState[load.key] == .loading {
                 revokeLevelDrain(load.key)
