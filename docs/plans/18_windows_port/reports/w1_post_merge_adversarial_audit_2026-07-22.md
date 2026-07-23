@@ -316,7 +316,7 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   unchanged Windows timing-test failure, and the PR was squash-merged as
   `ce19b0ebe9def05c2d55febf807e5c75f2e77a83` under the documented
   Codoki-outage exception.
-- W1-RT-17 is implemented on the current remediation branch. The progress
+- W1-RT-17 is implemented in PR #1030. The progress
   listener preserves `Started`, the latest `FileIndexed`, and the terminal
   event in one bounded ordered drain, rejects events after terminal admission,
   and restores the terminal maximum from the report's authoritative
@@ -326,7 +326,7 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   sidebar Selection, Toggle, ExpandCollapse, and Invoke census. Local evidence
   is 174/174 Windows tests, 2/2 accessibility tests, and clean .NET formatting;
   three independent final reviewers returned code-ready with no finding at any
-  severity. Publication and revision-bound CI are pending.
+  severity. Revision-bound CI is pending.
 - W1-RT-18 and W1-RT-19 remain open and are assigned to the next two small
   remediation groups above. They must not be represented as automated or code
   closure until their focused evidence and required CI lanes pass.
@@ -353,7 +353,7 @@ The remediation sequence from PR #1011 through PR #1029 is merged on
 | W1-RT-14 | #1027 | Closed |
 | W1-RT-15 | #1028 | Closed |
 | W1-RT-16 | #1029 | Closed |
-| W1-RT-17 | Current remediation branch | Implementation/local gates and three independent reviews complete; publication/CI pending |
+| W1-RT-17 | #1030 | Implementation/local gates and three independent reviews complete; CI pending |
 | W1-RT-18 | Planned follow-up | Open |
 | W1-RT-19 | Planned follow-up | Open |
 
