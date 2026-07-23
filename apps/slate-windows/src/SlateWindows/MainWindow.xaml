@@ -373,7 +373,8 @@
                                           Margin="0,2"
                                           AutomationProperties.AutomationId="SidebarShortcutsActions">
                                     <StackPanel>
-                                        <ListBox MaxHeight="100"
+                                        <ListBox MinHeight="24"
+                                                 MaxHeight="100"
                                                  ItemsSource="{Binding Shortcuts}"
                                                  SelectedItem="{Binding SelectedShortcut}"
                                                  DisplayMemberPath="DisplayName"
