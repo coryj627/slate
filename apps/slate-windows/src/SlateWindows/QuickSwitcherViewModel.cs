@@ -24,6 +24,8 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
     private readonly FileRecentsStore _recentsStore;
     private readonly Action<A11yEvent> _announce;
     private readonly SynchronizationContext? _uiContext;
+    private readonly QuickSwitcherRankCoordinator _rankCoordinator;
+    private readonly Func<SwitcherFile[], string, string[], SwitcherRankPage> _rankTop;
     private CancellationTokenSource? _rankCancellation;
     private int _rankGeneration;
     private SwitcherFile[] _files = [];
@@ -41,10 +43,15 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         Action<A11yEvent> announce,
         IEnumerable<SwitcherFile>? initialFiles = null,
         string? localAppDataRoot = null,
-        bool debounceRanking = true)
+        bool debounceRanking = true,
+        QuickSwitcherRankCoordinator? rankCoordinator = null,
+        Func<SwitcherFile[], string, string[], SwitcherRankPage>? rankTop = null)
     {
         _announce = announce;
         _uiContext = debounceRanking ? SynchronizationContext.Current : null;
+        _rankCoordinator = rankCoordinator ?? QuickSwitcherRankCoordinator.Shared;
+        _rankTop = rankTop ?? ((files, query, recents) =>
+            SlateUniffiMethods.SwitcherRankTop(files, query, recents, DisplayCap));
         _recentsStore = new FileRecentsStore(vaultRoot, session.RootIdentity(), localAppDataRoot);
         _files = initialFiles?.ToArray() ?? [];
         OpenCommand = new RelayCommand(_ => Open(), _ => !IsOpen);
@@ -59,6 +66,8 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
 
     public event EventHandler<(string Path, WorkspaceOpenTarget Target)>? OpenRequested;
     public event EventHandler? Dismissed;
+
+    internal Task RankCompletion { get; private set; } = Task.CompletedTask;
 
     public ObservableCollection<QuickSwitcherRowViewModel> Results { get; } = [];
 
@@ -262,7 +271,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         if (_uiContext is null)
         {
             ApplyRanked(
-                SlateUniffiMethods.SwitcherRankTop(_files, Query, [.. _recents], DisplayCap),
+                _rankTop(_files, Query, [.. _recents]),
                 Query);
             return;
         }
@@ -280,7 +289,7 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         Results.Clear();
         SelectedRow = null;
         RaiseCommandStates();
-        _ = RankAsync(files, query, recents, generation, cancellation.Token);
+        RankCompletion = RankAsync(files, query, recents, generation, cancellation.Token);
     }
 
     private async Task RankAsync(
@@ -293,8 +302,8 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
         try
         {
             await Task.Delay(60, cancellationToken);
-            SwitcherRankPage ranked = await Task.Run(
-                () => SlateUniffiMethods.SwitcherRankTop(files, query, recents, DisplayCap),
+            SwitcherRankPage ranked = await _rankCoordinator.RankAsync(
+                () => _rankTop(files, query, recents),
                 cancellationToken);
             _uiContext!.Post(
                 _ =>
@@ -317,7 +326,9 @@ internal sealed class QuickSwitcherViewModel : BindableBase, IDisposable
             _uiContext!.Post(
                 _ =>
                 {
-                    if (generation == _rankGeneration && IsOpen)
+                    if (!cancellationToken.IsCancellationRequested
+                        && generation == _rankGeneration
+                        && IsOpen)
                     {
                         IsRanking = false;
                         _rankingError = "Quick Open could not rank files.";
