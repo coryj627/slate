@@ -51,9 +51,14 @@ public class BindingSurfaceCensus
         Assert.Equal(3UL, session.ScanInitial(token).FilesIndexed);
         Assert.False(token.IsCancelled());
 
-        using var buffer = new DocumentBuffer("abc");
-        buffer.ApplyEdit(3, 0, "def");
-        Assert.Equal(6U, buffer.LenUtf16());
+        const string initialText = "abc 中 😀";
+        using var buffer = new DocumentBuffer(initialText);
+        buffer.ApplyEdit(3, 0, "\r\n");
+        Assert.Equal((uint)(initialText.Length + 2), buffer.LenUtf16());
+        Assert.Equal("abc\r\n 中 😀", buffer.Text());
+        Assert.Equal(
+            SlateUniffiMethods.EditorTextContentHash(buffer.Text()),
+            buffer.ContentHash());
 
         using var registry = new CommandRegistry();
         var action = new ScriptedAction(() => { });

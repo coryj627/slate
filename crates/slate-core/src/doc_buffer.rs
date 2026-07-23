@@ -112,6 +112,24 @@ impl DocBufferState {
         self.buffer.len_utf16()
     }
 
+    /// Materialise a consistent full-text snapshot.
+    ///
+    /// This is intentionally not part of the keystroke/highlight hot path.
+    /// Hosts may use it after an integrity mismatch for diagnostics or an
+    /// exact comparison before reconverging with [`reset`](Self::reset).
+    pub fn text(&self) -> String {
+        self.buffer.to_string()
+    }
+
+    /// Canonical BLAKE3 hash of the current rope bytes.
+    ///
+    /// Hashes the rope chunk-by-chunk, without first allocating a contiguous
+    /// document snapshot. The result uses the same lowercase 64-character
+    /// hexadecimal contract as [`crate::content_hash`].
+    pub fn content_hash(&self) -> String {
+        self.buffer.content_hash()
+    }
+
     /// Convert a whole-document UTF-8 byte offset to a UTF-16 code-unit offset
     /// on the live rope (O(log n)) — the host maps an `applied_range` back to
     /// the UTF-16 offsets its text view uses.
@@ -367,6 +385,44 @@ fn rope_fm_end(buf: &TextBuffer) -> usize {
 mod tests {
     use super::*;
     use crate::editor_spans::{EditorSpan, highlight_spans};
+
+    #[test]
+    fn census_content_hash_is_stable_across_equivalent_edit_sequences() {
+        // Keep this substantially larger than Ropey's leaf capacity so the
+        // hash is proven independent of chunk boundaries and edit history.
+        let prefix = "alpha ".repeat(4_000);
+        let suffix = " omega\n".repeat(4_000);
+        let expected = format!("{prefix}中 😀 {suffix}");
+        let edit_start = prefix.encode_utf16().count();
+
+        let mut one_edit = DocBufferState::new(&format!("{prefix}x{suffix}"));
+        one_edit.apply_edit(edit_start, 1, "中 😀 ");
+
+        let mut several_edits = DocBufferState::new(&format!("{prefix}{suffix}"));
+        several_edits.apply_edit(edit_start, 0, "中");
+        several_edits.apply_edit(edit_start + 1, 0, " ");
+        several_edits.apply_edit(edit_start + 2, 0, "😀 ");
+
+        let fresh = DocBufferState::new(&expected);
+        assert_eq!(one_edit.text(), expected);
+        assert_eq!(several_edits.text(), expected);
+        assert_eq!(one_edit.content_hash(), several_edits.content_hash());
+        assert_eq!(one_edit.content_hash(), fresh.content_hash());
+        assert_eq!(
+            fresh.content_hash(),
+            crate::content_hash(expected.as_bytes())
+        );
+    }
+
+    #[test]
+    fn census_content_hash_detects_equal_length_divergence() {
+        let left = DocBufferState::new("café 😀\n");
+        let right = DocBufferState::new("cafè 😀\n");
+
+        assert_eq!(left.len_utf16(), right.len_utf16());
+        assert_eq!(left.text().len(), right.text().len());
+        assert_ne!(left.content_hash(), right.content_hash());
+    }
 
     /// Apply a UTF-16 `(start, old_len, new)` delta to a `String` the way
     /// [`DocBufferState::apply_edit`] applies it to the rope — the independent

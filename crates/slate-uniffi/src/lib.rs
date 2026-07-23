@@ -4802,6 +4802,17 @@ pub fn editor_highlight_spans_in_range(
     }
 }
 
+/// Canonical content hash for an editor-owned text snapshot.
+///
+/// Hosts compare this with [`DocumentBuffer::content_hash`] on the automatic
+/// idle/highlight cadence and before every save. Keeping both sides behind the
+/// same Rust implementation prevents a platform host from re-implementing the
+/// BLAKE3/lowercase-hex contract.
+#[uniffi::export]
+pub fn editor_text_content_hash(text: String) -> String {
+    core::content_hash(text.as_bytes())
+}
+
 /// Stateful editor document buffer (#404). Holds the note's text as a rope
 /// across edits so the macOS editor feeds **edit deltas** (not the whole
 /// string) per keystroke and gets O(log n) UTF-16 ↔ byte conversions + a
@@ -4850,6 +4861,24 @@ impl DocumentBuffer {
     /// host re-`reset`s and falls back to a whole-document highlight.
     pub fn len_utf16(&self) -> u32 {
         self.inner.lock().unwrap().len_utf16() as u32
+    }
+
+    /// Materialise a consistent full-text snapshot.
+    ///
+    /// This is an integrity/diagnostic surface, not a per-keystroke path.
+    /// Hosts normally compare hashes and request the text only when they need
+    /// an exact snapshot after a suspected mismatch.
+    pub fn text(&self) -> String {
+        self.inner.lock().unwrap().text()
+    }
+
+    /// Canonical BLAKE3 hash of the current rope bytes.
+    ///
+    /// The core hashes rope chunks directly, so this does not first allocate a
+    /// contiguous document copy. The result is lowercase 64-character hex and
+    /// matches [`editor_text_content_hash`] for identical text.
+    pub fn content_hash(&self) -> String {
+        self.inner.lock().unwrap().content_hash()
     }
 
     /// Convert a whole-document UTF-8 byte offset to a UTF-16 offset on the
@@ -9251,6 +9280,33 @@ mod tests {
         assert_eq!(buf.len_utf16(), fresh.len_utf16());
         let n = fresh_text.encode_utf16().count() as u32;
         assert_eq!(buf.highlight_in_range(0, n), fresh.highlight_in_range(0, n));
+    }
+
+    #[test]
+    fn document_buffer_content_snapshot_and_hash_track_edits_and_reset() {
+        let buf = DocumentBuffer::new("alpha x omega\n".to_string());
+        buf.apply_edit(6, 1, "中 😀".to_string());
+        let expected = "alpha 中 😀 omega\n";
+
+        assert_eq!(buf.text(), expected);
+        assert_eq!(
+            buf.content_hash(),
+            editor_text_content_hash(expected.into())
+        );
+
+        let reset = "reset with\r\nmixed\nendings 😀\n";
+        buf.reset(reset.to_string());
+        assert_eq!(buf.text(), reset);
+        assert_eq!(buf.content_hash(), editor_text_content_hash(reset.into()));
+    }
+
+    #[test]
+    fn document_buffer_hash_detects_same_length_divergence() {
+        let left = DocumentBuffer::new("café 😀\n".to_string());
+        let right = DocumentBuffer::new("cafè 😀\n".to_string());
+
+        assert_eq!(left.len_utf16(), right.len_utf16());
+        assert_ne!(left.content_hash(), right.content_hash());
     }
 
     // ---------------------------------------------------------------
