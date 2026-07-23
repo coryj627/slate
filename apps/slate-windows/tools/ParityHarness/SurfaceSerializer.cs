@@ -27,19 +27,11 @@ public static class SurfaceSerializer
         j.Raw("{\"file\":").Str(relPath);
 
         j.Raw(",\"spans\":[");
-        var spans = SlateUniffiMethods.EditorHighlightSpans(text);
-        for (int i = 0; i < spans.Length; i++)
-        {
-            if (i > 0)
-            {
-                j.Raw(",");
-            }
-            j.Raw("{\"start\":").Num(spans[i].StartByte)
-             .Raw(",\"end\":").Num(spans[i].EndByte)
-             .Raw(",\"kind\":").Str(SpanKindName(spans[i].Kind))
-             .Raw("}");
-        }
+        AppendSpans(j, SlateUniffiMethods.EditorHighlightSpans(text));
         j.Raw("]");
+
+        j.Raw(",\"span_windows\":");
+        AppendSpanWindows(j, text);
 
         j.Raw(",\"headings\":[");
         var headings = SlateUniffiMethods.ExtractHeadings(text);
@@ -73,6 +65,33 @@ public static class SurfaceSerializer
              .Raw(",\"end\":").Num(b.ByteEnd)
              .Raw(",\"source\":").Str(b.Source)
              .Raw("}");
+        }
+        j.Raw("]}");
+        return j + "\n";
+    }
+
+    /// <summary>
+    /// Editor-scale §W-A artifact. Sources are deterministic ASCII fixtures
+    /// generated identically by both harness twins; only canonical window
+    /// results are serialized, so the golden remains small at the 8 MiB tier.
+    /// </summary>
+    public static string EditorScaleArtifact()
+    {
+        var j = new CanonicalJson();
+        j.Raw("{\"sizes\":[");
+        int[] sizes = [100 * 1024, 1024 * 1024, 8 * 1024 * 1024];
+        for (int index = 0; index < sizes.Length; index++)
+        {
+            if (index > 0)
+            {
+                j.Raw(",");
+            }
+
+            string text = EditorScaleFixture(sizes[index]);
+            j.Raw("{\"bytes\":").Num((ulong)sizes[index])
+             .Raw(",\"span_windows\":");
+            AppendSpanWindows(j, text);
+            j.Raw("}");
         }
         j.Raw("]}");
         return j + "\n";
@@ -211,6 +230,63 @@ public static class SurfaceSerializer
         TokenKind.Other o => $"other:{o.Label}",
         _ => throw new InvalidOperationException($"unmapped TokenKind {token}"),
     };
+
+    private static void AppendSpanWindows(CanonicalJson j, string text)
+    {
+        using var buffer = new DocumentBuffer(text);
+        int length = text.Length;
+        int[] anchors = [0, length / 2, length];
+        j.Raw("[");
+        for (int index = 0; index < anchors.Length; index++)
+        {
+            if (index > 0)
+            {
+                j.Raw(",");
+            }
+
+            int start = Math.Max(0, anchors[index] - 32);
+            int end = Math.Min(length, anchors[index] + 32);
+            RangedHighlight ranged = buffer.HighlightInRange(
+                checked((uint)start),
+                checked((uint)end));
+            j.Raw("{\"request_start_utf16\":").Num((ulong)start)
+             .Raw(",\"request_end_utf16\":").Num((ulong)end)
+             .Raw(",\"applied_start\":").Num(ranged.AppliedStart)
+             .Raw(",\"applied_end\":").Num(ranged.AppliedEnd)
+             .Raw(",\"spans\":[");
+            AppendSpans(j, ranged.Spans);
+            j.Raw("]}");
+        }
+        j.Raw("]");
+    }
+
+    private static void AppendSpans(CanonicalJson j, IReadOnlyList<EditorSpan> spans)
+    {
+        for (int i = 0; i < spans.Count; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"start\":").Num(spans[i].StartByte)
+             .Raw(",\"end\":").Num(spans[i].EndByte)
+             .Raw(",\"kind\":").Str(SpanKindName(spans[i].Kind))
+             .Raw("}");
+        }
+    }
+
+    private static string EditorScaleFixture(int targetBytes)
+    {
+        const string block =
+            "## Section\n\nProse with [[Wikilink]] and #tag plus `code` and [@citation].\n\n";
+        var text = new System.Text.StringBuilder(targetBytes + block.Length);
+        while (text.Length < targetBytes)
+        {
+            text.Append(block);
+        }
+
+        return text.ToString(0, targetBytes);
+    }
 
     public static string BlockKindName(ReadingBlockKind kind) => kind switch
     {

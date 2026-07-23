@@ -210,6 +210,8 @@ public sealed class W1WorkspaceModelTests
         Assert.Same(tab, workspace.ActiveGroup.ActiveTab);
         Assert.Equal("note1.md editor", tab.EditorAutomationName);
         Assert.Contains(nameof(WorkspaceTabViewModel.EditorAutomationName), changed);
+        Assert.Contains(nameof(WorkspaceTabViewModel.EditorDocument), changed);
+        Assert.Contains(nameof(WorkspaceTabViewModel.EditorSession), changed);
     }
 
     private static IEnumerable<WorkspaceGroupState> Groups(WorkspaceNodeState node) =>

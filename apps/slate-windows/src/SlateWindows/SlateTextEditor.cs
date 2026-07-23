@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using System.Windows;
 using System.Windows.Automation.Peers;
 using ICSharpCode.AvalonEdit;
 
@@ -12,10 +13,71 @@ namespace SlateWindows;
 /// </summary>
 internal sealed class SlateTextEditor : TextEditor
 {
+    public static readonly DependencyProperty HighlightSessionProperty =
+        DependencyProperty.Register(
+            nameof(HighlightSession),
+            typeof(AvalonDocumentBufferSession),
+            typeof(SlateTextEditor),
+            new PropertyMetadata(null, HighlightSession_Changed));
+
+    private AvalonHighlightingCoordinator? _highlighting;
+
+    public SlateTextEditor()
+    {
+        Loaded += SlateTextEditor_Loaded;
+        Unloaded += SlateTextEditor_Unloaded;
+    }
+
+    public AvalonDocumentBufferSession? HighlightSession
+    {
+        get => (AvalonDocumentBufferSession?)GetValue(HighlightSessionProperty);
+        set => SetValue(HighlightSessionProperty, value);
+    }
+
     internal bool FocusInputOwner() => TextArea.Focus();
+
+    internal AvalonHighlightingCoordinator? HighlightingForCensus => _highlighting;
 
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new SlateTextEditorAutomationPeer(this);
+
+    protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
+    {
+        base.OnPropertyChanged(e);
+        if (e.Property == DocumentProperty && IsLoaded)
+        {
+            AttachHighlighting();
+        }
+    }
+
+    private static void HighlightSession_Changed(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var editor = (SlateTextEditor)dependencyObject;
+        if (editor.IsLoaded)
+        {
+            editor.AttachHighlighting();
+        }
+    }
+
+    private void SlateTextEditor_Loaded(object sender, RoutedEventArgs e) => AttachHighlighting();
+
+    private void SlateTextEditor_Unloaded(object sender, RoutedEventArgs e)
+    {
+        _highlighting?.Dispose();
+        _highlighting = null;
+    }
+
+    private void AttachHighlighting()
+    {
+        _highlighting?.Dispose();
+        _highlighting = null;
+        if (HighlightSession is not null && ReferenceEquals(Document, HighlightSession.Document))
+        {
+            _highlighting = new AvalonHighlightingCoordinator(this, HighlightSession);
+        }
+    }
 }
 
 internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer

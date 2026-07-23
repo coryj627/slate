@@ -88,7 +88,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     public string? ActiveCanvasSurface { get; }
     public string Title => Item.Title;
     public TextDocument? EditorDocument => _editorSession?.Document;
-    internal AvalonDocumentBufferSession? EditorSession => _editorSession;
+    public AvalonDocumentBufferSession? EditorSession => _editorSession;
     public string EditorAutomationName =>
         $"{System.IO.Path.GetFileName(Path)} editor";
     public string Path => Item.Path;
@@ -165,6 +165,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         InitializeEditorSession();
         OnPropertyChanged(nameof(Text));
         OnPropertyChanged(nameof(EditorDocument));
+        OnPropertyChanged(nameof(EditorSession));
         OnPropertyChanged(nameof(IsDirty));
         OnPropertyChanged(nameof(DirtyMarker));
         OnPropertyChanged(nameof(Status));

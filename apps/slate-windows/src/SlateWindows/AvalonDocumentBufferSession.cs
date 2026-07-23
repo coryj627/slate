@@ -33,6 +33,7 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     private uint _savedLengthUtf16;
     private string _savedContentHash;
     private string _savedBaselineText;
+    private EditorHighlightWindow? _latestHighlightWindow;
 
     public AvalonDocumentBufferSession(
         string text,
@@ -63,6 +64,25 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     }
 
     public TextDocument Document { get; }
+
+    public event EventHandler? HighlightInvalidated;
+
+    /// <summary>
+    /// The last canonical semantic span window accepted for this document
+    /// revision. W7-1's UIA peer consumes this same immutable window instead
+    /// of running a second classifier.
+    /// </summary>
+    public EditorHighlightWindow? LatestHighlightWindow
+    {
+        get
+        {
+            ThrowIfDisposed();
+            lock (_gate)
+            {
+                return _latestHighlightWindow;
+            }
+        }
+    }
 
     public EditorSavedBaseline SavedBaseline
     {
@@ -148,6 +168,51 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     /// the divergence by comparing content hashes.
     /// </summary>
     internal DocumentBuffer BufferForCensus => _buffer;
+
+    /// <summary>
+    /// Computes one canonical span window over UTF-16 editor coordinates and
+    /// maps its UTF-8 byte offsets back to Avalon coordinates. This is the sole
+    /// Windows highlight classifier boundary: all Markdown semantics come from
+    /// <see cref="DocumentBuffer.HighlightInRange"/>.
+    /// </summary>
+    public EditorHighlightWindow HighlightInRange(int startUtf16, int endUtf16)
+    {
+        ThrowIfDisposed();
+        Document.VerifyAccess();
+
+        lock (_gate)
+        {
+            int clampedStart = Math.Clamp(startUtf16, 0, Document.TextLength);
+            int clampedEnd = Math.Clamp(endUtf16, clampedStart, Document.TextLength);
+            long revision = _revision;
+            RangedHighlight ranged = _buffer.HighlightInRange(
+                checked((uint)clampedStart),
+                checked((uint)clampedEnd));
+            int appliedStart = checked((int)_buffer.ByteToUtf16(ranged.AppliedStart));
+            int appliedEnd = checked((int)_buffer.ByteToUtf16(ranged.AppliedEnd));
+            if (appliedStart < 0
+                || appliedEnd < appliedStart
+                || appliedEnd > Document.TextLength)
+            {
+                throw new InvalidOperationException(
+                    "Canonical highlight returned an invalid applied range.");
+            }
+
+            string appliedText = Document.GetText(appliedStart, appliedEnd - appliedStart);
+            EditorSemanticSpan[] spans = EditorSpanMapper.MapWindow(
+                appliedText,
+                appliedStart,
+                ranged.AppliedStart,
+                ranged.Spans);
+            var window = new EditorHighlightWindow(
+                revision,
+                appliedStart,
+                appliedEnd - appliedStart,
+                spans);
+            _latestHighlightWindow = window;
+            return window;
+        }
+    }
 
     public void ReplaceAll(string text)
     {
@@ -461,6 +526,7 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
         lock (_gate)
         {
             _revision++;
+            _latestHighlightWindow = null;
             if (_resetAfterCurrentChange
                 || _buffer.LenUtf16() != checked((uint)Document.TextLength))
             {
@@ -482,6 +548,8 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
         {
             _documentEvent(notification);
         }
+
+        HighlightInvalidated?.Invoke(this, EventArgs.Empty);
     }
 
     private void Document_UpdateStarted(object? sender, EventArgs e)
@@ -574,6 +642,22 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
 internal sealed record EditorSaveSnapshot(string Text, long Revision);
 
 internal sealed record EditorSavedBaseline(string Text, uint Utf16Length, string ContentHash);
+
+internal sealed record EditorSemanticSpan(
+    int StartUtf16,
+    int LengthUtf16,
+    uint StartByte,
+    uint EndByte,
+    EditorSpanKind Kind);
+
+internal sealed record EditorHighlightWindow(
+    long Revision,
+    int AppliedStartUtf16,
+    int AppliedLengthUtf16,
+    IReadOnlyList<EditorSemanticSpan> Spans)
+{
+    public int AppliedEndUtf16 => AppliedStartUtf16 + AppliedLengthUtf16;
+}
 
 internal abstract record EditorDocumentSyncEvent;
 

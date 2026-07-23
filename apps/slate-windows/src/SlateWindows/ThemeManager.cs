@@ -31,6 +31,8 @@ internal sealed class ThemeManager : IDisposable
     private ResourceDictionary? _slateResources;
     private SlateTheme _theme;
 
+    internal static event EventHandler? ResourcesChanged;
+
     private static readonly string[] RequiredSlateBrushKeys =
     [
         "Slate.WindowBackgroundBrush",
@@ -44,6 +46,11 @@ internal sealed class ThemeManager : IDisposable
         "Slate.SelectionTextBrush",
         "Slate.FocusBrush",
         "Slate.ErrorBrush",
+        EditorSyntaxPalette.HeadingBrushKey,
+        EditorSyntaxPalette.CodeBrushKey,
+        EditorSyntaxPalette.WikilinkBrushKey,
+        EditorSyntaxPalette.TagBrushKey,
+        EditorSyntaxPalette.MetadataBrushKey,
     ];
 
     public ThemeManager(Application application, SlateTheme theme)
@@ -197,6 +204,7 @@ internal sealed class ThemeManager : IDisposable
         dictionaries.Add(slateResources);
         _fluentResources = fluentResources;
         _slateResources = slateResources;
+        ResourcesChanged?.Invoke(this, EventArgs.Empty);
     }
 
     private static ResourceDictionary LoadDictionary(string uri) => new()

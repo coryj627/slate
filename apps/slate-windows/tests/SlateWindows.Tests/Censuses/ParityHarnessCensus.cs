@@ -152,6 +152,9 @@ public class ParityHarnessCensus
             File.WriteAllBytes(
                 Path.Combine(outDir, "links.json"),
                 System.Text.Encoding.UTF8.GetBytes(SurfaceSerializer.LinksArtifact(session, files)));
+            File.WriteAllBytes(
+                Path.Combine(outDir, "editor_scale.json"),
+                System.Text.Encoding.UTF8.GetBytes(SurfaceSerializer.EditorScaleArtifact()));
         }
         finally
         {

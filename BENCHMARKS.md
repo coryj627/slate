@@ -808,3 +808,27 @@ A same-run component diagnostic isolated the 8 MiB miss: plain AvalonEdit was
 host path was 2.2944 ms (median noise explains the small inversion). The managed
 editor/delta bridge adds no material size-correlated cost; the remaining curve
 is in the sustained core buffer path and is carried into W2-2 optimization.
+
+## W2-2 Windows canonical span consumer — 2026-07-23 (#381)
+
+The W2-2 BenchmarkDotNet 0.15.8 gate measures the complete sustained editor
+operation: AvalonEdit `TextDocument.Insert` → UniFFI
+`DocumentBuffer.apply_edit` → `DocumentBuffer.highlight_in_range` over a
+4,096-UTF-16 viewport → canonical byte-span to UTF-16 mapping and retained
+semantic window. Each size uses four warmup iterations, 15 measured iterations,
+and 320 invocations per iteration; the table records BenchmarkDotNet's p50.
+
+Environment: AMD Ryzen 7 9800X3D (8 cores / 16 logical processors), Windows 11
+Pro x64 build 26200, .NET SDK 10.0.302 / .NET 10.0.10, `rustc 1.97.1`.
+
+| Sustained delta + canonical window | p50 | Pinned §W-B budget | Result |
+|---|---:|---:|---:|
+| 100 KiB | 0.3921 ms | ≤0.5 ms | PASS |
+| 1 MiB | 0.4523 ms | ≤0.5 ms | PASS |
+| 8 MiB | 0.8920 ms | ≤1.0 ms | PASS |
+
+The 8 MiB / 1 MiB ratio is 1.97× against the ≤4× flatness budget: **PASS**.
+The optimization keeps immutable concurrent snapshots through the existing
+`Arc` ownership boundary while using `Arc::make_mut` plus in-place structure
+splices for the normal sequential edit path. The formal `--validate-budgets`
+runner exits non-zero on any point or flatness miss.

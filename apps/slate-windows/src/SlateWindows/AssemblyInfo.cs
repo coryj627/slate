@@ -5,6 +5,7 @@ using System.Windows;
 using System.Runtime.CompilerServices;
 
 [assembly: InternalsVisibleTo("SlateWindows.Tests")]
+[assembly: InternalsVisibleTo("SlateWindows.Benchmarks")]
 
 [assembly: ThemeInfo(
     ResourceDictionaryLocation.None,

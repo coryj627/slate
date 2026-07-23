@@ -35,4 +35,14 @@
                      Color="{StaticResource Slate.AccentColor}" />
     <SolidColorBrush x:Key="Slate.ErrorBrush"
                      Color="{StaticResource Slate.ErrorColor}" />
+    <SolidColorBrush x:Key="Slate.EditorHeadingBrush"
+                     Color="{StaticResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="Slate.EditorCodeBrush"
+                     Color="{StaticResource Slate.SecondaryTextColor}" />
+    <SolidColorBrush x:Key="Slate.EditorWikilinkBrush"
+                     Color="{StaticResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="Slate.EditorTagBrush"
+                     Color="{StaticResource Slate.AccentColor}" />
+    <SolidColorBrush x:Key="Slate.EditorMetadataBrush"
+                     Color="{StaticResource Slate.SecondaryTextColor}" />
 </ResourceDictionary>

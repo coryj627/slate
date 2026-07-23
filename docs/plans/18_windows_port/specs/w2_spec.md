@@ -19,6 +19,16 @@ Program: [00_program.md](../00_program.md) (decisions 4, 8, 10, 15; DoD §W-A/§
   one-shot 300 ms dispatcher idle debounce runs the hash tier, saves recheck under the
   monotonic revision gate, and any mismatch resets before the verified
   snapshot can reach core save.
+- **#381 implementation decision (2026-07-23):** each Avalon editor retains
+  the exact canonical semantic window its `DocumentColorizingTransformer`
+  paints. A 40 ms debounce requests the visible lines plus a 40-line margin
+  after edit/scroll/resize/theme changes; C# performs only UTF-8-byte ↔ UTF-16
+  coordinate conversion and an exhaustive kind-to-token mapping. Both §W-A
+  twins now serialize stateful window requests over the base corpus and
+  deterministic 100 KiB / 1 MiB / 8 MiB editor-scale fixtures. The formal
+  BenchmarkDotNet gate records 0.3921 / 0.4523 / 0.8920 ms p50 and 1.97×
+  flatness, all green after copy-on-write in-place structure splicing removed
+  W2-1's vector-recreation curve.
 - **§W-B budgets are pinned, not pending** (W0-4 `parity_matrix.md` §W-B): p50 ≤ 0.5 ms (100 KB), ≤ 0.5 ms (1 MB), ≤ 1.0 ms (8 MB), flatness p50(8 MB) ≤ 4× p50(1 MB). W2-1's "first numbers" and W2-2's BenchmarkDotNet run are recorded **against those numbers**.
 - **The §W-A skeleton already serializes editor spans** (and headings/blocks/search/links) over the `tests/fixtures/markdown/` corpus — incl. CRLF and mixed-ending fixtures — with committed goldens both platforms diff (`parity_golden/`, W0-3). W2-2's §W-A span rows **extend that harness and corpus** (editor-scale fixtures, windowed-request coverage), they do not build a new mechanism; serialization rules live in `CanonicalJson.cs` + the Swift twin, changed only together.
 - **C# census conventions** (W0-3): `[Trait("census", …)]`, `CensusTier` moderate/full tiers, serialized test assembly, `Support/` recorders — W2-1's drift-guard and edit-storm censuses (§W-E) follow them.
@@ -53,8 +63,8 @@ W2-1 first p50s on the recorded Windows runner are 0.1147 / 0.2008 /
 4. §W-A row: span streams for the fixture corpus byte-identical mac↔windows — extend the shipped W0-3 harness (its per-file `spans` artifact already covers the base corpus; add editor-scale fixtures and windowed-request coverage to both twins + goldens in the same PR).
 5. Semantic span data is retained on the host for W7-1 (the UIA peer consumes the same window the colorizer paints).
 
-- [ ] Colorizer over windowed spans; zero tokenization; budgets green
-- [ ] §W-A span rows green
+- [x] Colorizer over windowed spans; zero tokenization; budgets green
+- [x] §W-A span rows green
 
 ## W2-3 · In-editor interactions — PR 3
 

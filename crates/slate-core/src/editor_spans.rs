@@ -639,7 +639,7 @@ pub(crate) struct StructureSnapshot {
     len: usize,
     /// Byte positions (sorted, ascending) of every **lone CR** in the source
     /// — a `\r` not immediately followed by `\n` (#927). Non-empty gates
-    /// [`updated`](Self::updated) straight to a from-scratch re-parse:
+    /// [`update`](Self::update) straight to a from-scratch re-parse:
     /// pulldown's scanners disagree with each other about lone CRs
     /// (`scan_eol` treats `\r` as a line ending, `scan_nextline` is
     /// `\n`-only), so what follows one parses differently depending on
@@ -657,7 +657,7 @@ pub(crate) struct StructureSnapshot {
 
 impl StructureSnapshot {
     /// Build from a whole-document CommonMark parse (the oracle / fallback
-    /// path; also the suffix re-parse in [`updated`](Self::updated)).
+    /// path; also the suffix re-parse in [`update`](Self::update)).
     pub(crate) fn from_source(source: &str) -> Self {
         let mut blocks = Vec::new();
         let mut containers = Vec::new();
@@ -831,13 +831,13 @@ impl StructureSnapshot {
     /// [`lone_crs`](Self::lone_crs)). The buffer `debug_assert!`s
     /// `updated == from_source` on every edit, and the differential census is
     /// the proof.
-    pub(crate) fn updated<T: DocText + ?Sized>(
-        &self,
+    pub(crate) fn update<T: DocText + ?Sized>(
+        &mut self,
         new_source: &T,
         edit_start: usize,
         edit_old_end: usize,
         new_text_len: usize,
-    ) -> Self {
+    ) {
         // #927 gate: with a lone CR anywhere in the document, pulldown's
         // parse below it depends on arbitrarily distant context (its
         // scanners split on different EOL sets), so NO clean break or
@@ -848,11 +848,13 @@ impl StructureSnapshot {
         // so lone-CR-free documents (LF, CRLF, mixed) pay one bounded scan.
         let lone_crs = self.lone_crs_updated(new_source, edit_start, edit_old_end, new_text_len);
         if !lone_crs.is_empty() {
-            return Self::from_source(&new_source.slice_to_string(0, new_source.len()));
+            *self = Self::from_source(&new_source.slice_to_string(0, new_source.len()));
+            return;
         }
         let r = self.clean_break_before(new_source, edit_start);
         if r == 0 {
-            return Self::from_source(&new_source.slice_to_string(0, new_source.len()));
+            *self = Self::from_source(&new_source.slice_to_string(0, new_source.len()));
+            return;
         }
         let delta = new_text_len as isize - (edit_old_end - edit_start) as isize;
         let edit_new_end = edit_start + new_text_len;
@@ -879,24 +881,39 @@ impl StructureSnapshot {
                 edit_new_end,
                 delta,
             ) {
-                return self.splice(chunk_struct, r, p, delta, new_source.len());
+                self.splice_in_place(chunk_struct, r, p, delta, new_source.len());
+                return;
             }
 
             if chunk_end == new_source.len() {
                 // Reached EOF with no reconvergence — the chunk IS the whole
                 // suffix, so splice it as Phase 1 would (prefix `< r` ++ the
                 // shifted suffix), no extra parse.
-                return self.splice_suffix(chunk_struct, r, new_source.len());
+                self.splice_suffix_in_place(chunk_struct, r, new_source.len());
+                return;
             }
             chunk = chunk.saturating_mul(2);
         }
+    }
+
+    #[cfg(test)]
+    fn updated<T: DocText + ?Sized>(
+        &self,
+        new_source: &T,
+        edit_start: usize,
+        edit_old_end: usize,
+        new_text_len: usize,
+    ) -> Self {
+        let mut updated = self.clone();
+        updated.update(new_source, edit_start, edit_old_end, new_text_len);
+        updated
     }
 
     /// The first **reconvergence point** `P` strictly past `edit_new_end`: the
     /// start of a blank line where the freshly-parsed chunk (`chunk_struct` over
     /// `chunk_text == new_source[r..]`) has a clean break (cond 1), no OLD range
     /// covers `pd = P - delta` (cond 2), and the first non-blank line below `P`
-    /// in `new_source` begins at column 0 (cond 3). See [`updated`](Self::updated)
+    /// in `new_source` begins at column 0 (cond 3). See [`update`](Self::update)
     /// for why those three imply the new and shifted-old parses agree from `P` on.
     fn reconvergence_point<T: DocText + ?Sized>(
         &self,
@@ -948,76 +965,60 @@ impl StructureSnapshot {
     /// Splice prefix (`< r`) ++ middle chunk (shifted to `r`, `start < P`) ++
     /// shifted old tail (`start ≥ pd`, shifted by `+delta`). Block/container
     /// document order is preserved: prefix `< r ≤` middle `< P ≤` shifted tail.
-    fn splice(&self, chunk_struct: Self, r: usize, p: usize, delta: isize, new_len: usize) -> Self {
+    fn splice_in_place(
+        &mut self,
+        chunk_struct: Self,
+        r: usize,
+        p: usize,
+        delta: isize,
+        new_len: usize,
+    ) {
         let pd = (p as isize - delta) as usize;
         let mid = chunk_struct.shifted(r);
         let shift_tail = |v: isize| (v + delta) as usize;
 
-        let mut blocks: Vec<(usize, usize, u8)> = self
-            .blocks
-            .iter()
-            .copied()
-            .filter(|&(s, ..)| s < r)
-            .collect();
-        blocks.extend(mid.blocks.into_iter().filter(|&(s, ..)| s < p));
-        blocks.extend(
-            self.blocks
-                .iter()
-                .filter(|&&(s, ..)| s >= pd)
-                .map(|&(s, e, k)| (shift_tail(s as isize), shift_tail(e as isize), k)),
-        );
-
-        let mut containers: Vec<(usize, usize)> = self
-            .containers
-            .iter()
-            .copied()
-            .filter(|&(s, _)| s < r)
-            .collect();
-        containers.extend(mid.containers.into_iter().filter(|&(s, _)| s < p));
-        containers.extend(
-            self.containers
-                .iter()
-                .filter(|&&(s, _)| s >= pd)
-                .map(|&(s, e)| (shift_tail(s as isize), shift_tail(e as isize))),
-        );
-
-        Self {
-            blocks,
-            containers,
-            len: new_len,
-            // The splice paths run only behind the lone-CR gate, so the
-            // post-edit document provably has none — matching what
-            // `from_source` would compute.
-            lone_crs: Vec::new(),
+        let block_prefix_end = self.blocks.partition_point(|&(s, ..)| s < r);
+        let block_tail_start = self.blocks.partition_point(|&(s, ..)| s < pd);
+        for (s, e, _) in &mut self.blocks[block_tail_start..] {
+            *s = shift_tail(*s as isize);
+            *e = shift_tail(*e as isize);
         }
+        self.blocks.splice(
+            block_prefix_end..block_tail_start,
+            mid.blocks.into_iter().filter(|&(s, ..)| s < p),
+        );
+
+        let container_prefix_end = self.containers.partition_point(|&(s, _)| s < r);
+        let container_tail_start = self.containers.partition_point(|&(s, _)| s < pd);
+        for (s, e) in &mut self.containers[container_tail_start..] {
+            *s = shift_tail(*s as isize);
+            *e = shift_tail(*e as isize);
+        }
+        self.containers.splice(
+            container_prefix_end..container_tail_start,
+            mid.containers.into_iter().filter(|&(s, _)| s < p),
+        );
+
+        self.len = new_len;
+        // The splice paths run only behind the lone-CR gate, so the post-edit
+        // document provably has none — matching what `from_source` computes.
+        self.lone_crs.clear();
     }
 
     /// Phase-1 splice (no reconvergence found): prefix (`< r`) ++ the whole
     /// re-parsed suffix (`chunk_struct` over `new_source[r..EOF]`, shifted to
     /// `r`). A clean break at `r` makes "start < r" keep exactly the prefix.
-    fn splice_suffix(&self, suffix: Self, r: usize, new_len: usize) -> Self {
+    fn splice_suffix_in_place(&mut self, suffix: Self, r: usize, new_len: usize) {
         let suffix = suffix.shifted(r);
-        let mut blocks: Vec<(usize, usize, u8)> = self
-            .blocks
-            .iter()
-            .copied()
-            .filter(|&(s, ..)| s < r)
-            .collect();
-        blocks.extend(suffix.blocks);
-        let mut containers: Vec<(usize, usize)> = self
-            .containers
-            .iter()
-            .copied()
-            .filter(|&(s, _)| s < r)
-            .collect();
-        containers.extend(suffix.containers);
-        Self {
-            blocks,
-            containers,
-            len: new_len,
-            // Behind the lone-CR gate — see `splice`.
-            lone_crs: Vec::new(),
-        }
+        let block_prefix_end = self.blocks.partition_point(|&(s, ..)| s < r);
+        self.blocks.truncate(block_prefix_end);
+        self.blocks.extend(suffix.blocks);
+        let container_prefix_end = self.containers.partition_point(|&(s, _)| s < r);
+        self.containers.truncate(container_prefix_end);
+        self.containers.extend(suffix.containers);
+        self.len = new_len;
+        // Behind the lone-CR gate — see `splice_in_place`.
+        self.lone_crs.clear();
     }
 }
 
