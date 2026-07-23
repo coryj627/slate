@@ -19,13 +19,11 @@ Program: [00_program.md](../00_program.md) (decisions 1, 2, 9, 15; DoD §W-C). B
 Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral spec** (states, transitions, announcements, keyboard model — including any Reduce Motion equivalents); the WPF implementation is idiomatic WPF (MVVM view models over the FFI), **not** a SwiftUI transliteration. Where mac behavior encodes an AppKit workaround (documented in memory/PRs), port the *intent*, and record the divergence in gap_analysis.
 
 **Execution status (updated 2026-07-23): W1-0 through W1-4 and remediation
-through W1-RT-18 are merged through PR #1031 / squash commit
-`a443264f4be57e186d106001c3ab500e4622ec97`. W1-RT-19 is implemented as a
-15-authored-file change on the current remediation branch; its first independent
-review findings are remediated, and closure is gated by three exact-tree
-re-reviews plus macOS CI.
-Final code and automated closure remains open for W1-RT-19, and human
-acceptance evidence remains pending.**
+through W1-RT-19 are merged through PR #1032 / squash commit
+`dfe1d5164ea225448e7d8506779d36ce35376e7a`. W1 repository remediation and
+automated acceptance are complete. Named-human Narrator/NVDA/JAWS and
+Contrast-theme acceptance evidence remains pending as a separate release
+blocker.**
 
 Three independent reviewers audited every W1 workstream
 across completeness, correctness, maintainability, documentation, reliability,
@@ -39,7 +37,7 @@ levels, Windows core-suite portability, LiveSync handle containment, and op-log
 event-index synchronization—were fixed and regression-tested. The final audit
 then identified fatal event-rebuild read rollback, progress-event/UIA evidence,
 Windows process-wide Quick Open serialization, and macOS page-one file-tree
-responsiveness gaps. RT16–RT18 are closed; RT19 now moves whole-level native
+responsiveness gaps. RT16–RT19 are closed; RT19 moves whole-level native
 loading, cancellable organization, and live key reorganization to one serial
 non-main queue, publishes worker-built indexes without large MainActor scans,
 retires obsolete and transient level/presentation/targeted-owner buffers through
@@ -47,7 +45,7 @@ a main-turn cleanup barrier, batches partial-child retry teardown, bounds
 restored and Expand Loaded admission to one child level with deterministic
 ordering, final recency persistence, and truthful completion copy, and
 regression-locks async mutation/metadata races with
-deadline-bounded tests; its final gates remain.
+deadline-bounded tests; its automated gates passed.
 Ranked closure
 evidence is tracked in
 [`../reports/w1_post_merge_adversarial_audit_2026-07-22.md`](../reports/w1_post_merge_adversarial_audit_2026-07-22.md).
@@ -77,6 +75,19 @@ RT18 then merged in PR #1031 as
 `a443264f4be57e186d106001c3ab500e4622ec97`; final-head Windows Actions run
 29990822473 passed the complete core/CLI, 179-test Windows, live FlaUI/axe,
 retained-evidence, and formatting gates.
+RT19 then merged in PR #1032 as
+`dfe1d5164ea225448e7d8506779d36ce35376e7a`; its final head
+`b825dd81a13521b6b49048a5f8329cc08fc00522` received three independent
+exact-tree code-ready reviews, and macOS XCTest
+[run 30011366576](https://github.com/coryj627/slate/actions/runs/30011366576),
+accessibility
+[run 30011366383](https://github.com/coryj627/slate/actions/runs/30011366383),
+SPDX [run 30011366393](https://github.com/coryj627/slate/actions/runs/30011366393),
+[a11y-check](https://github.com/coryj627/slate/runs/89220257824), and
+[Semgrep](https://semgrep.dev/orgs/startingblind/projects/6298114/scans/199190025)
+all passed. The account's monthly Codoki review quota was exhausted, as
+[recorded on PR #1032](https://github.com/coryj627/slate/pull/1032#issuecomment-5058118985),
+so no Codoki verdict is claimed.
 Interactive FlaUI + axe-windows remains a required CI gate
 (`SLATE_REQUIRE_UI_AUTOMATION=1`). Human
 Narrator/NVDA/JAWS and the four built-in plus customized Contrast-theme pass

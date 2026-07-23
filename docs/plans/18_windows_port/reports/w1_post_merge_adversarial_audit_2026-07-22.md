@@ -125,14 +125,17 @@ than that ceiling.
    authoritative W1 status/evidence records.
 16. **macOS file-tree page-one responsiveness** — W1-RT-19. Move root/child
    page-one provider and projection work off `MainActor`, preserve restoration
-   and invalidation semantics, and add blocked-provider regressions. Expected:
-   3–6 authored files.
+   and invalidation semantics, and add blocked-provider regressions. Actual: 15
+   authored files; independent findings expanded the original 3–6 estimate
+   while remaining below the 22-file cap.
 
 Every group follows the same gate: focused tests, full applicable local gates,
 an adversarial diff review across all eight audit dimensions, correction of any
 new finding, PR publication, 120-second CI/review polling, all CI green, then
-squash merge before the next group. Codoki is quota-unavailable through
-2026-08-01. PRs handled during that outage use a documented exception requiring
+squash merge before the next group. The account's monthly Codoki review quota
+is exhausted through its 2026-08-01 reset, as
+[recorded on PR #1032](https://github.com/coryj627/slate/pull/1032#issuecomment-5058118985).
+PRs handled during that outage use a documented exception requiring
 three independent read-only adversarial reviews and fully green CI; they do not
 claim a Codoki score or “safe to merge” verdict that was not produced.
 
@@ -348,8 +351,8 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   The PR was squash-merged as
   `a443264f4be57e186d106001c3ab500e4622ec97` under the documented outage
   exception.
-- W1-RT-19 is implemented as a 15-authored-file change on the current
-  remediation branch. Production root and child page-one fetch, continuation
+- W1-RT-19 closed in PR #1032 as a 15-authored-file change. Production root and
+  child page-one fetch, continuation
   draining, shared pure organization, projection, metadata-overlay
   re-preparation, and restored-chain materialization run on one dedicated
   serial non-main queue rather than Swift's cooperative executor. Cancellation
@@ -415,14 +418,23 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   found the overlay ordering,
   mutation reconciliation, failure cleanup, cooperative-executor, large-level
   indexing, duplicated organization, raw error-copy, and unbounded-test gaps;
-  all are remediated. Closure remains gated by three exact-tree re-reviews. No
-  Swift toolchain is available on the Windows development host; macOS
-  compile/test CI remains the executable gate.
+  all are remediated. On final head
+  `b825dd81a13521b6b49048a5f8329cc08fc00522`, three independent exact-tree
+  reviewers returned code-ready; macOS XCTest
+  [run 30011366576](https://github.com/coryj627/slate/actions/runs/30011366576),
+  accessibility
+  [run 30011366383](https://github.com/coryj627/slate/actions/runs/30011366383),
+  SPDX [run 30011366393](https://github.com/coryj627/slate/actions/runs/30011366393),
+  [a11y-check](https://github.com/coryj627/slate/runs/89220257824), and
+  [Semgrep](https://semgrep.dev/orgs/startingblind/projects/6298114/scans/199190025)
+  all passed. The account's Codoki review quota was exhausted, so no Codoki
+  verdict is claimed. The PR was
+  squash-merged as `dfe1d5164ea225448e7d8506779d36ce35376e7a`.
 
 ## Current closure status
 
-The remediation sequence from PR #1011 through PR #1031 is merged on
-`main` at `a443264f4be57e186d106001c3ab500e4622ec97`. The current mapping is:
+The remediation sequence from PR #1011 through PR #1032 is merged on
+`main` at `dfe1d5164ea225448e7d8506779d36ce35376e7a`. The current mapping is:
 
 | Gap | Closing PR(s) | Repository status |
 |---|---|---|
@@ -443,10 +455,9 @@ The remediation sequence from PR #1011 through PR #1031 is merged on
 | W1-RT-16 | #1029 | Closed |
 | W1-RT-17 | #1030 | Closed |
 | W1-RT-18 | #1031 | Closed |
-| W1-RT-19 | Current remediation branch (15 authored files) | Implementation/test code complete; three independent exact-tree re-reviews and macOS CI gate closure |
+| W1-RT-19 | #1032 | Closed |
 
-W1 repository remediation and automated acceptance are not yet complete:
-W1-RT-19 must merge first. Independently, milestone release
-acceptance remains blocked under WGA-9 until a named human records the Narrator
+W1 repository remediation and automated acceptance are complete. Independently,
+milestone release acceptance remains blocked under WGA-9 until a named human records the Narrator
 smoke, NVDA and JAWS passes, and all four built-in plus one customized Windows
 Contrast-theme passes in `w_c_matrix.md`.
