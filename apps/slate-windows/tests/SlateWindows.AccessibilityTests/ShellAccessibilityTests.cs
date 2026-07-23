@@ -213,6 +213,14 @@ public sealed class ShellAccessibilityTests
                     $"{automationId} does not expose Toggle.");
             }
 
+            AutomationElement tabs = WaitForElement(
+                window,
+                "WorkspaceTabs",
+                TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(
+                tabs,
+                "Opening a vault did not focus its active TabControl.");
+
             AssertActionButtonCensus(
                 WaitForElement(window, "SidebarBatchActions", TimeSpan.FromSeconds(10)),
                 automation,
@@ -242,14 +250,6 @@ public sealed class ShellAccessibilityTests
                 WaitForElement(window, "SidebarShortcutsActions", TimeSpan.FromSeconds(10)),
                 automation,
                 "Remove shortcut");
-
-            AutomationElement tabs = WaitForElement(
-                window,
-                "WorkspaceTabs",
-                TimeSpan.FromSeconds(10));
-            AssertEventuallyFocused(
-                tabs,
-                "Opening a vault did not focus its active TabControl.");
 
             AutomationElement filesTree = WaitForElement(
                 window,
