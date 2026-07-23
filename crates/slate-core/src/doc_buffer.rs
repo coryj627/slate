@@ -164,15 +164,17 @@ impl DocBufferState {
         // `editor_spans` (`incremental_structure_*`, 100k+ sequences + the
         // exhaustive single-edit and caveat suites) is the real correctness
         // guarantee. Do not weaken it.
-        let updated = self
-            .structure
-            .updated(&self.buffer, start_byte, end_byte, new_text.len());
+        Arc::make_mut(&mut self.structure).update(
+            &self.buffer,
+            start_byte,
+            end_byte,
+            new_text.len(),
+        );
         debug_assert_eq!(
-            updated,
-            StructureSnapshot::from_source(&self.buffer.to_string()),
+            self.structure.as_ref(),
+            &StructureSnapshot::from_source(&self.buffer.to_string()),
             "#404: incremental structure diverged from from_source (edit_start={start_byte})"
         );
-        self.structure = Arc::new(updated);
 
         // Maintain the cached frontmatter-BODY structure (#404 Task B). The
         // body framing only moves when the frontmatter itself is touched, which
@@ -192,15 +194,15 @@ impl DocBufferState {
                 buf: &self.buffer,
                 base: new_fm_end,
             };
-            let body_updated = self.body_structure.updated(
+            Arc::make_mut(&mut self.body_structure).update(
                 &body,
                 start_byte - new_fm_end,
                 end_byte - old_fm_end,
                 new_text.len(),
             );
             debug_assert_eq!(
-                body_updated,
-                StructureSnapshot::from_source(
+                self.body_structure.as_ref(),
+                &StructureSnapshot::from_source(
                     &self
                         .buffer
                         .byte_slice_to_string(new_fm_end..self.buffer.len_bytes())
@@ -209,7 +211,6 @@ impl DocBufferState {
                  (fm_end={new_fm_end} body_edit_start={})",
                 start_byte - new_fm_end
             );
-            self.body_structure = Arc::new(body_updated);
         } else {
             // The edit touched (or shifted) the frontmatter block — rare. Rebuild
             // the body framing from scratch; the raw structure above already
@@ -422,6 +423,49 @@ mod tests {
         assert_eq!(left.len_utf16(), right.len_utf16());
         assert_eq!(left.text().len(), right.text().len());
         assert_ne!(left.content_hash(), right.content_hash());
+    }
+
+    #[test]
+    fn cloned_snapshot_is_isolated_from_in_place_structure_updates() {
+        let original =
+            "---\ntitle: Snapshot\n---\n\n# Heading\n\nBody with [[old]] and #tag.\n\nTail.\n";
+        let mut live = DocBufferState::new(original);
+        let mut snapshot = live.clone();
+        assert!(Arc::ptr_eq(&live.structure, &snapshot.structure));
+        assert!(Arc::ptr_eq(&live.body_structure, &snapshot.body_structure));
+
+        let live_edit = original.find("Body").unwrap();
+        live.apply_edit(live_edit, "Body".len(), "Live body");
+        let live_text = original.replacen("Body", "Live body", 1);
+        assert!(!Arc::ptr_eq(&live.structure, &snapshot.structure));
+        assert!(!Arc::ptr_eq(&live.body_structure, &snapshot.body_structure));
+        assert_eq!(snapshot.text(), original);
+        assert_eq!(
+            snapshot.highlight_in_range(0, snapshot.len_utf16()),
+            DocBufferState::new(original).highlight_in_range(0, original.encode_utf16().count())
+        );
+        assert_eq!(live.text(), live_text);
+        assert_eq!(
+            live.highlight_in_range(0, live.len_utf16()),
+            DocBufferState::new(&live_text).highlight_in_range(0, live_text.encode_utf16().count())
+        );
+
+        let snapshot_edit = original.find("old").unwrap();
+        snapshot.apply_edit(snapshot_edit, "old".len(), "snapshot");
+        let snapshot_text = original.replacen("old", "snapshot", 1);
+        let second_live_edit = live_text.find("old").unwrap();
+        live.apply_edit(second_live_edit, "old".len(), "live");
+        let second_live_text = live_text.replacen("old", "live", 1);
+        assert_eq!(
+            snapshot.highlight_in_range(0, snapshot.len_utf16()),
+            DocBufferState::new(&snapshot_text)
+                .highlight_in_range(0, snapshot_text.encode_utf16().count())
+        );
+        assert_eq!(
+            live.highlight_in_range(0, live.len_utf16()),
+            DocBufferState::new(&second_live_text)
+                .highlight_in_range(0, second_live_text.encode_utf16().count())
+        );
     }
 
     /// Apply a UTF-16 `(start, old_len, new)` delta to a `String` the way

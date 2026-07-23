@@ -1,4 +1,7 @@
 <Solution>
+  <Folder Name="/benchmarks/">
+    <Project Path="benchmarks/SlateWindows.Benchmarks/SlateWindows.Benchmarks.csproj" />
+  </Folder>
   <Folder Name="/src/">
     <Project Path="src/SlateUniffi/SlateUniffi.csproj" />
     <Project Path="src/SlateWindows/SlateWindows.csproj" />

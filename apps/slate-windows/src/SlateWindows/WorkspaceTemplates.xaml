@@ -65,6 +65,7 @@
                                    Margin="12"
                                    Padding="12"
                                    Document="{Binding EditorDocument}"
+                                   HighlightSession="{Binding EditorSession}"
                                    WordWrap="True"
                                    ShowLineNumbers="False"
                                    VerticalScrollBarVisibility="Auto"

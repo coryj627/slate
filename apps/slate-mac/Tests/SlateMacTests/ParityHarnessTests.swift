@@ -100,6 +100,7 @@ final class ParityHarnessTests: XCTestCase {
         }
         artifacts["search.json"] = Data(try searchArtifact(session: session, cancel: cancel).utf8)
         artifacts["links.json"] = Data(try linksArtifact(session: session, relPaths: files).utf8)
+        artifacts["editor_scale.json"] = Data(editorScaleArtifact().utf8)
         return artifacts
     }
 
@@ -110,15 +111,11 @@ final class ParityHarnessTests: XCTestCase {
         j.raw("{\"file\":").str(relPath)
 
         j.raw(",\"spans\":[")
-        let spans = editorHighlightSpans(text: text)
-        for (i, span) in spans.enumerated() {
-            if i > 0 { j.raw(",") }
-            j.raw("{\"start\":").num(UInt64(span.startByte))
-                .raw(",\"end\":").num(UInt64(span.endByte))
-                .raw(",\"kind\":").str(spanKindName(span.kind))
-                .raw("}")
-        }
+        appendSpans(j, editorHighlightSpans(text: text))
         j.raw("]")
+
+        j.raw(",\"span_windows\":")
+        appendSpanWindows(j, text: text)
 
         j.raw(",\"headings\":[")
         let headings = extractHeadings(source: text)
@@ -145,6 +142,65 @@ final class ParityHarnessTests: XCTestCase {
         }
         j.raw("]}")
         return j.output + "\n"
+    }
+
+    private static func editorScaleArtifact() -> String {
+        let j = CanonicalJson()
+        let sizes = [100 * 1024, 1024 * 1024, 8 * 1024 * 1024]
+        j.raw("{\"sizes\":[")
+        for (index, size) in sizes.enumerated() {
+            if index > 0 { j.raw(",") }
+            let text = editorScaleFixture(targetBytes: size)
+            j.raw("{\"bytes\":").num(UInt64(size)).raw(",\"span_windows\":")
+            appendSpanWindows(j, text: text)
+            j.raw("}")
+        }
+        j.raw("]}")
+        return j.output + "\n"
+    }
+
+    private static func appendSpanWindows(_ j: CanonicalJson, text: String) {
+        let buffer = DocumentBuffer(text: text)
+        let length = text.utf16.count
+        let anchors = [0, length / 2, length]
+        j.raw("[")
+        for (index, anchor) in anchors.enumerated() {
+            if index > 0 { j.raw(",") }
+            let start = max(0, anchor - 32)
+            let end = min(length, anchor + 32)
+            let ranged = buffer.highlightInRange(
+                dirtyStartUtf16: UInt32(start),
+                dirtyEndUtf16: UInt32(end))
+            j.raw("{\"request_start_utf16\":").num(UInt64(start))
+                .raw(",\"request_end_utf16\":").num(UInt64(end))
+                .raw(",\"applied_start\":").num(UInt64(ranged.appliedStart))
+                .raw(",\"applied_end\":").num(UInt64(ranged.appliedEnd))
+                .raw(",\"spans\":[")
+            appendSpans(j, ranged.spans)
+            j.raw("]}")
+        }
+        j.raw("]")
+    }
+
+    private static func appendSpans(_ j: CanonicalJson, _ spans: [EditorSpan]) {
+        for (index, span) in spans.enumerated() {
+            if index > 0 { j.raw(",") }
+            j.raw("{\"start\":").num(UInt64(span.startByte))
+                .raw(",\"end\":").num(UInt64(span.endByte))
+                .raw(",\"kind\":").str(spanKindName(span.kind))
+                .raw("}")
+        }
+    }
+
+    private static func editorScaleFixture(targetBytes: Int) -> String {
+        let block =
+            "## Section\n\nProse with [[Wikilink]] and #tag plus `code` and [@citation].\n\n"
+        var text = ""
+        text.reserveCapacity(targetBytes + block.utf8.count)
+        while text.utf8.count < targetBytes {
+            text += block
+        }
+        return String(text.prefix(targetBytes))
     }
 
     private static func searchArtifact(session: VaultSession, cancel: CancelToken) throws -> String {
