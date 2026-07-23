@@ -1,4 +1,4 @@
-# W1 post-merge adversarial audit — 2026-07-22
+# W1 post-merge adversarial audit — 2026-07-22 (updated 2026-07-23)
 
 ## Scope and method
 
@@ -10,7 +10,7 @@ architecture map, the W1 specification and execution report, the existing W1
 red-team suites, hostile-input and concurrency source probes, the WPF control
 and automation contracts, and a clean Release build/test baseline.
 
-The baseline is:
+The pre-remediation baseline was:
 
 - `dotnet build apps/slate-windows/SlateWindows.slnx --no-restore --configuration Release`:
   pass, zero warnings.
@@ -43,11 +43,15 @@ green.
 | W1-RT-08 | Medium / release blocker | Accessibility, completeness | Interactive FlaUI/axe is CI-only, and Narrator, NVDA, JAWS, four built-in Contrast themes, and a customized Contrast theme remain unrecorded. Code contracts are strong, but the milestone cannot claim human AT acceptance without this evidence. | Automated evidence retention is implemented and verified by Actions run 29926688975: its retained TRX and three dated, revision-bound JSON summaries passed with zero axe errors. Main-window discovery retries transient UIA COM timeouts only within its existing bounded window, with regression coverage. Human-only AT and Contrast-theme rows remain explicitly pending until performed by a named human operator; this release blocker cannot be closed by code alone. |
 | W1-RT-09 | Low / P3 | Reliability | Several temporary-file cleanup blocks catch `IOException` but not `UnauthorizedAccessException`, allowing cleanup failure to mask an earlier primary exception. | Shared cleanup is best-effort for both exception classes and preserves the original failure; unit coverage pins this behavior. |
 | W1-RT-10 | Low / P3 | Maintainability, CI | The test project executes `HostLogProbe.dll` without a build dependency. `dotnet test` from a clean tree fails unless the full solution build happened first. | Remediated in the release-evidence PR: the test project declares and contract-tests a build-only `HostLogProbe` project reference. A clean standalone Release invocation rebuilt the probe and passed 127/127 tests on 2026-07-22. |
-| W1-RT-11 | Low / P3 | Maintainability | After security/performance remediation, `FilesSidebarViewModel.cs` had grown to 2,653 lines while `WorkspaceViewModel.cs` remained 1,612 lines, with persistence, asynchronous work, command policy, and presentation projection colocated. This raises review and race-analysis cost, although no defect follows from size alone. | Complete. Sidebar filter/tree/import/session-work ownership is isolated in 432/665/472/133-line partials, leaving the primary sidebar file at 1,688 lines after the complete synchronous admission wiring. Workspace persistence and layout policy occupy 212/773-line owners, leaving the primary workspace file at 659 lines. Structure censuses guard representative declarations against accidental boundary collapse. Each extraction/remediation remained within the authored-file cap. |
+| W1-RT-11 | Low / P3 | Maintainability | After security/performance remediation, `FilesSidebarViewModel.cs` had grown to 2,653 lines while `WorkspaceViewModel.cs` remained 1,612 lines, with persistence, asynchronous work, command policy, and presentation projection colocated. This raises review and race-analysis cost, although no defect follows from size alone. | Complete. Sidebar filter/tree/child-expansion/import/session-work ownership is isolated in 432/653/470/472/135-line partials, leaving the primary sidebar file at 1,809 lines after later synchronous admission wiring. Workspace persistence and layout policy occupy 212/773-line owners, leaving the primary workspace file at 659 lines. Structure censuses guard representative declarations against accidental boundary collapse. Each extraction/remediation remained within the authored-file cap. |
 | W1-RT-12 | Medium / P2 | Performance, reliability | After the top-K core contract landed, macOS `QuickSwitcherModel` still called ranking synchronously from `@MainActor`; candidate construction also made one display-name FFI call per file. Opening or typing in a large vault could therefore block keyboard and assistive-technology interaction, and superseded work had no publication owner. | Candidate capture is value-only; a 60 ms debounced, process-scoped serial background actor constructs FFI inputs and ranks with at most one native call active across sheet lifetimes; query mutation synchronously advances a monotonic publication generation; a surviving selection is retained, revealed in the rebuilt lazy list, and kept inert while stale rows are absent; synthesized stationary-pointer hover cannot steal it; and every explicit dismissal synchronously cancels publication before removing the sheet. The sheet exposes an accessible loading state. Deterministic blocked-worker, default-worker-identity, cross-model queue-admission/serialization, queued-supersession, selection-retention, viewport-target and hover-admission decision, dismissal-cancellation, announcement-cancellation, and max-concurrency tests pin their respective contracts; mac CI remains the view-integration compile gate. |
 | W1-RT-13 | Medium / P2 | Performance, reliability, accessibility | Ordinary Windows file-tree folder expansion called the native child provider, restored descendant state, sorted and projected as many as 5,000 rows, and appended them to the live `ObservableCollection` synchronously on the UI thread. A large folder could stall keyboard and UI Automation interaction even though root refresh and bulk expansion were already asynchronous. | Native provider work, projection, sorting, and restored-descendant construction run off the UI thread through the shared serial tree-provider lane. Collapse, refresh, bulk expansion, close, and shutdown cancel or supersede work into an honest accessible retry state. Attachment identity rejects detached nodes before provider admission; operation identity, tree generation, and root identity reject stale publication; and the UI receives one prebuilt child collection swap. Ordinary and bulk requests begun during refresh await its UI publication before snapshot/provider work, while canceling that refresh cascades to both deferred dependents. Deterministic 5,001-item blocked-provider return, supersession, refresh precedence/cancellation cascade, post-refresh detached admission, sibling serialization/canceled queue, failure/retry, canceled-close retry, restoration, close, and direct-disposal tests pin the contract; interactive UIA covers ExpandCollapse and native Right/Left behavior with focus retention. |
 | W1-RT-14 | Medium / P2 | Performance, reliability | Core `DirListing.dirs` is still returned as one complete directory array, and directory summaries can recompute descendant state before any host-level page limit is applied. The Windows caller can bound file lookahead to 5,001 in one request, but it cannot place a true bound on a directory-heavy level or guarantee a stable multi-page snapshot. | Core exposes a bounded, deterministic, snapshot-consistent directory-page contract with explicit continuation/truncation state and no repeated descendant-summary traversal. Rust/UniFFI/host goldens cover directory-only overflow, mixed ordering, cancellation and mutation between pages; a large-directory benchmark demonstrates bounded output and work per page. |
 | W1-RT-15 | High / P1 | Correctness, reliability, security, CI portability | Windows CI ran only 7 atomic-rename and 5 path-adapter core tests. Separating the intentionally long census tier exposed five Windows-only fixture/assertion failures. Independent review then found a Windows LiveSync reparse/parent-swap escape and a real save/compaction/rebuild event-index race that could duplicate, orphan, or lose repair obligations. | Windows CI runs the complete bounded non-census `slate-core` package plus doctests. Fixtures and platform assertions are honest; Windows LiveSync walks pinned no-follow handles and reopens only the validated object; save and compaction hold their per-log guard from before durable marker publication through event-index commit; atomic rebuilds use one deadlock-safe try-locked log at a time. Escape, contention rollback/retry, and 100-run race stress regressions pass. |
+| W1-RT-16 | Medium / P2 | Reliability, correctness | A global event-index rebuild deleted all rows and markers, then treated any fatal `read_oplog` header/I/O error as a successful empty contribution. Missing logs and torn entry tails already degrade to `Ok(empty/prefix)`; an actual `Err` could therefore commit a partial index and erase its retry obligation. | Fatal reads propagate out of the rebuild transaction. A deterministic two-log regression corrupts the later log header after another log was processed, proves every prior row and marker rolls back exactly, repairs the log, and proves retry convergence. |
+| W1-RT-17 | Medium / P2 | Accessibility, correctness | The UI progress listener used one overwrite slot, so a fast scan could coalesce `Started`, `FileIndexed`, and `Finished` into only `Finished`; the terminal handler did not restore the report total, allowing a two-file scan to expose a false 1/1 `RangeValue`. The live gate also lacked scan `RangeValue` and sidebar organization/action pattern assertions. | Preserve semantic start/latest-progress/terminal boundaries in one bounded ordered drain; terminal state derives its total independently. A deterministic queued-drain test pins 2/2 and announcements. Live UIA asserts the settled progress range plus exact Selection, Toggle, ExpandCollapse, and Invoke coverage for sidebar controls/actions. |
+| W1-RT-18 | Medium / P2 | Performance, reliability | Windows Quick Open cancellation prevents stale publication but cannot stop a native rank already executing; each debounced query starts an independent `Task.Run`, so ranks can overlap across queries and view-model lifetimes despite the process-wide serialization contract. | One process-scoped serial worker admits at most one native rank across all view models, discards canceled queued work before native entry, and retains generation guards. Blocked-ranker tests prove caller return, newest-only publication, cross-lifetime serialization, and maximum native concurrency one. |
+| W1-RT-19 | Medium / P2 | Performance, accessibility, reliability | macOS file-tree root, first child page, projection, and restored-descendant recursion execute synchronously on `@MainActor` for up to 5,000 rows; only continuation pages are detached. A blocked provider can prevent loading state, keyboard, and VoiceOver updates. | Page-one provider/projection/restoration work runs off-main with session, generation, attachment, expanded-state, collapse, and rebind guards. Deterministic blocked-provider, stale/collapse/rebind/failure/restoration tests pin prompt actor return and newest-state-only publication. |
 
 ## Remediation PR groups
 
@@ -106,6 +110,21 @@ than that ceiling.
    and gate the full non-census core package in `windows.yml`. Actual: 16
    authored files; the independent security and synchronization findings
    expanded the original 7–10 estimate while remaining below the 22-file cap.
+13. **Fatal event-index rebuild rollback** — W1-RT-16. Propagate fatal log
+   reads out of the global rebuild transaction and pin exact two-log
+   row/marker rollback plus repaired retry. Actual: 5 authored files, including
+   the three authoritative W1 status records reopened by the finding.
+14. **Progress semantics and live UIA census** — W1-RT-17. Replace the
+   overwrite-only progress mailbox with bounded ordered semantic slots, derive
+   the terminal total from the report, and exercise live scan/sidebar patterns.
+   Expected: 5–7 authored files.
+15. **Windows Quick Open process worker** — W1-RT-18. Serialize native ranks
+   process-wide, reject canceled queued work before FFI, and pin cross-lifetime
+   maximum concurrency one. Expected: 3–5 authored files.
+16. **macOS file-tree page-one responsiveness** — W1-RT-19. Move root/child
+   page-one provider and projection work off `MainActor`, preserve restoration
+   and invalidation semantics, and add blocked-provider regressions. Expected:
+   3–6 authored files.
 
 Every group follows the same gate: focused tests, full applicable local gates,
 an adversarial diff review across all eight audit dimensions, correction of any
@@ -196,7 +215,7 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   CI lane, including mac XCTest and SwiftUI accessibility, passed in Actions
   run 29950708145 under the documented Codoki-outage exception. The PR was
   squash-merged as `866d3c92c43a630edda7aa1943dbbf1519fb49e7`.
-- W1-RT-13 is remediated in the current small PR: an ordinary expansion owns a
+- W1-RT-13 closed by PR #1026: an ordinary expansion owns a
   cancellable per-node operation, shares the sidebar's serial tree-provider
   lane and session-work admission barrier, builds the complete visible child
   collection away from the UI thread, and publishes it with operation,
@@ -213,7 +232,9 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   `CODE-READY: YES`. Every CI lane passed for revision
   `7a860ca962b33bfe50d348ae1efb46c12679e3ce`; Windows Actions run 29956533198
   includes the live ExpandCollapse/Right/Left accessibility gate and evidence
-  upload. W1-RT-13 is closed under the documented Codoki-outage exception.
+  upload. The PR was squash-merged as
+  `81a108220a7202dc414d53286b644bd4ca290323` under the documented
+  Codoki-outage exception.
 - W1-RT-14 closed by PR #1027, a 22-authored-file change. Its first three
   independent reviews blocked publication: macOS dropped continuation
   directories; page reads had an external-writer TOCTOU; nullable cursor
@@ -251,7 +272,7 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   checks passed, and the PR was squash-merged as
   `985061e9198d00db319701aed8f1d2b63ac86f0d` under the documented
   Codoki-outage exception.
-- W1-RT-15 is remediated in the current small PR. The full non-census Windows
+- W1-RT-15 closed by PR #1028, a 16-authored-file change. The full non-census Windows
   run no longer asks NTFS for POSIX-only `*`, `?`, or `|` names; those cases
   remain covered on supporting hosts while cross-platform SQL wildcard and
   punctuated-parent cases still run on Windows. Local-time DQL regressions use
@@ -270,4 +291,59 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   its two narrow filters with the complete non-census package command. Repeated
   exact local gates passed in 30.1–31.9 seconds: 1,615 unit, 364 integration,
   and 2 doctests passed; 2 intentionally ignored and 50 census/timing tests
-  were excluded from the unit binary.
+  were excluded from the unit binary. CI first exposed a Unix-only local-time
+  test-harness assumption: Windows does not honor `TZ=America/New_York` through
+  Chrono. The corrected tests retain deterministic New York/DST child-process
+  coverage on Unix and straddle the actual configured local-midnight boundary
+  on Windows. Three independent final reviewers returned `CODE-READY: YES`,
+  including targeted reviews of both CI repairs. On final revision
+  `9fac9b2007d0cc7c12ef17fe12c36938796af826`, all seven PR checks passed:
+  Windows Actions run 29980921181 included the complete core package, Windows
+  tests, live FlaUI + axe, evidence upload, and format gate; Mac Actions run
+  29980921180 passed XCTest; and Actions run 29980921192 passed workspace
+  formatting/Clippy, nextest, and bench compilation. The PR was squash-merged
+  as `726157a858b06fcde13b6ed0936e753848675433` under the documented
+  Codoki-outage exception.
+- W1-RT-16 is addressed by PR #1029. Fatal op-log reads
+  now abort the immediate rebuild transaction instead of silently contributing
+  no events. A two-log corrupt-header regression proves the global delete and
+  partial reinserts roll back with the repair marker, then restores the log and
+  proves exact successful retry convergence. Both rollback tests pass together;
+  the complete bounded package passes 1,616 unit, 364 integration, and 2
+  doctests; and workspace all-target Clippy is clean. Publication and three
+  independent final reviews are complete; CI and merge are pending.
+- W1-RT-17 through W1-RT-19 remain open and are assigned to the next three
+  small remediation groups above. They must not be represented as automated or
+  code closure until their focused evidence and required CI lanes pass.
+
+## Current closure status
+
+The remediation sequence from PR #1011 through PR #1028 is merged on
+`main` at `726157a858b06fcde13b6ed0936e753848675433`. The final mapping is:
+
+| Gap | Closing PR(s) | Repository status |
+|---|---|---|
+| W1-RT-01 | #1011, #1012 | Closed |
+| W1-RT-02, W1-RT-09 | #1012 | Closed |
+| W1-RT-03 | #1013, #1023 | Closed |
+| W1-RT-04 | #1013 | Closed |
+| W1-RT-05 | #1014 | Closed |
+| W1-RT-06 | #1015 | Closed |
+| W1-RT-07 | #1016, #1024 | Closed |
+| W1-RT-08 | #1017 | Code and automated evidence closed; named-human Narrator/NVDA/JAWS and Contrast-theme evidence remains a release blocker |
+| W1-RT-10 | #1017 | Closed |
+| W1-RT-11 | #1018–#1022 | Closed |
+| W1-RT-12 | #1025 | Closed |
+| W1-RT-13 | #1026 | Closed |
+| W1-RT-14 | #1027 | Closed |
+| W1-RT-15 | #1028 | Closed |
+| W1-RT-16 | #1029 | Three independent reviews are code-ready; CI/merge pending |
+| W1-RT-17 | Planned follow-up | Open |
+| W1-RT-18 | Planned follow-up | Open |
+| W1-RT-19 | Planned follow-up | Open |
+
+W1 repository remediation and automated acceptance are not yet complete:
+W1-RT-16 through W1-RT-19 must merge first. Independently, milestone release
+acceptance remains blocked under WGA-9 until a named human records the Narrator
+smoke, NVDA and JAWS passes, and all four built-in plus one customized Windows
+Contrast-theme passes in `w_c_matrix.md`.

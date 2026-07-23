@@ -18,7 +18,45 @@ Program: [00_program.md](../00_program.md) (decisions 1, 2, 9, 15; DoD §W-C). B
 
 Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral spec** (states, transitions, announcements, keyboard model — including any Reduce Motion equivalents); the WPF implementation is idiomatic WPF (MVVM view models over the FFI), **not** a SwiftUI transliteration. Where mac behavior encodes an AppKit workaround (documented in memory/PRs), port the *intent*, and record the divergence in gap_analysis.
 
-**Execution status (updated 2026-07-22): repository implementation and code-remediable post-merge audit work are complete; human acceptance evidence remains pending.** Three independent reviewers audited every W1 workstream across completeness, correctness, maintainability, documentation, reliability, performance, security, and accessibility, then independently reviewed the completed remediations. Their blockers—tab target/dirty/buffer semantics, exact path identity, workspace restore invariants, real pane focus, modal Quick Open, F2 rename, paged sidebar completeness, filtering/expansion responsiveness, persistence bounds, import walking, IPC deadlines, UIA state, evidence overclaim, host-side synchronous ranking and expansion, unbounded directory levels, Windows core-suite portability, LiveSync handle containment, and op-log event-index synchronization—were fixed and regression-tested. Ranked closure evidence is tracked in [`../reports/w1_post_merge_adversarial_audit_2026-07-22.md`](../reports/w1_post_merge_adversarial_audit_2026-07-22.md). The generated parity matrix requires inventory-complete implementation/test evidence for every W1 command row rather than inferring status from issue ownership; the anchors remain surface-level, not a substitute for command-specific behavior tests. RT14 merged as `985061e9198d00db319701aed8f1d2b63ac86f0d` after 171/171 Windows tests, 72/72 UniFFI tests, 12/12 bounded-directory core tests, 128/128 focused database/migration tests, all ten CI checks, and a 10,000-sibling first/middle/98%-late benchmark passed. Ordinary Windows child expansion runs provider/projection/restored-descendant work away from the UI thread and publishes one guarded collection; both hosts consume hard-capped combined and direct-files-only range pages with session/scope/parent/snapshot-bound cursors, post-query mutation rejection, and SQLite progress cancellation. The earlier apparent Windows core-suite nontermination was the intentionally long census tier mixed into an ordinary run; the separated non-census package command now repeatedly passes 1,615 unit, 364 integration, and 2 doctests in 30.1–31.9 seconds and is required by `windows.yml`. Interactive FlaUI + axe-windows remains a required CI gate (`SLATE_REQUIRE_UI_AUTOMATION=1`). Human Narrator/NVDA/JAWS and the four built-in plus customized Contrast-theme pass remain release-blocking §W-C evidence; see [`../w_c_matrix.md`](../w_c_matrix.md) and [`../reports/w1_execution_2026-07-20.md`](../reports/w1_execution_2026-07-20.md). Checkboxes that combine implemented code with that external evidence intentionally remain open.
+**Execution status (updated 2026-07-23): W1-0 through W1-4 and remediation
+through W1-RT-15 are merged in PR #1028 / squash commit
+`726157a858b06fcde13b6ed0936e753848675433`; final code and automated closure
+is reopened for W1-RT-16 through W1-RT-19, and human acceptance evidence remains
+pending.** Three independent reviewers audited every W1 workstream
+across completeness, correctness, maintainability, documentation, reliability,
+performance, security, and accessibility, then independently reviewed the
+completed remediations. Their earlier blockers—tab target/dirty/buffer semantics, exact
+path identity, workspace restore invariants, real pane focus, modal Quick Open,
+F2 rename, paged sidebar completeness, filtering/expansion responsiveness,
+persistence bounds, import walking, IPC deadlines, UIA state, evidence
+overclaim, host-side synchronous ranking and expansion, unbounded directory
+levels, Windows core-suite portability, LiveSync handle containment, and op-log
+event-index synchronization—were fixed and regression-tested. The final audit
+then identified fatal event-rebuild read rollback, progress-event/UIA evidence,
+Windows process-wide Quick Open serialization, and macOS page-one file-tree
+responsiveness gaps; those are the active RT16–RT19 follow-ups. Ranked closure
+evidence is tracked in
+[`../reports/w1_post_merge_adversarial_audit_2026-07-22.md`](../reports/w1_post_merge_adversarial_audit_2026-07-22.md).
+The generated parity matrix requires inventory-complete implementation/test
+evidence for every W1 command row rather than inferring status from issue
+ownership; the anchors remain surface-level, not a substitute for
+command-specific behavior tests. RT14 merged as
+`985061e9198d00db319701aed8f1d2b63ac86f0d` after its bounded-page, host,
+migration, and performance gates passed. RT15 then merged as
+`726157a858b06fcde13b6ed0936e753848675433`: the separated non-census package
+command passed 1,615 unit, 364 integration, and 2 doctests and is required by
+`windows.yml`; Windows LiveSync uses pinned no-follow handles; and per-log save,
+compaction, and event-index rebuild synchronization has deterministic
+contention plus 100-run race-stress coverage. Final PR #1028 revision
+`9fac9b2007d0cc7c12ef17fe12c36938796af826` passed all seven checks, including
+the complete Windows package and live FlaUI + axe gate. Interactive FlaUI +
+axe-windows remains a required CI gate (`SLATE_REQUIRE_UI_AUTOMATION=1`). Human
+Narrator/NVDA/JAWS and the four built-in plus customized Contrast-theme pass
+remain release-blocking §W-C evidence; see
+[`../w_c_matrix.md`](../w_c_matrix.md) and
+[`../reports/w1_execution_2026-07-20.md`](../reports/w1_execution_2026-07-20.md).
+Checkboxes that combine implemented code with that external evidence
+intentionally remain open.
 
 ## W1-0 · Atomic no-clobber rename on Windows/portable fallbacks — prerequisite PR
 
