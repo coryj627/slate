@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
+using ICSharpCode.AvalonEdit;
 using Microsoft.Win32;
 using uniffi.slate_uniffi;
 
@@ -755,9 +756,9 @@ public partial class MainWindow : Window
     private void FocusEditorPane(WorkspaceGroupViewModel group)
     {
         WorkspaceTabViewModel? activeTab = group.ActiveTab;
-        TextBox? editor = FindVisualDescendants<TextBox>(ContentPaneBorder)
+        SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)
             .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, activeTab));
-        if (editor is { IsVisible: true, IsEnabled: true } && editor.Focus())
+        if (editor is { IsVisible: true, IsEnabled: true } && editor.FocusInputOwner())
         {
             return;
         }

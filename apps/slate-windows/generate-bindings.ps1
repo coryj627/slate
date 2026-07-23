@@ -4,6 +4,9 @@
 # Build slate_uniffi as a cdylib and generate the C# bindings into
 # src/SlateUniffi/generated/ (git-ignored, like the Swift bindings —
 # CONTRIBUTING "The FFI bindings workflow"). Idempotent; safe to re-run.
+# The staged native DLL is always Release: Windows editor performance gates
+# measure the actual shipped DocumentBuffer path, even when a developer later
+# compiles managed projects in Debug.
 #
 # Prereqs: repo-pinned Rust toolchain (rust-toolchain.toml) and
 # uniffi-bindgen-cs matching the workspace's uniffi minor:
@@ -24,15 +27,15 @@ $repoRoot = (Resolve-Path (Join-Path $appDir '..\..')).Path
 $targetDir = $env:CARGO_TARGET_DIR
 if (-not $targetDir) { $targetDir = Join-Path $repoRoot 'target' }
 
-Write-Host "==> cargo build -p slate-uniffi (debug)"
+Write-Host "==> cargo build -p slate-uniffi (release)"
 Push-Location $repoRoot
 try {
-    cargo build -p slate-uniffi @cargoFlags
+    cargo build -p slate-uniffi --release @cargoFlags
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed ($LASTEXITCODE)" }
 }
 finally { Pop-Location }
 
-$dll = Join-Path $targetDir 'debug\slate_uniffi.dll'
+$dll = Join-Path $targetDir 'release\slate_uniffi.dll'
 if (-not (Test-Path $dll)) { throw "expected cdylib not found: $dll" }
 
 $genDir = Join-Path $appDir 'src\SlateUniffi\generated'

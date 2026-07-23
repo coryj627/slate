@@ -9,13 +9,23 @@ Program: [00_program.md](../00_program.md) (decisions 4, 8, 10, 15; DoD §W-A/§
 
 - **The W0/W1 buffer hot-path baseline — what was proven before #966:** `DocumentBuffer` exported `new`/`apply_edit`/`reset`/`len_utf16`/`byte_to_utf16`/`highlight_in_range` — **no content read-back existed**. The permanent W0-3 censuses exercise `ApplyEdit`/`LenUtf16`; `ByteToUtf16` and `HighlightInRange` were probe-exercised in W0-1 (evidence in the w0 §Decision) and get permanent census coverage with W2-1. W0-1 measured the whole uniffi `apply_edit` round-trip at ~112 µs/edit (debug). `editor_highlight_spans(_in_range)` and the text offset free functions are bound and `public`. **Drift-guard reality check:** the shipped mac Tier-1 guard is *length-only* (`lenUtf16` vs store length, `reset` re-sync; the release guarantee is the Rust census suite) — item 3's full-text compare required **#966** (`content_hash()`/snapshot FFI, a pre-unpark-executable core prerequisite) and W2-1 consumes it.
 - **#966 implementation decision (2026-07-23):** the prerequisite exposes `DocumentBuffer.content_hash()` (allocation-light canonical BLAKE3 over rope chunks), `DocumentBuffer.text()` (exact diagnostic snapshot), and `editor_text_content_hash()` (the same hash for the host-owned editor snapshot). Mac adoption is deliberately deferred: its existing length-only Tier-1 guard and Rust census release guarantee remain unchanged in this prerequisite PR; W2-1 is the first required consumer and owns the serialized revision-gated compare/reset/save flow.
+- **#724 implementation decision (2026-07-23):** AvalonEdit 6.3.1.120 owns the
+  WPF text view and undo stack; `TextDocument.Changing` feeds every UTF-16
+  delta to one long-lived `DocumentBuffer`. Same-path panes relay exact deltas
+  inside matching outer `TextDocument` update groups, so drag/multi-change
+  undo remains one native unit; a saved UTF-16-length/content-hash baseline
+  (with Avalon’s original-file marker as the fast undo path) drives exact dirty
+  state and advances across every pane after save or return-to-baseline. A
+  one-shot 300 ms dispatcher idle debounce runs the hash tier, saves recheck under the
+  monotonic revision gate, and any mismatch resets before the verified
+  snapshot can reach core save.
 - **§W-B budgets are pinned, not pending** (W0-4 `parity_matrix.md` §W-B): p50 ≤ 0.5 ms (100 KB), ≤ 0.5 ms (1 MB), ≤ 1.0 ms (8 MB), flatness p50(8 MB) ≤ 4× p50(1 MB). W2-1's "first numbers" and W2-2's BenchmarkDotNet run are recorded **against those numbers**.
 - **The §W-A skeleton already serializes editor spans** (and headings/blocks/search/links) over the `tests/fixtures/markdown/` corpus — incl. CRLF and mixed-ending fixtures — with committed goldens both platforms diff (`parity_golden/`, W0-3). W2-2's §W-A span rows **extend that harness and corpus** (editor-scale fixtures, windowed-request coverage), they do not build a new mechanism; serialization rules live in `CanonicalJson.cs` + the Swift twin, changed only together.
 - **C# census conventions** (W0-3): `[Trait("census", …)]`, `CensusTier` moderate/full tiers, serialized test assembly, `Support/` recorders — W2-1's drift-guard and edit-storm censuses (§W-E) follow them.
 - **Fluent theme (program decision 2 addendum):** AvalonEdit draws its own text surface — Fluent restyles the *chrome around it* (scrollbars, context menus, find UI, the W2-4 completion window). Editor text colors come from the W1-1 Slate tokens (which own every text-bearing surface and carry the two-layer Contrast behavior); the Mica policy from W1-1 item 8 applies — the editor surface always sits on a solid token-backed background. §W-C editor-chrome assertions run against the Fluent templates.
 - **V/X status at the W0-4 snapshot:** unshipped (matrix dropped-rows table) — W2-4/W2-5 activate only if V/X ship before port start; re-run the matrix generator at wave start to re-check.
 
-- `DocumentBuffer` (slate-uniffi lib.rs:3422; anchor current 2026-07-12) is the stateful editor backend: edit deltas in, spans/structure out, O(edit) (BENCHMARKS: 8 MB keystroke ≈ 245 µs core-side). The mac consumers to mirror: `NoteEditorView` coordinator (delta feed + drift guard + windowed `applyHighlight`), `EditorSpanMapping` (UTF-16 ↔ byte offset mapping), `EditorTextConversions`.
+- `DocumentBuffer` (`crates/slate-uniffi/src/lib.rs`, symbol anchor) is the stateful editor backend: edit deltas in, spans/structure out, O(edit) (BENCHMARKS: 8 MB pristine-buffer keystroke ≈ 245 µs core-side). The mac consumers to mirror: `NoteEditorView` coordinator (delta feed + drift guard + windowed `applyHighlight`), `EditorSpanMapping` (UTF-16 ↔ byte offset mapping), `EditorTextConversions`.
 - The release guarantee is census-side, not assertion-side: buffer-vs-stateless, comment-index, and structure censuses — the C# host must not weaken this (its drift guard twin is §W-E).
 - AvalonEdit specifics: its `TextDocument` has its own offset model (UTF-16); `DocumentColorizingTransformer` applies per-line visual styling during render — the natural consumer for windowed span requests (visible range + margin, the mac windowing strategy).
 
@@ -28,8 +38,12 @@ Program: [00_program.md](../00_program.md) (decisions 4, 8, 10, 15; DoD §W-A/§
 5. Save flow: debounce/save-state parity with the mac typing-save flow (dirty tracking, atomic write via core).
 6. IME: CJK composition correctness smoke (decision 15) — composition events must not feed partial deltas.
 
-- [ ] Delta feed + offsets + drift guard censuses green (incl. edit storms, IME)
-- [ ] Undo/save parity; §W-B first numbers recorded (pre-optimization)
+W2-1 first p50s on the recorded Windows runner are 0.1147 / 0.2008 /
+2.3552 ms at 100 KiB / 1 MiB / 8 MiB. The first two budgets pass; 8 MiB and
+11.73× flatness miss and are explicitly carried into W2-2's optimization gate.
+
+- [x] Delta feed + offsets + drift guard censuses green (incl. edit storms, IME)
+- [x] Undo/save parity; §W-B first numbers recorded (pre-optimization)
 
 ## W2-2 · Canonical span consumer (#381 — the reuse payoff) — PR 2
 

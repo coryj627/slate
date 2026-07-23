@@ -99,10 +99,10 @@ jobs:
         run: ./apps/slate-windows/generate-bindings.ps1 -Locked
 
       - name: Build
-        run: dotnet build apps/slate-windows/SlateWindows.slnx
+        run: dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
 
       - name: Test
-        run: dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --no-build
+        run: dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --no-build
 
       # W1-1 / §W-C: launch the real Fluent-styled WinExe, drive its shell
       # through UIA3, and run the axe-windows rule set against the live tree.
@@ -112,6 +112,7 @@ jobs:
         run: >-
           dotnet test
           apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj
+          --configuration Release
           --no-build
           --logger "trx;LogFileName=slate-windows-accessibility.trx"
           --results-directory "${{ runner.temp }}\slate-accessibility-results"

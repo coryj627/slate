@@ -6,6 +6,7 @@ using System.ComponentModel;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
+using ICSharpCode.AvalonEdit.Document;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -53,10 +54,11 @@ internal abstract class BindableBase : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
-internal sealed class WorkspaceTabViewModel : BindableBase
+internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
-    private readonly Action<WorkspaceTabViewModel>? _documentChanged;
+    private readonly Action<WorkspaceTabViewModel, EditorDocumentSyncEvent?>? _documentChanged;
+    private AvalonDocumentBufferSession? _editorSession;
     private string _text = string.Empty;
     private string? _contentHash;
     private bool _isDirty;
@@ -66,7 +68,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase
     public WorkspaceTabViewModel(
         VaultSession session,
         WorkspaceTabState state,
-        Action<WorkspaceTabViewModel>? documentChanged = null)
+        Action<WorkspaceTabViewModel, EditorDocumentSyncEvent?>? documentChanged = null)
     {
         _session = session;
         _documentChanged = documentChanged;
@@ -76,6 +78,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase
         PropsCollapsed = state.PropsCollapsed;
         ActiveCanvasSurface = state.ActiveCanvasSurface;
         Load();
+        InitializeEditorSession();
     }
 
     public Guid Id { get; }
@@ -84,6 +87,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase
     public bool? PropsCollapsed { get; }
     public string? ActiveCanvasSurface { get; }
     public string Title => Item.Title;
+    public TextDocument? EditorDocument => _editorSession?.Document;
+    internal AvalonDocumentBufferSession? EditorSession => _editorSession;
     public string EditorAutomationName =>
         $"{System.IO.Path.GetFileName(Path)} editor";
     public string Path => Item.Path;
@@ -103,14 +108,16 @@ internal sealed class WorkspaceTabViewModel : BindableBase
 
     public string Text
     {
-        get => _text;
+        get => _editorSession?.Document.Text ?? _text;
         set
         {
-            if (SetField(ref _text, value))
+            if (_editorSession is null)
             {
-                IsDirty = true;
-                _documentChanged?.Invoke(this);
+                ApplyEditorText(value);
+                return;
             }
+
+            _editorSession.ReplaceAll(value);
         }
     }
 
@@ -145,6 +152,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase
 
     public void ReplaceItem(WorkspaceItemState item)
     {
+        _editorSession?.Dispose();
+        _editorSession = null;
         Item = item;
         _text = string.Empty;
         _contentHash = null;
@@ -153,7 +162,9 @@ internal sealed class WorkspaceTabViewModel : BindableBase
         _isMissingFromDisk = false;
         NotifyItemChanged();
         Load();
+        InitializeEditorSession();
         OnPropertyChanged(nameof(Text));
+        OnPropertyChanged(nameof(EditorDocument));
         OnPropertyChanged(nameof(IsDirty));
         OnPropertyChanged(nameof(DirtyMarker));
         OnPropertyChanged(nameof(Status));
@@ -172,10 +183,12 @@ internal sealed class WorkspaceTabViewModel : BindableBase
     {
         IsMissingFromDisk = true;
         Status = $"{Path} no longer exists on disk. Unsaved editor content is preserved.";
-        _documentChanged?.Invoke(this);
+        _documentChanged?.Invoke(this, null);
     }
 
-    public void MirrorDocumentStateFrom(WorkspaceTabViewModel source)
+    public void MirrorDocumentStateFrom(
+        WorkspaceTabViewModel source,
+        bool reconstructUndoHistory = true)
     {
         if (!IsMarkdown || !source.IsMarkdown || ReferenceEquals(this, source))
         {
@@ -187,11 +200,62 @@ internal sealed class WorkspaceTabViewModel : BindableBase
         _isDirty = source._isDirty;
         _isMissingFromDisk = source._isMissingFromDisk;
         _status = source._status;
+        AvalonDocumentBufferSession? sourceSession = source._editorSession;
+        if (_editorSession is not null && sourceSession is not null)
+        {
+            _editorSession.SynchronizeFromPeer(
+                source.Text,
+                sourceSession.SavedBaseline,
+                reconstructUndoHistory);
+        }
         OnPropertyChanged(nameof(Text));
         OnPropertyChanged(nameof(IsDirty));
         OnPropertyChanged(nameof(DirtyMarker));
         OnPropertyChanged(nameof(IsMissingFromDisk));
         OnPropertyChanged(nameof(Status));
+    }
+
+    public void ApplyPeerDocumentEvent(
+        WorkspaceTabViewModel source,
+        EditorDocumentSyncEvent syncEvent)
+    {
+        if (!IsMarkdown || !source.IsMarkdown || ReferenceEquals(this, source))
+        {
+            return;
+        }
+
+        AvalonDocumentBufferSession session = _editorSession
+            ?? throw new InvalidOperationException("A Markdown tab has no editor session.");
+        switch (syncEvent)
+        {
+            case EditorDocumentUpdateStarted:
+                session.BeginPeerUpdate();
+                break;
+            case EditorDocumentChange change:
+                session.ApplyPeerEdit(change);
+                OnPropertyChanged(nameof(Text));
+                break;
+            case EditorDocumentUpdateFinished:
+                session.EndPeerUpdate();
+                _contentHash = source._contentHash;
+                _isDirty = source._isDirty;
+                _isMissingFromDisk = source._isMissingFromDisk;
+                _status = source._status;
+                if (!_isDirty)
+                {
+                    AvalonDocumentBufferSession sourceSession = source._editorSession
+                        ?? throw new InvalidOperationException("A Markdown source tab has no editor session.");
+                    session.MarkSaved(sourceSession.SavedBaseline);
+                }
+
+                OnPropertyChanged(nameof(IsDirty));
+                OnPropertyChanged(nameof(DirtyMarker));
+                OnPropertyChanged(nameof(IsMissingFromDisk));
+                OnPropertyChanged(nameof(Status));
+                break;
+            default:
+                throw new ArgumentOutOfRangeException(nameof(syncEvent));
+        }
     }
 
     public bool Save()
@@ -201,20 +265,74 @@ internal sealed class WorkspaceTabViewModel : BindableBase
             return true;
         }
 
+        string saveText;
         try
         {
-            SaveReport report = _session.SaveText(Path, Text, _contentHash);
+            EditorSaveSnapshot? snapshot = _editorSession?.PrepareSaveSnapshot();
+            saveText = snapshot?.Text ?? Text;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            Status = $"Save blocked by editor integrity check: {exception.Message}";
+            _documentChanged?.Invoke(this, null);
+            return false;
+        }
+
+        try
+        {
+            SaveReport report = _session.SaveText(Path, saveText, _contentHash);
             _contentHash = report.NewContentHash;
+            _text = saveText;
+            _editorSession?.MarkSaved(saveText);
             IsDirty = false;
             Status = $"Saved {System.IO.Path.GetFileName(Path)}.";
-            _documentChanged?.Invoke(this);
+            _documentChanged?.Invoke(this, null);
             return true;
         }
         catch (VaultException exception)
         {
             Status = $"Save blocked: {exception.Message}";
-            _documentChanged?.Invoke(this);
+            _documentChanged?.Invoke(this, null);
             return false;
+        }
+    }
+
+    public void Dispose()
+    {
+        _editorSession?.Dispose();
+        _editorSession = null;
+    }
+
+    private void InitializeEditorSession()
+    {
+        if (IsMarkdown)
+        {
+            _editorSession = new AvalonDocumentBufferSession(_text, ApplyEditorSyncEvent);
+        }
+    }
+
+    private void ApplyEditorSyncEvent(EditorDocumentSyncEvent syncEvent)
+    {
+        if (syncEvent is EditorDocumentChange)
+        {
+            OnPropertyChanged(nameof(Text));
+        }
+        else if (syncEvent is EditorDocumentUpdateFinished)
+        {
+            AvalonDocumentBufferSession session = _editorSession
+                ?? throw new InvalidOperationException("A Markdown tab has no editor session.");
+            IsDirty = !session.IsAtSavedBaseline;
+        }
+
+        _documentChanged?.Invoke(this, syncEvent);
+    }
+
+    private void ApplyEditorText(string text)
+    {
+        if (SetField(ref _text, text, nameof(Text)))
+        {
+            IsDirty = true;
+            _documentChanged?.Invoke(this, null);
         }
     }
 
@@ -565,6 +683,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public void Dispose()
     {
         Persist();
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            tab.Dispose();
+        }
     }
 
     private void SaveActive()
@@ -600,7 +722,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 && string.Equals(tab.Path, item.Path, StringComparison.Ordinal))
             : null;
 
-    private void MirrorSamePathDocumentState(WorkspaceTabViewModel source)
+    private void MirrorSamePathDocumentState(
+        WorkspaceTabViewModel source,
+        EditorDocumentSyncEvent? syncEvent)
     {
         if (!source.IsMarkdown)
         {
@@ -613,7 +737,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 && peer.IsMarkdown
                 && string.Equals(peer.Path, source.Path, StringComparison.Ordinal))
             {
-                peer.MirrorDocumentStateFrom(source);
+                if (syncEvent is null)
+                {
+                    peer.MirrorDocumentStateFrom(source, reconstructUndoHistory: false);
+                }
+                else
+                {
+                    peer.ApplyPeerDocumentEvent(source, syncEvent);
+                }
             }
         }
     }

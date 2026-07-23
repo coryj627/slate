@@ -63,6 +63,10 @@ same rule: generated, git-ignored, never committed. Regenerate with
 ./apps/slate-windows/generate-bindings.ps1
 ```
 
+The Windows generator always builds and stages the **Release** native DLL.
+That keeps local and CI editor measurements on the shipped `DocumentBuffer`
+path; do not substitute `target/debug/slate_uniffi.dll` for app or test builds.
+
 **If you change the FFI surface, both platforms' bindings must keep
 generating and compiling.** You don't need a Mac (or a Windows box) to prove
 the other platform: CI regenerates and compiles the Swift bindings in
@@ -84,8 +88,8 @@ The daily loop, from the repo root:
 
 ```powershell
 ./apps/slate-windows/generate-bindings.ps1          # after any FFI change
-dotnet build apps/slate-windows/SlateWindows.slnx
-dotnet test apps/slate-windows/SlateWindows.slnx
+dotnet build apps/slate-windows/SlateWindows.slnx --configuration Release
+dotnet test apps/slate-windows/SlateWindows.slnx --configuration Release
 dotnet format apps/slate-windows/SlateWindows.slnx  # pre-push; CI enforces --verify-no-changes
 ```
 

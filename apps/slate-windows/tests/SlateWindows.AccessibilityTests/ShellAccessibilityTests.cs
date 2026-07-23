@@ -268,6 +268,9 @@ public sealed class ShellAccessibilityTests
                 automation,
                 "note.md editor",
                 TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.Document, editor.ControlType);
+            Assert.True(editor.Patterns.Value.IsSupported);
+            Assert.True(editor.Properties.IsKeyboardFocusable.Value);
             editor.Focus();
             AssertEventuallyFocused(editor, "The opened note editor could not receive focus.");
             Keyboard.Press(VirtualKeyShort.F2);
@@ -384,7 +387,6 @@ public sealed class ShellAccessibilityTests
                 ?? throw new Xunit.Sdk.XunitException("Workspace TabItem is absent.");
             Assert.True(tab.Patterns.SelectionItem.IsSupported);
             Assert.Contains("note", tab.Name, StringComparison.OrdinalIgnoreCase);
-            Assert.True(editor.Patterns.Value.IsSupported);
             editor.Patterns.Value.Pattern.SetValue("# Changed through UIA\n");
             Assert.True(
                 SpinWait.SpinUntil(
@@ -442,10 +444,10 @@ public sealed class ShellAccessibilityTests
                 splitHandle,
                 "Arrow-key resizing unexpectedly moved focus off the split handle.");
             AutomationElement leftEditor = splitTabs[0].FindFirstDescendant(
-                automation.ConditionFactory.ByControlType(ControlType.Edit))
+                automation.ConditionFactory.ByControlType(ControlType.Document))
                 ?? throw new Xunit.Sdk.XunitException("The left split editor is absent.");
             AutomationElement rightEditor = splitTabs[1].FindFirstDescendant(
-                automation.ConditionFactory.ByControlType(ControlType.Edit))
+                automation.ConditionFactory.ByControlType(ControlType.Document))
                 ?? throw new Xunit.Sdk.XunitException("The right split editor is absent.");
             rightEditor.Focus();
             AssertEventuallyFocused(rightEditor, "The right split editor could not receive focus.");
@@ -684,6 +686,7 @@ public sealed class ShellAccessibilityTests
                 TimeSpan.FromSeconds(10)),
             message);
     }
+
 
     private static void AssertActionButtonCensus(
         AutomationElement expander,

@@ -61,19 +61,20 @@
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <TextBox Grid.Row="0"
-                     Margin="12"
-                     Padding="12"
-                     AcceptsReturn="True"
-                     AcceptsTab="True"
-                     TextWrapping="Wrap"
-                     VerticalScrollBarVisibility="Auto"
-                     HorizontalScrollBarVisibility="Auto"
-                     FontFamily="Consolas"
-                     FontSize="14"
-                     Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
-                     Visibility="{Binding IsMarkdown, Converter={StaticResource BooleanToVisibilityConverter}}"
-                     AutomationProperties.Name="{Binding EditorAutomationName}" />
+            <local:SlateTextEditor Grid.Row="0"
+                                   Margin="12"
+                                   Padding="12"
+                                   Document="{Binding EditorDocument}"
+                                   WordWrap="True"
+                                   ShowLineNumbers="False"
+                                   VerticalScrollBarVisibility="Auto"
+                                   HorizontalScrollBarVisibility="Auto"
+                                   FontFamily="Consolas"
+                                   FontSize="14"
+                                   Background="{DynamicResource Slate.WindowBackgroundBrush}"
+                                   Foreground="{DynamicResource Slate.TextBrush}"
+                                   Visibility="{Binding IsMarkdown, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                   AutomationProperties.Name="{Binding EditorAutomationName}" />
             <StackPanel Grid.Row="0"
                         Margin="32"
                         HorizontalAlignment="Center"
