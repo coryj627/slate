@@ -304,14 +304,14 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   formatting/Clippy, nextest, and bench compilation. The PR was squash-merged
   as `726157a858b06fcde13b6ed0936e753848675433` under the documented
   Codoki-outage exception.
-- W1-RT-16 is implemented in the current focused follow-up. Fatal op-log reads
+- W1-RT-16 is addressed by PR #1029. Fatal op-log reads
   now abort the immediate rebuild transaction instead of silently contributing
   no events. A two-log corrupt-header regression proves the global delete and
   partial reinserts roll back with the repair marker, then restores the log and
   proves exact successful retry convergence. Both rollback tests pass together;
   the complete bounded package passes 1,616 unit, 364 integration, and 2
-  doctests; and workspace all-target Clippy is clean. Publication, independent
-  final review, CI, and merge are still pending.
+  doctests; and workspace all-target Clippy is clean. Publication and three
+  independent final reviews are complete; CI and merge are pending.
 - W1-RT-17 through W1-RT-19 remain open and are assigned to the next three
   small remediation groups above. They must not be represented as automated or
   code closure until their focused evidence and required CI lanes pass.
@@ -337,7 +337,7 @@ The remediation sequence from PR #1011 through PR #1028 is merged on
 | W1-RT-13 | #1026 | Closed |
 | W1-RT-14 | #1027 | Closed |
 | W1-RT-15 | #1028 | Closed |
-| W1-RT-16 | Follow-up PR pending | Implemented locally; review/CI/merge pending |
+| W1-RT-16 | #1029 | Three independent reviews are code-ready; CI/merge pending |
 | W1-RT-17 | Planned follow-up | Open |
 | W1-RT-18 | Planned follow-up | Open |
 | W1-RT-19 | Planned follow-up | Open |
