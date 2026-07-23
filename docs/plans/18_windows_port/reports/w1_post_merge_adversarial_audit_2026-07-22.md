@@ -103,7 +103,7 @@ than that ceiling.
    long census tier from the ordinary Windows run, repair platform-invalid
    fixtures and assertions without relaxing production validation, harden
    LiveSync handle containment, close the event-index mutation/rebuild races,
-   and gate the full non-census core package in `windows.yml`. Actual: 13
+   and gate the full non-census core package in `windows.yml`. Actual: 16
    authored files; the independent security and synchronization findings
    expanded the original 7–10 estimate while remaining below the 22-file cap.
 
@@ -254,7 +254,10 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
 - W1-RT-15 is remediated in the current small PR. The full non-census Windows
   run no longer asks NTFS for POSIX-only `*`, `?`, or `|` names; those cases
   remain covered on supporting hosts while cross-platform SQL wildcard and
-  punctuated-parent cases still run on Windows. The ctime backfill regression
+  punctuated-parent cases still run on Windows. Local-time DQL regressions use
+  the configured Windows zone instead of assuming the Unix-only `TZ` override
+  works there, while Unix retains the pinned America/New_York child coverage.
+  The ctime backfill regression
   asserts the documented zero sentinel off Unix, Dropbox evidence uses the
   host separator, and Windows LiveSync opens and retains the root and every
   fixed component without delete/write sharing, rejects reparses and special

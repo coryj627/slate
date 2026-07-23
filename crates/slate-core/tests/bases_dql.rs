@@ -1688,20 +1688,23 @@ WHERE file.path = "123.md"
 
 #[test]
 fn dql_exact_runtime_semantics_cover_constructors_operators_and_nulls() {
-    const CHILD: &str = "SLATE_DQL_EXACT_RUNTIME_TZ_CHILD";
-    if std::env::var(CHILD).as_deref() != Ok("1") {
-        let status = std::process::Command::new(
-            std::env::current_exe().expect("locate DQL exact-runtime test binary"),
-        )
-        .arg("dql_exact_runtime_semantics_cover_constructors_operators_and_nulls")
-        .arg("--exact")
-        .arg("--nocapture")
-        .env("TZ", "America/New_York")
-        .env(CHILD, "1")
-        .status()
-        .expect("run DQL exact-runtime test in America/New_York");
-        assert!(status.success(), "DQL exact-runtime timezone child failed");
-        return;
+    #[cfg(unix)]
+    {
+        const CHILD: &str = "SLATE_DQL_EXACT_RUNTIME_TZ_CHILD";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            let status = std::process::Command::new(
+                std::env::current_exe().expect("locate DQL exact-runtime test binary"),
+            )
+            .arg("dql_exact_runtime_semantics_cover_constructors_operators_and_nulls")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("TZ", "America/New_York")
+            .env(CHILD, "1")
+            .status()
+            .expect("run DQL exact-runtime test in America/New_York");
+            assert!(status.success(), "DQL exact-runtime timezone child failed");
+            return;
+        }
     }
 
     let conn = dql_fixture_conn();
@@ -1710,15 +1713,22 @@ WHERE file.path = "123.md"
 "#;
     let result = execute_dql(&conn, source, None);
     assert_eq!(result.error, None);
+    let local_date = |year, month, day| {
+        let date = Local
+            .with_ymd_and_hms(year, month, day, 0, 0, 0)
+            .single()
+            .expect("authored local midnight is unambiguous");
+        DqlDateValue {
+            epoch_ms: date.timestamp_millis(),
+            has_time: false,
+            offset_minutes: date.offset().local_minus_utc() / 60,
+            is_local: true,
+        }
+    };
     let expected = vec![
         Value::Number(42.0),
         first_value(&result, 1).clone(),
-        Value::DqlDate(DqlDateValue {
-            epoch_ms: 1_577_854_800_000,
-            has_time: false,
-            offset_minutes: -300,
-            is_local: true,
-        }),
+        Value::DqlDate(local_date(2020, 1, 1)),
         first_value(&result, 3).clone(),
         Value::Null,
         Value::Null,
@@ -1744,12 +1754,7 @@ WHERE file.path = "123.md"
         }),
         Value::Null,
         Value::Null,
-        Value::DqlDate(DqlDateValue {
-            epoch_ms: 1_783_656_000_000,
-            has_time: false,
-            offset_minutes: -240,
-            is_local: true,
-        }),
+        Value::DqlDate(local_date(2026, 7, 10)),
         Value::Null,
         Value::Null,
         Value::DqlDuration(DqlDurationValue {
@@ -2281,20 +2286,23 @@ WHERE file.path = "A/Owner.md"
 
 #[test]
 fn dql_date_difference_uses_calendar_days_across_dst() {
-    const CHILD: &str = "SLATE_DQL_DST_DIFF_CHILD";
-    if std::env::var(CHILD).as_deref() != Ok("1") {
-        let status = std::process::Command::new(
-            std::env::current_exe().expect("locate DQL date-difference test binary"),
-        )
-        .arg("dql_date_difference_uses_calendar_days_across_dst")
-        .arg("--exact")
-        .arg("--nocapture")
-        .env("TZ", "America/New_York")
-        .env(CHILD, "1")
-        .status()
-        .expect("run DQL date-difference test in America/New_York");
-        assert!(status.success(), "DQL DST date-difference child failed");
-        return;
+    #[cfg(unix)]
+    {
+        const CHILD: &str = "SLATE_DQL_DST_DIFF_CHILD";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            let status = std::process::Command::new(
+                std::env::current_exe().expect("locate DQL date-difference test binary"),
+            )
+            .arg("dql_date_difference_uses_calendar_days_across_dst")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("TZ", "America/New_York")
+            .env(CHILD, "1")
+            .status()
+            .expect("run DQL date-difference test in America/New_York");
+            assert!(status.success(), "DQL DST date-difference child failed");
+            return;
+        }
     }
 
     let conn = dql_fixture_conn();
@@ -2328,20 +2336,23 @@ WHERE file.path = "123.md"
 
 #[test]
 fn dql_date_equality_preserves_zone_provenance() {
-    const CHILD: &str = "SLATE_DQL_DATE_EQ_CHILD";
-    if std::env::var(CHILD).as_deref() != Ok("1") {
-        let status = std::process::Command::new(
-            std::env::current_exe().expect("locate DQL date-equality test binary"),
-        )
-        .arg("dql_date_equality_preserves_zone_provenance")
-        .arg("--exact")
-        .arg("--nocapture")
-        .env("TZ", "America/New_York")
-        .env(CHILD, "1")
-        .status()
-        .expect("run DQL date-equality test in America/New_York");
-        assert!(status.success(), "DQL date-equality child failed");
-        return;
+    #[cfg(unix)]
+    {
+        const CHILD: &str = "SLATE_DQL_DATE_EQ_CHILD";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            let status = std::process::Command::new(
+                std::env::current_exe().expect("locate DQL date-equality test binary"),
+            )
+            .arg("dql_date_equality_preserves_zone_provenance")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("TZ", "America/New_York")
+            .env(CHILD, "1")
+            .status()
+            .expect("run DQL date-equality test in America/New_York");
+            assert!(status.success(), "DQL date-equality child failed");
+            return;
+        }
     }
 
     let result = execute_dql(
