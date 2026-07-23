@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Automation.Peers;
 using System.Windows.Input;
 using System.Windows.Threading;
@@ -32,12 +33,22 @@ public sealed class AvalonDocumentBufferCensus
         RunOnSta(() =>
         {
             var editor = new SlateTextEditor();
+            AutomationProperties.SetName(editor, "note.md editor");
             using var surface = new EditorSurface(editor);
             AutomationPeer peer = Assert.IsType<SlateTextEditorAutomationPeer>(
                 UIElementAutomationPeer.CreatePeerForElement(editor));
+            AutomationPeer textAreaPeer = Assert.IsAssignableFrom<AutomationPeer>(
+                UIElementAutomationPeer.FromElement(editor.TextArea));
 
             Assert.Equal(AutomationControlType.Document, peer.GetAutomationControlType());
+            Assert.Equal("note.md editor", peer.GetName());
+            Assert.Same(peer, textAreaPeer.EventsSource);
             Assert.Same(peer, peer.GetPattern(PatternInterface.Value));
+            Assert.Same(textAreaPeer, peer.GetPattern(PatternInterface.Text));
+            AutomationPeer scrollPeer = Assert.IsAssignableFrom<AutomationPeer>(
+                peer.GetPattern(PatternInterface.Scroll));
+            Assert.Same(peer, scrollPeer.EventsSource);
+            Assert.Null(peer.GetChildren());
             Assert.True(peer.IsKeyboardFocusable());
 
             Keyboard.ClearFocus();
