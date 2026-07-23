@@ -183,6 +183,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "structural batches: durable inflight recovery intent",
         sql: include_str!("../migrations/032_structural_batch_inflight.sql"),
     },
+    Migration {
+        description: "directory pages: bounded parent/sort indexes (W1-RT-14)",
+        sql: include_str!("../migrations/033_directory_page_indexes.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -210,7 +214,9 @@ pub fn open_in_memory(cache_size_pages: u32) -> Result<Connection, DbError> {
 /// Directory paging must apply the exact Rust NFC/full-Unicode-lowercase key
 /// before SQL LIMIT/OFFSET. Keeping the function here makes file-backed,
 /// in-memory, and background-worker connections agree instead of teaching SQL
-/// a weaker ASCII-only approximation.
+/// a weaker ASCII-only approximation. Migration 033 persists this function in
+/// expression indexes; changing its Unicode/casefold semantics requires an
+/// explicit schema migration that rebuilds those indexes.
 pub(crate) fn register_connection_functions(conn: &Connection) -> rusqlite::Result<()> {
     use rusqlite::functions::FunctionFlags;
 
@@ -345,6 +351,10 @@ fn is_busy_or_locked(e: &rusqlite::Error) -> bool {
 /// migration rolls the whole run back instead of leaving a prefix
 /// applied.
 pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
+    // Public callers may supply a raw rusqlite connection. Migration 033
+    // persists the deterministic tree-key UDF in expression indexes, so the
+    // migration boundary itself must establish every required function.
+    register_connection_functions(conn)?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     ensure_version_table(&tx)?;
     let current = current_version(&tx)?;
@@ -375,6 +385,7 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
 /// rows exist at migration time).
 #[cfg(test)]
 pub(crate) fn migrate_up_to(conn: &mut Connection, version: u32) -> Result<(), DbError> {
+    register_connection_functions(conn)?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     ensure_version_table(&tx)?;
     for (i, migration) in MIGRATIONS.iter().take(version as usize).enumerate() {
@@ -486,8 +497,89 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        // extension + mtime (001) + birthtime (030, #801).
-        assert_eq!(indexes, 3);
+        // extension + mtime (001) + birthtime (030, #801) + parent tree order (033).
+        assert_eq!(indexes, 4);
+    }
+
+    #[test]
+    fn migrate_registers_required_functions_on_a_raw_connection() {
+        let mut conn = Connection::open_in_memory().expect("raw in-memory connection");
+        assert!(
+            conn.query_row("SELECT slate_tree_sort_key('Alpha')", [], |row| row
+                .get::<_, String>(0))
+                .is_err()
+        );
+
+        migrate(&mut conn).expect("raw-connection migration");
+        let key: String = conn
+            .query_row("SELECT slate_tree_sort_key('ÉTUDE')", [], |row| row.get(0))
+            .expect("migration registered deterministic functions");
+        assert_eq!(key, "étude");
+    }
+
+    #[test]
+    fn migration_033_upgrades_populated_unicode_rows_and_reopens_idempotently() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("unicode-upgrade.sqlite3");
+        {
+            let mut conn = Connection::open(&path).expect("create schema-32 database");
+            migrate_up_to(&mut conn, 32).expect("freeze at schema 32");
+            conn.execute(
+                "INSERT INTO dirs (path, parent_path, name) VALUES (?1, '', ?2)",
+                rusqlite::params!["ÉTUDE", "E\u{0301}TUDE"],
+            )
+            .unwrap();
+            conn.execute(
+                "INSERT INTO files
+                 (path, name, extension, size_bytes, mtime_ms, content_hash,
+                  parser_version, indexed_at_ms, is_markdown)
+                 VALUES (?1, ?2, 'md', 1, 1, 'hash', 1, 1, 1)",
+                rusqlite::params!["ÉTUDE/Note.md", "Note.md"],
+            )
+            .unwrap();
+        }
+
+        {
+            let mut conn = Connection::open(&path).expect("reopen schema-32 database");
+            assert_eq!(migrate(&mut conn).unwrap(), 33);
+            let dir: (String, String) = conn
+                .query_row(
+                    "SELECT path, name FROM dirs INDEXED BY idx_dirs_parent_tree
+                     WHERE parent_path = '' ORDER BY slate_tree_sort_key(name), path",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(dir, ("ÉTUDE".into(), "E\u{0301}TUDE".into()));
+            let file: String = conn
+                .query_row(
+                    "SELECT path FROM files INDEXED BY idx_files_parent_tree
+                     WHERE (CASE WHEN length(path) = length(name) THEN ''
+                            ELSE substr(path, 1, length(path) - length(name) - 1) END) = ?1",
+                    ["ÉTUDE"],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert_eq!(file, "ÉTUDE/Note.md");
+        }
+
+        let mut conn = Connection::open(&path).expect("reopen migrated database");
+        assert_eq!(migrate(&mut conn).unwrap(), 33);
+        conn.execute(
+            "INSERT INTO dirs (path, parent_path, name) VALUES ('zulu', '', 'Zulu')",
+            [],
+        )
+        .expect("expression index remains writable after reopen");
+        let count: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM dirs INDEXED BY idx_dirs_parent_tree
+                 WHERE parent_path = '' AND slate_tree_sort_key(name) = 'zulu'
+                   AND path = 'zulu'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]

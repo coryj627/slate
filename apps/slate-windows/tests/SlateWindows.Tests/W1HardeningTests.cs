@@ -1422,6 +1422,33 @@ public sealed class W1SidebarHardeningTests
     }
 
     [Fact]
+    public void DirectoryOnlyOverflowUsesCoreTruncation_AndFilesOnlyPaneSeeksPastIt()
+    {
+        using FixtureVault fixture = FixtureVault.Create(0, "sidebar-directory-pages");
+        for (int index = 0; index < FilesSidebarViewModel.MaxMaterializedDirectoryItems + 1; index++)
+        {
+            Directory.CreateDirectory(Path.Combine(fixture.Root, $"folder-{index:D5}"));
+        }
+
+        File.WriteAllText(Path.Combine(fixture.Root, "visible-after-folders.md"), string.Empty);
+        using VaultSession session = OpenScanned(fixture.Root);
+        var sidebar = CreateSidebar(session, fixture.Root);
+
+        Assert.Equal(
+            FilesSidebarViewModel.MaxMaterializedDirectoryItems,
+            sidebar.RootNodes.Count(node => node.IsDirectory));
+        Assert.DoesNotContain(
+            sidebar.RootNodes,
+            node => node.Path == "visible-after-folders.md");
+        Assert.Single(sidebar.RootNodes, node => node.IsPlaceholder);
+
+        sidebar.IsDualPaneEnabled = true;
+        FileTreeNodeViewModel file = Assert.Single(sidebar.DualPaneFiles);
+        Assert.Equal("visible-after-folders.md", file.Path);
+        Assert.False(file.IsPlaceholder);
+    }
+
+    [Fact]
     public void MixedDirectoryAndFinalFilePage_ReportsFilesOmittedInsideThePage()
     {
         using FixtureVault fixture = FixtureVault.Create(0, "sidebar-mixed-overflow");

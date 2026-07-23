@@ -697,13 +697,41 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         cancellationToken.ThrowIfCancellationRequested();
         ordering ??= CaptureDirectoryOrdering();
-        uint requestedFiles = checked((uint)(MaxMaterializedDirectoryItems + 1));
-        DirListing listing = _session.ListDirChildren(
-            parentPath,
-            new Paging(null, requestedFiles));
+        int lookaheadLimit = MaxMaterializedDirectoryItems + 1;
+        var directoryRows = new List<DirNodeSummary>();
+        var fileRows = new List<FileSummary>();
+        using var nativeCancellation = new CancelToken();
+        using CancellationTokenRegistration registration =
+            cancellationToken.Register(nativeCancellation.Cancel);
+        bool providerTruncated;
+        try
+        {
+            DirListingPage page = includeDirectories
+                ? _session.ListDirChildrenPage(
+                    parentPath,
+                    new Paging(null, checked((uint)lookaheadLimit)),
+                    nativeCancellation)
+                : _session.ListDirFilesPage(
+                    parentPath,
+                    new Paging(null, checked((uint)lookaheadLimit)),
+                    nativeCancellation);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (includeDirectories)
+            {
+                directoryRows.AddRange(page.Dirs);
+            }
+
+            fileRows.AddRange(page.Files);
+            providerTruncated = page.Truncated;
+        }
+        catch (VaultException.Cancelled) when (cancellationToken.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(cancellationToken);
+        }
+
         cancellationToken.ThrowIfCancellationRequested();
         FileTreeNodeViewModel[] directories = includeDirectories
-            ? listing.Dirs
+            ? directoryRows
                 .Take(MaxMaterializedDirectoryItems)
                 .Select(directory =>
                 {
@@ -719,10 +747,11 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 }).ToArray()
             : [];
         var files = new List<FileTreeNodeViewModel>();
-        bool truncated = includeDirectories && listing.Dirs.Length > directories.Length;
+        bool truncated = providerTruncated
+            || (includeDirectories && directoryRows.Count > directories.Length);
         int remaining = MaxMaterializedDirectoryItems - directories.Length;
-        int filesTaken = Math.Min(listing.Files.Items.Length, Math.Max(0, remaining));
-        foreach (FileSummary summary in listing.Files.Items.Take(filesTaken))
+        int filesTaken = Math.Min(fileRows.Count, Math.Max(0, remaining));
+        foreach (FileSummary summary in fileRows.Take(filesTaken))
         {
             cancellationToken.ThrowIfCancellationRequested();
             files.Add(new FileTreeNodeViewModel(
@@ -735,7 +764,7 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
                 summary: summary));
         }
 
-        truncated |= filesTaken < listing.Files.Items.Length || listing.Files.NextCursor is not null;
+        truncated |= filesTaken < fileRows.Count;
 
         IEnumerable<FileTreeNodeViewModel> sortedDirectories = SortNodes(directories, ordering);
         IEnumerable<FileTreeNodeViewModel> nodes;

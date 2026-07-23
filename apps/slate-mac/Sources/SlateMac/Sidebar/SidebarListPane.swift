@@ -220,7 +220,12 @@ final class SidebarListPaneModel: ObservableObject {
         let result = try dependencies.performUntagged(paging)
         (page, next) = (result.files, result.nextCursor)
       }
-      files.append(contentsOf: page)
+      let remaining = drainCap - files.count
+      let accepted = Array(page.prefix(remaining))
+      files.append(contentsOf: accepted)
+      if accepted.count < page.count {
+        return (files, true)
+      }
       guard let nextCursor = next else {
         return (files, false)
       }

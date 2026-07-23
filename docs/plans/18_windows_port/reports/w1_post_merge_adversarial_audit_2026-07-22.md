@@ -206,7 +206,35 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   `7a860ca962b33bfe50d348ae1efb46c12679e3ce`; Windows Actions run 29956533198
   includes the live ExpandCollapse/Right/Left accessibility gate and evidence
   upload. W1-RT-13 is closed under the documented Codoki-outage exception.
-- W1-RT-14 remains open and deliberately separate from the host remediation:
-  the existing core result still materializes the complete directory-summary
-  array. Hiding that core/API limit inside the Windows PR would overstate the
-  bound and enlarge the authored review surface.
+- W1-RT-14 is remediated in the current 22-authored-file PR. Its first three
+  independent reviews blocked publication: macOS dropped continuation
+  directories; page reads had an external-writer TOCTOU; nullable cursor
+  predicates still prefix-scanned; raw-connection migration lacked the new
+  UDF; files-only Windows work drained directory prefixes synchronously; and
+  mac list/duplicate/folder-discovery caps and error paths were incomplete.
+  The corrected core/UniFFI contract now provides hard-capped combined and
+  direct files-only range pages. Opaque cursors are size-limited and bind the
+  session, scope, normalized parent, and SQLite discriminator; a post-query
+  recheck rejects any in-flight external commit. SQLite progress cancellation
+  interrupts count/enrichment statements, and only returned rows are
+  enriched. Migration registers deterministic functions for raw connections,
+  with a populated Unicode v32→v33 upgrade/reopen regression and a documented
+  REINDEX obligation if sort-key semantics ever change. Query-plan tests
+  require range constraints on both expression indexes.
+  Windows files-only loading is one bounded request. macOS continuation drains
+  retain directories and files, cap their combined count, cancel revoked
+  native work, and adopt restored page-two expansions; the list pane caps an
+  unaligned page exactly. Duplicate preparation performs no sibling
+  enumeration and uses at most 200 authoritative exclusive-create collision
+  attempts. Folder discovery is linear, stops paging at 50,000 folders, and
+  surfaces reaching that limit or a failure through the existing alert and assistive
+  announcement channels. Safety-capped tree levels retain a visible,
+  VoiceOver-labeled incomplete row.
+  The focused evidence is 12/12 core page tests, 128/128 database/migration
+  tests, 72/72 UniFFI tests, and 171/171 Windows tests. On a 10,000-directory
+  fixture, exact 200-row first/middle/98%-late medians are
+  153.04/158.20/167.96 µs; the late page is only 9.8% above the first.
+  Three fresh independent closure reviews (core, hosts/accessibility, and
+  cross-cutting quality) each returned CODE-READY: YES. Local focused gates
+  are green, including 20 consecutive parallel runs of the formerly racy core
+  page module; CI remains pending under the documented Codoki-outage exception.

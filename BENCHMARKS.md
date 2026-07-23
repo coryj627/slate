@@ -1,6 +1,6 @@
 # Slate Benchmarks
 
-Slate's performance harness lives in `crates/slate-core/benches/scan_bench.rs` and uses [`criterion`](https://crates.io/crates/criterion). The suite covers the Milestone A hot paths against synthetic vaults at three scales (1k / 10k / 50k Markdown files).
+Slate's performance harnesses live in `crates/slate-core/benches/` and use [`criterion`](https://crates.io/crates/criterion). The main suite covers the Milestone A hot paths against synthetic vaults at three scales (1k / 10k / 50k Markdown files); focused benches isolate later bounded contracts without paying that fixture cost.
 
 ## How to run
 
@@ -12,6 +12,7 @@ Or directly:
 
 ```sh
 cargo bench -p slate-core --bench scan_bench
+cargo bench -p slate-core --bench directory_page_bench
 ```
 
 To run a subset (criterion filters by group/benchmark name as a regex):
@@ -34,6 +35,27 @@ Full-suite walltime is roughly **10–15 minutes** on a modern Apple Silicon lap
 | `tasks_in_vault_first_page` | Cache primed; each iteration runs `tasks_in_vault(All, first(200))` against that realistic 1 000-file fixture. Drives the Mac TasksReviewView's initial render. | 10 default; CLI-overridable |
 
 The first three groups run for three vault sizes: **1 000**, **10 000**, **50 000** Markdown files. The Tasks groups run the single realistic 1 000-file distribution described above.
+
+## W1-RT-14 baseline — 2026-07-22 (bounded directory pages)
+
+The standalone `directory_page_bench` scans a 10,000-direct-directory fixture
+outside the timed loop, then requests exact 200-row pages at the first,
+middle, and 98%-late positions. Cursor priming is outside each timed loop;
+no offset scan is used. Measurements below were recorded on the Windows
+development host with the Criterion default configuration.
+
+| Benchmark | Median (95% CI) | Returned rows |
+|---|---:|---:|
+| `directory_page_10k/first_200` | 153.04 µs (152.39–153.95 µs) | 200 |
+| `directory_page_10k/middle_200` | 158.20 µs (157.94–158.38 µs) | 200 |
+| `directory_page_10k/late_200` | 167.96 µs (166.71–168.94 µs) | 200 |
+
+All three pages remain sub-millisecond and return only the requested rows. The
+late page is only 9.8% above the first page at 98% depth. Query-plan tests
+also require a range constraint on both parent-tree expression indexes, so
+the benchmark and plan gate jointly guard the keyset scale shape. Correctness
+tests separately pin dirs-first ordering, continuation, cancellation, and
+stale-snapshot rejection.
 
 ## FL-08 baseline — 2026-07-19 (sidebar filter, #662)
 

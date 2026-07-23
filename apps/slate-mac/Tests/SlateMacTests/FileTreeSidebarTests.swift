@@ -68,6 +68,23 @@ final class FileTreeSidebarTests: XCTestCase {
         }
     }
 
+    private final class PageProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storedPages: [Int] = []
+
+        func record(_ page: Int) {
+            lock.lock()
+            storedPages.append(page)
+            lock.unlock()
+        }
+
+        var pages: [Int] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storedPages
+        }
+    }
+
     // MARK: - AX builders (spec: label/value builders unit-tested)
 
     func testFolderAccessibilityValueCollapsedPluralAtRoot() {
@@ -705,6 +722,132 @@ final class FileTreeSidebarTests: XCTestCase {
 
         PresentationReady.assertRendersInBothAppearances(
             FileTreeSidebar().environmentObject(state))
+    }
+
+    func testBoundedDirectoryPageBridgePreservesDirsFirstContinuation() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("directory-page-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        for name in ["Zulu", "alpha", "beta"] {
+            try FileManager.default.createDirectory(
+                at: tempDir.appendingPathComponent(name),
+                withIntermediateDirectories: true)
+        }
+        try "# note\n".write(
+            to: tempDir.appendingPathComponent("note.md"),
+            atomically: true,
+            encoding: .utf8)
+
+        let session = try VaultSession.openFilesystem(rootPath: tempDir.path)
+        try session.scanInitial(cancel: CancelToken())
+        let first = try session.listDirChildrenPage(
+            parentPath: "",
+            paging: Paging(cursor: nil, limit: 2),
+            cancel: CancelToken())
+        let bridged = first.asTreeListing()
+        XCTAssertEqual(bridged.dirs.map(\.name), ["alpha", "beta"])
+        XCTAssertTrue(bridged.files.items.isEmpty)
+        XCTAssertNotNil(bridged.files.nextCursor)
+
+        let second = try session.listDirChildrenPage(
+            parentPath: "",
+            paging: Paging(cursor: first.nextCursor, limit: 2),
+            cancel: CancelToken())
+        XCTAssertEqual(second.dirs.map(\.name), ["Zulu"])
+        XCTAssertEqual(second.files.map(\.name), ["note.md"])
+        XCTAssertFalse(second.truncated)
+        XCTAssertNil(second.nextCursor)
+    }
+
+    func testTreeDrainPublishesContinuationDirectoriesAndRestoredExpansion() async throws {
+        let rootFirst = DirListing(
+            dirs: [dir(1, "alpha")],
+            files: FileSummaryPage(
+                items: [], nextCursor: "root-2", totalFiltered: 1))
+        let rootSecond = DirListing(
+            dirs: [dir(2, "beta", fileCount: 1)],
+            files: FileSummaryPage(
+                items: [file("root.md")], nextCursor: nil, totalFiltered: 1))
+        let betaChildren = listing(
+            dirs: [], files: [file("beta/inside.md")])
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(
+            pagedFetcher: { parent, cursor in
+                switch (parent, cursor) {
+                case ("", nil): return rootFirst
+                case ("", "root-2"): return rootSecond
+                case ("beta", nil): return betaChildren
+                default:
+                    XCTFail(
+                        "unexpected page \(parent) / \(String(describing: cursor))")
+                    return self.listing(dirs: [], files: [])
+                }
+            },
+            restoringExpandedDirPaths: ["beta"])
+
+        await vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]?.value
+        XCTAssertEqual(vm.rootLevel.map(\.path), ["alpha", "beta", "root.md"])
+        let beta = try XCTUnwrap(vm.rootLevel.first { $0.path == "beta" })
+        XCTAssertTrue(vm.expanded.contains(beta.nodeID))
+        XCTAssertEqual(vm.children[beta.nodeID]?.map(\.path), ["beta/inside.md"])
+    }
+
+    func testTreeDrainStopsAtExactSafetyCapAndPublishesIncompleteReason() async {
+        let probe = PageProbe()
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(
+            pagedFetcher: { _, cursor in
+                let page = Int(cursor ?? "0")!
+                probe.record(page)
+                let start = page * 5_000
+                let dirs = (start..<(start + 5_000)).map {
+                    let path = String(format: "folder-%05d", $0)
+                    return DirNodeSummary(
+                        id: Int64($0 + 1), path: path, name: path,
+                        childDirCount: 0, childFileCount: 0,
+                        hasFolderNote: false)
+                }
+                return DirListing(
+                    dirs: dirs,
+                    files: FileSummaryPage(
+                        items: [],
+                        nextCursor: page < 10 ? String(page + 1) : nil,
+                        totalFiltered: 0))
+            })
+
+        await vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]?.value
+        XCTAssertEqual(vm.rootLevel.count, FileTreeViewModel.levelTotalSafetyCap)
+        XCTAssertEqual(probe.pages, Array(0...9), "page beyond the cap must not be fetched")
+        XCTAssertEqual(
+            vm.incompleteLevelMessage(for: FileTreeViewModel.rootFetchKey),
+            FileTreeViewModel.levelSafetyCapMessage)
+    }
+
+    func testRebindingCancelsTheNativeContinuationToken() async {
+        let entered = expectation(description: "continuation entered")
+        let cancelled = expectation(description: "native token cancelled")
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(
+            cancellablePagedFetcher: { _, cursor, cancel in
+                guard cursor != nil else {
+                    return DirListing(
+                        dirs: [self.dir(1, "alpha")],
+                        files: FileSummaryPage(
+                            items: [], nextCursor: "next", totalFiltered: 0))
+                }
+                entered.fulfill()
+                while !cancel.isCancelled() {
+                    Thread.sleep(forTimeInterval: 0.001)
+                }
+                cancelled.fulfill()
+                throw CancellationError()
+            })
+
+        await fulfillment(of: [entered], timeout: 10)
+        vm.bindForTesting { _ in self.listing(dirs: [], files: []) }
+        await fulfillment(of: [cancelled], timeout: 10)
+        XCTAssertTrue(vm.rootLevel.isEmpty)
     }
 
     /// The tree's text-on-surface pairings ride the token registry — re-assert

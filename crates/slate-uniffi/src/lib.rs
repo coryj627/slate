@@ -821,6 +821,38 @@ impl VaultSession {
         Ok(listing.into())
     }
 
+    /// Bounded dirs-first directory page (W1-RT-14).
+    ///
+    /// Continuations are parent/snapshot-bound and fail closed after an index
+    /// mutation instead of combining rows from two directory states.
+    pub fn list_dir_children_page(
+        &self,
+        parent_path: String,
+        paging: Paging,
+        cancel: Arc<CancelToken>,
+    ) -> Result<DirListingPage, VaultError> {
+        let page = self
+            .inner
+            .list_dir_children_page(&parent_path, paging.into(), &cancel.inner)?;
+        Ok(page.into())
+    }
+
+    /// Bounded file-only directory page (W1-RT-14).
+    ///
+    /// Seeks directly into the file segment without enumerating sibling
+    /// directories; cursors remain session/scope/parent/snapshot-bound.
+    pub fn list_dir_files_page(
+        &self,
+        parent_path: String,
+        paging: Paging,
+        cancel: Arc<CancelToken>,
+    ) -> Result<DirListingPage, VaultError> {
+        let page = self
+            .inner
+            .list_dir_files_page(&parent_path, paging.into(), &cancel.inner)?;
+        Ok(page.into())
+    }
+
     /// Fetch full per-file metadata (basic columns + headings).
     ///
     /// Returns `nil` if the path isn't in the index yet — call
@@ -2514,6 +2546,33 @@ impl From<core::DirListing> for DirListing {
         Self {
             dirs: l.dirs.into_iter().map(Into::into).collect(),
             files: l.files.into(),
+        }
+    }
+}
+
+/// One bounded slice of a directory level in dirs-first order (W1-RT-14).
+#[derive(uniffi::Record)]
+pub struct DirListingPage {
+    /// Directory rows; empty for the files-only endpoint.
+    pub dirs: Vec<DirNodeSummary>,
+    /// File rows in deterministic tree order.
+    pub files: Vec<FileSummary>,
+    /// Ephemeral opaque continuation bound to session/scope/parent/snapshot.
+    pub next_cursor: Option<String>,
+    /// True exactly when `next_cursor` is present.
+    pub truncated: bool,
+    /// Diagnostic snapshot identity, not a continuation token.
+    pub snapshot_id: String,
+}
+
+impl From<core::DirListingPage> for DirListingPage {
+    fn from(page: core::DirListingPage) -> Self {
+        Self {
+            dirs: page.dirs.into_iter().map(Into::into).collect(),
+            files: page.files.into_iter().map(Into::into).collect(),
+            next_cursor: page.next_cursor,
+            truncated: page.truncated,
+            snapshot_id: page.snapshot_id,
         }
     }
 }
@@ -8272,6 +8331,96 @@ impl VaultSession {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_directory_page_crosses_ffi_with_cursor_and_cancellation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        for directory in ["Zulu", "alpha", "beta"] {
+            std::fs::create_dir_all(tmp.path().join(directory)).unwrap();
+        }
+        std::fs::write(tmp.path().join("note.md"), "# note\n").unwrap();
+        let session = VaultSession::open_filesystem(tmp.path().to_string_lossy().into_owned())
+            .expect("open vault");
+        session.scan_initial(CancelToken::new()).unwrap();
+
+        let first = session
+            .list_dir_children_page(
+                String::new(),
+                Paging {
+                    cursor: None,
+                    limit: 2,
+                },
+                CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            first
+                .dirs
+                .iter()
+                .map(|directory| directory.name.as_str())
+                .collect::<Vec<_>>(),
+            ["alpha", "beta"]
+        );
+        assert!(first.files.is_empty());
+        assert!(first.truncated);
+        assert!(first.next_cursor.is_some());
+        assert!(first.snapshot_id.starts_with("v2:"));
+
+        let second = session
+            .list_dir_children_page(
+                String::new(),
+                Paging {
+                    cursor: first.next_cursor.clone(),
+                    limit: 2,
+                },
+                CancelToken::new(),
+            )
+            .unwrap();
+        assert_eq!(
+            second
+                .dirs
+                .iter()
+                .map(|directory| directory.name.as_str())
+                .collect::<Vec<_>>(),
+            ["Zulu"]
+        );
+        assert_eq!(
+            second
+                .files
+                .iter()
+                .map(|file| file.name.as_str())
+                .collect::<Vec<_>>(),
+            ["note.md"]
+        );
+        assert!(!second.truncated);
+
+        let files_only = session
+            .list_dir_files_page(
+                String::new(),
+                Paging {
+                    cursor: None,
+                    limit: 1,
+                },
+                CancelToken::new(),
+            )
+            .unwrap();
+        assert!(files_only.dirs.is_empty());
+        assert_eq!(files_only.files[0].name, "note.md");
+
+        let cancelled = CancelToken::new();
+        cancelled.cancel();
+        assert!(matches!(
+            session.list_dir_children_page(
+                String::new(),
+                Paging {
+                    cursor: None,
+                    limit: 2,
+                },
+                cancelled,
+            ),
+            Err(VaultError::Cancelled)
+        ));
+    }
 
     #[test]
     fn create_folder_exclusive_ffi_wrapper_creates_the_directory() {
