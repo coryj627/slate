@@ -298,6 +298,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             if (generation == _generation)
             {
                 StatusText = $"Scan finished: {loaded.Report.FilesIndexed} files indexed.";
+                ProgressMaximum = Math.Max(1, loaded.Report.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
                 InitializeWorkspace(_session, root, loaded.SwitcherFiles);
@@ -462,6 +463,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
 
                 break;
             case ScanProgress.Finished finished:
+                ProgressMaximum = Math.Max(1, finished.Report.FilesSeen);
                 ProgressValue = ProgressMaximum;
                 IsProgressIndeterminate = false;
                 StatusText = $"Scan finished: {finished.Report.FilesIndexed} files indexed.";
@@ -932,7 +934,10 @@ internal sealed class UiProgressListener : ScanProgressListener
     private readonly object _gate = new();
     private readonly Action<Action> _enqueueUi;
     private readonly Action<ScanProgress> _emit;
-    private ScanProgress? _pending;
+    private ScanProgress.Started? _pendingStarted;
+    private ScanProgress.FileIndexed? _pendingFileIndexed;
+    private ScanProgress? _pendingTerminal;
+    private bool _terminalSeen;
     private bool _dispatchScheduled;
 
     public UiProgressListener(Action<Action> enqueueUi, Action<ScanProgress> emit)
@@ -945,7 +950,25 @@ internal sealed class UiProgressListener : ScanProgressListener
     {
         lock (_gate)
         {
-            _pending = @event;
+            if (_terminalSeen)
+            {
+                return;
+            }
+
+            switch (@event)
+            {
+                case ScanProgress.Started started:
+                    _pendingStarted = started;
+                    break;
+                case ScanProgress.FileIndexed indexed:
+                    _pendingFileIndexed = indexed;
+                    break;
+                case ScanProgress.Finished or ScanProgress.Cancelled or ScanProgress.Failed:
+                    _terminalSeen = true;
+                    _pendingTerminal = @event;
+                    break;
+            }
+
             if (_dispatchScheduled)
             {
                 return;
@@ -959,17 +982,31 @@ internal sealed class UiProgressListener : ScanProgressListener
 
     private void Drain()
     {
-        ScanProgress? pending;
+        ScanProgress? started;
+        ScanProgress? indexed;
+        ScanProgress? terminal;
         lock (_gate)
         {
-            pending = _pending;
-            _pending = null;
+            started = _pendingStarted;
+            indexed = _pendingFileIndexed;
+            terminal = _pendingTerminal;
+            _pendingStarted = null;
+            _pendingFileIndexed = null;
+            _pendingTerminal = null;
             _dispatchScheduled = false;
         }
 
-        if (pending is not null)
+        if (started is not null)
         {
-            _emit(pending);
+            _emit(started);
+        }
+        if (indexed is not null)
+        {
+            _emit(indexed);
+        }
+        if (terminal is not null)
+        {
+            _emit(terminal);
         }
     }
 }

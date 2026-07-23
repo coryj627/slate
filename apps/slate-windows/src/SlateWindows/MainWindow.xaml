@@ -250,6 +250,7 @@
                                             Padding="6,2"
                                             Content="↻"
                                             ToolTip="Refresh"
+                                            AutomationProperties.AutomationId="SidebarRefresh"
                                             AutomationProperties.Name="Refresh files"
                                             Command="{Binding RefreshCommand}" />
                                 </DockPanel>
@@ -263,6 +264,7 @@
                                     <ComboBox Width="145"
                                               ItemsSource="{Binding SortModes}"
                                               SelectedItem="{Binding SortMode}"
+                                              AutomationProperties.AutomationId="SidebarSortOrder"
                                               AutomationProperties.Name="File sort order">
                                         <ComboBox.ItemTemplate>
                                             <DataTemplate>
@@ -273,15 +275,18 @@
                                     <CheckBox Margin="8,0,0,0"
                                               VerticalAlignment="Center"
                                               Content="Group dates"
+                                              AutomationProperties.AutomationId="SidebarGroupDates"
                                               IsChecked="{Binding GroupByDate}" />
                                 </StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
                                     <ToggleButton Content="Tags"
                                                   IsChecked="{Binding ShowTags}"
+                                                  AutomationProperties.AutomationId="SidebarShowTags"
                                                   AutomationProperties.Name="Show tag tree" />
                                     <ToggleButton Margin="6,0,0,0"
                                                   Content="Dual pane"
                                                   IsChecked="{Binding IsDualPaneEnabled}"
+                                                  AutomationProperties.AutomationId="SidebarDualPaneToggle"
                                                   AutomationProperties.Name="Enable dual-pane files sidebar" />
                                 </StackPanel>
                                 <TreeView MaxHeight="120"
@@ -307,7 +312,9 @@
                                            Text="{Binding BatchSelectionSummary}"
                                            FontSize="11"
                                            Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
-                                <Expander Header="Batch actions" Margin="0,2">
+                                <Expander Header="Batch actions"
+                                          Margin="0,2"
+                                          AutomationProperties.AutomationId="SidebarBatchActions">
                                     <StackPanel>
                                         <TextBox Text="{Binding TagInput, UpdateSourceTrigger=PropertyChanged}"
                                                  AutomationProperties.Name="Tag name" />
@@ -327,7 +334,8 @@
                                 </Expander>
                                 <Expander x:Name="SidebarFileActionsExpander"
                                           Header="File actions"
-                                          Margin="0,2">
+                                          Margin="0,2"
+                                          AutomationProperties.AutomationId="SidebarFileActions">
                                     <StackPanel>
                                         <TextBox x:Name="SidebarMutationNameTextBox"
                                                  Text="{Binding MutationName, UpdateSourceTrigger=PropertyChanged}"
@@ -361,9 +369,12 @@
                                         </WrapPanel>
                                     </StackPanel>
                                 </Expander>
-                                <Expander Header="Shortcuts" Margin="0,2">
+                                <Expander Header="Shortcuts"
+                                          Margin="0,2"
+                                          AutomationProperties.AutomationId="SidebarShortcutsActions">
                                     <StackPanel>
-                                        <ListBox MaxHeight="100"
+                                        <ListBox MinHeight="24"
+                                                 MaxHeight="100"
                                                  ItemsSource="{Binding Shortcuts}"
                                                  SelectedItem="{Binding SelectedShortcut}"
                                                  DisplayMemberPath="DisplayName"
