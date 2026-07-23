@@ -2599,12 +2599,12 @@ impl VaultSession {
                     });
                 }
             };
-            // A missing/torn log yields its readable prefix or nothing;
-            // either way the file simply has fewer (or no) events.
-            let entries = match crate::oplog::read_oplog(&self.config.cache_dir, &log_name) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
+            // Missing logs and torn entry tails already degrade to an empty
+            // log or readable prefix. A fatal header/I/O error is different:
+            // abort so the transaction restores every prior row and marker,
+            // preserving the durable repair obligation for a later retry.
+            let entries = crate::oplog::read_oplog(&self.config.cache_dir, &log_name)
+                .map_err(VaultError::Io)?;
             let events = crate::oplog_events::derive_events_for_log(&entries);
             insert_oplog_events(&tx, file_id, &events, cutoff_ms)?;
         }
@@ -3955,17 +3955,15 @@ impl VaultSession {
             // scan rebuilds.
             log::warn!("oplog_events insert failed for file_id={file_id}");
             log::debug!("oplog_events insert failure detail: {e}");
-            // Re-arm the marker unconditionally (round 3). Two ways
-            // the pre-append marker can be missing here: it never
-            // landed (the marker write and this transaction share ONE
-            // cause — a long-lived writer holding the cross-process
-            // lock past the busy timeout — so "two independent
-            // failures" was false comfort), or a concurrent process's
-            // scan rebuild deleted it after reading the log but before
-            // this entry's append landed. A redundant marker when it
-            // DID survive is harmless — the rebuild clears the whole
-            // table. Failing this too degrades to a stale index until
-            // the next full rebuild.
+            // Re-arm the marker unconditionally (round 3). The
+            // pre-append marker can be missing if it never landed (the
+            // marker write and this transaction share ONE cause — a
+            // long-lived writer holding the cross-process lock past the
+            // busy timeout — so "two independent failures" was false
+            // comfort). A redundant marker when it DID survive is
+            // harmless — the rebuild clears the whole table. Failing
+            // this too degrades to a stale index until the next full
+            // rebuild.
             if let Err(e) = conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", []) {
                 log::warn!("oplog_events staleness marker retry failed");
                 log::debug!("oplog_events staleness marker retry failure detail: {e}");

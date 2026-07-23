@@ -1888,6 +1888,110 @@ fn contended_event_rebuild_rolls_back_rows_and_markers_then_retries() {
 }
 
 #[test]
+fn fatal_log_read_event_rebuild_rolls_back_all_rows_and_markers_then_retries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let cache_dir = tmp.path().join(".slate");
+    let mut config = SessionConfig::new(cache_dir.clone());
+    config.oplog_compaction_threshold_bytes = u32::MAX;
+    config.oplog_compaction_threshold_entries = u32::MAX;
+    let provider = std::sync::Arc::new(FsVaultProvider::new(tmp.path().to_path_buf()));
+    let session = VaultSession::open(provider, config).unwrap();
+    session.scan_initial(&CancelToken::new()).unwrap();
+    session.save_text("a.md", "alpha\n", None).unwrap();
+    session.save_text("b.md", "bravo\n", None).unwrap();
+
+    let ordered_logs: Vec<(String, String)> = {
+        let conn = session.conn.lock().unwrap();
+        conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", [])
+            .unwrap();
+        conn.prepare(
+            "SELECT path, oplog_name
+             FROM files
+             WHERE path IN ('a.md', 'b.md')
+             ORDER BY oplog_name",
+        )
+        .unwrap()
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    assert_eq!(ordered_logs.len(), 2);
+    let rows_before: Vec<(String, Vec<EventRow>)> = ["a.md", "b.md"]
+        .into_iter()
+        .map(|path| (path.to_string(), events_for(&session, path)))
+        .collect();
+    assert!(
+        rows_before.iter().all(|(_, rows)| !rows.is_empty()),
+        "both logs must contribute rows before the partial rebuild"
+    );
+
+    // Corrupt the lexicographically last log so the rebuild has already
+    // processed another file after its global DELETE. The eventual error must
+    // still roll the entire transaction back, not commit a partial index.
+    let corrupt_path = crate::oplog::oplog_path_for_name(&cache_dir, &ordered_logs[1].1);
+    let original_log = std::fs::read(&corrupt_path).unwrap();
+    std::fs::write(&corrupt_path, b"not-an-oplog").unwrap();
+
+    let rebuild = {
+        let mut conn = session.conn.lock().unwrap();
+        session.rebuild_oplog_events_inner(&mut conn, true)
+    };
+    assert!(
+        matches!(rebuild, Err(VaultError::Io(_))),
+        "a fatal log-header read must abort the rebuild: {rebuild:?}"
+    );
+    for (path, expected) in &rows_before {
+        assert_eq!(
+            events_for(&session, path),
+            *expected,
+            "the global DELETE and partial reinserts must roll back for {path}"
+        );
+    }
+    let marker_count: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM oplog_events_stale", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(marker_count, 1, "the repair obligation must survive");
+
+    std::fs::write(&corrupt_path, original_log).unwrap();
+    {
+        let mut conn = session.conn.lock().unwrap();
+        session.rebuild_oplog_events_inner(&mut conn, true).unwrap();
+    }
+    let marker_count: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row("SELECT COUNT(*) FROM oplog_events_stale", [], |row| {
+            row.get(0)
+        })
+        .unwrap()
+    };
+    assert_eq!(marker_count, 0, "successful retry clears the obligation");
+    for (path, _) in &rows_before {
+        let entries = session.read_oplog(path).unwrap();
+        let derived: Vec<EventRow> = crate::oplog_events::derive_events_for_log(&entries)
+            .iter()
+            .map(|event| {
+                (
+                    event.ts_ms,
+                    event.event_class,
+                    event.property_key.clone(),
+                    event.deleted_text.clone(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            events_for(&session, path),
+            derived,
+            "retry regenerates every {path} event field exactly"
+        );
+    }
+}
+
+#[test]
 fn birthtime_backfills_on_fast_path_and_survives_zero_sentinels() {
     // Round 2 (adversarial review): (1) migration-030 rows carry
     // birthtime 0; an UNCHANGED file's next scan — the fast path,

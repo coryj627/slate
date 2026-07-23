@@ -2,7 +2,16 @@
 
 ## Outcome
 
-W1-0 through W1-4 are implemented in the repository. Three independent agents red-teamed the complete wave, found no P0 issue but several P1/P2 correctness, performance, reliability, documentation, and accessibility defects, and then performed a read-only closure audit after remediation. The closure audit found no remaining P0/P1 code defect. The Windows shell now opens and closes vaults, persists recents/window state, exposes a native files sidebar, restores recursive tab/split workspaces, hosts the full right-pane leaf registry, and provides a core-ranked Quick Open surface. W1’s code and automated local gates are complete. Interactive CI and human assistive-technology evidence remain explicit release gates, not implied passes.
+W1-0 through W1-4 are implemented in the repository. Three independent agents red-teamed the complete wave, found no P0 issue but several P1/P2 correctness, performance, reliability, documentation, and accessibility defects, and then performed repeated read-only audits after remediation. The Windows shell now opens and closes vaults, persists recents/window state, exposes a native files sidebar, restores recursive tab/split workspaces, hosts the full right-pane leaf registry, and provides a core-ranked Quick Open surface. Interactive CI and human assistive-technology evidence remain explicit release gates, not implied passes.
+
+The post-merge remediation sequence through W1-RT-15 is merged in PR #1028 and
+squash commit `726157a858b06fcde13b6ed0936e753848675433`. A fresh final
+audit then reopened code closure with W1-RT-16 through W1-RT-19: fatal event
+rebuild reads, progress mailbox/live UIA evidence, Windows Quick Open
+process-wide serialization, and macOS file-tree page-one responsiveness. These
+follow-ups are tracked in the adversarial audit and must merge before W1 code
+or automated acceptance is called complete. Named-human Narrator/NVDA/JAWS
+and Contrast-theme evidence remains a separate release blocker.
 
 ## Delivered scope
 
@@ -42,7 +51,7 @@ W1-0 through W1-4 are implemented in the repository. Three independent agents re
 
 ## Independent red team and remediation
 
-Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their final closure pass found no remaining P0/P1 implementation defect. Remediation closed their confirmed findings:
+Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19 tracked above. The prior remediation closed these confirmed findings:
 
 - Current-tab replacement is dirty-gated and selects an exact existing same-group target; new-tab deduplicates; close-tab/pane uses Save/Discard/Cancel. Duplicate/split Markdown tabs share live dirty buffers. Path identity is exact and case-sensitive.
 - Graph is a global singleton, restore prunes graph-created empty panes, and workspaces stop at six panes. Persistence rejects hostile structure, duplicate IDs, invalid group counts and its own size bound without escaping UI commands.
@@ -161,7 +170,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | `dotnet format ... --verify-no-changes` | Pass |
 | Windows unit/integration suite | 171 passed, 0 failed; the latest clean standalone Release invocation rebuilt the declared and contract-tested HostLogProbe dependency, and the current suite includes behavioral sidebar session-lifetime, owner-context, WPF-dispatcher disposal, active-load joining, task-publication, cancellation-ownership, unexpected-failure, anchored replacement-redirection, native rename-layout, post-commit cleanup, and ordinary child-expansion blocked-provider return/supersession/refresh/refresh precedence/refresh-cancellation cascade/detached-admission/provider-serialization/canceled-queue/failure/restoration/close/retry/disposal cases plus representative sidebar-operation, session-work, workspace-persistence, and workspace-layout ownership censuses |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
-| Interactive FlaUI + axe-windows | Pass for revision `7a860ca962b33bfe50d348ae1efb46c12679e3ce` in Actions run 29956533198 on 2026-07-22. The live RT13 ExpandCollapse and native Right/Left focus-retention assertions passed; the retained artifact upload, TRX, and dated revision-bound workspace, Quick Open, and welcome axe evidence steps were green. |
+| Interactive FlaUI + axe-windows | Pass for final PR #1028 revision `9fac9b2007d0cc7c12ef17fe12c36938796af826` in Windows Actions run 29980921181. The live RT13 ExpandCollapse and native Right/Left focus-retention assertions, retained artifact upload, TRX, and dated revision-bound workspace, Quick Open, and welcome axe evidence steps were green alongside the complete non-census core package. |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
 | `cargo test -p slate-core vault::fs::tests::windows_ --locked -q` | 5 passed, 0 failed |
 | `cargo test -p slate-core --locked -- --skip census_ --skip perf_guard_root_listing_under_100ms_on_10k_files` on Windows | Repeated passes in 30.1–31.9 seconds: 1,615 unit, 364 integration, and 2 doctests; zero failures. The long randomized censuses and hardware-timing guard remain in their dedicated Rust lanes. |
@@ -171,11 +180,12 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | Focused core switcher tests | 20 passed, 0 failed |
 | `cargo test -p slate-uniffi --lib --locked -q` | 72 passed, 0 failed |
 | `cargo fmt --check` | Pass |
-| `cargo clippy -p slate-core --lib --benches --locked -- -D warnings`; UniFFI library equivalent | Pass |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | Pass locally and in final PR #1028 CI |
 | `cargo bench -p slate-core --bench directory_page_bench --locked` | Pass; 10,000-directory first/middle/98%-late 200-row p50 pages measured 153.04/158.20/167.96 µs |
 | `python scripts/generate-parity-matrix.py --validate-delivery-evidence` | Pass; 60 command rows and four issue surfaces |
 | Complete Windows `slate-core` verification | Closed: the apparent nontermination came from mixing intentionally long randomized censuses into the ordinary local run. The separated non-census package tier passes completely and is now required by Windows CI. |
-| mac Swift Quick Open tests | Pass in Actions run 29950708145 for PR #1025; mac XCTest and SwiftUI accessibility were green before squash merge |
+| mac Swift Quick Open tests | Pass in Actions run 29950708145 for PR #1025; the final W1 PR #1028 Mac XCTest suite also passed in Actions run 29980921180 |
+| Final PR #1028 rollup | Seven of seven checks passed on `9fac9b2007d0cc7c12ef17fe12c36938796af826`: Mac XCTest, workspace fmt/Clippy, nextest, bench compile, SPDX, Windows x64, and Semgrep |
 
 ## Reliability, performance and security notes
 
