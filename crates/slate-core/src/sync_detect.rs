@@ -693,6 +693,7 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
                 reason: "config path escapes the vault".to_string(),
             };
         }
+        #[cfg(not(unix))]
         Err(OpenConfigError::NotRegular) => {
             return LiveSyncConfigStatus::Malformed {
                 reason: "config file is not a regular file".to_string(),
@@ -749,7 +750,9 @@ enum OpenConfigError {
     NotPresent,
     /// A component is a symlink (a swap/escape attempt) — refused.
     EscapeRefused,
-    /// The final component exists but is not a regular file.
+    /// The final component exists but is not a regular file. Unix classifies
+    /// this from the returned handle in the caller instead.
+    #[cfg(not(unix))]
     NotRegular,
     /// Any other I/O failure.
     Io(std::io::Error),
