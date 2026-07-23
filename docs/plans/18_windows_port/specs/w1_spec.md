@@ -20,9 +20,9 @@ Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral 
 
 **Execution status (updated 2026-07-23): W1-0 through W1-4 and remediation
 through W1-RT-17 are merged through PR #1030 / squash commit
-`268953adcaede360429dc41483604a175cff4333`. W1-RT-18 is implemented on the
-current remediation branch with three independent final reviewers code-ready;
-publication and CI remain pending. Final code and automated closure remains open for W1-RT-18 through
+`268953adcaede360429dc41483604a175cff4333`. W1-RT-18 is published as PR
+#1031 with three independent final reviewers code-ready; CI remains pending.
+Final code and automated closure remains open for W1-RT-18 through
 W1-RT-19, and human acceptance evidence remains pending.** Three independent reviewers audited every W1 workstream
 across completeness, correctness, maintainability, documentation, reliability,
 performance, security, and accessibility, then independently reviewed the
@@ -35,8 +35,8 @@ levels, Windows core-suite portability, LiveSync handle containment, and op-log
 event-index synchronization—were fixed and regression-tested. The final audit
 then identified fatal event-rebuild read rollback, progress-event/UIA evidence,
 Windows process-wide Quick Open serialization, and macOS page-one file-tree
-responsiveness gaps. RT16–RT17 are closed; RT18 is locally implemented and
-independently code-ready pending publication/CI; RT19 remains open. Ranked closure
+responsiveness gaps. RT16–RT17 are closed; RT18 is independently code-ready in
+PR #1031 pending CI; RT19 remains open. Ranked closure
 evidence is tracked in
 [`../reports/w1_post_merge_adversarial_audit_2026-07-22.md`](../reports/w1_post_merge_adversarial_audit_2026-07-22.md).
 The generated parity matrix requires inventory-complete implementation/test

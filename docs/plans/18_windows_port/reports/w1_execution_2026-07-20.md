@@ -6,9 +6,9 @@ W1-0 through W1-4 are implemented in the repository. Three independent agents re
 
 The post-merge remediation sequence through W1-RT-17 is merged through PR
 #1030 and squash commit `268953adcaede360429dc41483604a175cff4333`.
-W1-RT-18's Windows Quick Open process-wide ranking lane is implemented on the
-current remediation branch. Three independent final reviewers returned
-code-ready; publication and CI remain pending.
+W1-RT-18's Windows Quick Open process-wide ranking lane is published as PR
+#1031. Three independent final reviewers returned code-ready; CI remains
+pending.
 W1-RT-19—macOS file-tree page-one responsiveness—remains open. These
 follow-ups are tracked in the adversarial audit and must merge
 before W1 code or automated acceptance is called complete. Named-human
@@ -53,7 +53,7 @@ blocker.
 
 ## Independent red team and remediation
 
-Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19. RT16–RT17 are closed, RT18 is locally implemented and independently code-ready pending publication/CI, and RT19 remains open as tracked above. The prior remediation closed these confirmed findings:
+Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19. RT16–RT17 are closed, RT18 is independently code-ready in PR #1031 pending CI, and RT19 remains open as tracked above. The prior remediation closed these confirmed findings:
 
 - Current-tab replacement is dirty-gated and selects an exact existing same-group target; new-tab deduplicates; close-tab/pane uses Save/Discard/Cancel. Duplicate/split Markdown tabs share live dirty buffers. Path identity is exact and case-sensitive.
 - Graph is a global singleton, restore prunes graph-created empty panes, and workspaces stop at six panes. Persistence rejects hostile structure, duplicate IDs, invalid group counts and its own size bound without escaping UI commands.

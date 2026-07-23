@@ -332,7 +332,7 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   path-selected checks were green, and the PR was squash-merged as
   `268953adcaede360429dc41483604a175cff4333` under the documented outage
   exception.
-- W1-RT-18 is implemented on the current remediation branch. One
+- W1-RT-18 is implemented in PR #1031. One
   process-lifetime coordinator serializes native ranks across view-model/vault
   lifetimes, drops canceled queued work before FFI, and retains an admitted
   lane until the non-cancellable native call actually returns. Generation and
@@ -341,8 +341,7 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   maximum concurrency one and disposed-model nonpublication, canceled queued
   admission, exception release, and privacy-safe terminal failure publication.
   Local evidence is 179/179 Windows tests plus clean .NET formatting. Three
-  independent final reviewers returned code-ready; publication and CI remain
-  pending.
+  independent final reviewers returned code-ready; CI remains pending.
 - W1-RT-19 remains open and is assigned to the final small remediation group
   above. It must not be represented as automated or code closure until its
   focused evidence and required CI lanes pass.
@@ -370,7 +369,7 @@ The remediation sequence from PR #1011 through PR #1030 is merged on
 | W1-RT-15 | #1028 | Closed |
 | W1-RT-16 | #1029 | Closed |
 | W1-RT-17 | #1030 | Closed |
-| W1-RT-18 | Current remediation branch | Implementation/local gates and three independent final reviews complete; publication/CI pending |
+| W1-RT-18 | #1031 | Implementation/local gates and three independent final reviews complete; CI pending |
 | W1-RT-19 | Planned follow-up | Open |
 
 W1 repository remediation and automated acceptance are not yet complete:
