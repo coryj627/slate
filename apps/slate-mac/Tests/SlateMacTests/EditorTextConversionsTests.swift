@@ -16,6 +16,18 @@ final class EditorTextConversionsTests: XCTestCase {
     /// UTF-16 offsets are a=0, \n=1, 中=2, \n=3, x=4.
     private let multiline = "a\n中\nx"
 
+    func testDocumentBufferIntegritySurfaceOverFFI() {
+        let initialText = "abc 中 😀"
+        let buffer = DocumentBuffer(text: initialText)
+        buffer.applyEdit(startUtf16: 3, oldLenUtf16: 0, newText: "\r\n")
+
+        XCTAssertEqual(buffer.text(), "abc\r\n 中 😀")
+        XCTAssertEqual(
+            buffer.contentHash(),
+            editorTextContentHash(text: buffer.text())
+        )
+    }
+
     func testLineForUTF16Offset() {
         XCTAssertEqual(EditorTextConversions.lineForUTF16Offset(0, in: multiline), 1)  // a
         XCTAssertEqual(EditorTextConversions.lineForUTF16Offset(2, in: multiline), 2)  // 中

@@ -83,6 +83,21 @@ impl TextBuffer {
         self.rope.len_lines(LineType::LF)
     }
 
+    /// Canonical BLAKE3 content hash of the rope's UTF-8 bytes.
+    ///
+    /// This is byte-for-byte identical to [`crate::content_hash`] without
+    /// materialising the rope as one contiguous `String`. The editor drift
+    /// guard uses it on an idle cadence and before saves, so keeping the hash
+    /// allocation-light avoids copying multi-megabyte documents merely to
+    /// verify integrity.
+    pub fn content_hash(&self) -> String {
+        let mut hasher = blake3::Hasher::new();
+        for chunk in self.rope.chunks() {
+            hasher.update(chunk.as_bytes());
+        }
+        hasher.finalize().to_hex().to_string()
+    }
+
     // --- byte <-> char (the bridge the others compose through) -------
 
     /// UTF-8 byte offset → char index. A mid-scalar byte snaps to the
