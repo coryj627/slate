@@ -286,6 +286,7 @@ internal sealed partial class WorkspaceViewModel
         }
 
         group.Tabs.Remove(tab);
+        tab.Dispose();
         WorkspaceTabViewModel? successor = group.Tabs.Count == 0
             ? null
             : group.Tabs[Math.Min(index, group.Tabs.Count - 1)];
@@ -357,6 +358,11 @@ internal sealed partial class WorkspaceViewModel
         if (_closedTabs.Count > ClosedTabCapacity)
         {
             _closedTabs.RemoveRange(0, _closedTabs.Count - ClosedTabCapacity);
+        }
+
+        foreach (WorkspaceTabViewModel tab in group.Tabs)
+        {
+            tab.Dispose();
         }
 
         group.Tabs.Clear();

@@ -416,15 +416,18 @@ def cli_verbs() -> list[str]:
 IMPLEMENTED_STATUS = (
     "implemented; local gates green 2026-07-20; interactive CI + human AT pending"
 )
+W2_IMPLEMENTED_STATUS = (
+    "implemented; local gates green 2026-07-23; interactive CI + human AT pending"
+)
 
 
 def load_delivery_evidence(
     cmd_rows: list[tuple[str, str, str, str, str]],
 ) -> dict[str, dict[str, str]]:
-    """Load and validate explicit W1 delivery evidence.
+    """Load and validate explicit delivered-issue evidence.
 
     Status is evidence-driven, never inferred from an issue-number prefix. The
-    exact command-key comparison is intentional: a new W1 inventory row makes
+    exact command-key comparison is intentional: a new delivered inventory row makes
     generation fail until a reviewer maps it to checked implementation and
     test anchors.
     """
@@ -459,24 +462,24 @@ def load_delivery_evidence(
                 if not marker or marker not in path.read_text(encoding="utf-8"):
                     fail(f"delivery-evidence marker {marker!r} missing from {relative}")
 
-    w1_commands = {
+    delivered_commands = {
         cid for cid, _, _, _, issue in cmd_rows
-        if issue.startswith(("#720", "#721", "#722", "#723"))
+        if issue.startswith(("#720", "#721", "#722", "#723", "#724"))
     }
     mapped_commands = set(command_map)
-    if mapped_commands != w1_commands:
-        missing = sorted(w1_commands - mapped_commands)
-        extra = sorted(mapped_commands - w1_commands)
-        fail(f"W1 delivery-evidence command drift: missing={missing}, extra={extra}")
+    if mapped_commands != delivered_commands:
+        missing = sorted(delivered_commands - mapped_commands)
+        extra = sorted(mapped_commands - delivered_commands)
+        fail(f"delivery-evidence command drift: missing={missing}, extra={extra}")
 
     for command_id, group_name in command_map.items():
         if group_name not in groups:
             fail(f"command {command_id} references unknown evidence group {group_name!r}")
 
-    expected_issues = {"#720", "#721", "#722", "#723"}
+    expected_issues = {"#720", "#721", "#722", "#723", "#724"}
     if set(issue_map) != expected_issues:
         fail(
-            "W1 delivery-evidence issue drift: expected "
+            "delivery-evidence issue drift: expected "
             f"{sorted(expected_issues)}, got {sorted(issue_map)}"
         )
     for issue, group_name in issue_map.items():
@@ -490,7 +493,13 @@ def command_delivery_status(
     command_id: str,
     evidence: dict[str, dict[str, str]],
 ) -> str:
-    return IMPLEMENTED_STATUS if command_id in evidence["commands"] else "pending"
+    if command_id not in evidence["commands"]:
+        return "pending"
+    return (
+        W2_IMPLEMENTED_STATUS
+        if command_id == "slate.editor.save"
+        else IMPLEMENTED_STATUS
+    )
 
 
 def issue_delivery_status(
@@ -498,7 +507,9 @@ def issue_delivery_status(
     evidence: dict[str, dict[str, str]],
 ) -> str:
     issue_number = issue.split(" ", 1)[0]
-    return IMPLEMENTED_STATUS if issue_number in evidence["issues"] else "pending"
+    if issue_number not in evidence["issues"]:
+        return "pending"
+    return W2_IMPLEMENTED_STATUS if issue_number == "#724" else IMPLEMENTED_STATUS
 
 
 def main() -> int:
@@ -506,7 +517,7 @@ def main() -> int:
     delivery_evidence = load_delivery_evidence(cmd_rows)
     if "--validate-delivery-evidence" in sys.argv:
         print(
-            "W1 delivery evidence verified "
+            "delivery evidence verified "
             f"({len(delivery_evidence['commands'])} command rows, "
             f"{len(delivery_evidence['issues'])} issue surfaces)"
         )
@@ -619,7 +630,7 @@ def main() -> int:
     a(f"| Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | {issue_delivery_status('#721 (W1-2)', delivery_evidence)} |")
     a(f"| Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | {issue_delivery_status('#722 (W1-3)', delivery_evidence)} |")
     a(f"| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | {issue_delivery_status('#723 (W1-4)', delivery_evidence)} |")
-    a("| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | pending |")
+    a(f"| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | {issue_delivery_status('#724 (W2-1)', delivery_evidence)} |")
     a("| Editor canonical spans | #381 span API consumers | #381 (W2-2) | pending |")
     a("| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | pending |")
     a("| Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | pending |")

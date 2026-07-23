@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-21 at `4211245` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-07-23 at `3792d49` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -117,7 +117,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | pending |
 | `slate.editor.citationSummary` | Citation Summary | ⇧⌘J | Shift Command J | #737 (W4-5) | pending |
 | `slate.editor.findInNote` | Find… | ⌘F | Command F | #742 (W5-2) | pending |
-| `slate.editor.save` | Save | ⌘S | Command S | #724 (W2-1) | pending |
+| `slate.editor.save` | Save | ⌘S | Command S | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.togglePropertiesSource` | Show Properties Source | ⇧⌘D | Shift Command D | #736 (W4-4) | pending |
 | `slate.editor.toggleSpellCheck` | Check Spelling While Typing | — | — | #725 (W2-3) | pending |
 | `slate.editor.toggleViewMode` | Toggle Reading Mode | ⇧⌘E | Shift Command E | #728 (W3-1) | pending |
@@ -257,7 +257,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Files sidebar (tree CRUD, filter, tags, pins, shortcuts, folder notes) | `FileTreeSidebar.swift` + FL program | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
-| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | pending |
+| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | Editor canonical spans | #381 span API consumers | #381 (W2-2) | pending |
 | In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | pending |
 | Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | pending |
@@ -295,6 +295,7 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | `docs/help/bases.md` | #756 (W8-6; shared prose, per-platform chords per decision 20) | pending |
 | `docs/help/canvas.md` | #756 (W8-6; shared prose, per-platform chords per decision 20) | pending |
 | `docs/help/graph.md` | #756 (W8-6; shared prose, per-platform chords per decision 20) | pending |
+| `docs/help/sidebar.md` | #756 (W8-6; shared prose, per-platform chords per decision 20) | pending |
 
 ## `slate.cli.v1` surface
 

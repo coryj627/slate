@@ -779,3 +779,32 @@ its confidence intervals were overwritten and are not reconstructed here.
 
 Final verdict: **scan PASS at 1k/10k/50k; listing PASS at 10k; amended save
 gate PASS at 1k/10k/50k; scale-shape/O(changed-file) gate PASS.**
+
+## W2-1 Windows first numbers — 2026-07-23 (#724)
+
+The W2-1 census measures one sustained single-character insertion through
+AvalonEdit `TextDocument.Insert` → `Changing` → the UniFFI
+`DocumentBuffer.apply_edit` call. It intentionally excludes W2-2 span
+highlighting. Each size receives 12 warm-ups and 101 measured insertions; the
+reported value is the sorted p50. The generated native DLL is a Release build.
+
+Environment: AMD Ryzen 7 9800X3D (8 cores / 16 logical processors), Windows 11
+Pro x64 build 26200, .NET SDK 10.0.302, `rustc 1.97.1`. Source base
+`3792d499525fbe70e5271ea2aae329eb1a9f78f6` plus the #724 working change.
+
+| Sustained delta feed | p50 | Pinned §W-B budget | Result |
+|---|---:|---:|---:|
+| 100 KiB | 0.1147 ms | ≤0.5 ms | PASS |
+| 1 MiB | 0.2008 ms | ≤0.5 ms | PASS |
+| 8 MiB | 2.3552 ms | ≤1.0 ms | **MISS** |
+
+The 8 MiB / 1 MiB ratio is 11.73× against the ≤4× flatness budget: **MISS**.
+These are the spec's required W2-1 *pre-optimization* first numbers, not a claim
+that §W-B is complete. W2-2 owns the formal BenchmarkDotNet span-recompute gate
+and must bring both misses green before its deliverable closes.
+
+A same-run component diagnostic isolated the 8 MiB miss: plain AvalonEdit was
+0.0020 ms, raw long-lived `DocumentBuffer` FFI was 2.3054 ms, and the complete
+host path was 2.2944 ms (median noise explains the small inversion). The managed
+editor/delta bridge adds no material size-correlated cost; the remaining curve
+is in the sustained core buffer path and is carried into W2-2 optimization.

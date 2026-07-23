@@ -68,11 +68,26 @@
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/W1WorkspaceTests.cs#QuickSwitcher_UsesCoreRankingTypedCountsTargetsWrapAndIncrementalChanges"
         ]
+      },
+      "editorHost": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/AvalonDocumentBufferSession.cs#AvalonDocumentBufferSession",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs#ApplyPeerDocumentEvent",
+          "apps/slate-windows/src/SlateWindows/WorkspaceTemplates.xaml#avalonedit:TextEditor"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#ImeCompositionLifecycleAndClipboardPaste_CommitOnlyThroughInputCommands",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#EightMiBSamePathPeers_UseExactDeltasAndPreserveCrossPaneUndo",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#SavedBaselineDirtyState_TracksUndoSaveAndDirtyDuplicateSplitPeers",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#GroupedTwoDeltaMove_RemainsOneUndoRedoUnitInEveryPane",
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#OffsetMapperMatchesGeneratedUnicodeAndFixtureCorpusAtEveryBoundary"
+        ]
       }
     },
     "commands": {
       "slate.file.cancelImport": "sidebar",
       "slate.file.importFilesAndFolders": "sidebar",
+      "slate.editor.save": "editorHost",
       "slate.sidebar.addShortcut": "sidebar",
       "slate.sidebar.addTag": "sidebar",
       "slate.sidebar.clearRecents": "sidebar",
@@ -136,7 +151,8 @@
       "#720": "vault",
       "#721": "sidebar",
       "#722": "workspace",
-      "#723": "quickSwitcher"
+      "#723": "quickSwitcher",
+      "#724": "editorHost"
     }
   }
 }
