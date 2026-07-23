@@ -680,15 +680,23 @@ pub fn read_livesync_config(vault_root: &Path) -> LiveSyncConfigStatus {
     // symlinked component is refused (`EscapeRefused`) instead of
     // traversed. This binds containment to the opened fd atomically,
     // closing the canonicalize→open parent-swap race for good. It also
-    // opens the final component `O_NONBLOCK` so a FIFO can't block. On
-    // non-Unix (no `openat`) it falls back to a canonicalize+contain
-    // open; the platforms slate ships to are Unix-likes.
+    // opens the final component `O_NONBLOCK` so a FIFO can't block. Windows
+    // gets the same no-follow guarantee by retaining non-delete-share handles
+    // for the root and every fixed path component, then reopening the already
+    // validated final object for reading. No config bytes are read until the
+    // handle walk has passed.
     let file = match open_config_in(vault_root) {
         Ok(f) => f,
         Err(OpenConfigError::NotPresent) => return LiveSyncConfigStatus::NotPresent,
         Err(OpenConfigError::EscapeRefused) => {
             return LiveSyncConfigStatus::Malformed {
                 reason: "config path escapes the vault".to_string(),
+            };
+        }
+        #[cfg(not(unix))]
+        Err(OpenConfigError::NotRegular) => {
+            return LiveSyncConfigStatus::Malformed {
+                reason: "config file is not a regular file".to_string(),
             };
         }
         Err(OpenConfigError::Io(e)) => {
@@ -742,6 +750,10 @@ enum OpenConfigError {
     NotPresent,
     /// A component is a symlink (a swap/escape attempt) — refused.
     EscapeRefused,
+    /// The final component exists but is not a regular file. Unix classifies
+    /// this from the returned handle in the caller instead.
+    #[cfg(not(unix))]
+    NotRegular,
     /// Any other I/O failure.
     Io(std::io::Error),
 }
@@ -869,11 +881,190 @@ fn open_config_in(vault_root: &Path) -> Result<std::fs::File, OpenConfigError> {
     Ok(unsafe { std::fs::File::from_raw_fd(file_fd) })
 }
 
-/// Non-Unix fallback: no `openat`, so canonicalize the target and
-/// require it to stay under the canonicalized vault root (the
-/// `vault::fs` boundary). Weaker than the Unix walk (no parent-swap
-/// race close), but the platforms slate ships to are Unix-likes.
-#[cfg(not(unix))]
+/// Windows no-follow walk.
+///
+/// `CreateFileW` has no `openat`-style root argument. The walk therefore
+/// resolves the trusted root handle once, builds descendants from that stable
+/// extended path, and opens every fixed component with
+/// `FILE_FLAG_OPEN_REPARSE_POINT`. Handles share read access only: keeping the
+/// root and ancestors alive pins each entry against replacement or in-place
+/// mutation while the next component opens. The final object is opened
+/// attribute-only, classified from that handle, and `ReOpenFile` creates the
+/// readable handle for the exact same object.
+#[cfg(windows)]
+fn open_config_in(vault_root: &Path) -> Result<std::fs::File, OpenConfigError> {
+    use std::ffi::OsString;
+    use std::os::windows::ffi::OsStringExt;
+    use std::os::windows::fs::OpenOptionsExt;
+    use std::os::windows::io::{AsRawHandle, FromRawHandle};
+    use windows_sys::Win32::Foundation::{GENERIC_READ, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::Storage::FileSystem::{
+        BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT,
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES,
+        FILE_SHARE_READ, FILE_TYPE_DISK, GetFileInformationByHandle, GetFileType,
+        GetFinalPathNameByHandleW, ReOpenFile, VOLUME_NAME_GUID,
+    };
+
+    fn classify_open(err: std::io::Error) -> OpenConfigError {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            OpenConfigError::NotPresent
+        } else {
+            OpenConfigError::Io(err)
+        }
+    }
+
+    fn open_component(
+        path: &Path,
+        follow_final_reparse: bool,
+    ) -> Result<std::fs::File, OpenConfigError> {
+        let mut options = std::fs::OpenOptions::new();
+        options
+            .access_mode(FILE_READ_ATTRIBUTES)
+            .share_mode(FILE_SHARE_READ)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS);
+        if !follow_final_reparse {
+            options.custom_flags(FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT);
+        }
+        options.open(path).map_err(classify_open)
+    }
+
+    fn handle_info(file: &std::fs::File) -> Result<BY_HANDLE_FILE_INFORMATION, OpenConfigError> {
+        let mut info = std::mem::MaybeUninit::<BY_HANDLE_FILE_INFORMATION>::uninit();
+        // SAFETY: `file` owns a valid handle and `info` points to writable,
+        // correctly sized storage. A nonzero return initializes the struct.
+        let ok = unsafe { GetFileInformationByHandle(file.as_raw_handle(), info.as_mut_ptr()) };
+        if ok == 0 {
+            return Err(OpenConfigError::Io(std::io::Error::last_os_error()));
+        }
+        // SAFETY: established by the successful API return above.
+        Ok(unsafe { info.assume_init() })
+    }
+
+    fn reject_reparse(info: &BY_HANDLE_FILE_INFORMATION) -> Result<(), OpenConfigError> {
+        if info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+            Err(OpenConfigError::EscapeRefused)
+        } else {
+            Ok(())
+        }
+    }
+
+    fn query_final_handle_path(file: &std::fs::File, volume_name: u32) -> std::io::Result<PathBuf> {
+        // Windows' maximum extended path is 32,767 UTF-16 code units. Bound
+        // growth so a corrupt provider cannot induce an unbounded allocation.
+        const MAX_PATH_UNITS: usize = 32_768;
+        let mut capacity = 256usize;
+        loop {
+            let mut buffer = vec![0u16; capacity];
+            // SAFETY: `file` owns a valid handle and `buffer` is writable
+            // for the supplied length. Flags 0 request a normalized DOS/UNC
+            // extended path, which can be passed back to CreateFileW.
+            let written = unsafe {
+                GetFinalPathNameByHandleW(
+                    file.as_raw_handle(),
+                    buffer.as_mut_ptr(),
+                    buffer.len() as u32,
+                    volume_name,
+                )
+            };
+            if written == 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let written = written as usize;
+            if written < buffer.len() {
+                buffer.truncate(written);
+                return Ok(PathBuf::from(OsString::from_wide(&buffer)));
+            }
+            // On insufficient space the API's required length already includes
+            // the trailing NUL, so no extra code unit is needed.
+            if written > MAX_PATH_UNITS {
+                return Err(std::io::Error::other("resolved vault path is too long"));
+            }
+            capacity = written;
+        }
+    }
+
+    fn final_handle_path(file: &std::fs::File) -> Result<PathBuf, OpenConfigError> {
+        // DOS/UNC form works for ordinary local, mapped, and network vaults.
+        // A mounted local volume without a drive letter has no DOS form; its
+        // volume-GUID path is also accepted by CreateFileW.
+        query_final_handle_path(file, 0)
+            .or_else(|dos_error| {
+                query_final_handle_path(file, VOLUME_NAME_GUID).map_err(|_| dos_error)
+            })
+            .map_err(OpenConfigError::Io)
+    }
+
+    // The caller-provided vault root is the trust anchor and may itself be a
+    // symlink. Follow it once, then pin the resulting directory handle without
+    // delete sharing for the entire component walk.
+    let root = open_component(vault_root, true)?;
+    let root_info = handle_info(&root)?;
+    if root_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+        return Err(OpenConfigError::NotPresent);
+    }
+    let mut path = final_handle_path(&root)?;
+    let mut pinned = vec![root];
+
+    let (file_name, directories) = LIVESYNC_CONFIG_COMPONENTS
+        .split_last()
+        .expect("component list is non-empty");
+    for comp in directories {
+        path.push(comp);
+        let directory = open_component(&path, false)?;
+        let info = handle_info(&directory)?;
+        reject_reparse(&info)?;
+        if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY == 0 {
+            return Err(OpenConfigError::NotPresent);
+        }
+        pinned.push(directory);
+    }
+
+    path.push(file_name);
+    let target = open_component(&path, false)?;
+    let info = handle_info(&target)?;
+    reject_reparse(&info)?;
+    // GetFileType rules out pipes/devices before any data access. The
+    // attribute check gives directories their stable NotRegular status.
+    if info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0
+        || unsafe { GetFileType(target.as_raw_handle()) } != FILE_TYPE_DISK
+    {
+        return Err(OpenConfigError::NotRegular);
+    }
+
+    // Reopen the validated object itself, never its pathname. The readable
+    // handle also omits FILE_SHARE_DELETE so replacement stays impossible
+    // while the caller checks metadata and reads the bounded payload.
+    // SAFETY: `target` owns a valid disk-file handle; flags are documented
+    // ReOpenFile inputs. The returned handle is independent.
+    let reopened = unsafe {
+        ReOpenFile(
+            target.as_raw_handle(),
+            GENERIC_READ,
+            FILE_SHARE_READ,
+            FILE_FLAG_OPEN_REPARSE_POINT,
+        )
+    };
+    if reopened == INVALID_HANDLE_VALUE {
+        return Err(OpenConfigError::Io(std::io::Error::last_os_error()));
+    }
+    // SAFETY: ReOpenFile returned a fresh owned handle. `File` assumes sole
+    // ownership and closes it on drop.
+    let file = unsafe { std::fs::File::from_raw_handle(reopened) };
+    let reopened_info = handle_info(&file)?;
+    reject_reparse(&reopened_info)?;
+    if reopened_info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY != 0
+        || unsafe { GetFileType(file.as_raw_handle()) } != FILE_TYPE_DISK
+    {
+        return Err(OpenConfigError::NotRegular);
+    }
+    drop(pinned);
+    Ok(file)
+}
+
+/// Last-resort fallback for targets that are neither Unix nor Windows. These
+/// platforms have neither the `openat` walk above nor Windows handle pinning,
+/// so retain the canonicalize-and-contain behavior explicitly.
+#[cfg(not(any(unix, windows)))]
 fn open_config_in(vault_root: &Path) -> Result<std::fs::File, OpenConfigError> {
     let mut path = vault_root.to_path_buf();
     for comp in LIVESYNC_CONFIG_COMPONENTS {
@@ -889,6 +1080,10 @@ fn open_config_in(vault_root: &Path) -> Result<std::fs::File, OpenConfigError> {
     let canonical_root = std::fs::canonicalize(vault_root).map_err(OpenConfigError::Io)?;
     if !canonical_target.starts_with(&canonical_root) {
         return Err(OpenConfigError::EscapeRefused);
+    }
+    let metadata = std::fs::metadata(&canonical_target).map_err(OpenConfigError::Io)?;
+    if !metadata.is_file() {
+        return Err(OpenConfigError::NotRegular);
     }
     std::fs::File::open(&canonical_target).map_err(OpenConfigError::Io)
 }
@@ -1276,7 +1471,12 @@ mod tests {
         let p = single(&detect(&fs), SyncProviderKind::Dropbox);
         assert_eq!(
             p.evidence_paths,
-            vec!["/Users/u/.dropbox.cache".to_string()]
+            vec![
+                Path::new("/Users/u")
+                    .join(".dropbox.cache")
+                    .display()
+                    .to_string()
+            ]
         );
     }
 
@@ -1882,6 +2082,121 @@ mod tests {
             LiveSyncConfigStatus::Malformed {
                 reason: "config file is not a regular file".to_string(),
             }
+        );
+    }
+
+    /// The Windows final-component open uses OPEN_REPARSE_POINT, so even a
+    /// regular outside target is never traversed or parsed.
+    #[cfg(windows)]
+    #[test]
+    fn livesync_windows_final_symlink_escape_is_refused() {
+        let outside = tempfile::tempdir().unwrap();
+        let secret = outside.path().join("outside-data.json");
+        std::fs::write(
+            &secret,
+            br#"{"couchDB_URI":"https://evil.example","couchDB_DBNAME":"stolen"}"#,
+        )
+        .unwrap();
+
+        let vault = tempfile::tempdir().unwrap();
+        let plugin = vault.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::os::windows::fs::symlink_file(&secret, plugin.join("data.json")).unwrap();
+
+        let status = read_livesync_config(vault.path());
+        assert_eq!(
+            status,
+            LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            }
+        );
+        let dump = format!("{status:?}");
+        assert!(!dump.contains("evil.example"));
+        assert!(!dump.contains("stolen"));
+    }
+
+    /// Every below-root directory is opened no-follow and pinned. A parent
+    /// link to a complete outside plugin tree is rejected at that component.
+    #[cfg(windows)]
+    #[test]
+    fn livesync_windows_parent_symlink_escape_is_refused() {
+        let outside = tempfile::tempdir().unwrap();
+        let plugin = outside.path().join("plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(
+            plugin.join("data.json"),
+            br#"{"couchDB_URI":"https://evil.example","couchDB_DBNAME":"stolen"}"#,
+        )
+        .unwrap();
+
+        let vault = tempfile::tempdir().unwrap();
+        std::os::windows::fs::symlink_dir(outside.path(), vault.path().join(".obsidian")).unwrap();
+
+        let status = read_livesync_config(vault.path());
+        assert_eq!(
+            status,
+            LiveSyncConfigStatus::Malformed {
+                reason: "config path escapes the vault".to_string(),
+            }
+        );
+        let dump = format!("{status:?}");
+        assert!(!dump.contains("evil.example"));
+        assert!(!dump.contains("stolen"));
+    }
+
+    /// The configured vault root is trusted and may itself be a link. The walk
+    /// resolves that root handle once, then uses its stable extended path.
+    #[cfg(windows)]
+    #[test]
+    fn livesync_windows_trusted_root_symlink_is_supported() {
+        let real_vault = tempfile::tempdir().unwrap();
+        let plugin = real_vault
+            .path()
+            .join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        std::fs::write(plugin.join("data.json"), br#"{"couchDB_DBNAME":"inside"}"#).unwrap();
+
+        let link_parent = tempfile::tempdir().unwrap();
+        let linked_root = link_parent.path().join("linked-vault");
+        std::os::windows::fs::symlink_dir(real_vault.path(), &linked_root).unwrap();
+        let LiveSyncConfigStatus::Parsed(config) = read_livesync_config(&linked_root) else {
+            panic!("trusted linked root should parse");
+        };
+        assert_eq!(config.database.as_deref(), Some("inside"));
+    }
+
+    /// The returned readable handle preserves the no-delete-share pin through
+    /// metadata validation and the bounded read. Replacement succeeds only
+    /// after that handle is dropped.
+    #[cfg(windows)]
+    #[test]
+    fn livesync_windows_read_handle_pins_validated_file() {
+        let vault = tempfile::tempdir().unwrap();
+        let plugin = vault.path().join(".obsidian/plugins/obsidian-livesync");
+        std::fs::create_dir_all(&plugin).unwrap();
+        let config = plugin.join("data.json");
+        let renamed = plugin.join("renamed.json");
+        std::fs::write(&config, br#"{"couchDB_DBNAME":"inside"}"#).unwrap();
+
+        let Ok(file) = open_config_in(vault.path()) else {
+            panic!("expected config handle");
+        };
+        assert!(
+            std::fs::rename(&config, &renamed).is_err(),
+            "validated file must remain pinned while its read handle is live"
+        );
+        drop(file);
+        std::fs::rename(&config, &renamed).expect("rename after handle drop");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn livesync_windows_regular_intermediate_is_not_present() {
+        let vault = tempfile::tempdir().unwrap();
+        std::fs::write(vault.path().join(".obsidian"), b"not a directory").unwrap();
+        assert_eq!(
+            read_livesync_config(vault.path()),
+            LiveSyncConfigStatus::NotPresent
         );
     }
 

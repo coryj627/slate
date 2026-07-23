@@ -1400,9 +1400,15 @@ fn fast_path_backfills_ctime_for_pre_migration_rows() {
             |row| row.get(0),
         )
         .unwrap();
+    #[cfg(unix)]
     assert!(
         ctime_ms > 0,
         "fast-path UPDATE should backfill ctime_ms from stat, got {ctime_ms}"
+    );
+    #[cfg(not(unix))]
+    assert_eq!(
+        ctime_ms, 0,
+        "platforms without portable ctime must retain the documented zero sentinel"
     );
 }
 

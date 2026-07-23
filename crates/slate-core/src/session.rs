@@ -649,6 +649,8 @@ enum CompactionJob {
         log_name: String,
         path: String,
     },
+    #[cfg(test)]
+    Drain(std::sync::mpsc::Sender<()>),
     Shutdown,
 }
 
@@ -1074,22 +1076,24 @@ fn regen_events_after_compaction(
     log_name: &str,
     marker_rowid: Option<i64>,
     events_cutoff_ms: i64,
+    _log_lock: &crate::oplog::OplogLock,
 ) -> Result<(), VaultError> {
     // Hold the log's exclusive mutation lock across read + transaction
     // (milestone re-review High): without it, a save can append entry
     // N+1 and commit its event row between our read and our
     // DELETE+reinsert — erasing that row forever with every marker
-    // already cleared. Under the lock a concurrent save blocks at its
-    // own append (milliseconds) and its event insert lands strictly
-    // after this commit. Same SIDECAR lock as the appenders and the
+    // already cleared. A concurrent save retains its append lock
+    // through the event insert, so append + insert orders strictly
+    // around this commit. Same SIDECAR lock as the appenders and the
     // compactor (`lock_oplog`, #928) — deliberately not a lock on the
     // log itself, which is mandatory on Windows and would fail THIS
     // function's own `read_oplog` below (it reads through a second
-    // handle). A vanished log aborts (the marker stays, the scan
-    // heals); the existence check runs under the lock, so no rename
-    // or reclamation can swap the answer before the read.
+    // handle). The worker acquired this guard before its marker and
+    // rewrite and keeps it through this transaction. A vanished log
+    // aborts (the marker stays, the scan heals); the existence check
+    // runs under the lock, so no rename or reclamation can swap the
+    // answer before the read.
     let log_path = crate::oplog::oplog_path_for_name(cache_dir, log_name);
-    let _log_lock = crate::oplog::lock_oplog(&log_path).map_err(VaultError::Io)?;
     match std::fs::metadata(&log_path) {
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -1140,6 +1144,22 @@ fn compaction_worker_loop(
     // worker thread for its lifetime.
     let mut worker_conn: Option<Connection> = None;
     while let Ok(job) = rx.recv() {
+        #[cfg(test)]
+        let job = match job {
+            CompactionJob::Drain(done) => {
+                // A compact job can requeue itself behind this barrier after
+                // its fairness pass limit. Keep circulating until no log is
+                // claimed; FIFO ordering then proves every job admitted before
+                // the barrier has completed and released its claim.
+                if queued.lock().expect("compaction queue mutex").is_empty() {
+                    let _ = done.send(());
+                } else {
+                    let _ = tx.send(CompactionJob::Drain(done));
+                }
+                continue;
+            }
+            other => other,
+        };
         let CompactionJob::Compact {
             file_id,
             log_name,
@@ -1166,15 +1186,29 @@ fn compaction_worker_loop(
                 threshold_entries,
                 retention_days: retention_days.load(std::sync::atomic::Ordering::SeqCst),
             };
+            // Lock BEFORE publishing the marker. A scan rebuild owns the DB
+            // writer and only try-locks logs, so if it overlaps this worker it
+            // rolls back rather than clearing a marker for a rewrite that has
+            // not happened yet. This guard spans marker → rewrite → event
+            // regeneration.
+            let log_path = crate::oplog::oplog_path_for_name(&cache_dir, &log_name);
+            let mut lock_error = None;
+            let pass_lock = match crate::oplog::lock_oplog(&log_path) {
+                Ok(lock) => Some(lock),
+                Err(e) => {
+                    lock_error = Some(e);
+                    None
+                }
+            };
             // Durable staleness marker BEFORE the rewrite (milestone
             // red team, the mark-before-append discipline applied to
             // compaction): a rewrite discards folded history, and the
             // derived `oplog_events` rows for it must die too. Marker
             // first ⇒ a crash between the rename and the regeneration
             // below leaves a repair trigger for the next scan. A
-            // marker-write failure degrades to the pre-marker crash
-            // window; the fold itself still runs — filesystem truth
-            // outranks index freshness.
+            // marker-write failure fails closed: skip the fold so the
+            // existing log and derived index remain mutually consistent,
+            // then retry on a later trigger.
             if worker_conn.is_none() {
                 worker_conn = open_worker_connection(&cache_dir)
                     .map_err(|e| {
@@ -1183,16 +1217,20 @@ fn compaction_worker_loop(
                     })
                     .ok();
             }
-            let marker_rowid: Option<i64> = worker_conn.as_ref().and_then(|conn| {
-                match conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", []) {
-                    Ok(_) => Some(conn.last_insert_rowid()),
-                    Err(e) => {
-                        log::warn!("compaction staleness marker write failed");
-                        log::debug!("compaction staleness marker failure detail: {e}");
-                        None
+            let marker_rowid: Option<i64> = if pass_lock.is_some() {
+                worker_conn.as_ref().and_then(|conn| {
+                    match conn.execute("INSERT INTO oplog_events_stale (marker) VALUES (1)", []) {
+                        Ok(_) => Some(conn.last_insert_rowid()),
+                        Err(e) => {
+                            log::warn!("compaction staleness marker write failed");
+                            log::debug!("compaction staleness marker failure detail: {e}");
+                            None
+                        }
                     }
-                }
-            });
+                })
+            } else {
+                None
+            };
             let clear_marker_only = |worker_conn: &mut Option<Connection>| {
                 if let (Some(conn), Some(rowid)) = (worker_conn.as_ref(), marker_rowid) {
                     let _ = conn.execute(
@@ -1207,20 +1245,25 @@ fn compaction_worker_loop(
             // forever. Skip the pass — the claim releases normally
             // below and the next trigger (a save's threshold check or
             // the on-open sweep) retries with a working database.
-            let outcome = if marker_rowid.is_none() {
+            let outcome = if let Some(e) = lock_error {
+                Err(e)
+            } else if marker_rowid.is_none() {
                 log::warn!(
                     "oplog compaction skipped for file_id={file_id}: staleness marker unavailable"
                 );
                 Ok(crate::oplog_compaction::CompactionOutcome::Missing)
             } else {
-                crate::oplog_compaction::compact_log(
+                crate::oplog_compaction::compact_log_with_lock(
                     &cache_dir,
                     &log_name,
                     &path,
                     &limits,
                     now_ms(),
+                    pass_lock.as_ref().expect("compaction lock checked"),
                 )
             };
+            let mut mark_futile = false;
+            let mut compaction_error = None;
             match outcome {
                 Ok(crate::oplog_compaction::CompactionOutcome::Rewritten { .. }) => {
                     // Tail hash unchanged by construction; the session
@@ -1240,6 +1283,7 @@ fn compaction_worker_loop(
                             &log_name,
                             marker_rowid,
                             retention_cutoff_ms(limits.retention_days),
+                            pass_lock.as_ref().expect("rewritten under compaction lock"),
                         ),
                         None => Err(VaultError::Trash {
                             message: "no worker db connection".into(),
@@ -1259,47 +1303,56 @@ fn compaction_worker_loop(
                     // No rewrite: the index rows are still accurate;
                     // this pass's marker is moot.
                     clear_marker_only(&mut worker_conn);
-                    if let Some(state) = oplog_state
-                        .lock()
-                        .expect("oplog state mutex")
-                        .get_mut(&file_id)
-                    {
-                        state.compaction_futile = true;
-                    }
+                    mark_futile = true;
                 }
                 Ok(crate::oplog_compaction::CompactionOutcome::Missing) => {
                     clear_marker_only(&mut worker_conn);
                 }
                 Err(e) => {
-                    // §9.3.3: failure is a user-visible hard error — the
-                    // exact copy below is the O-2/O-5 contract. The
-                    // listener message may carry the vault path (it IS
-                    // user-facing UI copy); the log warn stays path-free
-                    // per the privacy rule.
-                    let message = format!(
-                        "Slate couldn't compact the edit history for {path}: {e}. \
-                         History for this file may grow unbounded."
-                    );
-                    let snapshot: Vec<Arc<dyn VaultEventListener>> = listeners
-                        .lock()
-                        .expect("event listener mutex")
-                        .values()
-                        .cloned()
-                        .collect();
-                    for listener in snapshot {
-                        listener.on_error(
-                            EventErrorCode::CompactionFailed,
-                            path.clone(),
-                            message.clone(),
-                        );
-                    }
-                    log::warn!("oplog compaction failed for {log_name}: {}", e.kind());
-                    log::debug!("oplog compaction failure for {path:?}: {e}");
                     // compact_log publishes atomically (tmp+rename): a
                     // reported failure means the log was NOT rewritten
                     // and the index rows are still accurate.
                     clear_marker_only(&mut worker_conn);
+                    compaction_error = Some(e);
                 }
+            }
+            drop(pass_lock);
+            if let Some(e) = compaction_error {
+                // §9.3.3: failure is a user-visible hard error — the
+                // exact copy below is the O-2/O-5 contract. Notify only after
+                // releasing the per-log guard: a listener may synchronously
+                // re-enter a save for this file. The message may carry the
+                // vault path (it IS user-facing UI copy); warn stays path-free.
+                let message = format!(
+                    "Slate couldn't compact the edit history for {path}: {e}. \
+                     History for this file may grow unbounded."
+                );
+                let snapshot: Vec<Arc<dyn VaultEventListener>> = listeners
+                    .lock()
+                    .expect("event listener mutex")
+                    .values()
+                    .cloned()
+                    .collect();
+                for listener in snapshot {
+                    listener.on_error(
+                        EventErrorCode::CompactionFailed,
+                        path.clone(),
+                        message.clone(),
+                    );
+                }
+                log::warn!("oplog compaction failed for {log_name}: {}", e.kind());
+                log::debug!("oplog compaction failure for {path:?}: {e}");
+            }
+            // Preserve lock order: saves hold oplog_state while acquiring the
+            // per-log guard, so the worker must release that guard before
+            // updating the in-memory futility bit.
+            if mark_futile
+                && let Some(state) = oplog_state
+                    .lock()
+                    .expect("oplog state mutex")
+                    .get_mut(&file_id)
+            {
+                state.compaction_futile = true;
             }
 
             // Atomic release-or-continue: with BOTH locks held, either
@@ -1357,6 +1410,17 @@ impl Drop for VaultSession {
 }
 
 impl VaultSession {
+    #[cfg(test)]
+    fn drain_compaction_worker_for_test(&self) {
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        self.compaction_tx
+            .send(CompactionJob::Drain(done_tx))
+            .expect("compaction worker accepts drain barrier");
+        done_rx
+            .recv_timeout(std::time::Duration::from_secs(30))
+            .expect("compaction worker drains within the test safety bound");
+    }
+
     fn bump_bases_generation(&self) {
         self.bases_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -2501,14 +2565,40 @@ impl VaultSession {
             return Ok(());
         }
         let cutoff_ms = retention_cutoff_ms(self.retention_days());
-        let tx = conn.transaction()?;
-        tx.execute("DELETE FROM oplog_events", [])?;
-        tx.execute("DELETE FROM oplog_events_stale", [])?;
+        // Acquire the database writer first, then TRY-lock each bound log in
+        // deterministic order. A blocking DB→log wait would deadlock with a
+        // mutator that holds its log lock through the event-row transaction;
+        // a contended try-lock instead rolls this transaction back and leaves
+        // the durable markers for the next scan/open.
+        //
+        // Only one log handle is retained at a time (large vaults must not hit
+        // RLIMIT_NOFILE). This is still snapshot-safe because every mutator
+        // takes its log lock BEFORE writing its marker: after we release a
+        // processed log, a mutator can take that lock but blocks on this
+        // transaction's DB writer before changing log bytes. Commit releases
+        // the writer; the mutator then publishes a new obligation and proceeds.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let bound: Vec<(i64, String)> = tx
-            .prepare("SELECT id, oplog_name FROM files WHERE oplog_name IS NOT NULL")?
+            .prepare(
+                "SELECT id, oplog_name
+                 FROM files
+                 WHERE oplog_name IS NOT NULL
+                 ORDER BY oplog_name",
+            )?
             .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
             .collect::<Result<_, _>>()?;
+        tx.execute("DELETE FROM oplog_events", [])?;
+        tx.execute("DELETE FROM oplog_events_stale", [])?;
         for (file_id, log_name) in bound {
+            let log_path = crate::oplog::oplog_path_for_name(&self.config.cache_dir, &log_name);
+            let _log_lock = match crate::oplog::try_lock_oplog(&log_path).map_err(VaultError::Io)? {
+                Some(lock) => lock,
+                None => {
+                    return Err(VaultError::Trash {
+                        message: "op-log changed during event-index rebuild; retry required".into(),
+                    });
+                }
+            };
             // A missing/torn log yields its readable prefix or nothing;
             // either way the file simply has fewer (or no) events.
             let entries = match crate::oplog::read_oplog(&self.config.cache_dir, &log_name) {
@@ -3721,6 +3811,25 @@ impl VaultSession {
             payload_bytes,
         };
 
+        // Acquire the per-log mutation lock BEFORE publishing the durable
+        // marker. Scan rebuilds take the database writer and then try-lock each
+        // log; this ordering means they either observe neither obligation nor
+        // mutation, or fail closed while this guard protects both. Publishing
+        // the marker first would let a rebuild clear it against the old log
+        // before this save acquired the lock and appended.
+        let log_path = crate::oplog::oplog_path_for_name(&self.config.cache_dir, log_name);
+        let oplog_lock = match crate::oplog::lock_oplog(&log_path) {
+            Ok(lock) => lock,
+            Err(e) => {
+                log::warn!(
+                    "oplog mutation lock failed for file_id={file_id}: {}",
+                    e.kind()
+                );
+                log::debug!("oplog mutation lock failure for path {path:?}: {e}");
+                return;
+            }
+        };
+
         // O-6 (#544): durable staleness marker BEFORE the filesystem
         // append (adversarial round 2 — mark-before-append). The log
         // entry becomes durable at `append_entry`; a crash before the
@@ -3774,31 +3883,36 @@ impl VaultSession {
             }
         };
 
-        let post_append_len =
-            match crate::oplog::append_entry(&self.config.cache_dir, log_name, path, &entry) {
-                Ok(len) => len,
-                Err(e) => {
-                    // Non-fatal: a missing op-log entry only degrades undo to a
-                    // per-file conflict report, never corruption. Route through the
-                    // facade (#507). warn carries only the file id and the error
-                    // *kind* — never the full error Display, which for a torn/short
-                    // existing log embeds the cache path (`oplog {path:?}: …`). The
-                    // path-bearing detail rides the debug line instead, so it stays
-                    // out of shipped host logs (see lib.rs privacy rule).
-                    log::warn!("oplog append failed for file_id={file_id}: {}", e.kind());
-                    log::debug!("oplog append failure for path {path:?}: {e}");
-                    // The append never happened: log and index agree, so
-                    // this save's marker is moot. Best-effort removal — a
-                    // leftover only costs one harmless rebuild.
-                    if let Some(rowid) = stale_marker_rowid {
-                        let _ = conn.execute(
-                            "DELETE FROM oplog_events_stale WHERE rowid = ?1",
-                            rusqlite::params![rowid],
-                        );
-                    }
-                    return; // leave the cache untouched so the next save re-snapshots
+        let post_append_len = match crate::oplog::append_entry_with_lock(
+            &self.config.cache_dir,
+            log_name,
+            path,
+            &entry,
+            &oplog_lock,
+        ) {
+            Ok(len) => len,
+            Err(e) => {
+                // Non-fatal: a missing op-log entry only degrades undo to a
+                // per-file conflict report, never corruption. Route through the
+                // facade (#507). warn carries only the file id and the error
+                // *kind* — never the full error Display, which for a torn/short
+                // existing log embeds the cache path (`oplog {path:?}: …`). The
+                // path-bearing detail rides the debug line instead, so it stays
+                // out of shipped host logs (see lib.rs privacy rule).
+                log::warn!("oplog append failed for file_id={file_id}: {}", e.kind());
+                log::debug!("oplog append failure for path {path:?}: {e}");
+                // The append never happened: log and index agree, so
+                // this save's marker is moot. Best-effort removal — a
+                // leftover only costs one harmless rebuild.
+                if let Some(rowid) = stale_marker_rowid {
+                    let _ = conn.execute(
+                        "DELETE FROM oplog_events_stale WHERE rowid = ?1",
+                        rusqlite::params![rowid],
+                    );
                 }
-            };
+                return; // leave the cache untouched so the next save re-snapshots
+            }
+        };
         let appends_this_session = cached.as_ref().map_or(1, |c| c.appends_this_session + 1);
         state.insert(
             file_id,
@@ -3857,6 +3971,11 @@ impl VaultSession {
                 log::debug!("oplog_events staleness marker retry failure detail: {e}");
             }
         }
+        // The append and its derived-row transaction are one serialized unit
+        // with respect to both compaction regeneration and scan rebuilds.
+        // Releasing this guard earlier lets a rebuild observe the new entry,
+        // insert its event, and then let this save insert it again.
+        drop(oplog_lock);
 
         // O-2 (#540): the compaction trigger check is pure arithmetic —
         // the returned post-append length against the byte threshold,

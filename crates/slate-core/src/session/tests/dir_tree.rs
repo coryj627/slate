@@ -475,16 +475,22 @@ fn nonexistent_parent_returns_empty_listing() {
     assert_eq!(listing.files.total_filtered, 0);
 }
 
-// --- unit: bracket/star/question-mark names (GLOB hazards) ---------------
+// --- unit: SQL wildcard names (GLOB/LIKE hazards) -------------------------
 
 #[test]
 fn glob_hazard_names_do_not_break_range_scan() {
-    // `[`, `*`, `?` are legal in vault filenames and would be wildcards
-    // under GLOB/LIKE; the range-scan must treat them literally.
+    // `[`, `%`, and `_` are legal on every supported host and are wildcards
+    // under GLOB or LIKE. `*` and `?` add the remaining GLOB hazards on hosts
+    // where those are legal filenames. The range scan must treat all of them
+    // literally without asking Windows to create names it correctly rejects.
     let (tmp, session) = make_vault(|p| {
         p.write_file("weird[1]/inside.md", b"i").unwrap();
         p.write_file("weird[1]/nested/deep.md", b"d").unwrap();
+        p.write_file("percent%dir/p.md", b"p").unwrap();
+        p.write_file("under_dir/u.md", b"u").unwrap();
+        #[cfg(unix)]
         p.write_file("star*dir/s.md", b"s").unwrap();
+        #[cfg(unix)]
         p.write_file("q?dir/q.md", b"q").unwrap();
         // A sibling that would be matched by `weird[1]` glob but must NOT
         // be conflated: `weird1` (glob char class [1] matches '1').
@@ -494,10 +500,26 @@ fn glob_hazard_names_do_not_break_range_scan() {
     session.scan_initial(&CancelToken::new()).unwrap();
 
     let root = session.list_dir_children("", Paging::first(100)).unwrap();
-    // All four bracket/star/question/plain dirs present, distinct.
+    // Every platform-valid wildcard spelling remains a distinct directory.
     let mut names = dir_names(&root);
     names.sort();
-    assert_eq!(names, vec!["q?dir", "star*dir", "weird1", "weird[1]"]);
+    #[cfg(not(unix))]
+    assert_eq!(
+        names,
+        vec!["percent%dir", "under_dir", "weird1", "weird[1]"]
+    );
+    #[cfg(unix)]
+    assert_eq!(
+        names,
+        vec![
+            "percent%dir",
+            "q?dir",
+            "star*dir",
+            "under_dir",
+            "weird1",
+            "weird[1]",
+        ]
+    );
 
     // Listing the bracket dir returns exactly its immediate children, not
     // `weird1`'s.

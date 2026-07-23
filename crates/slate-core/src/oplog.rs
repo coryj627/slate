@@ -965,34 +965,30 @@ pub fn append_entry(
     created_path: &str,
     entry: &OpLogEntry,
 ) -> io::Result<u64> {
+    let path = oplog_path_for_name(cache_dir, log_name);
+    // Hold the sidecar lock across first-file header creation and append.
+    // This prevents both a header/body first-write race and a compaction
+    // rename swapping the path before this handle opens.
+    let lock = lock_oplog(&path)?;
+    append_entry_with_lock(cache_dir, log_name, created_path, entry, &lock)
+}
+
+/// Append using a caller-held lock for this log.
+///
+/// The caller controls the guard's lifetime, which may span a durable marker
+/// write and the matching derived-index transaction. Passing a guard for a
+/// different log violates the serialization contract; all call sites derive
+/// both from the same `cache_dir` + `log_name` pair.
+pub(crate) fn append_entry_with_lock(
+    cache_dir: &Path,
+    log_name: &str,
+    created_path: &str,
+    entry: &OpLogEntry,
+    _lock: &OplogLock,
+) -> io::Result<u64> {
     let dir = oplog_dir(cache_dir);
     fs::create_dir_all(&dir)?;
     let path = oplog_path_for_name(cache_dir, log_name);
-
-    // First-write race (PR #105 Codoki feedback, refined here).
-    //
-    // The earlier `create_new(true)` shape is *almost* race-free: only
-    // one caller wins the create. But the dirent becomes visible to
-    // every other thread *immediately* — before the create-winner has
-    // written the header. A loser arriving in that window opens the
-    // file in pure-append mode and writes its entry body ahead of the
-    // header, leaving the file with the loser's `body_len` u32 where
-    // MAGIC should be. `read_oplog` then rejects the file with "bad
-    // magic" and every previously committed entry is unrecoverable.
-    //
-    // Fix: hold the per-log exclusive mutation lock (the SIDECAR lock
-    // — see `lock_oplog`, #928: never an OS lock on the log itself,
-    // which is mandatory on Windows and fails other handles' reads)
-    // across "decide whether to write the header" *and* "write our
-    // entry." Whoever gets the lock first sees the empty file and
-    // writes the header before appending. Subsequent lock-holders see
-    // a non-empty file with a valid header already in place and just
-    // append. Acquiring the lock BEFORE opening the log means a
-    // compaction rename can't swap the path→file binding in between —
-    // this handle is the current file by construction (the race the
-    // old lock-then-verify-inode retry existed for). The lock is
-    // released when `_lock` drops at the end of this function.
-    let _lock = lock_oplog(&path)?;
     let mut file = OpenOptions::new()
         .create(true)
         .read(true)

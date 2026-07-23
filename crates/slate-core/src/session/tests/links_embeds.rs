@@ -30,7 +30,6 @@ fn wikilink_for_path_allows_safe_bare_targets_under_punctuated_parents() {
     let cases = [
         ("Folder#Name/HashTarget.md", "[[HashTarget]]"),
         ("Folder^Name/CaretTarget.md", "[[CaretTarget]]"),
-        ("Folder|Name/PipeTarget.md", "[[PipeTarget]]"),
         ("Folder]Name/BracketTarget.md", "[[BracketTarget]]"),
     ];
     let (_tmp, session) = make_vault(|provider| {
@@ -47,6 +46,24 @@ fn wikilink_for_path_allows_safe_bare_targets_under_punctuated_parents() {
             "the session boundary must preserve a safe bare candidate for {path}"
         );
     }
+}
+
+#[cfg(unix)]
+#[test]
+fn wikilink_for_path_allows_safe_bare_target_under_pipe_parent() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("Folder|Name/PipeTarget.md", b"# Target")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    assert_eq!(
+        session
+            .wikilink_for_path("Folder|Name/PipeTarget.md")
+            .unwrap(),
+        Some("[[PipeTarget]]".into())
+    );
 }
 
 #[test]

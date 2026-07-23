@@ -1629,27 +1629,34 @@ fn cache_keys_stable_queries_by_generation_and_today_queries_by_day() {
 }
 
 #[test]
-fn dql_date_shorthands_never_reuse_engine_cache_across_new_york_midnight() {
-    const CHILD: &str = "SLATE_DQL_ENGINE_CACHE_TZ_CHILD";
-    if std::env::var(CHILD).as_deref() != Ok("1") {
-        let status = std::process::Command::new(
-            std::env::current_exe().expect("locate Bases engine test binary"),
-        )
-        .arg("dql_date_shorthands_never_reuse_engine_cache_across_new_york_midnight")
-        .arg("--exact")
-        .arg("--nocapture")
-        .env("TZ", "America/New_York")
-        .env(CHILD, "1")
-        .status()
-        .expect("run DQL engine-cache test in America/New_York");
-        assert!(status.success(), "DQL engine-cache timezone child failed");
-        return;
+fn dql_date_shorthands_never_reuse_engine_cache_across_local_midnight() {
+    #[cfg(unix)]
+    {
+        const CHILD: &str = "SLATE_DQL_ENGINE_CACHE_TZ_CHILD";
+        if std::env::var(CHILD).as_deref() != Ok("1") {
+            let status = std::process::Command::new(
+                std::env::current_exe().expect("locate Bases engine test binary"),
+            )
+            .arg("dql_date_shorthands_never_reuse_engine_cache_across_local_midnight")
+            .arg("--exact")
+            .arg("--nocapture")
+            .env("TZ", "America/New_York")
+            .env(CHILD, "1")
+            .status()
+            .expect("run DQL engine-cache test in America/New_York");
+            assert!(status.success(), "DQL engine-cache timezone child failed");
+            return;
+        }
     }
 
-    // 2026-07-10T04:00:00Z is local midnight in America/New_York.
-    const LOCAL_MIDNIGHT_MS: i64 = 1_783_656_000_000;
-    let before_midnight_ms = LOCAL_MIDNIGHT_MS - 1;
-    let after_midnight_ms = LOCAL_MIDNIGHT_MS + 1;
+    use chrono::TimeZone as _;
+    let local_midnight_ms = chrono::Local
+        .with_ymd_and_hms(2026, 7, 10, 0, 0, 0)
+        .single()
+        .expect("July 10 local midnight is unambiguous")
+        .timestamp_millis();
+    let before_midnight_ms = local_midnight_ms - 1;
+    let after_midnight_ms = local_midnight_ms + 1;
     let conn = migrated_conn();
     seed_index(&conn);
 
