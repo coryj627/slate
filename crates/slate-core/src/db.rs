@@ -565,6 +565,44 @@ mod tests {
 
         let mut conn = Connection::open(&path).expect("reopen migrated database");
         assert_eq!(migrate(&mut conn).unwrap(), 33);
+        conn.execute_batch(
+            "DROP INDEX idx_dirs_parent_tree;
+             DROP INDEX idx_files_parent_tree;
+             CREATE INDEX idx_dirs_parent_tree ON dirs(path);
+             CREATE INDEX idx_files_parent_tree ON files(path);",
+        )
+        .expect("seed stale same-name index definitions");
+        conn.execute("DELETE FROM schema_version WHERE version = 33", [])
+            .expect("simulate restored schema-version metadata");
+        assert_eq!(
+            migrate(&mut conn).unwrap(),
+            33,
+            "migration 033 must safely rebuild its existing indexes on replay"
+        );
+        for (name, required_fragments) in [
+            (
+                "idx_dirs_parent_tree",
+                &["parent_path", "slate_tree_sort_key(name)"][..],
+            ),
+            (
+                "idx_files_parent_tree",
+                &["CASE", "slate_tree_sort_key(name)"][..],
+            ),
+        ] {
+            let sql: String = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                    [name],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            for fragment in required_fragments {
+                assert!(
+                    sql.contains(fragment),
+                    "replayed {name} must contain {fragment:?}: {sql}"
+                );
+            }
+        }
         conn.execute(
             "INSERT INTO dirs (path, parent_path, name) VALUES ('zulu', '', 'Zulu')",
             [],

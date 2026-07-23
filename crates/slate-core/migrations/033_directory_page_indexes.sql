@@ -8,12 +8,17 @@
 -- The UDF semantics are schema state: any future Unicode/casefold change must
 -- ship a new migration that REINDEXes both expression indexes before new
 -- cursor keys are used.
+-- Replays can occur after recovery tooling restores schema-version metadata.
+-- Rebuild our owned indexes so a stale definition can neither block the
+-- migration nor silently violate the query-plan contract.
+DROP INDEX IF EXISTS idx_dirs_parent_tree;
 CREATE INDEX idx_dirs_parent_tree
     ON dirs(parent_path, slate_tree_sort_key(name), path COLLATE BINARY);
 
 -- Files predate an explicit parent_path column. This exact expression is the
 -- established parent derivation used by list_dir_children; indexing it makes
 -- direct-child counts and keyset pages proportional to the requested page.
+DROP INDEX IF EXISTS idx_files_parent_tree;
 CREATE INDEX idx_files_parent_tree
     ON files(
         CASE
