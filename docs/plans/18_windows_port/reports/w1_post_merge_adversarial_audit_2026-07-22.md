@@ -348,7 +348,7 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   The PR was squash-merged as
   `a443264f4be57e186d106001c3ab500e4622ec97` under the documented outage
   exception.
-- W1-RT-19 is implemented as a 14-authored-file change on the current
+- W1-RT-19 is implemented as a 15-authored-file change on the current
   remediation branch. Production root and child page-one fetch, continuation
   draining, shared pure organization, projection, metadata-overlay
   re-preparation, and restored-chain materialization run on one dedicated
@@ -359,7 +359,9 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   reject stale publication. Worker-built file and directory indexes are
   assigned directly; level-owned header/pin lookups avoid a whole-tree
   MainActor merge; obsolete arrays, indexes, and presentation buffers cross a
-  main-turn barrier before final destruction on a utility queue; and restored
+  main-turn barrier before final destruction on a utility queue, including
+  accepted no-op organization presentations and targeted-root predecessor
+  snapshots; and restored
   expansion uses the indexes instead of scanning a 50,000-row level. Live
   active-key and preference reorganization uses one deterministic, compacting
   pump over the same worker;
@@ -367,8 +369,9 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   indexed directories in provider order, incrementally discloses them, and
   admits at most one child operation to the serial worker at a time. Restored
   and invalidated expansion chains share a structurally owned one-at-a-time
-  pump. Collapse/invalidation cancels stale bulk intent, and completion copy is
-  posted only after a full drain, so queued rows never claim an expanded
+  pump. Collapse/invalidation cancels stale bulk intent, and completion mirrors
+  final deterministic expansion recency before posting copy after a full drain,
+  so queued rows never claim an expanded
   accessibility state without children or a loading row. While an authoritative
   root replacement keeps predecessor rows visible, disclosure is read-only and
   rejected bulk commands replace their start announcement with bounded
@@ -380,22 +383,31 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   inheriting expanded or collapsed caches while stale-path-only removal
   preserves the authoritative remapped disclosure, and
   failures clear predecessor caches before a reused directory ID can land.
-  Backend error payloads no longer enter visible or VoiceOver copy. Thirty-one
+  Backend error payloads no longer enter visible or VoiceOver copy. Forty
   async tests use deadline-bounded waits and cover prompt root return/newest
   rebind, read-only stale root-subtree disclosure and running-child retirement
   during same-ID replacement, chained remap/delete cancellation, child collapse/
   cancel/retry, active failure/retry, sibling serialization and queued
-  cancellation, restored recursive expansion, async root rename/delete/same-
+  cancellation, root/child continuation-failure prefix preservation and
+  sanitized Retry, collapsed partial-child same-ID cache revocation, 50,000-row
+  shallow and many-cached-descendant batched retry teardown, targeted
+  partial-root late-page ownership retention with authoritative Collapse All,
+  and
+  same-ID/path-replacement Retry cache revocation,
+  restored recursive expansion, async root rename/delete/same-
   path reuse, targeted failure/reused-ID retry, save-during-load overlay
   ordering/grouping, owner-only overlay routing, overflow-refetch, cancellable
-  preparation, active live reorganization, normal and stale-result off-main
-  level retirement, owned-directory reconciliation, ordered and cancellable
-  Expand Loaded admission/completion, truthful one-at-a-time disclosure for
+  preparation, active live reorganization, accepted no-op, normal, stale-result,
+  and large targeted-snapshot off-main retirement, owned-directory
+  reconciliation, ordered and cancellable Expand Loaded admission/completion
+  with final AppState recency mirroring, truthful one-at-a-time disclosure for
   1,000 restored siblings, dormant nested restoration across ancestor collapse/
   re-expand, queued-restoration collapse and Collapse All across owner
   replacement, same-ID owning-level supersession, empty-level publication
   without global expansion rescans, and production-path pagination/pin/folder-
-  note parity. A separate pure regression proves linear component visits while
+  note parity. A synchronous command-to-AppState integration regression covers
+  pending-only Collapse All persistence. A separate pure regression proves
+  linear component visits while
   ordering 50,000 unrelated removal roots plus 1,000 descendants and retains
   every same-path predecessor/replacement owner; an integration regression
   proves 1,000 owned levels publish one batched teardown. The first
@@ -403,9 +415,9 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   found the overlay ordering,
   mutation reconciliation, failure cleanup, cooperative-executor, large-level
   indexing, duplicated organization, raw error-copy, and unbounded-test gaps;
-  all are remediated and three exact-tree re-reviews report code-ready. No Swift toolchain is
-  available on the Windows development host; macOS compile/test CI remains the
-  executable gate.
+  all are remediated. Closure remains gated by three exact-tree re-reviews. No
+  Swift toolchain is available on the Windows development host; macOS
+  compile/test CI remains the executable gate.
 
 ## Current closure status
 
@@ -431,7 +443,7 @@ The remediation sequence from PR #1011 through PR #1031 is merged on
 | W1-RT-16 | #1029 | Closed |
 | W1-RT-17 | #1030 | Closed |
 | W1-RT-18 | #1031 | Closed |
-| W1-RT-19 | Current remediation branch (14 authored files) | Implementation/test code and three independent exact-tree re-reviews complete; macOS CI pending |
+| W1-RT-19 | Current remediation branch (15 authored files) | Implementation/test code complete; three independent exact-tree re-reviews and macOS CI gate closure |
 
 W1 repository remediation and automated acceptance are not yet complete:
 W1-RT-19 must merge first. Independently, milestone release

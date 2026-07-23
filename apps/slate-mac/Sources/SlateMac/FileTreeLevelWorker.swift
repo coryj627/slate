@@ -25,6 +25,10 @@ struct FileTreePreparedLevel: @unchecked Sendable {
     let directoryOrdinalByID: [NodeID: Int]
     let isComplete: Bool
     let incompleteMessage: String?
+    /// A continuation failure preserves this prepared prefix while exposing
+    /// the inline Retry surface. Initial-page failures have no level to keep
+    /// and remain a worker failure outcome.
+    let retryMessage: String?
 }
 
 struct FileTreeSummaryOverlay: @unchecked Sendable {
@@ -305,6 +309,24 @@ final class FileTreeLevelWorker: @unchecked Sendable {
     }
 
     @MainActor
+    func retire(directoryIDIndex: [NodeID: TreeNode]) {
+        retire(
+            FileTreeRetiredStorage(
+                levels: [],
+                fileIndexes: [],
+                directoryPathIndexes: [],
+                directoryIDIndexes: [directoryIDIndex]))
+    }
+
+    /// Test barrier proving every retirement queued before this call has
+    /// crossed the utility queue after its MainActor handoff was released.
+    func settleRetirementsForTesting() async {
+        await withCheckedContinuation { continuation in
+            retirementQueue.async { continuation.resume() }
+        }
+    }
+
+    @MainActor
     func retire(_ prepared: FileTreePreparedLevel) {
         retire(
             FileTreeRetiredStorage(
@@ -465,6 +487,7 @@ final class FileTreeLevelWorker: @unchecked Sendable {
         var cursor: String?
         var fetchedPage = false
         var incompleteMessage: String?
+        var retryMessage: String?
 
         do {
             repeat {
@@ -506,9 +529,13 @@ final class FileTreeLevelWorker: @unchecked Sendable {
             if case .Cancelled = error {
                 return .cancelled
             }
-            return .failure(FileTreeViewModel.message(for: error))
+            let message = FileTreeViewModel.message(for: error)
+            guard fetchedPage else { return .failure(message) }
+            retryMessage = message
         } catch {
-            return .failure(FileTreeViewModel.message(for: error))
+            let message = FileTreeViewModel.message(for: error)
+            guard fetchedPage else { return .failure(message) }
+            retryMessage = message
         }
 
         guard let prepared = Self.prepare(
@@ -517,8 +544,9 @@ final class FileTreeLevelWorker: @unchecked Sendable {
             depth: depth,
             parentPath: parentPath,
             organization: organization,
-            isComplete: incompleteMessage == nil,
+            isComplete: incompleteMessage == nil && retryMessage == nil,
             incompleteMessage: incompleteMessage,
+            retryMessage: retryMessage,
             nativeCancel: nativeCancel,
             preparationEvent: .initial(parentPath: parentPath),
             preparationHook: preparationHook)
@@ -601,6 +629,7 @@ final class FileTreeLevelWorker: @unchecked Sendable {
             organization: organization,
             isComplete: prepared.isComplete,
             incompleteMessage: prepared.incompleteMessage,
+            retryMessage: prepared.retryMessage,
             nativeCancel: nativeCancel,
             preparationEvent: .overlay(parentPath: parentPath),
             preparationHook: preparationHook)
@@ -616,6 +645,7 @@ final class FileTreeLevelWorker: @unchecked Sendable {
         organization: FileTreeOrganizationInput,
         isComplete: Bool,
         incompleteMessage: String?,
+        retryMessage: String?,
         nativeCancel: CancelToken,
         preparationEvent: FileTreePreparationEvent?,
         preparationHook: FileTreePreparationHook?
@@ -722,7 +752,8 @@ final class FileTreeLevelWorker: @unchecked Sendable {
             directoryOrder: directoryOrder,
             directoryOrdinalByID: directoryOrdinalByID,
             isComplete: isComplete,
-            incompleteMessage: incompleteMessage)
+            incompleteMessage: incompleteMessage,
+            retryMessage: retryMessage)
     }
 
 }

@@ -3,9 +3,9 @@
 
 import Foundation
 
-/// The metadata one file contributes to level organization. Extracted from
-/// `FileSummary` on the main actor so sorting and bucketing stay pure and
-/// testable without FFI or `MainActor` hops.
+/// The immutable metadata one file contributes to level organization.
+/// Production projects it from `FileSummary` on the serial level worker so
+/// sorting and bucketing stay pure and testable without FFI or actor hops.
 struct SidebarOrganizerFile: Equatable {
   let path: String
   let name: String

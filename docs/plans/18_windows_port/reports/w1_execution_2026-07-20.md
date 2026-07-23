@@ -9,9 +9,9 @@ The post-merge remediation sequence through W1-RT-18 is merged through PR
 Final-head Windows Actions run 29990822473 passed the complete core/CLI,
 Windows, live accessibility, evidence-upload, and format gates.
 W1-RT-19—macOS file-tree page-one responsiveness—is implemented as a
-14-authored-file change on the current remediation branch; its first independent
-review round is remediated and three exact-tree re-reviews are code-ready, while
-macOS CI remains pending. These
+15-authored-file change on the current remediation branch; its first independent
+review findings are remediated, and closure is gated by three exact-tree
+re-reviews plus macOS CI. These
 follow-ups are tracked in the adversarial audit and must merge
 before W1 code or automated acceptance is called complete. Named-human
 Narrator/NVDA/JAWS and Contrast-theme evidence remains a separate release
@@ -55,7 +55,7 @@ blocker.
 
 ## Independent red team and remediation
 
-Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19. RT16–RT18 are closed; RT19 is locally implemented, every review finding is remediated, and all three exact-tree re-reviews report code-ready with macOS CI still pending. The prior remediation closed these confirmed findings:
+Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19. RT16–RT18 are closed; RT19 is locally implemented and remains gated by three exact-tree re-reviews plus macOS CI. The prior remediation closed these confirmed findings:
 
 - Current-tab replacement is dirty-gated and selects an exact existing same-group target; new-tab deduplicates; close-tab/pane uses Save/Discard/Cancel. Duplicate/split Markdown tabs share live dirty buffers. Path identity is exact and case-sensitive.
 - Graph is a global singleton, restore prunes graph-created empty panes, and workspaces stop at six panes. Persistence rejects hostile structure, duplicate IDs, invalid group counts and its own size bound without escaping UI commands.

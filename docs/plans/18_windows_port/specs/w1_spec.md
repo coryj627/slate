@@ -21,9 +21,9 @@ Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral 
 **Execution status (updated 2026-07-23): W1-0 through W1-4 and remediation
 through W1-RT-18 are merged through PR #1031 / squash commit
 `a443264f4be57e186d106001c3ab500e4622ec97`. W1-RT-19 is implemented as a
-14-authored-file change on the current remediation branch; its first independent
-review findings are remediated and three exact-tree re-reviews are code-ready,
-with macOS CI pending.
+15-authored-file change on the current remediation branch; its first independent
+review findings are remediated, and closure is gated by three exact-tree
+re-reviews plus macOS CI.
 Final code and automated closure remains open for W1-RT-19, and human
 acceptance evidence remains pending.**
 
@@ -42,9 +42,11 @@ Windows process-wide Quick Open serialization, and macOS page-one file-tree
 responsiveness gaps. RT16–RT18 are closed; RT19 now moves whole-level native
 loading, cancellable organization, and live key reorganization to one serial
 non-main queue, publishes worker-built indexes without large MainActor scans,
-retires obsolete levels and presentations through a main-turn cleanup barrier,
-bounds restored and Expand Loaded admission to one child level with deterministic
-ordering and truthful completion copy, and regression-locks async mutation/metadata races with
+retires obsolete and transient level/presentation/targeted-owner buffers through
+a main-turn cleanup barrier, batches partial-child retry teardown, bounds
+restored and Expand Loaded admission to one child level with deterministic
+ordering, final recency persistence, and truthful completion copy, and
+regression-locks async mutation/metadata races with
 deadline-bounded tests; its final gates remain.
 Ranked closure
 evidence is tracked in

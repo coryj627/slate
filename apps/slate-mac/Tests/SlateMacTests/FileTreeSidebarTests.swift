@@ -1142,6 +1142,29 @@ final class FileTreeSidebarTests: XCTestCase {
         XCTAssertEqual(vm.expandedDirPaths, ["ghost/dir", "b", "a"])
     }
 
+    func testCollapseAllMirrorsPendingOnlyDisclosureIntoAppState() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("collapse-mirror-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(
+            fetcher: { _ in self.listing(dirs: [], files: []) },
+            restoringExpandedDirPaths: ["ghost/dir"])
+        state.treeExpandedDirPaths = vm.expandedDirPaths
+
+        XCTAssertTrue(vm.expanded.isEmpty)
+        XCTAssertEqual(state.treeExpandedDirPaths, ["ghost/dir"])
+        XCTAssertTrue(
+            FileTreeSidebar.collapseAllAndMirror(
+                tree: vm, appState: state, preserving: nil))
+        XCTAssertTrue(vm.pendingExpandedPaths.isEmpty)
+        XCTAssertTrue(state.treeExpandedDirPaths.isEmpty)
+    }
+
     /// Codex round 2 (probe-proven): SQLite reuses INTEGER PRIMARY KEY
     /// rowids after deletes. Expansion must NOT follow a recycled id to
     /// an unrelated folder: invalidation demotes the deleted folder's

@@ -146,6 +146,17 @@ final class FileTreeAsyncLoadingTests: XCTestCase {
         XCTAssertTrue(settled, file: file, line: line)
     }
 
+    private func assertRetirementsSettle(
+        _ worker: FileTreeLevelWorker
+    ) async {
+        let settled = expectation(description: "retirement queue settled")
+        Task {
+            await worker.settleRetirementsForTesting()
+            settled.fulfill()
+        }
+        await fulfillment(of: [settled], timeout: 5)
+    }
+
     func testBlockedRootReturnsPromptlyAndRebindPublishesOnlyNewestLevel()
         async throws
     {
@@ -284,12 +295,512 @@ final class FileTreeAsyncLoadingTests: XCTestCase {
         XCTAssertEqual(message, "Couldn't load this folder.")
         XCTAssertTrue(vm.rootLevel.isEmpty)
 
-        vm.loadRoot()
+        vm.retryRootLoad()
         XCTAssertEqual(
             vm.fetchState[FileTreeViewModel.rootFetchKey],
             .loading)
         await assertSettles(vm)
         XCTAssertEqual(vm.rootLevel.map(\.path), ["recovered.md"])
+        XCTAssertNil(vm.fetchState[FileTreeViewModel.rootFetchKey])
+    }
+
+    func testContinuationFailureKeepsPreparedPrefixAndRetryRefetches()
+        async
+    {
+        final class FailureBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var failing = true
+            private var rootStarts = 0
+
+            func startedRoot() {
+                lock.lock()
+                rootStarts += 1
+                lock.unlock()
+            }
+
+            func heal() {
+                lock.lock()
+                failing = false
+                lock.unlock()
+            }
+
+            var snapshot: (failing: Bool, rootStarts: Int) {
+                lock.lock()
+                defer { lock.unlock() }
+                return (failing, rootStarts)
+            }
+        }
+
+        let box = FailureBox()
+        let vm = FileTreeViewModel()
+        defer { vm.cancelPendingLoads() }
+        vm.bindAsynchronouslyForTesting { [self] _, cursor, _ in
+            if cursor == nil {
+                box.startedRoot()
+                return listing(
+                    files: [file("page-one.md")],
+                    nextCursor: "page-2")
+            }
+            if box.snapshot.failing {
+                throw VaultError.Db(message: "page two boom")
+            }
+            return listing(files: [file("page-two.md")])
+        }
+
+        await assertSettles(vm)
+        XCTAssertEqual(vm.rootLevel.map(\.path), ["page-one.md"])
+        guard case .failed(let message) =
+            vm.fetchState[FileTreeViewModel.rootFetchKey]
+        else {
+            return XCTFail("a failed continuation must expose Retry")
+        }
+        XCTAssertEqual(message, "Couldn't load this folder.")
+        XCTAssertFalse(message.contains("page two boom"))
+        XCTAssertEqual(box.snapshot.rootStarts, 1)
+
+        box.heal()
+        vm.retryRootLoad()
+        await assertSettles(vm)
+        XCTAssertEqual(
+            vm.rootLevel.map(\.path),
+            ["page-one.md", "page-two.md"])
+        XCTAssertNil(vm.fetchState[FileTreeViewModel.rootFetchKey])
+        XCTAssertEqual(box.snapshot.rootStarts, 2)
+    }
+
+    func testChildContinuationFailureKeepsPreparedPrefixAndRetryRefetches()
+        async throws
+    {
+        final class FailureBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var failing = true
+            private var childStarts = 0
+
+            func startedChild() {
+                lock.lock()
+                childStarts += 1
+                lock.unlock()
+            }
+
+            func heal() {
+                lock.lock()
+                failing = false
+                lock.unlock()
+            }
+
+            var snapshot: (failing: Bool, childStarts: Int) {
+                lock.lock()
+                defer { lock.unlock() }
+                return (failing, childStarts)
+            }
+        }
+
+        let box = FailureBox()
+        let vm = FileTreeViewModel()
+        defer { vm.cancelPendingLoads() }
+        vm.bindAsynchronouslyForTesting { [self] parent, cursor, _ in
+            guard parent == "notes" else {
+                return listing(
+                    dirs: [dir(1, "notes", fileCount: 2)])
+            }
+            if cursor == nil {
+                box.startedChild()
+                return listing(
+                    files: [file("notes/page-one.md")],
+                    nextCursor: "page-2")
+            }
+            if box.snapshot.failing {
+                throw VaultError.Db(message: "child page two boom")
+            }
+            return listing(files: [file("notes/page-two.md")])
+        }
+
+        await assertSettles(vm)
+        let notes = try XCTUnwrap(vm.rootLevel.first)
+        vm.expand(notes)
+        await assertSettles(vm)
+        XCTAssertEqual(
+            vm.children[notes.nodeID]?.map(\.path),
+            ["notes/page-one.md"])
+        guard case .failed(let message) = vm.fetchState[notes.nodeID] else {
+            return XCTFail("a failed child continuation must expose Retry")
+        }
+        XCTAssertEqual(message, "Couldn't load this folder.")
+        XCTAssertFalse(message.contains("child page two boom"))
+        XCTAssertEqual(box.snapshot.childStarts, 1)
+
+        box.heal()
+        vm.loadChildren(of: notes)
+        await assertSettles(vm)
+        XCTAssertEqual(
+            vm.children[notes.nodeID]?.map(\.path),
+            ["notes/page-one.md", "notes/page-two.md"])
+        XCTAssertNil(vm.fetchState[notes.nodeID])
+        XCTAssertEqual(box.snapshot.childStarts, 2)
+    }
+
+    func testCollapsedPartialChildRetryDoesNotInheritSameIDCache()
+        async throws
+    {
+        final class RetryBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var failing = true
+            private var replacementChildCalls = 0
+
+            func heal() {
+                lock.lock()
+                failing = false
+                lock.unlock()
+            }
+
+            func calledReplacementChild() {
+                lock.lock()
+                replacementChildCalls += 1
+                lock.unlock()
+            }
+
+            var snapshot: (failing: Bool, replacementChildCalls: Int) {
+                lock.lock()
+                defer { lock.unlock() }
+                return (failing, replacementChildCalls)
+            }
+        }
+
+        let box = RetryBox()
+        let vm = FileTreeViewModel()
+        defer { vm.cancelPendingLoads() }
+        vm.bindAsynchronouslyForTesting { [self] parent, cursor, _ in
+            switch parent {
+            case "":
+                return listing(
+                    dirs: [dir(1, "notes", dirCount: 1)])
+            case "notes":
+                if box.snapshot.failing {
+                    if cursor == nil {
+                        return listing(
+                            dirs: [dir(2, "notes/old", fileCount: 1)],
+                            nextCursor: "page-2")
+                    }
+                    throw VaultError.Db(message: "child page two failed")
+                }
+                return listing(
+                    dirs: [dir(2, "notes/new", fileCount: 1)])
+            case "notes/old":
+                return listing(files: [file("notes/old/stale.md")])
+            case "notes/new":
+                box.calledReplacementChild()
+                return listing(files: [file("notes/new/fresh.md")])
+            default:
+                return listing()
+            }
+        }
+
+        await assertSettles(vm)
+        let notes = try XCTUnwrap(vm.rootLevel.first)
+        vm.expand(notes)
+        await assertSettles(vm)
+        let old = try XCTUnwrap(vm.children[notes.nodeID]?.first)
+        vm.expand(old)
+        await assertSettles(vm)
+        XCTAssertEqual(
+            vm.visibleRows.map(\.path),
+            ["notes", "notes/old", "notes/old/stale.md"])
+
+        vm.collapse(notes)
+        XCTAssertFalse(vm.expanded.contains(notes.nodeID))
+        XCTAssertTrue(vm.expanded.contains(old.nodeID))
+        box.heal()
+        vm.expand(notes)
+        await assertSettles(vm)
+
+        XCTAssertEqual(
+            vm.children[notes.nodeID]?.map(\.path),
+            ["notes/new"])
+        XCTAssertFalse(vm.expanded.contains(old.nodeID))
+        XCTAssertNil(vm.children[old.nodeID])
+        XCTAssertEqual(
+            vm.visibleRows.map(\.path),
+            ["notes", "notes/new"])
+        XCTAssertEqual(box.snapshot.replacementChildCalls, 0)
+        XCTAssertNil(vm.fetchState[notes.nodeID])
+    }
+
+    func testPartialChildRetryBatchesFiftyThousandShallowRows()
+        async throws
+    {
+        final class FailureBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var failing = true
+            func heal() { lock.withLock { failing = false } }
+            var snapshot: Bool { lock.withLock { failing } }
+        }
+
+        let box = FailureBox()
+        let shallowCount = FileTreeViewModel.levelTotalSafetyCap - 1
+        let shallow = (0..<shallowCount).map {
+            dir(Int64($0 + 2), "notes/folder-\($0)")
+        }
+        let vm = FileTreeViewModel()
+        defer { vm.cancelPendingLoads() }
+        vm.bindAsynchronouslyForTesting { parent, cursor, _ in
+            switch parent {
+            case "":
+                return self.listing(
+                    dirs: [self.dir(1, "notes", dirCount: shallowCount)])
+            case "notes":
+                if box.snapshot {
+                    if cursor == nil {
+                        return self.listing(
+                            dirs: shallow, nextCursor: "page-2")
+                    }
+                    throw VaultError.Db(message: "continuation failed")
+                }
+                return self.listing()
+            default:
+                return self.listing()
+            }
+        }
+        await assertSettles(vm)
+        let notes = try XCTUnwrap(vm.rootLevel.first)
+        vm.expand(notes)
+        await assertSettles(vm, timeoutNanoseconds: 20_000_000_000)
+        guard case .failed = vm.fetchState[notes.nodeID] else {
+            return XCTFail("partial child level must expose Retry")
+        }
+
+        let revisionBeforeRetry = vm.presentationRevision
+        box.heal()
+        vm.loadChildren(of: notes)
+        XCTAssertEqual(
+            vm.presentationRevision, revisionBeforeRetry + 1,
+            "reset publishes the owning level once before async replacement")
+        XCTAssertEqual(
+            vm.descendantResetCandidateVisitCountForTesting, shallowCount)
+        XCTAssertEqual(vm.descendantResetBatchPublicationCountForTesting, 0)
+        XCTAssertEqual(vm.descendantResetRetirementHandoffCountForTesting, 0)
+        await assertSettles(vm, timeoutNanoseconds: 20_000_000_000)
+        XCTAssertEqual(vm.children[notes.nodeID]?.count, 0)
+        XCTAssertNil(vm.fetchState[notes.nodeID])
+    }
+
+    func testPartialChildRetryBatchesManyCachedDescendantLevels()
+        async throws
+    {
+        final class FailureBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var failing = true
+            func heal() { lock.withLock { failing = false } }
+            var snapshot: Bool { lock.withLock { failing } }
+        }
+
+        let box = FailureBox()
+        let childCount = 128
+        let shallow = (0..<childCount).map {
+            dir(Int64($0 + 2), "notes/child-\($0)", fileCount: 1)
+        }
+        let vm = FileTreeViewModel()
+        defer { vm.cancelPendingLoads() }
+        vm.bindAsynchronouslyForTesting { parent, cursor, _ in
+            switch parent {
+            case "":
+                return self.listing(
+                    dirs: [self.dir(1, "notes", dirCount: childCount)])
+            case "notes":
+                if box.snapshot {
+                    if cursor == nil {
+                        return self.listing(
+                            dirs: shallow, nextCursor: "page-2")
+                    }
+                    throw VaultError.Db(message: "continuation failed")
+                }
+                return self.listing()
+            default:
+                return self.listing(
+                    files: [self.file("\(parent)/cached.md")])
+            }
+        }
+        await assertSettles(vm)
+        let notes = try XCTUnwrap(vm.rootLevel.first)
+        vm.expand(notes)
+        await assertSettles(vm)
+        let oldChildren = try XCTUnwrap(vm.children[notes.nodeID])
+        for child in oldChildren { vm.expand(child) }
+        await assertSettles(vm, timeoutNanoseconds: 20_000_000_000)
+        XCTAssertEqual(
+            oldChildren.filter { vm.children[$0.nodeID] != nil }.count,
+            childCount)
+
+        let revisionBeforeRetry = vm.presentationRevision
+        box.heal()
+        vm.loadChildren(of: notes)
+        XCTAssertEqual(vm.presentationRevision, revisionBeforeRetry + 2)
+        XCTAssertEqual(
+            vm.descendantResetCandidateVisitCountForTesting, childCount)
+        XCTAssertEqual(vm.descendantResetBatchPublicationCountForTesting, 1)
+        XCTAssertEqual(vm.descendantResetRetirementHandoffCountForTesting, 1)
+        XCTAssertTrue(oldChildren.allSatisfy { vm.children[$0.nodeID] == nil })
+        await assertSettles(vm)
+        XCTAssertEqual(vm.children[notes.nodeID]?.count, 0)
+        XCTAssertNil(vm.fetchState[notes.nodeID])
+    }
+
+    func testTargetedPartialRootKeepsLateCacheButHonorsCollapseAll()
+        async throws
+    {
+        final class RefreshBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var refreshing = false
+            private var failing = true
+
+            func beginRefresh() {
+                lock.lock()
+                refreshing = true
+                lock.unlock()
+            }
+
+            func heal() {
+                lock.lock()
+                failing = false
+                lock.unlock()
+            }
+
+            var snapshot: (refreshing: Bool, failing: Bool) {
+                lock.lock()
+                defer { lock.unlock() }
+                return (refreshing, failing)
+            }
+        }
+
+        let box = RefreshBox()
+        let vm = FileTreeViewModel()
+        defer { vm.cancelPendingLoads() }
+        vm.bindAsynchronouslyForTesting { [self] parent, cursor, _ in
+            if parent == "late" {
+                return listing(files: [file("late/cached.md")])
+            }
+            let state = box.snapshot
+            guard state.refreshing else {
+                return listing(
+                    dirs: [
+                        dir(1, "early"),
+                        dir(2, "late", fileCount: 1)
+                    ])
+            }
+            if cursor == nil {
+                return listing(
+                    dirs: [dir(1, "early")],
+                    nextCursor: "page-2")
+            }
+            if state.failing {
+                throw VaultError.Db(message: "late page unavailable")
+            }
+            return listing(dirs: [dir(2, "late", fileCount: 1)])
+        }
+
+        await assertSettles(vm)
+        let late = try XCTUnwrap(vm.rootLevel.last)
+        vm.expand(late)
+        await assertSettles(vm)
+        XCTAssertEqual(
+            vm.children[late.nodeID]?.map(\.path),
+            ["late/cached.md"])
+
+        box.beginRefresh()
+        vm.rootLevelInvalidation()
+        await assertSettles(vm)
+        XCTAssertEqual(vm.rootLevel.map(\.path), ["early"])
+        XCTAssertTrue(vm.expanded.contains(late.nodeID))
+        XCTAssertEqual(
+            vm.children[late.nodeID]?.map(\.path),
+            ["late/cached.md"])
+        XCTAssertEqual(
+            vm.fetchState[FileTreeViewModel.rootFetchKey],
+            .failed(message: "Couldn't load this folder."))
+        XCTAssertTrue(vm.collapseAllPreservingAncestors(ofPath: nil))
+        XCTAssertFalse(vm.expanded.contains(late.nodeID))
+        XCTAssertTrue(vm.expansionRecency.isEmpty)
+
+        box.heal()
+        vm.retryRootLoad()
+        await assertSettles(vm)
+        XCTAssertEqual(vm.rootLevel.map(\.path), ["early", "late"])
+        XCTAssertFalse(vm.expanded.contains(late.nodeID))
+        XCTAssertEqual(
+            vm.children[late.nodeID]?.map(\.path),
+            ["late/cached.md"])
+        XCTAssertEqual(
+            vm.visibleRows.map(\.path),
+            ["early", "late"])
+        XCTAssertNil(vm.fetchState[FileTreeViewModel.rootFetchKey])
+    }
+
+    func testRootRetrySameIDPathReplacementDoesNotInheritPartialCache()
+        async throws
+    {
+        final class RetryBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var failing = true
+            private var replacementChildCalls = 0
+
+            func heal() {
+                lock.lock()
+                failing = false
+                lock.unlock()
+            }
+
+            func calledReplacementChild() {
+                lock.lock()
+                replacementChildCalls += 1
+                lock.unlock()
+            }
+
+            var snapshot: (failing: Bool, replacementChildCalls: Int) {
+                lock.lock()
+                defer { lock.unlock() }
+                return (failing, replacementChildCalls)
+            }
+        }
+
+        let box = RetryBox()
+        let vm = FileTreeViewModel()
+        defer { vm.cancelPendingLoads() }
+        vm.bindAsynchronouslyForTesting { [self] parent, cursor, _ in
+            switch parent {
+            case "a":
+                return listing(files: [file("a/stale.md")])
+            case "b":
+                box.calledReplacementChild()
+                return listing(files: [file("b/fresh.md")])
+            default:
+                if box.snapshot.failing {
+                    if cursor == nil {
+                        return listing(
+                            dirs: [dir(1, "a", fileCount: 1)],
+                            nextCursor: "page-2")
+                    }
+                    throw VaultError.Db(message: "page two failed")
+                }
+                return listing(
+                    dirs: [dir(1, "b", fileCount: 1)])
+            }
+        }
+
+        await assertSettles(vm)
+        let oldA = try XCTUnwrap(vm.rootLevel.first)
+        vm.expand(oldA)
+        await assertSettles(vm)
+        XCTAssertEqual(
+            vm.visibleRows.map(\.path),
+            ["a", "a/stale.md"])
+
+        box.heal()
+        vm.retryRootLoad()
+        await assertSettles(vm)
+        XCTAssertEqual(vm.rootLevel.map(\.path), ["b"])
+        XCTAssertFalse(vm.expanded.contains(oldA.nodeID))
+        XCTAssertNil(vm.children[oldA.nodeID])
+        XCTAssertEqual(vm.visibleRows.map(\.path), ["b"])
+        XCTAssertEqual(box.snapshot.replacementChildCalls, 0)
         XCTAssertNil(vm.fetchState[FileTreeViewModel.rootFetchKey])
     }
 
@@ -874,7 +1385,7 @@ final class FileTreeAsyncLoadingTests: XCTestCase {
             vm.fetchState[FileTreeViewModel.rootFetchKey],
             .failed(message: "Couldn't load this folder."))
 
-        vm.loadRoot()
+        vm.retryRootLoad()
         await assertSettles(vm)
         XCTAssertEqual(vm.rootLevel.map(\.path), ["b"])
         XCTAssertFalse(vm.expanded.contains(.dir(1)))
@@ -977,6 +1488,56 @@ final class FileTreeAsyncLoadingTests: XCTestCase {
         XCTAssertEqual(vm.levelReorganizeCountForTesting, 1)
     }
 
+    func testAcceptedNoOpReorganizationEphemeraRetiresOffMain() async {
+        let initialRetired = expectation(
+            description: "initial prepared ephemera retired")
+        let acceptedInputRetired = expectation(
+            description: "accepted reorganization input retired")
+        let acceptedOutputRetired = expectation(
+            description: "accepted no-op output retired")
+        let lock = NSLock()
+        var retirements: [Bool] = []
+        let worker = FileTreeLevelWorker(
+            retirementHook: FileTreeRetirementHook { wasMain in
+                let count = lock.withLock {
+                    retirements.append(wasMain)
+                    return retirements.count
+                }
+                switch count {
+                case 1: initialRetired.fulfill()
+                case 2: acceptedInputRetired.fulfill()
+                case 3: acceptedOutputRetired.fulfill()
+                default: break
+                }
+            })
+        var prefs = SidebarOrganizationPrefs()
+        prefs.vaultChoice = SidebarOrganizationChoice(
+            sort: SidebarSortOption(field: .modified, direction: .desc),
+            grouping: .dateBuckets)
+        let vm = FileTreeViewModel(levelWorker: worker)
+        defer { vm.cancelPendingLoads() }
+        vm.applyOrganization(
+            FileTreeViewModel.OrganizationContext(prefs: prefs))
+        vm.bindAsynchronouslyForTesting { _, _, _ in
+            self.listing(
+                dirs: [self.dir(1, "folder")],
+                files: [self.file("only.md", mtimeMs: 1)])
+        }
+        await assertSettles(vm)
+        await fulfillment(of: [initialRetired], timeout: 5)
+
+        XCTAssertTrue(
+            vm.replaceFileSummary(self.file("only.md", mtimeMs: 2)))
+        await assertSettles(vm)
+        await fulfillment(
+            of: [acceptedInputRetired, acceptedOutputRetired], timeout: 5)
+        await assertRetirementsSettle(worker)
+
+        XCTAssertEqual(vm.rootLevel.map(\.path), ["folder", "only.md"])
+        XCTAssertEqual(vm.levelReorganizeCountForTesting, 0)
+        XCTAssertEqual(lock.withLock { retirements }, [false, false, false])
+    }
+
     func testObsoleteLevelStorageRetiresOffMain() async {
         let initialEphemeraRetired = expectation(
             description: "initial prepared ephemera retired")
@@ -1016,6 +1577,66 @@ final class FileTreeAsyncLoadingTests: XCTestCase {
 
         let completedOnMain = lock.withLock { retirementWasOnMain }
         XCTAssertEqual(completedOnMain, false)
+    }
+
+    func testLargeTargetedRootSnapshotsRetireOffMainAfterPartialAndComplete()
+        async
+    {
+        final class RootPhaseBox: @unchecked Sendable {
+            private let lock = NSLock()
+            private var phase = 0
+
+            func beginPartial() { lock.withLock { phase = 1 } }
+            func heal() { lock.withLock { phase = 2 } }
+            var snapshot: Int { lock.withLock { phase } }
+        }
+
+        let roots = (0..<256).map {
+            dir(Int64($0 + 1), "folder-\($0)")
+        }
+        let box = RootPhaseBox()
+        let lock = NSLock()
+        var retirements: [Bool] = []
+        let worker = FileTreeLevelWorker(
+            retirementHook: FileTreeRetirementHook { wasMain in
+                lock.withLock { retirements.append(wasMain) }
+            })
+        let vm = FileTreeViewModel(levelWorker: worker)
+        defer { vm.cancelPendingLoads() }
+        vm.bindAsynchronouslyForTesting { parent, cursor, _ in
+            guard parent.isEmpty else { return self.listing() }
+            if box.snapshot == 1 {
+                if cursor == nil {
+                    return self.listing(
+                        dirs: [roots[0]], nextCursor: "page-2")
+                }
+                throw VaultError.Db(message: "late roots unavailable")
+            }
+            return self.listing(dirs: roots)
+        }
+        await assertSettles(vm)
+        for root in vm.rootLevel { vm.expand(root) }
+        await assertSettles(vm, timeoutNanoseconds: 20_000_000_000)
+        await assertRetirementsSettle(worker)
+        lock.withLock { retirements = [] }
+
+        box.beginPartial()
+        vm.rootLevelInvalidation()
+        await assertSettles(vm)
+        await assertRetirementsSettle(worker)
+        XCTAssertEqual(lock.withLock { retirements }, [false, false])
+        XCTAssertEqual(vm.rootLevel.count, 1)
+        guard case .failed = vm.fetchState[FileTreeViewModel.rootFetchKey]
+        else { return XCTFail("partial targeted root must expose Retry") }
+
+        lock.withLock { retirements = [] }
+        box.heal()
+        vm.retryRootLoad()
+        await assertSettles(vm)
+        await assertRetirementsSettle(worker)
+        XCTAssertEqual(lock.withLock { retirements }, [false, false, false])
+        XCTAssertEqual(vm.rootLevel.count, roots.count)
+        XCTAssertNil(vm.fetchState[FileTreeViewModel.rootFetchKey])
     }
 
     func testPreparedSuccessRevokedBeforePublicationRetiresOffMain()
@@ -1699,10 +2320,22 @@ final class FileTreeAsyncLoadingTests: XCTestCase {
 
     func testExpandLoadedCompletionFiresAfterDeterministicFullDrain() async {
         let completed = expectation(description: "bulk expansion completed")
+        let aEntered = expectation(description: "last child worker entered")
+        let releaseA = DispatchSemaphore(value: 0)
         let lock = NSLock()
         var childParents: [String] = []
         let vm = FileTreeViewModel()
-        defer { vm.cancelPendingLoads() }
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("expand-mirror-\(UUID().uuidString)")
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        defer {
+            vm.cancelPendingLoads()
+            releaseA.signal()
+            try? FileManager.default.removeItem(at: tempDir)
+        }
 
         vm.bindAsynchronouslyForTesting { parent, _, _ in
             guard !parent.isEmpty else {
@@ -1711,20 +2344,40 @@ final class FileTreeAsyncLoadingTests: XCTestCase {
                 ])
             }
             lock.withLock { childParents.append(parent) }
+            if parent == "a" {
+                aEntered.fulfill()
+                try waitForFileTreeGate(releaseA)
+            }
             return self.listing()
         }
         await assertSettles(vm)
         let b = vm.rootLevel[1]
         vm.expand(b)
         await assertSettles(vm)
+        FileTreeSidebar.mirrorExpandedPaths(tree: vm, appState: state)
+        XCTAssertEqual(state.treeExpandedDirPaths, ["b"])
         lock.withLock { childParents = [] }
-        vm.expandLoadedLevels { completed.fulfill() }
+        XCTAssertTrue(
+            FileTreeSidebar.expandLoadedAndMirror(
+                tree: vm, appState: state
+            ) {
+                completed.fulfill()
+            })
+        await fulfillment(of: [aEntered], timeout: 5)
+        FileTreeSidebar.mirrorExpandedPaths(tree: vm, appState: state)
+        XCTAssertEqual(
+            state.treeExpandedDirPaths, ["b", "a"],
+            "the normal expanded-id observer can publish the interim order")
+        releaseA.signal()
         await fulfillment(of: [completed], timeout: 5)
         await assertSettles(vm)
 
         XCTAssertEqual(lock.withLock { childParents }, ["a"])
         XCTAssertEqual(vm.expanded.count, 2)
         XCTAssertEqual(vm.expansionRecency, ["a", "b"])
+        XCTAssertEqual(
+            state.treeExpandedDirPaths, ["a", "b"],
+            "command completion must mirror the final deterministic recency")
         XCTAssertEqual(vm.maximumLevelDrainTaskCountForTesting, 1)
     }
 
