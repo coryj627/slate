@@ -2384,11 +2384,17 @@ final class BatchHostQuarantineTests: XCTestCase {
             "new nested bytes")
     }
 
-    func testDuplicateQuarantineDoesNotSpendTheCreateRaceCollisionBudget()
+    func testDuplicateQuarantineDoesNotSpendPhysicalCollisionBudget()
         async throws
     {
         let fixture = try await makeTypedState()
         let state = fixture.state
+        for ordinal in 0...5_000 {
+            try FileManager.default.createDirectory(
+                at: fixture.vault.appendingPathComponent(
+                    String(format: "folder/prefix-%05d", ordinal)),
+                withIntermediateDirectories: false)
+        }
         for ordinal in 1...199 {
             let name =
                 ordinal == 1
@@ -2426,7 +2432,29 @@ final class BatchHostQuarantineTests: XCTestCase {
                     "folder/a copy 201.md"),
                 encoding: .utf8),
             "# Duplicate source\n",
-            "listed collisions and quarantined candidates must not consume race retries")
+            "quarantined candidates must not consume physical collision retries")
+    }
+
+    func testFolderDiscoveryStopsAtCapAndSurfacesTruncation() async throws {
+        let fixture = try await makeTypedState()
+        for name in ["Alpha", "Beta", "Gamma"] {
+            try FileManager.default.createDirectory(
+                at: fixture.vault.appendingPathComponent(name),
+                withIntermediateDirectories: false)
+        }
+        _ = try XCTUnwrap(fixture.state.currentSession)
+            .scanInitial(cancel: CancelToken())
+        fixture.state.folderDiscoveryLimitForTesting = 4
+
+        let folders = await fixture.state.loadAllFolders()
+
+        XCTAssertEqual(folders.count, 4)
+        XCTAssertEqual(
+            fixture.state.lastError,
+            "Folder choices reached the 50,000-folder safety limit. Additional folders may not be shown.")
+        XCTAssertEqual(
+            fixture.state.lastMutationAnnouncement,
+            "Folder choices reached the 50,000-folder safety limit. Additional folders may not be shown.")
     }
 
     func testNewFolderThenMovePreflightsUnknownGateBeforeCreatingFolder()

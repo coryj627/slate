@@ -4,6 +4,21 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Keep the tree's injectable `DirListing` test seam while production uses
+/// the bounded W1-RT-14 combined page. `nextCursor` now advances through the
+/// dirs-first level rather than files alone; no tree consumer reads the legacy
+/// page total.
+extension DirListingPage {
+    func asTreeListing() -> DirListing {
+        DirListing(
+            dirs: dirs,
+            files: FileSummaryPage(
+                items: files,
+                nextCursor: nextCursor,
+                totalFiltered: UInt64(files.count)))
+    }
+}
+
 /// User-facing message for a shared Sidebar dispatch failure. UniFFI's typed
 /// command error carries the actionable reason; unrelated errors retain their
 /// localized description. Keeping this as a property lets every renderer make
@@ -316,7 +331,14 @@ final class FileTreeViewModel: ObservableObject {
     /// Whether a stored level's listing was complete (no next page). Stale
     /// pins are only ever reported from complete levels.
     private var completeLevelByKey: [NodeID: Bool] = [:]
+    /// User-facing reason a successfully published level remains incomplete.
+    /// Fetch failures use fetchState and its Retry row instead.
+    @Published private(set) var incompleteLevelMessageByKey: [NodeID: String] = [:]
     private(set) var levelReorganizeCountForTesting = 0
+
+    func incompleteLevelMessage(for parent: NodeID) -> String? {
+        incompleteLevelMessageByKey[parent]
+    }
 
     /// Adopt new organization inputs. Cached levels re-sort only when the
     /// preferences, pins, calendar/locale, or the local civil day actually
@@ -507,20 +529,22 @@ final class FileTreeViewModel: ObservableObject {
     /// never stamp rows with a replacement vault's session.
     private(set) var sessionIdentity: ObjectIdentifier?
 
-    /// Level fetcher: `parentPath` → one level's listing. Production routes to
-    /// `session.listDirChildren`; tests inject a spy to assert *which* levels
-    /// are fetched (the lazy-fetch guarantee) and to stand up large synthetic
-    /// fixtures without an FFI round-trip. `nil` until `bind(to:)`.
-    private var fetcher: ((String, String?) throws -> DirListing)?
+    /// One bounded combined page. Production forwards the supplied native
+    /// cancellation token; test adapters preserve the legacy DirListing seam.
+    private var fetcher: ((String, String?, CancelToken) throws -> DirListing)?
 
     /// Sentinel thrown by the single-shot test wrapper for a continuation
     /// cursor it cannot serve; the drain treats it as "incomplete level".
     private struct LevelPageUnavailable: Error {}
 
-    /// Total-files safety bound for one level's drain. Levels beyond it are
+    /// Total-row safety bound for one level's drain. Levels beyond it are
     /// stored partial (organization still applies to what is materialized,
     /// stale pruning stays suppressed).
     nonisolated static let levelTotalSafetyCap = 50_000
+    nonisolated static let levelSafetyCapMessage =
+        "Only the first 50,000 items in this folder are shown."
+    nonisolated static let incompleteLevelMessage =
+        "Additional items in this folder could not be loaded."
 
     /// Ownership token per level for the asynchronous continuation drain
     /// (round-14 finding 1): a drain publishes only if its token is still
@@ -540,6 +564,15 @@ final class FileTreeViewModel: ObservableObject {
     private var pendingSummaryOverlay: [UUID: [String: FileSummary]] = [:]
     private static let pendingSummaryOverlayCap = 4096
     private(set) var levelDrainTasksForTesting: [NodeID: Task<Void, Never>] = [:]
+    private var levelDrainNativeCancels: [NodeID: CancelToken] = [:]
+
+    private func revokeLevelDrain(_ key: NodeID) {
+        if let revoked = levelDrainTokens.removeValue(forKey: key) {
+            pendingSummaryOverlay[revoked] = nil
+        }
+        levelDrainNativeCancels.removeValue(forKey: key)?.cancel()
+        levelDrainTasksForTesting.removeValue(forKey: key)?.cancel()
+    }
 
 
     /// Round-13 finding 1 + round-14 finding 1: the FIRST page fetches
@@ -557,31 +590,54 @@ final class FileTreeViewModel: ObservableObject {
         guard let fetcher else { return }
         let token = UUID()
         levelDrainTokens[parentKey] = token
+        let nativeCancel = CancelToken()
+        levelDrainNativeCancels[parentKey] = nativeCancel
         let capturedSession = sessionIdentity
         let startCursor = firstPage.files.nextCursor
-        let baseCount = firstPage.files.items.count
+        let baseCount = firstPage.dirs.count + firstPage.files.items.count
         let task = Task { [weak self] in
-            let outcome: Result<(files: [FileSummary], isComplete: Bool), Error> =
+            let outcome: Result<
+                (
+                    dirs: [DirNodeSummary], files: [FileSummary],
+                    incompleteMessage: String?
+                ), Error
+            > =
                 await Task.detached(priority: .userInitiated) {
+                    var dirs: [DirNodeSummary] = []
                     var files: [FileSummary] = []
                     var cursor = startCursor
-                    var isComplete = true
+                    var incompleteMessage: String?
                     do {
                         while let next = cursor {
-                            let page = try fetcher(parentPath, next)
-                            files.append(contentsOf: page.files.items)
+                            try Task.checkCancellation()
+                            let page = try fetcher(parentPath, next, nativeCancel)
+                            let remaining = Self.levelTotalSafetyCap
+                                - baseCount - dirs.count - files.count
+                            guard remaining > 0 else {
+                                incompleteMessage = Self.levelSafetyCapMessage
+                                break
+                            }
+                            let takenDirs = Array(page.dirs.prefix(remaining))
+                            dirs.append(contentsOf: takenDirs)
+                            let fileRoom = remaining - takenDirs.count
+                            let takenFiles = Array(page.files.items.prefix(fileRoom))
+                            files.append(contentsOf: takenFiles)
+                            let consumedWholePage = takenDirs.count == page.dirs.count
+                                && takenFiles.count == page.files.items.count
                             cursor = page.files.nextCursor
-                            if cursor != nil,
-                                baseCount + files.count
-                                    >= FileTreeViewModel.levelTotalSafetyCap
+                            if !consumedWholePage
+                                || (cursor != nil
+                                    && baseCount + dirs.count + files.count
+                                        >= Self.levelTotalSafetyCap)
                             {
-                                isComplete = false
+                                incompleteMessage = Self.levelSafetyCapMessage
                                 break
                             }
                         }
-                        return .success((files, isComplete))
+                        return .success((dirs, files, incompleteMessage))
                     } catch is LevelPageUnavailable {
-                        return .success(([], false))
+                        return .success(
+                            (dirs, files, Self.incompleteLevelMessage))
                     } catch {
                         return .failure(error)
                     }
@@ -592,6 +648,7 @@ final class FileTreeViewModel: ObservableObject {
             else { return }
             self.levelDrainTokens[parentKey] = nil
             self.levelDrainTasksForTesting[parentKey] = nil
+            self.levelDrainNativeCancels[parentKey] = nil
             defer {
                 // This drain's leftovers can never be consumed again.
                 self.pendingSummaryOverlay[token] = nil
@@ -614,8 +671,9 @@ final class FileTreeViewModel: ObservableObject {
             // identity.
             var level: [TreeNode] = []
             level.reserveCapacity(
-                firstPage.dirs.count + baseCount + drained.files.count)
-            for dir in firstPage.dirs {
+                firstPage.dirs.count + drained.dirs.count
+                    + firstPage.files.items.count + drained.files.count)
+            for dir in firstPage.dirs + drained.dirs {
                 level.append(
                     TreeNode(
                         nodeID: .dir(dir.id),
@@ -656,12 +714,20 @@ final class FileTreeViewModel: ObservableObject {
             }
             if parentKey == Self.rootFetchKey {
                 self.replaceRootLevel(
-                    with: level, isCompleteLevel: drained.isComplete)
+                    with: level,
+                    isCompleteLevel: drained.incompleteMessage == nil,
+                    incompleteMessage: drained.incompleteMessage)
             } else {
                 self.replaceChildLevel(
                     level, for: parentKey, parentPath: parentPath,
-                    isCompleteLevel: drained.isComplete)
+                    isCompleteLevel: drained.incompleteMessage == nil,
+                    incompleteMessage: drained.incompleteMessage)
             }
+            let published = parentKey == Self.rootFetchKey
+                ? self.rootLevel
+                : self.children[parentKey] ?? []
+            self.adoptPendingExpansions(in: published)
+            self.materializeExpandedChildren(in: published)
         }
         levelDrainTasksForTesting[parentKey] = task
     }
@@ -672,6 +738,7 @@ final class FileTreeViewModel: ObservableObject {
     private(set) var summaryReplacementLookupCountForTesting = 0
 
     private func clearMaterializedLevels() {
+        for key in Array(levelDrainTokens.keys) { revokeLevelDrain(key) }
         rootLevel = []
         children = [:]
         fileStateByPath = [:]
@@ -679,15 +746,21 @@ final class FileTreeViewModel: ObservableObject {
         presentationByParent = [:]
         parentPathByKey = [:]
         completeLevelByKey = [:]
+        incompleteLevelMessageByKey = [:]
         levelDrainTokens = [:]
         levelDrainTasksForTesting = [:]
+        levelDrainNativeCancels = [:]
         pendingSummaryOverlay = [:]
         if treePresentation != SidebarTreePresentation() {
             treePresentation = SidebarTreePresentation()
         }
     }
 
-    private func replaceRootLevel(with level: [TreeNode], isCompleteLevel: Bool = true) {
+    private func replaceRootLevel(
+        with level: [TreeNode],
+        isCompleteLevel: Bool = true,
+        incompleteMessage: String? = nil
+    ) {
         removeFileStates(in: rootLevel)
         let organizedResult = organizedPresentation(
             level: level, parentPath: "")
@@ -700,6 +773,7 @@ final class FileTreeViewModel: ObservableObject {
             presentation.stalePinnedPaths = []
         }
         completeLevelByKey[Self.rootFetchKey] = isCompleteLevel
+        incompleteLevelMessageByKey[Self.rootFetchKey] = incompleteMessage
         rootLevel = organized
         presentationByParent[Self.rootFetchKey] = presentation
         parentPathByKey[Self.rootFetchKey] = ""
@@ -710,7 +784,8 @@ final class FileTreeViewModel: ObservableObject {
 
     private func replaceChildLevel(
         _ level: [TreeNode]?, for parent: NodeID, parentPath: String?,
-        isCompleteLevel: Bool = true
+        isCompleteLevel: Bool = true,
+        incompleteMessage: String? = nil
     ) {
         if let oldLevel = children[parent] {
             removeFileStates(in: oldLevel)
@@ -720,11 +795,8 @@ final class FileTreeViewModel: ObservableObject {
             presentationByParent[parent] = nil
             parentPathByKey[parent] = nil
             completeLevelByKey[parent] = nil
-            if let revoked = levelDrainTokens[parent] {
-                pendingSummaryOverlay[revoked] = nil
-            }
-            levelDrainTokens[parent] = nil
-            levelDrainTasksForTesting[parent] = nil
+            incompleteLevelMessageByKey[parent] = nil
+            revokeLevelDrain(parent)
             rebuildMergedPresentation()
             return
         }
@@ -736,6 +808,7 @@ final class FileTreeViewModel: ObservableObject {
             presentation.stalePinnedPaths = []
         }
         completeLevelByKey[parent] = isCompleteLevel
+        incompleteLevelMessageByKey[parent] = incompleteMessage
         children[parent] = organized
         presentationByParent[parent] = presentation
         parentPathByKey[parent] = parentPath
@@ -767,14 +840,14 @@ final class FileTreeViewModel: ObservableObject {
             removeFileStates(in: level)
         }
         children = [:]
-        for (key, revoked) in levelDrainTokens where key != Self.rootFetchKey {
-            pendingSummaryOverlay[revoked] = nil
-        }
-        levelDrainTokens = levelDrainTokens.filter {
+        completeLevelByKey = completeLevelByKey.filter {
             $0.key == Self.rootFetchKey
         }
-        levelDrainTasksForTesting = levelDrainTasksForTesting.filter {
+        incompleteLevelMessageByKey = incompleteLevelMessageByKey.filter {
             $0.key == Self.rootFetchKey
+        }
+        for key in Array(levelDrainTokens.keys) where key != Self.rootFetchKey {
+            revokeLevelDrain(key)
         }
     }
 
@@ -797,9 +870,21 @@ final class FileTreeViewModel: ObservableObject {
         pagedFetcher: @escaping (String, String?) throws -> DirListing,
         restoringExpandedDirPaths: [String] = []
     ) {
+        bindForTesting(
+            cancellablePagedFetcher: { parentPath, cursor, _ in
+                try pagedFetcher(parentPath, cursor)
+            },
+            restoringExpandedDirPaths: restoringExpandedDirPaths)
+    }
+
+    func bindForTesting(
+        cancellablePagedFetcher:
+            @escaping (String, String?, CancelToken) throws -> DirListing,
+        restoringExpandedDirPaths: [String] = []
+    ) {
         self.session = nil
         sessionIdentity = nil
-        self.fetcher = pagedFetcher
+        self.fetcher = cancellablePagedFetcher
         clearMaterializedLevels()
         expanded = []
         pendingExpandedPaths = Set(restoringExpandedDirPaths)
@@ -816,13 +901,9 @@ final class FileTreeViewModel: ObservableObject {
     /// nonisolated autoclosure.
     nonisolated static let rootFetchKey = NodeID.dir(-1)
 
-    /// Page size for a level fetch. Directory levels are small by construction
-    /// (a folder rarely holds thousands of *immediate* children); this bound is
-    /// generous and the API sorts + pages for us. The tree does not paginate
-    /// within a level in U2-4 — a `next_cursor` beyond this bound is a recorded
-    /// follow-up, not a correctness gap for realistic vaults. `nonisolated`
-    /// (immutable constant, the `rootFetchKey` precedent) so the detached
-    /// duplicate task (#853) can share the same level-listing bound.
+    /// Per-request page size for one tree level. A background drain follows
+    /// continuation cursors up to levelTotalSafetyCap, keeping each native call
+    /// bounded while preserving a complete level for ordinary vaults.
     nonisolated static let levelPageLimit: UInt32 = 5000
 
     enum FetchState: Equatable {
@@ -859,13 +940,15 @@ final class FileTreeViewModel: ObservableObject {
             expansionRecency = []
             return
         }
-        // Route level fetches through the session. `Paging` with a nil cursor
-        // and a generous limit takes the whole level in one call (see
-        // `levelPageLimit`).
-        fetcher = { parentPath, cursor in
-            try session.listDirChildren(
+        // Route production through the bounded combined page. The existing
+        // drain owns continuation, stale-result rejection, and the materialized
+        // safety cap; tests retain the narrower `DirListing` seam.
+        fetcher = { parentPath, cursor, cancel in
+            let page = try session.listDirChildrenPage(
                 parentPath: parentPath,
-                paging: Paging(cursor: cursor, limit: Self.levelPageLimit))
+                paging: Paging(cursor: cursor, limit: Self.levelPageLimit),
+                cancel: cancel)
+            return page.asTreeListing()
         }
         loadRoot()
     }
@@ -880,14 +963,10 @@ final class FileTreeViewModel: ObservableObject {
         // for it (level-scoped revocation, round-16): without this, a
         // complete new first page would leave the old token current and let
         // a stale continuation publish over the reload.
-        if let revoked = levelDrainTokens[Self.rootFetchKey] {
-            pendingSummaryOverlay[revoked] = nil
-        }
-        levelDrainTokens[Self.rootFetchKey] = nil
-        levelDrainTasksForTesting[Self.rootFetchKey] = nil
+        revokeLevelDrain(Self.rootFetchKey)
         fetchState[Self.rootFetchKey] = .loading
         do {
-            let firstPage = try fetcher("", nil)
+            let firstPage = try fetcher("", nil, CancelToken())
             let isComplete = firstPage.files.nextCursor == nil
             replaceRootLevel(
                 with: Self.nodes(from: firstPage, depth: 0),
@@ -919,14 +998,10 @@ final class FileTreeViewModel: ObservableObject {
             guard case .failed = fetchState[node.nodeID] else { return }
             replaceChildLevel(nil, for: node.nodeID, parentPath: nil)
         }
-        if let revoked = levelDrainTokens[node.nodeID] {
-            pendingSummaryOverlay[revoked] = nil
-        }
-        levelDrainTokens[node.nodeID] = nil
-        levelDrainTasksForTesting[node.nodeID] = nil
+        revokeLevelDrain(node.nodeID)
         fetchState[node.nodeID] = .loading
         do {
-            let firstPage = try fetcher(node.path, nil)
+            let firstPage = try fetcher(node.path, nil, CancelToken())
             let isComplete = firstPage.files.nextCursor == nil
             let level = Self.nodes(from: firstPage, depth: node.depth + 1)
             replaceChildLevel(
@@ -1746,6 +1821,7 @@ struct FileTreeSidebar: View {
         case node(NodeID)
         case loading(parent: NodeID)
         case error(parent: NodeID)
+        case notice(parent: NodeID)
         /// A nonselectable FL-06 section header (Pinned or a date bucket),
         /// stable per (containing folder, bucket key) across renders.
         case header(parentPath: String, key: String)
@@ -4928,6 +5004,7 @@ struct FileTreeSidebar: View {
         case node(TreeNode)
         case loading(parent: NodeID, depth: Int)
         case error(parent: NodeID?, depth: Int, message: String, node: TreeNode?)
+        case notice(parent: NodeID, depth: Int, message: String)
         case header(parentPath: String, header: SidebarTreeHeaderRow)
 
         var rowID: RowID {
@@ -4936,6 +5013,7 @@ struct FileTreeSidebar: View {
             case let .loading(parent, _): return .loading(parent: parent)
             case let .error(parent, _, _, _):
                 return .error(parent: parent ?? FileTreeViewModel.rootFetchKey)
+            case let .notice(parent, _, _): return .notice(parent: parent)
             case let .header(parentPath, header):
                 return .header(parentPath: parentPath, key: header.key)
             }
@@ -4959,6 +5037,15 @@ struct FileTreeSidebar: View {
         case nil:
             break
         }
+        if let message = tree.incompleteLevelMessage(
+            for: FileTreeViewModel.rootFetchKey)
+        {
+            out.append(
+                .notice(
+                    parent: FileTreeViewModel.rootFetchKey,
+                    depth: 0,
+                    message: message))
+        }
         for node in tree.visibleRows {
             // FL-06: splice the Pinned/date-bucket header immediately above
             // the first file row of its run (nonselectable; see headerRow).
@@ -4970,6 +5057,13 @@ struct FileTreeSidebar: View {
             }
             out.append(.node(node))
             guard node.isDirectory, tree.expanded.contains(node.nodeID) else { continue }
+            if let message = tree.incompleteLevelMessage(for: node.nodeID) {
+                out.append(
+                    .notice(
+                        parent: node.nodeID,
+                        depth: node.depth + 1,
+                        message: message))
+            }
             switch tree.fetchState[node.nodeID] {
             case .loading:
                 out.append(.loading(parent: node.nodeID, depth: node.depth + 1))
@@ -4992,6 +5086,8 @@ struct FileTreeSidebar: View {
             loadingRow(depth: depth)
         case let .error(_, depth, message, node):
             errorRow(depth: depth, message: message, node: node)
+        case let .notice(_, depth, message):
+            incompleteLevelRow(depth: depth, message: message)
         case let .header(_, header):
             sectionHeaderRow(header)
         }
@@ -6330,6 +6426,25 @@ struct FileTreeSidebar: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Error loading folder. \(message)")
+    }
+
+    /// Nonselectable status for an intentionally bounded or otherwise partial
+    /// successful level. The text remains visible and is repeated as the
+    /// VoiceOver label so truncation cannot be mistaken for a complete folder.
+    private func incompleteLevelRow(depth: Int, message: String) -> some View {
+        HStack(spacing: Tokens.Spacing.sm) {
+            indent(for: depth)
+            SlateSymbol.warning.image()
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+            Text(message)
+                .font(Tokens.Typography.caption)
+                .foregroundStyle(Tokens.ColorRole.textSecondary)
+                .lineLimit(3)
+            Spacer(minLength: 0)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Folder list incomplete. \(message)")
+        .selectionDisabled(true)
     }
 
     /// Fixed-width indent for a row at `depth`. `Tokens.Spacing.md` (12pt) per

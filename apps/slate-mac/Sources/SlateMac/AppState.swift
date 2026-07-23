@@ -9803,8 +9803,9 @@ final class AppState: ObservableObject {
                         guard let session else {
                             throw SidebarFilterSessionClosedError()
                         }
-                        return try session.listDirChildren(
-                            parentPath: parent, paging: paging)
+                        return try session.listDirFilesPage(
+                            parentPath: parent, paging: paging,
+                            cancel: CancelToken()).asTreeListing()
                     }),
                 organization: { [weak self] in
                     self?.sidebarOrganizationContext()
@@ -15955,12 +15956,13 @@ final class AppState: ObservableObject {
                 var filePaths = Set<String>()
                 var cursor: String? = nil
                 repeat {
-                    let listing = try session.listDirChildren(
+                    let listing = try session.listDirChildrenPage(
                         parentPath: parent,
-                        paging: Paging(cursor: cursor, limit: 1_000))
+                        paging: Paging(cursor: cursor, limit: 1_000),
+                        cancel: CancelToken())
                     directoryPaths.formUnion(listing.dirs.map(\.path))
-                    filePaths.formUnion(listing.files.items.map(\.path))
-                    cursor = listing.files.nextCursor
+                    filePaths.formUnion(listing.files.map(\.path))
+                    cursor = listing.nextCursor
                 } while cursor != nil
                 materialized.append(contentsOf: values.filter {
                     $0.isDirectory
@@ -16428,32 +16430,18 @@ final class AppState: ObservableObject {
         let sourceName = (path as NSString).lastPathComponent
         let parent = TreeMutation.parentPath(of: path) ?? ""
         guard admitBatchTrashWrite(to: [path, parent]) else { return nil }
-        // Treat every quarantined sibling as occupied before entering detached
-        // name selection. This preserves Duplicate's original behavior of
-        // jumping past arbitrarily many listed collisions without spending its
-        // 200 create-exclusive race attempts, while ensuring no concrete
-        // unknown-outcome candidate can be selected.
+        // Treat every quarantined sibling as occupied before entering candidate
+        // selection. Concrete on-disk collisions are discovered by the
+        // authoritative exclusive create below; enumerating a potentially huge
+        // sibling level here would add unbounded preparation work.
         let quarantinedSiblingNames = batchTrashUnknownSiblingNames(in: parent)
         let token = beginStructuralMutation()
         let task = Task { @MainActor [weak self] in
-            let preparation: Result<(String, Set<String>), VaultError> = await Task.detached(
+            let preparation: Result<String, VaultError> = await Task.detached(
                 priority: .userInitiated
             ) {
                 do {
-                    let content = try session.readText(path: path)
-                    // Seed the collision set from the live level listing
-                    // (files AND folders — a folder named "a copy" blocks
-                    // that name too). The index can lag disk; the exclusive-
-                    // create below is the authoritative guard.
-                    var existing = quarantinedSiblingNames
-                    if let listing = try? session.listDirChildren(
-                        parentPath: parent,
-                        paging: Paging(cursor: nil, limit: FileTreeViewModel.levelPageLimit))
-                    {
-                        for dir in listing.dirs { existing.insert(dir.name.lowercased()) }
-                        for file in listing.files.items { existing.insert(file.name.lowercased()) }
-                    }
-                    return .success((content, existing))
+                    return .success(try session.readText(path: path))
                 } catch let e as VaultError { return .failure(e) }
                 catch { return .failure(.Io(message: error.localizedDescription)) }
             }.value
@@ -16467,13 +16455,11 @@ final class AppState: ObservableObject {
                     verb: "duplicate", name: sourceName, error: error)
                 self.endStructuralMutation(token)
                 return
-            case .success(let prepared):
-                var existing = prepared.1
-                // Candidate selection must remain live-list/race aware, but the
-                // recovery registry is main-actor state. Choose one candidate,
-                // admit that exact identity, then perform only its exclusive
-                // create. A user-owned recovery candidate rejects instead of
-                // being silently treated as another suffix collision.
+            case .success(let content):
+                var existing = quarantinedSiblingNames
+                // Candidate selection is live/race aware through exclusive
+                // creation. Each concrete file OR directory collision consumes
+                // one bounded retry; quarantined names are skipped without I/O.
                 for _ in 0..<200 {
                     let candidate = Self.duplicateName(
                         for: sourceName,
@@ -16501,7 +16487,7 @@ final class AppState: ObservableObject {
                         do {
                             _ = try session.createExclusive(
                                 path: candidatePath,
-                                content: prepared.0)
+                                content: content)
                             return .success(())
                         } catch let error as VaultError {
                             return .failure(error)
@@ -19879,30 +19865,71 @@ final class AppState: ObservableObject {
     /// `list_dir_children` recursively off the main actor. The vault root is NOT
     /// included as a path here — the picker adds a "Vault root" row (path "")
     /// explicitly. Empty folders ARE included (they're real move targets).
+    var folderDiscoveryLimitForTesting: Int?
+
     func loadAllFolders() async -> [String] {
         guard let session = currentSession else { return [] }
-        return await Task.detached(priority: .userInitiated) {
+        let cancel = CancelToken()
+        let cap = folderDiscoveryLimitForTesting ?? 50_000
+        let result: Result<(folders: [String], limitReached: Bool), VaultError> =
+            await withTaskCancellationHandler {
+          await Task.detached(priority: .userInitiated) {
             var out: [String] = []
             var queue: [String] = [""]
-            // Bound the walk defensively against a pathological vault so the
-            // picker can't hang; realistic vaults are far under this.
-            var visited = 0
-            let cap = 50_000
-            while !queue.isEmpty, visited < cap {
-                let parent = queue.removeFirst()
-                visited += 1
-                guard
-                    let listing = try? session.listDirChildren(
-                        parentPath: parent,
-                        paging: Paging(cursor: nil, limit: 5000))
-                else { continue }
-                for dir in listing.dirs {
-                    out.append(dir.path)
-                    queue.append(dir.path)
+            var head = 0
+            while head < queue.count, out.count < cap {
+                if Task.isCancelled { cancel.cancel() }
+                let parent = queue[head]
+                head += 1
+                var cursor: String?
+                do {
+                    repeat {
+                        let page = try session.listDirChildrenPage(
+                            parentPath: parent,
+                            paging: Paging(
+                                cursor: cursor,
+                                limit: UInt32(min(5_000, cap - out.count))),
+                            cancel: cancel)
+                        let room = cap - out.count
+                        let accepted = Array(page.dirs.prefix(room))
+                        out.append(contentsOf: accepted.map(\.path))
+                        queue.append(contentsOf: accepted.map(\.path))
+                        if accepted.count < page.dirs.count || out.count == cap {
+                            return .success((out, true))
+                        }
+                        // Once a combined page reaches files, every directory
+                        // for this level has already been visited.
+                        cursor = page.files.isEmpty ? page.nextCursor : nil
+                    } while cursor != nil
+                } catch let error as VaultError {
+                    // A stale snapshot or cancelled native query must not turn
+                    // into an apparently complete but partial move-target list.
+                    return .failure(error)
+                } catch {
+                    return .failure(.Io(message: error.localizedDescription))
                 }
             }
-            return out
-        }.value
+            return .success((out, head < queue.count))
+          }.value
+        } onCancel: {
+            cancel.cancel()
+        }
+        guard !Task.isCancelled, currentSession === session else { return [] }
+        switch result {
+        case .success(let loaded):
+            if loaded.limitReached {
+                let message =
+                    "Folder choices reached the 50,000-folder safety limit. Additional folders may not be shown."
+                lastError = message
+                postMutationAnnouncement(message)
+            }
+            return loaded.folders
+        case .failure(let error):
+            let message = "Could not load folder choices. \(humanReadable(error))"
+            lastError = message
+            postMutationAnnouncement(message)
+            return []
+        }
     }
 
     /// A non-colliding "Untitled Folder" / "Untitled Folder N" for `parent`.

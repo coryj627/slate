@@ -150,13 +150,13 @@ pub use session::{
     CanvasLoadWarningKind, CanvasNeighbor, CanvasOpenInfo, CanvasOutlineRow, CanvasPlacement,
     CanvasRectArg, CanvasSceneEdge, CanvasSceneNode, CanvasSetPlacement, CanvasTableRow,
     CanvasWhereAmI, ChangesSinceOpen, ColumnRole, CslStyleInfo, Dashboard, DashboardSection,
-    DashboardSectionStatus, DashboardSummary, DeletedFileEntry, DirListing, DirNodeSummary,
-    EventErrorCode, ExportFormat, FileChangeEvent, FileChangeKind, FileFilter, FileMetadata,
-    FileSummary, IndexPhase, NoteLoadBundle, NotePartsBundle, OpAnnotationSummary, Page, Paging,
-    RemnantLog, RenameAffected, RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason,
-    RenameSkipped, SaveReport, SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress,
-    ScanProgressListener, ScanReport, SessionConfig, VaultEventListener, VaultRootIdentity,
-    VaultSession, VersionSummary,
+    DashboardSectionStatus, DashboardSummary, DeletedFileEntry, DirListing, DirListingPage,
+    DirNodeSummary, EventErrorCode, ExportFormat, FileChangeEvent, FileChangeKind, FileFilter,
+    FileMetadata, FileSummary, IndexPhase, NoteLoadBundle, NotePartsBundle, OpAnnotationSummary,
+    Page, Paging, RemnantLog, RenameAffected, RenameFailed, RenameFailureKind, RenameReport,
+    RenameSkipReason, RenameSkipped, SaveReport, SavedQuery, SavedQuerySourceSyntax,
+    SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport, SessionConfig,
+    VaultEventListener, VaultRootIdentity, VaultSession, VersionSummary,
 };
 pub use session::{SkippedFile, TagCount, TagEditReport};
 pub use sidebar_filter::{

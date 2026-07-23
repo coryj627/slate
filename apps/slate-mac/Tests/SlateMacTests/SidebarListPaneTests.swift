@@ -210,6 +210,32 @@ final class SidebarListPaneTests: XCTestCase {
                 + "presented as the complete container")
     }
 
+    func testDrainCapsAnUnalignedFinalPageWithoutOvershoot() async {
+        let model = syntheticModel { index in
+            if index == 0 {
+                let files = (0..<9_900).map {
+                    self.summary(String(format: "f/first-%05d.md", $0))
+                }
+                return (files, "1")
+            }
+            let files = (0..<500).map {
+                self.summary(String(format: "f/final-%03d.md", $0))
+            }
+            return (files, nil)
+        }
+        model.show(.folder(path: "f"))
+        await model.drainTaskForTesting?.value
+        XCTAssertEqual(model.fileCount, 10_000)
+        XCTAssertTrue(model.truncated)
+        let paths = Set(model.fileSummaries.map(\.path))
+        XCTAssertEqual(
+            paths.filter { $0.hasPrefix("f/final-") }.count,
+            100,
+            "only the remaining capacity is accepted from the final page")
+        XCTAssertTrue(paths.contains("f/final-099.md"))
+        XCTAssertFalse(paths.contains("f/final-100.md"))
+    }
+
     func testSupersededShowNeverPublishesItsStaleResult() async {
         let model = syntheticModel { _ in
             ([self.summary("stale/marker.md")], nil)

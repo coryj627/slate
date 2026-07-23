@@ -33,6 +33,20 @@ use crate::VaultError;
 use crate::db;
 use crate::vault::{EntryKind, FsVaultProvider, VaultProvider, content_hash};
 
+mod directory_page;
+pub use directory_page::DirListingPage;
+
+static NEXT_DIRECTORY_CURSOR_NONCE: AtomicU64 = AtomicU64::new(1);
+
+fn next_directory_cursor_nonce() -> u64 {
+    let sequence = NEXT_DIRECTORY_CURSOR_NONCE.fetch_add(1, Ordering::Relaxed);
+    let time = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or_default();
+    time ^ sequence.rotate_left(23)
+}
+
 /// Process-local half of the vault structural writer gate.
 ///
 /// BSD `flock` ownership semantics vary enough across platforms that two
@@ -801,6 +815,8 @@ fn pin_root_identity(
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
+    /// Ephemeral process/session binding for opaque directory cursors.
+    directory_cursor_nonce: u64,
     config: SessionConfig,
     /// Per-file op-log append state (#378). See [`OplogAppendState`].
     /// `Arc` so the compaction worker can mark futility (O-2).
@@ -1851,6 +1867,7 @@ impl VaultSession {
         let session = Self {
             provider,
             conn: Mutex::new(conn),
+            directory_cursor_nonce: next_directory_cursor_nonce(),
             config,
             oplog_state,
             next_oplog_stem_salt: AtomicU64::new(0),
@@ -16562,6 +16579,9 @@ mod tests {
 
     #[path = "dir_tree.rs"]
     mod dir_tree;
+
+    #[path = "directory_page.rs"]
+    mod directory_page;
 
     #[path = "structural.rs"]
     mod structural;
