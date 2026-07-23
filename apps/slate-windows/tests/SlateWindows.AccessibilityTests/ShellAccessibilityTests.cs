@@ -156,6 +156,93 @@ public sealed class ShellAccessibilityTests
                 automation.ConditionFactory.ByAutomationId("ContentPane")));
             Assert.NotNull(workspace.FindFirstDescendant(
                 automation.ConditionFactory.ByAutomationId("InspectorPane")));
+
+            AutomationElement scanProgress = WaitForElement(
+                window,
+                "VaultScanProgress",
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.ProgressBar, scanProgress.ControlType);
+            Assert.True(scanProgress.Patterns.RangeValue.IsSupported);
+            var scanRange = scanProgress.Patterns.RangeValue.Pattern;
+            Assert.True(scanRange.IsReadOnly.Value);
+            Assert.Equal(0, scanRange.Minimum.Value);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => scanRange.Maximum.Value == 2
+                        && scanRange.Value.Value == 2,
+                    TimeSpan.FromSeconds(10)),
+                $"The live scan RangeValue did not settle at 2/2: " +
+                $"{scanRange.Value.Value}/{scanRange.Maximum.Value}.");
+            Assert.Equal(2, scanRange.Maximum.Value);
+            Assert.Equal(2, scanRange.Value.Value);
+
+            AutomationElement sidebarRefresh = WaitForElement(
+                window,
+                "SidebarRefresh",
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.Button, sidebarRefresh.ControlType);
+            Assert.True(sidebarRefresh.Patterns.Invoke.IsSupported);
+
+            AutomationElement sortOrder = WaitForElement(
+                window,
+                "SidebarSortOrder",
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.ComboBox, sortOrder.ControlType);
+            Assert.True(sortOrder.Patterns.Selection.IsSupported);
+
+            AutomationElement groupDates = WaitForElement(
+                window,
+                "SidebarGroupDates",
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.CheckBox, groupDates.ControlType);
+            Assert.True(groupDates.Patterns.Toggle.IsSupported);
+
+            foreach (string automationId in new[]
+            {
+                "SidebarShowTags",
+                "SidebarDualPaneToggle",
+            })
+            {
+                AutomationElement toggle = WaitForElement(
+                    window,
+                    automationId,
+                    TimeSpan.FromSeconds(10));
+                Assert.Equal(ControlType.Button, toggle.ControlType);
+                Assert.True(
+                    toggle.Patterns.Toggle.IsSupported,
+                    $"{automationId} does not expose Toggle.");
+            }
+
+            AssertActionButtonCensus(
+                WaitForElement(window, "SidebarBatchActions", TimeSpan.FromSeconds(10)),
+                automation,
+                "Add",
+                "Move selected",
+                "Remove",
+                "Trash selected");
+            AssertActionButtonCensus(
+                WaitForElement(window, "SidebarFileActions", TimeSpan.FromSeconds(10)),
+                automation,
+                "Add shortcut",
+                "Cancel import",
+                "Copy link",
+                "Delete",
+                "Delete folder note",
+                "Folder note",
+                "Import…",
+                "New folder",
+                "New note",
+                "New tab",
+                "Open",
+                "Pin",
+                "Rename",
+                "Split",
+                "Unpin");
+            AssertActionButtonCensus(
+                WaitForElement(window, "SidebarShortcutsActions", TimeSpan.FromSeconds(10)),
+                automation,
+                "Remove shortcut");
+
             AutomationElement tabs = WaitForElement(
                 window,
                 "WorkspaceTabs",
@@ -596,6 +683,51 @@ public sealed class ShellAccessibilityTests
                 () => element.Properties.HasKeyboardFocus.Value,
                 TimeSpan.FromSeconds(10)),
             message);
+    }
+
+    private static void AssertActionButtonCensus(
+        AutomationElement expander,
+        UIA3Automation automation,
+        params string[] expectedNames)
+    {
+        Assert.True(expander.Patterns.ExpandCollapse.IsSupported);
+        var expansion = expander.Patterns.ExpandCollapse.Pattern;
+        if (expansion.ExpandCollapseState.Value != ExpandCollapseState.Expanded)
+        {
+            expansion.Expand();
+        }
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => expansion.ExpandCollapseState.Value == ExpandCollapseState.Expanded,
+                TimeSpan.FromSeconds(10)),
+            $"{expander.AutomationId} did not expose its expanded state.");
+
+        AutomationElement[] buttons = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    buttons = expander.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(ControlType.Button))
+                        .Where(button => button.Patterns.Invoke.IsSupported)
+                        .ToArray();
+                    return buttons.Length == expectedNames.Length;
+                },
+                TimeSpan.FromSeconds(10)),
+            $"{expander.AutomationId} exposed {buttons.Length} Invoke buttons; " +
+            $"expected {expectedNames.Length}.");
+
+        foreach (AutomationElement button in buttons)
+        {
+            Assert.True(
+                button.Patterns.Invoke.IsSupported,
+                $"{expander.AutomationId}/{button.Name} does not expose Invoke.");
+        }
+        Assert.Equal(
+            expectedNames.OrderBy(name => name, StringComparer.Ordinal).ToArray(),
+            buttons.Select(button => button.Name)
+                .OrderBy(name => name, StringComparer.Ordinal)
+                .ToArray());
     }
 
     private static void AssertElementDisappears(

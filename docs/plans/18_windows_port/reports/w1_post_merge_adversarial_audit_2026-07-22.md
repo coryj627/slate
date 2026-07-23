@@ -117,7 +117,8 @@ than that ceiling.
 14. **Progress semantics and live UIA census** — W1-RT-17. Replace the
    overwrite-only progress mailbox with bounded ordered semantic slots, derive
    the terminal total from the report, and exercise live scan/sidebar patterns.
-   Expected: 5–7 authored files.
+   Actual: 8 authored files, including the normative spec, execution report,
+   this audit, and the wave-close matrix.
 15. **Windows Quick Open process worker** — W1-RT-18. Serialize native ranks
    process-wide, reject canceled queued work before FFI, and pin cross-lifetime
    maximum concurrency one. Expected: 3–5 authored files.
@@ -304,22 +305,36 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   formatting/Clippy, nextest, and bench compilation. The PR was squash-merged
   as `726157a858b06fcde13b6ed0936e753848675433` under the documented
   Codoki-outage exception.
-- W1-RT-16 is addressed by PR #1029. Fatal op-log reads
+- W1-RT-16 was closed by PR #1029. Fatal op-log reads
   now abort the immediate rebuild transaction instead of silently contributing
   no events. A two-log corrupt-header regression proves the global delete and
   partial reinserts roll back with the repair marker, then restores the log and
   proves exact successful retry convergence. Both rollback tests pass together;
   the complete bounded package passes 1,616 unit, 364 integration, and 2
-  doctests; and workspace all-target Clippy is clean. Publication and three
-  independent final reviews are complete; CI and merge are pending.
-- W1-RT-17 through W1-RT-19 remain open and are assigned to the next three
-  small remediation groups above. They must not be represented as automated or
-  code closure until their focused evidence and required CI lanes pass.
+  doctests; and workspace all-target Clippy is clean. Three independent final
+  reviews returned code-ready. All seven checks passed after rerunning one
+  unchanged Windows timing-test failure, and the PR was squash-merged as
+  `ce19b0ebe9def05c2d55febf807e5c75f2e77a83` under the documented
+  Codoki-outage exception.
+- W1-RT-17 is implemented on the current remediation branch. The progress
+  listener preserves `Started`, the latest `FileIndexed`, and the terminal
+  event in one bounded ordered drain, rejects events after terminal admission,
+  and restores the terminal maximum from the report's authoritative
+  `FilesSeen` total. A deterministic cached two-file scan pins the 2/2 range
+  while its canonical completion truthfully announces zero files re-indexed.
+  Live UIA now inspects the progress `RangeValue` and exact
+  sidebar Selection, Toggle, ExpandCollapse, and Invoke census. Local evidence
+  is 174/174 Windows tests, 2/2 accessibility tests, and clean .NET formatting;
+  three independent final reviewers returned code-ready with no finding at any
+  severity. Publication and revision-bound CI are pending.
+- W1-RT-18 and W1-RT-19 remain open and are assigned to the next two small
+  remediation groups above. They must not be represented as automated or code
+  closure until their focused evidence and required CI lanes pass.
 
 ## Current closure status
 
-The remediation sequence from PR #1011 through PR #1028 is merged on
-`main` at `726157a858b06fcde13b6ed0936e753848675433`. The final mapping is:
+The remediation sequence from PR #1011 through PR #1029 is merged on
+`main` at `ce19b0ebe9def05c2d55febf807e5c75f2e77a83`. The current mapping is:
 
 | Gap | Closing PR(s) | Repository status |
 |---|---|---|
@@ -337,13 +352,13 @@ The remediation sequence from PR #1011 through PR #1028 is merged on
 | W1-RT-13 | #1026 | Closed |
 | W1-RT-14 | #1027 | Closed |
 | W1-RT-15 | #1028 | Closed |
-| W1-RT-16 | #1029 | Three independent reviews are code-ready; CI/merge pending |
-| W1-RT-17 | Planned follow-up | Open |
+| W1-RT-16 | #1029 | Closed |
+| W1-RT-17 | Current remediation branch | Implementation/local gates and three independent reviews complete; publication/CI pending |
 | W1-RT-18 | Planned follow-up | Open |
 | W1-RT-19 | Planned follow-up | Open |
 
 W1 repository remediation and automated acceptance are not yet complete:
-W1-RT-16 through W1-RT-19 must merge first. Independently, milestone release
+W1-RT-17 through W1-RT-19 must merge first. Independently, milestone release
 acceptance remains blocked under WGA-9 until a named human records the Narrator
 smoke, NVDA and JAWS passes, and all four built-in plus one customized Windows
 Contrast-theme passes in `w_c_matrix.md`.

@@ -4,14 +4,17 @@
 
 W1-0 through W1-4 are implemented in the repository. Three independent agents red-teamed the complete wave, found no P0 issue but several P1/P2 correctness, performance, reliability, documentation, and accessibility defects, and then performed repeated read-only audits after remediation. The Windows shell now opens and closes vaults, persists recents/window state, exposes a native files sidebar, restores recursive tab/split workspaces, hosts the full right-pane leaf registry, and provides a core-ranked Quick Open surface. Interactive CI and human assistive-technology evidence remain explicit release gates, not implied passes.
 
-The post-merge remediation sequence through W1-RT-15 is merged in PR #1028 and
-squash commit `726157a858b06fcde13b6ed0936e753848675433`. A fresh final
-audit then reopened code closure with W1-RT-16 through W1-RT-19: fatal event
-rebuild reads, progress mailbox/live UIA evidence, Windows Quick Open
-process-wide serialization, and macOS file-tree page-one responsiveness. These
-follow-ups are tracked in the adversarial audit and must merge before W1 code
-or automated acceptance is called complete. Named-human Narrator/NVDA/JAWS
-and Contrast-theme evidence remains a separate release blocker.
+The post-merge remediation sequence through W1-RT-16 is merged through PR
+#1029 and squash commit `ce19b0ebe9def05c2d55febf807e5c75f2e77a83`.
+W1-RT-17's bounded progress semantics and live UIA census are implemented on
+the current remediation branch; three independent final reviewers returned
+code-ready, while publication and revision-bound interactive CI remain pending.
+W1-RT-18 and W1-RT-19—Windows Quick Open
+process-wide serialization and macOS file-tree page-one responsiveness—remain
+open. These follow-ups are tracked in the adversarial audit and must merge
+before W1 code or automated acceptance is called complete. Named-human
+Narrator/NVDA/JAWS and Contrast-theme evidence remains a separate release
+blocker.
 
 ## Delivered scope
 
@@ -51,7 +54,7 @@ and Contrast-theme evidence remains a separate release blocker.
 
 ## Independent red team and remediation
 
-Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19 tracked above. The prior remediation closed these confirmed findings:
+Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19. RT16 is now closed, RT17's independent review is complete with publication/CI pending, and RT18–RT19 remain open as tracked above. The prior remediation closed these confirmed findings:
 
 - Current-tab replacement is dirty-gated and selects an exact existing same-group target; new-tab deduplicates; close-tab/pane uses Save/Discard/Cancel. Duplicate/split Markdown tabs share live dirty buffers. Path identity is exact and case-sensitive.
 - Graph is a global singleton, restore prunes graph-created empty panes, and workspaces stop at six panes. Persistence rejects hostile structure, duplicate IDs, invalid group counts and its own size bound without escaping UI commands.
