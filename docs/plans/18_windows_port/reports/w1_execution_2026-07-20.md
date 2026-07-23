@@ -4,12 +4,14 @@
 
 W1-0 through W1-4 are implemented in the repository. Three independent agents red-teamed the complete wave, found no P0 issue but several P1/P2 correctness, performance, reliability, documentation, and accessibility defects, and then performed repeated read-only audits after remediation. The Windows shell now opens and closes vaults, persists recents/window state, exposes a native files sidebar, restores recursive tab/split workspaces, hosts the full right-pane leaf registry, and provides a core-ranked Quick Open surface. Interactive CI and human assistive-technology evidence remain explicit release gates, not implied passes.
 
-The post-merge remediation sequence through W1-RT-17 is merged through PR
-#1030 and squash commit `268953adcaede360429dc41483604a175cff4333`.
-W1-RT-18's Windows Quick Open process-wide ranking lane is published as PR
-#1031. Three independent final reviewers returned code-ready; CI remains
-pending.
-W1-RT-19—macOS file-tree page-one responsiveness—remains open. These
+The post-merge remediation sequence through W1-RT-18 is merged through PR
+#1031 and squash commit `a443264f4be57e186d106001c3ab500e4622ec97`.
+Final-head Windows Actions run 29990822473 passed the complete core/CLI,
+Windows, live accessibility, evidence-upload, and format gates.
+W1-RT-19—macOS file-tree page-one responsiveness—is implemented as a
+15-authored-file change on the current remediation branch; its first independent
+review findings are remediated, and closure is gated by three exact-tree
+re-reviews plus macOS CI. These
 follow-ups are tracked in the adversarial audit and must merge
 before W1 code or automated acceptance is called complete. Named-human
 Narrator/NVDA/JAWS and Contrast-theme evidence remains a separate release
@@ -53,7 +55,7 @@ blocker.
 
 ## Independent red team and remediation
 
-Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19. RT16–RT17 are closed, RT18 is independently code-ready in PR #1031 pending CI, and RT19 remains open as tracked above. The prior remediation closed these confirmed findings:
+Three read-only reviewers independently inspected all W1 code, tests, CI, fixtures, documentation and accessibility evidence. Their earlier closure pass found no remaining P0/P1 implementation defect; the 2026-07-23 final audit subsequently reopened the four P2 gaps W1-RT-16 through W1-RT-19. RT16–RT18 are closed; RT19 is locally implemented and remains gated by three exact-tree re-reviews plus macOS CI. The prior remediation closed these confirmed findings:
 
 - Current-tab replacement is dirty-gated and selects an exact existing same-group target; new-tab deduplicates; close-tab/pane uses Save/Discard/Cancel. Duplicate/split Markdown tabs share live dirty buffers. Path identity is exact and case-sensitive.
 - Graph is a global singleton, restore prunes graph-created empty panes, and workspaces stop at six panes. Persistence rejects hostile structure, duplicate IDs, invalid group counts and its own size bound without escaping UI commands.
@@ -172,7 +174,7 @@ The repository contains no remaining automation consumer of `WorkspaceSplitHandl
 | `dotnet format ... --verify-no-changes` | Pass |
 | Windows unit/integration suite | 179 passed, 0 failed; the latest clean standalone invocation includes bounded/reentrant scan-progress semantics plus blocked-ranker return, 20-query newest-only supersession with stale-failure suppression, default cross-lifetime maximum-concurrency-one and disposed-model nonpublication, canceled-queue rejection, exception release, and generic high-priority rank-failure publication coverage, alongside the existing sidebar/session/workspace behavioral and structure contracts |
 | Accessibility project, non-interactive local branch | 2 passed, 0 failed; production executable survived XAML load and initial scan, and transient UIA COM timeout retry behavior is pinned |
-| Interactive FlaUI + axe-windows | Pass for final PR #1030 revision `86443682e7e2d41eebf6e660c9b5393ea713696a` in Windows Actions run 29988127038. Live RT17 scan RangeValue and exact sidebar pattern assertions passed after preserving initial-focus test ordering and giving the expanded empty shortcuts list nonzero accessible geometry. Retained artifact `slate-windows-accessibility-83c2185ecd7314a9eda98a314f3b1b6c5464dca3`, TRX, and dated revision-bound workspace, Quick Open, and welcome axe evidence were green alongside the complete non-census core package. |
+| Interactive FlaUI + axe-windows | Pass for final PR #1031 revision `d2da2cdb023bf0a988b9ba52d2046f8287c61825` in Windows Actions run 29990822473. Live RT17 scan RangeValue and exact sidebar pattern assertions remained green together with the RT18 tests, complete core/CLI tiers, and format gate. Retained artifact `slate-windows-accessibility-d2da2cdb023bf0a988b9ba52d2046f8287c61825`, TRX, and dated revision-bound workspace, Quick Open, and welcome axe evidence were green. |
 | `cargo test -p slate-core --lib vault::fs::tests::rename --locked -q` | 7 passed, 0 failed |
 | `cargo test -p slate-core vault::fs::tests::windows_ --locked -q` | 5 passed, 0 failed |
 | `cargo test -p slate-core --locked -- --skip census_ --skip perf_guard_root_listing_under_100ms_on_10k_files` on Windows | Current bounded-package evidence: 1,616 unit, 364 integration, and 2 doctests; zero failures. The long randomized censuses and hardware-timing guard remain in their dedicated Rust lanes. |

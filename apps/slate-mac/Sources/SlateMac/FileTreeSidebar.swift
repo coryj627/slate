@@ -45,7 +45,7 @@ extension Error {
 /// never collide" role the spec's `.file(i64)` intended. Keying files by path
 /// also matches the existing open seam (`AppState.selectedFilePath` is a path).
 /// See the deviation note in the U2-4 PR.
-enum NodeID: Hashable {
+enum NodeID: Hashable, Sendable {
     case dir(Int64)
     case file(path: String)
 }
@@ -56,19 +56,36 @@ enum NodeID: Hashable {
 /// derived metadata changes do not. A targeted save updates this keyed object,
 /// so SwiftUI invalidates only the observing row instead of rebuilding and
 /// equality-comparing a 50k-entry structural array on the main actor.
-@MainActor
-final class FileTreeFileState: ObservableObject, Equatable {
+/// Construction may happen on FileTreeLevelWorker before the state is
+/// published. After publication, Published reads and every mutation are
+/// MainActor-owned; live organization may read only the locked value mirror.
+final class FileTreeFileState: ObservableObject, Equatable, @unchecked Sendable {
     @Published private(set) var summary: FileSummary
+    private let workerSnapshotLock = NSLock()
+    private var workerSummary: FileSummary
 
     init(summary: FileSummary) {
         self.summary = summary
+        workerSummary = summary
     }
 
     @discardableResult
     func replace(with summary: FileSummary) -> Bool {
         guard self.summary != summary else { return false }
+        workerSnapshotLock.lock()
+        workerSummary = summary
+        workerSnapshotLock.unlock()
         self.summary = summary
         return true
+    }
+
+    /// The only off-main read after publication. A dedicated immutable-value
+    /// mirror avoids racing the MainActor-owned Published storage while live
+    /// sort/group reorganization snapshots existing rows.
+    func snapshotForWorker() -> FileSummary {
+        workerSnapshotLock.lock()
+        defer { workerSnapshotLock.unlock() }
+        return workerSummary
     }
 
     nonisolated static func == (lhs: FileTreeFileState, rhs: FileTreeFileState) -> Bool {
@@ -80,7 +97,7 @@ final class FileTreeFileState: ObservableObject, Equatable {
 /// counts (so a *collapsed* folder can announce "N items" without a fetch)
 /// and their depth (0-based from root); files carry the path the open flow
 /// consumes. `depth` drives indentation and the "level N" AX suffix.
-struct TreeNode: Identifiable, Equatable {
+struct TreeNode: Identifiable, Equatable, @unchecked Sendable {
     let nodeID: NodeID
     /// Vault-relative path (forward slashes, no trailing `/`). For a file this
     /// is what `AppState.selectedFilePath` is set to on selection.
@@ -315,10 +332,9 @@ final class FileTreeViewModel: ObservableObject {
             SidebarProductionCivilDateResolver()
     }
 
-    /// Header/pin lookups for the rendered rows, merged across levels.
-    /// Published separately from the structural arrays so a label-only change
-    /// (a day rollover) still re-renders without republishing every level.
-    @Published private(set) var treePresentation = SidebarTreePresentation()
+    /// Invalidates header/pin lookups without constructing a whole-tree merged
+    /// dictionary on MainActor. The lookups themselves route to one level.
+    @Published private(set) var presentationRevision: UInt64 = 0
 
     private var organization = OrganizationContext()
     /// Stale-pin report seam: fired whenever an organized level carries
@@ -327,7 +343,13 @@ final class FileTreeViewModel: ObservableObject {
     var onStalePins: ((_ folder: String, _ stale: [String]) -> Void)?
     private var presentationByParent: [NodeID: SidebarLevelPresentation] = [:]
     private var parentPathByKey: [NodeID: String] = [:]
-    private var parentKeyByPath: [String: NodeID] = [:]
+    /// Root owners absent from an incomplete targeted replacement are
+    /// unresolved, not deleted. Keep their exact predecessor rows until a
+    /// later complete root result can reconcile same-ID path ownership.
+    private var deferredRootPredecessorByID: [NodeID: TreeNode] = [:]
+    /// Folder path → the materialized level owner. Per-level file and directory
+    /// indexes can then be swapped in O(1) when a worker-prepared level lands.
+    private var parentKeyByFolderPath: [String: NodeID] = [:]
     /// Whether a stored level's listing was complete (no next page). Stale
     /// pins are only ever reported from complete levels.
     private var completeLevelByKey: [NodeID: Bool] = [:]
@@ -335,6 +357,23 @@ final class FileTreeViewModel: ObservableObject {
     /// Fetch failures use fetchState and its Retry row instead.
     @Published private(set) var incompleteLevelMessageByKey: [NodeID: String] = [:]
     private(set) var levelReorganizeCountForTesting = 0
+    private(set) var liveReorganizationRowVisitCountForTesting = 0
+    private var liveReorganizationTokens: [NodeID: UUID] = [:]
+    private var liveReorganizationTasks: [NodeID: Task<Void, Never>] = [:]
+    private var liveReorganizationCancels: [NodeID: CancelToken] = [:]
+    private var pendingLiveReorganizationKeys: [NodeID] = []
+    private var pendingLiveReorganizationKeySet: Set<NodeID> = []
+    private var pendingLiveReorganizationIndex = 0
+    private(set) var maximumLiveReorganizationQueueStorageForTesting = 0
+    private(set) var removalOwnershipPrefixVisitCountForTesting = 0
+    private(set) var removalOwnershipBatchPublicationCountForTesting = 0
+    private(set) var descendantResetCandidateVisitCountForTesting = 0
+    private(set) var descendantResetBatchPublicationCountForTesting = 0
+    private(set) var descendantResetRetirementHandoffCountForTesting = 0
+    private var liveReorganizationPumpToken: UUID?
+    private var liveReorganizationPumpTask: Task<Void, Never>?
+    private var summaryOrganizationRevisionByParent: [NodeID: UInt64] = [:]
+    private var levelStructuralRevisionByParent: [NodeID: UInt64] = [:]
 
     func incompleteLevelMessage(for parent: NodeID) -> String? {
         incompleteLevelMessageByKey[parent]
@@ -355,16 +394,28 @@ final class FileTreeViewModel: ObservableObject {
         let dayChanged = !context.calendar.isDate(
             previous.now, inSameDayAs: context.now)
         guard inputsChanged || dayChanged else { return }
-        reorganizeCachedLevels()
+        organizationGeneration &+= 1
+        if usesAsyncLevelLoading {
+            cancelLiveReorganizationWork()
+            enqueueLiveReorganizations(liveReorganizationPriorityKeys())
+        } else {
+            reorganizeCachedLevels()
+        }
     }
 
     /// The synthetic header rendered immediately above this file row, if any.
     func headerRow(before id: NodeID) -> SidebarTreeHeaderRow? {
-        treePresentation.headersBefore[id]
+        guard case .file(let path) = id,
+            let parent = parentKeyByFolderPath[Self.containingFolder(of: path)]
+        else { return nil }
+        return presentationByParent[parent]?.headersBefore[id]
     }
 
     func isPinnedRow(_ id: NodeID) -> Bool {
-        treePresentation.pinnedIDs.contains(id)
+        guard case .file(let path) = id,
+            let parent = parentKeyByFolderPath[Self.containingFolder(of: path)]
+        else { return false }
+        return presentationByParent[parent]?.pinnedIDs.contains(id) == true
     }
 
     /// Authored pin entries that no longer resolve to a row in the folder's
@@ -384,71 +435,23 @@ final class FileTreeViewModel: ObservableObject {
         level: [TreeNode], parentPath: String
     ) -> (nodes: [TreeNode], presentation: SidebarLevelPresentation) {
         let fileNodes = level.filter { !$0.isDirectory }
-        let pinnedPaths = organization.pins.paths(forFolder: parentPath)
-        if fileNodes.isEmpty {
-            // Nothing to sort; every authored pin for this folder is stale.
-            return (level, SidebarLevelPresentation(stalePinnedPaths: pinnedPaths))
+        let summaries = fileNodes.compactMap { node -> FileSummary? in
+            guard case let .file(state) = node.kind else { return nil }
+            return state.summary
         }
-
-        let files = fileNodes.map { node -> SidebarOrganizerFile in
-            let summary: FileSummary
-            if case let .file(state) = node.kind {
-                summary = state.summary
-            } else {
-                summary = FileSummary(
-                    path: node.path, name: node.name, mtimeMs: 0, sizeBytes: 0,
-                    isMarkdown: false, displayName: nil, createdDate: nil,
-                    createdMs: nil, wordCount: nil, preview: nil, taskTotal: 0,
-                    taskOpen: 0)
-            }
-            return SidebarOrganizerFile(
-                path: summary.path,
-                name: summary.name,
-                displayName: summary.displayName,
-                createdDate: summary.createdDate,
-                createdMs: summary.createdMs,
-                mtimeMs: summary.mtimeMs)
-        }
-
-        let organized = SidebarLevelOrganizer.organize(
-            files: files,
-            choice: organization.prefs.effectiveChoice(forFolder: parentPath),
-            pinnedPaths: pinnedPaths,
-            now: organization.now,
-            calendar: organization.calendar,
-            locale: organization.locale,
-            civilDateResolver: organization.civilDateResolver)
+        let organized = FileTreeLevelOrganization.organize(
+            files: summaries,
+            parentPath: parentPath,
+            depth: fileNodes.first?.depth ?? level.first?.depth ?? 0,
+            input: FileTreeOrganizationInput(organization),
+            isComplete: true)
 
         var nodeByPath: [String: TreeNode] = [:]
         nodeByPath.reserveCapacity(fileNodes.count)
         for node in fileNodes { nodeByPath[node.path] = node }
         let orderedFiles = organized.orderedPaths.compactMap { nodeByPath[$0] }
-        let depth = fileNodes[0].depth
-
-        var headers: [NodeID: SidebarTreeHeaderRow] = [:]
-        if organized.pinnedCount > 0, let firstPinned = orderedFiles.first {
-            headers[firstPinned.nodeID] = SidebarTreeHeaderRow(
-                kind: .pinned,
-                key: "pinned",
-                label: "Pinned",
-                fileCount: organized.pinnedCount,
-                depth: depth)
-        }
-        for group in organized.groups {
-            headers[.file(path: group.firstPath)] = SidebarTreeHeaderRow(
-                kind: .group,
-                key: group.key,
-                label: group.label,
-                fileCount: group.fileCount,
-                depth: depth)
-        }
-
-        let presentation = SidebarLevelPresentation(
-            headersBefore: headers,
-            pinnedIDs: Set(orderedFiles.prefix(organized.pinnedCount).map(\.nodeID)),
-            stalePinnedPaths: organized.stalePinnedPaths)
         let dirs = level.filter(\.isDirectory)
-        return (dirs + orderedFiles, presentation)
+        return (dirs + orderedFiles, organized.presentation)
     }
 
     /// Re-run organization over every cached level, publishing only levels
@@ -458,7 +461,7 @@ final class FileTreeViewModel: ObservableObject {
         for key in children.keys {
             reorganizeLevel(key: key)
         }
-        rebuildMergedPresentation()
+        publishPresentationChange()
     }
 
     private func reorganizeLevel(key: NodeID) {
@@ -492,6 +495,195 @@ final class FileTreeViewModel: ObservableObject {
         }
     }
 
+    private func revokeLiveReorganization(_ key: NodeID) {
+        pendingLiveReorganizationKeySet.remove(key)
+        liveReorganizationTokens[key] = nil
+        liveReorganizationCancels.removeValue(forKey: key)?.cancel()
+        liveReorganizationTasks.removeValue(forKey: key)?.cancel()
+    }
+
+    private func cancelLiveReorganizationWork() {
+        liveReorganizationPumpTask?.cancel()
+        liveReorganizationPumpTask = nil
+        liveReorganizationPumpToken = nil
+        pendingLiveReorganizationKeys = []
+        pendingLiveReorganizationKeySet = []
+        pendingLiveReorganizationIndex = 0
+        for key in Array(liveReorganizationTokens.keys) {
+            revokeLiveReorganization(key)
+        }
+    }
+
+    /// One MainActor pump admits at most one cached-level reorganization to
+    /// the serial worker. Preference changes and multi-folder save bursts can
+    /// therefore enqueue O(levels) lightweight keys without creating O(levels)
+    /// Tasks, continuations, cancellation tokens, and dispatch blocks.
+    private func enqueueLiveReorganizations<S: Sequence>(_ keys: S)
+    where S.Element == NodeID {
+        for key in keys where pendingLiveReorganizationKeySet.insert(key).inserted {
+            pendingLiveReorganizationKeys.append(key)
+        }
+        maximumLiveReorganizationQueueStorageForTesting = max(
+            maximumLiveReorganizationQueueStorageForTesting,
+            pendingLiveReorganizationKeys.count)
+        guard liveReorganizationPumpTask == nil,
+            pendingLiveReorganizationIndex < pendingLiveReorganizationKeys.count
+        else { return }
+        let token = UUID()
+        let capturedBindingGeneration = bindingGeneration
+        liveReorganizationPumpToken = token
+        let pump = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.liveReorganizationPumpToken == token {
+                    self.pendingLiveReorganizationKeys = []
+                    self.pendingLiveReorganizationKeySet = []
+                    self.pendingLiveReorganizationIndex = 0
+                    self.liveReorganizationPumpToken = nil
+                    self.liveReorganizationPumpTask = nil
+                }
+            }
+            while self.pendingLiveReorganizationIndex
+                    < self.pendingLiveReorganizationKeys.count
+            {
+                guard !Task.isCancelled,
+                    self.liveReorganizationPumpToken == token,
+                    self.bindingGeneration == capturedBindingGeneration
+                else { return }
+                let key = self.pendingLiveReorganizationKeys[
+                    self.pendingLiveReorganizationIndex]
+                self.pendingLiveReorganizationIndex += 1
+                guard self.pendingLiveReorganizationKeySet.remove(key) != nil else {
+                    continue
+                }
+                self.scheduleLiveReorganizationNow(key)
+                if let admitted = self.liveReorganizationTasks[key] {
+                    await admitted.value
+                }
+                if self.pendingLiveReorganizationIndex >= 256,
+                    self.pendingLiveReorganizationIndex * 2
+                        >= self.pendingLiveReorganizationKeys.count
+                {
+                    self.pendingLiveReorganizationKeys.removeFirst(
+                        self.pendingLiveReorganizationIndex)
+                    self.pendingLiveReorganizationIndex = 0
+                }
+            }
+        }
+        liveReorganizationPumpTask = pump
+    }
+
+    /// Live saves under date/title organization re-sort on the same serial
+    /// non-main owner as initial level preparation. A token-local metadata
+    /// revision rejects a mixed snapshot when another key save arrives while
+    /// the worker is traversing or sorting.
+    private func scheduleLiveReorganizationNow(_ key: NodeID) {
+        revokeLiveReorganization(key)
+        let nodes: [TreeNode]
+        if key == Self.rootFetchKey {
+            nodes = rootLevel
+        } else {
+            guard let childNodes = children[key] else { return }
+            nodes = childNodes
+        }
+        guard !nodes.isEmpty,
+            let parentPath = parentPathByKey[key],
+            let oldPresentation = presentationByParent[key]
+        else { return }
+
+        let token = UUID()
+        let nativeCancel = CancelToken()
+        let capturedBindingGeneration = bindingGeneration
+        let capturedOrganizationGeneration = organizationGeneration
+        let capturedStructuralRevision =
+            levelStructuralRevisionByParent[key] ?? 0
+        let capturedSummaryRevision =
+            summaryOrganizationRevisionByParent[key] ?? 0
+        let input = FileTreeOrganizationInput(organization)
+        let isComplete = completeLevelByKey[key] == true
+        let depth = nodes.first?.depth ?? 0
+        let worker = levelWorker
+        liveReorganizationTokens[key] = token
+        liveReorganizationCancels[key] = nativeCancel
+        let task = Task { @MainActor [weak self] in
+            let outcome = await worker.reorganize(
+                nodes: nodes,
+                oldPresentation: oldPresentation,
+                parentPath: parentPath,
+                depth: depth,
+                organization: input,
+                isComplete: isComplete,
+                nativeCancel: nativeCancel)
+            worker.retire(
+                FileTreeRetiredStorage(
+                    levels: [nodes],
+                    fileIndexes: [],
+                    directoryPathIndexes: [],
+                    directoryIDIndexes: [],
+                    presentations: [oldPresentation]))
+            guard let self else {
+                if case .success(let reorganized) = outcome {
+                    worker.retire(reorganized)
+                }
+                return
+            }
+            guard self.liveReorganizationTokens[key] == token,
+                self.bindingGeneration == capturedBindingGeneration,
+                self.organizationGeneration == capturedOrganizationGeneration,
+                self.levelStructuralRevisionByParent[key]
+                    == capturedStructuralRevision
+            else {
+                if case .success(let reorganized) = outcome {
+                    worker.retire(reorganized)
+                }
+                return
+            }
+            self.liveReorganizationTokens[key] = nil
+            self.liveReorganizationCancels[key] = nil
+            self.liveReorganizationTasks[key] = nil
+            guard self.summaryOrganizationRevisionByParent[key]
+                    == capturedSummaryRevision
+            else {
+                if case .success(let reorganized) = outcome {
+                    worker.retire(reorganized)
+                }
+                self.enqueueLiveReorganizations([key])
+                return
+            }
+            guard case .success(let reorganized) = outcome else { return }
+            // Even an accepted no-op/order-only result owns a worker-built
+            // presentation buffer. Keep a retirement copy until this
+            // MainActor turn unwinds so its last release occurs off-main.
+            defer { worker.retire(reorganized) }
+            self.liveReorganizationRowVisitCountForTesting +=
+                reorganized.rowVisits
+            if reorganized.presentationChanged {
+                self.presentationByParent[key] = reorganized.presentation
+                self.reportStalePins(
+                    reorganized.presentation, folder: parentPath)
+                self.publishPresentationChange()
+            }
+            guard reorganized.orderChanged else { return }
+            guard let nodes = reorganized.nodes else { return }
+            self.levelReorganizeCountForTesting += 1
+            let oldNodes: [TreeNode]
+            if key == Self.rootFetchKey {
+                oldNodes = self.rootLevel
+                self.rootLevel = nodes
+            } else {
+                oldNodes = self.children[key] ?? []
+                self.children[key] = nodes
+            }
+            worker.retire(
+                FileTreeRetiredStorage(
+                    levels: [oldNodes],
+                    fileIndexes: [],
+                    directoryPathIndexes: [],
+                    directoryIDIndexes: []))
+        }
+        liveReorganizationTasks[key] = task
+    }
+
     private func reportStalePins(
         _ presentation: SidebarLevelPresentation, folder: String
     ) {
@@ -499,26 +691,42 @@ final class FileTreeViewModel: ObservableObject {
         onStalePins?(folder, presentation.stalePinnedPaths)
     }
 
-    private func rebuildMergedPresentation() {
-        var merged = SidebarTreePresentation()
-        for presentation in presentationByParent.values {
-            merged.headersBefore.merge(presentation.headersBefore) { _, new in new }
-            merged.pinnedIDs.formUnion(presentation.pinnedIDs)
+    private func publishPresentationChange() {
+        presentationRevision &+= 1
+    }
+
+    /// Root first, then disclosed/visible cached owners, then collapsed caches;
+    /// every partition uses stable owner-path order rather than hash order.
+    private func liveReorganizationPriorityKeys() -> [NodeID] {
+        let cached = children.keys.sorted { lhs, rhs in
+            let left = parentPathByKey[lhs] ?? ""
+            let right = parentPathByKey[rhs] ?? ""
+            return left < right
         }
-        if merged != treePresentation {
-            treePresentation = merged
-        }
+        return [Self.rootFetchKey]
+            + cached.filter { expanded.contains($0) }
+            + cached.filter { !expanded.contains($0) }
     }
 
     /// Fields whose change can move a row under some active sort or grouping.
     private static func organizationKeyChanged(
-        _ old: FileSummary, _ new: FileSummary
+        _ old: FileSummary,
+        _ new: FileSummary,
+        choice: SidebarOrganizationChoice
     ) -> Bool {
-        old.displayName != new.displayName
-            || old.name != new.name
-            || old.createdDate != new.createdDate
-            || old.createdMs != new.createdMs
-            || old.mtimeMs != new.mtimeMs
+        // Every sort uses the effective label as its deterministic tie-break.
+        if old.displayName != new.displayName || old.name != new.name {
+            return true
+        }
+        switch choice.normalized.sort.field {
+        case .name:
+            return false
+        case .created:
+            return old.createdDate != new.createdDate
+                || old.createdMs != new.createdMs
+        case .modified:
+            return old.mtimeMs != new.mtimeMs
+        }
     }
 
     /// The session the tree reads from. Swapped by `bind(to:)` when the vault
@@ -532,10 +740,21 @@ final class FileTreeViewModel: ObservableObject {
     /// One bounded combined page. Production forwards the supplied native
     /// cancellation token; test adapters preserve the legacy DirListing seam.
     private var fetcher: ((String, String?, CancelToken) throws -> DirListing)?
+    /// Production and explicit async tests use one serial non-main owner for
+    /// page one through final projection. The legacy synchronous test seam is
+    /// retained so older pure state-machine tests stay deterministic.
+    private let levelWorker: FileTreeLevelWorker
+    private var usesAsyncLevelLoading = false
+    /// Rebind generation distinguishes test binds too, where sessionIdentity
+    /// is intentionally nil for every vault.
+    private var bindingGeneration: UInt64 = 0
+    /// Organization changes while a level is loading invalidate its prepared
+    /// ordering; the completion restarts under the newest inputs.
+    private var organizationGeneration: UInt64 = 0
 
-    /// Sentinel thrown by the single-shot test wrapper for a continuation
-    /// cursor it cannot serve; the drain treats it as "incomplete level".
-    private struct LevelPageUnavailable: Error {}
+    init(levelWorker: FileTreeLevelWorker = FileTreeLevelWorker()) {
+        self.levelWorker = levelWorker
+    }
 
     /// Total-row safety bound for one level's drain. Levels beyond it are
     /// stored partial (organization still applies to what is materialized,
@@ -562,39 +781,428 @@ final class FileTreeViewModel: ObservableObject {
     /// drain (whose pages already reflect the save) can never consume a
     /// stale predecessor's buffer.
     private var pendingSummaryOverlay: [UUID: [String: FileSummary]] = [:]
-    private static let pendingSummaryOverlayCap = 4096
+    /// Monotonic token-local version. A re-preparation may suspend; publication
+    /// is admitted only if no newer save arrived during that suspension.
+    private var pendingSummaryOverlayRevision: [UUID: UInt64] = [:]
+    /// Captured level ownership routes each summary to exactly one matching
+    /// active load instead of broadcasting across every queued expansion.
+    private var levelDrainParentPathByToken: [UUID: String] = [:]
+    /// Last requested path for each level owner, retained across a failed
+    /// fetch so authoritative deletion can clear that state without scanning
+    /// materialized levels or depending on a still-live token.
+    private var requestedLevelPathByKey: [NodeID: String] = [:]
+    /// More distinct saves than the bounded overlay can retain invalidate the
+    /// worker snapshot. The owner refetches rather than publishing partial
+    /// overlay truth.
+    private var overflowedSummaryOverlayTokens: Set<UUID> = []
+    /// Internal so the cap+1 fail-closed regression stays tied to production.
+    nonisolated static let pendingSummaryOverlayCap = 4096
     private(set) var levelDrainTasksForTesting: [NodeID: Task<Void, Never>] = [:]
+    private(set) var targetedRootReconcileVisitCountForTesting = 0
+    private(set) var maximumLevelDrainTaskCountForTesting = 0
+    private(set) var expandLoadedTaskForTesting: Task<Void, Never>?
+    private var expandLoadedToken: UUID?
+    private var materializationPumpTask: Task<Void, Never>?
+    private var materializationPumpToken: UUID?
+    private(set) var materializationCandidateVisitCountForTesting = 0
+    private struct MaterializationEntry {
+        let node: TreeNode
+        let owner: MaterializationOwner
+        let generation: UUID
+        let promotesPendingExpansion: Bool
+    }
+    private var pendingMaterializationEntries: [MaterializationEntry] = []
+    private var pendingMaterializationIDs: Set<NodeID> = []
+    private struct MaterializationOwner {
+        let level: NodeID
+        let structuralRevision: UInt64
+    }
+    private var pendingMaterializationOwners: [NodeID: MaterializationOwner] = [:]
+    private var pendingMaterializationGenerationByID: [NodeID: UUID] = [:]
+    private var pendingMaterializationIDsByOwner: [NodeID: Set<NodeID>] = [:]
+    private var pendingMaterializationIndex = 0
     private var levelDrainNativeCancels: [NodeID: CancelToken] = [:]
 
     private func revokeLevelDrain(_ key: NodeID) {
         if let revoked = levelDrainTokens.removeValue(forKey: key) {
-            pendingSummaryOverlay[revoked] = nil
+            clearPendingSummaryState(for: revoked)
         }
         levelDrainNativeCancels.removeValue(forKey: key)?.cancel()
         levelDrainTasksForTesting.removeValue(forKey: key)?.cancel()
     }
 
+    private func clearPendingSummaryState(for token: UUID) {
+        pendingSummaryOverlay[token] = nil
+        pendingSummaryOverlayRevision[token] = nil
+        levelDrainParentPathByToken[token] = nil
+        overflowedSummaryOverlayTokens.remove(token)
+    }
 
-    /// Round-13 finding 1 + round-14 finding 1: the FIRST page fetches
-    /// synchronously (the shipped U2 behavior — content appears immediately
-    /// and every synchronous test seam holds), while any REMAINING pages
-    /// drain off the main actor and merge in one publish when they land.
-    /// Until the drain completes the level is stored partial, so stale-pin
-    /// pruning stays suppressed (round-5 finding 2).
+    /// Production whole-level operation: page one, continuations, projection,
+    /// and organization run serially off MainActor. Publication is admitted
+    /// only while every captured structural owner remains current.
+    private func scheduleLevelLoad(
+        parentKey: NodeID,
+        parentPath: String,
+        depth: Int,
+        targetedRootPredecessor: [NodeID: TreeNode]? = nil
+    ) {
+        guard let fetcher else { return }
+        revokeLevelDrain(parentKey)
+        fetchState[parentKey] = .loading
+
+        let token = UUID()
+        let nativeCancel = CancelToken()
+        levelDrainTokens[parentKey] = token
+        levelDrainNativeCancels[parentKey] = nativeCancel
+        levelDrainParentPathByToken[token] = parentPath
+        requestedLevelPathByKey[parentKey] = parentPath
+        let capturedSession = sessionIdentity
+        let capturedBindingGeneration = bindingGeneration
+        let capturedOrganizationGeneration = organizationGeneration
+        let workerOrganization = FileTreeOrganizationInput(organization)
+        let worker = levelWorker
+        let operation = FileTreeFetchOperation(call: fetcher)
+
+        let task = Task { @MainActor [weak self] in
+            var outcome = await worker.load(
+                fetch: operation,
+                parentPath: parentPath,
+                depth: depth,
+                organization: workerOrganization,
+                nativeCancel: nativeCancel)
+            defer {
+                if let targetedRootPredecessor {
+                    worker.retire(
+                        directoryIDIndex: targetedRootPredecessor)
+                }
+            }
+            guard let self else {
+                worker.retire(outcome)
+                return
+            }
+            guard self.levelDrainTokens[parentKey] == token,
+                self.bindingGeneration == capturedBindingGeneration,
+                self.sessionIdentity == capturedSession
+            else {
+                worker.retire(outcome)
+                return
+            }
+
+            // Organization changed while projection was off-main. Discard the
+            // obsolete prepared order and restart the same still-live level
+            // under the newest inputs; never flash stale grouping or pins.
+            if self.organizationGeneration != capturedOrganizationGeneration {
+                worker.retire(outcome)
+                self.finishLevelLoad(parentKey, token: token)
+                self.clearPendingSummaryState(for: token)
+                if parentKey == Self.rootFetchKey {
+                    self.scheduleLevelLoad(
+                        parentKey: parentKey,
+                        parentPath: parentPath,
+                        depth: depth,
+                        targetedRootPredecessor: targetedRootPredecessor)
+                } else if self.isAttachedExpandedDirectory(
+                    parentKey, path: parentPath)
+                {
+                    self.scheduleLevelLoad(
+                        parentKey: parentKey,
+                        parentPath: parentPath,
+                        depth: depth)
+                } else {
+                    self.reconcileDetachedLevelLoad(
+                        parentKey, requestedPath: parentPath)
+                }
+                return
+            }
+
+            guard parentKey == Self.rootFetchKey
+                || self.isAttachedExpandedDirectory(parentKey, path: parentPath)
+            else {
+                worker.retire(outcome)
+                self.finishLevelLoad(parentKey, token: token)
+                self.clearPendingSummaryState(for: token)
+                self.reconcileDetachedLevelLoad(
+                    parentKey, requestedPath: parentPath)
+                return
+            }
+
+            if case .success = outcome,
+                self.overflowedSummaryOverlayTokens.contains(token)
+            {
+                worker.retire(outcome)
+                self.restartOverflowedLevelLoad(
+                    parentKey: parentKey,
+                    parentPath: parentPath,
+                    depth: depth,
+                    targetedRootPredecessor: targetedRootPredecessor,
+                    token: token)
+                return
+            }
+
+            // A save may have supplied newer metadata while the native read or
+            // initial projection was in flight. Reprepare the unpublished
+            // level off-main so sorting, grouping, headers, and pins all use
+            // the overlay too. Every suspension revalidates structural owner
+            // and token-local overlay revision before publication.
+            if case .success(var prepared) = outcome {
+                while let overlay = self.pendingSummaryOverlay[token],
+                    !overlay.isEmpty
+                {
+                    let revision = self.pendingSummaryOverlayRevision[token] ?? 0
+                    let refreshedOutcome = await worker.reprepare(
+                        prepared,
+                        overlay: FileTreeSummaryOverlay(
+                            summariesByPath: overlay),
+                        parentPath: parentPath,
+                        depth: depth,
+                        organization: workerOrganization,
+                        nativeCancel: nativeCancel)
+                    worker.retire(prepared)
+                    outcome = refreshedOutcome
+                    guard self.levelDrainTokens[parentKey] == token,
+                        self.bindingGeneration == capturedBindingGeneration,
+                        self.sessionIdentity == capturedSession
+                    else {
+                        worker.retire(outcome)
+                        return
+                    }
+                    if case .success = outcome,
+                        self.overflowedSummaryOverlayTokens.contains(token)
+                    {
+                        worker.retire(outcome)
+                        self.restartOverflowedLevelLoad(
+                            parentKey: parentKey,
+                            parentPath: parentPath,
+                            depth: depth,
+                            targetedRootPredecessor: targetedRootPredecessor,
+                            token: token)
+                        return
+                    }
+                    if self.organizationGeneration
+                        != capturedOrganizationGeneration
+                    {
+                        worker.retire(outcome)
+                        self.finishLevelLoad(parentKey, token: token)
+                        self.clearPendingSummaryState(for: token)
+                        if parentKey == Self.rootFetchKey {
+                            self.scheduleLevelLoad(
+                                parentKey: parentKey,
+                                parentPath: parentPath,
+                                depth: depth,
+                                targetedRootPredecessor: targetedRootPredecessor)
+                        } else if self.isAttachedExpandedDirectory(
+                            parentKey, path: parentPath)
+                        {
+                            self.scheduleLevelLoad(
+                                parentKey: parentKey,
+                                parentPath: parentPath,
+                                depth: depth)
+                        } else {
+                            self.reconcileDetachedLevelLoad(
+                                parentKey, requestedPath: parentPath)
+                        }
+                        return
+                    }
+                    guard parentKey == Self.rootFetchKey
+                        || self.isAttachedExpandedDirectory(
+                            parentKey, path: parentPath)
+                    else {
+                        worker.retire(outcome)
+                        self.finishLevelLoad(parentKey, token: token)
+                        self.clearPendingSummaryState(for: token)
+                        self.reconcileDetachedLevelLoad(
+                            parentKey, requestedPath: parentPath)
+                        return
+                    }
+                    guard case .success(let refreshed) = outcome else { break }
+                    prepared = refreshed
+                    if self.pendingSummaryOverlayRevision[token] == revision {
+                        outcome = .success(refreshed)
+                        break
+                    }
+                }
+            }
+
+            self.finishLevelLoad(parentKey, token: token)
+            defer {
+                self.clearPendingSummaryState(for: token)
+            }
+            switch outcome {
+            case .success(let prepared):
+                if parentKey == Self.rootFetchKey {
+                    self.replaceRootLevel(with: prepared)
+                    if let targetedRootPredecessor {
+                        self.reconcileTargetedRootPredecessor(
+                            targetedRootPredecessor,
+                            isComplete: prepared.isComplete)
+                    }
+                } else {
+                    self.replaceChildLevel(
+                        prepared, for: parentKey, parentPath: parentPath)
+                }
+                if let retryMessage = prepared.retryMessage {
+                    self.fetchState[parentKey] = .failed(
+                        message: retryMessage)
+                } else {
+                    self.fetchState[parentKey] = nil
+                }
+                self.adoptPendingExpansions(in: prepared)
+                self.materializeExpandedChildren(in: prepared)
+            case .failure(let message):
+                if parentKey == Self.rootFetchKey {
+                    self.replaceRootLevel(with: [])
+                    if let targetedRootPredecessor {
+                        self.reconcileTargetedRootPredecessor(
+                            targetedRootPredecessor,
+                            isComplete: true)
+                    }
+                }
+                self.fetchState[parentKey] = .failed(message: message)
+            case .cancelled:
+                // Owner-driven cancellation revokes the token before this
+                // branch. A still-current cancellation is therefore a real
+                // provider outcome and must leave an honest Retry surface.
+                if parentKey == Self.rootFetchKey {
+                    self.replaceRootLevel(with: [])
+                    if let targetedRootPredecessor {
+                        self.reconcileTargetedRootPredecessor(
+                            targetedRootPredecessor,
+                            isComplete: true)
+                    }
+                }
+                self.fetchState[parentKey] = .failed(
+                    message: "Loading this folder was cancelled.")
+            }
+        }
+        levelDrainTasksForTesting[parentKey] = task
+        maximumLevelDrainTaskCountForTesting = max(
+            maximumLevelDrainTaskCountForTesting,
+            levelDrainTasksForTesting.count)
+    }
+
+    private func finishLevelLoad(_ key: NodeID, token: UUID) {
+        guard levelDrainTokens[key] == token else { return }
+        levelDrainTokens[key] = nil
+        levelDrainTasksForTesting[key] = nil
+        levelDrainNativeCancels[key] = nil
+    }
+
+    /// A still-current request can finish after its row moved or was replaced.
+    /// Clear that request's visible state, discard stale path ownership, and
+    /// only schedule the currently attached row when it still has explicit
+    /// expanded ownership for its new path. A deliberate collapse stays closed.
+    private func reconcileDetachedLevelLoad(
+        _ key: NodeID,
+        requestedPath: String
+    ) {
+        let current = node(for: key)
+        if hasVisibleRootPredecessorRefresh,
+            current?.path == requestedPath,
+            expanded.contains(key),
+            expandedPathByID[key] != requestedPath
+        {
+            // The child operation ended, but the remapped root replacement is
+            // still the authoritative work backing this read-only predecessor.
+            fetchState[key] = .loading
+            return
+        }
+        fetchState[key] = nil
+        if expandedPathByID[key] == requestedPath {
+            expanded.remove(key)
+            expandedPathByID[key] = nil
+            pendingExpandedPaths.remove(requestedPath)
+            expansionRecency.removeAll { $0 == requestedPath }
+        }
+        guard let current,
+            current.path != requestedPath,
+            expanded.contains(key),
+            expandedPathByID[key] == current.path,
+            isAttachedDirectory(key, path: current.path)
+        else { return }
+        loadChildren(of: current)
+    }
+
+    /// A bounded overlay that overflowed is incomplete truth. Revoke its
+    /// unpublished snapshot and refetch the same still-live level so no stale
+    /// row can replace the visible predecessor.
+    private func restartOverflowedLevelLoad(
+        parentKey: NodeID,
+        parentPath: String,
+        depth: Int,
+        targetedRootPredecessor: [NodeID: TreeNode]?,
+        token: UUID
+    ) {
+        finishLevelLoad(parentKey, token: token)
+        clearPendingSummaryState(for: token)
+        if parentKey == Self.rootFetchKey {
+            scheduleLevelLoad(
+                parentKey: parentKey,
+                parentPath: parentPath,
+                depth: depth,
+                targetedRootPredecessor: targetedRootPredecessor)
+        } else if isAttachedExpandedDirectory(parentKey, path: parentPath) {
+            scheduleLevelLoad(
+                parentKey: parentKey,
+                parentPath: parentPath,
+                depth: depth)
+        } else {
+            reconcileDetachedLevelLoad(parentKey, requestedPath: parentPath)
+        }
+    }
+
+    private func isAttachedExpandedDirectory(
+        _ key: NodeID,
+        path: String
+    ) -> Bool {
+        expanded.contains(key)
+            && expandedPathByID[key] == path
+            && isAttachedDirectory(key, path: path)
+    }
+
+    private func isAttachedDirectory(_ id: NodeID, path: String) -> Bool {
+        guard let parent = parentKeyByFolderPath[
+            Self.containingFolder(of: path)]
+        else { return false }
+        return directoriesByIDByParent[parent]?[id]?.path == path
+    }
+
+    private func hasExpandedAncestorChain(for path: String) -> Bool {
+        var ancestorPath = Self.containingFolder(of: path)
+        while !ancestorPath.isEmpty {
+            guard let ancestorID = parentKeyByFolderPath[ancestorPath],
+                expanded.contains(ancestorID),
+                expandedPathByID[ancestorID] == ancestorPath,
+                isAttachedDirectory(ancestorID, path: ancestorPath)
+            else { return false }
+            ancestorPath = Self.containingFolder(of: ancestorPath)
+        }
+        return true
+    }
+
+
+    /// Legacy synchronous test compatibility: the FIRST page publishes
+    /// immediately while any REMAINING pages drain off the main actor and
+    /// merge in one publish. Production uses FileTreeLevelWorker for page one
+    /// through final projection. Until this legacy drain completes the level
+    /// is stored partial, so stale-pin pruning stays suppressed.
     private func scheduleContinuationDrain(
         parentKey: NodeID,
         parentPath: String,
         depth: Int,
-        firstPage: DirListing
+        firstPage: DirListing,
+        targetedRootPredecessor: [NodeID: TreeNode]? = nil
     ) {
         guard let fetcher else { return }
         let token = UUID()
         levelDrainTokens[parentKey] = token
         let nativeCancel = CancelToken()
         levelDrainNativeCancels[parentKey] = nativeCancel
+        levelDrainParentPathByToken[token] = parentPath
         let capturedSession = sessionIdentity
         let startCursor = firstPage.files.nextCursor
         let baseCount = firstPage.dirs.count + firstPage.files.items.count
+        let worker = levelWorker
         let task = Task { [weak self] in
             let outcome: Result<
                 (
@@ -635,13 +1243,19 @@ final class FileTreeViewModel: ObservableObject {
                             }
                         }
                         return .success((dirs, files, incompleteMessage))
-                    } catch is LevelPageUnavailable {
+                    } catch is FileTreeLevelPageUnavailable {
                         return .success(
                             (dirs, files, Self.incompleteLevelMessage))
                     } catch {
                         return .failure(error)
                     }
                 }.value
+            defer {
+                if let targetedRootPredecessor {
+                    worker.retire(
+                        directoryIDIndex: targetedRootPredecessor)
+                }
+            }
             guard let self,
                 self.levelDrainTokens[parentKey] == token,
                 self.sessionIdentity == capturedSession
@@ -651,7 +1265,7 @@ final class FileTreeViewModel: ObservableObject {
             self.levelDrainNativeCancels[parentKey] = nil
             defer {
                 // This drain's leftovers can never be consumed again.
-                self.pendingSummaryOverlay[token] = nil
+                self.clearPendingSummaryState(for: token)
             }
             guard case .success(let drained) = outcome else {
                 // Round-15 finding 2: a failed continuation keeps the
@@ -692,7 +1306,7 @@ final class FileTreeViewModel: ObservableObject {
                     continue
                 }
                 let state: FileTreeFileState
-                if let existing = self.fileStateByPath[summary.path] {
+                if let existing = self.fileState(forPath: summary.path) {
                     state = existing
                 } else if let buffered =
                     self.pendingSummaryOverlay[token]?
@@ -717,6 +1331,11 @@ final class FileTreeViewModel: ObservableObject {
                     with: level,
                     isCompleteLevel: drained.incompleteMessage == nil,
                     incompleteMessage: drained.incompleteMessage)
+                if let targetedRootPredecessor {
+                    self.reconcileTargetedRootPredecessor(
+                        targetedRootPredecessor,
+                        isComplete: drained.incompleteMessage == nil)
+                }
             } else {
                 self.replaceChildLevel(
                     level, for: parentKey, parentPath: parentPath,
@@ -732,28 +1351,68 @@ final class FileTreeViewModel: ObservableObject {
         levelDrainTasksForTesting[parentKey] = task
     }
 
-    /// Exact path → the one observable owned by its materialized row. Rich
-    /// metadata refreshes use this index and never mutate a published level.
-    private var fileStateByPath: [String: FileTreeFileState] = [:]
+    /// Worker-built level indexes. Publication assigns these dictionaries
+    /// directly instead of scanning up to 50,000 rows on MainActor.
+    private var fileStatesByParent: [NodeID: [String: FileTreeFileState]] = [:]
+    private var directoriesByPathByParent: [NodeID: [String: TreeNode]] = [:]
+    private var directoriesByIDByParent: [NodeID: [NodeID: TreeNode]] = [:]
+    private var directoryOrderByParent: [NodeID: [NodeID]] = [:]
     private(set) var summaryReplacementLookupCountForTesting = 0
 
     private func clearMaterializedLevels() {
+        cancelExpandLoadedWork()
+        cancelMaterializationWork()
         for key in Array(levelDrainTokens.keys) { revokeLevelDrain(key) }
+        cancelLiveReorganizationWork()
+        let retired = FileTreeRetiredStorage(
+            levels: [rootLevel] + Array(children.values),
+            fileIndexes: Array(fileStatesByParent.values),
+            directoryPathIndexes: Array(directoriesByPathByParent.values),
+            directoryIDIndexes: Array(directoriesByIDByParent.values)
+                + [deferredRootPredecessorByID],
+            directoryOrders: Array(directoryOrderByParent.values),
+            presentations: Array(presentationByParent.values))
         rootLevel = []
         children = [:]
-        fileStateByPath = [:]
-        parentKeyByPath = [:]
+        fileStatesByParent = [:]
+        directoriesByPathByParent = [:]
+        directoriesByIDByParent = [:]
+        directoryOrderByParent = [:]
+        parentKeyByFolderPath = [:]
         presentationByParent = [:]
         parentPathByKey = [:]
+        deferredRootPredecessorByID = [:]
         completeLevelByKey = [:]
         incompleteLevelMessageByKey = [:]
         levelDrainTokens = [:]
         levelDrainTasksForTesting = [:]
         levelDrainNativeCancels = [:]
+        maximumLevelDrainTaskCountForTesting = 0
         pendingSummaryOverlay = [:]
-        if treePresentation != SidebarTreePresentation() {
-            treePresentation = SidebarTreePresentation()
-        }
+        pendingSummaryOverlayRevision = [:]
+        levelDrainParentPathByToken = [:]
+        requestedLevelPathByKey = [:]
+        overflowedSummaryOverlayTokens = []
+        liveReorganizationTokens = [:]
+        liveReorganizationTasks = [:]
+        liveReorganizationCancels = [:]
+        pendingLiveReorganizationKeys = []
+        pendingLiveReorganizationKeySet = []
+        pendingLiveReorganizationIndex = 0
+        maximumLiveReorganizationQueueStorageForTesting = 0
+        removalOwnershipPrefixVisitCountForTesting = 0
+        removalOwnershipBatchPublicationCountForTesting = 0
+        descendantResetCandidateVisitCountForTesting = 0
+        descendantResetBatchPublicationCountForTesting = 0
+        descendantResetRetirementHandoffCountForTesting = 0
+        materializationCandidateVisitCountForTesting = 0
+        liveReorganizationPumpToken = nil
+        liveReorganizationPumpTask = nil
+        summaryOrganizationRevisionByParent = [:]
+        levelStructuralRevisionByParent = [:]
+        expandedPathByID = [:]
+        publishPresentationChange()
+        levelWorker.retire(retired)
     }
 
     private func replaceRootLevel(
@@ -761,7 +1420,10 @@ final class FileTreeViewModel: ObservableObject {
         isCompleteLevel: Bool = true,
         incompleteMessage: String? = nil
     ) {
-        removeFileStates(in: rootLevel)
+        let oldNodes = rootLevel
+        let oldIndexes = removeLevelIndexes(for: Self.rootFetchKey)
+        let oldPresentation = presentationByParent.removeValue(
+            forKey: Self.rootFetchKey)
         let organizedResult = organizedPresentation(
             level: level, parentPath: "")
         let organized = organizedResult.nodes
@@ -777,9 +1439,48 @@ final class FileTreeViewModel: ObservableObject {
         rootLevel = organized
         presentationByParent[Self.rootFetchKey] = presentation
         parentPathByKey[Self.rootFetchKey] = ""
-        indexFileStates(in: organized, parentKey: Self.rootFetchKey)
-        rebuildMergedPresentation()
+        installLevelIndexes(
+            Self.indexes(in: organized),
+            for: Self.rootFetchKey,
+            parentPath: "")
+        publishPresentationChange()
         reportStalePins(presentation, folder: "")
+        if usesAsyncLevelLoading {
+            retire(
+                nodes: oldNodes, indexes: oldIndexes,
+                presentations: oldPresentation.map { [$0] } ?? [])
+        }
+    }
+
+    /// Publish one worker-prepared root level without repeating projection or
+    /// organization on MainActor. Only indexed ownership bookkeeping and the
+    /// single observable-array publication remain here.
+    private func replaceRootLevel(with prepared: FileTreePreparedLevel) {
+        let oldNodes = rootLevel
+        let oldIndexes = removeLevelIndexes(for: Self.rootFetchKey)
+        let oldPresentation = presentationByParent.removeValue(
+            forKey: Self.rootFetchKey)
+        completeLevelByKey[Self.rootFetchKey] = prepared.isComplete
+        incompleteLevelMessageByKey[Self.rootFetchKey] =
+            prepared.incompleteMessage
+        rootLevel = prepared.nodes
+        presentationByParent[Self.rootFetchKey] = prepared.presentation
+        parentPathByKey[Self.rootFetchKey] = ""
+        installLevelIndexes(
+            (
+                files: prepared.fileStatesByPath,
+                directoriesByPath: prepared.directoriesByPath,
+                directoriesByID: prepared.directoriesByID,
+                directoryOrder: prepared.directoryOrder
+            ),
+            for: Self.rootFetchKey,
+            parentPath: "")
+        publishPresentationChange()
+        reportStalePins(prepared.presentation, folder: "")
+        retire(
+            nodes: oldNodes, indexes: oldIndexes,
+            presentations: oldPresentation.map { [$0] } ?? [],
+            directoryOrdinalIndexes: [prepared.directoryOrdinalByID])
     }
 
     private func replaceChildLevel(
@@ -787,17 +1488,22 @@ final class FileTreeViewModel: ObservableObject {
         isCompleteLevel: Bool = true,
         incompleteMessage: String? = nil
     ) {
-        if let oldLevel = children[parent] {
-            removeFileStates(in: oldLevel)
-        }
+        let oldNodes = children[parent] ?? []
+        let oldIndexes = removeLevelIndexes(for: parent)
+        let oldPresentation = presentationByParent.removeValue(forKey: parent)
         guard let level, let parentPath else {
             children[parent] = level
-            presentationByParent[parent] = nil
             parentPathByKey[parent] = nil
             completeLevelByKey[parent] = nil
             incompleteLevelMessageByKey[parent] = nil
+            requestedLevelPathByKey[parent] = nil
             revokeLevelDrain(parent)
-            rebuildMergedPresentation()
+            publishPresentationChange()
+            if usesAsyncLevelLoading {
+                retire(
+                    nodes: oldNodes, indexes: oldIndexes,
+                    presentations: oldPresentation.map { [$0] } ?? [])
+            }
             return
         }
         let organizedResult = organizedPresentation(
@@ -812,43 +1518,185 @@ final class FileTreeViewModel: ObservableObject {
         children[parent] = organized
         presentationByParent[parent] = presentation
         parentPathByKey[parent] = parentPath
-        indexFileStates(in: organized, parentKey: parent)
-        rebuildMergedPresentation()
+        installLevelIndexes(
+            Self.indexes(in: organized), for: parent, parentPath: parentPath)
+        publishPresentationChange()
         reportStalePins(presentation, folder: parentPath)
-    }
-
-    private func removeFileStates(in level: [TreeNode]) {
-        for node in level {
-            guard case let .file(state) = node.kind,
-                fileStateByPath[node.path] === state
-            else { continue }
-            fileStateByPath[node.path] = nil
-            parentKeyByPath[node.path] = nil
+        if usesAsyncLevelLoading {
+            retire(
+                nodes: oldNodes, indexes: oldIndexes,
+                presentations: oldPresentation.map { [$0] } ?? [])
         }
     }
 
-    private func indexFileStates(in level: [TreeNode], parentKey: NodeID) {
+    /// Publish one worker-prepared child level. The worker already filtered,
+    /// sorted, grouped, projected, and constructed row state off MainActor.
+    private func replaceChildLevel(
+        _ prepared: FileTreePreparedLevel,
+        for parent: NodeID,
+        parentPath: String
+    ) {
+        let oldNodes = children[parent] ?? []
+        let oldIndexes = removeLevelIndexes(for: parent)
+        let oldPresentation = presentationByParent.removeValue(forKey: parent)
+        completeLevelByKey[parent] = prepared.isComplete
+        incompleteLevelMessageByKey[parent] = prepared.incompleteMessage
+        children[parent] = prepared.nodes
+        presentationByParent[parent] = prepared.presentation
+        parentPathByKey[parent] = parentPath
+        installLevelIndexes(
+            (
+                files: prepared.fileStatesByPath,
+                directoriesByPath: prepared.directoriesByPath,
+                directoriesByID: prepared.directoriesByID,
+                directoryOrder: prepared.directoryOrder
+            ),
+            for: parent,
+            parentPath: parentPath)
+        publishPresentationChange()
+        reportStalePins(prepared.presentation, folder: parentPath)
+        retire(
+            nodes: oldNodes, indexes: oldIndexes,
+            presentations: oldPresentation.map { [$0] } ?? [],
+            directoryOrdinalIndexes: [prepared.directoryOrdinalByID])
+    }
+
+    private typealias LevelIndexes = (
+        files: [String: FileTreeFileState],
+        directoriesByPath: [String: TreeNode],
+        directoriesByID: [NodeID: TreeNode],
+        directoryOrder: [NodeID]
+    )
+
+    /// Legacy synchronous tests still construct rows on MainActor. Keep their
+    /// deterministic seam, but build the same level-owned indexes used by the
+    /// production worker.
+    private static func indexes(in level: [TreeNode]) -> LevelIndexes {
+        var files: [String: FileTreeFileState] = [:]
+        var directoriesByPath: [String: TreeNode] = [:]
+        var directoriesByID: [NodeID: TreeNode] = [:]
+        var directoryOrder: [NodeID] = []
+        files.reserveCapacity(level.count)
         for node in level {
-            guard case let .file(state) = node.kind else { continue }
-            fileStateByPath[node.path] = state
-            parentKeyByPath[node.path] = parentKey
+            switch node.kind {
+            case let .file(state):
+                files[node.path] = state
+            case .directory:
+                directoriesByPath[node.path] = node
+                directoriesByID[node.nodeID] = node
+                directoryOrder.append(node.nodeID)
+            }
         }
+        return (files, directoriesByPath, directoriesByID, directoryOrder)
+    }
+
+    private func installLevelIndexes(
+        _ indexes: LevelIndexes,
+        for parent: NodeID,
+        parentPath: String
+    ) {
+        fileStatesByParent[parent] = indexes.files
+        directoriesByPathByParent[parent] = indexes.directoriesByPath
+        directoriesByIDByParent[parent] = indexes.directoriesByID
+        directoryOrderByParent[parent] = indexes.directoryOrder
+        parentKeyByFolderPath[parentPath] = parent
+    }
+
+    @discardableResult
+    private func removeLevelIndexes(for parent: NodeID) -> LevelIndexes {
+        revokeLiveReorganization(parent)
+        invalidatePendingMaterializations(ownedBy: parent)
+        levelStructuralRevisionByParent[parent, default: 0] &+= 1
+        if let oldParentPath = parentPathByKey[parent],
+            parentKeyByFolderPath[oldParentPath] == parent
+        {
+            parentKeyByFolderPath[oldParentPath] = nil
+        }
+        return (
+            files: fileStatesByParent.removeValue(forKey: parent) ?? [:],
+            directoriesByPath:
+                directoriesByPathByParent.removeValue(forKey: parent) ?? [:],
+            directoriesByID:
+                directoriesByIDByParent.removeValue(forKey: parent) ?? [:],
+            directoryOrder:
+                directoryOrderByParent.removeValue(forKey: parent) ?? [])
+    }
+
+    private func retire(
+        nodes: [TreeNode],
+        indexes: LevelIndexes,
+        presentations: [SidebarLevelPresentation] = [],
+        directoryOrdinalIndexes: [[NodeID: Int]] = []
+    ) {
+        levelWorker.retire(
+            FileTreeRetiredStorage(
+                levels: [nodes],
+                fileIndexes: [indexes.files],
+                directoryPathIndexes: [indexes.directoriesByPath],
+                directoryIDIndexes: [indexes.directoriesByID],
+                directoryOrders: [indexes.directoryOrder],
+                directoryOrdinalIndexes: directoryOrdinalIndexes,
+                presentations: presentations))
+    }
+
+    nonisolated private static func containingFolder(of path: String) -> String {
+        guard let slash = path.lastIndex(of: "/") else { return "" }
+        return String(path[..<slash])
+    }
+
+    private func fileState(forPath path: String) -> FileTreeFileState? {
+        let folder = Self.containingFolder(of: path)
+        guard let parent = parentKeyByFolderPath[folder] else { return nil }
+        return fileStatesByParent[parent]?[path]
     }
 
     private func clearChildLevels() {
-        for level in children.values {
-            removeFileStates(in: level)
+        let oldLevels = Array(children.values)
+        var oldFileIndexes: [[String: FileTreeFileState]] = []
+        var oldDirectoryPathIndexes: [[String: TreeNode]] = []
+        var oldDirectoryIDIndexes: [[NodeID: TreeNode]] = []
+        var oldDirectoryOrders: [[NodeID]] = []
+        var oldPresentations: [SidebarLevelPresentation] = []
+        oldFileIndexes.reserveCapacity(children.count)
+        oldDirectoryPathIndexes.reserveCapacity(children.count)
+        oldDirectoryIDIndexes.reserveCapacity(children.count)
+        for parent in children.keys {
+            let indexes = removeLevelIndexes(for: parent)
+            oldFileIndexes.append(indexes.files)
+            oldDirectoryPathIndexes.append(indexes.directoriesByPath)
+            oldDirectoryIDIndexes.append(indexes.directoriesByID)
+            oldDirectoryOrders.append(indexes.directoryOrder)
+            if let presentation = presentationByParent.removeValue(forKey: parent) {
+                oldPresentations.append(presentation)
+            }
         }
         children = [:]
+        parentPathByKey = parentPathByKey.filter {
+            $0.key == Self.rootFetchKey
+        }
         completeLevelByKey = completeLevelByKey.filter {
             $0.key == Self.rootFetchKey
         }
         incompleteLevelMessageByKey = incompleteLevelMessageByKey.filter {
             $0.key == Self.rootFetchKey
         }
+        requestedLevelPathByKey = requestedLevelPathByKey.filter {
+            $0.key == Self.rootFetchKey
+        }
         for key in Array(levelDrainTokens.keys) where key != Self.rootFetchKey {
             revokeLevelDrain(key)
         }
+        if usesAsyncLevelLoading {
+            levelWorker.retire(
+                FileTreeRetiredStorage(
+                    levels: oldLevels,
+                    fileIndexes: oldFileIndexes,
+                    directoryPathIndexes: oldDirectoryPathIndexes,
+                    directoryIDIndexes: oldDirectoryIDIndexes,
+                    directoryOrders: oldDirectoryOrders,
+                    presentations: oldPresentations))
+        }
+        publishPresentationChange()
     }
 
     /// Test seam: bind to an explicit fetcher instead of a live session. The
@@ -860,7 +1708,7 @@ final class FileTreeViewModel: ObservableObject {
     ) {
         bindForTesting(
             pagedFetcher: { parentPath, cursor in
-                guard cursor == nil else { throw LevelPageUnavailable() }
+                guard cursor == nil else { throw FileTreeLevelPageUnavailable() }
                 return try fetcher(parentPath)
             },
             restoringExpandedDirPaths: restoringExpandedDirPaths)
@@ -882,6 +1730,8 @@ final class FileTreeViewModel: ObservableObject {
             @escaping (String, String?, CancelToken) throws -> DirListing,
         restoringExpandedDirPaths: [String] = []
     ) {
+        bindingGeneration &+= 1
+        usesAsyncLevelLoading = false
         self.session = nil
         sessionIdentity = nil
         self.fetcher = cancellablePagedFetcher
@@ -891,6 +1741,51 @@ final class FileTreeViewModel: ObservableObject {
         expansionRecency = restoringExpandedDirPaths
         fetchState = [:]
         loadRoot()
+    }
+
+    /// Explicit asynchronous test seam for the production operation owner.
+    /// Existing pure state-machine tests retain bindForTesting's synchronous
+    /// behavior; RT19 regressions use this seam to block page one safely.
+    func bindAsynchronouslyForTesting(
+        cancellablePagedFetcher:
+            @escaping (String, String?, CancelToken) throws -> DirListing,
+        restoringExpandedDirPaths: [String] = []
+    ) {
+        bindingGeneration &+= 1
+        usesAsyncLevelLoading = true
+        session = nil
+        sessionIdentity = nil
+        fetcher = cancellablePagedFetcher
+        clearMaterializedLevels()
+        expanded = []
+        pendingExpandedPaths = Set(restoringExpandedDirPaths)
+        expansionRecency = restoringExpandedDirPaths
+        fetchState = [:]
+        loadRoot()
+    }
+
+    /// Bounded settle seam for the dynamically restored level chain. A broken
+    /// provider/test can no longer hang CI indefinitely; timeout revokes every
+    /// owner and native token before returning false.
+    @discardableResult
+    func settleLevelLoadsForTesting(
+        timeoutNanoseconds: UInt64 = 5_000_000_000
+    ) async -> Bool {
+        let started = DispatchTime.now().uptimeNanoseconds
+        while !levelDrainTasksForTesting.isEmpty
+            || !liveReorganizationTasks.isEmpty
+            || liveReorganizationPumpTask != nil
+            || expandLoadedTaskForTesting != nil
+            || materializationPumpTask != nil
+        {
+            let now = DispatchTime.now().uptimeNanoseconds
+            if now &- started >= timeoutNanoseconds {
+                cancelPendingLoads()
+                return false
+            }
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+        return true
     }
 
     /// Sentinel node id standing in for the root level in `fetchState` (the
@@ -919,13 +1814,15 @@ final class FileTreeViewModel: ObservableObject {
     /// change, so re-entrancy on the same session isn't a concern here.
     ///
     /// #873: `restoringExpandedDirPaths` rehydrates the persisted expansion
-    /// state instead of resetting to []. The whole set is adopted up front;
-    /// the post-fetch cascade in `loadRoot`/`loadChildren` then materializes
-    /// exactly the reachable expanded chains (an id under a collapsed parent
-    /// stays dormant, exactly like an in-session collapse — re-expanding the
-    /// parent reveals it expanded). Ids that no longer exist match no node
-    /// and cost nothing; the persistence cap bounds any accumulation.
+    /// state instead of resetting to []. Production promotes one reachable row
+    /// only when its child load is admitted, so disclosure always has children
+    /// or a loading row. A path under a collapsed parent stays dormant and is
+    /// re-enqueued from the cached parent level when that ancestor re-expands.
+    /// Ids that no longer exist match no node and cost nothing; the persistence
+    /// cap bounds any accumulation.
     func bind(to session: VaultSession?, restoringExpandedDirPaths: [String] = []) {
+        bindingGeneration &+= 1
+        usesAsyncLevelLoading = true
         self.session = session
         sessionIdentity = session.map(ObjectIdentifier.init)
         clearMaterializedLevels()
@@ -957,8 +1854,22 @@ final class FileTreeViewModel: ObservableObject {
 
     /// (Re)fetch the root level. Sets `.loading` on the root sentinel while in
     /// flight so the view can show a spinner if the root is slow.
-    func loadRoot() {
+    func loadRoot(targetedRootPredecessor: [NodeID: TreeNode]? = nil) {
         guard let fetcher else { return }
+        if usesAsyncLevelLoading {
+            scheduleLevelLoad(
+                parentKey: Self.rootFetchKey,
+                parentPath: "",
+                depth: 0,
+                targetedRootPredecessor: targetedRootPredecessor)
+            return
+        }
+        defer {
+            if let targetedRootPredecessor {
+                levelWorker.retire(
+                    directoryIDIndex: targetedRootPredecessor)
+            }
+        }
         // A fresh fetch of this level supersedes any prior in-flight drain
         // for it (level-scoped revocation, round-16): without this, a
         // complete new first page would leave the old token current and let
@@ -974,13 +1885,24 @@ final class FileTreeViewModel: ObservableObject {
             if !isComplete {
                 scheduleContinuationDrain(
                     parentKey: Self.rootFetchKey, parentPath: "", depth: 0,
-                    firstPage: firstPage)
+                    firstPage: firstPage,
+                    targetedRootPredecessor: targetedRootPredecessor)
             }
             fetchState[Self.rootFetchKey] = nil
+            if let targetedRootPredecessor {
+                reconcileTargetedRootPredecessor(
+                    targetedRootPredecessor,
+                    isComplete: isComplete)
+            }
             adoptPendingExpansions(in: rootLevel)
             materializeExpandedChildren(in: rootLevel)
         } catch {
             replaceRootLevel(with: [])
+            if let targetedRootPredecessor {
+                reconcileTargetedRootPredecessor(
+                    targetedRootPredecessor,
+                    isComplete: true)
+            }
             fetchState[Self.rootFetchKey] = .failed(message: Self.message(for: error))
         }
     }
@@ -996,7 +1918,14 @@ final class FileTreeViewModel: ObservableObject {
             // partial with an inline error, in which case Retry refetches
             // the whole level from page one (round-15 finding 2).
             guard case .failed = fetchState[node.nodeID] else { return }
-            replaceChildLevel(nil, for: node.nodeID, parentPath: nil)
+            resetChildLevelForRefetch(node.nodeID)
+        }
+        if usesAsyncLevelLoading {
+            scheduleLevelLoad(
+                parentKey: node.nodeID,
+                parentPath: node.path,
+                depth: node.depth + 1)
+            return
         }
         revokeLevelDrain(node.nodeID)
         fetchState[node.nodeID] = .loading
@@ -1020,35 +1949,213 @@ final class FileTreeViewModel: ObservableObject {
         }
     }
 
-    /// After a level lands, fetch the children of any of its directories
-    /// that are already in `expanded` but not yet materialized (#873). This
-    /// is what makes the restored (and the in-session collapsed-then-
-    /// re-expanded) expansion state lazy-safe: a persisted chain
+    /// After a level lands, enqueue any not-yet-materialized directory that is
+    /// already expanded or still has persisted intent (#873). The async pump
+    /// promotes persisted intent only at admission. This makes restored (and
+    /// in-session collapsed-then-re-expanded) state lazy-safe: a persisted chain
     /// root → A → A/B materializes exactly A then A/B, one level per fetch,
     /// while an id whose parent stays collapsed costs nothing. Recursion
-    /// depth is bounded by the expanded set (≤ the persistence cap) and
-    /// paths form a tree, so no cycles. Cached levels no-op in
-    /// `loadChildren`, so re-walks (rescans, re-expands) don't refetch.
+    /// Runtime state can exceed the persistence cap, so one pump admits only
+    /// one child load at a time instead of creating O(levels) tasks.
     private func materializeExpandedChildren(in level: [TreeNode]) {
-        for child in level
-        where child.isDirectory
-            && expanded.contains(child.nodeID)
-            && children[child.nodeID] == nil
-        {
-            loadChildren(of: child)
+        enqueueMaterialization(
+            level.filter {
+                $0.isDirectory
+                    && (expanded.contains($0.nodeID)
+                        || pendingExpandedPaths.contains($0.path))
+                    && children[$0.nodeID] == nil
+            })
+    }
+
+    /// Production publication uses the worker-built provider order and O(1)
+    /// directory index, avoiding both a 50,000-row scan and hash iteration.
+    private func materializeExpandedChildren(
+        in prepared: FileTreePreparedLevel
+    ) {
+        guard !prepared.directoryOrder.isEmpty else { return }
+        let ids: [NodeID]
+        let desiredCount = expanded.count + pendingExpandedPaths.count
+        if prepared.directoryOrder.count <= desiredCount {
+            materializationCandidateVisitCountForTesting +=
+                prepared.directoryOrder.count
+            ids = prepared.directoryOrder.filter { id in
+                guard let row = prepared.directoriesByID[id] else {
+                    return false
+                }
+                return expanded.contains(id)
+                    || pendingExpandedPaths.contains(row.path)
+            }
+        } else {
+            materializationCandidateVisitCountForTesting += desiredCount
+            var selected = Set<NodeID>()
+            selected.reserveCapacity(desiredCount)
+            for id in expanded
+            where prepared.directoryOrdinalByID[id] != nil {
+                selected.insert(id)
+            }
+            for path in pendingExpandedPaths {
+                if let row = prepared.directoriesByPath[path] {
+                    selected.insert(row.nodeID)
+                }
+            }
+            ids = selected.sorted {
+                prepared.directoryOrdinalByID[$0]!
+                    < prepared.directoryOrdinalByID[$1]!
+            }
+        }
+        enqueueMaterialization(ids.compactMap { id in
+            guard children[id] == nil else { return nil }
+            return prepared.directoriesByID[id]
+        })
+    }
+
+    private func enqueueMaterialization(_ nodes: [TreeNode]) {
+        guard usesAsyncLevelLoading else {
+            for node in nodes { loadChildren(of: node) }
+            return
+        }
+        for node in nodes {
+            guard let levelOwner = parentKeyByFolderPath[
+                Self.containingFolder(of: node.path)]
+            else { continue }
+            guard pendingMaterializationIDs.insert(node.nodeID).inserted else {
+                continue
+            }
+            let owner = MaterializationOwner(
+                level: levelOwner,
+                structuralRevision:
+                    levelStructuralRevisionByParent[levelOwner] ?? 0)
+            let generation = UUID()
+            pendingMaterializationOwners[node.nodeID] = owner
+            pendingMaterializationGenerationByID[node.nodeID] = generation
+            pendingMaterializationIDsByOwner[levelOwner, default: []].insert(
+                node.nodeID)
+            pendingMaterializationEntries.append(
+                MaterializationEntry(
+                    node: node,
+                    owner: owner,
+                    generation: generation,
+                    promotesPendingExpansion:
+                        !expanded.contains(node.nodeID)
+                            && pendingExpandedPaths.contains(node.path)))
+        }
+        guard materializationPumpTask == nil,
+            pendingMaterializationIndex < pendingMaterializationEntries.count
+        else { return }
+        let token = UUID()
+        let capturedBindingGeneration = bindingGeneration
+        materializationPumpToken = token
+        materializationPumpTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.materializationPumpToken == token {
+                    self.pendingMaterializationEntries = []
+                    self.pendingMaterializationIDs = []
+                    self.pendingMaterializationOwners = [:]
+                    self.pendingMaterializationGenerationByID = [:]
+                    self.pendingMaterializationIDsByOwner = [:]
+                    self.pendingMaterializationIndex = 0
+                    self.materializationPumpToken = nil
+                    self.materializationPumpTask = nil
+                }
+            }
+            while self.pendingMaterializationIndex
+                    < self.pendingMaterializationEntries.count
+            {
+                guard !Task.isCancelled,
+                    self.materializationPumpToken == token,
+                    self.bindingGeneration == capturedBindingGeneration
+                else { return }
+                let entry = self.pendingMaterializationEntries[
+                    self.pendingMaterializationIndex]
+                self.pendingMaterializationIndex += 1
+                let node = entry.node
+                guard self.pendingMaterializationGenerationByID[node.nodeID]
+                        == entry.generation
+                else { continue }
+                self.pendingMaterializationGenerationByID[node.nodeID] = nil
+                self.pendingMaterializationOwners[node.nodeID] = nil
+                self.pendingMaterializationIDsByOwner[entry.owner.level]?.remove(
+                    node.nodeID)
+                if self.pendingMaterializationIDsByOwner[entry.owner.level]?.isEmpty
+                        == true
+                {
+                    self.pendingMaterializationIDsByOwner[entry.owner.level] = nil
+                }
+                guard self.pendingMaterializationIDs.remove(node.nodeID) != nil,
+                    self.levelStructuralRevisionByParent[entry.owner.level]
+                        == entry.owner.structuralRevision,
+                    self.isAttachedDirectory(node.nodeID, path: node.path),
+                    self.hasExpandedAncestorChain(for: node.path)
+                else { continue }
+                if entry.promotesPendingExpansion {
+                    guard self.pendingExpandedPaths.remove(node.path) != nil
+                    else { continue }
+                    self.expanded.insert(node.nodeID)
+                    self.expandedPathByID[node.nodeID] = node.path
+                }
+                guard self.expanded.contains(node.nodeID),
+                    self.expandedPathByID[node.nodeID] == node.path
+                else { continue }
+                if let active = self.levelDrainTasksForTesting[node.nodeID] {
+                    await active.value
+                    continue
+                }
+                guard self.children[node.nodeID] == nil else { continue }
+                self.loadChildren(of: node)
+                if let admitted = self.levelDrainTasksForTesting[node.nodeID] {
+                    await admitted.value
+                }
+            }
+        }
+    }
+
+    private func cancelMaterializationWork() {
+        materializationPumpTask?.cancel()
+        materializationPumpTask = nil
+        materializationPumpToken = nil
+        pendingMaterializationEntries = []
+        pendingMaterializationIDs = []
+        pendingMaterializationOwners = [:]
+        pendingMaterializationGenerationByID = [:]
+        pendingMaterializationIDsByOwner = [:]
+        pendingMaterializationIndex = 0
+    }
+
+    private func invalidatePendingMaterializations(ownedBy level: NodeID) {
+        let ids = pendingMaterializationIDsByOwner.removeValue(forKey: level) ?? []
+        for id in ids {
+            pendingMaterializationIDs.remove(id)
+            pendingMaterializationOwners[id] = nil
+            pendingMaterializationGenerationByID[id] = nil
+        }
+    }
+
+    private func discardPendingMaterialization(_ id: NodeID) {
+        pendingMaterializationIDs.remove(id)
+        pendingMaterializationGenerationByID[id] = nil
+        guard let owner = pendingMaterializationOwners.removeValue(forKey: id)
+        else { return }
+        pendingMaterializationIDsByOwner[owner.level]?.remove(id)
+        if pendingMaterializationIDsByOwner[owner.level]?.isEmpty == true {
+            pendingMaterializationIDsByOwner[owner.level] = nil
         }
     }
 
     /// Persisted-expansion staging (#873, Codex round 2): paths, not
     /// rowids. `expanded` holds ONLY materialized nodes; anything not
     /// yet (or no longer) materialized lives here as a vault-relative
-    /// dir path. Landing levels promote pending paths into `expanded`;
-    /// invalidation DEMOTES cached expanded subtrees back to paths.
+    /// dir path. Landing levels stage candidates and production promotes them
+    /// only at child-load admission; invalidation DEMOTES cached expanded
+    /// subtrees back to paths.
     /// This kills the rowid-reuse hazard outright (SQLite INTEGER
     /// PRIMARY KEY reuses ids after delete — probe-proven): a deleted
     /// folder's entry survives only as a path that nothing ever
     /// re-materializes, and a recycled id can't inherit expansion.
     var pendingExpandedPaths: Set<String> = []
+    /// Direct path ownership for disclosed ids. This avoids resolving each
+    /// deletion candidate through every cached level index on MainActor.
+    private var expandedPathByID: [NodeID: String] = [:]
 
     /// Expansion RECENCY ledger (Codex round 3): ordered oldest→newest,
     /// deduped; the persisted array preserves this order so the 500-cap
@@ -1061,10 +2168,7 @@ final class FileTreeViewModel: ObservableObject {
     /// The persistence payload: the recency ledger filtered to paths
     /// that are still live (materialized-expanded or pending).
     var expandedDirPaths: [String] {
-        let materialized = Set(expanded.compactMap { id -> String? in
-            guard case .dir = id else { return nil }
-            return node(for: id)?.path
-        })
+        let materialized = Set(expanded.compactMap { expandedPathByID[$0] })
         let live = materialized.union(pendingExpandedPaths)
         return expansionRecency.filter { live.contains($0) }
     }
@@ -1074,13 +2178,27 @@ final class FileTreeViewModel: ObservableObject {
         expansionRecency.append(path)
     }
 
-    /// Promote pending paths that just materialized in `level`.
+    /// The synchronous compatibility seam promotes paths immediately. Async
+    /// production leaves them staged for truthful admission by the pump.
     private func adoptPendingExpansions(in level: [TreeNode]) {
         guard !pendingExpandedPaths.isEmpty else { return }
+        guard !usesAsyncLevelLoading else { return }
         for row in level where row.isDirectory {
             if pendingExpandedPaths.remove(row.path) != nil {
                 expanded.insert(row.nodeID)
+                expandedPathByID[row.nodeID] = row.path
             }
+        }
+    }
+
+    private func adoptPendingExpansions(in prepared: FileTreePreparedLevel) {
+        guard !pendingExpandedPaths.isEmpty else { return }
+        guard !usesAsyncLevelLoading else { return }
+        for path in Array(pendingExpandedPaths) {
+            guard let row = prepared.directoriesByPath[path] else { continue }
+            pendingExpandedPaths.remove(path)
+            expanded.insert(row.nodeID)
+            expandedPathByID[row.nodeID] = row.path
         }
     }
 
@@ -1097,11 +2215,15 @@ final class FileTreeViewModel: ObservableObject {
         }
         pendingExpandedPaths = Set(pendingExpandedPaths.map { remap($0) ?? $0 })
         expansionRecency = expansionRecency.map { remap($0) ?? $0 }
-        // Ordering (Codex round 5): the mutation's invalidation has
-        // ALREADY reloaded the level synchronously — the new row landed
-        // before this remap, so its adoption pass found nothing. Re-run
-        // adoption over every loaded level so the remapped path
-        // promotes (and its children fetch) immediately.
+        expandedPathByID = Dictionary(
+            uniqueKeysWithValues: expandedPathByID.map {
+                ($0.key, remap($0.value) ?? $0.value)
+            })
+        // The compatibility seam, or indexes that were already loaded before
+        // this remap, can contain the replacement row before its new pending
+        // path exists. Re-run adoption over loaded indexes so that row promotes
+        // (and its children fetch) immediately; async publication also adopts
+        // when its worker result lands.
         reAdoptPendingExpansions()
     }
 
@@ -1124,6 +2246,10 @@ final class FileTreeViewModel: ObservableObject {
             let next = mapped[path] ?? path
             return seen.insert(next).inserted ? next : nil
         }
+        expandedPathByID = Dictionary(
+            uniqueKeysWithValues: expandedPathByID.map {
+                ($0.key, mapped[$0.value] ?? $0.value)
+            })
         reAdoptPendingExpansions()
     }
 
@@ -1132,11 +2258,45 @@ final class FileTreeViewModel: ObservableObject {
     /// materialization appends NEW cache entries mid-sweep.
     private func reAdoptPendingExpansions() {
         guard !pendingExpandedPaths.isEmpty else { return }
-        adoptPendingExpansions(in: rootLevel)
-        materializeExpandedChildren(in: rootLevel)
-        for level in Array(children.values) {
-            adoptPendingExpansions(in: level)
-            materializeExpandedChildren(in: level)
+        adoptPendingExpansionsFromLoadedIndexes()
+        guard !usesAsyncLevelLoading else { return }
+        enqueueMaterialization(expansionRecency.compactMap { path in
+            let folder = Self.containingFolder(of: path)
+            guard let owner = parentKeyByFolderPath[folder],
+                let row = directoriesByPathByParent[owner]?[path],
+                expanded.contains(row.nodeID),
+                children[row.nodeID] == nil
+            else { return nil }
+            return row
+        })
+    }
+
+    private func adoptPendingExpansionsFromLoadedIndexes() {
+        guard !pendingExpandedPaths.isEmpty else { return }
+        if usesAsyncLevelLoading {
+            let recorded = Set(expansionRecency)
+            let stablePaths = expansionRecency.filter {
+                pendingExpandedPaths.contains($0)
+            } + pendingExpandedPaths.subtracting(recorded).sorted()
+            enqueueMaterialization(stablePaths.compactMap { path in
+                let folder = Self.containingFolder(of: path)
+                guard let owner = parentKeyByFolderPath[folder],
+                    let row = directoriesByPathByParent[owner]?[path],
+                    children[row.nodeID] == nil
+                else { return nil }
+                return row
+            })
+            return
+        }
+        let parents = [Self.rootFetchKey] + Array(children.keys)
+        for parent in parents {
+            guard let byPath = directoriesByPathByParent[parent] else { continue }
+            for path in Array(pendingExpandedPaths) {
+                guard let row = byPath[path] else { continue }
+                pendingExpandedPaths.remove(path)
+                expanded.insert(row.nodeID)
+                expandedPathByID[row.nodeID] = row.path
+            }
         }
     }
 
@@ -1148,6 +2308,7 @@ final class FileTreeViewModel: ObservableObject {
         }
         pendingExpandedPaths = pendingExpandedPaths.filter { !hit($0) }
         expansionRecency.removeAll(where: hit)
+        clearRemovedDirectoryOwnership(where: hit)
     }
 
     /// Batch form: exact files remove only themselves; directories cover their
@@ -1164,19 +2325,345 @@ final class FileTreeViewModel: ObservableObject {
         }
         pendingExpandedPaths.subtract(removed)
         expansionRecency.removeAll { removed.contains($0) }
+        var ignoredVisits = 0
+        clearRemovedDirectoryOwnership { path in
+            index.covers(path, componentVisits: &ignoredVisits)
+        }
     }
 
-    /// Drop the cached child levels (and fetch state) of every dir under
-    /// `rows`, recursively. Partner of `demoteExpandedSubtree` on the
-    /// targeted-invalidation path: without it, a recycled id could serve
-    /// the DELETED folder's stale cached children on next expand.
-    private func dropDescendantCaches(rows: [TreeNode]) {
-        for row in rows where row.isDirectory {
-            if let kids = children[row.nodeID] {
-                dropDescendantCaches(rows: kids)
+    /// Mutation deletion is authoritative immediately, even while a targeted
+    /// parent refresh is blocked. Clear every materialized/cache owner covered
+    /// by the removal now so delete→same-path recreate cannot let a recycled
+    /// SQLite id inherit the predecessor's disclosure or children.
+    private func clearRemovedDirectoryOwnership(
+        where isRemoved: (String) -> Bool
+    ) {
+        removalOwnershipPrefixVisitCountForTesting = 0
+        var candidates: [(id: NodeID, path: String)] = []
+        var disclosureIDs = Set<NodeID>()
+        var cacheIDs = Set<NodeID>()
+        var fetchIDs = Set<NodeID>()
+        var materializationIDs = Set<NodeID>()
+
+        func record(
+            _ id: NodeID,
+            path: String,
+            in owners: inout Set<NodeID>
+        ) {
+            guard id != Self.rootFetchKey, isRemoved(path) else { return }
+            owners.insert(id)
+            candidates.append((id: id, path: path))
+        }
+
+        for (id, path) in expandedPathByID {
+            record(id, path: path, in: &disclosureIDs)
+        }
+        var cacheOwnerIDs = Set(children.keys)
+        cacheOwnerIDs.formUnion(fileStatesByParent.keys)
+        cacheOwnerIDs.formUnion(directoriesByPathByParent.keys)
+        cacheOwnerIDs.formUnion(directoriesByIDByParent.keys)
+        cacheOwnerIDs.formUnion(directoryOrderByParent.keys)
+        cacheOwnerIDs.formUnion(presentationByParent.keys)
+        for id in cacheOwnerIDs {
+            if let path = parentPathByKey[id] {
+                record(id, path: path, in: &cacheIDs)
             }
-            replaceChildLevel(nil, for: row.nodeID, parentPath: nil)
-            fetchState[row.nodeID] = nil
+        }
+        var fetchOwnerIDs = Set(fetchState.keys)
+        fetchOwnerIDs.formUnion(levelDrainTokens.keys)
+        for id in fetchOwnerIDs {
+            if let path = requestedLevelPathByKey[id] {
+                record(id, path: path, in: &fetchIDs)
+            }
+            if let token = levelDrainTokens[id],
+                let path = levelDrainParentPathByToken[token]
+            {
+                record(id, path: path, in: &fetchIDs)
+            }
+        }
+        for entry in pendingMaterializationEntries
+        where pendingMaterializationGenerationByID[entry.node.nodeID]
+            == entry.generation {
+            record(
+                entry.node.nodeID,
+                path: entry.node.path,
+                in: &materializationIDs)
+        }
+
+        // Direct disclosure owns the current entity identity. Removing it must
+        // revoke every stale same-ID cache/fetch generation too. Removing only
+        // an old cache/fetch path preserves a remapped live disclosure.
+        cacheIDs.formUnion(disclosureIDs)
+        fetchIDs.formUnion(disclosureIDs)
+        materializationIDs.formUnion(disclosureIDs)
+        let allIDs = disclosureIDs
+            .union(cacheIDs)
+            .union(fetchIDs)
+            .union(materializationIDs)
+        guard !allIDs.isEmpty else { return }
+        let ordered = Self.orderedRemovedDirectoryOwners(
+            candidates,
+            componentVisits: &removalOwnershipPrefixVisitCountForTesting)
+        var seen = Set<NodeID>()
+        var orderedIDs = ordered.compactMap {
+            seen.insert($0.id).inserted ? $0.id : nil
+        }
+        orderedIDs.append(contentsOf: allIDs.subtracting(seen))
+
+        var retiredLevels: [[TreeNode]] = []
+        var retiredFileIndexes: [[String: FileTreeFileState]] = []
+        var retiredDirectoryPathIndexes: [[String: TreeNode]] = []
+        var retiredDirectoryIDIndexes: [[NodeID: TreeNode]] = []
+        var retiredDirectoryOrders: [[NodeID]] = []
+        var retiredPresentations: [SidebarLevelPresentation] = []
+        for id in orderedIDs where materializationIDs.contains(id) {
+            discardPendingMaterialization(id)
+        }
+        for id in orderedIDs where cacheIDs.contains(id) {
+            if let level = children[id], !level.isEmpty {
+                retiredLevels.append(level)
+            }
+            let indexes = removeLevelIndexes(for: id)
+            if !indexes.files.isEmpty {
+                retiredFileIndexes.append(indexes.files)
+            }
+            if !indexes.directoriesByPath.isEmpty {
+                retiredDirectoryPathIndexes.append(indexes.directoriesByPath)
+            }
+            if !indexes.directoriesByID.isEmpty {
+                retiredDirectoryIDIndexes.append(indexes.directoriesByID)
+            }
+            if !indexes.directoryOrder.isEmpty {
+                retiredDirectoryOrders.append(indexes.directoryOrder)
+            }
+            if let presentation = presentationByParent.removeValue(forKey: id) {
+                retiredPresentations.append(presentation)
+            }
+        }
+        for id in orderedIDs where fetchIDs.contains(id) {
+            revokeLevelDrain(id)
+        }
+        if !disclosureIDs.isEmpty {
+            expanded.subtract(disclosureIDs)
+            expandedPathByID = expandedPathByID.filter {
+                !disclosureIDs.contains($0.key)
+            }
+        }
+        if !cacheIDs.isEmpty {
+            children = children.filter { !cacheIDs.contains($0.key) }
+            incompleteLevelMessageByKey = incompleteLevelMessageByKey.filter {
+                !cacheIDs.contains($0.key)
+            }
+            parentPathByKey = parentPathByKey.filter {
+                !cacheIDs.contains($0.key)
+            }
+            completeLevelByKey = completeLevelByKey.filter {
+                !cacheIDs.contains($0.key)
+            }
+            summaryOrganizationRevisionByParent =
+                summaryOrganizationRevisionByParent.filter {
+                    !cacheIDs.contains($0.key)
+                }
+            levelStructuralRevisionByParent =
+                levelStructuralRevisionByParent.filter {
+                    !cacheIDs.contains($0.key)
+                }
+            publishPresentationChange()
+        }
+        if !fetchIDs.isEmpty {
+            fetchState = fetchState.filter { !fetchIDs.contains($0.key) }
+            requestedLevelPathByKey = requestedLevelPathByKey.filter {
+                !fetchIDs.contains($0.key)
+            }
+        }
+        removalOwnershipBatchPublicationCountForTesting += 1
+        if usesAsyncLevelLoading, !cacheIDs.isEmpty {
+            levelWorker.retire(
+                FileTreeRetiredStorage(
+                    levels: retiredLevels,
+                    fileIndexes: retiredFileIndexes,
+                    directoryPathIndexes: retiredDirectoryPathIndexes,
+                    directoryIDIndexes: retiredDirectoryIDIndexes,
+                    directoryOrders: retiredDirectoryOrders,
+                    presentations: retiredPresentations))
+        }
+
+        let reload = orderedIDs.compactMap { id -> TreeNode? in
+            guard !disclosureIDs.contains(id),
+                (cacheIDs.contains(id) || fetchIDs.contains(id)
+                    || materializationIDs.contains(id)),
+                expanded.contains(id),
+                children[id] == nil,
+                levelDrainTokens[id] == nil,
+                let livePath = expandedPathByID[id],
+                let owner = parentKeyByFolderPath[
+                    Self.containingFolder(of: livePath)],
+                let current = directoriesByIDByParent[owner]?[id],
+                current.path == livePath
+            else { return nil }
+            return current
+        }
+        enqueueMaterialization(reload)
+    }
+
+    /// Order every covered owner shallowest-first without pairwise prefix
+    /// comparisons. The batch cleanup retains every ID, including unattached
+    /// stale/live overlaps, while publishing the resulting dictionaries once.
+    nonisolated static func orderedRemovedDirectoryOwners(
+        _ candidates: [(id: NodeID, path: String)],
+        componentVisits: inout Int
+    ) -> [(id: NodeID, path: String)] {
+        let ordered: [(id: NodeID, path: String, depth: Int)] =
+            candidates.map { candidate in
+                let depth = candidate.path.split(separator: "/").count
+                componentVisits += depth
+                return (
+                    id: candidate.id,
+                    path: candidate.path,
+                    depth: depth
+                )
+            }.sorted(by: {
+                (lhs: (id: NodeID, path: String, depth: Int),
+                 rhs: (id: NodeID, path: String, depth: Int)) in
+                lhs.depth < rhs.depth
+            })
+        return ordered.map { (id: $0.id, path: $0.path) }
+    }
+
+    /// Demote disclosed descendants and clear only rows that actually own
+    /// cached, fetch, presentation, or materialization state. A partial level
+    /// may contain 50k shallow directories; publishing/retiring once per row
+    /// would move the worker's responsiveness stall back onto MainActor.
+    private func resetDescendantLevelOwnership(
+        rows: [TreeNode],
+        demoteDisclosures: Bool = true
+    ) {
+        descendantResetCandidateVisitCountForTesting = 0
+        descendantResetBatchPublicationCountForTesting = 0
+        descendantResetRetirementHandoffCountForTesting = 0
+
+        var pendingRows = rows
+        var rowIndex = 0
+        var visitedIDs = Set<NodeID>()
+        var ownedIDs = Set<NodeID>()
+        var demotedIDs = Set<NodeID>()
+        var demotedPaths = Set<String>()
+        while rowIndex < pendingRows.count {
+            let row = pendingRows[rowIndex]
+            rowIndex += 1
+            guard row.isDirectory else { continue }
+            descendantResetCandidateVisitCountForTesting += 1
+            let id = row.nodeID
+            visitedIDs.insert(id)
+            if expanded.contains(id) {
+                demotedIDs.insert(id)
+                demotedPaths.insert(row.path)
+            }
+            if let nested = children[id] {
+                pendingRows.append(contentsOf: nested)
+            }
+            let ownsState = children[id] != nil
+                || fileStatesByParent[id] != nil
+                || directoriesByPathByParent[id] != nil
+                || directoriesByIDByParent[id] != nil
+                || directoryOrderByParent[id] != nil
+                || presentationByParent[id] != nil
+                || parentPathByKey[id] != nil
+                || completeLevelByKey[id] != nil
+                || incompleteLevelMessageByKey[id] != nil
+                || fetchState[id] != nil
+                || levelDrainTokens[id] != nil
+                || levelDrainTasksForTesting[id] != nil
+                || levelDrainNativeCancels[id] != nil
+                || requestedLevelPathByKey[id] != nil
+                || liveReorganizationTokens[id] != nil
+                || liveReorganizationTasks[id] != nil
+                || liveReorganizationCancels[id] != nil
+                || pendingMaterializationIDs.contains(id)
+                || pendingMaterializationIDsByOwner[id]?.isEmpty == false
+                || summaryOrganizationRevisionByParent[id] != nil
+                || levelStructuralRevisionByParent[id] != nil
+            if ownsState { ownedIDs.insert(id) }
+        }
+
+        if !visitedIDs.isEmpty {
+            expandedPathByID = expandedPathByID.filter {
+                !visitedIDs.contains($0.key)
+            }
+        }
+        if !demotedIDs.isEmpty {
+            expanded.subtract(demotedIDs)
+            if demoteDisclosures {
+                pendingExpandedPaths.formUnion(demotedPaths)
+            }
+        }
+        guard !ownedIDs.isEmpty else { return }
+
+        var retiredLevels: [[TreeNode]] = []
+        var retiredFileIndexes: [[String: FileTreeFileState]] = []
+        var retiredDirectoryPathIndexes: [[String: TreeNode]] = []
+        var retiredDirectoryIDIndexes: [[NodeID: TreeNode]] = []
+        var retiredDirectoryOrders: [[NodeID]] = []
+        var retiredPresentations: [SidebarLevelPresentation] = []
+        for id in ownedIDs {
+            discardPendingMaterialization(id)
+            if let level = children[id], !level.isEmpty {
+                retiredLevels.append(level)
+            }
+            let indexes = removeLevelIndexes(for: id)
+            if !indexes.files.isEmpty {
+                retiredFileIndexes.append(indexes.files)
+            }
+            if !indexes.directoriesByPath.isEmpty {
+                retiredDirectoryPathIndexes.append(indexes.directoriesByPath)
+            }
+            if !indexes.directoriesByID.isEmpty {
+                retiredDirectoryIDIndexes.append(indexes.directoriesByID)
+            }
+            if !indexes.directoryOrder.isEmpty {
+                retiredDirectoryOrders.append(indexes.directoryOrder)
+            }
+            if let presentation = presentationByParent.removeValue(forKey: id) {
+                retiredPresentations.append(presentation)
+            }
+            revokeLevelDrain(id)
+        }
+
+        children = children.filter { !ownedIDs.contains($0.key) }
+        fetchState = fetchState.filter { !ownedIDs.contains($0.key) }
+        incompleteLevelMessageByKey = incompleteLevelMessageByKey.filter {
+            !ownedIDs.contains($0.key)
+        }
+        parentPathByKey = parentPathByKey.filter {
+            !ownedIDs.contains($0.key)
+        }
+        completeLevelByKey = completeLevelByKey.filter {
+            !ownedIDs.contains($0.key)
+        }
+        requestedLevelPathByKey = requestedLevelPathByKey.filter {
+            !ownedIDs.contains($0.key)
+        }
+        summaryOrganizationRevisionByParent =
+            summaryOrganizationRevisionByParent.filter {
+                !ownedIDs.contains($0.key)
+            }
+        levelStructuralRevisionByParent =
+            levelStructuralRevisionByParent.filter {
+                !ownedIDs.contains($0.key)
+            }
+        publishPresentationChange()
+        descendantResetBatchPublicationCountForTesting = 1
+
+        let retired = FileTreeRetiredStorage(
+            levels: retiredLevels,
+            fileIndexes: retiredFileIndexes,
+            directoryPathIndexes: retiredDirectoryPathIndexes,
+            directoryIDIndexes: retiredDirectoryIDIndexes,
+            directoryOrders: retiredDirectoryOrders,
+            presentations: retiredPresentations)
+        if usesAsyncLevelLoading, !retired.isEmpty {
+            descendantResetRetirementHandoffCountForTesting = 1
+            levelWorker.retire(retired)
         }
     }
 
@@ -1189,6 +2676,7 @@ final class FileTreeViewModel: ObservableObject {
             if expanded.remove(row.nodeID) != nil {
                 pendingExpandedPaths.insert(row.path)
             }
+            expandedPathByID[row.nodeID] = nil
             if let kids = children[row.nodeID] {
                 demoteExpandedSubtree(rows: kids)
             }
@@ -1197,22 +2685,82 @@ final class FileTreeViewModel: ObservableObject {
 
     // MARK: - Expand / collapse
 
+    /// A targeted root refresh deliberately keeps predecessor rows visible.
+    /// They are read-only until publication so a collapsed old path cannot
+    /// acquire expansion ownership while a same-ID replacement is in flight.
+    private var hasVisibleRootPredecessorRefresh: Bool {
+        usesAsyncLevelLoading
+            && !rootLevel.isEmpty
+            && fetchState[Self.rootFetchKey] == .loading
+    }
+
     /// Expand a directory: mark it disclosed and fetch its children if this is
     /// the first expand (or it was invalidated). Cached levels re-expand
     /// without a fetch.
     func expand(_ node: TreeNode) {
         guard case .directory = node.kind else { return }
+        guard !hasVisibleRootPredecessorRefresh else { return }
+        pendingExpandedPaths.remove(node.path)
+        discardPendingMaterialization(node.nodeID)
         expanded.insert(node.nodeID)
+        expandedPathByID[node.nodeID] = node.path
         recencyTouch(node.path)
         loadChildren(of: node)  // no-op when cached
+        if let cached = children[node.nodeID] {
+            materializeExpandedChildren(in: cached)
+        }
     }
 
     /// Collapse a directory. The cached level is retained (re-expand is
     /// instant); `treeInvalidation` is what drops it.
     func collapse(_ node: TreeNode) {
         guard case .directory = node.kind else { return }
+        guard !hasVisibleRootPredecessorRefresh else { return }
+        cancelExpandLoadedWork()
+        discardPendingMaterialization(node.nodeID)
+        pendingExpandedPaths.remove(node.path)
         expanded.remove(node.nodeID)
+        expandedPathByID[node.nodeID] = nil
         expansionRecency.removeAll { $0 == node.path }
+        if usesAsyncLevelLoading {
+            let prefix = node.path + "/"
+            let loadingSubtree: [(key: NodeID, path: String)] =
+                levelDrainTokens.keys.compactMap {
+                    key -> (key: NodeID, path: String)? in
+                    guard let requestedPath = requestedLevelPathByKey[key] else {
+                        return nil
+                    }
+                    guard requestedPath == node.path
+                        || requestedPath.hasPrefix(prefix)
+                    else { return nil }
+                    return (key: key, path: requestedPath)
+                }
+            for load in loadingSubtree
+            where fetchState[load.key] == .loading {
+                revokeLevelDrain(load.key)
+                fetchState[load.key] = nil
+                if load.path != node.path,
+                    expanded.remove(load.key) != nil
+                {
+                    pendingExpandedPaths.insert(load.path)
+                    expandedPathByID[load.key] = nil
+                }
+            }
+        }
+    }
+
+    /// View/vault close seam: revoke queued work and cancel any admitted
+    /// native call. A later onAppear/rebind starts a fresh generation.
+    func cancelPendingLoads() {
+        cancelExpandLoadedWork()
+        cancelMaterializationWork()
+        for key in Array(levelDrainTokens.keys) {
+            revokeLevelDrain(key)
+            if case .loading = fetchState[key] {
+                fetchState[key] = nil
+            }
+        }
+        cancelLiveReorganizationWork()
     }
 
     /// Toggle disclosure for a directory row (Space, Return when no selected
@@ -1245,7 +2793,9 @@ final class FileTreeViewModel: ObservableObject {
     /// change anything, every cached child level — they refetch lazily on next
     /// expand, and expanded ones refetch now).
     func treeInvalidation(parent: NodeID?) {
+        cancelExpandLoadedWork()
         guard let parent else {
+            cancelMaterializationWork()
             // Root (and everything below) may have changed. Refetch root now;
             // drop all child caches so each refetches on its next expand, and
             // refetch the ones that are currently expanded immediately.
@@ -1255,6 +2805,13 @@ final class FileTreeViewModel: ObservableObject {
             // level in turn — level by level, lazily. (An id-keyed refetch
             // loop here would resolve RECYCLED ids to unrelated new folders
             // and eagerly fetch their children — Codex round 3.)
+            let retiredDeferredRootPredecessors =
+                deferredRootPredecessorByID
+            demoteExpandedSubtree(
+                rows: Array(retiredDeferredRootPredecessors.values))
+            deferredRootPredecessorByID = [:]
+            levelWorker.retire(
+                directoryIDIndex: retiredDeferredRootPredecessors)
             demoteExpandedSubtree(rows: rootLevel)
             clearChildLevels()
             fetchState = fetchState.filter { $0.key == Self.rootFetchKey }
@@ -1266,14 +2823,20 @@ final class FileTreeViewModel: ObservableObject {
         // Codex round 3: without this, a recycled child id inherited the
         // deleted sibling's expansion), then drop the cache and refetch iff
         // the parent is disclosed.
-        let oldRows = children[parent] ?? []
-        demoteExpandedSubtree(rows: oldRows)
-        dropDescendantCaches(rows: oldRows)
-        replaceChildLevel(nil, for: parent, parentPath: nil)
-        fetchState[parent] = nil
+        resetChildLevelForRefetch(parent)
         if expanded.contains(parent), let node = node(for: parent) {
             loadChildren(of: node)
         }
+    }
+
+    /// A failed partial child level and mutation invalidation share the same
+    /// reuse guard: demote exact descendant paths before dropping every nested
+    /// cache, then clear the owning level so a recycled id cannot inherit it.
+    private func resetChildLevelForRefetch(_ parent: NodeID) {
+        let oldRows = children[parent] ?? []
+        resetDescendantLevelOwnership(rows: oldRows)
+        replaceChildLevel(nil, for: parent, parentPath: nil)
+        fetchState[parent] = nil
     }
 
     /// Targeted root-level mutation refresh. It refetches only the root and
@@ -1281,24 +2844,80 @@ final class FileTreeViewModel: ObservableObject {
     /// changed or disappeared are demoted and cleared after the refetch, so an
     /// SQLite id reused by a new root folder cannot inherit stale children.
     func rootLevelInvalidation() {
-        let oldRoot = rootLevel
-        loadRoot()
-        let newPathByID = Dictionary(uniqueKeysWithValues: rootLevel.compactMap {
-            node -> (NodeID, String)? in
-            node.isDirectory ? (node.nodeID, node.path) : nil
-        })
-        for old in oldRoot where old.isDirectory
-            && newPathByID[old.nodeID] != old.path
-        {
-            if expanded.remove(old.nodeID) != nil {
-                pendingExpandedPaths.insert(old.path)
+        startTargetedRootReload()
+    }
+
+    /// Retry a failed root page without allowing a recycled directory id to
+    /// inherit the partial predecessor's disclosure or child cache.
+    func retryRootLoad() {
+        startTargetedRootReload()
+    }
+
+    private func startTargetedRootReload() {
+        cancelExpandLoadedWork()
+        invalidatePendingMaterializations(ownedBy: Self.rootFetchKey)
+        loadRoot(targetedRootPredecessor: rootPredecessorSnapshot())
+    }
+
+    private func rootPredecessorSnapshot() -> [NodeID: TreeNode] {
+        var ownedIDs = expanded
+        ownedIDs.formUnion(children.keys)
+        ownedIDs.formUnion(fetchState.keys)
+        ownedIDs.formUnion(levelDrainTokens.keys)
+        ownedIDs.formUnion(presentationByParent.keys)
+        let rootDirectories =
+            directoriesByIDByParent[Self.rootFetchKey] ?? [:]
+        var predecessor = deferredRootPredecessorByID
+        predecessor.reserveCapacity(ownedIDs.count)
+        for id in ownedIDs {
+            if predecessor[id] == nil, let row = rootDirectories[id] {
+                predecessor[id] = row
             }
-            let oldChildren = children[old.nodeID] ?? []
-            demoteExpandedSubtree(rows: oldChildren)
-            dropDescendantCaches(rows: oldChildren)
-            replaceChildLevel(nil, for: old.nodeID, parentPath: nil)
-            fetchState[old.nodeID] = nil
         }
+        return predecessor
+    }
+
+    /// Finish targeted-root reconciliation only after the replacement level
+    /// has actually published. This is synchronous in the legacy test seam
+    /// and completion-owned in production.
+    private func reconcileTargetedRootPredecessor(
+        _ oldRoot: [NodeID: TreeNode],
+        isComplete: Bool
+    ) {
+        // Rename/move/delete handlers have already rewritten this ledger while
+        // the root read was in flight. It is the authoritative desired state;
+        // predecessor paths must never be demoted back into pending here.
+        let desiredExpandedPaths = Set(expansionRecency)
+        targetedRootReconcileVisitCountForTesting = 0
+        let newDirectories =
+            directoriesByIDByParent[Self.rootFetchKey] ?? [:]
+        var deferred: [NodeID: TreeNode] = [:]
+        var removedRoots: [TreeNode] = []
+        deferred.reserveCapacity(oldRoot.count)
+        removedRoots.reserveCapacity(oldRoot.count)
+        for (id, old) in oldRoot {
+            targetedRootReconcileVisitCountForTesting += 1
+            if let replacement = newDirectories[id] {
+                guard replacement.path != old.path else { continue }
+            } else if !isComplete {
+                deferred[id] = old
+                continue
+            }
+            removedRoots.append(old)
+        }
+        if !removedRoots.isEmpty {
+            resetDescendantLevelOwnership(
+                rows: removedRoots,
+                demoteDisclosures: false)
+        }
+        let retiredDeferredRootPredecessors =
+            deferredRootPredecessorByID
+        deferredRootPredecessorByID = deferred
+        levelWorker.retire(
+            directoryIDIndex: retiredDeferredRootPredecessors)
+        pendingExpandedPaths.formUnion(desiredExpandedPaths)
+        pendingExpandedPaths.subtract(Set(expandedPathByID.values))
+        adoptPendingExpansionsFromLoadedIndexes()
     }
 
     /// Explicit whole-tree reconcile used only for authoritative scans or
@@ -1334,6 +2953,12 @@ final class FileTreeViewModel: ObservableObject {
     /// Find the `TreeNode` for a node id across the root + all cached levels.
     /// Used by keyboard/selection handlers that hold an id but need the node.
     func node(for id: NodeID) -> TreeNode? {
+        if case .dir = id {
+            for index in directoriesByIDByParent.values {
+                if let hit = index[id] { return hit }
+            }
+            return nil
+        }
         if let hit = rootLevel.first(where: { $0.nodeID == id }) { return hit }
         for level in children.values {
             if let hit = level.first(where: { $0.nodeID == id }) { return hit }
@@ -1353,19 +2978,13 @@ final class FileTreeViewModel: ObservableObject {
 
         for summary in summaries {
             summaryReplacementLookupCountForTesting += 1
-            guard let state = fileStateByPath[summary.path] else {
-                // Round-19 finding 2: while a drain is in flight this path
-                // may be a later-page row that just hasn't landed — buffer
-                // the newest summary under every ACTIVE drain token so the
-                // owning landing overlays it (round-20 finding 2).
-                for token in levelDrainTokens.values {
-                    if pendingSummaryOverlay[token, default: [:]].count
-                        < Self.pendingSummaryOverlayCap
-                    {
-                        pendingSummaryOverlay[token, default: [:]][summary.path] =
-                            summary
-                    }
-                }
+            // A replacement level may be in flight while its predecessor is
+            // still visible. Buffer every live save for active owners even
+            // when the predecessor state is found; otherwise the older worker
+            // snapshot could overwrite both metadata and organization when it
+            // lands. Unrelated levels simply ignore unmatched overlay paths.
+            bufferSummaryForActiveLevelLoads(summary)
+            guard let state = fileState(forPath: summary.path) else {
                 continue
             }
             let previous = state.summary
@@ -1375,20 +2994,50 @@ final class FileTreeViewModel: ObservableObject {
                 // authored title or created date). Re-sort only the levels
                 // that contain a key-relevant change; the reorganize itself
                 // publishes nothing when the order is already correct.
-                if Self.organizationKeyChanged(previous, summary),
-                    let parent = parentKeyByPath[summary.path]
+                if let parent = parentKeyByFolderPath[
+                        Self.containingFolder(of: summary.path)],
+                    Self.organizationKeyChanged(
+                        previous,
+                        summary,
+                        choice: organization.prefs.effectiveChoice(
+                            forFolder: parentPathByKey[parent] ?? ""))
                 {
+                    summaryOrganizationRevisionByParent[parent, default: 0] &+= 1
                     affectedParents.insert(parent)
                 }
             }
         }
         if !affectedParents.isEmpty {
-            for parent in affectedParents {
-                reorganizeLevel(key: parent)
+            if usesAsyncLevelLoading {
+                enqueueLiveReorganizations(affectedParents)
+            } else {
+                for parent in affectedParents {
+                    reorganizeLevel(key: parent)
+                }
+                publishPresentationChange()
             }
-            rebuildMergedPresentation()
         }
         return replacementCount
+    }
+
+    private func bufferSummaryForActiveLevelLoads(_ summary: FileSummary) {
+        let owningParentPath = Self.containingFolder(of: summary.path)
+        for token in levelDrainTokens.values {
+            guard levelDrainParentPathByToken[token] == owningParentPath,
+                !overflowedSummaryOverlayTokens.contains(token)
+            else { continue }
+            let alreadyBuffered =
+                pendingSummaryOverlay[token]?[summary.path] != nil
+            guard alreadyBuffered
+                || pendingSummaryOverlay[token, default: [:]].count
+                    < Self.pendingSummaryOverlayCap
+            else {
+                overflowedSummaryOverlayTokens.insert(token)
+                continue
+            }
+            pendingSummaryOverlay[token, default: [:]][summary.path] = summary
+            pendingSummaryOverlayRevision[token, default: 0] &+= 1
+        }
     }
 
     @discardableResult
@@ -1399,7 +3048,7 @@ final class FileTreeViewModel: ObservableObject {
     /// Current rich summary for a materialized file. This reads the same keyed
     /// state the row observes and never scans a level.
     func fileSummary(forPath path: String) -> FileSummary? {
-        fileStateByPath[path]?.summary
+        fileState(forPath: path)?.summary
     }
 
     /// The parent node id of a node, if that node lives in a cached child
@@ -1509,10 +3158,14 @@ final class FileTreeViewModel: ObservableObject {
         }
     }
 
-    /// FL3-4.1: collapse every materialized folder except the ancestor
-    /// chain of `path` (the current selection stays revealed, so
-    /// VoiceOver focus cannot land on a vanished row).
-    func collapseAllPreservingAncestors(ofPath path: String?) {
+    /// FL3-4.1: collapse every disclosed folder except the ancestor chain of
+    /// `path` (the current selection stays revealed, so VoiceOver focus cannot
+    /// land on a vanished row). Exact ownership includes folders temporarily
+    /// absent from an incomplete root page.
+    @discardableResult
+    func collapseAllPreservingAncestors(ofPath path: String?) -> Bool {
+        guard !hasVisibleRootPredecessorRefresh else { return false }
+        cancelExpandLoadedWork()
         var keep: Set<String> = []
         if let path {
             let components = path.split(separator: "/").map(String.init)
@@ -1522,23 +3175,147 @@ final class FileTreeViewModel: ObservableObject {
                 keep.insert(prefix)
             }
         }
-        let materialized =
-            (rootLevel + children.values.flatMap { $0 }).filter(\.isDirectory)
-        for node in materialized where !keep.contains(node.path) {
-            collapse(node)
+        var disclosureIDs = expanded
+        disclosureIDs.formUnion(expandedPathByID.keys)
+        for id in disclosureIDs {
+            if let ownedPath = expandedPathByID[id],
+                keep.contains(ownedPath),
+                expanded.contains(id)
+            {
+                continue
+            }
+            discardPendingMaterialization(id)
+            expanded.remove(id)
+            expandedPathByID[id] = nil
         }
+        pendingExpandedPaths = pendingExpandedPaths.filter { keep.contains($0) }
+        expansionRecency.removeAll { !keep.contains($0) }
+        if usesAsyncLevelLoading {
+            let revoke = levelDrainTokens.keys.filter { key in
+                guard let path = requestedLevelPathByKey[key], !path.isEmpty
+                else { return false }
+                return !keep.contains(path)
+            }
+            for key in revoke {
+                revokeLevelDrain(key)
+                fetchState[key] = nil
+            }
+        }
+        return true
     }
 
     /// FL3-4.1: expand every already-materialized folder. Expanding an
     /// unfetched folder fetches its level — exactly one level deeper than
     /// what was loaded — and the newly fetched levels' own folders are NOT
     /// expanded, so a 10k-vault full expansion cannot cascade.
-    func expandLoadedLevels() {
-        let materialized =
-            (rootLevel + children.values.flatMap { $0 }).filter(\.isDirectory)
-        for node in materialized {
-            expand(node)
+    @discardableResult
+    func expandLoadedLevels(
+        onCompletion: (@MainActor () -> Void)? = nil
+    ) -> Bool {
+        guard !hasVisibleRootPredecessorRefresh else { return false }
+        let materialized = materializedDirectoriesInProviderOrder()
+        guard !materialized.isEmpty else {
+            onCompletion?()
+            return true
         }
+        guard usesAsyncLevelLoading else {
+            let materializedPaths = Set(materialized.map(\.path))
+            expansionRecency.removeAll { materializedPaths.contains($0) }
+            expansionRecency.append(contentsOf: materialized.map(\.path))
+            for node in materialized {
+                expanded.insert(node.nodeID)
+                expandedPathByID[node.nodeID] = node.path
+                loadChildren(of: node)
+            }
+            onCompletion?()
+            return true
+        }
+
+        cancelExpandLoadedWork()
+        let token = UUID()
+        let capturedBindingGeneration = bindingGeneration
+        let existingRecency = Set(expansionRecency)
+        let materializedPaths = Set(materialized.map(\.path))
+        expandLoadedToken = token
+        let task = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer {
+                if self.expandLoadedToken == token {
+                    self.expandLoadedToken = nil
+                    self.expandLoadedTaskForTesting = nil
+                }
+            }
+            for node in materialized {
+                guard !Task.isCancelled,
+                    self.expandLoadedToken == token,
+                    self.bindingGeneration == capturedBindingGeneration
+                else { return }
+                guard self.isMaterializedDirectory(node) else { continue }
+                if !self.expanded.contains(node.nodeID) {
+                    self.expanded.insert(node.nodeID)
+                    self.expandedPathByID[node.nodeID] = node.path
+                    if !existingRecency.contains(node.path) {
+                        self.expansionRecency.append(node.path)
+                    }
+                }
+                if let active = self.levelDrainTasksForTesting[node.nodeID] {
+                    await active.value
+                    continue
+                }
+                guard self.children[node.nodeID] == nil else { continue }
+                self.loadChildren(of: node)
+                if let admitted =
+                    self.levelDrainTasksForTesting[node.nodeID]
+                {
+                    await admitted.value
+                }
+            }
+            guard !Task.isCancelled,
+                self.expandLoadedToken == token,
+                self.bindingGeneration == capturedBindingGeneration
+            else { return }
+            self.expansionRecency.removeAll {
+                materializedPaths.contains($0)
+            }
+            self.expansionRecency.append(contentsOf: materialized.map(\.path))
+            onCompletion?()
+        }
+        expandLoadedTaskForTesting = task
+        return true
+    }
+
+    private func cancelExpandLoadedWork() {
+        expandLoadedTaskForTesting?.cancel()
+        expandLoadedTaskForTesting = nil
+        expandLoadedToken = nil
+    }
+
+    /// Breadth-first provider order is deterministic, shallow-first, and uses
+    /// directory-only indexes, so it never scans file rows.
+    private func materializedDirectoriesInProviderOrder() -> [TreeNode] {
+        var result: [TreeNode] = []
+        var parents: [NodeID] = [Self.rootFetchKey]
+        var parentIndex = 0
+        var seen: Set<NodeID> = []
+        while parentIndex < parents.count {
+            let parent = parents[parentIndex]
+            parentIndex += 1
+            guard let order = directoryOrderByParent[parent],
+                let index = directoriesByIDByParent[parent]
+            else { continue }
+            for id in order where seen.insert(id).inserted {
+                guard let node = index[id] else { continue }
+                result.append(node)
+                if directoryOrderByParent[id] != nil { parents.append(id) }
+            }
+        }
+        return result
+    }
+
+    private func isMaterializedDirectory(_ node: TreeNode) -> Bool {
+        let folder = Self.containingFolder(of: node.path)
+        guard let parent = parentKeyByFolderPath[folder] else { return false }
+        return directoriesByIDByParent[parent]?[node.nodeID]?.path == node.path
     }
 
     /// The full `TreeNode` for a folder at `path` in the current tree, or nil.
@@ -1597,7 +3374,10 @@ final class FileTreeViewModel: ObservableObject {
     /// folder row and hidden from the expanded children. Counts stay
     /// honest; only the duplicate row disappears (duplicate rows double
     /// VoiceOver walks).
-    static func isRepresentedFolderNote(path: String, name: String) -> Bool {
+    nonisolated static func isRepresentedFolderNote(
+        path: String,
+        name: String
+    ) -> Bool {
         guard name.count > 3, name.hasSuffix(".md") else { return false }
         let stem = String(name.dropLast(3))
         if path == "\(stem)/\(name)" { return true }
@@ -1639,21 +3419,13 @@ final class FileTreeViewModel: ObservableObject {
         return out
     }
 
-    /// A specific, user-facing message for a level-fetch failure. `VaultError`'s
-    /// own `errorDescription` is a debug reflection (not user prose), so we
-    /// front it with a plain sentence and append the reason where the variant
-    /// carries a useful one.
-    static func message(for error: Error) -> String {
+    /// Privacy-safe user copy for a level-fetch failure. Backend payloads can
+    /// contain absolute paths, SQL details, or provider diagnostics, so they
+    /// remain out of both visible and assistive-technology error surfaces.
+    nonisolated static func message(for error: Error) -> String {
         if let vaultError = error as? VaultError {
-            switch vaultError {
-            case let .Io(message), let .Db(message):
-                return "Couldn't load this folder: \(message)"
-            case let .InvalidPath(path, reason):
-                return "Couldn't load \(path): \(reason)"
-            case .Cancelled:
+            if case .Cancelled = vaultError {
                 return "Loading this folder was cancelled."
-            default:
-                return "Couldn't load this folder."
             }
         }
         return "Couldn't load this folder."
@@ -3087,6 +4859,9 @@ struct FileTreeSidebar: View {
                 restoringExpandedDirPaths: appState.treeExpandedDirPaths)
             mirrorProgrammaticSelection(rowID(forPath: appState.selectedFilePath))
         }
+        .onDisappear {
+            tree.cancelPendingLoads()
+        }
         .onChange(of: appState.currentVaultURL) {
             // Each new vault gets a fresh tree and its own count announcement.
             didAnnounceCount = false
@@ -3110,10 +4885,7 @@ struct FileTreeSidebar: View {
         // move-reveals, spring-loads) into AppState, whose debounced
         // workspace-save path persists it. Post-update mutation point (#448).
         .onChange(of: tree.expanded) { _, _ in
-            let paths = tree.expandedDirPaths
-            if appState.treeExpandedDirPaths != paths {
-                appState.treeExpandedDirPaths = paths
-            }
+            Self.mirrorExpandedPaths(tree: tree, appState: appState)
         }
         .onChange(of: appState.isScanning) { _, scanning in
             // Announce once the scan finishes — at that point `files` has been
@@ -3344,7 +5116,16 @@ struct FileTreeSidebar: View {
         // FL3-4.1: Expand Loaded — materialized folders expand,
         // fetching at most one level deeper.
         .onChange(of: appState.sidebarExpandLoadedRequest) { _, _ in
-            tree.expandLoadedLevels()
+            let accepted = Self.expandLoadedAndMirror(
+                tree: tree, appState: appState
+            ) {
+                appState.postMutationAnnouncement(
+                    "Expanded loaded folders.")
+            }
+            if !accepted {
+                appState.postMutationAnnouncement(
+                    "File tree is updating. Try again shortly.")
+            }
         }
         // FL3-4.1: Collapse All against the LIVE tree, preserving the
         // selected row's ancestors.
@@ -3352,7 +5133,14 @@ struct FileTreeSidebar: View {
             let anchor = selectionModel.focused
                 .flatMap { selectionRow(for: $0)?.path }
                 ?? appState.selectedFilePath
-            tree.collapseAllPreservingAncestors(ofPath: anchor)
+            if Self.collapseAllAndMirror(
+                tree: tree, appState: appState, preserving: anchor)
+            {
+                appState.postMutationAnnouncement("Collapsed all folders.")
+            } else {
+                appState.postMutationAnnouncement(
+                    "File tree is updating. Try again shortly.")
+            }
         }
         // FL3-3.2: ⌃1–⌃9 activate shortcuts 1–9 while the sidebar has
         // key focus (⌘1–9 belong to tabs; palette commands work
@@ -6403,7 +8191,8 @@ struct FileTreeSidebar: View {
 
     /// Inline error row shown under a folder whose children failed to load.
     /// Carries the specific message and a Retry button that refetches that
-    /// level (a real folder via `treeInvalidation`; the root via `loadRoot`).
+    /// level (a real folder via tree invalidation; the root via the
+    /// ownership-preserving retry path).
     private func errorRow(depth: Int, message: String, node: TreeNode?) -> some View {
         HStack(spacing: Tokens.Spacing.sm) {
             indent(for: depth)
@@ -6419,7 +8208,7 @@ struct FileTreeSidebar: View {
                 if let node {
                     tree.treeInvalidation(parent: node.nodeID)
                 } else {
-                    tree.loadRoot()
+                    tree.retryRootLoad()
                 }
             }
             .buttonStyle(.borderless)
@@ -6865,6 +8654,51 @@ struct FileTreeSidebar: View {
     }
 
     // MARK: - AX builders (unit-tested)
+
+    @MainActor
+    static func mirrorExpandedPaths(
+        tree: FileTreeViewModel,
+        appState: AppState
+    ) {
+        let paths = tree.expandedDirPaths
+        if appState.treeExpandedDirPaths != paths {
+            appState.treeExpandedDirPaths = paths
+        }
+    }
+
+    /// Expand Loaded can finalize recency after its last awaited child without
+    /// changing the expanded id set. Mirror from its completion edge so the
+    /// persisted 500-path keep-newest order is the final provider order.
+    @MainActor
+    @discardableResult
+    static func expandLoadedAndMirror(
+        tree: FileTreeViewModel,
+        appState: AppState,
+        onCompletion: (@MainActor () -> Void)? = nil
+    ) -> Bool {
+        tree.expandLoadedLevels {
+            mirrorExpandedPaths(tree: tree, appState: appState)
+            onCompletion?()
+        }
+    }
+
+    /// Complete the Collapse All command as one persistence transaction. The
+    /// aggregate path ledger can change while the materialized id set does not
+    /// (for example, a restored descendant is still dormant), so relying only
+    /// on `onChange(of: tree.expanded)` would let that disclosure resurrect.
+    @MainActor
+    @discardableResult
+    static func collapseAllAndMirror(
+        tree: FileTreeViewModel,
+        appState: AppState,
+        preserving path: String?
+    ) -> Bool {
+        guard tree.collapseAllPreservingAncestors(ofPath: path) else {
+            return false
+        }
+        mirrorExpandedPaths(tree: tree, appState: appState)
+        return true
+    }
 
     /// The AX value for a folder row: disclosure state, immediate item count,
     /// and 1-based depth ("level N"). macOS VoiceOver doesn't voice custom-row

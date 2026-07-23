@@ -3,9 +3,9 @@
 
 import Foundation
 
-/// The metadata one file contributes to level organization. Extracted from
-/// `FileSummary` on the main actor so sorting and bucketing stay pure and
-/// testable without FFI or `MainActor` hops.
+/// The immutable metadata one file contributes to level organization.
+/// Production projects it from `FileSummary` on the serial level worker so
+/// sorting and bucketing stay pure and testable without FFI or actor hops.
 struct SidebarOrganizerFile: Equatable {
   let path: String
   let name: String
@@ -185,8 +185,8 @@ struct SidebarProductionCivilDateResolver: SidebarCivilDateResolving {
 
 /// One synthetic, nonselectable section header spliced above a file row:
 /// the Pinned section or a date bucket (fl3 spec §FL3-1.4/§FL3-2.2).
-struct SidebarTreeHeaderRow: Equatable, Hashable {
-  enum Kind: Equatable, Hashable {
+struct SidebarTreeHeaderRow: Equatable, Hashable, Sendable {
+  enum Kind: Equatable, Hashable, Sendable {
     case pinned
     case group
   }
@@ -200,25 +200,17 @@ struct SidebarTreeHeaderRow: Equatable, Hashable {
   let depth: Int
 }
 
-/// Everything the rendered tree needs to splice headers and badge pinned
-/// rows, merged across materialized levels. Header lookups key off the file
-/// node the header precedes.
-struct SidebarTreePresentation: Equatable {
-  var headersBefore: [NodeID: SidebarTreeHeaderRow] = [:]
-  var pinnedIDs: Set<NodeID> = []
-}
-
 /// Per-level organization bookkeeping retained by the view model so a
 /// preference change can re-sort cached levels without refetching.
-struct SidebarLevelPresentation: Equatable {
+struct SidebarLevelPresentation: Equatable, Sendable {
   var headersBefore: [NodeID: SidebarTreeHeaderRow] = [:]
   var pinnedIDs: Set<NodeID> = []
   var stalePinnedPaths: [String] = []
 }
 
 /// The organized presentation of one level's file portion.
-struct SidebarOrganizedLevel: Equatable {
-  struct Group: Equatable {
+struct SidebarOrganizedLevel: Equatable, Sendable {
+  struct Group: Equatable, Sendable {
     let key: String
     let label: String
     let firstPath: String
@@ -259,10 +251,37 @@ enum SidebarLevelOrganizer {
     locale: Locale = .current,
     civilDateResolver: any SidebarCivilDateResolving
   ) -> SidebarOrganizedLevel {
+    // The compatibility path is intentionally non-cancelling. Production
+    // whole-level work uses `organizeCancellable` so a superseded 50k sort
+    // releases the serial worker promptly.
+    organizeCancellable(
+      files: files,
+      choice: choice,
+      pinnedPaths: pinnedPaths,
+      now: now,
+      calendar: calendar,
+      locale: locale,
+      civilDateResolver: civilDateResolver,
+      isCancelled: { false })!
+  }
+
+  static func organizeCancellable(
+    files: [SidebarOrganizerFile],
+    choice: SidebarOrganizationChoice,
+    pinnedPaths: [String],
+    now: Date,
+    calendar: Calendar,
+    locale: Locale = .current,
+    civilDateResolver: any SidebarCivilDateResolving,
+    isCancelled: () -> Bool
+  ) -> SidebarOrganizedLevel? {
     let effective = choice.normalized
     let needsCreated =
       effective.sort.field == .created
-    let keyed = files.map { file -> Keyed in
+    var keyed: [Keyed] = []
+    keyed.reserveCapacity(files.count)
+    for (offset, file) in files.enumerated() {
+      if offset.isMultiple(of: 256), isCancelled() { return nil }
       let label =
         file.displayName ?? (file.name as NSString).deletingPathExtension
       var created: Date?
@@ -275,21 +294,25 @@ enum SidebarLevelOrganizer {
           created = Self.date(fromMilliseconds: createdMs)
         }
       }
-      return Keyed(
+      keyed.append(Keyed(
         file: file,
         nameKey: label.precomposedStringWithCanonicalMapping,
         created: created,
-        modified: Self.date(fromMilliseconds: file.mtimeMs))
+        modified: Self.date(fromMilliseconds: file.mtimeMs)))
     }
 
     var byPath: [String: Keyed] = [:]
     byPath.reserveCapacity(keyed.count)
-    for entry in keyed { byPath[entry.file.path] = entry }
+    for (offset, entry) in keyed.enumerated() {
+      if offset.isMultiple(of: 256), isCancelled() { return nil }
+      byPath[entry.file.path] = entry
+    }
 
     var pinned: [Keyed] = []
     var stale: [String] = []
     var pinnedSet: Set<String> = []
-    for path in pinnedPaths {
+    for (offset, path) in pinnedPaths.enumerated() {
+      if offset.isMultiple(of: 256), isCancelled() { return nil }
       if let entry = byPath[path] {
         // Defensive: a duplicated authored entry pins the row once.
         if pinnedSet.insert(path).inserted { pinned.append(entry) }
@@ -298,8 +321,15 @@ enum SidebarLevelOrganizer {
       }
     }
 
-    let unpinned = keyed.filter { !pinnedSet.contains($0.file.path) }
-    let sorted = unpinned.sorted { Self.ordered($0, before: $1, by: effective.sort) }
+    var unpinned: [Keyed] = []
+    unpinned.reserveCapacity(keyed.count - pinned.count)
+    for (offset, entry) in keyed.enumerated() {
+      if offset.isMultiple(of: 256), isCancelled() { return nil }
+      if !pinnedSet.contains(entry.file.path) { unpinned.append(entry) }
+    }
+    guard let sorted = stableSort(
+      unpinned, by: effective.sort, isCancelled: isCancelled)
+    else { return nil }
 
     var groups: [SidebarOrganizedLevel.Group] = []
     if effective.grouping == .dateBuckets {
@@ -308,7 +338,8 @@ enum SidebarLevelOrganizer {
       var currentLabel = ""
       var currentFirst = ""
       var currentCount = 0
-      for entry in sorted {
+      for (offset, entry) in sorted.enumerated() {
+        if offset.isMultiple(of: 256), isCancelled() { return nil }
         let date = effective.sort.field == .created ? entry.created : entry.modified
         let bucket = classifier.classify(date)
         if bucket.key != currentKey {
@@ -333,11 +364,79 @@ enum SidebarLevelOrganizer {
       }
     }
 
+    guard !isCancelled() else { return nil }
+    var orderedPaths: [String] = []
+    orderedPaths.reserveCapacity(pinned.count + sorted.count)
+    for entry in pinned { orderedPaths.append(entry.file.path) }
+    for (offset, entry) in sorted.enumerated() {
+      if offset.isMultiple(of: 256), isCancelled() { return nil }
+      orderedPaths.append(entry.file.path)
+    }
     return SidebarOrganizedLevel(
-      orderedPaths: pinned.map(\.file.path) + sorted.map(\.file.path),
+      orderedPaths: orderedPaths,
       pinnedCount: pinned.count,
       stalePinnedPaths: stale,
       groups: groups)
+  }
+
+  /// Bottom-up stable merge sort with cancellation checks inside every merge
+  /// pass. The comparator is a strict total order for real file rows, while
+  /// choosing the left entry on equality preserves deterministic duplicate
+  /// handling from the old implementation.
+  private static func stableSort(
+    _ values: [Keyed],
+    by sort: SidebarSortOption,
+    isCancelled: () -> Bool
+  ) -> [Keyed]? {
+    guard values.count > 1 else {
+      return isCancelled() ? nil : values
+    }
+    var source = values
+    var destination = values
+    var width = 1
+    var operations = 0
+    while width < source.count {
+      if isCancelled() { return nil }
+      var start = 0
+      while start < source.count {
+        let middle = min(start + width, source.count)
+        let end = min(start + width + width, source.count)
+        var left = start
+        var right = middle
+        var output = start
+        while left < middle && right < end {
+          operations &+= 1
+          if operations.isMultiple(of: 256), isCancelled() { return nil }
+          if ordered(source[right], before: source[left], by: sort) {
+            destination[output] = source[right]
+            right += 1
+          } else {
+            destination[output] = source[left]
+            left += 1
+          }
+          output += 1
+        }
+        while left < middle {
+          operations &+= 1
+          if operations.isMultiple(of: 256), isCancelled() { return nil }
+          destination[output] = source[left]
+          left += 1
+          output += 1
+        }
+        while right < end {
+          operations &+= 1
+          if operations.isMultiple(of: 256), isCancelled() { return nil }
+          destination[output] = source[right]
+          right += 1
+          output += 1
+        }
+        start = end
+      }
+      swap(&source, &destination)
+      if width > source.count / 2 { break }
+      width *= 2
+    }
+    return isCancelled() ? nil : source
   }
 
   // MARK: - Comparator

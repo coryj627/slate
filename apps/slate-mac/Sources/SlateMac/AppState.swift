@@ -6815,14 +6815,14 @@ final class AppState: ObservableObject {
             // selection's ancestors, then its normal sync updates the
             // mirror.
             sidebarCollapseAllRequest &+= 1
-            let message = "Collapsed all folders."
+            let message = "Collapsing folders."
             lastMutationAnnouncement = message
             // W0.5-3 residue: sidebar navigation mutation copy (§U2-6 lastMutationAnnouncement channel)
             announcer.post(.hostComposed(text: message, priority: .medium))
 
         case SlateCommandID.sidebarExpandLoaded:
             sidebarExpandLoadedRequest &+= 1
-            let message = "Expanded loaded folders."
+            let message = "Expanding loaded folders."
             lastMutationAnnouncement = message
             // W0.5-3 residue: sidebar navigation mutation copy (§U2-6 lastMutationAnnouncement channel)
             announcer.post(.hostComposed(text: message, priority: .medium))

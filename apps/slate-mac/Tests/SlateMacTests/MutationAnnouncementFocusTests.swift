@@ -347,8 +347,12 @@ final class MutationAnnouncementFocusTests: XCTestCase {
         // The tree VM must know the folder's children for the focus computation.
         let vm = FileTreeViewModel()
         vm.bind(to: state.currentSession)
+        let rootSettled = await vm.settleLevelLoadsForTesting()
+        XCTAssertTrue(rootSettled)
         let f = try XCTUnwrap(vm.node(for: .dir(vm.rootLevel.first { $0.name == "folder" }!.nodeID.dirID!)))
         vm.expand(f)
+        let childSettled = await vm.settleLevelLoadsForTesting()
+        XCTAssertTrue(childSettled)
         let focusTarget = vm.deleteFocusTarget(
             deletedPath: "folder/only.md", parentPath: "folder")
 

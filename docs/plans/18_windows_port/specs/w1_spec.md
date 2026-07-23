@@ -19,11 +19,15 @@ Program: [00_program.md](../00_program.md) (decisions 1, 2, 9, 15; DoD §W-C). B
 Porting doctrine for every W1–W6 spec: the mac view layer is the **behavioral spec** (states, transitions, announcements, keyboard model — including any Reduce Motion equivalents); the WPF implementation is idiomatic WPF (MVVM view models over the FFI), **not** a SwiftUI transliteration. Where mac behavior encodes an AppKit workaround (documented in memory/PRs), port the *intent*, and record the divergence in gap_analysis.
 
 **Execution status (updated 2026-07-23): W1-0 through W1-4 and remediation
-through W1-RT-17 are merged through PR #1030 / squash commit
-`268953adcaede360429dc41483604a175cff4333`. W1-RT-18 is published as PR
-#1031 with three independent final reviewers code-ready; CI remains pending.
-Final code and automated closure remains open for W1-RT-18 through
-W1-RT-19, and human acceptance evidence remains pending.** Three independent reviewers audited every W1 workstream
+through W1-RT-18 are merged through PR #1031 / squash commit
+`a443264f4be57e186d106001c3ab500e4622ec97`. W1-RT-19 is implemented as a
+15-authored-file change on the current remediation branch; its first independent
+review findings are remediated, and closure is gated by three exact-tree
+re-reviews plus macOS CI.
+Final code and automated closure remains open for W1-RT-19, and human
+acceptance evidence remains pending.**
+
+Three independent reviewers audited every W1 workstream
 across completeness, correctness, maintainability, documentation, reliability,
 performance, security, and accessibility, then independently reviewed the
 completed remediations. Their earlier blockers—tab target/dirty/buffer semantics, exact
@@ -35,8 +39,16 @@ levels, Windows core-suite portability, LiveSync handle containment, and op-log
 event-index synchronization—were fixed and regression-tested. The final audit
 then identified fatal event-rebuild read rollback, progress-event/UIA evidence,
 Windows process-wide Quick Open serialization, and macOS page-one file-tree
-responsiveness gaps. RT16–RT17 are closed; RT18 is independently code-ready in
-PR #1031 pending CI; RT19 remains open. Ranked closure
+responsiveness gaps. RT16–RT18 are closed; RT19 now moves whole-level native
+loading, cancellable organization, and live key reorganization to one serial
+non-main queue, publishes worker-built indexes without large MainActor scans,
+retires obsolete and transient level/presentation/targeted-owner buffers through
+a main-turn cleanup barrier, batches partial-child retry teardown, bounds
+restored and Expand Loaded admission to one child level with deterministic
+ordering, final recency persistence, and truthful completion copy, and
+regression-locks async mutation/metadata races with
+deadline-bounded tests; its final gates remain.
+Ranked closure
 evidence is tracked in
 [`../reports/w1_post_merge_adversarial_audit_2026-07-22.md`](../reports/w1_post_merge_adversarial_audit_2026-07-22.md).
 The generated parity matrix requires inventory-complete implementation/test
@@ -61,6 +73,10 @@ RT17 then merged in PR #1030 as
 29988127038 passed the live 2/2 scan RangeValue and sidebar UIA pattern census,
 the expanded-state axe scan, the full core package, 174 Windows tests, retained
 evidence upload, and formatting.
+RT18 then merged in PR #1031 as
+`a443264f4be57e186d106001c3ab500e4622ec97`; final-head Windows Actions run
+29990822473 passed the complete core/CLI, 179-test Windows, live FlaUI/axe,
+retained-evidence, and formatting gates.
 Interactive FlaUI + axe-windows remains a required CI gate
 (`SLATE_REQUIRE_UI_AUTOMATION=1`). Human
 Narrator/NVDA/JAWS and the four built-in plus customized Contrast-theme pass

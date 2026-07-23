@@ -254,6 +254,11 @@ final class FileTreeSidebarTests: XCTestCase {
             1,
             "one changed file must not scan or map the 50k-row root")
         XCTAssertEqual(
+            vm.levelReorganizeCountForTesting,
+            0,
+            "mtime is not an active key under the default name sort")
+        XCTAssertEqual(vm.liveReorganizationRowVisitCountForTesting, 0)
+        XCTAssertEqual(
             structuralInvalidations,
             0,
             "metadata-only refresh must invalidate its keyed row, not the structural tree")
@@ -494,7 +499,7 @@ final class FileTreeSidebarTests: XCTestCase {
 
     // MARK: - Error + retry path
 
-    func testChildFetchErrorRecordsFailedStateWithSpecificMessage() {
+    func testChildFetchErrorRecordsFailedStateWithPrivacySafeMessage() {
         let spy = FetchSpy(
             [
                 "": listing(dirs: [dir(1, "a")], files: []),
@@ -506,16 +511,16 @@ final class FileTreeSidebarTests: XCTestCase {
         vm.expand(a)
         // Failed level is recorded (drives the inline error row + Retry); no
         // children cached.
-        XCTAssertEqual(vm.fetchState[.dir(1)], .failed(message: "Couldn't load this folder: boom"))
+        XCTAssertEqual(
+            vm.fetchState[.dir(1)],
+            .failed(message: "Couldn't load this folder."))
         XCTAssertNil(vm.children[.dir(1)])
     }
 
-    func testMessageForVaultErrorIsUserFacingNotDebugReflection() {
-        // VaultError.errorDescription is a debug reflection; the tree fronts it
-        // with plain prose.
+    func testMessageForVaultErrorDoesNotExposeBackendPayload() {
         XCTAssertEqual(
             FileTreeViewModel.message(for: VaultError.Io(message: "disk gone")),
-            "Couldn't load this folder: disk gone")
+            "Couldn't load this folder.")
         XCTAssertEqual(
             FileTreeViewModel.message(for: VaultError.Cancelled),
             "Loading this folder was cancelled.")
@@ -1137,6 +1142,29 @@ final class FileTreeSidebarTests: XCTestCase {
         XCTAssertEqual(vm.expandedDirPaths, ["ghost/dir", "b", "a"])
     }
 
+    func testCollapseAllMirrorsPendingOnlyDisclosureIntoAppState() {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("collapse-mirror-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+        let state = AppState(
+            recentsStore: RecentVaultsStore(
+                fileURL: tempDir.appendingPathComponent("recents.json")),
+            externalOpener: { _ in true })
+        let vm = FileTreeViewModel()
+        vm.bindForTesting(
+            fetcher: { _ in self.listing(dirs: [], files: []) },
+            restoringExpandedDirPaths: ["ghost/dir"])
+        state.treeExpandedDirPaths = vm.expandedDirPaths
+
+        XCTAssertTrue(vm.expanded.isEmpty)
+        XCTAssertEqual(state.treeExpandedDirPaths, ["ghost/dir"])
+        XCTAssertTrue(
+            FileTreeSidebar.collapseAllAndMirror(
+                tree: vm, appState: state, preserving: nil))
+        XCTAssertTrue(vm.pendingExpandedPaths.isEmpty)
+        XCTAssertTrue(state.treeExpandedDirPaths.isEmpty)
+    }
+
     /// Codex round 2 (probe-proven): SQLite reuses INTEGER PRIMARY KEY
     /// rowids after deletes. Expansion must NOT follow a recycled id to
     /// an unrelated folder: invalidation demotes the deleted folder's
@@ -1288,6 +1316,64 @@ final class FileTreeSidebarTests: XCTestCase {
             vm.expansionRecency,
             ["trashish", "exact-file/deep", "kept"])
         XCTAssertEqual(vm.pendingExpandedPaths, ["trashish", "exact-file/deep", "kept"])
+    }
+
+    func testRemovalOwnerOrderingVisitsFiftyThousandUnrelatedRootsLinearly() {
+        var candidates: [(id: NodeID, path: String)] = (0..<50_000).map {
+            (
+                id: .dir(Int64($0 + 1)),
+                path: String(format: "root-%05d", $0)
+            )
+        }
+        candidates.append(contentsOf: (0..<1_000).map {
+            (
+                id: .dir(Int64(50_001 + $0)),
+                path: String(format: "root-00000/child-%04d", $0)
+            )
+        })
+        candidates.append((id: .dir(51_001), path: "root-00000"))
+        var visits = 0
+
+        let roots = FileTreeViewModel.orderedRemovedDirectoryOwners(
+            candidates, componentVisits: &visits)
+
+        XCTAssertEqual(roots.count, 51_001)
+        XCTAssertEqual(visits, 52_001)
+        XCTAssertEqual(
+            Set(
+                roots.filter { $0.path == "root-00000" }.map { $0.id }
+            ).count, 2,
+            "same-path predecessor and replacement owners must both clear")
+        XCTAssertTrue(roots.contains { $0.path == "root-00000/child-0000" })
+    }
+
+    func testBatchRemovalPublishesOnceForOneThousandOwnedLevels() {
+        let paths = (0..<1_000).map {
+            String(format: "root-%04d", $0)
+        }
+        let vm = FileTreeViewModel()
+        vm.bindForTesting { parent in
+            parent.isEmpty
+                ? self.listing(
+                    dirs: paths.enumerated().map {
+                        self.dir(Int64($0.offset + 1), $0.element)
+                    }, files: [])
+                : self.listing(dirs: [], files: [])
+        }
+        vm.expandLoadedLevels()
+        XCTAssertEqual(vm.children.count, 1_000)
+        let presentationBefore = vm.presentationRevision
+        let index = FileTreeSidebar.SelectionModel.KnownRemovalIndex(
+            paths.map { .init(path: $0, isDirectory: true) })
+        var visits = 0
+
+        vm.removeExpansions(using: index, componentVisits: &visits)
+
+        XCTAssertTrue(vm.expanded.isEmpty)
+        XCTAssertTrue(vm.children.isEmpty)
+        XCTAssertEqual(
+            vm.removalOwnershipBatchPublicationCountForTesting, 1)
+        XCTAssertEqual(vm.presentationRevision, presentationBefore + 1)
     }
 
     /// Targeted invalidation also drops DESCENDANT caches: a recycled id

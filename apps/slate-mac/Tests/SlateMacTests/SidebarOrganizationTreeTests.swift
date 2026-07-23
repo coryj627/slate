@@ -425,11 +425,14 @@ final class SidebarOrganizationTreeTests: XCTestCase {
     else {
       return XCTFail("a failed continuation must surface the inline error")
     }
-    XCTAssertTrue(message.contains("page two boom"))
+    XCTAssertEqual(message, "Couldn't load this folder.")
+    XCTAssertFalse(
+      message.contains("page two boom"),
+      "backend diagnostics must not reach visible or assistive error copy")
 
-    // Retry (the root error row calls loadRoot) refetches and completes.
+    // Retry captures root ownership, then refetches and completes.
     box.heal()
-    vm.loadRoot()
+    vm.retryRootLoad()
     await vm.levelDrainTasksForTesting[FileTreeViewModel.rootFetchKey]?.value
     XCTAssertEqual(visiblePaths(vm), ["page-one.md", "page-two.md"])
     XCTAssertNil(vm.fetchState[FileTreeViewModel.rootFetchKey])
