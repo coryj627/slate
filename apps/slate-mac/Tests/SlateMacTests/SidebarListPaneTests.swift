@@ -227,7 +227,13 @@ final class SidebarListPaneTests: XCTestCase {
         await model.drainTaskForTesting?.value
         XCTAssertEqual(model.fileCount, 10_000)
         XCTAssertTrue(model.truncated)
-        XCTAssertEqual(model.fileSummaries.last?.path, "f/final-099.md")
+        let paths = Set(model.fileSummaries.map(\.path))
+        XCTAssertEqual(
+            paths.filter { $0.hasPrefix("f/final-") }.count,
+            100,
+            "only the remaining capacity is accepted from the final page")
+        XCTAssertTrue(paths.contains("f/final-099.md"))
+        XCTAssertFalse(paths.contains("f/final-100.md"))
     }
 
     func testSupersededShowNeverPublishesItsStaleResult() async {
