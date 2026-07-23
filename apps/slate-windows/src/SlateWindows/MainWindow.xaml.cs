@@ -756,9 +756,9 @@ public partial class MainWindow : Window
     private void FocusEditorPane(WorkspaceGroupViewModel group)
     {
         WorkspaceTabViewModel? activeTab = group.ActiveTab;
-        TextEditor? editor = FindVisualDescendants<TextEditor>(ContentPaneBorder)
+        SlateTextEditor? editor = FindVisualDescendants<SlateTextEditor>(ContentPaneBorder)
             .FirstOrDefault(candidate => ReferenceEquals(candidate.DataContext, activeTab));
-        if (editor is { IsVisible: true, IsEnabled: true } && editor.Focus())
+        if (editor is { IsVisible: true, IsEnabled: true } && editor.FocusInputOwner())
         {
             return;
         }

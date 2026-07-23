@@ -12,6 +12,8 @@ namespace SlateWindows;
 /// </summary>
 internal sealed class SlateTextEditor : TextEditor
 {
+    internal bool FocusInputOwner() => TextArea.Focus();
+
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new SlateTextEditorAutomationPeer(this);
 }
@@ -36,7 +38,7 @@ internal sealed class SlateTextEditorAutomationPeer : TextEditorAutomationPeer
 
     protected override void SetFocusCore()
     {
-        if (!_owner.TextArea.Focus())
+        if (!_owner.FocusInputOwner())
         {
             throw new InvalidOperationException("The editor TextArea could not receive keyboard focus.");
         }

@@ -46,6 +46,11 @@ public sealed class AvalonDocumentBufferCensus
 
             Assert.True(peer.HasKeyboardFocus());
             Assert.True(editor.TextArea.IsKeyboardFocusWithin);
+
+            Keyboard.ClearFocus();
+            Assert.True(editor.FocusInputOwner());
+            Assert.True(peer.HasKeyboardFocus());
+            Assert.True(editor.TextArea.IsKeyboardFocusWithin);
         });
     }
 
