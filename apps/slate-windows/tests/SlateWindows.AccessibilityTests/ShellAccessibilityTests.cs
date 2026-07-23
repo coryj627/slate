@@ -270,14 +270,12 @@ public sealed class ShellAccessibilityTests
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.Document, editor.ControlType);
             Assert.True(editor.Patterns.Value.IsSupported);
-            AutomationElement editorFocusTarget = EditorFocusTarget(editor, automation);
-            editorFocusTarget.Focus();
-            AssertEventuallyFocused(
-                editorFocusTarget,
-                "The opened note editor could not receive focus.");
+            Assert.True(editor.Properties.IsKeyboardFocusable.Value);
+            editor.Focus();
+            AssertEventuallyFocused(editor, "The opened note editor could not receive focus.");
             Keyboard.Press(VirtualKeyShort.F2);
             AssertEventuallyFocused(
-                editorFocusTarget,
+                editor,
                 "F2 escaped the editor even though the Files tree did not own focus.");
             noteItem.Focus();
             AssertEventuallyFocused(noteItem, "The note TreeItem could not receive focus.");
@@ -395,7 +393,7 @@ public sealed class ShellAccessibilityTests
                     () => tab.Name.EndsWith(", unsaved changes", StringComparison.Ordinal),
                     TimeSpan.FromSeconds(10)),
                 "The dirty tab did not expose its unsaved state in its accessible name.");
-            editorFocusTarget.Focus();
+            editor.Focus();
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_S);
             Assert.True(
                 SpinWait.SpinUntil(
@@ -446,10 +444,10 @@ public sealed class ShellAccessibilityTests
                 splitHandle,
                 "Arrow-key resizing unexpectedly moved focus off the split handle.");
             AutomationElement leftEditor = splitTabs[0].FindFirstDescendant(
-                automation.ConditionFactory.ByControlType(ControlType.Edit))
+                automation.ConditionFactory.ByControlType(ControlType.Document))
                 ?? throw new Xunit.Sdk.XunitException("The left split editor is absent.");
             AutomationElement rightEditor = splitTabs[1].FindFirstDescendant(
-                automation.ConditionFactory.ByControlType(ControlType.Edit))
+                automation.ConditionFactory.ByControlType(ControlType.Document))
                 ?? throw new Xunit.Sdk.XunitException("The right split editor is absent.");
             rightEditor.Focus();
             AssertEventuallyFocused(rightEditor, "The right split editor could not receive focus.");
@@ -536,9 +534,8 @@ public sealed class ShellAccessibilityTests
                 automation,
                 "note.md editor",
                 TimeSpan.FromSeconds(10));
-            editorFocusTarget = EditorFocusTarget(editor, automation);
             AssertEventuallyFocused(
-                editorFocusTarget,
+                editor,
                 "Committing Quick Open did not focus the destination editor.");
 
             AutomationElement splitDown = WaitForMenuItem(
@@ -690,13 +687,6 @@ public sealed class ShellAccessibilityTests
             message);
     }
 
-    private static AutomationElement EditorFocusTarget(
-        AutomationElement editor,
-        UIA3Automation automation) =>
-        editor.FindFirstDescendant(
-            automation.ConditionFactory.ByControlType(ControlType.Edit))
-        ?? throw new Xunit.Sdk.XunitException(
-            "The AvalonEdit Document peer has no focusable Edit descendant.");
 
     private static void AssertActionButtonCensus(
         AutomationElement expander,

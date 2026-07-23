@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-23 at `3792d49` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-07-23 at `f63dd90` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 

@@ -5,6 +5,7 @@ using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation.Peers;
 using System.Windows.Input;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
@@ -23,6 +24,29 @@ public sealed class AvalonDocumentBufferCensus
     public AvalonDocumentBufferCensus(ITestOutputHelper output)
     {
         _output = output;
+    }
+
+    [Fact]
+    public void SlateEditorAutomationPeer_ProxiesFocusToAvalonTextArea()
+    {
+        RunOnSta(() =>
+        {
+            var editor = new SlateTextEditor();
+            using var surface = new EditorSurface(editor);
+            AutomationPeer peer = Assert.IsType<SlateTextEditorAutomationPeer>(
+                UIElementAutomationPeer.CreatePeerForElement(editor));
+
+            Assert.Equal(AutomationControlType.Document, peer.GetAutomationControlType());
+            Assert.Same(peer, peer.GetPattern(PatternInterface.Value));
+            Assert.True(peer.IsKeyboardFocusable());
+
+            Keyboard.ClearFocus();
+            Assert.False(peer.HasKeyboardFocus());
+            peer.SetFocus();
+
+            Assert.True(peer.HasKeyboardFocus());
+            Assert.True(editor.TextArea.IsKeyboardFocusWithin);
+        });
     }
 
     [Fact]

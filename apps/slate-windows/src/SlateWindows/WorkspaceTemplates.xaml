@@ -1,7 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:local="clr-namespace:SlateWindows"
-                    xmlns:avalonedit="http://icsharpcode.net/sharpdevelop/avalonedit">
+                    xmlns:local="clr-namespace:SlateWindows">
     <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
     <local:AxisToOrientationConverter x:Key="AxisToOrientationConverter" />
@@ -62,7 +61,7 @@
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <avalonedit:TextEditor Grid.Row="0"
+            <local:SlateTextEditor Grid.Row="0"
                                    Margin="12"
                                    Padding="12"
                                    Document="{Binding EditorDocument}"

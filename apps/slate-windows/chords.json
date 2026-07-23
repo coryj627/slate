@@ -73,9 +73,11 @@
         "implementation": [
           "apps/slate-windows/src/SlateWindows/AvalonDocumentBufferSession.cs#AvalonDocumentBufferSession",
           "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs#ApplyPeerDocumentEvent",
-          "apps/slate-windows/src/SlateWindows/WorkspaceTemplates.xaml#avalonedit:TextEditor"
+          "apps/slate-windows/src/SlateWindows/SlateTextEditor.cs#SlateTextEditorAutomationPeer",
+          "apps/slate-windows/src/SlateWindows/WorkspaceTemplates.xaml#local:SlateTextEditor"
         ],
         "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#SlateEditorAutomationPeer_ProxiesFocusToAvalonTextArea",
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#ImeCompositionLifecycleAndClipboardPaste_CommitOnlyThroughInputCommands",
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#EightMiBSamePathPeers_UseExactDeltasAndPreserveCrossPaneUndo",
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#SavedBaselineDirtyState_TracksUndoSaveAndDirtyDuplicateSplitPeers",
