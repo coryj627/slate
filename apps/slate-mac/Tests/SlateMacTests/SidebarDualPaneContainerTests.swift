@@ -202,14 +202,15 @@ final class SidebarDualPaneContainerTests: XCTestCase {
 
     // MARK: - Folders-only projection (rule 2)
 
-    func testFoldersOnlyProjectionSuppressesFilesAndFollowsExpansion() throws {
+    func testFoldersOnlyProjectionSuppressesFilesAndFollowsExpansion() async throws {
         let state = makeState()
         try openVault(
             state, named: "proj",
             files: ["A/inner/deep.md", "A/x.md", "B/y.md", "top.md"])
         let tree = FileTreeViewModel()
         tree.bind(to: try XCTUnwrap(state.currentSession))
-        tree.loadRoot()
+        let rootSettled = await tree.settleLevelLoadsForTesting()
+        XCTAssertTrue(rootSettled)
         var rows = SidebarDualPaneView.foldersOnlyRows(tree: tree)
         XCTAssertEqual(
             rows.map(\.node.path), ["A", "B"],
@@ -218,6 +219,8 @@ final class SidebarDualPaneContainerTests: XCTestCase {
         if let a = tree.rootLevel.first(where: { $0.path == "A" }) {
             tree.toggle(a)
         }
+        let childSettled = await tree.settleLevelLoadsForTesting()
+        XCTAssertTrue(childSettled)
         rows = SidebarDualPaneView.foldersOnlyRows(tree: tree)
         XCTAssertEqual(
             rows.map(\.node.path), ["A", "A/inner", "B"],

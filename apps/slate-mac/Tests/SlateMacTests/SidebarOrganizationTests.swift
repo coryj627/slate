@@ -840,4 +840,27 @@ final class SidebarOrganizationTests: XCTestCase {
       SidebarOrganizationSchema.knownSectionShapesAreValid(
         root: ["pins": ["F": [String(repeating: "a", count: 4_096)]]]))
   }
+
+  func testCancellableOrganizerStopsInsideLargeSort() {
+    let files = (0..<5_000).map {
+      file(path: String(format: "note-%05d.md", 4_999 - $0))
+    }
+    var checks = 0
+    let result = SidebarLevelOrganizer.organizeCancellable(
+      files: files,
+      choice: .defaults,
+      pinnedPaths: [],
+      now: Date(timeIntervalSince1970: 1_768_953_600),
+      calendar: gregorian("UTC"),
+      civilDateResolver: Self.productionResolver,
+      isCancelled: {
+        checks += 1
+        // Key construction, path indexing, and unpinned filtering account for
+        // 60 checks. This threshold enters the merge comparator loop.
+        return checks >= 65
+      })
+
+    XCTAssertNil(result)
+    XCTAssertEqual(checks, 65)
+  }
 }

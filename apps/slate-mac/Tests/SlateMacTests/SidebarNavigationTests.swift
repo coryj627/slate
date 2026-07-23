@@ -176,7 +176,7 @@ final class SidebarNavigationTests: XCTestCase {
     let before = state.sidebarCollapseAllRequest
     _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarCollapseAll)
     XCTAssertEqual(state.sidebarCollapseAllRequest, before + 1)
-    XCTAssertEqual(state.lastMutationAnnouncement, "Collapsed all folders.")
+    XCTAssertEqual(state.lastMutationAnnouncement, "Collapsing folders.")
   }
 
   func testExpandLoadedBumpsTheOneShotRequestAndAnnounces() throws {
@@ -185,7 +185,7 @@ final class SidebarNavigationTests: XCTestCase {
     let before = state.sidebarExpandLoadedRequest
     _ = try state.dispatchSidebarAction(id: SlateCommandID.sidebarExpandLoaded)
     XCTAssertEqual(state.sidebarExpandLoadedRequest, before + 1)
-    XCTAssertEqual(state.lastMutationAnnouncement, "Expanded loaded folders.")
+    XCTAssertEqual(state.lastMutationAnnouncement, "Expanding loaded folders.")
   }
 
   func testFocusFilterDispatchesThroughTheRouterAndBumpsTheRequest() throws {

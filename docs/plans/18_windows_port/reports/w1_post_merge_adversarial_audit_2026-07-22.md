@@ -332,7 +332,7 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   path-selected checks were green, and the PR was squash-merged as
   `268953adcaede360429dc41483604a175cff4333` under the documented outage
   exception.
-- W1-RT-18 is implemented in PR #1031. One
+- W1-RT-18 closed in PR #1031. One
   process-lifetime coordinator serializes native ranks across view-model/vault
   lifetimes, drops canceled queued work before FFI, and retains an admitted
   lane until the non-cancellable native call actually returns. Generation and
@@ -341,15 +341,76 @@ claim a Codoki score or “safe to merge” verdict that was not produced.
   maximum concurrency one and disposed-model nonpublication, canceled queued
   admission, exception release, and privacy-safe terminal failure publication.
   Local evidence is 179/179 Windows tests plus clean .NET formatting. Three
-  independent final reviewers returned code-ready; CI remains pending.
-- W1-RT-19 remains open and is assigned to the final small remediation group
-  above. It must not be represented as automated or code closure until its
-  focused evidence and required CI lanes pass.
+  independent final reviewers returned code-ready. Semgrep and license checks
+  passed, and final-head Windows Actions run 29990822473 passed the complete
+  core/CLI, Windows, live accessibility, evidence-upload, and format gates with
+  retained artifact `slate-windows-accessibility-d2da2cdb023bf0a988b9ba52d2046f8287c61825`.
+  The PR was squash-merged as
+  `a443264f4be57e186d106001c3ab500e4622ec97` under the documented outage
+  exception.
+- W1-RT-19 is implemented as a 14-authored-file change on the current
+  remediation branch. Production root and child page-one fetch, continuation
+  draining, shared pure organization, projection, metadata-overlay
+  re-preparation, and restored-chain materialization run on one dedicated
+  serial non-main queue rather than Swift's cooperative executor. Cancellation
+  is checked before native admission and throughout projection, key building,
+  sorting, grouping, and publication preparation; bind/session/
+  organization/level/attachment/expanded/root and overlay-revision guards
+  reject stale publication. Worker-built file and directory indexes are
+  assigned directly; level-owned header/pin lookups avoid a whole-tree
+  MainActor merge; obsolete arrays, indexes, and presentation buffers cross a
+  main-turn barrier before final destruction on a utility queue; and restored
+  expansion uses the indexes instead of scanning a 50,000-row level. Live
+  active-key and preference reorganization uses one deterministic, compacting
+  pump over the same worker;
+  inactive metadata changes remain one keyed lookup. Expand Loaded snapshots
+  indexed directories in provider order, incrementally discloses them, and
+  admits at most one child operation to the serial worker at a time. Restored
+  and invalidated expansion chains share a structurally owned one-at-a-time
+  pump. Collapse/invalidation cancels stale bulk intent, and completion copy is
+  posted only after a full drain, so queued rows never claim an expanded
+  accessibility state without children or a loading row. While an authoritative
+  root replacement keeps predecessor rows visible, disclosure is read-only and
+  rejected bulk commands replace their start announcement with bounded
+  “File tree is updating” copy; Collapse All announces completion only after
+  the live tree accepts it. Targeted async
+  root rename/move/delete reconciliation follows the already-mutated path
+  ledger; immediate state-specific disclosure/cache/fetch/materialization
+  cleanup prevents a blocked delete or chained same-ID remap/delete from
+  inheriting expanded or collapsed caches while stale-path-only removal
+  preserves the authoritative remapped disclosure, and
+  failures clear predecessor caches before a reused directory ID can land.
+  Backend error payloads no longer enter visible or VoiceOver copy. Thirty-one
+  async tests use deadline-bounded waits and cover prompt root return/newest
+  rebind, read-only stale root-subtree disclosure and running-child retirement
+  during same-ID replacement, chained remap/delete cancellation, child collapse/
+  cancel/retry, active failure/retry, sibling serialization and queued
+  cancellation, restored recursive expansion, async root rename/delete/same-
+  path reuse, targeted failure/reused-ID retry, save-during-load overlay
+  ordering/grouping, owner-only overlay routing, overflow-refetch, cancellable
+  preparation, active live reorganization, normal and stale-result off-main
+  level retirement, owned-directory reconciliation, ordered and cancellable
+  Expand Loaded admission/completion, truthful one-at-a-time disclosure for
+  1,000 restored siblings, dormant nested restoration across ancestor collapse/
+  re-expand, queued-restoration collapse and Collapse All across owner
+  replacement, same-ID owning-level supersession, empty-level publication
+  without global expansion rescans, and production-path pagination/pin/folder-
+  note parity. A separate pure regression proves linear component visits while
+  ordering 50,000 unrelated removal roots plus 1,000 descendants and retains
+  every same-path predecessor/replacement owner; an integration regression
+  proves 1,000 owned levels publish one batched teardown. The first
+  independent review round
+  found the overlay ordering,
+  mutation reconciliation, failure cleanup, cooperative-executor, large-level
+  indexing, duplicated organization, raw error-copy, and unbounded-test gaps;
+  all are remediated and three exact-tree re-reviews report code-ready. No Swift toolchain is
+  available on the Windows development host; macOS compile/test CI remains the
+  executable gate.
 
 ## Current closure status
 
-The remediation sequence from PR #1011 through PR #1030 is merged on
-`main` at `268953adcaede360429dc41483604a175cff4333`. The current mapping is:
+The remediation sequence from PR #1011 through PR #1031 is merged on
+`main` at `a443264f4be57e186d106001c3ab500e4622ec97`. The current mapping is:
 
 | Gap | Closing PR(s) | Repository status |
 |---|---|---|
@@ -369,11 +430,11 @@ The remediation sequence from PR #1011 through PR #1030 is merged on
 | W1-RT-15 | #1028 | Closed |
 | W1-RT-16 | #1029 | Closed |
 | W1-RT-17 | #1030 | Closed |
-| W1-RT-18 | #1031 | Implementation/local gates and three independent final reviews complete; CI pending |
-| W1-RT-19 | Planned follow-up | Open |
+| W1-RT-18 | #1031 | Closed |
+| W1-RT-19 | Current remediation branch (14 authored files) | Implementation/test code and three independent exact-tree re-reviews complete; macOS CI pending |
 
 W1 repository remediation and automated acceptance are not yet complete:
-W1-RT-18 through W1-RT-19 must merge first. Independently, milestone release
+W1-RT-19 must merge first. Independently, milestone release
 acceptance remains blocked under WGA-9 until a named human records the Narrator
 smoke, NVDA and JAWS passes, and all four built-in plus one customized Windows
 Contrast-theme passes in `w_c_matrix.md`.
