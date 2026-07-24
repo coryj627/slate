@@ -1105,22 +1105,36 @@ public sealed class ShellAccessibilityTests
         Assert.True(
             editor.Patterns.Text.IsSupported,
             "The Markdown editor does not expose TextPattern.");
-        var textPattern = editor.Patterns.Text.Pattern;
-        var target = textPattern.DocumentRange.FindText(
-            text,
-            backward: false,
-            ignoreCase: false)
-            ?? throw new Xunit.Sdk.XunitException(
+        if (editor.Patterns.Text.Pattern.DocumentRange.FindText(
+                text,
+                backward: false,
+                ignoreCase: false) is null)
+        {
+            throw new Xunit.Sdk.XunitException(
                 $"The editor text does not contain '{text}'.");
-        target.MoveEndpointByRange(
-            TextPatternRangeEndpoint.End,
-            target,
-            TextPatternRangeEndpoint.Start);
-        target.Select();
+        }
+
         Assert.True(
             SpinWait.SpinUntil(
                 () =>
                 {
+                    var textPattern = editor.Patterns.Text.Pattern;
+                    var target = textPattern.DocumentRange.FindText(
+                        text,
+                        backward: false,
+                        ignoreCase: false);
+                    if (target is null)
+                    {
+                        Thread.Sleep(50);
+                        return false;
+                    }
+
+                    target.MoveEndpointByRange(
+                        TextPatternRangeEndpoint.End,
+                        target,
+                        TextPatternRangeEndpoint.Start);
+                    target.Select();
+                    Thread.Sleep(50);
                     var selections = textPattern.GetSelection();
                     return selections.Length == 1
                         && selections[0].CompareEndpoints(
