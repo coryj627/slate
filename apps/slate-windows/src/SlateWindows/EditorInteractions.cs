@@ -621,6 +621,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
     private void CloseHoveredCitation()
     {
+        if (_hoveredCitationByteOffset is null)
+        {
+            return;
+        }
+
         _hoveredCitationByteOffset = null;
         if (IsPopoverOpen
             && PopoverAutomationName.StartsWith("Citation", StringComparison.Ordinal))
@@ -639,7 +644,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
     internal void ReleaseCitationPopover()
     {
-        if (IsPopoverOpen
+        if (_hoveredCitationByteOffset is not null
+            && IsPopoverOpen
             && PopoverAutomationName.StartsWith("Citation", StringComparison.Ordinal))
         {
             _citationCloseTimer.Stop();
@@ -1142,7 +1148,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         CitationPreview preview,
         bool requestPopoverFocus)
     {
-        _hoveredCitationByteOffset = checked((int)byteOffset);
+        _citationCloseTimer.Stop();
+        _hoveredCitationByteOffset = requestPopoverFocus
+            ? null
+            : checked((int)byteOffset);
         PopoverTitle = "Citation";
         PopoverBody = preview.Body;
         PopoverAutomationName = preview.Speech.StartsWith(

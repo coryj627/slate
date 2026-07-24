@@ -137,6 +137,38 @@ public sealed class W2EditorInteractionTests
     }
 
     [Fact]
+    public void ActivatedCitation_DoesNotInheritHoverAutoClose()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create();
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        using var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            startInteractionBackgroundWork: false);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+        int citation = Inside(tab.Text, "[@doe]");
+
+        Assert.True(interactions.ActivateAt(citation));
+        Assert.True(interactions.IsPopoverOpen);
+        interactions.ClearCitationHover();
+        PumpUiFor(TimeSpan.FromMilliseconds(1200));
+        Assert.True(interactions.IsPopoverOpen);
+
+        interactions.ClosePopoverCommand.Execute(null);
+        DrainUi();
+        interactions.HoverAt(citation);
+        Assert.True(interactions.IsPopoverOpen);
+        interactions.ClearCitationHover();
+        WaitForUi(() => !interactions.IsPopoverOpen);
+    }
+    [Fact]
     public void DirtyTaskAndSavedRecordActions_FailClosedWithoutLosingEditorText()
     {
         using InteractionFixture fixture = InteractionFixture.Create();
@@ -735,6 +767,15 @@ public sealed class W2EditorInteractionTests
             DispatcherPriority.Background,
             new Action(() => frame.Continue = false));
         Dispatcher.PushFrame(frame);
+    }
+    private static void PumpUiFor(TimeSpan duration)
+    {
+        DateTime deadline = DateTime.UtcNow + duration;
+        while (DateTime.UtcNow < deadline)
+        {
+            DrainUi();
+            Thread.Yield();
+        }
     }
     private static string EmbedText(EditorEmbedPreviewNode node) =>
         string.Concat(node.Parts.Select(part =>
