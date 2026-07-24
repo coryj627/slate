@@ -508,9 +508,12 @@ public sealed class ShellAccessibilityTests
                 "SidebarTagTree",
                 TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.Tree, tagTree.ControlType);
-            AutomationElement tagItem = tagTree.FindFirstDescendant(
-                automation.ConditionFactory.ByControlType(ControlType.TreeItem))
-                ?? throw new Xunit.Sdk.XunitException("The tag TreeItem is absent.");
+            AutomationElement tagItem = WaitForNamedElement(
+                tagTree,
+                automation,
+                "accessibility, 1 file",
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.TreeItem, tagItem.ControlType);
             Assert.True(tagItem.Patterns.SelectionItem.IsSupported);
 
             tabs = WaitForElement(
