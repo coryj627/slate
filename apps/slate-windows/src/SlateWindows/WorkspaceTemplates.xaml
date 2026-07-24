@@ -104,10 +104,13 @@
                  source so UIA ownership is stable across providers. The
                  transparent layer intentionally makes Close/Escape the only
                  dismissal paths and prevents pointer input reaching the editor. -->
-            <Grid Grid.RowSpan="2"
-                  Panel.ZIndex="100"
-                  Background="Transparent"
-                  Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
+            <local:AutomationLandmarkGrid Grid.RowSpan="2"
+                                          Panel.ZIndex="100"
+                                          Background="Transparent"
+                                          Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                          AutomationProperties.IsDialog="True"
+                                          AutomationProperties.AutomationId="EditorInteractionPopover"
+                                          AutomationProperties.Name="{Binding EditorInteractions.PopoverAutomationName}">
                 <local:EditorInteractionPopoverHost MaxWidth="620"
                                                     MaxHeight="460"
                                                     Margin="16"
@@ -115,10 +118,7 @@
                                                     VerticalAlignment="Center"
                                                     InteractionSession="{Binding EditorInteractions}"
                                                     KeyboardNavigation.TabNavigation="Cycle"
-                                                    KeyboardNavigation.ControlTabNavigation="Cycle"
-                                                    AutomationProperties.IsDialog="True"
-                                                    AutomationProperties.AutomationId="EditorInteractionPopover"
-                                                    AutomationProperties.Name="{Binding EditorInteractions.PopoverAutomationName}">
+                                                    KeyboardNavigation.ControlTabNavigation="Cycle">
                     <Border Padding="16"
                             CornerRadius="8"
                             BorderThickness="1"
@@ -181,7 +181,7 @@
                     </Grid>
                     </Border>
                 </local:EditorInteractionPopoverHost>
-            </Grid>
+            </local:AutomationLandmarkGrid>
             <StackPanel Grid.Row="0"
                         Margin="32"
                         HorizontalAlignment="Center"

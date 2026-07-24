@@ -592,12 +592,11 @@ public sealed class W2EditorInteractionTests
         Assert.DoesNotContain(
             interactionPopover.Ancestors(),
             ancestor => ancestor.Name.LocalName == "Popup");
+        Assert.Equal("AutomationLandmarkGrid", interactionPopover.Name.LocalName);
         Assert.Contains(
-            interactionPopover.Ancestors(),
-            ancestor => ancestor.Name.LocalName == "Grid"
-                && ancestor.Attributes().Any(attribute =>
-                    attribute.Name.LocalName == "Panel.ZIndex"
-                    && attribute.Value == "100"));
+            interactionPopover.Attributes(),
+            attribute => attribute.Name.LocalName == "Panel.ZIndex"
+                && attribute.Value == "100");
 
         foreach (string required in new[]
         {
