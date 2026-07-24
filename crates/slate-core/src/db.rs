@@ -187,6 +187,10 @@ const MIGRATIONS: &[Migration] = &[
         description: "directory pages: bounded parent/sort indexes (W1-RT-14)",
         sql: include_str!("../migrations/033_directory_page_indexes.sql"),
     },
+    Migration {
+        description: "tasks: canonical checkbox action offsets (W2-3)",
+        sql: include_str!("../migrations/034_task_checkbox_offsets.sql"),
+    },
 ];
 
 /// Open or create a SQLite database at `path` with Slate's standard PRAGMAs.
@@ -379,7 +383,7 @@ pub fn migrate(conn: &mut Connection) -> Result<u32, DbError> {
     Ok(final_version)
 }
 
-/// Test-only: apply migrations `1..=version` on a fresh connection —
+/// Test-only: apply pending migrations through `version` —
 /// upgrade-path fixtures need a database frozen at an older schema
 /// (e.g. pre-027, to prove the legacy op-log stamping only fires when
 /// rows exist at migration time).
@@ -388,8 +392,12 @@ pub(crate) fn migrate_up_to(conn: &mut Connection, version: u32) -> Result<(), D
     register_connection_functions(conn)?;
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     ensure_version_table(&tx)?;
+    let current = current_version(&tx)?;
     for (i, migration) in MIGRATIONS.iter().take(version as usize).enumerate() {
-        apply_migration(&tx, (i + 1) as u32, migration)?;
+        let target_version = (i + 1) as u32;
+        if target_version > current {
+            apply_migration(&tx, target_version, migration)?;
+        }
     }
     tx.commit()?;
     Ok(())
@@ -541,7 +549,7 @@ mod tests {
 
         {
             let mut conn = Connection::open(&path).expect("reopen schema-32 database");
-            assert_eq!(migrate(&mut conn).unwrap(), 33);
+            migrate_up_to(&mut conn, 33).unwrap();
             let dir: (String, String) = conn
                 .query_row(
                     "SELECT path, name FROM dirs INDEXED BY idx_dirs_parent_tree
@@ -564,7 +572,7 @@ mod tests {
         }
 
         let mut conn = Connection::open(&path).expect("reopen migrated database");
-        assert_eq!(migrate(&mut conn).unwrap(), 33);
+        migrate_up_to(&mut conn, 33).unwrap();
         conn.execute_batch(
             "DROP INDEX idx_dirs_parent_tree;
              DROP INDEX idx_files_parent_tree;
@@ -574,11 +582,8 @@ mod tests {
         .expect("seed stale same-name index definitions");
         conn.execute("DELETE FROM schema_version WHERE version = 33", [])
             .expect("simulate restored schema-version metadata");
-        assert_eq!(
-            migrate(&mut conn).unwrap(),
-            33,
-            "migration 033 must safely rebuild its existing indexes on replay"
-        );
+        migrate_up_to(&mut conn, 33)
+            .expect("migration 033 must safely rebuild its existing indexes on replay");
         for (name, required_fragments) in [
             (
                 "idx_dirs_parent_tree",
@@ -618,6 +623,46 @@ mod tests {
             )
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn migration_034_adds_task_action_ranges_and_forces_cache_reindex() {
+        let mut conn = fresh_db();
+        migrate_up_to(&mut conn, 33).expect("freeze at schema 33");
+        conn.execute(
+            "INSERT INTO files
+             (path, name, extension, size_bytes, mtime_ms, content_hash,
+              parser_version, indexed_at_ms, is_markdown)
+             VALUES ('task.md', 'task.md', 'md', 17, 1, 'hash', 1, 1, 1)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO tasks
+             (file_id, ordinal, text, status_char, completed, line, byte_offset)
+             VALUES ((SELECT id FROM files WHERE path = 'task.md'), 0,
+                     'old cache', ' ', 0, 1, 0)",
+            [],
+        )
+        .unwrap();
+
+        migrate_up_to(&mut conn, 34).unwrap();
+        let ranges: (u32, u32) = conn
+            .query_row(
+                "SELECT checkbox_start_byte, checkbox_end_byte FROM tasks",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(ranges, (0, 0));
+        let size: i64 = conn
+            .query_row(
+                "SELECT size_bytes FROM files WHERE path = 'task.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(size, -1);
     }
 
     #[test]

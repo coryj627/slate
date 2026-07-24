@@ -96,7 +96,7 @@ public sealed class ShellAccessibilityTests
         Directory.CreateDirectory(vaultRoot);
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"),
-            "---\ntags:\n  - accessibility\n---\n# Accessible note\n");
+            "![[Folder/child]]\n\n---\ntags:\n  - accessibility\n---\n# Accessible note\n");
         Directory.CreateDirectory(Path.Combine(vaultRoot, "Folder"));
         File.WriteAllText(Path.Combine(vaultRoot, "Folder", "child.md"), "# Child note\n");
 
@@ -273,6 +273,55 @@ public sealed class ShellAccessibilityTests
             Assert.True(editor.Properties.IsKeyboardFocusable.Value);
             editor.Focus();
             AssertEventuallyFocused(editor, "The opened note editor could not receive focus.");
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
+            AutomationElement interactionPopover = WaitForElement(
+                window,
+                "EditorInteractionPopover",
+                TimeSpan.FromSeconds(10));
+            Assert.StartsWith("Embed preview for", interactionPopover.Name);
+            AutomationElement popoverClose = WaitForElement(
+                window,
+                "EditorPopoverClose",
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.Button, popoverClose.ControlType);
+            Assert.True(popoverClose.Patterns.Invoke.IsSupported);
+            AssertEventuallyFocused(
+                popoverClose,
+                "The embed popover did not focus its Close button.");
+            popoverClose.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "EditorInteractionPopover")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "The editor interaction popover did not close.");
+            AssertEventuallyFocused(
+                editor,
+                "Closing the embed popover did not return focus to the editor.");
+            editor.Focus();
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
+            _ = WaitForElement(window, "EditorInteractionPopover", TimeSpan.FromSeconds(10));
+            AutomationElement citationClose = WaitForElement(
+                window,
+                "EditorPopoverClose",
+                TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(
+                citationClose,
+                "The citation popover did not focus its Close button.");
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "EditorInteractionPopover")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the editor interaction popover.");
+            AssertEventuallyFocused(
+                editor,
+                "Escape did not return focus from the popover to the editor.");
             Keyboard.Press(VirtualKeyShort.F2);
             AssertEventuallyFocused(
                 editor,
@@ -418,6 +467,24 @@ public sealed class ShellAccessibilityTests
                 "SplitRightMenuItem",
                 TimeSpan.FromSeconds(10));
             Assert.True(splitRight.IsEnabled);
+            foreach (string editorCommand in new[]
+            {
+                "EditorActivateMenuItem",
+                "EditorPreviewEmbedMenuItem",
+                "EditorToggleSpellCheckMenuItem",
+                "EditorZoomInMenuItem",
+                "EditorZoomOutMenuItem",
+                "EditorActualSizeMenuItem",
+            })
+            {
+                AutomationElement item = WaitForMenuItem(
+                    window,
+                    "EditorMenu",
+                    editorCommand,
+                    TimeSpan.FromSeconds(10));
+                Assert.Equal(ControlType.MenuItem, item.ControlType);
+                Assert.True(item.Patterns.Invoke.IsSupported);
+            }
             Assert.True(splitRight.Patterns.Invoke.IsSupported);
             splitRight.Patterns.Invoke.Pattern.Invoke();
             Assert.True(SpinWait.SpinUntil(

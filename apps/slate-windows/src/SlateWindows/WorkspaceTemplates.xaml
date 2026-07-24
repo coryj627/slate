@@ -61,21 +61,122 @@
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
-            <local:SlateTextEditor Grid.Row="0"
+            <local:SlateTextEditor x:Name="MarkdownEditor"
+                                   Grid.Row="0"
                                    Margin="12"
                                    Padding="12"
                                    Document="{Binding EditorDocument}"
                                    HighlightSession="{Binding EditorSession}"
+                                   InteractionSession="{Binding EditorInteractions}"
+                                   CaretOffset="{Binding EditorCaretOffset, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                    WordWrap="True"
                                    ShowLineNumbers="False"
                                    VerticalScrollBarVisibility="Auto"
                                    HorizontalScrollBarVisibility="Auto"
                                    FontFamily="Consolas"
-                                   FontSize="14"
+                                   FontSize="{Binding EditorPreferences.FontSize}"
+                                   SpellingPreferences="{Binding EditorPreferences}"
                                    Background="{DynamicResource Slate.WindowBackgroundBrush}"
                                    Foreground="{DynamicResource Slate.TextBrush}"
                                    Visibility="{Binding IsMarkdown, Converter={StaticResource BooleanToVisibilityConverter}}"
-                                   AutomationProperties.Name="{Binding EditorAutomationName}" />
+                                   AutomationProperties.Name="{Binding EditorAutomationName}">
+                <local:SlateTextEditor.ContextMenu>
+                    <ContextMenu DataContext="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource Self}}">
+                        <MenuItem Header="_Activate at Cursor"
+                                  AutomationProperties.AutomationId="EditorActivateAtCursor"
+                                  InputGestureText="Ctrl+Enter"
+                                  Command="{Binding EditorInteractions.ActivateAtCaretCommand}" />
+                        <MenuItem Header="Preview _Embed"
+                                  AutomationProperties.AutomationId="EditorPreviewEmbed"
+                                  InputGestureText="Ctrl+E"
+                                  Command="{Binding EditorInteractions.PreviewEmbedCommand}" />
+                        <Separator />
+                        <MenuItem Header="Check _Spelling While Typing"
+                                  AutomationProperties.AutomationId="EditorToggleSpellCheckContext"
+                                  IsCheckable="True"
+                                  IsChecked="{Binding EditorPreferences.IsSpellCheckEnabled, Mode=OneWay}"
+                                  Command="{Binding EditorPreferences.ToggleSpellCheckCommand}" />
+                    </ContextMenu>
+                </local:SlateTextEditor.ContextMenu>
+            </local:SlateTextEditor>
+            <Popup Grid.Row="0"
+                   PlacementTarget="{Binding ElementName=MarkdownEditor}"
+                   Placement="Center"
+                   AllowsTransparency="True"
+                   StaysOpen="False"
+                   IsOpen="{Binding EditorInteractions.IsPopoverOpen, Mode=TwoWay}">
+                <local:EditorInteractionPopoverHost MaxWidth="620"
+                                                    MaxHeight="460"
+                                                    Margin="16"
+                                                    InteractionSession="{Binding EditorInteractions}"
+                                                    KeyboardNavigation.TabNavigation="Cycle"
+                                                    KeyboardNavigation.ControlTabNavigation="Cycle"
+                                                    AutomationProperties.IsDialog="True"
+                                                    AutomationProperties.AutomationId="EditorInteractionPopover"
+                                                    AutomationProperties.Name="{Binding EditorInteractions.PopoverAutomationName}">
+                    <Border Padding="16"
+                            CornerRadius="8"
+                            BorderThickness="1"
+                            BorderBrush="{DynamicResource Slate.BorderBrush}"
+                            Background="{DynamicResource Slate.WindowBackgroundBrush}">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="{Binding EditorInteractions.PopoverTitle}"
+                                   FontSize="16"
+                                   FontWeight="SemiBold"
+                                   AutomationProperties.HeadingLevel="Level2" />
+                        <StackPanel Grid.Row="1" Margin="0,10,0,10">
+                            <ScrollViewer MaxWidth="560"
+                                          MaxHeight="300"
+                                          VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled"
+                                          Focusable="True"
+                                          AutomationProperties.Name="Scrollable embed preview"
+                                          Visibility="{Binding EditorInteractions.HasPopoverEmbed, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                <local:EditorEmbedPreviewView Root="{Binding EditorInteractions.PopoverEmbedRoot}"
+                                                              InteractionSession="{Binding EditorInteractions}" />
+                            </ScrollViewer>
+                            <StackPanel Visibility="{Binding EditorInteractions.HasPopoverEmbed, Converter={StaticResource InverseBooleanToVisibilityConverter}}">
+                                <Image MaxWidth="560"
+                                       MaxHeight="240"
+                                       Stretch="Uniform"
+                                       Source="{Binding EditorInteractions.PopoverImage}"
+                                       Visibility="{Binding EditorInteractions.HasPopoverImage, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                       AutomationProperties.Name="{Binding EditorInteractions.PopoverTitle}" />
+                                <TextBox MaxWidth="560"
+                                         MaxHeight="260"
+                                         Padding="0"
+                                         BorderThickness="0"
+                                         Background="Transparent"
+                                         Foreground="{DynamicResource Slate.TextBrush}"
+                                         Text="{Binding EditorInteractions.PopoverBody}"
+                                         TextWrapping="Wrap"
+                                         AcceptsReturn="True"
+                                         IsReadOnly="True"
+                                         VerticalScrollBarVisibility="Auto"
+                                         AutomationProperties.Name="Preview content" />
+                            </StackPanel>
+                        </StackPanel>
+                        <StackPanel Grid.Row="2"
+                                    HorizontalAlignment="Right"
+                                    Orientation="Horizontal">
+                            <Button Margin="0,0,8,0"
+                                    Content="Open source"
+                                    AutomationProperties.AutomationId="EditorPopoverOpenSource"
+                                    Command="{Binding EditorInteractions.OpenPopoverSourceCommand}"
+                                    Visibility="{Binding EditorInteractions.CanOpenPopoverSource, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                            <Button Content="Close"
+                                    AutomationProperties.AutomationId="EditorPopoverClose"
+                                    Command="{Binding EditorInteractions.ClosePopoverCommand}" />
+                        </StackPanel>
+                    </Grid>
+                    </Border>
+                </local:EditorInteractionPopoverHost>
+            </Popup>
             <StackPanel Grid.Row="0"
                         Margin="32"
                         HorizontalAlignment="Center"

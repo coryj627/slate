@@ -29,6 +29,28 @@ Program: [00_program.md](../00_program.md) (decisions 4, 8, 10, 15; DoD §W-A/§
   BenchmarkDotNet gate records 0.3921 / 0.4523 / 0.8920 ms p50 and 1.97×
   flatness, all green after copy-on-write in-place structure splicing removed
   W2-1's vector-recreation curve.
+- **#725 implementation decision (2026-07-23):** `SlateTextEditor` routes
+  Ctrl+Click and Ctrl+Enter through one `EditorInteractionCoordinator`; Ctrl+E
+  is the dedicated embed-preview path. The coordinator inspects canonical
+  `DocumentBuffer` spans without replacing W2-2's retained painted window,
+  and matches links by new parser-owned `OutgoingLink.span_start/span_end`
+  offsets rather than host document-order guesses. Pointer task activation is
+  confined to new parser-owned `TaskItem.checkbox_*_byte` ranges; migration 034
+  adds those cache columns and forces reindex. `DocumentBuffer.utf16_to_byte`
+  supplies stateful O(log n) hit-test mapping without materialising the note.
+  These three additive FFI fields/methods were required because the previous
+  API could not unambiguously map comment-masked links or checkbox hits without
+  a second C# parser. Saved-hash/index drift fails closed. Core-resolved nested
+  embeds are expanded recursively, corrupt images receive visible failure
+  text, and citation UIA names retain core `speech_text`. Keyboard activation
+  includes a token's right edge; pointer activation does not, and Ctrl+Click
+  commits the source caret before synchronous navigation so target caret
+  parking wins. Fluent popovers enter a cycled keyboard focus surface, return
+  focus on close, and close on tab/group deactivation. Check spelling while
+  typing is default-off and uses the installed Windows Spell Checker COM API
+  over a debounced, bounded visible AvalonEdit window with real red underlines;
+  the four generated matrix commands share this workspace-wide spelling/text
+  scale state.
 - **§W-B budgets are pinned, not pending** (W0-4 `parity_matrix.md` §W-B): p50 ≤ 0.5 ms (100 KB), ≤ 0.5 ms (1 MB), ≤ 1.0 ms (8 MB), flatness p50(8 MB) ≤ 4× p50(1 MB). W2-1's "first numbers" and W2-2's BenchmarkDotNet run are recorded **against those numbers**.
 - **The §W-A skeleton already serializes editor spans** (and headings/blocks/search/links) over the `tests/fixtures/markdown/` corpus — incl. CRLF and mixed-ending fixtures — with committed goldens both platforms diff (`parity_golden/`, W0-3). W2-2's §W-A span rows **extend that harness and corpus** (editor-scale fixtures, windowed-request coverage), they do not build a new mechanism; serialization rules live in `CanonicalJson.cs` + the Swift twin, changed only together.
 - **C# census conventions** (W0-3): `[Trait("census", …)]`, `CensusTier` moderate/full tiers, serialized test assembly, `Support/` recorders — W2-1's drift-guard and edit-storm censuses (§W-E) follow them.
@@ -71,7 +93,7 @@ W2-1 first p50s on the recorded Windows runner are 0.1147 / 0.2008 /
 1. Parity set (matrix rows): wikilink follow (Ctrl+Click + keyboard command) with anchor/subpath handling via core resolution; tag activation → search scope; citation hover/popover data; embed affordances (expansion per the shipped embed state machine); checkbox toggles writing through core; code-fence and math-region behaviors as shipped on mac at port start.
 2. Every interaction consumes core APIs already exercised by mac (link resolution, embeds, tasks) — no C# re-derivation (§W-G).
 
-- [ ] Interaction parity rows green incl. keyboard-only paths; §W-C editor rows via FlaUI
+- [x] Interaction parity rows green incl. keyboard-only paths; §W-C editor rows via FlaUI
 
 ## W2-4 · Autocomplete (Milestone V parity)* — PR 4
 

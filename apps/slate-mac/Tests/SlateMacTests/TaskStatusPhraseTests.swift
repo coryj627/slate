@@ -19,7 +19,9 @@ final class TaskStatusPhraseTests: XCTestCase {
             priority: nil,
             recurrence: nil,
             line: 1,
-            byteOffset: 0
+            byteOffset: 0,
+            checkboxStartByte: 0,
+            checkboxEndByte: 0
         )
     }
 

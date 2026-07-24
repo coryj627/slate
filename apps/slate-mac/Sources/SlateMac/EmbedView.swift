@@ -395,15 +395,9 @@ enum EmbedBodySegment {
 /// alternating sequence of `.text` and `.embed` segments in source
 /// order.
 ///
-/// The dropped span length is `5 + raw_target.utf8.count` —
-/// `![[` (3 bytes) + target + `]]` (2 bytes) for the wikilink
-/// embed form. Audit #199: earlier shape used `4 + …` which left a
-/// stray `]` in the trailing text that VoiceOver would read as
-/// "right bracket". For Markdown-image embeds (`![alt](src)`) the
-/// length is variable; until the backend reports a real span_end
-/// the approximation may leave a small remainder for those —
-/// documented limitation, mostly invisible because Markdown-image
-/// embeds inside an embedded note are rare.
+/// Core supplies the exact authored `[byteOffsetInParent,
+/// byteEndInParent)` span, including aliases, anchors, Unicode, and
+/// Markdown-image syntax. Hosts never reconstruct embed grammar.
 func splice(text: String, nested: [NestedEmbed]) -> [EmbedBodySegment] {
     if nested.isEmpty {
         return [.text(text)]
@@ -415,16 +409,14 @@ func splice(text: String, nested: [NestedEmbed]) -> [EmbedBodySegment] {
     let totalLen = bytes.count
     for ne in sorted {
         let offset = Int(ne.byteOffsetInParent)
-        guard offset >= cursor, offset <= totalLen else { continue }
+        let end = Int(ne.byteEndInParent)
+        guard offset >= cursor, offset <= end, end <= totalLen else { continue }
         if offset > cursor {
             let leading = substringByByteRange(text: text, start: cursor, end: offset)
             out.append(.text(leading))
         }
-        // Wikilink embed span: `![[target]]` = 5 + target.utf8.count.
-        let approxLen = 5 + ne.rawTarget.utf8.count
-        let consumed = min(offset + approxLen, totalLen)
         out.append(.embed(ne))
-        cursor = consumed
+        cursor = end
     }
     if cursor < totalLen {
         let trailing = substringByByteRange(text: text, start: cursor, end: totalLen)

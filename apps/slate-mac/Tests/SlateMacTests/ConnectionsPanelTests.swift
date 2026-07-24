@@ -182,7 +182,7 @@ final class ConnectionsPanelTests: XCTestCase {
                 OutgoingLink(
                     targetPath: "out.md", targetRaw: "Outbound", targetAnchor: nil,
                     kind: "wikilink", isEmbed: false, isExternal: false, isUnresolved: false,
-                    snippet: "…the Outbound note…", ordinal: 0, displayText: nil)
+                    snippet: "…the Outbound note…", ordinal: 0, spanStart: 0, spanEnd: 0, displayText: nil)
             ],
             properties: [])
         let model = ConnectionsModel(hood: hood, bundle: bundle, depth: 1)

@@ -3,6 +3,7 @@
 
 using System.Windows;
 using System.Windows.Automation.Peers;
+using System.Windows.Input;
 using ICSharpCode.AvalonEdit;
 
 namespace SlateWindows;
@@ -20,7 +21,23 @@ internal sealed class SlateTextEditor : TextEditor
             typeof(SlateTextEditor),
             new PropertyMetadata(null, HighlightSession_Changed));
 
+    public static readonly DependencyProperty InteractionSessionProperty =
+        DependencyProperty.Register(
+            nameof(InteractionSession),
+            typeof(EditorInteractionCoordinator),
+            typeof(SlateTextEditor),
+            new PropertyMetadata(null, InteractionSession_Changed));
+
+    public static readonly DependencyProperty SpellingPreferencesProperty =
+        DependencyProperty.Register(
+            nameof(SpellingPreferences),
+            typeof(EditorPreferencesViewModel),
+            typeof(SlateTextEditor),
+            new PropertyMetadata(null, SpellingPreferences_Changed));
+
     private AvalonHighlightingCoordinator? _highlighting;
+    private AvalonSpellingCoordinator? _spelling;
+    private EditorInteractionCoordinator? _attachedInteraction;
 
     public SlateTextEditor()
     {
@@ -32,6 +49,18 @@ internal sealed class SlateTextEditor : TextEditor
     {
         get => (AvalonDocumentBufferSession?)GetValue(HighlightSessionProperty);
         set => SetValue(HighlightSessionProperty, value);
+    }
+
+    public EditorInteractionCoordinator? InteractionSession
+    {
+        get => (EditorInteractionCoordinator?)GetValue(InteractionSessionProperty);
+        set => SetValue(InteractionSessionProperty, value);
+    }
+
+    public EditorPreferencesViewModel? SpellingPreferences
+    {
+        get => (EditorPreferencesViewModel?)GetValue(SpellingPreferencesProperty);
+        set => SetValue(SpellingPreferencesProperty, value);
     }
 
     internal bool FocusInputOwner() => TextArea.Focus();
@@ -47,7 +76,72 @@ internal sealed class SlateTextEditor : TextEditor
         if (e.Property == DocumentProperty && IsLoaded)
         {
             AttachHighlighting();
+            AttachSpelling();
         }
+    }
+
+    protected override void OnPreviewMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        if (Keyboard.Modifiers == ModifierKeys.Control
+            && TryOffsetAt(e.GetPosition(this), out int offset))
+        {
+            CaretOffset = offset;
+            if (InteractionSession?.ActivateAt(
+                    offset,
+                    EditorInteractionOrigin.Pointer) == true)
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
+        base.OnPreviewMouseLeftButtonDown(e);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (TryOffsetAt(e.GetPosition(this), out int offset))
+        {
+            InteractionSession?.HoverAt(offset);
+        }
+    }
+
+    protected override void OnMouseLeave(MouseEventArgs e)
+    {
+        base.OnMouseLeave(e);
+        InteractionSession?.ClearCitationHover();
+    }
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (modifiers == ModifierKeys.Control && e.Key == Key.E)
+        {
+            InteractionSession?.PreviewEmbedAt(CaretOffset);
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == ModifierKeys.Control
+            && e.Key == Key.Enter
+            && InteractionSession?.ActivateAt(
+                CaretOffset,
+                EditorInteractionOrigin.Keyboard) == true)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == ModifierKeys.None
+            && e.Key == Key.Escape
+            && InteractionSession?.IsPopoverOpen == true)
+        {
+            InteractionSession.ClosePopoverCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        base.OnPreviewKeyDown(e);
     }
 
     private static void HighlightSession_Changed(
@@ -61,12 +155,42 @@ internal sealed class SlateTextEditor : TextEditor
         }
     }
 
-    private void SlateTextEditor_Loaded(object sender, RoutedEventArgs e) => AttachHighlighting();
+    private static void InteractionSession_Changed(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var editor = (SlateTextEditor)dependencyObject;
+        if (editor.IsLoaded)
+        {
+            editor.AttachInteractions();
+        }
+    }
+
+    private static void SpellingPreferences_Changed(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var editor = (SlateTextEditor)dependencyObject;
+        if (editor.IsLoaded)
+        {
+            editor.AttachSpelling();
+        }
+    }
+
+    private void SlateTextEditor_Loaded(object sender, RoutedEventArgs e)
+    {
+        AttachHighlighting();
+        AttachSpelling();
+        AttachInteractions();
+    }
 
     private void SlateTextEditor_Unloaded(object sender, RoutedEventArgs e)
     {
         _highlighting?.Dispose();
         _highlighting = null;
+        _spelling?.Dispose();
+        _spelling = null;
+        DetachInteractions();
     }
 
     private void AttachHighlighting()
@@ -77,6 +201,72 @@ internal sealed class SlateTextEditor : TextEditor
         {
             _highlighting = new AvalonHighlightingCoordinator(this, HighlightSession);
         }
+    }
+
+    private void AttachSpelling()
+    {
+        _spelling?.Dispose();
+        _spelling = null;
+        if (SpellingPreferences is not null)
+        {
+            _spelling = new AvalonSpellingCoordinator(this, SpellingPreferences);
+        }
+    }
+
+    private void AttachInteractions()
+    {
+        DetachInteractions();
+        _attachedInteraction = InteractionSession;
+        if (_attachedInteraction is null)
+        {
+            return;
+        }
+
+        _attachedInteraction.FocusRequested += Interaction_FocusRequested;
+        _attachedInteraction.CaretNavigationRequested += Interaction_CaretNavigationRequested;
+        ApplyPendingCaret();
+    }
+
+    private void DetachInteractions()
+    {
+        if (_attachedInteraction is null)
+        {
+            return;
+        }
+
+        _attachedInteraction.FocusRequested -= Interaction_FocusRequested;
+        _attachedInteraction.CaretNavigationRequested -= Interaction_CaretNavigationRequested;
+        _attachedInteraction = null;
+    }
+
+    private void Interaction_FocusRequested(object? sender, EventArgs e) => FocusInputOwner();
+
+    private void Interaction_CaretNavigationRequested(object? sender, EventArgs e) =>
+        ApplyPendingCaret();
+
+    private void ApplyPendingCaret()
+    {
+        if (_attachedInteraction?.TryConsumePendingCaret(out int offset) != true)
+        {
+            return;
+        }
+
+        CaretOffset = Math.Clamp(offset, 0, Document.TextLength);
+        ScrollToLine(Document.GetLineByOffset(CaretOffset).LineNumber);
+        FocusInputOwner();
+    }
+
+    private bool TryOffsetAt(Point point, out int offset)
+    {
+        TextViewPosition? position = GetPositionFromPoint(point);
+        if (position is null)
+        {
+            offset = 0;
+            return false;
+        }
+
+        offset = Document.GetOffset(position.Value.Location);
+        return true;
     }
 }
 

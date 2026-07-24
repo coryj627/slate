@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-23 at `f63dd90` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-07-23 at `ffdb78b` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -112,17 +112,17 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.canvas.zoomOut` | Canvas: Zoom Out | ⌘- | Command Minus | #745 (W6-1) | pending |
 | `slate.canvas.zoomToSelection` | Canvas: Zoom to Selection | — | — | #745 (W6-1) | pending |
 | `slate.diagnostics.refreshSync` | Refresh Sync Diagnostics | — | — | #740 (W4-8) | pending |
-| `slate.editor.actualSize` | Editor: Actual Size | — | — | #725 (W2-3) | pending |
+| `slate.editor.actualSize` | Editor: Actual Size | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.addProperty` | Add Property… | — | — | #736 (W4-4) | pending |
 | `slate.editor.bulkRenameProperties` | Bulk Rename Properties… | ⇧⌘R | Shift Command R | #736 (W4-4) | pending |
 | `slate.editor.citationSummary` | Citation Summary | ⇧⌘J | Shift Command J | #737 (W4-5) | pending |
 | `slate.editor.findInNote` | Find… | ⌘F | Command F | #742 (W5-2) | pending |
 | `slate.editor.save` | Save | ⌘S | Command S | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.togglePropertiesSource` | Show Properties Source | ⇧⌘D | Shift Command D | #736 (W4-4) | pending |
-| `slate.editor.toggleSpellCheck` | Check Spelling While Typing | — | — | #725 (W2-3) | pending |
+| `slate.editor.toggleSpellCheck` | Check Spelling While Typing | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.toggleViewMode` | Toggle Reading Mode | ⇧⌘E | Shift Command E | #728 (W3-1) | pending |
-| `slate.editor.zoomIn` | Editor: Zoom In | — | — | #725 (W2-3) | pending |
-| `slate.editor.zoomOut` | Editor: Zoom Out | — | — | #725 (W2-3) | pending |
+| `slate.editor.zoomIn` | Editor: Zoom In | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
+| `slate.editor.zoomOut` | Editor: Zoom Out | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.file.cancelImport` | Cancel Import | ⌘. | Command Period | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.file.copyPath` | Copy Path | — | — | #744 (W5-4) | pending |
 | `slate.file.delete` | Move to Trash | — | — | #744 (W5-4) | pending |
@@ -258,8 +258,8 @@ What `WorkspaceStore` round-trips — a **separate** inventory from the right-pa
 | Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
-| Editor canonical spans | #381 span API consumers | #381 (W2-2) | pending |
-| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | pending |
+| Editor canonical spans | #381 span API consumers | #381 (W2-2) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
+| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | pending |
 | Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | pending |
 | Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | pending |

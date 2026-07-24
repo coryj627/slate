@@ -43,6 +43,27 @@ pub trait VaultProvider: Send + Sync {
         self.read_file(relative)
     }
 
+    /// Read up to `max_bytes + 1` bytes starting at `offset`.
+    ///
+    /// The extra byte is the same over-cap sentinel used by
+    /// [`Self::read_file_with_cap`]. Filesystem-backed providers should
+    /// override this so a late anchored preview does not materialize the
+    /// entire prefix before the requested section or block.
+    fn read_file_range_with_cap(
+        &self,
+        relative: &str,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        let bytes = self.read_file(relative)?;
+        let start = usize::try_from(offset)
+            .unwrap_or(usize::MAX)
+            .min(bytes.len());
+        let cap = usize::try_from(max_bytes.saturating_add(1)).unwrap_or(usize::MAX);
+        let end = start.saturating_add(cap).min(bytes.len());
+        Ok(bytes[start..end].to_vec())
+    }
+
     /// Write a vault file. Implementations should be atomic where
     /// possible (write to a temp file, then rename).
     fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError>;

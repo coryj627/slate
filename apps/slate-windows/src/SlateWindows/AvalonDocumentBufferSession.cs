@@ -175,7 +175,49 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
     /// Windows highlight classifier boundary: all Markdown semantics come from
     /// <see cref="DocumentBuffer.HighlightInRange"/>.
     /// </summary>
-    public EditorHighlightWindow HighlightInRange(int startUtf16, int endUtf16)
+    public EditorHighlightWindow HighlightInRange(int startUtf16, int endUtf16) =>
+        ComputeHighlightWindow(startUtf16, endUtf16, retain: true);
+
+    /// <summary>
+    /// Computes a canonical semantic window for a discrete interaction without
+    /// replacing <see cref="LatestHighlightWindow"/>. The retained window must
+    /// remain the exact one painted by the colorizer for W7's UIA consumer.
+    /// </summary>
+    internal EditorHighlightWindow InspectInRange(int startUtf16, int endUtf16) =>
+        ComputeHighlightWindow(startUtf16, endUtf16, retain: false);
+
+    internal uint Utf16ToByte(int utf16Offset)
+    {
+        ThrowIfDisposed();
+        Document.VerifyAccess();
+        lock (_gate)
+        {
+            return _buffer.Utf16ToByte(checked((uint)Math.Clamp(
+                utf16Offset,
+                0,
+                Document.TextLength)));
+        }
+    }
+
+    internal int ByteToUtf16(uint byteOffset)
+    {
+        ThrowIfDisposed();
+        Document.VerifyAccess();
+        return checked((int)_buffer.ByteToUtf16(byteOffset));
+    }
+    /// <summary>
+    /// Parses display-math interaction ranges from an O(1) canonical rope
+    /// snapshot. Safe to call from the interaction coordinator's worker.
+    /// </summary>
+    internal IReadOnlyList<EditorInteractionRange> EditorInteractionMathRanges()
+    {
+        ThrowIfDisposed();
+        return _buffer.EditorInteractionMathRanges();
+    }
+    private EditorHighlightWindow ComputeHighlightWindow(
+        int startUtf16,
+        int endUtf16,
+        bool retain)
     {
         ThrowIfDisposed();
         Document.VerifyAccess();
@@ -209,7 +251,11 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
                 appliedStart,
                 appliedEnd - appliedStart,
                 spans);
-            _latestHighlightWindow = window;
+            if (retain)
+            {
+                _latestHighlightWindow = window;
+            }
+
             return window;
         }
     }
@@ -472,6 +518,22 @@ internal sealed class AvalonDocumentBufferSession : IDisposable
         AdoptSavedBaseline(savedBaseline);
     }
 
+    internal void MarkSavedAfterVerifiedDelta(
+        EditorSavedBaseline savedBaseline,
+        long expectedRevision)
+    {
+        ArgumentNullException.ThrowIfNull(savedBaseline);
+        ThrowIfDisposed();
+        Document.VerifyAccess();
+        if (Revision != expectedRevision
+            || Document.TextLength != savedBaseline.Utf16Length)
+        {
+            throw new InvalidOperationException(
+                "Verified task delta no longer matches the editor revision.");
+        }
+
+        AdoptSavedBaseline(savedBaseline);
+    }
     private void AdoptSavedBaseline(EditorSavedBaseline savedBaseline)
     {
         lock (_gate)
