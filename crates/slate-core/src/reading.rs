@@ -1253,9 +1253,13 @@ struct TokenRun {
     kind: ReadingInlineRunKind,
     ax_text: Option<String>,
     /// The authored bytes the token replaced. Emitted instead of
-    /// `display` when the sentinel lands inside a construct that binds
+    /// `display` when the mask lands inside a construct that binds
     /// tighter than a link — see [`TokenMode::Literal`].
     source: String,
+    /// True for an escaped authored [`TOKEN_MARKER`] scalar rather than a
+    /// selected Slate token: it renders as that scalar with no affordance
+    /// and no construct break, so surrounding text still coalesces.
+    is_escape: bool,
 }
 
 fn map_token(
@@ -1281,6 +1285,7 @@ fn map_token(
             let resolved = is_resolved(&target, ReadingWikiGrammar::Wikilink, sets);
             Some(TokenRun {
                 source: span_text.to_string(),
+                is_escape: false,
                 display,
                 kind: ReadingInlineRunKind::Wikilink {
                     target,
@@ -1300,6 +1305,7 @@ fn map_token(
             let parts = embed_parts(span_text)?;
             Some(TokenRun {
                 source: span_text.to_string(),
+                is_escape: false,
                 display: parts.display,
                 kind: ReadingInlineRunKind::Embed { key: parts.key },
                 ax_text: None,
@@ -1311,6 +1317,7 @@ fn map_token(
             }
             Some(TokenRun {
                 source: span_text.to_string(),
+                is_escape: false,
                 display: span_text.to_string(),
                 kind: ReadingInlineRunKind::Tag {
                     name: span_text[1..].to_string(),
@@ -1330,6 +1337,7 @@ fn map_token(
                 .unwrap_or_else(|| span_text.to_string());
             Some(TokenRun {
                 source: span_text.to_string(),
+                is_escape: false,
                 display,
                 kind: ReadingInlineRunKind::Citation {
                     raw: span_text.to_string(),
@@ -1547,7 +1555,10 @@ fn render_inlines(
     // a wrong activation target, silently. Carrying the index makes that
     // structurally impossible: an unrendered mark is simply never
     // emitted, and its neighbours are unaffected.
-    let marker = token_marker(source);
+    // Authored text is copied through `push_escaped`, so the only
+    // TOKEN_MARKER scalars in `masked` are delimiters we wrote — which is
+    // what lets the delimiter stay ONE fixed-width scalar and keeps
+    // construction linear.
     let mut masked = String::with_capacity(source.len());
     let mut tokens: Vec<TokenRun> = Vec::new();
     let mut cursor = 0usize;
@@ -1557,19 +1568,19 @@ fn render_inlines(
         if start < cursor || end > source.len() || start >= end {
             continue;
         }
-        masked.push_str(&source[cursor..start]);
+        push_escaped(&mut masked, &source[cursor..start], &mut tokens);
         match map_token(&span.kind, &source[start..end], citations, sets) {
             Some(token) => {
                 // Index 0 is reserved for the scaffold mark below.
-                masked.push_str(&mark_for(&marker, tokens.len() + 1));
+                masked.push_str(&mark_for(tokens.len() + 1));
                 tokens.push(token);
             }
             // Interior didn't map — keep the authored bytes.
-            None => masked.push_str(&source[start..end]),
+            None => push_escaped(&mut masked, &source[start..end], &mut tokens),
         }
         cursor = end;
     }
-    masked.push_str(&source[cursor..]);
+    push_escaped(&mut masked, &source[cursor..], &mut tokens);
 
     // --- Inline-ONLY parse (the `.inlineOnlyPreservingWhitespace` contract)
     //
@@ -1598,13 +1609,14 @@ fn render_inlines(
     // The scaffold is itself a token mark whose token renders as nothing:
     // uniform with every other mark, so the expansion scanner needs no
     // special case, and it disappears from the output for free.
-    let scaffold = mark_for(&marker, 0);
+    let scaffold = mark_for(0);
     let mut all_tokens = Vec::with_capacity(tokens.len() + 1);
     all_tokens.push(TokenRun {
         display: String::new(),
         kind: ReadingInlineRunKind::Text,
         ax_text: None,
         source: String::new(),
+        is_escape: true,
     });
     all_tokens.extend(tokens);
 
@@ -1639,15 +1651,7 @@ fn render_inlines(
     }
     let prefix_len = scaffold.len();
 
-    let mut walker = InlineWalker::new(
-        &probe,
-        &masked,
-        prefix_len,
-        &collapses,
-        &marker,
-        &all_tokens,
-        sets,
-    );
+    let mut walker = InlineWalker::new(&probe, &masked, prefix_len, &collapses, &all_tokens, sets);
     walker.run();
     (walker.out.content, walker.out.runs)
 }
@@ -1693,21 +1697,21 @@ fn render_inlines(
 /// the true opener and leaves the authored scalars as text.
 ///
 /// The marker is longer than any authored run of its scalar by
-/// construction ([`token_marker`]), so authored text can never supply a
+/// escaping ([`push_escaped`]), so authored text can never supply a
 /// complete marker window itself.
-fn find_mask(text: &str, marker: &str, token_count: usize) -> Option<(usize, usize, usize)> {
+fn find_mask(text: &str, token_count: usize) -> Option<(usize, usize, usize)> {
     let mut search = 0usize;
     while search < text.len() {
-        let open = search + text[search..].find(marker)?;
-        let after = open + marker.len();
+        let open = search + text[search..].find(TOKEN_MARKER)?;
+        let after = open + TOKEN_MARKER.len();
         let digits = text[after..].bytes().take_while(u8::is_ascii_digit).count();
         if digits > 0 {
             let digits_end = after + digits;
-            if text[digits_end..].starts_with(marker)
+            if text[digits_end..].starts_with(TOKEN_MARKER)
                 && let Ok(index) = text[after..digits_end].parse::<usize>()
                 && index < token_count
             {
-                return Some((open, digits_end + marker.len(), index));
+                return Some((open, digits_end + TOKEN_MARKER.len(), index));
             }
         }
         // Step ONE scalar, not one marker: the real opener may start
@@ -1717,27 +1721,56 @@ fn find_mask(text: &str, marker: &str, token_count: usize) -> Option<(usize, usi
     None
 }
 
+/// The token-mask delimiter: U+FFFC OBJECT REPLACEMENT CHARACTER, one
+/// scalar, **fixed width**.
+///
+/// Collision-freedom comes from ESCAPING, not from growing the delimiter.
+/// An earlier design sized the marker to one scalar longer than the
+/// longest authored run of U+FFFC, which made it collision-free but also
+/// made construction Θ(longest_run × token_count): a ~100 KiB paragraph
+/// holding a 32k-scalar run and a thousand tokens amplified into hundreds
+/// of megabytes of intermediate string — an out-of-memory crash reachable
+/// by opening an imported note, far under any file-size refusal
+/// threshold. Every authored occurrence is instead escaped into a literal
+/// mask ([`TokenRun::is_escape`]) as the masked text is built, so the
+/// only U+FFFC scalars in it are delimiters we wrote, and construction
+/// stays linear in source size plus token count.
+///
+/// The scalar is Unicode category So — the punctuation/symbol class that
+/// bounded the retired `[label](url)` splice — so a delimiter beside a
+/// masked token flanks exactly as it did before. A letter-class scalar
+/// (U+2E2F VERTICAL TILDE is `Lm` despite sitting in Supplemental
+/// Punctuation) or a Private Use scalar would not.
+const TOKEN_MARKER: &str = "\u{FFFC}";
+
+/// Append `text` to `masked`, escaping every authored [`TOKEN_MARKER`]
+/// scalar into a literal mask so it can never be mistaken for a
+/// delimiter. Literal masks render as the authored scalar with no
+/// affordance and no construct break, so neighbouring text still
+/// coalesces into one run.
+fn push_escaped(masked: &mut String, text: &str, tokens: &mut Vec<TokenRun>) {
+    let mut rest = text;
+    while let Some(at) = rest.find(TOKEN_MARKER) {
+        masked.push_str(&rest[..at]);
+        masked.push_str(&mark_for(tokens.len() + 1));
+        tokens.push(TokenRun {
+            display: TOKEN_MARKER.to_string(),
+            kind: ReadingInlineRunKind::Text,
+            ax_text: None,
+            source: TOKEN_MARKER.to_string(),
+            is_escape: true,
+        });
+        rest = &rest[at + TOKEN_MARKER.len()..];
+    }
+    masked.push_str(rest);
+}
+
 /// One token's mask: `<marker><index><marker>`. The digits are inert to
 /// CommonMark (the probe guarantees they are never at a line start, so
 /// they cannot open an ordered list), and the marker scalars bound the
 /// run so flanking is unchanged.
-fn mark_for(marker: &str, index: usize) -> String {
-    format!("{marker}{index}{marker}")
-}
-
-fn token_marker(text: &str) -> String {
-    const MARK: char = '\u{FFFC}';
-    let mut longest = 0usize;
-    let mut current = 0usize;
-    for scalar in text.chars() {
-        if scalar == MARK {
-            current += 1;
-            longest = longest.max(current);
-        } else {
-            current = 0;
-        }
-    }
-    std::iter::repeat_n(MARK, longest + 1).collect()
+fn mark_for(index: usize) -> String {
+    format!("{TOKEN_MARKER}{index}{TOKEN_MARKER}")
 }
 
 #[derive(Default)]
@@ -1819,7 +1852,6 @@ struct InlineWalker<'a> {
     /// Probe offsets (post-prefix) where a CRLF collapsed to one space,
     /// ascending — the only places probe and `masked` offsets diverge.
     collapses: &'a [usize],
-    marker: &'a str,
     tokens: &'a [TokenRun],
     sets: &'a RecordSets,
     out: RunBuilder,
@@ -1848,7 +1880,6 @@ impl<'a> InlineWalker<'a> {
         masked: &'a str,
         prefix_len: usize,
         collapses: &'a [usize],
-        marker: &'a str,
         tokens: &'a [TokenRun],
         sets: &'a RecordSets,
     ) -> Self {
@@ -1857,7 +1888,6 @@ impl<'a> InlineWalker<'a> {
             masked,
             prefix_len,
             collapses,
-            marker,
             tokens,
             sets,
             out: RunBuilder::default(),
@@ -2000,9 +2030,8 @@ impl<'a> InlineWalker<'a> {
     fn emit_text(&mut self, text: &str, extra_style: Option<ReadingInlineStyle>, mode: TokenMode) {
         let styles = self.styles_now(extra_style);
         let (kind, ax) = self.current();
-        let marker = self.marker;
         let mut rest = text;
-        while let Some((open, end, index)) = find_mask(rest, marker, self.tokens.len()) {
+        while let Some((open, end, index)) = find_mask(rest, self.tokens.len()) {
             let head = rest[..open].to_string();
             let construct = self.construct;
             self.out.push(&head, &styles, &kind, &ax, construct);
@@ -2025,6 +2054,15 @@ impl<'a> InlineWalker<'a> {
         let Some(token) = self.tokens.get(index) else {
             return;
         };
+        // An escaped authored scalar is not a construct: it renders as
+        // itself in the CURRENT context, with no construct break, so the
+        // text either side of it still coalesces into one run.
+        if token.is_escape {
+            let escaped = token.display.clone();
+            let construct = self.construct;
+            self.out.push(&escaped, styles, kind, ax, construct);
+            return;
+        }
         let token_kind = token.kind.clone();
         let token_ax = token.ax_text.clone();
         let display = token.display.clone();
@@ -3897,25 +3935,19 @@ final para
         );
     }
 
-    /// The marker is un-exhaustible by construction: one scalar longer
-    /// than the longest authored run of U+FFFC is always absent, so there
-    /// is no collision case that could force a degraded render. An
-    /// earlier design drew from a finite pool and fell back to emitting
-    /// raw Markdown once a document used every candidate.
+    /// Collision-freedom comes from ESCAPING, so the delimiter stays one
+    /// fixed-width scalar however many the author wrote — and every
+    /// authored occurrence still survives beside a working affordance.
+    ///
+    /// An earlier design sized the marker to one scalar longer than the
+    /// longest authored run, which was collision-free but made
+    /// construction Θ(longest_run × token_count); see
+    /// `token_masking_is_linear_in_source_size`.
     #[test]
-    fn token_marker_is_always_absent_and_never_degrades() {
+    fn authored_markers_are_escaped_not_outgrown() {
         for run in 0..6usize {
             let crowded: String = std::iter::repeat_n('\u{FFFC}', run).collect();
             let source = format!("{crowded} [[Note]] {crowded} tail");
-            let marker = token_marker(&source);
-            assert!(
-                !source.contains(&marker),
-                "marker {marker:?} collides with the source"
-            );
-            assert!(marker.chars().all(|c| c == '\u{FFFC}'));
-
-            // The whole pipeline still renders every authored byte AND a
-            // working affordance — never a degraded raw-Markdown render.
             let segment = only_segment(&source);
             if run > 0 {
                 assert!(
@@ -3924,6 +3956,11 @@ final para
                     segment.content
                 );
             }
+            assert_eq!(
+                segment.content.matches('\u{FFFC}').count(),
+                run * 2,
+                "exactly the authored scalars, no delimiters leaked"
+            );
             assert!(
                 segment
                     .runs
@@ -3934,6 +3971,37 @@ final para
             );
             assert_partitions(&segment);
         }
+    }
+
+    /// Resource-amplification guard. The masked/probe strings must stay
+    /// linear in source size plus token count: with a variable-width
+    /// marker, a ~100 KiB paragraph holding a long U+FFFC run and a
+    /// thousand tokens amplified into hundreds of megabytes of
+    /// intermediate string — an out-of-memory crash reachable by opening
+    /// an imported note, far under any file-size refusal threshold.
+    #[test]
+    fn token_masking_is_linear_in_source_size() {
+        let run: String = std::iter::repeat_n('\u{FFFC}', 8_192).collect();
+        let mut source = String::with_capacity(64 * 1024);
+        source.push_str(&run);
+        for _ in 0..512 {
+            source.push_str(" [[a]] ");
+        }
+        let segment = only_segment(&source);
+        // Rendered content is bounded by the authored size, not by
+        // run_length × token_count.
+        assert!(
+            segment.content.len() < source.len() * 2,
+            "rendered {} bytes from {} authored — amplification",
+            segment.content.len(),
+            source.len()
+        );
+        assert_eq!(
+            segment.content.matches('\u{FFFC}').count(),
+            8_192,
+            "every authored scalar survives, none invented"
+        );
+        assert_partitions(&segment);
     }
 
     /// pulldown exposes a link's destination and title as Tag metadata
