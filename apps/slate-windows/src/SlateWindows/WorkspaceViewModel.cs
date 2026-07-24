@@ -66,6 +66,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     private readonly bool _ownsEditorPreferences;
     private readonly bool _startInteractionBackgroundWork;
     private readonly Func<string, string, string, uint?> _anchorResolver;
+    private readonly Func<EditorInteractionWorkerKind, Exception?>?
+        _interactionBackgroundFaultForTests;
     private AvalonDocumentBufferSession? _editorSession;
     private EditorInteractionCoordinator? _editorInteractions;
     private string _text = string.Empty;
@@ -90,7 +92,9 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         Action<A11yEvent>? announce = null,
         EditorPreferencesViewModel? editorPreferences = null,
         bool startInteractionBackgroundWork = true,
-        Func<string, string, string, uint?>? anchorResolver = null)
+        Func<string, string, string, uint?>? anchorResolver = null,
+        Func<EditorInteractionWorkerKind, Exception?>?
+            interactionBackgroundFaultForTests = null)
     {
         _session = session;
         _documentChanged = documentChanged;
@@ -100,6 +104,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         _ownsEditorPreferences = editorPreferences is null;
         _startInteractionBackgroundWork = startInteractionBackgroundWork;
         _anchorResolver = anchorResolver ?? SlateUniffiMethods.LinkAnchorByteOffset;
+        _interactionBackgroundFaultForTests = interactionBackgroundFaultForTests;
         EditorPreferences = editorPreferences ?? new EditorPreferencesViewModel(_announce);
         Id = state.Id;
         Item = state.Item;
@@ -662,7 +667,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
                 _navigate,
                 _activateTag,
                 _announce,
-                _startInteractionBackgroundWork);
+                _startInteractionBackgroundWork,
+                _interactionBackgroundFaultForTests);
         }
     }
 

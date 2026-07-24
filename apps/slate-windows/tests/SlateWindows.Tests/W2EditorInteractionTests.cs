@@ -175,6 +175,331 @@ public sealed class W2EditorInteractionTests
     }
 
     [Fact]
+    public void ProductionBackgroundCache_ReplaysImmediateOffsetZeroEmbedPreview()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(
+            "![[target#Destination]]\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        using var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")));
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        int focusRequests = 0;
+        interactions.PopoverFocusRequested += (_, _) => focusRequests++;
+
+        Assert.True(interactions.PreviewEmbedAt(0));
+
+        WaitForUi(() => interactions.IsPopoverOpen);
+        Assert.Equal(1, focusRequests);
+    }
+
+    [Fact]
+    public void BackgroundWorkers_RetryTransientFaultsAndRecover()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(
+            "![[target#Destination]]\n[@doe]\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var attempts = new int[3];
+        using var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            interactionBackgroundFaultForTests: kind =>
+                Interlocked.Increment(ref attempts[(int)kind]) <= 2
+                    ? new IOException("Injected transient worker fault.")
+                    : null);
+        EditorInteractionCoordinator interactions = tab.EditorInteractions!;
+
+        Assert.True(interactions.PreviewEmbedAt(0));
+        WaitForUi(() => interactions.IsPopoverOpen);
+        interactions.ClosePopoverCommand.Execute(null);
+        int citation = Inside(tab.Text, "[@doe]");
+        WaitForUi(() =>
+        {
+            _ = interactions.ActivateAt(citation);
+            return interactions.IsPopoverOpen;
+        });
+
+        Assert.StartsWith("Citation", interactions.PopoverAutomationName);
+        Assert.All(attempts, count => Assert.InRange(count, 3, 6));
+    }
+
+    [Fact]
+    public void BackgroundWorkers_BoundTerminalFaultsAndAnnounceFailures()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(
+            "![[target#Destination]]\n[@doe]\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+
+        var mathAnnouncements = new List<A11yEvent>();
+        int mathAttempts = 0;
+        using (var mathTab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            announce: mathAnnouncements.Add,
+            startInteractionBackgroundWork: false,
+            interactionBackgroundFaultForTests: kind =>
+                kind is EditorInteractionWorkerKind.Math
+                    ? InjectTerminalFault(ref mathAttempts)
+                    : null))
+        {
+            mathTab.EditorInteractions!.RefreshArtifactCacheForTests();
+            Assert.True(mathTab.EditorInteractions.PreviewEmbedAt(0));
+            WaitForUi(() => ContainsAnnouncement(
+                mathAnnouncements,
+                "Editor interaction classification could not be refreshed; try again."));
+            Assert.Equal(3, mathAttempts);
+            Assert.False(mathTab.EditorInteractions.IsPopoverOpen);
+        }
+
+        var artifactAnnouncements = new List<A11yEvent>();
+        int artifactAttempts = 0;
+        using (var artifactTab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            announce: artifactAnnouncements.Add,
+            startInteractionBackgroundWork: false,
+            interactionBackgroundFaultForTests: kind =>
+                kind is EditorInteractionWorkerKind.Artifact
+                    ? InjectTerminalFault(ref artifactAttempts)
+                    : null))
+        {
+            artifactTab.EditorInteractions!.RefreshMathRangesForTests();
+            Assert.True(artifactTab.EditorInteractions.PreviewEmbedAt(0));
+            WaitForUi(() => ContainsAnnouncement(
+                artifactAnnouncements,
+                "Editor interaction data could not be refreshed; try again."));
+            Assert.Equal(3, artifactAttempts);
+            Assert.False(artifactTab.EditorInteractions.IsPopoverOpen);
+        }
+
+        var citationAnnouncements = new List<A11yEvent>();
+        int citationAttempts = 0;
+        using var citationTab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            announce: citationAnnouncements.Add,
+            startInteractionBackgroundWork: false,
+            interactionBackgroundFaultForTests: kind =>
+                kind is EditorInteractionWorkerKind.Citation
+                    ? InjectTerminalFault(ref citationAttempts)
+                    : null);
+        citationTab.EditorInteractions!.RefreshMathRangesForTests();
+        Assert.True(citationTab.EditorInteractions.ActivateAt(
+            Inside(citationTab.Text, "[@doe]")));
+        WaitForUi(() => ContainsAnnouncement(
+            citationAnnouncements,
+            "Citation data could not be refreshed; try again."));
+        Assert.Equal(3, citationAttempts);
+        Assert.False(citationTab.EditorInteractions.IsPopoverOpen);
+    }
+    [Fact]
+    public void StaleMathFailure_DoesNotCancelNewerSameRevisionPreview()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(
+            "![[target#Destination]]\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        var announcements = new List<A11yEvent>();
+        using var thirdFailure = new ManualResetEventSlim();
+        int attempts = 0;
+        int fail = 1;
+        using var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            announce: announcements.Add,
+            startInteractionBackgroundWork: false,
+            interactionBackgroundFaultForTests: kind =>
+            {
+                if (kind is not EditorInteractionWorkerKind.Math
+                    || Volatile.Read(ref fail) == 0)
+                {
+                    Interlocked.Increment(ref attempts);
+                    return null;
+                }
+
+                int attempt = Interlocked.Increment(ref attempts);
+                if (attempt == 3)
+                {
+                    thirdFailure.Set();
+                }
+                return new IOException("Injected stale math failure.");
+            });
+        tab.EditorInteractions!.RefreshArtifactCacheForTests();
+
+        Assert.True(tab.EditorInteractions.PreviewEmbedAt(0));
+        Assert.True(thirdFailure.Wait(TimeSpan.FromSeconds(5)));
+        Volatile.Write(ref fail, 0);
+        Assert.True(tab.EditorInteractions.PreviewEmbedAt(0));
+
+        WaitForUi(() => tab.EditorInteractions.IsPopoverOpen);
+        Assert.Equal(4, attempts);
+        Assert.False(ContainsAnnouncement(
+            announcements,
+            "Editor interaction classification could not be refreshed; try again."));
+    }
+
+    [Fact]
+    public void Deactivation_DropsDelayedCitationAndTerminalFailureState()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(
+            "![[target#Destination]]\n[@doe]\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+
+        using var citationStarted = new ManualResetEventSlim();
+        using var releaseCitation = new ManualResetEventSlim();
+        var hoverAnnouncements = new List<A11yEvent>();
+        using (var hoverTab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            announce: hoverAnnouncements.Add,
+            startInteractionBackgroundWork: false,
+            interactionBackgroundFaultForTests: kind =>
+            {
+                if (kind is EditorInteractionWorkerKind.Citation)
+                {
+                    citationStarted.Set();
+                    releaseCitation.Wait();
+                }
+                return null;
+            }))
+        {
+            hoverTab.EditorInteractions!.HoverAt(Inside(hoverTab.Text, "[@doe]"));
+            Assert.True(citationStarted.Wait(TimeSpan.FromSeconds(5)));
+            WaitForUi(() =>
+                hoverTab.EditorInteractions.HasPendingCitationInteractionForTests);
+            hoverTab.Deactivate();
+            Assert.False(
+                hoverTab.EditorInteractions.HasPendingCitationInteractionForTests);
+            releaseCitation.Set();
+            WaitForUi(() =>
+                hoverTab.EditorInteractions.CitationCacheLoadCountForTests == 1);
+            Assert.False(hoverTab.EditorInteractions.IsPopoverOpen);
+            Assert.Empty(hoverAnnouncements);
+        }
+
+        using var artifactStarted = new ManualResetEventSlim();
+        using var releaseArtifact = new ManualResetEventSlim();
+        var terminalAnnouncements = new List<A11yEvent>();
+        int artifactAttempts = 0;
+        using var terminalTab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            announce: terminalAnnouncements.Add,
+            startInteractionBackgroundWork: false,
+            interactionBackgroundFaultForTests: kind =>
+            {
+                if (kind is not EditorInteractionWorkerKind.Artifact)
+                {
+                    return null;
+                }
+                Interlocked.Increment(ref artifactAttempts);
+                artifactStarted.Set();
+                releaseArtifact.Wait();
+                return new IOException("Injected delayed terminal artifact failure.");
+            });
+        terminalTab.EditorInteractions!.RefreshMathRangesForTests();
+        Assert.True(terminalTab.EditorInteractions.PreviewEmbedAt(0));
+        Assert.True(artifactStarted.Wait(TimeSpan.FromSeconds(5)));
+        terminalTab.Deactivate();
+        releaseArtifact.Set();
+        WaitForUi(() =>
+            artifactAttempts == 3
+            && !terminalTab.EditorInteractions.ArtifactCacheLoadingForTests);
+        Assert.False(terminalTab.EditorInteractions.IsPopoverOpen);
+        Assert.False(ContainsAnnouncement(
+            terminalAnnouncements,
+            "Editor interaction data could not be refreshed; try again."));
+    }
+
+    [Fact]
+    public void Disposal_StopsAllWorkerRetryLoopsWithoutTerminalAnnouncement()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(
+            "![[target#Destination]]\n[@doe]\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+
+        foreach (EditorInteractionWorkerKind kind in
+            Enum.GetValues<EditorInteractionWorkerKind>())
+        {
+            using var started = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            int attempts = 0;
+            var announcements = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+                announce: announcements.Add,
+                startInteractionBackgroundWork: false,
+                interactionBackgroundFaultForTests: candidate =>
+                {
+                    if (candidate != kind)
+                    {
+                        return null;
+                    }
+                    Interlocked.Increment(ref attempts);
+                    started.Set();
+                    release.Wait();
+                    return new IOException("Injected disposal worker fault.");
+                });
+            switch (kind)
+            {
+                case EditorInteractionWorkerKind.Math:
+                    tab.EditorInteractions!.RefreshArtifactCacheForTests();
+                    Assert.True(tab.EditorInteractions.PreviewEmbedAt(0));
+                    break;
+                case EditorInteractionWorkerKind.Artifact:
+                    tab.EditorInteractions!.RefreshMathRangesForTests();
+                    Assert.True(tab.EditorInteractions.PreviewEmbedAt(0));
+                    break;
+                case EditorInteractionWorkerKind.Citation:
+                    tab.EditorInteractions!.RefreshMathRangesForTests();
+                    Assert.True(tab.EditorInteractions.ActivateAt(
+                        Inside(tab.Text, "[@doe]")));
+                    break;
+            }
+
+            Assert.True(started.Wait(TimeSpan.FromSeconds(5)));
+            tab.Dispose();
+            release.Set();
+            Thread.Sleep(350);
+            Assert.Equal(1, attempts);
+            Assert.DoesNotContain(
+                announcements,
+                item => item is A11yEvent.HostComposed composed
+                    && composed.Priority is A11yPriority.High);
+        }
+    }
+    [Fact]
     public void WorkspaceNavigation_UsesCoreHeadingAndBlockArtifactsToParkCaret()
     {
         using InteractionFixture fixture = InteractionFixture.Create();
@@ -302,6 +627,17 @@ public sealed class W2EditorInteractionTests
                 new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
             startInteractionBackgroundWork: false);
 
+    private static Exception InjectTerminalFault(ref int attempts)
+    {
+        Interlocked.Increment(ref attempts);
+        return new IOException("Injected terminal worker fault.");
+    }
+
+    private static bool ContainsAnnouncement(
+        IReadOnlyList<A11yEvent> announcements,
+        string text) =>
+        announcements.Any(item => item is A11yEvent.HostComposed composed
+            && string.Equals(composed.Text, text, StringComparison.Ordinal));
     private static void WaitForUi(Func<bool> condition)
     {
         DateTime deadline = DateTime.UtcNow.AddSeconds(20);

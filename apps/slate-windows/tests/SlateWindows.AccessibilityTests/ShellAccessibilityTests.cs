@@ -96,7 +96,7 @@ public sealed class ShellAccessibilityTests
         Directory.CreateDirectory(vaultRoot);
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"),
-            "![[Folder/child]]\n\n---\ntags:\n  - accessibility\n---\n# Accessible note\n");
+            "![[Folder/child]]\n\n[@doe]\n\n---\ntags:\n  - accessibility\n---\n# Accessible note\n");
         Directory.CreateDirectory(Path.Combine(vaultRoot, "Folder"));
         File.WriteAllText(Path.Combine(vaultRoot, "Folder", "child.md"), "# Child note\n");
 
@@ -273,27 +273,58 @@ public sealed class ShellAccessibilityTests
             Assert.True(editor.Properties.IsKeyboardFocusable.Value);
             editor.Focus();
             AssertEventuallyFocused(editor, "The opened note editor could not receive focus.");
-            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+            PlaceCaretAtText(editor, "![[Folder/child]]");
+            AutomationElement previewMenu = WaitForMenuItem(
+                window,
+                "EditorMenu",
+                "EditorPreviewEmbedMenuItem",
+                TimeSpan.FromSeconds(10));
+            Assert.True(previewMenu.IsEnabled, "The Preview Embed menu item is disabled.");
+            Assert.True(
+                previewMenu.Patterns.Invoke.IsSupported,
+                "The Preview Embed menu item does not expose Invoke.");
+            previewMenu.Patterns.Invoke.Pattern.Invoke();
+            _ = WaitForElement(
+                window,
+                "EditorInteractionPopover",
+                TimeSpan.FromSeconds(10));
+            AutomationElement menuPopoverClose = WaitForElement(
+                window,
+                "EditorPopoverClose",
+                TimeSpan.FromSeconds(10));
+            menuPopoverClose.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "EditorInteractionPopover")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "The menu-opened editor interaction popover did not close.");
+
+            editor.Focus();
+            AssertEventuallyFocused(editor, "The editor did not regain focus after menu preview.");
+            PlaceCaretAtText(editor, "![[Folder/child]]");
+            string editorTextBeforePreview = editor.Patterns.Value.Pattern.Value;
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
             AutomationElement? interactionPopover = TryWaitForElement(
                 window,
                 "EditorInteractionPopover",
                 TimeSpan.FromSeconds(10));
+            string editorTextAfterPreview = editor.Patterns.Value.Pattern.Value;
+            if (!string.Equals(
+                    editorTextBeforePreview,
+                    editorTextAfterPreview,
+                    StringComparison.Ordinal))
+            {
+                throw new Xunit.Sdk.XunitException(
+                    "Ctrl+E changed the editor text instead of invoking Preview Embed. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+            }
             if (interactionPopover is null)
             {
-                AutomationElement previewMenu = WaitForMenuItem(
-                    window,
-                    "EditorMenu",
-                    "EditorPreviewEmbedMenuItem",
-                    TimeSpan.FromSeconds(10));
-                previewMenu.Patterns.Invoke.Pattern.Invoke();
-                bool menuOpened = TryWaitForElement(
-                    window,
-                    "EditorInteractionPopover",
-                    TimeSpan.FromSeconds(5)) is not null;
                 throw new Xunit.Sdk.XunitException(
-                    "Ctrl+E did not open the editor interaction popover. " +
-                    $"Invoking the bound menu command opened it: {menuOpened}. " +
+                    "Ctrl+E did not open the editor interaction popover after the clean " +
+                    "menu command path succeeded. " +
                     $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
             }
             Assert.True(
@@ -338,9 +369,20 @@ public sealed class ShellAccessibilityTests
                 editor,
                 "Closing the embed popover did not return focus to the editor.");
             editor.Focus();
-            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+            PlaceCaretAtText(editor, "[@doe]");
+            string editorTextBeforeCitation = editor.Patterns.Value.Pattern.Value;
             PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
-            _ = WaitForElement(window, "EditorInteractionPopover", TimeSpan.FromSeconds(10));
+            AutomationElement citationPopover = WaitForElement(
+                window,
+                "EditorInteractionPopover",
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(
+                editorTextBeforeCitation,
+                editor.Patterns.Value.Pattern.Value);
+            Assert.StartsWith(
+                "Citation",
+                citationPopover.Name,
+                StringComparison.Ordinal);
             AutomationElement citationClose = WaitForElement(
                 window,
                 "EditorPopoverClose",
@@ -1038,20 +1080,51 @@ public sealed class ShellAccessibilityTests
     {
         using (Keyboard.Pressing(modifier))
         {
-            Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             PressKey(key);
-            Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
         }
-        Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
     }
 
+    private static void PlaceCaretAtText(AutomationElement editor, string text)
+    {
+        Assert.True(
+            editor.Patterns.Text.IsSupported,
+            "The Markdown editor does not expose TextPattern.");
+        var textPattern = editor.Patterns.Text.Pattern;
+        var target = textPattern.DocumentRange.FindText(
+            text,
+            backward: false,
+            ignoreCase: false)
+            ?? throw new Xunit.Sdk.XunitException(
+                $"The editor text does not contain '{text}'.");
+        target.MoveEndpointByRange(
+            TextPatternRangeEndpoint.End,
+            target,
+            TextPatternRangeEndpoint.Start);
+        target.Select();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    var selections = textPattern.GetSelection();
+                    return selections.Length == 1
+                        && selections[0].CompareEndpoints(
+                            TextPatternRangeEndpoint.Start,
+                            target,
+                            TextPatternRangeEndpoint.Start) == 0
+                        && selections[0].CompareEndpoints(
+                            TextPatternRangeEndpoint.End,
+                            target,
+                            TextPatternRangeEndpoint.End) == 0;
+                },
+                TimeSpan.FromSeconds(5)),
+            $"The editor caret did not move to '{text}'.");
+    }
     private static void PressKey(VirtualKeyShort key)
     {
-        using (Keyboard.Pressing(key))
-        {
-            Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
-        }
-        Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
+        Keyboard.Type(key);
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
     }
     private static AutomationElement WaitForElement(
         Window window,

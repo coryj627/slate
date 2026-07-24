@@ -29,6 +29,13 @@ internal enum EditorInteractionOrigin
     Keyboard,
 }
 
+internal enum EditorInteractionWorkerKind
+{
+    Math,
+    Artifact,
+    Citation,
+}
+
 internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
 {
     internal const double ActualFontSize = 14;
@@ -129,11 +136,15 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
 /// </summary>
 internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 {
+    private const int MaximumBackgroundRefreshAttempts = 3;
+    private static readonly TimeSpan BackgroundRefreshRetryDelay =
+        TimeSpan.FromMilliseconds(100);
     private readonly VaultSession _session;
     private readonly WorkspaceTabViewModel _tab;
     private readonly Action<EditorNavigationRequest> _navigate;
     private readonly Action<string> _activateTag;
     private readonly Action<A11yEvent> _announce;
+    private readonly Func<EditorInteractionWorkerKind, Exception?>? _backgroundFaultForTests;
     private bool _disposed;
     private bool _isPopoverOpen;
     private string _popoverTitle = string.Empty;
@@ -151,11 +162,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private CancellationTokenSource? _mathRefreshDelay;
     private bool _mathWorkerRunning;
     private bool _mathRerunPending;
+    private bool _mathLoadRequestedByUser;
+    private int _mathRefreshGeneration;
     private long _mathRangesRevision = -1;
     private bool _popoverFocusPending;
     private readonly object _artifactCacheGate = new();
     private bool _artifactCacheLoading;
     private bool _artifactCacheRerunPending;
+    private bool _artifactLoadRequestedByUser;
     private int _artifactCacheGeneration;
     private ulong _artifactCacheSessionGeneration;
     private bool _artifactCacheSourceCurrent;
@@ -165,6 +179,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private string? _citationCacheHash;
     private bool _citationCacheLoading;
     private bool _citationCacheRerunPending;
+    private bool _citationLoadRequestedByUser;
     private int _citationCacheGeneration;
     private ulong _citationCacheSessionGeneration;
     private bool _citationCacheSourceCurrent;
@@ -173,6 +188,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private Dictionary<uint, TaskItem> _tasksByLine = [];
     private TaskItem[] _tasksByCheckbox = [];
     private long _artifactCacheLoadCountForTests;
+    private long _citationCacheLoadCountForTests;
     private int _embedGeneration;
     private EditorEmbedPreviewNode? _popoverEmbedRoot;
     private string? _embedRequestKey;
@@ -187,13 +203,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         Action<EditorNavigationRequest>? navigate = null,
         Action<string>? activateTag = null,
         Action<A11yEvent>? announce = null,
-        bool startBackgroundWork = true)
+        bool startBackgroundWork = true,
+        Func<EditorInteractionWorkerKind, Exception?>? backgroundFaultForTests = null)
     {
         _session = session;
         _tab = tab;
         _navigate = navigate ?? (_ => { });
         _activateTag = activateTag ?? (_ => { });
         _announce = announce ?? (_ => { });
+        _backgroundFaultForTests = backgroundFaultForTests;
         _citationCloseTimer = new DispatcherTimer(
             DispatcherPriority.Background,
             _dispatcher)
@@ -320,6 +338,21 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         Interlocked.Read(ref _mathRangeRefreshCountForTests);
     internal long ArtifactCacheLoadCountForTests =>
         Interlocked.Read(ref _artifactCacheLoadCountForTests);
+    internal long CitationCacheLoadCountForTests =>
+        Interlocked.Read(ref _citationCacheLoadCountForTests);
+    internal bool HasPendingCitationInteractionForTests =>
+        _pendingHoverUtf16 is not null
+        || _pendingHoveredCitationByteOffset is not null;
+    internal bool ArtifactCacheLoadingForTests
+    {
+        get
+        {
+            lock (_artifactCacheGate)
+            {
+                return _artifactCacheLoading;
+            }
+        }
+    }
 
     public bool ActivateAt(
         int utf16Offset,
@@ -667,6 +700,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
     public void CloseTransientUi()
     {
+        _pendingHoverUtf16 = null;
+        _pendingHoveredCitationByteOffset = null;
+        _mathLoadRequestedByUser = false;
+        _artifactLoadRequestedByUser = false;
+        _citationLoadRequestedByUser = false;
         CancelPendingEmbedPreview();
         ClosePopover(requestFocus: false);
     }
@@ -1251,6 +1289,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return true;
         }
 
+        _mathLoadRequestedByUser |= announceWhenUnavailable;
         QueueMathRefresh(TimeSpan.Zero);
         QueueArtifactCacheRefresh();
         QueueCitationCacheRefresh();
@@ -1267,6 +1306,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private void QueueMathRefresh(TimeSpan delay)
     {
         CancellationTokenSource pending;
+        int generation;
         lock (_mathRefreshGate)
         {
             if (_disposed)
@@ -1278,14 +1318,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             _mathRefreshDelay?.Dispose();
             pending = new CancellationTokenSource();
             _mathRefreshDelay = pending;
+            generation = ++_mathRefreshGeneration;
         }
 
-        _ = WaitAndStartMathRefreshAsync(delay, pending);
+        _ = WaitAndStartMathRefreshAsync(delay, pending, generation);
     }
-
     private async Task WaitAndStartMathRefreshAsync(
         TimeSpan delay,
-        CancellationTokenSource pending)
+        CancellationTokenSource pending,
+        int generation)
     {
         try
         {
@@ -1315,10 +1356,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
 
         pending.Dispose();
-        _ = Task.Run(RunMathRefreshWorker);
+        _ = Task.Run(() => RunMathRefreshWorker(generation));
     }
 
-    private void RunMathRefreshWorker()
+    private async Task RunMathRefreshWorker(int generation)
     {
         while (true)
         {
@@ -1326,33 +1367,90 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             long revisionBefore = -1;
             long revisionAfter = -1;
             IReadOnlyList<EditorInteractionRange>? ranges = null;
-            try
+            Exception? terminalFailure = null;
+            bool aborted = false;
+            for (int attempt = 1; attempt <= MaximumBackgroundRefreshAttempts; attempt++)
             {
-                if (session is not null)
+                if (_disposed)
                 {
-                    revisionBefore = session.Revision;
-                    ranges = session.EditorInteractionMathRanges();
-                    revisionAfter = session.Revision;
-                    Interlocked.Increment(ref _mathRangeRefreshCountForTests);
+                    aborted = true;
+                    break;
+                }
+                try
+                {
+                    if (session is not null)
+                    {
+                        revisionBefore = session.Revision;
+                        if (_backgroundFaultForTests?.Invoke(
+                                EditorInteractionWorkerKind.Math) is Exception injected)
+                        {
+                            throw injected;
+                        }
+                        ranges = session.EditorInteractionMathRanges();
+                        revisionAfter = session.Revision;
+                        Interlocked.Increment(ref _mathRangeRefreshCountForTests);
+                    }
+                    terminalFailure = null;
+                    break;
+                }
+                catch (Exception exception) when (
+                    exception is not OutOfMemoryException
+                        and not StackOverflowException
+                        and not AccessViolationException)
+                {
+                    terminalFailure = exception;
+                    if (_disposed)
+                    {
+                        aborted = true;
+                        break;
+                    }
+                    if (attempt < MaximumBackgroundRefreshAttempts)
+                    {
+                        await Task.Delay(BackgroundRefreshRetryDelay).ConfigureAwait(false);
+                    }
                 }
             }
-            catch (Exception exception) when (
-                exception is not OutOfMemoryException
-                    and not StackOverflowException
-                    and not AccessViolationException)
+
+            if (aborted || _disposed)
             {
+                lock (_mathRefreshGate)
+                {
+                    _mathRerunPending = false;
+                    _mathWorkerRunning = false;
+                }
+                return;
             }
 
+            if (terminalFailure is not null)
+            {
+                HostLog.Write(HostDiagnosticEvent.EditorMathRefreshFailed, terminalFailure);
+            }
+
+            int publicationGeneration = generation;
+            long publicationRevisionBefore = revisionBefore;
+            long publicationRevisionAfter = revisionAfter;
             if (ranges is not null
                 && !_dispatcher.HasShutdownStarted
                 && !_dispatcher.HasShutdownFinished)
             {
-                _dispatcher.BeginInvoke(
+                IReadOnlyList<EditorInteractionRange> publicationRanges = ranges;
+                _ = _dispatcher.BeginInvoke(
                     DispatcherPriority.Background,
                     new Action(() => PublishMathRanges(
-                        revisionBefore,
-                        revisionAfter,
-                        ranges)));
+                        publicationGeneration,
+                        publicationRevisionBefore,
+                        publicationRevisionAfter,
+                        publicationRanges)));
+            }
+            else if (terminalFailure is not null
+                && !_dispatcher.HasShutdownStarted
+                && !_dispatcher.HasShutdownFinished)
+            {
+                _ = _dispatcher.BeginInvoke(
+                    DispatcherPriority.Background,
+                    new Action(() => PublishMathRefreshFailure(
+                        publicationGeneration,
+                        publicationRevisionBefore)));
             }
 
             lock (_mathRefreshGate)
@@ -1363,9 +1461,19 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                     return;
                 }
 
+                if (terminalFailure is not null
+                    && generation == _mathRefreshGeneration
+                    && _tab.EditorSession?.Revision == revisionBefore)
+                {
+                    _mathRerunPending = false;
+                    _mathWorkerRunning = false;
+                    return;
+                }
+
                 if (_mathRerunPending)
                 {
                     _mathRerunPending = false;
+                    generation = _mathRefreshGeneration;
                     continue;
                 }
 
@@ -1374,13 +1482,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             }
         }
     }
-
     private void PublishMathRanges(
+        int generation,
         long revisionBefore,
         long revisionAfter,
         IReadOnlyList<EditorInteractionRange> ranges)
     {
         if (_disposed
+            || generation != _mathRefreshGeneration
             || revisionBefore != revisionAfter
             || revisionAfter != _tab.EditorSession!.Revision)
         {
@@ -1389,6 +1498,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
         _mathRanges = ranges;
         _mathRangesRevision = revisionAfter;
+        _mathLoadRequestedByUser = false;
         if (_pendingHoverUtf16 is int pendingHover)
         {
             HoverAt(pendingHover);
@@ -1396,6 +1506,28 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _ = TryReplayPendingEmbedPreview();
     }
 
+    private void PublishMathRefreshFailure(int generation, long revision)
+    {
+        if (_disposed
+            || generation != _mathRefreshGeneration
+            || _tab.EditorSession?.Revision != revision)
+        {
+            return;
+        }
+
+        bool announce = _mathLoadRequestedByUser || _pendingEmbedPreview is not null;
+        _mathLoadRequestedByUser = false;
+        if (_pendingEmbedPreview is not null)
+        {
+            CancelPendingEmbedPreview();
+        }
+        if (announce)
+        {
+            _announce(new A11yEvent.HostComposed(
+                "Editor interaction classification could not be refreshed; try again.",
+                A11yPriority.High));
+        }
+    }
     internal void RefreshMathRangesForTests()
     {
         ThrowIfDisposed();
@@ -1405,13 +1537,18 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             _mathRefreshDelay?.Cancel();
             _mathRefreshDelay?.Dispose();
             _mathRefreshDelay = null;
+            _mathRefreshGeneration++;
         }
 
         long revision = _tab.EditorSession!.Revision;
         IReadOnlyList<EditorInteractionRange> ranges =
             _tab.EditorSession.EditorInteractionMathRanges();
         Interlocked.Increment(ref _mathRangeRefreshCountForTests);
-        PublishMathRanges(revision, _tab.EditorSession.Revision, ranges);
+        PublishMathRanges(
+            _mathRefreshGeneration,
+            revision,
+            _tab.EditorSession.Revision,
+            ranges);
     }
     private sealed record CitationPreview(string Body, string Speech);
 
@@ -1465,43 +1602,96 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             generation = _artifactCacheGeneration;
         }
 
-        _ = Task.Run(() => LoadArtifactCache(generation, path, savedHash));
+        _ = Task.Run(() => LoadArtifactCacheAsync(
+            generation,
+            path,
+            savedHash,
+            sessionGeneration));
     }
 
-    private void LoadArtifactCache(int generation, string path, string savedHash)
+    private async Task LoadArtifactCacheAsync(
+        int generation,
+        string path,
+        string savedHash,
+        ulong requestedSessionGeneration)
     {
         InteractionArtifactSnapshot? snapshot = null;
-        try
+        Exception? terminalFailure = null;
+        for (int attempt = 1; attempt <= MaximumBackgroundRefreshAttempts; attempt++)
         {
-            ulong generationBefore = _session.InteractionGeneration();
-            FileMetadata? metadata = _session.GetFileMetadata(path);
-            IReadOnlyList<TaskItem> tasks = _session.TasksForFile(path);
-            Dictionary<(uint Start, uint End, bool Embed), OutgoingLink> links =
-                _session.OutgoingLinks(path).ToDictionary(
-                    link => (link.SpanStart, link.SpanEnd, link.IsEmbed));
-            ulong generationAfter = _session.InteractionGeneration();
-            snapshot = new InteractionArtifactSnapshot(
-                links,
-                tasks.ToDictionary(task => task.Line),
-                tasks.OrderBy(task => task.CheckboxStartByte).ToArray(),
-                generationAfter,
-                generationBefore == generationAfter
-                    && metadata is not null
-                    && string.Equals(metadata.ContentHash, savedHash, StringComparison.Ordinal));
-            Interlocked.Increment(ref _artifactCacheLoadCountForTests);
+            if (_disposed)
+            {
+                return;
+            }
+            try
+            {
+                if (_backgroundFaultForTests?.Invoke(
+                        EditorInteractionWorkerKind.Artifact) is Exception injected)
+                {
+                    throw injected;
+                }
+                ulong generationBefore = _session.InteractionGeneration();
+                FileMetadata? metadata = _session.GetFileMetadata(path);
+                IReadOnlyList<TaskItem> tasks = _session.TasksForFile(path);
+                Dictionary<(uint Start, uint End, bool Embed), OutgoingLink> links =
+                    _session.OutgoingLinks(path).ToDictionary(
+                        link => (link.SpanStart, link.SpanEnd, link.IsEmbed));
+                ulong generationAfter = _session.InteractionGeneration();
+                snapshot = new InteractionArtifactSnapshot(
+                    links,
+                    tasks.ToDictionary(task => task.Line),
+                    tasks.OrderBy(task => task.CheckboxStartByte).ToArray(),
+                    generationAfter,
+                    generationBefore == generationAfter
+                        && metadata is not null
+                        && string.Equals(
+                            metadata.ContentHash,
+                            savedHash,
+                            StringComparison.Ordinal));
+                Interlocked.Increment(ref _artifactCacheLoadCountForTests);
+                terminalFailure = null;
+                break;
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                terminalFailure = exception;
+                if (_disposed)
+                {
+                    return;
+                }
+                if (attempt < MaximumBackgroundRefreshAttempts)
+                {
+                    await Task.Delay(BackgroundRefreshRetryDelay).ConfigureAwait(false);
+                }
+            }
         }
-        catch (Exception exception) when (
-            exception is not OutOfMemoryException
-                and not StackOverflowException
-                and not AccessViolationException)
+
+        if (_disposed)
         {
+            return;
+        }
+
+        if (terminalFailure is not null)
+        {
+            HostLog.Write(
+                HostDiagnosticEvent.EditorArtifactCacheRefreshFailed,
+                terminalFailure);
         }
 
         if (!_dispatcher.HasShutdownStarted && !_dispatcher.HasShutdownFinished)
         {
-            _dispatcher.BeginInvoke(
+            _ = _dispatcher.BeginInvoke(
                 DispatcherPriority.Background,
-                new Action(() => PublishArtifactCache(generation, path, savedHash, snapshot)));
+                new Action(() => PublishArtifactCache(
+                    generation,
+                    path,
+                    savedHash,
+                    requestedSessionGeneration,
+                    snapshot,
+                    terminalFailure is not null)));
         }
     }
 
@@ -1509,19 +1699,26 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         int generation,
         string path,
         string savedHash,
-        InteractionArtifactSnapshot? snapshot)
+        ulong requestedSessionGeneration,
+        InteractionArtifactSnapshot? snapshot,
+        bool terminalFailure)
     {
         bool rerun;
         bool published = false;
+        bool failedCurrentRequest;
         lock (_artifactCacheGate)
         {
             _artifactCacheLoading = false;
-            bool currentRequest = generation == _artifactCacheGeneration
+            bool targetMatches = generation == _artifactCacheGeneration
                 && !_disposed
-                && snapshot is not null
                 && string.Equals(_tab.Path, path, StringComparison.Ordinal)
                 && string.Equals(_tab.SavedContentHash, savedHash, StringComparison.Ordinal)
+                && requestedSessionGeneration == _session.InteractionGeneration();
+            bool currentRequest = targetMatches
+                && !terminalFailure
+                && snapshot is not null
                 && snapshot.SessionGeneration == _session.InteractionGeneration();
+            failedCurrentRequest = targetMatches && terminalFailure;
             if (currentRequest)
             {
                 _artifactCachePath = path;
@@ -1534,26 +1731,44 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 published = true;
             }
 
+            bool requestChanged = generation != _artifactCacheGeneration
+                || !string.Equals(_tab.Path, path, StringComparison.Ordinal)
+                || !string.Equals(_tab.SavedContentHash, savedHash, StringComparison.Ordinal)
+                || requestedSessionGeneration != _session.InteractionGeneration()
+                || (snapshot is not null
+                    && snapshot.SessionGeneration != _session.InteractionGeneration());
             rerun = !_disposed
-                && (_artifactCacheRerunPending
-                    || generation != _artifactCacheGeneration
-                    || !string.Equals(_tab.Path, path, StringComparison.Ordinal)
-                    || !string.Equals(_tab.SavedContentHash, savedHash, StringComparison.Ordinal)
-                    || (snapshot is not null
-                        && snapshot.SessionGeneration != _session.InteractionGeneration()));
+                && (requestChanged
+                    || (_artifactCacheRerunPending && !failedCurrentRequest));
             _artifactCacheRerunPending = false;
         }
 
+        if (failedCurrentRequest)
+        {
+            bool announce = _artifactLoadRequestedByUser
+                || _pendingEmbedPreview is not null;
+            _artifactLoadRequestedByUser = false;
+            if (_pendingEmbedPreview is not null)
+            {
+                CancelPendingEmbedPreview();
+            }
+            if (announce)
+            {
+                _announce(new A11yEvent.HostComposed(
+                    "Editor interaction data could not be refreshed; try again.",
+                    A11yPriority.High));
+            }
+        }
         if (rerun)
         {
             QueueArtifactCacheRefresh();
         }
         if (published)
         {
+            _artifactLoadRequestedByUser = false;
             _ = TryReplayPendingEmbedPreview();
         }
     }
-
     private void QueueCitationCacheRefresh()
     {
         string? savedHash = _tab.SavedContentHash;
@@ -1584,38 +1799,92 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             generation = _citationCacheGeneration;
         }
 
-        _ = Task.Run(() => LoadCitationCache(generation, path, savedHash));
+        _ = Task.Run(() => LoadCitationCacheAsync(
+            generation,
+            path,
+            savedHash,
+            sessionGeneration));
     }
 
-    private void LoadCitationCache(int generation, string path, string savedHash)
+    private async Task LoadCitationCacheAsync(
+        int generation,
+        string path,
+        string savedHash,
+        ulong requestedSessionGeneration)
     {
         CitationArtifactSnapshot? snapshot = null;
-        try
+        Exception? terminalFailure = null;
+        for (int attempt = 1; attempt <= MaximumBackgroundRefreshAttempts; attempt++)
         {
-            ulong generationBefore = _session.InteractionGeneration();
-            FileMetadata? metadata = _session.GetFileMetadata(path);
-            Dictionary<uint, CitationPreview> previews =
-                BuildCitationPreviews(_session.ListCitationsInFile(path));
-            ulong generationAfter = _session.InteractionGeneration();
-            snapshot = new CitationArtifactSnapshot(
-                previews,
-                generationAfter,
-                generationBefore == generationAfter
-                    && metadata is not null
-                    && string.Equals(metadata.ContentHash, savedHash, StringComparison.Ordinal));
+            if (_disposed)
+            {
+                return;
+            }
+            try
+            {
+                if (_backgroundFaultForTests?.Invoke(
+                        EditorInteractionWorkerKind.Citation) is Exception injected)
+                {
+                    throw injected;
+                }
+                ulong generationBefore = _session.InteractionGeneration();
+                FileMetadata? metadata = _session.GetFileMetadata(path);
+                Dictionary<uint, CitationPreview> previews =
+                    BuildCitationPreviews(_session.ListCitationsInFile(path));
+                ulong generationAfter = _session.InteractionGeneration();
+                snapshot = new CitationArtifactSnapshot(
+                    previews,
+                    generationAfter,
+                    generationBefore == generationAfter
+                        && metadata is not null
+                        && string.Equals(
+                            metadata.ContentHash,
+                            savedHash,
+                            StringComparison.Ordinal));
+                Interlocked.Increment(ref _citationCacheLoadCountForTests);
+                terminalFailure = null;
+                break;
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                terminalFailure = exception;
+                if (_disposed)
+                {
+                    return;
+                }
+                if (attempt < MaximumBackgroundRefreshAttempts)
+                {
+                    await Task.Delay(BackgroundRefreshRetryDelay).ConfigureAwait(false);
+                }
+            }
         }
-        catch (Exception exception) when (
-            exception is not OutOfMemoryException
-                and not StackOverflowException
-                and not AccessViolationException)
+
+        if (_disposed)
         {
+            return;
+        }
+
+        if (terminalFailure is not null)
+        {
+            HostLog.Write(
+                HostDiagnosticEvent.EditorCitationCacheRefreshFailed,
+                terminalFailure);
         }
 
         if (!_dispatcher.HasShutdownStarted && !_dispatcher.HasShutdownFinished)
         {
-            _dispatcher.BeginInvoke(
+            _ = _dispatcher.BeginInvoke(
                 DispatcherPriority.Background,
-                new Action(() => PublishCitationCache(generation, path, savedHash, snapshot)));
+                new Action(() => PublishCitationCache(
+                    generation,
+                    path,
+                    savedHash,
+                    requestedSessionGeneration,
+                    snapshot,
+                    terminalFailure is not null)));
         }
     }
 
@@ -1623,19 +1892,26 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         int generation,
         string path,
         string savedHash,
-        CitationArtifactSnapshot? snapshot)
+        ulong requestedSessionGeneration,
+        CitationArtifactSnapshot? snapshot,
+        bool terminalFailure)
     {
         bool rerun;
         bool published = false;
+        bool failedCurrentRequest;
         lock (_artifactCacheGate)
         {
             _citationCacheLoading = false;
-            bool currentRequest = generation == _citationCacheGeneration
+            bool targetMatches = generation == _citationCacheGeneration
                 && !_disposed
-                && snapshot is not null
                 && string.Equals(_tab.Path, path, StringComparison.Ordinal)
                 && string.Equals(_tab.SavedContentHash, savedHash, StringComparison.Ordinal)
+                && requestedSessionGeneration == _session.InteractionGeneration();
+            bool currentRequest = targetMatches
+                && !terminalFailure
+                && snapshot is not null
                 && snapshot.SessionGeneration == _session.InteractionGeneration();
+            failedCurrentRequest = targetMatches && terminalFailure;
             if (currentRequest)
             {
                 _citationCachePath = path;
@@ -1646,16 +1922,31 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 published = snapshot.SourceCurrent;
             }
 
+            bool requestChanged = generation != _citationCacheGeneration
+                || !string.Equals(_tab.Path, path, StringComparison.Ordinal)
+                || !string.Equals(_tab.SavedContentHash, savedHash, StringComparison.Ordinal)
+                || requestedSessionGeneration != _session.InteractionGeneration()
+                || (snapshot is not null
+                    && snapshot.SessionGeneration != _session.InteractionGeneration());
             rerun = !_disposed
-                && (_citationCacheRerunPending
-                    || generation != _citationCacheGeneration
-                    || !string.Equals(_tab.Path, path, StringComparison.Ordinal)
-                    || !string.Equals(_tab.SavedContentHash, savedHash, StringComparison.Ordinal)
-                    || (snapshot is not null
-                        && snapshot.SessionGeneration != _session.InteractionGeneration()));
+                && (requestChanged
+                    || (_citationCacheRerunPending && !failedCurrentRequest));
             _citationCacheRerunPending = false;
         }
 
+        if (failedCurrentRequest)
+        {
+            bool announce = _citationLoadRequestedByUser
+                || _pendingHoveredCitationByteOffset is not null;
+            _citationLoadRequestedByUser = false;
+            _pendingHoveredCitationByteOffset = null;
+            if (announce)
+            {
+                _announce(new A11yEvent.HostComposed(
+                    "Citation data could not be refreshed; try again.",
+                    A11yPriority.High));
+            }
+        }
         if (published
             && _pendingHoveredCitationByteOffset is uint pending
             && _citationsByOffset.TryGetValue(pending, out CitationPreview? preview)
@@ -1667,6 +1958,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         if (rerun)
         {
             QueueCitationCacheRefresh();
+        }
+        if (published)
+        {
+            _citationLoadRequestedByUser = false;
         }
     }
     private bool EnsureArtifactCacheReady(bool announceWhenUnavailable)
@@ -1689,6 +1984,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return false;
         }
 
+        _artifactLoadRequestedByUser |= announceWhenUnavailable;
         QueueArtifactCacheRefresh();
         if (announceWhenUnavailable)
         {
@@ -1719,6 +2015,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return false;
         }
 
+        _citationLoadRequestedByUser |= announceWhenUnavailable;
         QueueCitationCacheRefresh();
         if (announceWhenUnavailable)
         {
@@ -1747,15 +2044,23 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             sessionGeneration,
             sourceCurrent);
         Interlocked.Increment(ref _artifactCacheLoadCountForTests);
-        PublishArtifactCache(_artifactCacheGeneration, _tab.Path, savedHash, snapshot);
+        PublishArtifactCache(
+            _artifactCacheGeneration,
+            _tab.Path,
+            savedHash,
+            sessionGeneration,
+            snapshot,
+            terminalFailure: false);
         PublishCitationCache(
             _citationCacheGeneration,
             _tab.Path,
             savedHash,
+            sessionGeneration,
             new CitationArtifactSnapshot(
                 BuildCitationPreviews(_session.ListCitationsInFile(_tab.Path)),
                 sessionGeneration,
-                sourceCurrent));
+                sourceCurrent),
+            terminalFailure: false);
     }
     private OutgoingLink? LinkRecordFor(EditorSemanticSpan selected, bool expectEmbed) =>
         _linksBySpan.GetValueOrDefault(

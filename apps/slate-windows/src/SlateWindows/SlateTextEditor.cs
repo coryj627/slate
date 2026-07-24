@@ -52,6 +52,8 @@ internal sealed class SlateTextEditor : TextEditor
     private bool _synchronizingCaretOffset;
     private bool _suppressingCaretPublication;
     private int _caretRestoreGeneration;
+    private ModifierKeys _heldModifiers;
+    private Window? _controlWindow;
 
     public SlateTextEditor()
     {
@@ -158,15 +160,22 @@ internal sealed class SlateTextEditor : TextEditor
     }
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
-        ModifierKeys modifiers = Keyboard.Modifiers;
-        if (modifiers == ModifierKeys.Control && e.Key == Key.E)
+        _heldModifiers |= ModifierForKey(e.Key);
+        ModifierKeys modifiers = Keyboard.Modifiers | _heldModifiers;
+        bool controlGesture =
+            (modifiers & ModifierKeys.Control) == ModifierKeys.Control;
+        bool hasConflictingModifier =
+            (modifiers & (ModifierKeys.Alt | ModifierKeys.Shift | ModifierKeys.Windows))
+                != ModifierKeys.None;
+        if (controlGesture && !hasConflictingModifier && e.Key == Key.E)
         {
             InteractionSession?.PreviewEmbedAt(CaretOffset);
             e.Handled = true;
             return;
         }
 
-        if (modifiers == ModifierKeys.Control
+        if (controlGesture
+            && !hasConflictingModifier
             && e.Key == Key.Enter
             && InteractionSession?.ActivateAt(
                 CaretOffset,
@@ -187,6 +196,27 @@ internal sealed class SlateTextEditor : TextEditor
 
         base.OnPreviewKeyDown(e);
     }
+
+    protected override void OnPreviewKeyUp(KeyEventArgs e)
+    {
+        _heldModifiers &= ~ModifierForKey(e.Key);
+        base.OnPreviewKeyUp(e);
+    }
+
+    protected override void OnLostKeyboardFocus(KeyboardFocusChangedEventArgs e)
+    {
+        _heldModifiers = ModifierKeys.None;
+        base.OnLostKeyboardFocus(e);
+    }
+
+    private static ModifierKeys ModifierForKey(Key key) => key switch
+    {
+        Key.LeftCtrl or Key.RightCtrl => ModifierKeys.Control,
+        Key.LeftAlt or Key.RightAlt => ModifierKeys.Alt,
+        Key.LeftShift or Key.RightShift => ModifierKeys.Shift,
+        Key.LWin or Key.RWin => ModifierKeys.Windows,
+        _ => ModifierKeys.None,
+    };
 
     private static void HighlightSession_Changed(
         DependencyObject dependencyObject,
@@ -293,6 +323,12 @@ internal sealed class SlateTextEditor : TextEditor
 
     private void SlateTextEditor_Loaded(object sender, RoutedEventArgs e)
     {
+        DetachControlWindow();
+        _controlWindow = Window.GetWindow(this);
+        if (_controlWindow is not null)
+        {
+            _controlWindow.Deactivated += ControlWindow_Deactivated;
+        }
         AttachHighlighting();
         AttachSpelling();
         AttachInteractions();
@@ -300,11 +336,25 @@ internal sealed class SlateTextEditor : TextEditor
 
     private void SlateTextEditor_Unloaded(object sender, RoutedEventArgs e)
     {
+        _heldModifiers = ModifierKeys.None;
+        DetachControlWindow();
         _highlighting?.Dispose();
         _highlighting = null;
         _spelling?.Dispose();
         _spelling = null;
         DetachInteractions();
+    }
+
+    private void ControlWindow_Deactivated(object? sender, EventArgs e) =>
+        _heldModifiers = ModifierKeys.None;
+
+    private void DetachControlWindow()
+    {
+        if (_controlWindow is not null)
+        {
+            _controlWindow.Deactivated -= ControlWindow_Deactivated;
+            _controlWindow = null;
+        }
     }
 
     private void AttachHighlighting()
