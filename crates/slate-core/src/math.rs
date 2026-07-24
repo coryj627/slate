@@ -176,14 +176,14 @@ fn scan_math_blocks(
             .get(code_index)
             .is_some_and(|range| range.start <= i && i < range.end);
 
-        if i > 0 && bytes[i - 1] == b'\\' && bytes[i] == b'$' {
+        if bytes[i] == b'$' && dollar_is_escaped(bytes, i) {
             i += 1;
             continue;
         }
         if i + 1 < bytes.len()
             && &bytes[i..i + 2] == b"$$"
             && !in_code
-            && let Some(end_rel) = find_double_dollar_close(&bytes[i + 2..])
+            && let Some(end_rel) = find_double_dollar_close(&bytes[i + 2..], i + 2, code_ranges)
         {
             let source_start = i + 2;
             let source_end = source_start + end_rel;
@@ -205,7 +205,10 @@ fn scan_math_blocks(
             if next_idx < bytes.len() {
                 let nb = bytes[next_idx];
                 let opens = nb != b' ' && nb != b'\t' && nb != b'\n' && !nb.is_ascii_digit();
-                if opens && let Some(end_rel) = find_single_dollar_close(&bytes[next_idx..]) {
+                if opens
+                    && let Some(end_rel) =
+                        find_single_dollar_close(&bytes[next_idx..], next_idx, code_ranges)
+                {
                     let source_start = next_idx;
                     let source_end = source_start + end_rel;
                     if !source[source_start..source_end].trim().is_empty() {
@@ -282,9 +285,20 @@ pub fn interaction_display_math_ranges(source: &str) -> Vec<std::ops::Range<usiz
     out
 }
 
-/// Find the byte offset of the next closing `$$` in `after`. Returns
-/// `None` when the block doesn't close before EOF (degenerate / mid-
-/// edit) so we don't sweep math syntax over the rest of the file.
+fn dollar_is_escaped(bytes: &[u8], index: usize) -> bool {
+    let mut backslashes = 0usize;
+    let mut j = index;
+    while j > 0 && bytes[j - 1] == b'\\' {
+        backslashes += 1;
+        j -= 1;
+    }
+    !backslashes.is_multiple_of(2)
+}
+
+/// Find the byte offset of the next closing `$$` in `after`, ignoring
+/// delimiter-shaped text inside canonical Markdown code ranges. Returns
+/// `None` when the block doesn't close before EOF (degenerate / mid-edit)
+/// so we don't sweep math syntax over the rest of the file.
 ///
 /// Honors `\$` escapes (audit #245 H3, Codoki polish on top): a `$$`
 /// is escaped only when preceded by an **odd** number of backslashes.
@@ -293,39 +307,58 @@ pub fn interaction_display_math_ranges(source: &str) -> Vec<std::ops::Range<usiz
 /// closes normally. Without the parity check, a literal-backslash
 /// LaTeX expression (`\\`-terminated) followed by the close fence
 /// would skip the close and consume the rest of the file.
-fn find_double_dollar_close(after: &[u8]) -> Option<usize> {
+fn find_double_dollar_close(
+    after: &[u8],
+    after_start: usize,
+    code_ranges: &[std::ops::Range<usize>],
+) -> Option<usize> {
     let mut i = 0;
+    let mut code_index = code_ranges.partition_point(|range| range.end <= after_start);
     while i + 1 < after.len() {
-        if &after[i..i + 2] == b"$$" {
-            let mut backslashes = 0usize;
-            let mut j = i;
-            while j > 0 && after[j - 1] == b'\\' {
-                backslashes += 1;
-                j -= 1;
-            }
-            if backslashes.is_multiple_of(2) {
-                return Some(i);
-            }
+        let absolute = after_start + i;
+        while code_index < code_ranges.len() && code_ranges[code_index].end <= absolute {
+            code_index += 1;
+        }
+        if let Some(range) = code_ranges.get(code_index)
+            && range.start < absolute + 2
+            && absolute < range.end
+        {
+            i = range.end.saturating_sub(after_start).max(i + 1);
+            continue;
+        }
+        if &after[i..i + 2] == b"$$" && !dollar_is_escaped(after, i) {
+            return Some(i);
         }
         i += 1;
     }
     None
 }
 
-/// Find the byte offset of the next closing `$` in `after`, on the
-/// same line. Inline math can't span newlines (matches pandoc + Obs).
-fn find_single_dollar_close(after: &[u8]) -> Option<usize> {
+/// Find the byte offset of the next closing `$` in `after`, on the same
+/// line and outside canonical Markdown code ranges. Inline math can't span
+/// newlines (matches pandoc + Obs).
+fn find_single_dollar_close(
+    after: &[u8],
+    after_start: usize,
+    code_ranges: &[std::ops::Range<usize>],
+) -> Option<usize> {
     let mut i = 0;
-    let mut prev = b' ';
+    let mut code_index = code_ranges.partition_point(|range| range.end <= after_start);
     while i < after.len() {
         let b = after[i];
         if b == b'\n' {
             return None;
         }
-        if b == b'$' && prev != b'\\' {
+        let absolute = after_start + i;
+        while code_index < code_ranges.len() && code_ranges[code_index].end <= absolute {
+            code_index += 1;
+        }
+        let in_code = code_ranges
+            .get(code_index)
+            .is_some_and(|range| range.start <= absolute && absolute < range.end);
+        if b == b'$' && !in_code && !dollar_is_escaped(after, i) {
             return Some(i);
         }
-        prev = b;
         i += 1;
     }
     None
@@ -793,6 +826,94 @@ mod tests {
         let blocks = extract_math_blocks("see `$5 cost` here, also $x$");
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].source, "x");
+    }
+
+    #[test]
+    fn code_delimiters_do_not_close_unclosed_display_math() {
+        let fenced = "$$unclosed\n\n- [ ] task\n\n```\n$$inside-code\n```\n";
+        let inline = "$$unclosed\n\n- [ ] task\n\n`$$inside-code`\n";
+
+        for source in [fenced, inline] {
+            assert!(
+                extract_math_blocks(source).is_empty(),
+                "code delimiter must not produce an extracted math block: {source:?}"
+            );
+            assert!(
+                interaction_display_math_ranges(source).is_empty(),
+                "code delimiter must not suppress editor interactions: {source:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn inline_code_dollar_does_not_close_unclosed_inline_math() {
+        let source = "prefix $unclosed `code $` trailing text";
+        assert!(
+            extract_math_blocks(source).is_empty(),
+            "inline-code delimiter must not produce an inline math block"
+        );
+    }
+
+    #[test]
+    fn inline_math_close_uses_backslash_parity() {
+        assert!(
+            extract_math_blocks(r"$x \$").is_empty(),
+            "one backslash must escape the candidate close"
+        );
+
+        let even = extract_math_blocks(r"$x \\$ trailing $");
+        assert_eq!(even.len(), 1, "got {even:?}");
+        assert_eq!(
+            even[0].source, r"x \\",
+            "two backslashes must leave the first candidate close active"
+        );
+
+        let odd = extract_math_blocks(r"$x \\\$ trailing$");
+        assert_eq!(odd.len(), 1, "got {odd:?}");
+        assert!(
+            odd[0].source.contains("trailing"),
+            "three backslashes must escape the first candidate close"
+        );
+    }
+
+    #[test]
+    fn inline_math_opener_uses_backslash_parity() {
+        assert!(
+            extract_math_blocks(r"text \$x$").is_empty(),
+            "one backslash must escape the candidate opener"
+        );
+
+        let even = extract_math_blocks(r"text \\$x$");
+        assert_eq!(even.len(), 1, "got {even:?}");
+        assert_eq!(even[0].source, "x");
+
+        assert!(
+            extract_math_blocks(r"text \\\$x$").is_empty(),
+            "three backslashes must escape the candidate opener"
+        );
+    }
+
+    #[test]
+    fn inline_math_skips_code_delimiter_before_the_real_close() {
+        let blocks = extract_math_blocks("prefix $alpha `code $` omega$ suffix");
+        assert_eq!(blocks.len(), 1, "got {blocks:?}");
+        assert!(
+            blocks[0].source.ends_with("omega"),
+            "the real inline close after code must win: {:?}",
+            blocks[0]
+        );
+    }
+
+    #[test]
+    fn display_math_skips_code_delimiters_before_the_real_close() {
+        let source = "$$alpha\n```\n$$inside-code\n```\nomega$$";
+        let blocks = extract_math_blocks(source);
+        assert_eq!(blocks.len(), 1, "got {blocks:?}");
+        assert!(
+            blocks[0].source.ends_with("omega"),
+            "the real close after code must win: {:?}",
+            blocks[0]
+        );
     }
 
     #[test]
