@@ -597,6 +597,33 @@ public sealed class W2EditorInteractionTests
             interactionPopover.Attributes(),
             attribute => attribute.Name.LocalName == "Panel.ZIndex"
                 && attribute.Value == "100");
+        XElement popoverOpenSource = Assert.Single(
+            interactionPopover.Descendants(),
+            element => element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "AutomationProperties.AutomationId"
+                && attribute.Value == "EditorPopoverOpenSource"));
+        XElement popoverClose = Assert.Single(
+            interactionPopover.Descendants(),
+            element => element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "AutomationProperties.AutomationId"
+                && attribute.Value == "EditorPopoverClose"));
+        XElement popoverScroller = Assert.Single(
+            interactionPopover.Descendants(),
+            element => element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "AutomationProperties.Name"
+                && attribute.Value == "Scrollable embed preview"));
+        Assert.Contains(
+            popoverClose.Attributes(),
+            attribute => attribute.Name.LocalName == "KeyboardNavigation.TabIndex"
+                && attribute.Value == "0");
+        Assert.Contains(
+            popoverOpenSource.Attributes(),
+            attribute => attribute.Name.LocalName == "KeyboardNavigation.TabIndex"
+                && attribute.Value == "1");
+        Assert.Contains(
+            popoverScroller.Attributes(),
+            attribute => attribute.Name.LocalName == "KeyboardNavigation.TabIndex"
+                && attribute.Value == "2");
 
         foreach (string required in new[]
         {
