@@ -113,6 +113,7 @@ public sealed class ShellAccessibilityTests
             startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
                 $"slate-accessibility-{Guid.NewGuid():N}";
             startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            startInfo.Environment["SLATE_UIA_DIAGNOSTICS"] = "1";
             process = Process.Start(startInfo)
                 ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
 

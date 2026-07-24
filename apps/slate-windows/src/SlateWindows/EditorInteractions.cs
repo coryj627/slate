@@ -439,8 +439,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     public bool PreviewEmbedAt(int utf16Offset)
     {
         ThrowIfDisposed();
+        HostLog.WriteUiAutomationDiagnostic(
+            HostDiagnosticEvent.EditorEmbedPreviewRequested);
         if (_tab.IsDirty)
         {
+            HostLog.WriteUiAutomationDiagnostic(
+                HostDiagnosticEvent.EditorEmbedPreviewRejectedDirty);
             CancelPendingEmbedPreview();
             AnnounceSaveBeforeInteraction();
             return true;
@@ -450,6 +454,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             || _tab.EditorSession is null
             || _tab.SavedContentHash is not { } savedHash)
         {
+            HostLog.WriteUiAutomationDiagnostic(
+                HostDiagnosticEvent.EditorEmbedPreviewRejectedUnavailable);
             CancelPendingEmbedPreview();
             AnnounceReloadBeforeInteraction();
             return true;
@@ -484,6 +490,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 StringComparison.Ordinal)
             || _tab.EditorSession?.Revision != pending.Revision)
         {
+            HostLog.WriteUiAutomationDiagnostic(
+                HostDiagnosticEvent.EditorEmbedPreviewRejectedStale);
             CancelPendingEmbedPreview();
             return false;
         }
@@ -502,6 +510,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
         if (_mathRangesRevision != pending.Revision)
         {
+            HostLog.WriteUiAutomationDiagnostic(
+                HostDiagnosticEvent.EditorEmbedPreviewDeferredForMath);
             QueueMathRefresh(TimeSpan.Zero);
             QueueArtifactCacheRefresh();
             return null;
@@ -516,12 +526,16 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             && _artifactCacheSessionGeneration == pending.SessionGeneration;
         if (!artifactMatches)
         {
+            HostLog.WriteUiAutomationDiagnostic(
+                HostDiagnosticEvent.EditorEmbedPreviewDeferredForArtifacts);
             QueueArtifactCacheRefresh();
             return null;
         }
 
         if (!_artifactCacheSourceCurrent)
         {
+            HostLog.WriteUiAutomationDiagnostic(
+                HostDiagnosticEvent.EditorEmbedPreviewRejectedSourceStale);
             CancelPendingEmbedPreview();
             AnnounceReloadBeforeInteraction();
             return true;
@@ -530,6 +544,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _pendingEmbedPreview = null;
         if (IsInsideMathRegion(pending.Utf16Offset))
         {
+            HostLog.WriteUiAutomationDiagnostic(
+                HostDiagnosticEvent.EditorEmbedPreviewRejectedMath);
             _announce(new A11yEvent.NoEmbedAtCursor());
             return false;
         }
@@ -544,6 +560,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return PreviewEmbed(span);
         }
 
+        HostLog.WriteUiAutomationDiagnostic(
+            HostDiagnosticEvent.EditorEmbedPreviewRejectedNoSpan);
         _announce(new A11yEvent.NoEmbedAtCursor());
         return false;
     }
@@ -788,6 +806,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         OutgoingLink? link = LinkRecordFor(span, expectEmbed: true);
         if (link is null)
         {
+            HostLog.WriteUiAutomationDiagnostic(
+                HostDiagnosticEvent.EditorEmbedPreviewRejectedNoLink);
             _announce(new A11yEvent.NoResolvedEmbedAtCursor());
             return true;
         }
@@ -818,6 +838,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         PopoverImage = null;
         PopoverEmbedRoot = null;
         PopoverSourcePath = null;
+        HostLog.WriteUiAutomationDiagnostic(
+            HostDiagnosticEvent.EditorEmbedPreviewOpened);
         OpenPopover();
         _ = Task.Run(() => ResolveEmbedPreview(
             generation,

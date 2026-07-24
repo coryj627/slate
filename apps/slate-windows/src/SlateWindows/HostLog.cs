@@ -22,6 +22,17 @@ internal enum HostDiagnosticEvent
     DpiCensusFailed,
     EditorArtifactCacheRefreshFailed,
     EditorCitationCacheRefreshFailed,
+    EditorEmbedPreviewDeferredForArtifacts,
+    EditorEmbedPreviewDeferredForMath,
+    EditorEmbedPreviewOpened,
+    EditorEmbedPreviewRejectedDirty,
+    EditorEmbedPreviewRejectedMath,
+    EditorEmbedPreviewRejectedNoLink,
+    EditorEmbedPreviewRejectedNoSpan,
+    EditorEmbedPreviewRejectedSourceStale,
+    EditorEmbedPreviewRejectedStale,
+    EditorEmbedPreviewRejectedUnavailable,
+    EditorEmbedPreviewRequested,
     EditorMathRefreshFailed,
     FileRecentsPersistFailed,
     MonitorEnumerationFailed,
@@ -127,6 +138,18 @@ internal static class HostLog
         }
 
         WriteWithoutThrowing(message);
+    }
+
+    public static void WriteUiAutomationDiagnostic(
+        HostDiagnosticEvent diagnosticEvent)
+    {
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("SLATE_UIA_DIAGNOSTICS"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            Write(diagnosticEvent);
+        }
     }
 
     public static void WriteSizeLimit(
