@@ -70,7 +70,12 @@ internal sealed partial class WorkspaceViewModel
                 group.Tabs.Add(new WorkspaceTabViewModel(
                     _session,
                     tabState,
-                    MirrorSamePathDocumentState));
+                    MirrorSamePathDocumentState,
+                    OpenEditorNavigation,
+                    ActivateEditorTag,
+                    _announce,
+                    EditorPreferences,
+                    startInteractionBackgroundWork: _startInteractionBackgroundWork));
             }
 
             WorkspaceTabViewModel? active = group.Tabs.FirstOrDefault(tab => tab.Id == groupState.ActiveTab)

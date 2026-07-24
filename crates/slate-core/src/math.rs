@@ -135,6 +135,98 @@ pub struct MathBlock {
     pub byte_offset: u32,
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ScannedMathBlock {
+    source_start: usize,
+    source_end: usize,
+    delimiter_end: usize,
+    display_style: MathDisplayStyle,
+    line: u32,
+    byte_offset: usize,
+}
+
+fn markdown_code_ranges(source: &str) -> Vec<std::ops::Range<usize>> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+
+    Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH)
+        .into_offset_iter()
+        .filter_map(|(event, range)| match event {
+            Event::Code(_) | Event::Start(Tag::CodeBlock(_)) => Some(range),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Scan math without allocating formula strings. `code_ranges` must be in
+/// document order, as pulldown-cmark's offset iterator provides them.
+fn scan_math_blocks(
+    source: &str,
+    code_ranges: &[std::ops::Range<usize>],
+    mut visit: impl FnMut(ScannedMathBlock),
+) {
+    let bytes = source.as_bytes();
+    let mut lines = crate::line_index::LineTracker::new(source);
+    let mut code_index = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        while code_index < code_ranges.len() && code_ranges[code_index].end <= i {
+            code_index += 1;
+        }
+        let in_code = code_ranges
+            .get(code_index)
+            .is_some_and(|range| range.start <= i && i < range.end);
+
+        if i > 0 && bytes[i - 1] == b'\\' && bytes[i] == b'$' {
+            i += 1;
+            continue;
+        }
+        if i + 1 < bytes.len()
+            && &bytes[i..i + 2] == b"$$"
+            && !in_code
+            && let Some(end_rel) = find_double_dollar_close(&bytes[i + 2..])
+        {
+            let source_start = i + 2;
+            let source_end = source_start + end_rel;
+            if !source[source_start..source_end].trim().is_empty() {
+                visit(ScannedMathBlock {
+                    source_start,
+                    source_end,
+                    delimiter_end: source_end + 2,
+                    display_style: MathDisplayStyle::Block,
+                    line: lines.line_at(i),
+                    byte_offset: i,
+                });
+            }
+            i = source_end + 2;
+            continue;
+        }
+        if bytes[i] == b'$' && !in_code {
+            let next_idx = i + 1;
+            if next_idx < bytes.len() {
+                let nb = bytes[next_idx];
+                let opens = nb != b' ' && nb != b'\t' && nb != b'\n' && !nb.is_ascii_digit();
+                if opens && let Some(end_rel) = find_single_dollar_close(&bytes[next_idx..]) {
+                    let source_start = next_idx;
+                    let source_end = source_start + end_rel;
+                    if !source[source_start..source_end].trim().is_empty() {
+                        visit(ScannedMathBlock {
+                            source_start,
+                            source_end,
+                            delimiter_end: source_end + 1,
+                            display_style: MathDisplayStyle::Inline,
+                            line: lines.line_at(i),
+                            byte_offset: i,
+                        });
+                    }
+                    i = source_end + 1;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+}
+
 /// Walk `source` and return every math block in document order.
 ///
 /// Uses pulldown-cmark to find code-block byte ranges (so `$` inside
@@ -146,80 +238,47 @@ pub struct MathBlock {
 /// character (matching pandoc's tex-math rule, which suppresses
 /// mid-sentence dollar signs like "$50").
 pub fn extract_math_blocks(source: &str) -> Vec<RawMathBlock> {
-    use pulldown_cmark::{Event, Options, Parser, Tag};
+    let code_ranges = markdown_code_ranges(source);
+    let mut out = Vec::new();
+    scan_math_blocks(source, &code_ranges, |block| {
+        out.push(RawMathBlock {
+            source: source[block.source_start..block.source_end]
+                .trim()
+                .to_string(),
+            display_style: block.display_style,
+            line: block.line,
+            byte_offset: block.byte_offset as u32,
+        });
+    });
+    out
+}
 
-    // Pass 1: gather byte ranges of code blocks + inline code so we
-    // know where math scanning is forbidden.
-    let mut code_ranges: Vec<(usize, usize)> = Vec::new();
-    let parser = Parser::new_ext(source, Options::ENABLE_STRIKETHROUGH).into_offset_iter();
-    for (event, range) in parser {
-        match event {
-            Event::Code(_) | Event::Start(Tag::CodeBlock(_)) => {
-                code_ranges.push((range.start, range.end));
-            }
-            _ => {}
-        }
-    }
-
-    let in_code = |off: usize| code_ranges.iter().any(|(s, e)| off >= *s && off < *e);
-
-    // Pass 2: scan for math delimiters.
-    let bytes = source.as_bytes();
-    let mut out: Vec<RawMathBlock> = Vec::new();
-    // #387: O(n) incremental line numbering — the scan finds math spans at
-    // non-decreasing `i`, so count newlines once over the source.
-    let mut lines = crate::line_index::LineTracker::new(source);
-    let mut i = 0;
-    while i < bytes.len() {
-        // Skip escaped dollar signs (`\$` -> literal $).
-        if i > 0 && bytes[i - 1] == b'\\' && bytes[i] == b'$' {
-            i += 1;
-            continue;
-        }
-        // Display math: `$$ … $$`.
-        if i + 1 < bytes.len()
-            && &bytes[i..i + 2] == b"$$"
-            && !in_code(i)
-            && let Some(end_rel) = find_double_dollar_close(&bytes[i + 2..])
+/// Display-math ranges that suppress editor interactions.
+///
+/// This intentionally composes two existing canonical semantics in one
+/// CommonMark pass: the reading pipeline supplies the exact top-level,
+/// trim-start `$$` opener, while the non-owning math scanner supplies its
+/// canonical closing extent and code suppression. The returned range includes
+/// both delimiters and internal blank lines.
+pub fn interaction_display_math_ranges(source: &str) -> Vec<std::ops::Range<usize>> {
+    let body = crate::frontmatter::body_after_frontmatter(source);
+    let body_offset = source.len() - body.len();
+    let context = crate::reading::editor_display_math_context(body);
+    let mut opener_index = 0usize;
+    let mut out = Vec::new();
+    scan_math_blocks(body, &context.code_ranges, |block| {
+        while opener_index < context.openers.len()
+            && context.openers[opener_index] < block.byte_offset
         {
-            let inner = &source[i + 2..i + 2 + end_rel];
-            let trimmed = inner.trim();
-            if !trimmed.is_empty() {
-                out.push(RawMathBlock {
-                    source: trimmed.to_string(),
-                    display_style: MathDisplayStyle::Block,
-                    line: lines.line_at(i),
-                    byte_offset: i as u32,
-                });
-            }
-            i += 2 + end_rel + 2; // past the closing `$$`
-            continue;
+            opener_index += 1;
         }
-        // Inline math: `$…$`. Open only when the next char is a
-        // non-space non-digit (suppresses `$50` etc., matching pandoc).
-        if bytes[i] == b'$' && !in_code(i) {
-            let next_idx = i + 1;
-            if next_idx < bytes.len() {
-                let nb = bytes[next_idx];
-                let opens = nb != b' ' && nb != b'\t' && nb != b'\n' && !nb.is_ascii_digit();
-                if opens && let Some(end_rel) = find_single_dollar_close(&bytes[next_idx..]) {
-                    let inner = &source[next_idx..next_idx + end_rel];
-                    let trimmed = inner.trim();
-                    if !trimmed.is_empty() {
-                        out.push(RawMathBlock {
-                            source: trimmed.to_string(),
-                            display_style: MathDisplayStyle::Inline,
-                            line: lines.line_at(i),
-                            byte_offset: i as u32,
-                        });
-                    }
-                    i = next_idx + end_rel + 1;
-                    continue;
-                }
-            }
+        if block.display_style == MathDisplayStyle::Block
+            && context.openers.get(opener_index) == Some(&block.byte_offset)
+        {
+            out.push(body_offset + block.byte_offset..body_offset + block.delimiter_end);
+            opener_index += 1;
         }
-        i += 1;
-    }
+    });
     out
 }
 
@@ -238,9 +297,6 @@ fn find_double_dollar_close(after: &[u8]) -> Option<usize> {
     let mut i = 0;
     while i + 1 < after.len() {
         if &after[i..i + 2] == b"$$" {
-            // Count consecutive `\` bytes preceding the candidate
-            // close. Odd count means the `$` is escaped; even count
-            // (including zero) means it isn't.
             let mut backslashes = 0usize;
             let mut j = i;
             while j > 0 && after[j - 1] == b'\\' {
@@ -274,7 +330,6 @@ fn find_single_dollar_close(after: &[u8]) -> Option<usize> {
     }
     None
 }
-
 // --- Rendering ---------------------------------------------------------
 
 // MathCAT's `MATHML_INSTANCE`, `SPEECH_RULES`, `NAVIGATION_STATE`,
@@ -766,6 +821,38 @@ mod tests {
         assert_eq!(blocks[0].line, 3);
     }
 
+    #[test]
+    fn interaction_ranges_use_exact_top_level_trim_start_openers_and_canonical_closes() {
+        let source = "---\ntitle: Math\n---\n\n  $$alpha\n\nbeta$$\n\n$$a$$ prose $$b$$\n";
+        let ranges = interaction_display_math_ranges(source);
+        let first = source.find("$$alpha").unwrap();
+        let first_end = source.find("beta$$").unwrap() + "beta$$".len();
+        let second = source.find("$$a$$").unwrap();
+
+        assert_eq!(ranges, vec![first..first_end, second..second + 5]);
+    }
+
+    #[test]
+    fn interaction_ranges_reject_midline_lists_quotes_and_code() {
+        let source =
+            "prose $$mid$$\n\n- $$list$$\n\n> $$quote$$\n\n`$$inline$$`\n\n```\n$$fenced$$\n```\n";
+        assert!(interaction_display_math_ranges(source).is_empty());
+    }
+
+    #[test]
+    fn interaction_range_scan_stays_linear_for_mixed_code_and_dollar_dense_input() {
+        let mut source = String::with_capacity(8 * 1024 * 1024);
+        while source.len() < 8 * 1024 * 1024 {
+            source.push_str("```\n$$$$$$$$$$$$$$$$\n```\nprose $$x$$ $$y$$ $$$$$$$$\n\n");
+        }
+
+        let started = std::time::Instant::now();
+        assert!(interaction_display_math_ranges(&source).is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(20),
+            "mixed fenced/$-dense interaction scan regressed from linear behavior"
+        );
+    }
     #[test]
     fn prefs_fingerprint_changes_on_each_field() {
         let base = MathPrefs::default();

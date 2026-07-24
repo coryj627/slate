@@ -37,10 +37,15 @@ internal sealed partial class WorkspaceViewModel
         get => _activeGroup;
         private set
         {
-            if (SetField(ref _activeGroup, value))
+            if (ReferenceEquals(_activeGroup, value))
             {
-                RaiseCommandStates();
+                return;
             }
+
+            _activeGroup?.ActiveTab?.Deactivate();
+            _activeGroup = value;
+            OnPropertyChanged();
+            RaiseCommandStates();
         }
     }
 
@@ -179,7 +184,12 @@ internal sealed partial class WorkspaceViewModel
         var tab = new WorkspaceTabViewModel(
             _session,
             new WorkspaceTabState(Guid.NewGuid(), item),
-            MirrorSamePathDocumentState);
+            MirrorSamePathDocumentState,
+            OpenEditorNavigation,
+            ActivateEditorTag,
+            _announce,
+            EditorPreferences,
+            startInteractionBackgroundWork: _startInteractionBackgroundWork);
         if (peer is not null)
         {
             tab.MirrorDocumentStateFrom(peer);
@@ -397,7 +407,12 @@ internal sealed partial class WorkspaceViewModel
         WorkspaceTabViewModel duplicate = new(
             _session,
             new WorkspaceTabState(Guid.NewGuid(), tab.Item),
-            MirrorSamePathDocumentState);
+            MirrorSamePathDocumentState,
+            OpenEditorNavigation,
+            ActivateEditorTag,
+            _announce,
+            EditorPreferences,
+            startInteractionBackgroundWork: _startInteractionBackgroundWork);
         duplicate.MirrorDocumentStateFrom(tab);
         ActiveGroup.Tabs.Insert(index + 1, duplicate);
         ActiveGroup.ActiveTab = duplicate;

@@ -640,6 +640,23 @@ impl VaultProvider for FsVaultProvider {
         Ok(buf)
     }
 
+    fn read_file_range_with_cap(
+        &self,
+        relative: &str,
+        offset: u64,
+        max_bytes: u64,
+    ) -> Result<Vec<u8>, VaultError> {
+        use std::io::{Read, Seek, SeekFrom};
+        let path = self.resolve(relative)?;
+        let mut file = fs::File::open(&path)?;
+        file.seek(SeekFrom::Start(offset))?;
+        let cap = max_bytes.saturating_add(1);
+        let mut handle = file.take(cap);
+        let mut buf: Vec<u8> = Vec::with_capacity(cap.min(64 * 1024) as usize);
+        handle.read_to_end(&mut buf)?;
+        Ok(buf)
+    }
+
     fn write_file(&self, relative: &str, contents: &[u8]) -> Result<(), VaultError> {
         let path = self.resolve_for_mutation(relative)?;
         atomic_write(&path, &self.tmp_dir(), contents)?;

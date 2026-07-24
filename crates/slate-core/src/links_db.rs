@@ -41,6 +41,9 @@ pub struct OutgoingLink {
     pub is_unresolved: bool,
     pub snippet: String,
     pub ordinal: u32,
+    /// Exact authored source range in whole-file UTF-8 bytes.
+    pub span_start: u32,
+    pub span_end: u32,
     /// The link's display text — for `![alt](src)` image embeds this
     /// is the author's alt text (#433). `None` when not authored.
     pub display_text: Option<String>,
@@ -274,7 +277,7 @@ pub(crate) fn outgoing_links_for(
     let mut stmt = conn.prepare_cached(
         "SELECT links.target_path, links.target_raw, links.target_anchor,
                 links.kind, links.is_embed, links.is_external, links.snippet,
-                links.ordinal, links.display_text
+                links.ordinal, links.span_start, links.span_end, links.display_text
          FROM links
          JOIN files ON files.id = links.source_file_id
          WHERE files.path = ?1
@@ -295,7 +298,9 @@ pub(crate) fn outgoing_links_for(
             is_unresolved: row.get::<_, Option<String>>(0)?.is_none() && row.get::<_, i64>(5)? == 0,
             snippet: row.get::<_, String>(6)?,
             ordinal: row.get::<_, i64>(7)? as u32,
-            display_text: row.get::<_, Option<String>>(8)?,
+            span_start: row.get::<_, i64>(8)? as u32,
+            span_end: row.get::<_, i64>(9)? as u32,
+            display_text: row.get::<_, Option<String>>(10)?,
         })
     })?;
     let mut out = Vec::new();

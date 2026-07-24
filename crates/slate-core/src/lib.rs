@@ -113,7 +113,9 @@ pub use citations::{CitationMode, CitationReference, CitedItem, Locator, extract
 pub use commands::{Command, CommandAction, CommandError, CommandRegistry, CommandSection};
 pub use diff::diff_to_ops;
 pub use embeds::{
-    AttachmentBytes, EmbedResolution, EmbedUnresolvedReason, MAX_EMBED_DEPTH, NestedEmbed,
+    AttachmentBytes, EmbedPreviewResolution, EmbedResolution, EmbedUnresolvedReason,
+    MAX_EMBED_DEPTH, MAX_EMBED_PREVIEW_IMAGE_BYTES, MAX_EMBED_PREVIEW_NODES,
+    MAX_EMBED_PREVIEW_TEXT_BYTES, NestedEmbed,
 };
 pub use frontmatter::{
     NoteParts, Property, PropertyParseWarning, PropertyValue, compose_note, extract_frontmatter,
@@ -396,6 +398,30 @@ pub fn extract_headings(source: &str) -> Vec<Heading> {
         .collect()
 }
 
+/// Resolve a link anchor against the exact Markdown source a host opened.
+///
+/// Heading anchors accept either the generated unique slug or authored
+/// heading text (case-insensitively); block anchors use the parser's exact
+/// persisted block id. The returned offset is always a UTF-8 byte boundary.
+pub fn resolve_link_anchor_byte_offset(source: &str, anchor: &LinkAnchor) -> Option<u32> {
+    match anchor {
+        LinkAnchor::Heading(authored) => {
+            let authored = authored.trim();
+            let authored_folded = authored.to_lowercase();
+            extract_headings(source)
+                .into_iter()
+                .find(|heading| {
+                    heading.anchor_id.eq_ignore_ascii_case(authored)
+                        || heading.text.trim().to_lowercase() == authored_folded
+                })
+                .map(|heading| heading.byte_offset)
+        }
+        LinkAnchor::Block(block_id) => extract_blocks(source)
+            .into_iter()
+            .find(|block| block.block_id == *block_id)
+            .map(|block| block.byte_start),
+    }
+}
 /// Slugify heading text into an ASCII-only anchor id.
 ///
 /// Lowercase ASCII alphanumerics pass through unchanged; everything
@@ -648,6 +674,33 @@ mod tests {
                 h(1, "Just a heading", 0, "just-a-heading"),
                 h(2, "Sub", 1, "sub"),
             ]
+        );
+    }
+
+    #[test]
+    fn link_anchor_offset_matches_unicode_case_slug_punctuation_and_duplicates() {
+        let source =
+            "# Über View\n\nfirst\n\n# Hello, World!\n\nsecond\n\n# Destination\n\n# Destination\n";
+        assert_eq!(
+            resolve_link_anchor_byte_offset(source, &LinkAnchor::Heading("ÜBER VIEW".into())),
+            source.find("# Über View").map(|offset| offset as u32)
+        );
+        assert_eq!(
+            resolve_link_anchor_byte_offset(source, &LinkAnchor::Heading("hello-world".into())),
+            source.find("# Hello, World!").map(|offset| offset as u32)
+        );
+        assert_eq!(
+            resolve_link_anchor_byte_offset(source, &LinkAnchor::Heading("destination-2".into())),
+            source.rfind("# Destination").map(|offset| offset as u32)
+        );
+    }
+
+    #[test]
+    fn link_anchor_offset_uses_exact_block_id_when_bodies_are_identical() {
+        let source = "same body ^first\n\nsame body ^wanted\n";
+        assert_eq!(
+            resolve_link_anchor_byte_offset(source, &LinkAnchor::Block("wanted".into())),
+            source.rfind("same body").map(|offset| offset as u32)
         );
     }
 }

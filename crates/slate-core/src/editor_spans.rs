@@ -1016,6 +1016,7 @@ impl StructureSnapshot {
         let container_prefix_end = self.containers.partition_point(|&(s, _)| s < r);
         self.containers.truncate(container_prefix_end);
         self.containers.extend(suffix.containers);
+
         self.len = new_len;
         // Behind the lone-CR gate — see `splice_in_place`.
         self.lone_crs.clear();

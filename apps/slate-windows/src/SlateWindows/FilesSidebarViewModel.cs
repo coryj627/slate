@@ -652,7 +652,15 @@ internal sealed partial class FilesSidebarViewModel : BindableBase
     {
         if (tag is not null)
         {
-            FilterText = $"tag:\"{tag.Full}\"";
+            ActivateTag(tag.Full);
+        }
+    }
+
+    public void ActivateTag(string tag)
+    {
+        if (!string.IsNullOrWhiteSpace(tag))
+        {
+            FilterText = $"tag:\"{tag}\"";
         }
     }
 

@@ -61,6 +61,9 @@ pub struct TaskItem {
     pub line: u32,
     /// Byte offset of the start of the task's line in the source.
     pub byte_offset: u32,
+    /// Exact `[<status>]` action range in whole-source UTF-8 bytes.
+    pub checkbox_start_byte: u32,
+    pub checkbox_end_byte: u32,
 }
 
 /// Extract tasks from a Markdown source string in document order.
@@ -108,19 +111,21 @@ pub fn extract_tasks(source: &str) -> Vec<TaskItem> {
         let Some(parsed) = parse_task_line(trimmed_end) else {
             continue;
         };
-        let (status_char, body) = parsed;
-        let (text, due_ms, scheduled_ms, priority, recurrence) = split_text_and_metadata(body);
+        let (text, due_ms, scheduled_ms, priority, recurrence) =
+            split_text_and_metadata(parsed.body);
         out.push(TaskItem {
             ordinal,
             text,
-            status_char,
-            completed: status_char == 'x' || status_char == 'X',
+            status_char: parsed.status_char,
+            completed: parsed.status_char == 'x' || parsed.status_char == 'X',
             due_ms,
             scheduled_ms,
             priority,
             recurrence,
             line: (line_idx as u32) + 1,
             byte_offset: line_start,
+            checkbox_start_byte: line_start.saturating_add(parsed.checkbox_start_byte),
+            checkbox_end_byte: line_start.saturating_add(parsed.checkbox_end_byte),
         });
         ordinal += 1;
     }
@@ -221,16 +226,23 @@ fn strip_one_trailing_newline(s: &str) -> &str {
 /// reading view that trusted it would miss every project-specific
 /// status char (`[/]`, `[-]`, …) the panel supports.
 pub(crate) fn task_status_char(line: &str) -> Option<char> {
-    parse_task_line(line).map(|(status_char, _)| status_char)
+    parse_task_line(line).map(|parsed| parsed.status_char)
 }
 
-/// Returns `Some((status_char, body))` if `line` matches the task
+struct ParsedTaskLine<'a> {
+    status_char: char,
+    body: &'a str,
+    checkbox_start_byte: u32,
+    checkbox_end_byte: u32,
+}
+
+/// Returns the parsed task fields if `line` matches the task
 /// pattern `^\s*[-*+] \[(.)\](?: .*)?$`. The trailing space after
 /// `]` is required when text follows but tolerated as missing when
 /// the line ends right after `]` — i.e. `- [x]` with no body parses
 /// as a task with empty text. The body is what follows the `]`,
 /// still untrimmed so metadata splitting can see the exact bytes.
-fn parse_task_line(line: &str) -> Option<(char, &str)> {
+fn parse_task_line(line: &str) -> Option<ParsedTaskLine<'_>> {
     // Skip leading whitespace. We accept any horizontal whitespace
     // (spaces, tabs) so nested list-item tasks indented under their
     // parent parse the same as top-level ones.
@@ -249,6 +261,7 @@ fn parse_task_line(line: &str) -> Option<(char, &str)> {
     }
     let after_bullet = &trimmed[after_bullet_space.0 + after_bullet_space.1.len_utf8()..];
     let after_bullet = after_bullet.trim_start_matches(TASK_BULLET_SEPARATORS);
+    let checkbox_start_byte = u32::try_from(line.len().checked_sub(after_bullet.len())?).ok()?;
 
     // `[X] body` — exactly one char between brackets, then a single
     // space (CommonMark/GFM convention; pulldown-cmark's TaskList
@@ -271,7 +284,14 @@ fn parse_task_line(line: &str) -> Option<(char, &str)> {
         // `- [x]extra` (no space) → not a task. Matches GFM.
         return None;
     };
-    Some((status_char, body))
+    let checkbox_end_byte =
+        checkbox_start_byte.checked_add(u32::try_from(2 + status_char.len_utf8()).ok()?)?;
+    Some(ParsedTaskLine {
+        status_char,
+        body,
+        checkbox_start_byte,
+        checkbox_end_byte,
+    })
 }
 
 // --- Metadata block ---
@@ -787,6 +807,18 @@ mod tests {
         // post-trim slice.
         assert_eq!(tasks[0].line, 1);
         assert_eq!(tasks[0].byte_offset, 0);
+        assert_eq!(tasks[0].checkbox_start_byte, 6);
+        assert_eq!(tasks[0].checkbox_end_byte, 9);
+    }
+
+    #[test]
+    fn checkbox_range_is_whole_source_utf8_after_multibyte_prefix() {
+        let tasks = extract_tasks("é\n  - [x] nested\n");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].byte_offset, 3);
+        assert_eq!(tasks[0].checkbox_start_byte, 7);
+        assert_eq!(tasks[0].checkbox_end_byte, 10);
+        assert_eq!(&"é\n  - [x] nested\n"[7..10], "[x]");
     }
 
     #[test]

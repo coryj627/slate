@@ -464,7 +464,7 @@ def load_delivery_evidence(
 
     delivered_commands = {
         cid for cid, _, _, _, issue in cmd_rows
-        if issue.startswith(("#720", "#721", "#722", "#723", "#724"))
+        if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
     }
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
@@ -476,7 +476,7 @@ def load_delivery_evidence(
         if group_name not in groups:
             fail(f"command {command_id} references unknown evidence group {group_name!r}")
 
-    expected_issues = {"#720", "#721", "#722", "#723", "#724"}
+    expected_issues = {"#381", "#720", "#721", "#722", "#723", "#724", "#725"}
     if set(issue_map) != expected_issues:
         fail(
             "delivery-evidence issue drift: expected "
@@ -491,13 +491,14 @@ def load_delivery_evidence(
 
 def command_delivery_status(
     command_id: str,
+    issue: str,
     evidence: dict[str, dict[str, str]],
 ) -> str:
     if command_id not in evidence["commands"]:
         return "pending"
     return (
         W2_IMPLEMENTED_STATUS
-        if command_id == "slate.editor.save"
+        if issue.startswith(("#381", "#724", "#725"))
         else IMPLEMENTED_STATUS
     )
 
@@ -509,7 +510,11 @@ def issue_delivery_status(
     issue_number = issue.split(" ", 1)[0]
     if issue_number not in evidence["issues"]:
         return "pending"
-    return W2_IMPLEMENTED_STATUS if issue_number == "#724" else IMPLEMENTED_STATUS
+    return (
+        W2_IMPLEMENTED_STATUS
+        if issue_number in {"#381", "#724", "#725"}
+        else IMPLEMENTED_STATUS
+    )
 
 
 def main() -> int:
@@ -595,7 +600,7 @@ def main() -> int:
     a("| command id | capability (mac label) | mac chord | spoken hotkey | consuming W issue | status |")
     a("|---|---|---|---|---|---|")
     for cid, label, chord, spoke, issue in cmd_rows:
-        a(f"| `{cid}` | {label or '—'} | {chord or '—'} | {spoke or '—'} | {issue} | {command_delivery_status(cid, delivery_evidence)} |")
+        a(f"| `{cid}` | {label or '—'} | {chord or '—'} | {spoke or '—'} | {issue} | {command_delivery_status(cid, issue, delivery_evidence)} |")
     a("")
     a("The palette surface itself (ranking via the W0.5-1 core engine, "
       "sections, recents, chord display) is **#741 (W5-1)**; the quick "
@@ -631,8 +636,8 @@ def main() -> int:
     a(f"| Workspace: tabs, splits, leaves, persistence, focus routing | `Workspace/` | #722 (W1-3) | {issue_delivery_status('#722 (W1-3)', delivery_evidence)} |")
     a(f"| Quick switcher | `QuickSwitcherModel.swift` (core ranking, W0.5-2) | #723 (W1-4) | {issue_delivery_status('#723 (W1-4)', delivery_evidence)} |")
     a(f"| Editor host (AvalonEdit ⇄ DocumentBuffer, undo, save, IME) | `NoteEditorView.swift` | #724 (W2-1) | {issue_delivery_status('#724 (W2-1)', delivery_evidence)} |")
-    a("| Editor canonical spans | #381 span API consumers | #381 (W2-2) | pending |")
-    a("| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | pending |")
+    a(f"| Editor canonical spans | #381 span API consumers | #381 (W2-2) | {issue_delivery_status('#381 (W2-2)', delivery_evidence)} |")
+    a(f"| In-editor interactions (links, tags, citations, embeds, checkboxes) | `NoteEditorView.swift` | #725 (W2-3) | {issue_delivery_status('#725 (W2-3)', delivery_evidence)} |")
     a("| Reading view (block model, mode toggle, heading/link AT nav, print) | `Reading/` | #728 (W3-1) | pending |")
     a("| Math rendering + canonical speech/braille artifact | core `math.rs` consumers | #729 (W3-2) | pending |")
     a("| Diagrams (canonical Rust SVG + description) | core `diagram.rs` consumers | #730 (W3-3) | pending |")

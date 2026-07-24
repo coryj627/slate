@@ -21,6 +21,118 @@ use std::path::Path;
 /// for embedded-note rendering.
 pub const MAX_EMBED_DEPTH: u32 = 3;
 
+/// Resource bounds for transient editor previews. The normal reading-surface
+/// resolver remains lossless; preview callers use a separate bounded entry
+/// point so a broad nested graph cannot be materialized across FFI.
+pub const MAX_EMBED_PREVIEW_TEXT_BYTES: usize = 64 * 1024;
+pub const MAX_EMBED_PREVIEW_NODES: usize = 128;
+pub const MAX_EMBED_PREVIEW_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct EmbedPreviewResolution {
+    pub resolution: EmbedResolution,
+    pub truncated: bool,
+}
+
+pub(crate) enum EmbedResolveBudget {
+    Unlimited,
+    Preview {
+        remaining_text_bytes: usize,
+        remaining_nodes: usize,
+        remaining_image_bytes: u64,
+        truncated: bool,
+    },
+}
+
+impl EmbedResolveBudget {
+    pub(crate) fn preview() -> Self {
+        Self::Preview {
+            remaining_text_bytes: MAX_EMBED_PREVIEW_TEXT_BYTES,
+            remaining_nodes: MAX_EMBED_PREVIEW_NODES,
+            remaining_image_bytes: MAX_EMBED_PREVIEW_IMAGE_BYTES,
+            truncated: false,
+        }
+    }
+
+    pub(crate) fn is_preview(&self) -> bool {
+        matches!(self, Self::Preview { .. })
+    }
+
+    pub(crate) fn text_limit(&self, fallback: u64) -> u64 {
+        match self {
+            Self::Unlimited => fallback,
+            Self::Preview {
+                remaining_text_bytes,
+                ..
+            } => *remaining_text_bytes as u64,
+        }
+    }
+
+    pub(crate) fn consume_text(&mut self, bytes: usize, was_truncated: bool) {
+        if let Self::Preview {
+            remaining_text_bytes,
+            truncated,
+            ..
+        } = self
+        {
+            *remaining_text_bytes = remaining_text_bytes.saturating_sub(bytes);
+            *truncated |= was_truncated;
+        }
+    }
+
+    pub(crate) fn consume_node(&mut self) -> bool {
+        match self {
+            Self::Unlimited => true,
+            Self::Preview {
+                remaining_nodes, ..
+            } if *remaining_nodes > 0 => {
+                *remaining_nodes -= 1;
+                true
+            }
+            Self::Preview { truncated, .. } => {
+                *truncated = true;
+                false
+            }
+        }
+    }
+
+    pub(crate) fn image_limit(&self, fallback: u64) -> u64 {
+        match self {
+            Self::Unlimited => fallback,
+            Self::Preview {
+                remaining_image_bytes,
+                ..
+            } => (*remaining_image_bytes).min(fallback),
+        }
+    }
+
+    pub(crate) fn consume_image(&mut self, bytes: u64) {
+        if let Self::Preview {
+            remaining_image_bytes,
+            ..
+        } = self
+        {
+            *remaining_image_bytes = remaining_image_bytes.saturating_sub(bytes);
+        }
+    }
+
+    pub(crate) fn mark_truncated(&mut self) {
+        if let Self::Preview { truncated, .. } = self {
+            *truncated = true;
+        }
+    }
+
+    pub(crate) fn truncated(&self) -> bool {
+        matches!(
+            self,
+            Self::Preview {
+                truncated: true,
+                ..
+            }
+        )
+    }
+}
+
 /// The full resolution of one `![[…]]` reference.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EmbedResolution {
@@ -66,6 +178,8 @@ pub enum EmbedResolution {
 pub struct NestedEmbed {
     pub raw_target: String,
     pub byte_offset_in_parent: u32,
+    /// Exclusive exact authored embed span end in the parent UTF-8 source.
+    pub byte_end_in_parent: u32,
     pub resolution: EmbedResolution,
 }
 
@@ -213,6 +327,7 @@ pub(crate) fn strip_frontmatter_for_embed(source: &str) -> &str {
 /// cmark's text-event coalescing — case-insensitive, leading/
 /// trailing whitespace trimmed. Returns `None` when no heading
 /// matches.
+#[cfg(test)]
 pub(crate) fn extract_section(source: &str, heading_name: &str) -> Option<(String, String)> {
     use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 
@@ -266,12 +381,14 @@ pub(crate) fn extract_section(source: &str, heading_name: &str) -> Option<(Strin
     Some((matched.text.clone(), text))
 }
 
+#[cfg(test)]
 struct HeadingInfo {
     level: u8,
     text: String,
     byte_start: usize,
 }
 
+#[cfg(test)]
 fn heading_level_u8(level: pulldown_cmark::HeadingLevel) -> u8 {
     use pulldown_cmark::HeadingLevel::*;
     match level {

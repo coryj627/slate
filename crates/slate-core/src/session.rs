@@ -1431,6 +1431,13 @@ impl VaultSession {
             .load(std::sync::atomic::Ordering::SeqCst)
     }
 
+    /// Cheap session-local discriminator for UI caches backed by indexed
+    /// file content. It advances after scans and core writes, including
+    /// prose-only edits that do not change graph topology.
+    pub fn interaction_generation(&self) -> u64 {
+        self.bases_generation()
+    }
+
     // --- GraphIndex plumbing (Milestone P #550) -------------------------
 
     /// Open a staging sink for one hooked mutation. Live only when
@@ -4883,7 +4890,25 @@ impl VaultSession {
         target: &str,
         alt: Option<String>,
     ) -> Result<crate::EmbedResolution, VaultError> {
-        self.resolve_embed_at_depth(host_path, target, 0, alt)
+        let mut budget = crate::embeds::EmbedResolveBudget::Unlimited;
+        self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)
+    }
+
+    /// Resolve an editor popover preview under a shared text/node/image budget.
+    /// Unlike `resolve_embed`, this bounds allocation while walking the tree,
+    /// before the recursive result is materialized across FFI.
+    pub fn resolve_embed_preview(
+        &self,
+        host_path: &str,
+        target: &str,
+        alt: Option<String>,
+    ) -> Result<crate::EmbedPreviewResolution, VaultError> {
+        let mut budget = crate::embeds::EmbedResolveBudget::preview();
+        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        Ok(crate::EmbedPreviewResolution {
+            resolution,
+            truncated: budget.truncated(),
+        })
     }
 
     fn resolve_embed_at_depth(
@@ -4892,6 +4917,7 @@ impl VaultSession {
         target: &str,
         depth: u32,
         alt: Option<String>,
+        budget: &mut crate::embeds::EmbedResolveBudget,
     ) -> Result<crate::EmbedResolution, VaultError> {
         use crate::embeds::{EmbedAnchor, parse_embed_target};
 
@@ -4908,7 +4934,7 @@ impl VaultSession {
         // host path through so relative-folder resolution stays
         // symmetric with the note-target branch (Codoki PR #190).
         if crate::embeds::looks_like_image(note_name) {
-            return self.resolve_image_embed(host_path, target, note_name, alt);
+            return self.resolve_image_embed(host_path, target, note_name, alt, budget);
         }
 
         // Note target: snapshot the file index, run link_resolver,
@@ -4932,42 +4958,206 @@ impl VaultSession {
             }
         };
 
-        let text = match self.read_text(&target_path) {
-            Ok(t) => t,
-            Err(VaultError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                // The index pointed at a path the filesystem no
-                // longer has — surface as TargetNotFound so the UI
-                // doesn't show a stack-trace-shaped error.
-                return Ok(crate::EmbedResolution::Unresolved {
+        let resolved = match anchor {
+            None => self
+                .read_embed_text(&target_path, budget)
+                .and_then(|text| self.resolve_full_note_embed(target_path, text, depth, budget)),
+            Some(EmbedAnchor::Heading(heading)) => {
+                self.resolve_indexed_section_embed(target_path, heading, depth, budget)
+            }
+            Some(EmbedAnchor::Block(block_id)) => {
+                self.resolve_indexed_block_embed(target_path, block_id, budget)
+            }
+        };
+        match resolved {
+            Ok(resolution) => Ok(resolution),
+            Err(VaultError::Io(error)) if error.kind() == std::io::ErrorKind::NotFound => {
+                Ok(crate::EmbedResolution::Unresolved {
                     reason: crate::EmbedUnresolvedReason::TargetNotFound {
                         target: target.to_string(),
                     },
-                });
+                })
             }
-            Err(e) => {
-                return Ok(crate::EmbedResolution::Unresolved {
-                    reason: crate::EmbedUnresolvedReason::ReadError {
-                        message: e.to_string(),
-                    },
-                });
-            }
-        };
-
-        match anchor {
-            None => self.resolve_full_note_embed(target_path, text, depth),
-            Some(EmbedAnchor::Heading(h)) => {
-                self.resolve_section_embed(target_path, text, h, depth)
-            }
-            Some(EmbedAnchor::Block(id)) => self.resolve_block_embed(target_path, text, id),
+            Err(error) => Ok(crate::EmbedResolution::Unresolved {
+                reason: crate::EmbedUnresolvedReason::ReadError {
+                    message: error.to_string(),
+                },
+            }),
         }
     }
 
+    fn resolve_indexed_section_embed(
+        &self,
+        target_path: String,
+        heading_name: &str,
+        depth: u32,
+        budget: &mut crate::embeds::EmbedResolveBudget,
+    ) -> Result<crate::EmbedResolution, VaultError> {
+        let headings = {
+            let conn = self.conn.lock().expect("session connection mutex");
+            let file_id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM files WHERE path = ?1",
+                    rusqlite::params![&target_path],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(file_id) = file_id else {
+                return Ok(crate::EmbedResolution::Unresolved {
+                    reason: crate::EmbedUnresolvedReason::HeadingNotFound {
+                        target_path,
+                        heading: heading_name.to_string(),
+                    },
+                });
+            };
+            let mut statement = conn.prepare_cached(
+                "SELECT level, text, anchor_id, byte_offset
+                 FROM headings
+                 WHERE file_id = ?1
+                 ORDER BY ordinal ASC",
+            )?;
+            statement
+                .query_map(rusqlite::params![file_id], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)? as u8,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)? as u64,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let folded = heading_name.trim().to_lowercase();
+        let matched = headings
+            .iter()
+            .position(|(_, text, anchor_id, _)| {
+                anchor_id.eq_ignore_ascii_case(heading_name.trim())
+                    || text.trim().to_lowercase() == folded
+            })
+            .map(|index| {
+                let (level, text, _, start) = &headings[index];
+                let end = headings[index + 1..]
+                    .iter()
+                    .find(|(next_level, _, _, _)| next_level <= level)
+                    .map(|(_, _, _, offset)| *offset);
+                (text.clone(), *start, end)
+            });
+        let Some((heading, start, indexed_end)) = matched else {
+            return Ok(crate::EmbedResolution::Unresolved {
+                reason: crate::EmbedUnresolvedReason::HeadingNotFound {
+                    target_path,
+                    heading: heading_name.to_string(),
+                },
+            });
+        };
+        let end = indexed_end.unwrap_or(self.provider.stat(&target_path)?.size_bytes);
+        let section_text = self.read_embed_text_range(&target_path, start, end, budget)?;
+        let nested = self.resolve_nested_embeds(&target_path, &section_text, depth, budget)?;
+        Ok(crate::EmbedResolution::Section {
+            target_path,
+            heading,
+            text: section_text,
+            nested,
+        })
+    }
+
+    fn resolve_indexed_block_embed(
+        &self,
+        target_path: String,
+        block_id: &str,
+        budget: &mut crate::embeds::EmbedResolveBudget,
+    ) -> Result<crate::EmbedResolution, VaultError> {
+        let resolved = {
+            let conn = self.conn.lock().expect("session connection mutex");
+            let file_id: Option<i64> = conn
+                .query_row(
+                    "SELECT id FROM files WHERE path = ?1",
+                    rusqlite::params![&target_path],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match file_id {
+                Some(file_id) => crate::blocks_db::resolve_block(&conn, file_id, block_id)?,
+                None => None,
+            }
+        };
+        let Some(block) = resolved else {
+            return Ok(crate::EmbedResolution::Unresolved {
+                reason: crate::EmbedUnresolvedReason::BlockNotFound {
+                    target_path,
+                    block_id: block_id.to_string(),
+                },
+            });
+        };
+        let text = self.read_embed_text_range(
+            &target_path,
+            block.byte_start as u64,
+            block.byte_end as u64,
+            budget,
+        )?;
+        Ok(crate::EmbedResolution::Block {
+            target_path,
+            block_id: block_id.to_string(),
+            text,
+        })
+    }
+
+    fn read_embed_text_range(
+        &self,
+        path: &str,
+        start: u64,
+        end: u64,
+        budget: &mut crate::embeds::EmbedResolveBudget,
+    ) -> Result<String, VaultError> {
+        if !budget.is_preview() {
+            let text = self.read_text(path)?;
+            return Ok(text
+                .get(start as usize..end as usize)
+                .unwrap_or("")
+                .to_string());
+        }
+
+        let range_len = end.saturating_sub(start);
+        let limit = budget.text_limit(self.config.large_file_refuse_bytes);
+        if limit == 0 {
+            budget.consume_text(0, range_len > 0);
+            return Ok(String::new());
+        }
+        let read_limit = limit.min(range_len);
+        let mut bytes = self
+            .provider
+            .read_file_range_with_cap(path, start, read_limit)?;
+        if bytes.len() as u64 > read_limit {
+            bytes.truncate(read_limit as usize);
+        }
+        let text = Self::decode_bounded_embed_utf8(path, bytes)?;
+        budget.consume_text(text.len(), range_len > limit);
+        Ok(text)
+    }
+
+    fn decode_bounded_embed_utf8(path: &str, bytes: Vec<u8>) -> Result<String, VaultError> {
+        match String::from_utf8(bytes) {
+            Ok(text) => Ok(text),
+            Err(error) if error.utf8_error().error_len().is_none() => {
+                let valid_up_to = error.utf8_error().valid_up_to();
+                let mut bytes = error.into_bytes();
+                bytes.truncate(valid_up_to);
+                String::from_utf8(bytes).map_err(|_| VaultError::InvalidUtf8 {
+                    path: path.to_string(),
+                })
+            }
+            Err(_) => Err(VaultError::InvalidUtf8 {
+                path: path.to_string(),
+            }),
+        }
+    }
     fn resolve_image_embed(
         &self,
         host_path: &str,
         raw_target: &str,
         note_name: &str,
         alt: Option<String>,
+        budget: &mut crate::embeds::EmbedResolveBudget,
     ) -> Result<crate::EmbedResolution, VaultError> {
         // Same path-resolution strategy as note targets: snapshot
         // the file index and run the link_resolver. `looks_like_image`
@@ -5000,7 +5190,7 @@ impl VaultSession {
         // display_text per occurrence). #419's interim re-read +
         // re-parse of the host per image is gone, and nested alt is
         // now per-occurrence by construction.
-        match self.read_attachment(&target_path) {
+        match self.read_embed_attachment(&target_path, budget) {
             Ok(att) => Ok(crate::EmbedResolution::Image {
                 target_path,
                 bytes: att.bytes,
@@ -5022,87 +5212,77 @@ impl VaultSession {
         }
     }
 
+    fn read_embed_text(
+        &self,
+        path: &str,
+        budget: &mut crate::embeds::EmbedResolveBudget,
+    ) -> Result<String, VaultError> {
+        if !budget.is_preview() {
+            return self.read_text(path);
+        }
+
+        let limit = budget.text_limit(self.config.large_file_refuse_bytes);
+        let stat = self.provider.stat(path)?;
+        if limit == 0 {
+            budget.consume_text(0, stat.size_bytes > 0);
+            return Ok(String::new());
+        }
+
+        let mut bytes = self.provider.read_file_with_cap(path, limit)?;
+        let was_truncated = stat.size_bytes > limit || bytes.len() as u64 > limit;
+        if bytes.len() as u64 > limit {
+            bytes.truncate(limit as usize);
+        }
+
+        let text = Self::decode_bounded_embed_utf8(path, bytes)?;
+        budget.consume_text(text.len(), was_truncated);
+        Ok(text)
+    }
+
+    fn read_embed_attachment(
+        &self,
+        path: &str,
+        budget: &mut crate::embeds::EmbedResolveBudget,
+    ) -> Result<crate::AttachmentBytes, VaultError> {
+        if !budget.is_preview() {
+            return self.read_attachment(path);
+        }
+
+        let limit = budget.image_limit(self.config.large_attachment_refuse_bytes);
+        let stat = self.provider.stat(path)?;
+        if stat.size_bytes > limit {
+            budget.mark_truncated();
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: stat.size_bytes,
+            });
+        }
+        let bytes = self.provider.read_file_with_cap(path, limit)?;
+        if bytes.len() as u64 > limit {
+            budget.mark_truncated();
+            return Err(VaultError::FileTooLarge {
+                path: path.to_string(),
+                size: bytes.len() as u64,
+            });
+        }
+        let mime = crate::embeds::infer_mime(path, &bytes);
+        budget.consume_image(bytes.len() as u64);
+        Ok(crate::AttachmentBytes { bytes, mime })
+    }
+
     fn resolve_full_note_embed(
         &self,
         target_path: String,
         text: String,
         depth: u32,
+        budget: &mut crate::embeds::EmbedResolveBudget,
     ) -> Result<crate::EmbedResolution, VaultError> {
         let body = crate::embeds::strip_frontmatter_for_embed(&text).to_string();
-        let nested = self.resolve_nested_embeds(&target_path, &body, depth)?;
+        let nested = self.resolve_nested_embeds(&target_path, &body, depth, budget)?;
         Ok(crate::EmbedResolution::FullNote {
             target_path,
             text: body,
             nested,
-        })
-    }
-
-    fn resolve_section_embed(
-        &self,
-        target_path: String,
-        text: String,
-        heading_name: &str,
-        depth: u32,
-    ) -> Result<crate::EmbedResolution, VaultError> {
-        match crate::embeds::extract_section(&text, heading_name) {
-            Some((matched_heading, section_text)) => {
-                let nested = self.resolve_nested_embeds(&target_path, &section_text, depth)?;
-                Ok(crate::EmbedResolution::Section {
-                    target_path,
-                    heading: matched_heading,
-                    text: section_text,
-                    nested,
-                })
-            }
-            None => Ok(crate::EmbedResolution::Unresolved {
-                reason: crate::EmbedUnresolvedReason::HeadingNotFound {
-                    target_path,
-                    heading: heading_name.to_string(),
-                },
-            }),
-        }
-    }
-
-    fn resolve_block_embed(
-        &self,
-        target_path: String,
-        text: String,
-        block_id: &str,
-    ) -> Result<crate::EmbedResolution, VaultError> {
-        let conn = self.conn.lock().expect("session connection mutex");
-        let file_id: Option<i64> = conn
-            .query_row(
-                "SELECT id FROM files WHERE path = ?1",
-                rusqlite::params![target_path],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let Some(file_id) = file_id else {
-            return Ok(crate::EmbedResolution::Unresolved {
-                reason: crate::EmbedUnresolvedReason::BlockNotFound {
-                    target_path,
-                    block_id: block_id.to_string(),
-                },
-            });
-        };
-        let resolved = crate::blocks_db::resolve_block(&conn, file_id, block_id)?;
-        drop(conn);
-        let Some(b) = resolved else {
-            return Ok(crate::EmbedResolution::Unresolved {
-                reason: crate::EmbedUnresolvedReason::BlockNotFound {
-                    target_path,
-                    block_id: block_id.to_string(),
-                },
-            });
-        };
-        let block_text = text
-            .get(b.byte_start as usize..b.byte_end as usize)
-            .unwrap_or("")
-            .to_string();
-        Ok(crate::EmbedResolution::Block {
-            target_path,
-            block_id: block_id.to_string(),
-            text: block_text,
         })
     }
 
@@ -5115,12 +5295,16 @@ impl VaultSession {
         host_path: &str,
         text: &str,
         depth: u32,
+        budget: &mut crate::embeds::EmbedResolveBudget,
     ) -> Result<Vec<crate::NestedEmbed>, VaultError> {
         let next_depth = depth + 1;
         let mut out: Vec<crate::NestedEmbed> = Vec::new();
         for link in crate::extract_links(text) {
             if !link.is_embed {
                 continue;
+            }
+            if !budget.consume_node() {
+                break;
             }
             // Reconstruct the embed target string (target + optional
             // anchor) so the recursive call parses identically to
@@ -5135,10 +5319,12 @@ impl VaultSession {
                 &target_with_anchor,
                 next_depth,
                 link.display_text.clone(),
+                budget,
             )?;
             out.push(crate::NestedEmbed {
                 raw_target: target_with_anchor,
                 byte_offset_in_parent: link.span_start as u32,
+                byte_end_in_parent: link.span_end as u32,
                 resolution,
             });
         }
