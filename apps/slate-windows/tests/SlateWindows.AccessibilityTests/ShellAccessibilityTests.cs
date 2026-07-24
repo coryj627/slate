@@ -96,7 +96,7 @@ public sealed class ShellAccessibilityTests
         Directory.CreateDirectory(vaultRoot);
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"),
-            "![[Folder/child]]\n\n[@doe]\n\n---\ntags:\n  - accessibility\n---\n# Accessible note\n");
+            "---\ntags:\n  - accessibility\n---\n\n![[Folder/child]]\n\n[@doe]\n\n# Accessible note\n");
         Directory.CreateDirectory(Path.Combine(vaultRoot, "Folder"));
         File.WriteAllText(Path.Combine(vaultRoot, "Folder", "child.md"), "# Child note\n");
 
