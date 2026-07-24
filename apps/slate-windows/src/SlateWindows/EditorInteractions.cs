@@ -166,6 +166,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private int _mathRefreshGeneration;
     private long _mathRangesRevision = -1;
     private bool _popoverFocusPending;
+    private int _focusRequestGeneration;
     private readonly object _artifactCacheGate = new();
     private bool _artifactCacheLoading;
     private bool _artifactCacheRerunPending;
@@ -675,6 +676,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
 
         _disposed = true;
+        _focusRequestGeneration++;
         _citationCloseTimer.Stop();
         lock (_mathRefreshGate)
         {
@@ -2467,6 +2469,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
     private void ClosePopover(bool requestFocus)
     {
+        int focusRequestGeneration = ++_focusRequestGeneration;
         _embedGeneration++;
         _embedRequestKey = null;
         _activeEmbedRequestKey = null;
@@ -2475,7 +2478,17 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _hoveredCitationByteOffset = null;
         if (requestFocus)
         {
-            FocusRequested?.Invoke(this, EventArgs.Empty);
+            _dispatcher.BeginInvoke(
+                DispatcherPriority.Input,
+                new Action(() =>
+                {
+                    if (!_disposed
+                        && focusRequestGeneration == _focusRequestGeneration
+                        && !IsPopoverOpen)
+                    {
+                        FocusRequested?.Invoke(this, EventArgs.Empty);
+                    }
+                }));
         }
     }
 
@@ -2496,6 +2509,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
     private void OpenPopover(bool requestFocus = true)
     {
+        _focusRequestGeneration++;
         _popoverFocusPending = requestFocus;
         IsPopoverOpen = true;
         if (requestFocus)

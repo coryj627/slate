@@ -88,6 +88,46 @@ public sealed class W2EditorInteractionTests
     }
 
     [Fact]
+    public void ClosingPopover_DefersEditorFocusAndDropsStaleRequests()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create();
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        using var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            startInteractionBackgroundWork: false);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        interactions.RefreshArtifactCacheForTests();
+        int citation = Inside(tab.Text, "[@doe]");
+        int focusRequests = 0;
+        interactions.FocusRequested += (_, _) => focusRequests++;
+
+        Assert.True(interactions.ActivateAt(citation));
+        interactions.ClosePopoverCommand.Execute(null);
+
+        Assert.False(interactions.IsPopoverOpen);
+        Assert.Equal(0, focusRequests);
+        DrainUi();
+        Assert.Equal(1, focusRequests);
+
+        Assert.True(interactions.ActivateAt(citation));
+        interactions.ClosePopoverCommand.Execute(null);
+        Assert.True(interactions.ActivateAt(citation));
+        DrainUi();
+        Assert.Equal(1, focusRequests);
+
+        interactions.ClosePopoverCommand.Execute(null);
+        interactions.Dispose();
+        DrainUi();
+        Assert.Equal(1, focusRequests);
+    }
+
+    [Fact]
     public void DirtyTaskAndSavedRecordActions_FailClosedWithoutLosingEditorText()
     {
         using InteractionFixture fixture = InteractionFixture.Create();
@@ -678,6 +718,14 @@ public sealed class W2EditorInteractionTests
             Dispatcher.PushFrame(frame);
             Thread.Yield();
         }
+    }
+    private static void DrainUi()
+    {
+        var frame = new DispatcherFrame();
+        Dispatcher.CurrentDispatcher.BeginInvoke(
+            DispatcherPriority.Background,
+            new Action(() => frame.Continue = false));
+        Dispatcher.PushFrame(frame);
     }
     private static string EmbedText(EditorEmbedPreviewNode node) =>
         string.Concat(node.Parts.Select(part =>
