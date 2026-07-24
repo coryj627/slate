@@ -1105,50 +1105,57 @@ public sealed class ShellAccessibilityTests
         Assert.True(
             editor.Patterns.Text.IsSupported,
             "The Markdown editor does not expose TextPattern.");
-        if (editor.Patterns.Text.Pattern.DocumentRange.FindText(
-                text,
-                backward: false,
-                ignoreCase: false) is null)
-        {
-            throw new Xunit.Sdk.XunitException(
+        var textPattern = editor.Patterns.Text.Pattern;
+        var target = textPattern.DocumentRange.FindText(
+            text,
+            backward: false,
+            ignoreCase: false)
+            ?? throw new Xunit.Sdk.XunitException(
                 $"The editor text does not contain '{text}'.");
+        var caretTarget = target.Clone();
+        caretTarget.MoveEndpointByRange(
+            TextPatternRangeEndpoint.End,
+            caretTarget,
+            TextPatternRangeEndpoint.Start);
+        var prefix = textPattern.DocumentRange.Clone();
+        prefix.MoveEndpointByRange(
+            TextPatternRangeEndpoint.End,
+            target,
+            TextPatternRangeEndpoint.Start);
+        int targetOffset = prefix.GetText(-1).Length;
+        Assert.InRange(targetOffset, 0, 128);
+
+        // AvalonEdit's TextRangeProvider.Select does not move TextArea.Caret.
+        // Anchor the real caret and navigate through the bounded ASCII fixture.
+        PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+        for (int index = 0; index < targetOffset; index++)
+        {
+            PressKey(VirtualKeyShort.RIGHT);
         }
 
         Assert.True(
             SpinWait.SpinUntil(
                 () =>
                 {
-                    var textPattern = editor.Patterns.Text.Pattern;
-                    var target = textPattern.DocumentRange.FindText(
-                        text,
-                        backward: false,
-                        ignoreCase: false);
-                    if (target is null)
-                    {
-                        Thread.Sleep(50);
-                        return false;
-                    }
-
-                    target.MoveEndpointByRange(
-                        TextPatternRangeEndpoint.End,
-                        target,
-                        TextPatternRangeEndpoint.Start);
-                    target.Select();
-                    Thread.Sleep(50);
                     var selections = textPattern.GetSelection();
-                    return selections.Length == 1
+                    bool atTarget = selections.Length == 1
                         && selections[0].CompareEndpoints(
                             TextPatternRangeEndpoint.Start,
-                            target,
+                            caretTarget,
                             TextPatternRangeEndpoint.Start) == 0
                         && selections[0].CompareEndpoints(
                             TextPatternRangeEndpoint.End,
-                            target,
+                            caretTarget,
                             TextPatternRangeEndpoint.End) == 0;
+                    if (!atTarget)
+                    {
+                        Thread.Sleep(50);
+                    }
+
+                    return atTarget;
                 },
                 TimeSpan.FromSeconds(5)),
             $"The editor caret did not move to '{text}'.");
-        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
     }
     private static void PressKey(VirtualKeyShort key)
     {
