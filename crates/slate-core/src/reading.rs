@@ -809,9 +809,10 @@ pub fn reading_inline_segments_source(
     records: &[crate::links_db::OutgoingLink],
 ) -> Vec<ReadingBlockInlines> {
     let sets = RecordSets::from_records(records);
+    let citations = citation_index(citations);
     reading_blocks_source(source)
         .iter()
-        .map(|block| block_inlines(block, citations, &sets))
+        .map(|block| block_inlines(block, &citations, &sets))
         .collect()
 }
 
@@ -857,11 +858,28 @@ pub fn reading_match_link(
     None
 }
 
+/// Raw-text lookup for the note's rendered citations, built ONCE per
+/// `reading_inline_segments_source` call.
+///
+/// A linear `find` per citation span is Θ(spans × citations), and the mac
+/// host supplies one rendered entry per reference — so a citation-heavy
+/// note burns quadratic CPU before the view appears. First-match wins,
+/// preserving the `find` semantics this replaces.
+type CitationIndex<'a> = std::collections::HashMap<&'a str, &'a crate::RenderedCitation>;
+
+fn citation_index(citations: &[crate::RenderedCitation]) -> CitationIndex<'_> {
+    let mut index = CitationIndex::with_capacity(citations.len());
+    for citation in citations {
+        index.entry(citation.raw.as_str()).or_insert(citation);
+    }
+    index
+}
+
 // --- Block dispatch ----------------------------------------------------
 
 fn block_inlines(
     block: &ReadingBlock,
-    citations: &[crate::RenderedCitation],
+    citations: &CitationIndex<'_>,
     sets: &RecordSets,
 ) -> ReadingBlockInlines {
     // §5: block-level embed detection runs on the block's RAW source
@@ -1074,7 +1092,13 @@ fn mappable_spans(
 ) -> Vec<crate::editor_spans::EditorSpan> {
     use crate::editor_spans::EditorSpanKind as K;
 
-    let opaque: Vec<(u32, u32)> = spans
+    // Sorted and merged into disjoint ranges so the overlap test below is
+    // a binary search rather than a full scan. A linear `any()` per
+    // candidate is Θ(candidates × opaque) — a paragraph alternating n
+    // inline-code spans with n tags stalls reading-mode activation, and
+    // paragraphs run this selection twice (block-embed detection, then
+    // rendering).
+    let mut opaque: Vec<(u32, u32)> = spans
         .iter()
         .filter(|s| {
             matches!(
@@ -1084,6 +1108,16 @@ fn mappable_spans(
         })
         .map(|s| (s.start_byte, s.end_byte))
         .collect();
+    opaque.sort_unstable();
+    let mut merged: Vec<(u32, u32)> = Vec::with_capacity(opaque.len());
+    for (start, end) in opaque {
+        match merged.last_mut() {
+            // Touching endpoints do NOT overlap, so only extend when the
+            // next range starts strictly before the current one ends.
+            Some(last) if start < last.1 => last.1 = last.1.max(end),
+            _ => merged.push((start, end)),
+        }
+    }
 
     let mut candidates: Vec<crate::editor_spans::EditorSpan> = spans
         .iter()
@@ -1103,9 +1137,13 @@ fn mappable_spans(
         if span.start_byte < covered_end {
             continue;
         }
-        if opaque
-            .iter()
-            .any(|(s, e)| span.start_byte < *e && span.end_byte > *s)
+        // `merged` is disjoint and start-ascending, so the FIRST range
+        // ending strictly after this span's start is the only candidate
+        // overlap: every later range starts even further right.
+        let first = merged.partition_point(|(_, end)| *end <= span.start_byte);
+        if merged
+            .get(first)
+            .is_some_and(|(start, _)| *start < span.end_byte)
         {
             continue;
         }
@@ -1265,7 +1303,7 @@ struct TokenRun {
 fn map_token(
     kind: &crate::editor_spans::EditorSpanKind,
     span_text: &str,
-    citations: &[crate::RenderedCitation],
+    citations: &CitationIndex<'_>,
     sets: &RecordSets,
 ) -> Option<TokenRun> {
     use crate::editor_spans::EditorSpanKind as K;
@@ -1326,7 +1364,7 @@ fn map_token(
             })
         }
         K::Citation => {
-            let matched = citations.iter().find(|c| c.raw == span_text);
+            let matched = citations.get(span_text).copied();
             let display = matched
                 .map(|c| c.visual_text.clone())
                 .filter(|t| !t.is_empty())
@@ -1531,7 +1569,7 @@ fn uri_scheme(url: &str) -> Option<String> {
 /// Render one block's chrome-stripped content into `(content, runs)`.
 fn render_inlines(
     source: &str,
-    citations: &[crate::RenderedCitation],
+    citations: &CitationIndex<'_>,
     sets: &RecordSets,
 ) -> (String, Vec<ReadingInlineRun>) {
     let spans = inline_spans(source);
@@ -1568,19 +1606,19 @@ fn render_inlines(
         if start < cursor || end > source.len() || start >= end {
             continue;
         }
-        push_escaped(&mut masked, &source[cursor..start], &mut tokens);
+        push_escaped(&mut masked, &source[cursor..start]);
         match map_token(&span.kind, &source[start..end], citations, sets) {
             Some(token) => {
-                // Index 0 is reserved for the scaffold mark below.
-                masked.push_str(&mark_for(tokens.len() + 1));
+                // 0 is the scaffold, 1 the shared escape.
+                masked.push_str(&mark_for(tokens.len() + FIRST_TOKEN_INDEX));
                 tokens.push(token);
             }
             // Interior didn't map — keep the authored bytes.
-            None => push_escaped(&mut masked, &source[start..end], &mut tokens),
+            None => push_escaped(&mut masked, &source[start..end]),
         }
         cursor = end;
     }
-    push_escaped(&mut masked, &source[cursor..], &mut tokens);
+    push_escaped(&mut masked, &source[cursor..]);
 
     // --- Inline-ONLY parse (the `.inlineOnlyPreservingWhitespace` contract)
     //
@@ -1610,12 +1648,21 @@ fn render_inlines(
     // uniform with every other mark, so the expansion scanner needs no
     // special case, and it disappears from the output for free.
     let scaffold = mark_for(0);
-    let mut all_tokens = Vec::with_capacity(tokens.len() + 1);
+    let mut all_tokens = Vec::with_capacity(tokens.len() + FIRST_TOKEN_INDEX);
+    // 0: the scaffold, which renders as nothing.
     all_tokens.push(TokenRun {
         display: String::new(),
         kind: ReadingInlineRunKind::Text,
         ax_text: None,
         source: String::new(),
+        is_escape: true,
+    });
+    // 1: the ONE shared escape, referenced by every authored marker.
+    all_tokens.push(TokenRun {
+        display: TOKEN_MARKER.to_string(),
+        kind: ReadingInlineRunKind::Text,
+        ax_text: None,
+        source: TOKEN_MARKER.to_string(),
         is_escape: true,
     });
     all_tokens.extend(tokens);
@@ -1743,23 +1790,28 @@ fn find_mask(text: &str, token_count: usize) -> Option<(usize, usize, usize)> {
 /// Punctuation) or a Private Use scalar would not.
 const TOKEN_MARKER: &str = "\u{FFFC}";
 
+/// Index of the ONE shared escape token. Reserved alongside the scaffold
+/// so every authored [`TOKEN_MARKER`] scalar in a block costs a
+/// fixed-size mask and NO token-table growth: a marker-dense note would
+/// otherwise mint one owned record (two `String`s each) per scalar, so a
+/// file well under any size limit could exhaust memory. All escapes are
+/// identical by definition — the scalar renders as itself — so one shared
+/// record is not just cheaper, it is the honest model.
+const ESCAPE_TOKEN_INDEX: usize = 1;
+
+/// The first index available to a real selected token.
+const FIRST_TOKEN_INDEX: usize = 2;
+
 /// Append `text` to `masked`, escaping every authored [`TOKEN_MARKER`]
 /// scalar into a literal mask so it can never be mistaken for a
 /// delimiter. Literal masks render as the authored scalar with no
 /// affordance and no construct break, so neighbouring text still
 /// coalesces into one run.
-fn push_escaped(masked: &mut String, text: &str, tokens: &mut Vec<TokenRun>) {
+fn push_escaped(masked: &mut String, text: &str) {
     let mut rest = text;
     while let Some(at) = rest.find(TOKEN_MARKER) {
         masked.push_str(&rest[..at]);
-        masked.push_str(&mark_for(tokens.len() + 1));
-        tokens.push(TokenRun {
-            display: TOKEN_MARKER.to_string(),
-            kind: ReadingInlineRunKind::Text,
-            ax_text: None,
-            source: TOKEN_MARKER.to_string(),
-            is_escape: true,
-        });
+        masked.push_str(&mark_for(ESCAPE_TOKEN_INDEX));
         rest = &rest[at + TOKEN_MARKER.len()..];
     }
     masked.push_str(rest);
@@ -3759,8 +3811,8 @@ final para
         // A block whose stripped content holds no CommonMark block at
         // all must not lose its bytes.
         let segment = ReadingInlineSegment {
-            content: render_inlines("   ", &[], &RecordSets::default()).0,
-            runs: render_inlines("   ", &[], &RecordSets::default()).1,
+            content: render_inlines("   ", &CitationIndex::new(), &RecordSets::default()).0,
+            runs: render_inlines("   ", &CitationIndex::new(), &RecordSets::default()).1,
             task_completed: None,
         };
         assert_eq!(segment.content, "   ");
@@ -4349,6 +4401,152 @@ final para
             only_segment("a <!-- one\ntwo --> b\n").content,
             "a <!-- one\ntwo --> b"
         );
+    }
+
+    // --- Adversarial-review regressions (round 5): scaling ---
+    //
+    // These pin ASYMPTOTICS, so they measure how the cost RESPONDS to
+    // doubling the input rather than asserting a wall-clock budget. An
+    // absolute bound is the wrong instrument and was empirically too
+    // loose: the quadratic span scan this suite is meant to catch ran the
+    // 20k-pair case in 1.68 s, comfortably inside a 10 s cap. Doubling is
+    // the honest question — linear work roughly doubles, quadratic work
+    // roughly quadruples — and the answer is machine-independent.
+    //
+    // The defects these pin are stalls and out-of-memory crashes
+    // reachable by OPENING a note, not wrong output, so no equality
+    // assertion would catch them.
+
+    /// Median wall time of `body` over a few runs, after a warm-up.
+    fn scaling_sample(mut body: impl FnMut()) -> std::time::Duration {
+        body();
+        let mut samples: Vec<std::time::Duration> = (0..5)
+            .map(|_| {
+                let started = std::time::Instant::now();
+                body();
+                started.elapsed()
+            })
+            .collect();
+        samples.sort_unstable();
+        samples[samples.len() / 2]
+    }
+
+    /// Doubling the input must not more than triple the cost.
+    ///
+    /// Measured separation on this suite's fixtures: the fixed
+    /// implementations land at 1.98-2.00x, the quadratic ones this pins
+    /// against at 3.4-3.6x. The 3.0 threshold sits cleanly between, and
+    /// both figures were confirmed by reverting each fix in turn.
+    fn assert_scales_linearly(label: &str, small: std::time::Duration, large: std::time::Duration) {
+        // Guard against a sub-millisecond baseline making the ratio pure
+        // noise; the fixtures below are sized well past this.
+        assert!(
+            small >= std::time::Duration::from_millis(2),
+            "{label}: baseline {small:?} too small to measure"
+        );
+        let ratio = large.as_secs_f64() / small.as_secs_f64();
+        assert!(
+            ratio < 3.0,
+            "{label}: doubling the input multiplied the cost by {ratio:.1} \
+             ({small:?} -> {large:?}) — that is superlinear"
+        );
+    }
+
+    /// Marker-dense input must cost a fixed-size mask per authored scalar
+    /// and NO token-table growth. One owned record per scalar (two
+    /// `String`s each) let a note far under any size limit exhaust
+    /// memory; all escapes are identical by definition, so they share one
+    /// record.
+    #[test]
+    fn marker_dense_input_does_not_amplify() {
+        let dense: String = std::iter::repeat_n('\u{FFFC}', 40_000).collect();
+        let segment = only_segment(&dense);
+        assert_eq!(segment.content, dense, "every authored scalar survives");
+        assert_eq!(segment.runs.len(), 1, "and coalesces into one run");
+
+        let small = scaling_sample(|| {
+            let text: String = std::iter::repeat_n('\u{FFFC}', 40_000).collect();
+            let _ = reading_inline_segments_source(&text, &[], &[]);
+        });
+        let large = scaling_sample(|| {
+            let text: String = std::iter::repeat_n('\u{FFFC}', 80_000).collect();
+            let _ = reading_inline_segments_source(&text, &[], &[]);
+        });
+        assert_scales_linearly("marker-dense", small, large);
+    }
+
+    /// Token containment filtering must not restart the opaque scan per
+    /// candidate: a paragraph alternating inline-code spans with tags is
+    /// Θ(n²) interval checks otherwise, and paragraphs run selection
+    /// twice (block-embed detection, then rendering).
+    #[test]
+    fn alternating_code_and_token_spans_stay_linear() {
+        fn fixture(pairs: usize) -> String {
+            let mut source = String::with_capacity(pairs * 20);
+            for index in 0..pairs {
+                source.push_str(&format!("`code{index}` #tag{index} "));
+            }
+            source
+        }
+
+        let segment = only_segment(&fixture(64));
+        assert!(
+            segment
+                .runs
+                .iter()
+                .any(|r| matches!(r.kind, ReadingInlineRunKind::Tag { .. })),
+            "tags outside the code spans still classify"
+        );
+
+        let small_source = fixture(6_000);
+        let large_source = fixture(12_000);
+        let small = scaling_sample(|| {
+            let _ = reading_inline_segments_source(&small_source, &[], &[]);
+        });
+        let large = scaling_sample(|| {
+            let _ = reading_inline_segments_source(&large_source, &[], &[]);
+        });
+        assert_scales_linearly("alternating code/token spans", small, large);
+    }
+
+    /// The citation join must be a lookup, not a linear scan per span:
+    /// the host supplies one rendered entry per reference, so n unique
+    /// citations is n²/2 raw-string comparisons otherwise.
+    #[test]
+    fn many_unique_citations_stay_linear() {
+        fn fixture(count: usize) -> (String, Vec<crate::RenderedCitation>) {
+            let citations = (0..count)
+                .map(|index| {
+                    citation(
+                        &format!("[@key{index}]"),
+                        &format!("(Doe {index})"),
+                        &format!("Doe {index}"),
+                    )
+                })
+                .collect();
+            let mut source = String::with_capacity(count * 12);
+            for index in 0..count {
+                source.push_str(&format!("[@key{index}] "));
+            }
+            (source, citations)
+        }
+
+        let (source, citations) = fixture(64);
+        let segment = only_segment_with(&source, &citations, &[]);
+        assert!(
+            segment.content.contains("(Doe 0)") && segment.content.contains("(Doe 63)"),
+            "every citation still renders its visual text"
+        );
+
+        let (small_source, small_citations) = fixture(4_000);
+        let (large_source, large_citations) = fixture(8_000);
+        let small = scaling_sample(|| {
+            let _ = reading_inline_segments_source(&small_source, &small_citations, &[]);
+        });
+        let large = scaling_sample(|| {
+            let _ = reading_inline_segments_source(&large_source, &large_citations, &[]);
+        });
+        assert_scales_linearly("citation join", small, large);
     }
 
     // --- alignment ---
