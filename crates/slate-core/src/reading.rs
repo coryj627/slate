@@ -4403,6 +4403,101 @@ final para
         );
     }
 
+    /// The merged-and-binary-searched overlap test must be EXACTLY the
+    /// naive `any()` it replaced, at every boundary: touching endpoints,
+    /// zero-width ranges, fully nested ranges, equal starts, and spans
+    /// that sit in the gap between two ranges.
+    ///
+    /// Checked by differential: the same span set is run through
+    /// `mappable_spans` and through a local reimplementation of the
+    /// retired linear predicate, over deterministic pseudo-random span
+    /// layouts.
+    #[test]
+    fn merged_overlap_test_matches_the_naive_predicate() {
+        use crate::editor_spans::{EditorSpan, EditorSpanKind as K};
+
+        /// The retired predicate, verbatim.
+        fn naive(spans: &[EditorSpan]) -> Vec<EditorSpan> {
+            let opaque: Vec<(u32, u32)> = spans
+                .iter()
+                .filter(|s| {
+                    matches!(
+                        s.kind,
+                        K::InlineCode | K::CodeFence | K::Code(_) | K::Link | K::Image
+                    )
+                })
+                .map(|s| (s.start_byte, s.end_byte))
+                .collect();
+            let mut candidates: Vec<EditorSpan> = spans
+                .iter()
+                .filter(|s| matches!(s.kind, K::Wikilink | K::Embed | K::Tag | K::Citation))
+                .cloned()
+                .collect();
+            candidates.sort_by(|a, b| {
+                a.start_byte
+                    .cmp(&b.start_byte)
+                    .then(b.end_byte.cmp(&a.end_byte))
+            });
+            let mut kept = Vec::new();
+            let mut covered_end = 0u32;
+            for span in candidates {
+                if span.start_byte < covered_end {
+                    continue;
+                }
+                if opaque
+                    .iter()
+                    .any(|(s, e)| span.start_byte < *e && span.end_byte > *s)
+                {
+                    continue;
+                }
+                covered_end = span.end_byte;
+                kept.push(span);
+            }
+            kept
+        }
+
+        // splitmix64, the repo's census PRNG idiom — a failure replays
+        // from its seed.
+        let mut state = 0x2026_0724_0967_u64;
+        let mut next = move || {
+            state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+            let mut z = state;
+            z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+            z ^ (z >> 31)
+        };
+
+        for case in 0..4_000u64 {
+            let count = (next() % 12) as usize;
+            let mut spans = Vec::with_capacity(count);
+            for _ in 0..count {
+                // Small coordinate space so touching, nested, equal-start
+                // and zero-width shapes all occur densely.
+                let start = (next() % 16) as u32;
+                let width = (next() % 5) as u32;
+                let kind = match next() % 6 {
+                    0 => K::InlineCode,
+                    1 => K::Link,
+                    2 => K::Image,
+                    3 => K::Wikilink,
+                    4 => K::Tag,
+                    _ => K::Citation,
+                };
+                spans.push(EditorSpan {
+                    start_byte: start,
+                    end_byte: start + width,
+                    kind,
+                });
+            }
+            assert_eq!(
+                mappable_spans(&spans),
+                naive(&spans),
+                "case {case}: merged overlap test diverged from the naive \
+                 predicate for {spans:?}"
+            );
+        }
+    }
+
     // --- Adversarial-review regressions (round 5): scaling ---
     //
     // These pin ASYMPTOTICS, so they measure how the cost RESPONDS to
