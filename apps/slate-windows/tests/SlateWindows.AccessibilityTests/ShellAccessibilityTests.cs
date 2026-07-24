@@ -273,12 +273,29 @@ public sealed class ShellAccessibilityTests
             Assert.True(editor.Properties.IsKeyboardFocusable.Value);
             editor.Focus();
             AssertEventuallyFocused(editor, "The opened note editor could not receive focus.");
-            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
-            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
-            AutomationElement interactionPopover = WaitForElement(
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
+            AutomationElement? interactionPopover = TryWaitForElement(
                 window,
                 "EditorInteractionPopover",
                 TimeSpan.FromSeconds(10));
+            if (interactionPopover is null)
+            {
+                AutomationElement previewMenu = WaitForMenuItem(
+                    window,
+                    "EditorMenu",
+                    "EditorPreviewEmbedMenuItem",
+                    TimeSpan.FromSeconds(10));
+                previewMenu.Patterns.Invoke.Pattern.Invoke();
+                bool menuOpened = TryWaitForElement(
+                    window,
+                    "EditorInteractionPopover",
+                    TimeSpan.FromSeconds(5)) is not null;
+                throw new Xunit.Sdk.XunitException(
+                    "Ctrl+E did not open the editor interaction popover. " +
+                    $"Invoking the bound menu command opened it: {menuOpened}. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+            }
             Assert.True(
                 SpinWait.SpinUntil(
                     () => interactionPopover.Name.StartsWith(
@@ -291,21 +308,23 @@ public sealed class ShellAccessibilityTests
                 window,
                 "EditorPopoverClose",
                 TimeSpan.FromSeconds(10));
+            AutomationElement popoverOpenSource = WaitForElement(
+                window,
+                "EditorPopoverOpenSource",
+                TimeSpan.FromSeconds(10));
             Assert.Equal(ControlType.Button, popoverClose.ControlType);
             Assert.True(popoverClose.Patterns.Invoke.IsSupported);
             AssertEventuallyFocused(
                 popoverClose,
                 "The embed popover did not focus its Close button.");
-            Keyboard.Press(VirtualKeyShort.TAB);
-            AssertEventuallyFocusedWithin(
-                interactionPopover,
-                "Tab escaped the editor interaction popover.");
-            Keyboard.TypeSimultaneously(
-                VirtualKeyShort.SHIFT,
-                VirtualKeyShort.TAB);
-            AssertEventuallyFocusedWithin(
-                interactionPopover,
-                "Shift+Tab escaped the editor interaction popover.");
+            PressKey(VirtualKeyShort.TAB);
+            AssertEventuallyFocused(
+                popoverOpenSource,
+                "Tab from Close did not wrap to Open source.");
+            PressChord(VirtualKeyShort.SHIFT, VirtualKeyShort.TAB);
+            AssertEventuallyFocused(
+                popoverClose,
+                "Shift+Tab from Open source did not wrap to Close.");
             AssertAxeClean(process, "editor-embed-popover");
             popoverClose.Patterns.Invoke.Pattern.Invoke();
             Assert.True(
@@ -319,8 +338,8 @@ public sealed class ShellAccessibilityTests
                 editor,
                 "Closing the embed popover did not return focus to the editor.");
             editor.Focus();
-            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
-            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+            PressChord(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
             _ = WaitForElement(window, "EditorInteractionPopover", TimeSpan.FromSeconds(10));
             AutomationElement citationClose = WaitForElement(
                 window,
@@ -774,18 +793,6 @@ public sealed class ShellAccessibilityTests
     }
 
 
-    private static void AssertEventuallyFocusedWithin(
-        AutomationElement root,
-        string message)
-    {
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => root.Properties.HasKeyboardFocus.Value
-                    || root.FindAllDescendants().Any(
-                        element => element.Properties.HasKeyboardFocus.Value),
-                TimeSpan.FromSeconds(10)),
-            message);
-    }
 
     private static void AssertActionButtonCensus(
         AutomationElement expander,
@@ -1008,6 +1015,44 @@ public sealed class ShellAccessibilityTests
         return reader.ReadToEnd();
     }
 
+    private static AutomationElement? TryWaitForElement(
+        Window window,
+        string automationId,
+        TimeSpan timeout)
+    {
+        AutomationElement? element = null;
+        _ = SpinWait.SpinUntil(
+            () =>
+            {
+                element = window.FindFirstDescendant(
+                    condition => condition.ByAutomationId(automationId));
+                return element is not null;
+            },
+            timeout);
+        return element;
+    }
+
+    private static void PressChord(
+        VirtualKeyShort modifier,
+        VirtualKeyShort key)
+    {
+        using (Keyboard.Pressing(modifier))
+        {
+            Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
+            PressKey(key);
+            Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
+        }
+        Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
+    }
+
+    private static void PressKey(VirtualKeyShort key)
+    {
+        using (Keyboard.Pressing(key))
+        {
+            Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
+        }
+        Wait.UntilInputIsProcessed(TimeSpan.FromSeconds(2));
+    }
     private static AutomationElement WaitForElement(
         Window window,
         string automationId,

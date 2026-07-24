@@ -449,11 +449,22 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 _tab.SavedContentHash,
                 pending.SavedHash,
                 StringComparison.Ordinal)
-            || _tab.EditorSession?.Revision != pending.Revision
-            || _session.InteractionGeneration() != pending.SessionGeneration)
+            || _tab.EditorSession?.Revision != pending.Revision)
         {
             CancelPendingEmbedPreview();
             return false;
+        }
+
+        ulong sessionGeneration = _session.InteractionGeneration();
+        if (sessionGeneration != pending.SessionGeneration)
+        {
+            int generation = ++_pendingEmbedPreviewGeneration;
+            pending = pending with
+            {
+                Generation = generation,
+                SessionGeneration = sessionGeneration,
+            };
+            _pendingEmbedPreview = pending;
         }
 
         if (_mathRangesRevision != pending.Revision)

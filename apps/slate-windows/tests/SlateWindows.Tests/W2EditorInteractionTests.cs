@@ -136,9 +136,12 @@ public sealed class W2EditorInteractionTests
         int activeFocusRequests = 0;
         activeInteractions.PopoverFocusRequested += (_, _) => activeFocusRequests++;
 
+        activeInteractions.RefreshMathRangesForTests();
         Assert.True(activeInteractions.PreviewEmbedAt(0));
         Assert.False(activeInteractions.IsPopoverOpen);
-        activeInteractions.RefreshMathRangesForTests();
+        ulong generationBefore = session.InteractionGeneration();
+        _ = session.ToggleTaskStatus("unrelated.md", 0, "x", null);
+        Assert.NotEqual(generationBefore, session.InteractionGeneration());
         activeInteractions.RefreshArtifactCacheForTests();
         Assert.True(activeInteractions.IsPopoverOpen);
         Assert.Equal(1, activeFocusRequests);
@@ -370,6 +373,9 @@ public sealed class W2EditorInteractionTests
                 #not-math
                 $$
                 """);
+            File.WriteAllText(
+                Path.Combine(root, "unrelated.md"),
+                "- [ ] unrelated task\n");
             return new InteractionFixture(root);
         }
 
