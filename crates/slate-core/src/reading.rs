@@ -1679,6 +1679,44 @@ fn render_inlines(
 /// VERTICAL TILDE is `Lm` despite sitting in Supplemental Punctuation) or
 /// a Private Use scalar would let `a*[[x]]*` open emphasis the retired
 /// pipeline left inert.
+/// Locate the first well-formed `<marker><index><marker>` mask in `text`,
+/// returning `(start, end_exclusive, index)`.
+///
+/// The scan is **digit-anchored**, not a plain `find(marker)`. Authored
+/// U+FFFC runs sit adjacent to masks in real notes (a pasted rich-text
+/// object placeholder next to a wikilink), and they merge with the mask's
+/// opening marker into one longer run. Locking onto the first marker-length
+/// window of that run picks a boundary one scalar early, the digits then
+/// fail to parse, and the whole mask leaks into the rendered content while
+/// the token's affordance is lost. Requiring a digit immediately after the
+/// window — and stepping one scalar at a time until one is found — picks
+/// the true opener and leaves the authored scalars as text.
+///
+/// The marker is longer than any authored run of its scalar by
+/// construction ([`token_marker`]), so authored text can never supply a
+/// complete marker window itself.
+fn find_mask(text: &str, marker: &str, token_count: usize) -> Option<(usize, usize, usize)> {
+    let mut search = 0usize;
+    while search < text.len() {
+        let open = search + text[search..].find(marker)?;
+        let after = open + marker.len();
+        let digits = text[after..].bytes().take_while(u8::is_ascii_digit).count();
+        if digits > 0 {
+            let digits_end = after + digits;
+            if text[digits_end..].starts_with(marker)
+                && let Ok(index) = text[after..digits_end].parse::<usize>()
+                && index < token_count
+            {
+                return Some((open, digits_end + marker.len(), index));
+            }
+        }
+        // Step ONE scalar, not one marker: the real opener may start
+        // inside the run this window landed on.
+        search = open + text[open..].chars().next().map_or(1, char::len_utf8);
+    }
+    None
+}
+
 /// One token's mask: `<marker><index><marker>`. The digits are inert to
 /// CommonMark (the probe guarantees they are never at a line start, so
 /// they cannot open an ordered list), and the marker scalars bound the
@@ -1964,30 +2002,12 @@ impl<'a> InlineWalker<'a> {
         let (kind, ax) = self.current();
         let marker = self.marker;
         let mut rest = text;
-        while let Some(open) = rest.find(marker) {
-            let after = &rest[open + marker.len()..];
-            let parsed = after.find(marker).and_then(|close| {
-                after[..close]
-                    .parse::<usize>()
-                    .ok()
-                    .filter(|index| *index < self.tokens.len())
-                    .map(|index| (close, index))
-            });
-            let Some((close, index)) = parsed else {
-                // Not a well-formed mask — carry the bytes through and
-                // keep scanning after them.
-                let upto = open + marker.len();
-                let head = rest[..upto].to_string();
-                let construct = self.construct;
-                self.out.push(&head, &styles, &kind, &ax, construct);
-                rest = &rest[upto..];
-                continue;
-            };
+        while let Some((open, end, index)) = find_mask(rest, marker, self.tokens.len()) {
             let head = rest[..open].to_string();
             let construct = self.construct;
             self.out.push(&head, &styles, &kind, &ax, construct);
             self.expand_token(index, &styles, &kind, &ax, mode);
-            rest = &after[close + marker.len()..];
+            rest = &rest[end..];
         }
         let construct = self.construct;
         let tail = rest.to_string();
@@ -3966,6 +3986,54 @@ final para
                 }
             }
         }
+    }
+
+    /// An authored U+FFFC sitting against a token merges with the mask's
+    /// opening marker into one longer run. A plain `find(marker)` locks
+    /// onto that run one scalar early, the digits fail to parse, and the
+    /// whole mask leaks into the rendered content while the token's
+    /// affordance is lost — `\u{FFFC}[[a]]` rendered as
+    /// `\u{FFFC}\u{FFFC}\u{FFFC}1\u{FFFC}\u{FFFC}` with no link at all.
+    /// The digit-anchored scan picks the true opener.
+    #[test]
+    fn authored_marker_scalars_adjacent_to_a_token_survive() {
+        let f = '\u{FFFC}';
+        for (source, expected) in [
+            (format!("{f}[[a]] tail"), format!("{f}a tail")),
+            (format!("[[a]]{f}[[b]] tail"), format!("a{f}b tail")),
+            (format!("{f}{f}[[a]]"), format!("{f}{f}a")),
+            (format!("[[a]]{f}"), format!("a{f}")),
+            (format!("x [[a]] {f} [[b]] y"), format!("x a {f} b y")),
+        ] {
+            let segment = only_segment(&source);
+            assert_eq!(segment.content, expected, "source {source:?}");
+            assert!(
+                segment
+                    .runs
+                    .iter()
+                    .any(|r| matches!(r.kind, ReadingInlineRunKind::Wikilink { .. })),
+                "the token keeps its affordance: {source:?} -> {:?}",
+                segment.runs
+            );
+            assert_partitions(&segment);
+        }
+    }
+
+    /// Two adjacent masks put two marker runs back to back; the scanner
+    /// must still resolve each to its own index.
+    #[test]
+    fn adjacent_masks_resolve_to_their_own_tokens() {
+        let segment = only_segment("[[a]][[b]] tail\n");
+        assert_eq!(segment.content, "ab tail");
+        let targets: Vec<String> = segment
+            .runs
+            .iter()
+            .filter_map(|r| match &r.kind {
+                ReadingInlineRunKind::Wikilink { target, .. } => Some(target.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(targets, vec!["a".to_string(), "b".to_string()]);
     }
 
     // --- Adversarial-review regressions (round 2) ---

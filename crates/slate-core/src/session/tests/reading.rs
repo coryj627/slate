@@ -523,6 +523,21 @@ fn assert_inline_invariants(seed: u64, source: &str) {
                 );
                 cursor = run.end;
             }
+            // Mask-leakage guard: the pipeline masks selected tokens with
+            // runs of U+FFFC, so rendered content must never carry MORE of
+            // that scalar than the author wrote. A scanner that mis-parsed
+            // a mask would spill marker scalars here and drop the token's
+            // affordance — exactly what an authored U+FFFC sitting against
+            // a wikilink used to produce.
+            let authored = block.source.matches('\u{FFFC}').count();
+            let rendered = segment.content.matches('\u{FFFC}').count();
+            assert!(
+                rendered <= authored,
+                "seed {seed}: rendered content carries {rendered} marker scalars \
+                 from {authored} authored\ncontent: {:?}\nsource: {source:?}",
+                segment.content
+            );
+
             assert_eq!(
                 cursor as usize,
                 segment.content.len(),
