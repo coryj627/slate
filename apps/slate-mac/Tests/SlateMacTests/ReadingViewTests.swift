@@ -1141,10 +1141,8 @@ final class ReadingViewTests: XCTestCase {
     func testHeadingChromeStripping() {
         XCTAssertEqual(Self.segment("## Title").content, "Title")
         XCTAssertEqual(Self.segment("# Title ##").content, "Title")
-        XCTAssertEqual(Self.segment("Title
-=====").content, "Title")
-        XCTAssertEqual(Self.segment("Title
----").content, "Title")
+        XCTAssertEqual(Self.segment("Title\n=====").content, "Title")
+        XCTAssertEqual(Self.segment("Title\n---").content, "Title")
     }
 
     func testListItemChromeStripping() {
@@ -1166,10 +1164,8 @@ final class ReadingViewTests: XCTestCase {
         XCTAssertEqual(task.segments.first?.content, "done thing")
 
         XCTAssertEqual(
-            Self.inline("- a
-  continued").segments.first?.content,
-            "a
-  continued")
+            Self.inline("- a\n  continued").segments.first?.content,
+            "a\n  continued")
 
         // A paragraph is not a list item — no marker is reported.
         XCTAssertNil(Self.inline("not a list").listMarker)
@@ -1192,9 +1188,7 @@ final class ReadingViewTests: XCTestCase {
     func testQuoteChromeStripping() {
         XCTAssertEqual(Self.segment("> quoted").content, "quoted")
         XCTAssertEqual(Self.segment("> > deep").content, "deep")
-        XCTAssertEqual(Self.segment("> a
-> b").content, "a
-b")
+        XCTAssertEqual(Self.segment("> a\n> b").content, "a\nb")
     }
 
     /// The code-block interior is now carried authoritatively from Rust

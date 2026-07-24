@@ -834,6 +834,20 @@ pub fn reading_match_link(
     for key in candidate_keys(target, grammar) {
         if let Some(index) = records.iter().position(|record| {
             record.is_embed == embed
+                // EXTERNAL records never answer an internal activation.
+                //
+                // `resolve_link` classifies by target SHAPE, not by
+                // authoring grammar, so `[[https://example.com]]` is
+                // stored as a `wikilink`-kind record with
+                // `is_external = true`. The render-time classifier
+                // ([`RecordSets`]) already skips those, so the run styles
+                // unresolved and carries "Unresolved link". Without the
+                // same predicate here, activation would match that record
+                // and hand the URL to the system opener — the rendered
+                // state and the activation would cross different trust
+                // boundaries, which is exactly the disagreement this one
+                // shared matcher exists to make impossible (#849).
+                && !record.is_external
                 && record.target_raw == key
                 && record_kind_matches(&record.kind, grammar)
         }) {
@@ -1534,23 +1548,81 @@ fn render_inlines(
     }
     masked.push_str(&source[cursor..]);
 
-    let mut walker = InlineWalker::new(&masked, sentinel, &tokens, sets);
+    // --- Inline-ONLY parse (the `.inlineOnlyPreservingWhitespace` contract)
+    //
+    // The content handed to us has already had its BLOCK chrome stripped,
+    // so re-parsing it with a block parser would let pulldown reinterpret
+    // the newly exposed bytes as structure and consume them: `# ---`
+    // strips to `---`, which a block parse reads as a thematic break and
+    // renders as NOTHING, silently erasing the heading. `# > quote` and
+    // `# # nested` lose their leading marker the same way.
+    //
+    // The probe forces a single-paragraph, inline-only parse by
+    // construction:
+    //   1. one sentinel scalar at offset 0, so no line can begin with a
+    //      block trigger (`#`, `>`, `-`, `​```​`, four spaces, `<`, …);
+    //   2. every CR and LF replaced by a SPACE — one byte for one byte, so
+    //      probe offsets map to `masked` offsets by a constant shift, and
+    //      no blank line can split a paragraph.
+    // The result always parses as exactly one paragraph containing only
+    // inline events. Authored line terminators are recovered by slicing
+    // `masked` (see `InlineWalker::text_for`), never normalized.
+    let probe = {
+        let mut out = String::with_capacity(masked.len() + sentinel.len_utf8());
+        out.push(sentinel);
+        // One byte out per byte in: CR and LF are single-byte ASCII, so
+        // swapping either for a space keeps every later offset aligned
+        // with `masked`.
+        for chunk in masked.split_inclusive(['\n', '\r']) {
+            match chunk.as_bytes().last() {
+                Some(b'\n') | Some(b'\r') => {
+                    out.push_str(&chunk[..chunk.len() - 1]);
+                    out.push(' ');
+                }
+                _ => out.push_str(chunk),
+            }
+        }
+        out
+    };
+    let prefix_len = sentinel.len_utf8();
+
+    // The prefix sentinel expands to nothing: it is scaffolding, not
+    // content. Token expansion consumes sentinels in order, so it takes
+    // index 0 and the real tokens shift by one.
+    let mut all_tokens = Vec::with_capacity(tokens.len() + 1);
+    all_tokens.push(TokenRun {
+        display: String::new(),
+        kind: ReadingInlineRunKind::Text,
+        ax_text: None,
+    });
+    all_tokens.extend(tokens);
+
+    let mut walker = InlineWalker::new(&probe, &masked, prefix_len, sentinel, &all_tokens, sets);
     walker.run();
     (walker.out.content, walker.out.runs)
 }
 
 /// A scalar that cannot be Markdown syntax and is absent from `text`, so
 /// it can stand in for a selected token without colliding with authored
-/// content. U+FFFC OBJECT REPLACEMENT CHARACTER first (its exact
-/// purpose); the Private Use Area is the deterministic escalation.
+/// content.
+///
+/// Every candidate is Unicode general category **So or Po** — the same
+/// class as the `[` / `)` that bounded the retired `[label](url)` splice
+/// — so a masked token keeps the emphasis-flanking behavior the splice
+/// had. A Private Use scalar would be neither punctuation nor whitespace
+/// and could therefore let a delimiter beside a token open emphasis that
+/// the retired pipeline left inert, so the escalation deliberately stays
+/// inside the punctuation/symbol classes.
 fn pick_sentinel(text: &str) -> char {
-    if !text.contains('\u{FFFC}') {
-        return '\u{FFFC}';
-    }
-    for code in 0xE000u32..=0xF8FFu32 {
-        if let Some(candidate) = char::from_u32(code)
-            && !text.contains(candidate)
-        {
+    // U+FFFC OBJECT REPLACEMENT CHARACTER (So) is the natural first pick;
+    // U+FFFD (So), Control Pictures (U+2400..U+241F, So) and Supplemental
+    // Punctuation (U+2E00..U+2E4F, Po) are the collision escalation.
+    let candidates = ['\u{FFFC}', '\u{FFFD}']
+        .into_iter()
+        .chain((0x2400u32..=0x241Fu32).filter_map(char::from_u32))
+        .chain((0x2E00u32..=0x2E4Fu32).filter_map(char::from_u32));
+    for candidate in candidates {
+        if !text.contains(candidate) {
             return candidate;
         }
     }
@@ -1615,7 +1687,14 @@ impl RunBuilder {
 }
 
 struct InlineWalker<'a> {
+    /// The parsed string: sentinel prefix + `masked` with every CR/LF
+    /// replaced by a space (see `render_inlines`). Byte-for-byte the same
+    /// length as `masked` after `prefix_len`.
+    probe: &'a str,
+    /// The token-masked content with its AUTHORED line terminators still
+    /// in place — what text is actually sliced from.
     masked: &'a str,
+    prefix_len: usize,
     sentinel: char,
     tokens: &'a [TokenRun],
     sets: &'a RecordSets,
@@ -1630,8 +1709,8 @@ struct InlineWalker<'a> {
     /// [`RunBuilder::push`] never fuses two separate constructs that
     /// happen to carry identical payloads.
     construct: u32,
-    /// End of the last emitted block range, for the inter-block gap
-    /// reconstruction below.
+    /// End of the last emitted block range, for the gap reconstruction
+    /// below.
     block_cursor: Option<usize>,
     /// End of the last bytes an INLINE event consumed — the honest gap
     /// anchor (see [`Self::emit_gap`]).
@@ -1641,9 +1720,18 @@ struct InlineWalker<'a> {
 }
 
 impl<'a> InlineWalker<'a> {
-    fn new(masked: &'a str, sentinel: char, tokens: &'a [TokenRun], sets: &'a RecordSets) -> Self {
+    fn new(
+        probe: &'a str,
+        masked: &'a str,
+        prefix_len: usize,
+        sentinel: char,
+        tokens: &'a [TokenRun],
+        sets: &'a RecordSets,
+    ) -> Self {
         Self {
+            probe,
             masked,
+            prefix_len,
             sentinel,
             tokens,
             sets,
@@ -1657,6 +1745,56 @@ impl<'a> InlineWalker<'a> {
             block_depth: 0,
             saw_block: false,
         }
+    }
+
+    /// The authored bytes behind a probe range, or `None` when the range
+    /// is out of the mapped region.
+    fn authored(&self, range: &std::ops::Range<usize>) -> Option<&'a str> {
+        let start = range.start.checked_sub(self.prefix_len)?;
+        let end = range.end.checked_sub(self.prefix_len)?;
+        if end > self.masked.len()
+            || start > end
+            || !self.masked.is_char_boundary(start)
+            || !self.masked.is_char_boundary(end)
+        {
+            return None;
+        }
+        Some(&self.masked[start..end])
+    }
+
+    /// The text a `Text` event contributes.
+    ///
+    /// pulldown's payload equals the source bytes EXCEPT where it
+    /// resolved a backslash escape or a character entity, which changes
+    /// the byte length. So: same length ⇒ emit the AUTHORED slice, which
+    /// restores the CR/LF the probe replaced with spaces (line endings
+    /// are never normalized — decision 9); different length ⇒ emit the
+    /// payload, which is the resolved character the reader should see.
+    ///
+    /// The first event of the probe also covers the scaffolding sentinel,
+    /// which has no authored counterpart; it is carried through verbatim
+    /// so token expansion still consumes it (and renders it as nothing).
+    fn text_for(&self, payload: &str, range: &std::ops::Range<usize>) -> String {
+        let scaffold = self.prefix_len.saturating_sub(range.start);
+        let start = (range.start + scaffold).saturating_sub(self.prefix_len);
+        let Some(end) = range.end.checked_sub(self.prefix_len) else {
+            return payload.to_string();
+        };
+        if end > self.masked.len()
+            || start > end
+            || !self.masked.is_char_boundary(start)
+            || !self.masked.is_char_boundary(end)
+        {
+            return payload.to_string();
+        }
+        let authored = &self.masked[start..end];
+        if payload.len() != authored.len() + scaffold {
+            return payload.to_string();
+        }
+        let mut out = String::with_capacity(payload.len());
+        out.push_str(&self.probe[range.start..range.start + scaffold]);
+        out.push_str(authored);
+        out
     }
 
     fn current(&self) -> (ReadingInlineRunKind, Option<String>) {
@@ -1710,35 +1848,22 @@ impl<'a> InlineWalker<'a> {
         }
     }
 
-    /// The line terminator at the end of `range`, preserved verbatim so
-    /// CRLF and mixed-ending fixtures survive the walk (decision 9).
-    fn line_terminator(&self, range: &std::ops::Range<usize>) -> &'a str {
-        let slice = &self.masked[range.clone()];
-        if slice.ends_with("\r\n") {
-            "\r\n"
-        } else if slice.ends_with('\n') {
-            "\n"
-        } else if slice.ends_with('\r') {
-            "\r"
-        } else {
-            "\n"
-        }
-    }
-
-    /// Emit the bytes pulldown left between two top-level blocks (blank
-    /// lines inside a loose list item, for instance). The retired
-    /// `.inlineOnlyPreservingWhitespace` parse never dropped them, and
-    /// the degradation contract forbids losing authored bytes.
+    /// Emit the AUTHORED bytes pulldown left outside its paragraph — the
+    /// leading indent it consumed as block chrome and the trailing
+    /// whitespace it trimmed. `.inlineOnlyPreservingWhitespace` never
+    /// dropped them, and the degradation contract forbids losing authored
+    /// bytes.
     ///
     /// The gap starts at [`Self::inline_cursor`] — the end of the last
     /// bytes an inline event actually consumed — not at the block's own
-    /// range end, because a block's range swallows its terminating
-    /// newline while its `Text` event does not. Anchoring on the block
-    /// range would silently eat one newline per block boundary.
+    /// range end, because a block's range swallows trailing whitespace
+    /// that its `Text` event does not.
     fn emit_gap(&mut self, upto: usize) {
-        let from = self.block_cursor.unwrap_or(0);
-        if upto > from && from <= self.masked.len() && upto <= self.masked.len() {
-            let gap = self.masked[from..upto].to_string();
+        let from = self.block_cursor.unwrap_or(self.prefix_len);
+        if upto > from
+            && let Some(gap) = self.authored(&(from..upto))
+        {
+            let gap = gap.to_string();
             self.emit_text(&gap, None);
         }
     }
@@ -1750,7 +1875,7 @@ impl<'a> InlineWalker<'a> {
     fn run(&mut self) {
         use pulldown_cmark::TagEnd as End;
 
-        for (event, range) in Parser::new_ext(self.masked, READING_PARSE_OPTIONS).into_offset_iter()
+        for (event, range) in Parser::new_ext(self.probe, READING_PARSE_OPTIONS).into_offset_iter()
         {
             match event {
                 Event::Start(Tag::Emphasis) => self.styles.push(ReadingInlineStyle::Emphasis),
@@ -1795,7 +1920,8 @@ impl<'a> InlineWalker<'a> {
                     self.advance_inline(range.end);
                 }
                 Event::Text(text) => {
-                    self.emit_text(&text, None);
+                    let resolved = self.text_for(&text, &range);
+                    self.emit_text(&resolved, None);
                     self.advance_inline(range.end);
                 }
                 Event::Code(code) => {
@@ -1806,9 +1932,19 @@ impl<'a> InlineWalker<'a> {
                     self.emit_text(&html, None);
                     self.advance_inline(range.end);
                 }
+                // Unreachable: the probe holds no line terminators, so
+                // pulldown never emits a break. Kept so a future probe
+                // change degrades to the authored bytes rather than
+                // silently dropping them.
                 Event::SoftBreak | Event::HardBreak => {
-                    let terminator = self.line_terminator(&range);
-                    self.emit_text(terminator, None);
+                    let authored = self
+                        .authored(&range)
+                        .unwrap_or(
+                            "
+",
+                        )
+                        .to_string();
+                    self.emit_text(&authored, None);
                     self.advance_inline(range.end);
                 }
                 Event::Start(_) => {
@@ -1838,11 +1974,11 @@ impl<'a> InlineWalker<'a> {
         }
 
         if self.saw_block {
-            // Trailing whitespace pulldown left outside the last block.
-            self.emit_gap(self.masked.len());
+            // Trailing whitespace pulldown trimmed off the paragraph.
+            self.emit_gap(self.probe.len());
         } else {
-            // Whitespace-only (or otherwise block-less) content: nothing
-            // was emitted, so carry the bytes through verbatim.
+            // Block-less probe (empty content): carry the authored bytes
+            // through verbatim.
             let all = self.masked.to_string();
             self.emit_text(&all, None);
         }
@@ -3434,6 +3570,131 @@ final para
         assert_eq!(
             reading_match_link("Note", ReadingWikiGrammar::Wikilink, false, &[]),
             None
+        );
+    }
+
+    // --- Adversarial-review regressions (round 1) ---
+
+    /// The content handed to the inline walk has already had its BLOCK
+    /// chrome stripped, so a block re-parse would reinterpret the newly
+    /// exposed bytes as structure and consume them. `# ---` strips to
+    /// `---`, which a block parse reads as a thematic break and renders
+    /// as NOTHING — silently erasing the heading. The probe (§6) forces a
+    /// single-paragraph inline-only parse, so every one of these keeps
+    /// its authored bytes.
+    #[test]
+    fn stripped_content_is_never_reinterpreted_as_a_block() {
+        for (source, expected) in [
+            ("# ---\n", "---"),
+            ("# ***\n", "***"),
+            ("# ___\n", "___"),
+            ("# > quote\n", "> quote"),
+            ("# # nested\n", "# nested"),
+            ("# 1. item\n", "1. item"),
+            ("# - bullet\n", "- bullet"),
+            ("# ```rust\n", "```rust"),
+            ("# <div>x</div>\n", "<div>x</div>"),
+        ] {
+            assert_eq!(
+                only_segment(source).content,
+                expected,
+                "{source:?} must keep its authored bytes"
+            );
+        }
+    }
+
+    /// The same hazard through the other chrome strippers.
+    ///
+    /// `> # not a heading` is classified `Heading` by the block walk but
+    /// its source still carries the `>`, so `heading_text` degrades to
+    /// the verbatim slice — which the inline walk must then leave alone
+    /// rather than re-reading the `#` as a heading marker.
+    #[test]
+    fn stripped_quote_content_keeps_block_looking_bytes() {
+        assert_eq!(
+            only_segment("> # not a heading\n").content,
+            "> # not a heading"
+        );
+        // Same degradation on the list path: the block is a ListItem
+        // (innermost container names the leaf) but its source starts with
+        // the quote marker, so no list marker is found and the content is
+        // the verbatim slice — authored bytes are never dropped.
+        let inlines = reading_inline_segments_source("> - bullet\n", &[], &[]);
+        assert_eq!(inlines[0].list_marker, None);
+        assert_eq!(inlines[0].segments[0].content, "> - bullet");
+    }
+
+    /// An EXTERNAL record must never answer an internal activation.
+    ///
+    /// `resolve_link` classifies by target shape, not authoring grammar,
+    /// so `[[https://example.com]]` is stored as a `wikilink`-kind record
+    /// with `is_external = true`. Styling already skipped those; before
+    /// the fix `reading_match_link` did not, so the run rendered
+    /// "Unresolved link" and then handed the URL to the system opener.
+    #[test]
+    fn external_records_never_answer_an_internal_activation() {
+        let external = vec![OutgoingLink {
+            is_external: true,
+            ..record("https://example.com", "wikilink", false)
+        }];
+        assert_eq!(
+            reading_match_link(
+                "https://example.com",
+                ReadingWikiGrammar::Wikilink,
+                false,
+                &external
+            ),
+            None,
+            "activation must agree with the styling classifier"
+        );
+
+        // And the two halves agree end to end: the run styles unresolved
+        // AND carries the AX text, with no matching activation record.
+        let segment = only_segment_with("[[https://example.com]]\n", &[], &external);
+        match &segment.runs[0].kind {
+            ReadingInlineRunKind::Wikilink { resolved, .. } => assert!(!resolved),
+            other => panic!("expected a wikilink run, got {other:?}"),
+        }
+        assert_eq!(
+            segment.runs[0].ax_text.as_deref(),
+            Some(UNRESOLVED_LINK_AX_TEXT)
+        );
+    }
+
+    /// The sentinel escalation must stay in the punctuation/symbol
+    /// classes the retired `[label](url)` splice bounded tokens with — a
+    /// Private Use scalar is neither punctuation nor whitespace and would
+    /// change CommonMark's emphasis flanking beside a masked token.
+    #[test]
+    fn sentinel_escalation_preserves_flanking() {
+        // U+FFFC authored in the note forces the escalation.
+        let source = "\u{FFFC} a*[[x]]*\n";
+        let segment = only_segment(source);
+        assert!(
+            segment.content.starts_with('\u{FFFC}'),
+            "the authored scalar survives: {:?}",
+            segment.content
+        );
+        assert!(
+            segment.runs.iter().all(|r| r.styles.is_empty()),
+            "an asterisk that could not open emphasis before masking must \
+             not open it after: {:?}",
+            segment.runs
+        );
+
+        // Every escalation candidate is punctuation or symbol, never PUA.
+        let mut crowded = String::from("\u{FFFC}\u{FFFD}");
+        for code in 0x2400u32..=0x241Fu32 {
+            crowded.push(char::from_u32(code).unwrap());
+        }
+        let picked = pick_sentinel(&crowded);
+        assert!(
+            !('\u{E000}'..='\u{F8FF}').contains(&picked),
+            "escalation must not fall into the Private Use Area: {picked:?}"
+        );
+        assert!(
+            !crowded.contains(picked),
+            "escalation must be collision-free"
         );
     }
 
