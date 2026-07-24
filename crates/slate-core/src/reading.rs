@@ -1567,23 +1567,39 @@ fn render_inlines(
     // The result always parses as exactly one paragraph containing only
     // inline events. Authored line terminators are recovered by slicing
     // `masked` (see `InlineWalker::text_for`), never normalized.
-    let probe = {
-        let mut out = String::with_capacity(masked.len() + sentinel.len_utf8());
-        out.push(sentinel);
-        // One byte out per byte in: CR and LF are single-byte ASCII, so
-        // swapping either for a space keeps every later offset aligned
-        // with `masked`.
-        for chunk in masked.split_inclusive(['\n', '\r']) {
-            match chunk.as_bytes().last() {
-                Some(b'\n') | Some(b'\r') => {
-                    out.push_str(&chunk[..chunk.len() - 1]);
-                    out.push(' ');
+    // CommonMark maps ONE line ending to one space (inside a code span it
+    // says so explicitly), so a CRLF collapses to a single space and the
+    // probe is shorter than `masked` by one byte per CRLF. `collapses`
+    // records where, so probe offsets map back exactly.
+    let mut probe = String::with_capacity(masked.len() + sentinel.len_utf8());
+    let mut collapses: Vec<usize> = Vec::new();
+    probe.push(sentinel);
+    {
+        let bytes = masked.as_bytes();
+        let mut i = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\r' if i + 1 < bytes.len() && bytes[i + 1] == b'\n' => {
+                    collapses.push(probe.len() - sentinel.len_utf8());
+                    probe.push(' ');
+                    i += 2;
                 }
-                _ => out.push_str(chunk),
+                b'\r' | b'\n' => {
+                    probe.push(' ');
+                    i += 1;
+                }
+                _ => {
+                    // Copy the whole scalar so multibyte text survives.
+                    let start = i;
+                    i += 1;
+                    while i < bytes.len() && (bytes[i] & 0xC0) == 0x80 {
+                        i += 1;
+                    }
+                    probe.push_str(&masked[start..i]);
+                }
             }
         }
-        out
-    };
+    }
     let prefix_len = sentinel.len_utf8();
 
     // The prefix sentinel expands to nothing: it is scaffolding, not
@@ -1597,8 +1613,30 @@ fn render_inlines(
     });
     all_tokens.extend(tokens);
 
-    let mut walker = InlineWalker::new(&probe, &masked, prefix_len, sentinel, &all_tokens, sets);
+    let mut walker = InlineWalker::new(
+        &probe,
+        &masked,
+        prefix_len,
+        &collapses,
+        sentinel,
+        &all_tokens,
+        sets,
+    );
     walker.run();
+    // Token expansion is POSITIONAL: the Nth sentinel the walk sees is
+    // the Nth masked token. If pulldown ever swallowed a sentinel without
+    // emitting it as text, every later token would take the wrong
+    // payload — a silent, whole-block corruption. Nothing in the probe
+    // can consume one (it is not Markdown syntax, selection already
+    // excluded tokens inside links/images/code), so this is a tripwire
+    // rather than a live risk; the censuses run it on every document.
+    debug_assert_eq!(
+        walker.next_token,
+        all_tokens.len(),
+        "token stream desynchronised: {} of {} sentinels expanded",
+        walker.next_token,
+        all_tokens.len()
+    );
     (walker.out.content, walker.out.runs)
 }
 
@@ -1695,6 +1733,9 @@ struct InlineWalker<'a> {
     /// in place — what text is actually sliced from.
     masked: &'a str,
     prefix_len: usize,
+    /// Probe offsets (post-prefix) where a CRLF collapsed to one space,
+    /// ascending — the only places probe and `masked` offsets diverge.
+    collapses: &'a [usize],
     sentinel: char,
     tokens: &'a [TokenRun],
     sets: &'a RecordSets,
@@ -1724,6 +1765,7 @@ impl<'a> InlineWalker<'a> {
         probe: &'a str,
         masked: &'a str,
         prefix_len: usize,
+        collapses: &'a [usize],
         sentinel: char,
         tokens: &'a [TokenRun],
         sets: &'a RecordSets,
@@ -1732,6 +1774,7 @@ impl<'a> InlineWalker<'a> {
             probe,
             masked,
             prefix_len,
+            collapses,
             sentinel,
             tokens,
             sets,
@@ -1747,11 +1790,18 @@ impl<'a> InlineWalker<'a> {
         }
     }
 
+    /// Map one probe offset back onto `masked`: add one byte per CRLF
+    /// that collapsed strictly before it.
+    fn to_masked(&self, probe_offset: usize) -> Option<usize> {
+        let relative = probe_offset.checked_sub(self.prefix_len)?;
+        Some(relative + self.collapses.partition_point(|&at| at < relative))
+    }
+
     /// The authored bytes behind a probe range, or `None` when the range
     /// is out of the mapped region.
     fn authored(&self, range: &std::ops::Range<usize>) -> Option<&'a str> {
-        let start = range.start.checked_sub(self.prefix_len)?;
-        let end = range.end.checked_sub(self.prefix_len)?;
+        let start = self.to_masked(range.start)?;
+        let end = self.to_masked(range.end)?;
         if end > self.masked.len()
             || start > end
             || !self.masked.is_char_boundary(start)
@@ -1762,22 +1812,59 @@ impl<'a> InlineWalker<'a> {
         Some(&self.masked[start..end])
     }
 
+    /// `authored` rendered the way the probe renders it: every line
+    /// ending — CRLF, LF or lone CR — becomes exactly one space.
+    fn probe_form(authored: &str) -> String {
+        let bytes = authored.as_bytes();
+        let mut out = String::with_capacity(authored.len());
+        let mut i = 0usize;
+        while i < bytes.len() {
+            match bytes[i] {
+                b'\r' if i + 1 < bytes.len() && bytes[i + 1] == b'\n' => {
+                    out.push(' ');
+                    i += 2;
+                }
+                b'\r' | b'\n' => {
+                    out.push(' ');
+                    i += 1;
+                }
+                _ => {
+                    let start = i;
+                    i += 1;
+                    while i < bytes.len() && (bytes[i] & 0xC0) == 0x80 {
+                        i += 1;
+                    }
+                    out.push_str(&authored[start..i]);
+                }
+            }
+        }
+        out
+    }
+
     /// The text a `Text` event contributes.
     ///
-    /// pulldown's payload equals the source bytes EXCEPT where it
-    /// resolved a backslash escape or a character entity, which changes
-    /// the byte length. So: same length ⇒ emit the AUTHORED slice, which
-    /// restores the CR/LF the probe replaced with spaces (line endings
-    /// are never normalized — decision 9); different length ⇒ emit the
-    /// payload, which is the resolved character the reader should see.
+    /// The payload comes from the PROBE, so any authored CR/LF inside it
+    /// arrives as a space. Restoring the authored bytes is what keeps
+    /// line endings un-normalized (decision 9) — but only when the
+    /// payload really is the probe slice: pulldown also resolves
+    /// backslash escapes and character entities into `Text` payloads that
+    /// bear no byte relation to their source.
+    ///
+    /// The test is therefore **exact, not a length heuristic**: the
+    /// payload must equal the authored slice with CR/LF mapped to space,
+    /// character for character. Anything else is a resolved construct and
+    /// the payload is emitted verbatim.
     ///
     /// The first event of the probe also covers the scaffolding sentinel,
-    /// which has no authored counterpart; it is carried through verbatim
-    /// so token expansion still consumes it (and renders it as nothing).
+    /// which has no authored counterpart; it is carried through so token
+    /// expansion still consumes it (and renders it as nothing).
     fn text_for(&self, payload: &str, range: &std::ops::Range<usize>) -> String {
         let scaffold = self.prefix_len.saturating_sub(range.start);
-        let start = (range.start + scaffold).saturating_sub(self.prefix_len);
-        let Some(end) = range.end.checked_sub(self.prefix_len) else {
+        let scaffold_text = &self.probe[range.start..range.start + scaffold];
+        let Some(start) = self.to_masked(range.start + scaffold) else {
+            return payload.to_string();
+        };
+        let Some(end) = self.to_masked(range.end) else {
             return payload.to_string();
         };
         if end > self.masked.len()
@@ -1788,11 +1875,14 @@ impl<'a> InlineWalker<'a> {
             return payload.to_string();
         }
         let authored = &self.masked[start..end];
-        if payload.len() != authored.len() + scaffold {
+        if payload.len() != scaffold_text.len() + Self::probe_form(authored).len()
+            || !payload.starts_with(scaffold_text)
+            || payload[scaffold_text.len()..] != Self::probe_form(authored)
+        {
             return payload.to_string();
         }
-        let mut out = String::with_capacity(payload.len());
-        out.push_str(&self.probe[range.start..range.start + scaffold]);
+        let mut out = String::with_capacity(scaffold_text.len() + authored.len());
+        out.push_str(scaffold_text);
         out.push_str(authored);
         out
     }
@@ -3696,6 +3786,97 @@ final para
             !crowded.contains(picked),
             "escalation must be collision-free"
         );
+    }
+
+    // --- Adversarial-review regressions (round 2) ---
+
+    /// CommonMark maps ONE line ending inside a code span to one space.
+    /// The probe collapses CRLF to a single space (recording the offset
+    /// so slices still map back), so an LF file and a CRLF file render
+    /// the same code span identically — a naive byte-for-byte swap would
+    /// have produced two spaces on CRLF.
+    #[test]
+    fn code_span_across_a_line_break_renders_one_space() {
+        assert_eq!(only_segment("code `a\nb` span\n").content, "code a b span");
+        assert_eq!(
+            only_segment("code `a\r\nb` span\n").content,
+            "code a b span",
+            "CRLF must not double the space CommonMark specifies"
+        );
+    }
+
+    /// A hard break's authored bytes survive: the probe holds no line
+    /// terminators, so pulldown never mints a break event and the two
+    /// trailing spaces plus the terminator come back verbatim.
+    #[test]
+    fn hard_break_bytes_are_preserved_verbatim() {
+        assert_eq!(only_segment("hard  \nbreak\n").content, "hard  \nbreak");
+        assert_eq!(
+            only_segment("hard  \r\nbreak\r\n").content,
+            "hard  \r\nbreak"
+        );
+    }
+
+    /// Escapes and entities resolve — the authored-slice restoration must
+    /// not smuggle the raw bytes back for a construct pulldown rewrote.
+    #[test]
+    fn escapes_and_entities_resolve() {
+        assert_eq!(
+            only_segment("esc \\* and &amp; entity\n").content,
+            "esc * and & entity"
+        );
+        assert_eq!(only_segment("\\[[not a link]]\n").content, "[[not a link]]");
+    }
+
+    #[test]
+    fn autolinks_are_external_link_runs() {
+        assert_eq!(
+            run_view(&only_segment("auto <https://example.com> link\n"))[1],
+            (
+                "https://example.com".to_string(),
+                ReadingInlineRunKind::ExternalLink {
+                    url: "https://example.com".to_string()
+                }
+            )
+        );
+    }
+
+    /// Accepted divergence from a BLOCK parse, matching the retired
+    /// `.inlineOnlyPreservingWhitespace` contract: the whole segment is
+    /// one inline run, so emphasis may pair across what would have been a
+    /// paragraph boundary — and the authored blank line survives intact.
+    #[test]
+    fn emphasis_may_pair_across_a_former_blank_line() {
+        let segment = only_segment("- a *em\n\n  more* b\n");
+        assert_eq!(segment.content, "a em\n\n  more b");
+        assert_eq!(
+            segment
+                .runs
+                .iter()
+                .map(|r| r.styles.clone())
+                .collect::<Vec<_>>(),
+            vec![vec![], vec![ReadingInlineStyle::Emphasis], vec![]]
+        );
+    }
+
+    /// A link reference definition is block syntax, so an inline-only
+    /// parse leaves it literal — as the retired pipeline did.
+    #[test]
+    fn reference_definitions_stay_literal() {
+        let segment = only_segment("[ref]\n\n[ref]: https://example.com\n");
+        assert_eq!(segment.content, "[ref]\n\n[ref]: https://example.com");
+        assert!(
+            segment
+                .runs
+                .iter()
+                .all(|r| r.kind == ReadingInlineRunKind::Text)
+        );
+    }
+
+    /// Inline HTML is never interpreted; its bytes render as prose.
+    #[test]
+    fn inline_html_stays_literal() {
+        assert_eq!(only_segment("a <b>html</b> c\n").content, "a <b>html</b> c");
     }
 
     // --- alignment ---
