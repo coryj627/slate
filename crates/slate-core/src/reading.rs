@@ -1534,16 +1534,20 @@ fn render_inlines(
     // backtick inside `[[a*b]]` can no longer open or close anything
     // outside it, and the token's own display text never re-parses.
     //
-    // Degradation: with no free sentinel in the whole vetted pool (see
-    // `pick_sentinel`) nothing is masked and every token contributes its
-    // authored bytes as plain text. That loses affordances for one
-    // pathological document, which is strictly better than reusing an
-    // occupied scalar — that would turn every authored occurrence into a
-    // token separator, deleting text and shifting every later payload.
-    let Some(sentinel) = pick_sentinel(source) else {
-        let (content, runs) = render_unmasked(source, sets);
-        return (content, runs);
-    };
+    // Each token is masked as `<marker><index><marker>` — the INDEX is
+    // what makes expansion safe.
+    //
+    // Assigning tokens by the order sentinels are encountered is not
+    // sound: pulldown exposes a link's destination and title as Tag
+    // metadata, and NO event renders them. A token masked inside what
+    // later becomes a link title (reachable, because selection runs on
+    // the block-parsed content while the walk runs on the flattened
+    // probe) would therefore never be consumed, and every later token
+    // would expand with the previous token's payload — a wrong label and
+    // a wrong activation target, silently. Carrying the index makes that
+    // structurally impossible: an unrendered mark is simply never
+    // emitted, and its neighbours are unaffected.
+    let marker = token_marker(source);
     let mut masked = String::with_capacity(source.len());
     let mut tokens: Vec<TokenRun> = Vec::new();
     let mut cursor = 0usize;
@@ -1556,7 +1560,8 @@ fn render_inlines(
         masked.push_str(&source[cursor..start]);
         match map_token(&span.kind, &source[start..end], citations, sets) {
             Some(token) => {
-                masked.push(sentinel);
+                // Index 0 is reserved for the scaffold mark below.
+                masked.push_str(&mark_for(&marker, tokens.len() + 1));
                 tokens.push(token);
             }
             // Interior didn't map — keep the authored bytes.
@@ -1577,28 +1582,42 @@ fn render_inlines(
     //
     // The probe forces a single-paragraph, inline-only parse by
     // construction:
-    //   1. one sentinel scalar at offset 0, so no line can begin with a
-    //      block trigger (`#`, `>`, `-`, `​```​`, four spaces, `<`, …);
-    //   2. every CR and LF replaced by a SPACE — one byte for one byte, so
-    //      probe offsets map to `masked` offsets by a constant shift, and
-    //      no blank line can split a paragraph.
+    //   1. a scaffold mark at offset 0, so no line can begin with a block
+    //      trigger (`#`, `>`, `-`, a fence, four spaces, `<`, …);
+    //   2. every line ending replaced by a SPACE, so no blank line can
+    //      split a paragraph.
     // The result always parses as exactly one paragraph containing only
     // inline events. Authored line terminators are recovered by slicing
     // `masked` (see `InlineWalker::text_for`), never normalized.
+    //
     // CommonMark maps ONE line ending to one space (inside a code span it
     // says so explicitly), so a CRLF collapses to a single space and the
     // probe is shorter than `masked` by one byte per CRLF. `collapses`
     // records where, so probe offsets map back exactly.
-    let mut probe = String::with_capacity(masked.len() + sentinel.len_utf8());
+    //
+    // The scaffold is itself a token mark whose token renders as nothing:
+    // uniform with every other mark, so the expansion scanner needs no
+    // special case, and it disappears from the output for free.
+    let scaffold = mark_for(&marker, 0);
+    let mut all_tokens = Vec::with_capacity(tokens.len() + 1);
+    all_tokens.push(TokenRun {
+        display: String::new(),
+        kind: ReadingInlineRunKind::Text,
+        ax_text: None,
+        source: String::new(),
+    });
+    all_tokens.extend(tokens);
+
+    let mut probe = String::with_capacity(masked.len() + scaffold.len());
     let mut collapses: Vec<usize> = Vec::new();
-    probe.push(sentinel);
+    probe.push_str(&scaffold);
     {
         let bytes = masked.as_bytes();
         let mut i = 0usize;
         while i < bytes.len() {
             match bytes[i] {
                 b'\r' if i + 1 < bytes.len() && bytes[i + 1] == b'\n' => {
-                    collapses.push(probe.len() - sentinel.len_utf8());
+                    collapses.push(probe.len() - scaffold.len());
                     probe.push(' ');
                     i += 2;
                 }
@@ -1618,44 +1637,18 @@ fn render_inlines(
             }
         }
     }
-    let prefix_len = sentinel.len_utf8();
-
-    // The prefix sentinel expands to nothing: it is scaffolding, not
-    // content. Token expansion consumes sentinels in order, so it takes
-    // index 0 and the real tokens shift by one.
-    let mut all_tokens = Vec::with_capacity(tokens.len() + 1);
-    all_tokens.push(TokenRun {
-        display: String::new(),
-        kind: ReadingInlineRunKind::Text,
-        ax_text: None,
-        source: String::new(),
-    });
-    all_tokens.extend(tokens);
+    let prefix_len = scaffold.len();
 
     let mut walker = InlineWalker::new(
         &probe,
         &masked,
         prefix_len,
         &collapses,
-        sentinel,
+        &marker,
         &all_tokens,
         sets,
     );
     walker.run();
-    // Token expansion is POSITIONAL: the Nth sentinel the walk sees is
-    // the Nth masked token. If pulldown ever swallowed a sentinel without
-    // emitting it as text, every later token would take the wrong
-    // payload — a silent, whole-block corruption. Nothing in the probe
-    // can consume one (it is not Markdown syntax, selection already
-    // excluded tokens inside links/images/code), so this is a tripwire
-    // rather than a live risk; the censuses run it on every document.
-    debug_assert_eq!(
-        walker.next_token,
-        all_tokens.len(),
-        "token stream desynchronised: {} of {} sentinels expanded",
-        walker.next_token,
-        all_tokens.len()
-    );
     (walker.out.content, walker.out.runs)
 }
 
@@ -1670,50 +1663,43 @@ fn render_inlines(
 /// and could therefore let a delimiter beside a token open emphasis that
 /// the retired pipeline left inert, so the escalation deliberately stays
 /// inside the punctuation/symbol classes.
-/// The no-sentinel degradation path: one plain-text run over the
-/// authored bytes, with no token affordances and no Markdown
-/// interpretation. Unreachable for any realistic document (it needs the
-/// entire vetted sentinel pool present in one block), and deliberately
-/// lossless — authored bytes are never dropped.
-fn render_unmasked(source: &str, _sets: &RecordSets) -> (String, Vec<ReadingInlineRun>) {
-    if source.is_empty() {
-        return (String::new(), Vec::new());
-    }
-    (
-        source.to_string(),
-        vec![ReadingInlineRun {
-            start: 0,
-            end: source.len() as u32,
-            styles: Vec::new(),
-            kind: ReadingInlineRunKind::Text,
-            ax_text: None,
-        }],
-    )
+/// The token marker: a run of U+FFFC OBJECT REPLACEMENT CHARACTER long
+/// enough that the authored text cannot contain it.
+///
+/// **Un-exhaustible by construction.** One scalar longer than the longest
+/// authored run of U+FFFC is guaranteed absent, so there is no collision
+/// case to degrade into — an earlier design drew from a finite pool and
+/// had to decide what to do when a document used every candidate, which
+/// meant a 113-scalar note fell back to rendering raw Markdown.
+///
+/// **Flanking-safe.** Every scalar in the marker is U+FFFC, Unicode
+/// category So — the same punctuation/symbol class that bounded the
+/// retired `[label](url)` splice, so a delimiter beside a masked token
+/// flanks exactly as it did before. A letter-class placeholder (U+2E2F
+/// VERTICAL TILDE is `Lm` despite sitting in Supplemental Punctuation) or
+/// a Private Use scalar would let `a*[[x]]*` open emphasis the retired
+/// pipeline left inert.
+/// One token's mask: `<marker><index><marker>`. The digits are inert to
+/// CommonMark (the probe guarantees they are never at a line start, so
+/// they cannot open an ordered list), and the marker scalars bound the
+/// run so flanking is unchanged.
+fn mark_for(marker: &str, index: usize) -> String {
+    format!("{marker}{index}{marker}")
 }
 
-fn pick_sentinel(text: &str) -> Option<char> {
-    // U+FFFC OBJECT REPLACEMENT CHARACTER (So) is the natural first pick;
-    // U+FFFD (So), Control Pictures (U+2400..U+241F, all So) and
-    // Supplemental Punctuation (U+2E00..U+2E4F, all Po) are the collision
-    // escalation. U+2E2F VERTICAL TILDE is the ONE scalar excluded from
-    // that block: its category is Lm, not P/S, so it would flank like a
-    // letter and let a delimiter beside a token open emphasis the retired
-    // splice left inert — the exact hazard this vetted pool exists to
-    // avoid. Pinned by `sentinel_pool_is_punctuation_or_symbol_only`.
-    ['\u{FFFC}', '\u{FFFD}']
-        .into_iter()
-        .chain((0x2400u32..=0x241Fu32).filter_map(char::from_u32))
-        .chain(
-            (0x2E00u32..=0x2E4Fu32)
-                .filter(|code| *code != 0x2E2F)
-                .filter_map(char::from_u32),
-        )
-        .find(|candidate| !text.contains(*candidate))
-    // `None` on exhaustion is deliberate: returning an occupied scalar
-    // would make every authored occurrence of it a token separator,
-    // deleting authored text and shifting every later token's payload.
-    // The caller degrades to an unmasked walk instead — see
-    // `render_inlines`.
+fn token_marker(text: &str) -> String {
+    const MARK: char = '\u{FFFC}';
+    let mut longest = 0usize;
+    let mut current = 0usize;
+    for scalar in text.chars() {
+        if scalar == MARK {
+            current += 1;
+            longest = longest.max(current);
+        } else {
+            current = 0;
+        }
+    }
+    std::iter::repeat_n(MARK, longest + 1).collect()
 }
 
 #[derive(Default)]
@@ -1795,7 +1781,7 @@ struct InlineWalker<'a> {
     /// Probe offsets (post-prefix) where a CRLF collapsed to one space,
     /// ascending — the only places probe and `masked` offsets diverge.
     collapses: &'a [usize],
-    sentinel: char,
+    marker: &'a str,
     tokens: &'a [TokenRun],
     sets: &'a RecordSets,
     out: RunBuilder,
@@ -1803,7 +1789,6 @@ struct InlineWalker<'a> {
     /// Link context stack: the kind + AX text every text run inside the
     /// current link (or image label) carries.
     links: Vec<(ReadingInlineRunKind, Option<String>)>,
-    next_token: usize,
     /// Monotonic id of the authored construct currently being emitted.
     /// Bumped per expanded token and per Markdown link/image, so
     /// [`RunBuilder::push`] never fuses two separate constructs that
@@ -1825,7 +1810,7 @@ impl<'a> InlineWalker<'a> {
         masked: &'a str,
         prefix_len: usize,
         collapses: &'a [usize],
-        sentinel: char,
+        marker: &'a str,
         tokens: &'a [TokenRun],
         sets: &'a RecordSets,
     ) -> Self {
@@ -1834,13 +1819,12 @@ impl<'a> InlineWalker<'a> {
             masked,
             prefix_len,
             collapses,
-            sentinel,
+            marker,
             tokens,
             sets,
             out: RunBuilder::default(),
             styles: Vec::new(),
             links: Vec::new(),
-            next_token: 0,
             construct: 0,
             block_cursor: None,
             inline_cursor: 0,
@@ -1964,54 +1948,93 @@ impl<'a> InlineWalker<'a> {
     }
 
     /// Emit `text`, expanding every sentinel into its token's run.
+    /// Emit `text`, expanding every `<marker><index><marker>` mask into
+    /// its token.
+    ///
+    /// Expansion is keyed on the INDEX carried in the mask, never on the
+    /// order marks are encountered. pulldown exposes a link's destination
+    /// and title as Tag metadata that no event renders, so a mask can
+    /// legitimately never be seen — with order-based assignment every
+    /// later token would then expand with its predecessor's payload,
+    /// silently producing a wrong label and a wrong activation target.
+    /// A malformed or out-of-range mask is emitted verbatim rather than
+    /// guessed at.
     fn emit_text(&mut self, text: &str, extra_style: Option<ReadingInlineStyle>, mode: TokenMode) {
         let styles = self.styles_now(extra_style);
         let (kind, ax) = self.current();
-        for (index, piece) in text.split(self.sentinel).enumerate() {
-            if index > 0 {
-                // The separator consumed one sentinel — expand its token.
-                if let Some(token) = self.tokens.get(self.next_token) {
-                    let token_kind = token.kind.clone();
-                    let token_ax = token.ax_text.clone();
-                    let display = token.display.clone();
-                    let source = token.source.clone();
-                    self.next_token += 1;
-                    // Each token is its own construct: two adjacent
-                    // `[@k][@k]` must stay two runs.
-                    self.construct += 1;
-                    let construct = self.construct;
-                    match mode {
-                        // A construct that binds tighter than a link owns
-                        // this range: the token renders as its AUTHORED
-                        // bytes with no affordance. Reachable because
-                        // selection runs on the block-parsed content while
-                        // the walk runs on the flattened probe, so a code
-                        // span or HTML tag can form across a blank line
-                        // that separated them at selection time. Code-
-                        // styled text that silently navigates would be the
-                        // alternative (the retired pipeline leaked its raw
-                        // `[label](slate-wiki://…)` splice text there
-                        // instead — this is the honest rendering).
-                        TokenMode::Literal => {
-                            self.out.push(&source, &styles, &kind, &ax, construct)
-                        }
-                        // A token inside a link label keeps the LABEL's
-                        // affordance (the Markdown construct owns the
-                        // range).
-                        TokenMode::Affordance if !self.links.is_empty() => {
-                            self.out.push(&display, &styles, &kind, &ax, construct)
-                        }
-                        TokenMode::Affordance => {
-                            self.out
-                                .push(&display, &styles, &token_kind, &token_ax, construct)
-                        }
-                    }
-                    self.construct += 1;
-                }
-            }
+        let marker = self.marker;
+        let mut rest = text;
+        while let Some(open) = rest.find(marker) {
+            let after = &rest[open + marker.len()..];
+            let parsed = after.find(marker).and_then(|close| {
+                after[..close]
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|index| *index < self.tokens.len())
+                    .map(|index| (close, index))
+            });
+            let Some((close, index)) = parsed else {
+                // Not a well-formed mask — carry the bytes through and
+                // keep scanning after them.
+                let upto = open + marker.len();
+                let head = rest[..upto].to_string();
+                let construct = self.construct;
+                self.out.push(&head, &styles, &kind, &ax, construct);
+                rest = &rest[upto..];
+                continue;
+            };
+            let head = rest[..open].to_string();
             let construct = self.construct;
-            self.out.push(piece, &styles, &kind, &ax, construct);
+            self.out.push(&head, &styles, &kind, &ax, construct);
+            self.expand_token(index, &styles, &kind, &ax, mode);
+            rest = &after[close + marker.len()..];
         }
+        let construct = self.construct;
+        let tail = rest.to_string();
+        self.out.push(&tail, &styles, &kind, &ax, construct);
+    }
+
+    fn expand_token(
+        &mut self,
+        index: usize,
+        styles: &[ReadingInlineStyle],
+        kind: &ReadingInlineRunKind,
+        ax: &Option<String>,
+        mode: TokenMode,
+    ) {
+        let Some(token) = self.tokens.get(index) else {
+            return;
+        };
+        let token_kind = token.kind.clone();
+        let token_ax = token.ax_text.clone();
+        let display = token.display.clone();
+        let source = token.source.clone();
+        // Each token is its own construct: two adjacent `[@k][@k]` must
+        // stay two runs.
+        self.construct += 1;
+        let construct = self.construct;
+        match mode {
+            // A construct that binds tighter than a link owns this range:
+            // the token renders as its AUTHORED bytes with no affordance.
+            // Reachable because selection runs on the block-parsed content
+            // while the walk runs on the flattened probe, so a code span
+            // or HTML tag can form across a blank line that separated them
+            // at selection time. Code-styled text that silently navigates
+            // would be the alternative (the retired pipeline leaked its
+            // raw `[label](slate-wiki://…)` splice text there instead —
+            // this is the honest rendering).
+            TokenMode::Literal => self.out.push(&source, styles, kind, ax, construct),
+            // A token inside a link label keeps the LABEL's affordance
+            // (the Markdown construct owns the range).
+            TokenMode::Affordance if !self.links.is_empty() => {
+                self.out.push(&display, styles, kind, ax, construct)
+            }
+            TokenMode::Affordance => {
+                self.out
+                    .push(&display, styles, &token_kind, &token_ax, construct)
+            }
+        }
+        self.construct += 1;
     }
 
     /// Emit the AUTHORED bytes pulldown left outside its paragraph — the
@@ -3833,13 +3856,12 @@ final para
         );
     }
 
-    /// The sentinel escalation must stay in the punctuation/symbol
-    /// classes the retired `[label](url)` splice bounded tokens with — a
-    /// Private Use scalar is neither punctuation nor whitespace and would
-    /// change CommonMark's emphasis flanking beside a masked token.
+    /// The token mask must flank like the retired `[label](url)` splice
+    /// did: every scalar in the marker is U+FFFC (Unicode So), never a
+    /// letter-class or Private Use scalar that would let a delimiter
+    /// beside a token open emphasis the retired pipeline left inert.
     #[test]
-    fn sentinel_escalation_preserves_flanking() {
-        // U+FFFC authored in the note forces the escalation.
+    fn token_marker_preserves_flanking() {
         let source = "\u{FFFC} a*[[x]]*\n";
         let segment = only_segment(source);
         assert!(
@@ -3853,77 +3875,97 @@ final para
              not open it after: {:?}",
             segment.runs
         );
-
-        // Every escalation candidate is punctuation or symbol, never PUA.
-        let mut crowded = String::from("\u{FFFC}\u{FFFD}");
-        for code in 0x2400u32..=0x241Fu32 {
-            crowded.push(char::from_u32(code).unwrap());
-        }
-        let picked = pick_sentinel(&crowded).expect("pool is not exhausted");
-        assert!(
-            !('\u{E000}'..='\u{F8FF}').contains(&picked),
-            "escalation must not fall into the Private Use Area: {picked:?}"
-        );
-        assert!(
-            !crowded.contains(picked),
-            "escalation must be collision-free"
-        );
     }
 
-    /// The whole pool must be punctuation or symbol — a letter-class
-    /// placeholder (U+2E2F VERTICAL TILDE is category `Lm` and sits
-    /// inside the Supplemental Punctuation block) would flank like a
-    /// letter and let a delimiter beside a token open emphasis the
-    /// retired splice left inert.
+    /// The marker is un-exhaustible by construction: one scalar longer
+    /// than the longest authored run of U+FFFC is always absent, so there
+    /// is no collision case that could force a degraded render. An
+    /// earlier design drew from a finite pool and fell back to emitting
+    /// raw Markdown once a document used every candidate.
     #[test]
-    fn sentinel_pool_is_punctuation_or_symbol_only() {
-        let mut taken = String::new();
-        let mut pool = Vec::new();
-        while let Some(candidate) = pick_sentinel(&taken) {
-            pool.push(candidate);
-            taken.push(candidate);
-        }
-        assert!(pool.len() > 100, "pool should be generous: {}", pool.len());
-        assert!(
-            !pool.contains(&'\u{2E2F}'),
-            "U+2E2F is category Lm and must never be a sentinel"
-        );
-        for candidate in &pool {
-            // core has no Unicode-category API, so pin the two properties
-            // that actually matter to CommonMark flanking: never a word
-            // character, never whitespace.
+    fn token_marker_is_always_absent_and_never_degrades() {
+        for run in 0..6usize {
+            let crowded: String = std::iter::repeat_n('\u{FFFC}', run).collect();
+            let source = format!("{crowded} [[Note]] {crowded} tail");
+            let marker = token_marker(&source);
             assert!(
-                !candidate.is_alphanumeric() && !candidate.is_whitespace(),
-                "{candidate:?} would change delimiter flanking"
+                !source.contains(&marker),
+                "marker {marker:?} collides with the source"
             );
+            assert!(marker.chars().all(|c| c == '\u{FFFC}'));
+
+            // The whole pipeline still renders every authored byte AND a
+            // working affordance — never a degraded raw-Markdown render.
+            let segment = only_segment(&source);
+            if run > 0 {
+                assert!(
+                    segment.content.contains(&crowded),
+                    "authored U+FFFC run survives: {:?}",
+                    segment.content
+                );
+            }
+            assert!(
+                segment
+                    .runs
+                    .iter()
+                    .any(|r| matches!(r.kind, ReadingInlineRunKind::Wikilink { .. })),
+                "the token still resolves to an affordance: {:?}",
+                segment.runs
+            );
+            assert_partitions(&segment);
         }
     }
 
-    /// Exhausting the pool must DEGRADE, never reuse an occupied scalar:
-    /// reuse would turn every authored occurrence into a token separator,
-    /// deleting text and shifting every later token's payload.
+    /// pulldown exposes a link's destination and title as Tag metadata
+    /// that NO event renders. A token masked inside what only becomes a
+    /// title after blank-line flattening is therefore never emitted — and
+    /// with order-based token assignment every later token would expand
+    /// with its predecessor's payload, giving a wrong label and a wrong
+    /// activation target. Indexed masks make that impossible.
     #[test]
-    fn exhausted_sentinel_pool_degrades_losslessly() {
-        let mut taken = String::new();
-        while let Some(candidate) = pick_sentinel(&taken) {
-            taken.push(candidate);
-        }
-        assert_eq!(pick_sentinel(&taken), None);
-
-        let source = format!("{taken} [[Note]] tail");
-        let segment = only_segment(&source);
-        assert_eq!(
-            segment.content, source,
-            "every authored byte survives the degradation"
+    fn an_unrendered_mask_never_shifts_later_tokens() {
+        let inlines = reading_inline_segments_source(
+            "- [label](dest \"before\n\n  [[Wrong]]\") [[After]]\n",
+            &[],
+            &[],
         );
+        let targets: Vec<String> = inlines
+            .iter()
+            .flat_map(|i| &i.segments)
+            .flat_map(|s| &s.runs)
+            .filter_map(|r| match &r.kind {
+                ReadingInlineRunKind::Wikilink { target, .. } => Some(target.clone()),
+                _ => None,
+            })
+            .collect();
         assert!(
-            segment
-                .runs
-                .iter()
-                .all(|r| r.kind == ReadingInlineRunKind::Text),
-            "no affordances are invented on the degraded path"
+            !targets.contains(&"Wrong".to_string())
+                || targets.iter().filter(|t| *t == "Wrong").count() == 1,
+            "a token must never be expanded under another token's identity: {targets:?}"
         );
-        assert_partitions(&segment);
+        // Every wikilink-GRAMMAR run must carry its OWN target: that run
+        // renders the token's display text, so text and target agree
+        // unless an alias was authored (none here). A markdown-grammar
+        // run renders its label, which is unrelated to the destination,
+        // so it is excluded.
+        for inline in &inlines {
+            for segment in &inline.segments {
+                for run in &segment.runs {
+                    if let ReadingInlineRunKind::Wikilink {
+                        target,
+                        grammar: ReadingWikiGrammar::Wikilink,
+                        ..
+                    } = &run.kind
+                    {
+                        let text = &segment.content[run.start as usize..run.end as usize];
+                        assert_eq!(
+                            text, target,
+                            "a run must never be expanded under another token's identity"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // --- Adversarial-review regressions (round 2) ---

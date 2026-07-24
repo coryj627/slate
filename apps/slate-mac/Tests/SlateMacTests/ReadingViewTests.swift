@@ -554,6 +554,21 @@ final class ReadingViewTests: XCTestCase {
         XCTAssertFalse(
             ReadingLinkRouter.recordsBelongToNote(recordsPath: nil, notePath: nil),
             "no loaded records never owns anything")
+
+        // A vault path is a BYTE identity: Swift's `==` treats canonically
+        // equivalent Unicode as equal, so an NFC-spelled retained path
+        // would otherwise be accepted as owning a byte-distinct NFD note
+        // and the previous note's records would classify and activate
+        // this one's runs.
+        let nfc = "Cafe\u{0301}.md"  // decomposed
+        let nfd = "Caf\u{00E9}.md"  // precomposed
+        XCTAssertEqual(nfc, nfd, "the two spellings are canonically equal")
+        XCTAssertFalse(
+            Array(nfc.utf8) == Array(nfd.utf8), "but byte-distinct")
+        XCTAssertFalse(
+            ReadingLinkRouter.recordsBelongToNote(
+                recordsPath: nfc, notePath: nfd),
+            "ownership must be byte-exact, not canonical")
     }
 
     /// End-to-end `#`-outranks-`^` for wiki runs: `[[note^draft#sec]]`

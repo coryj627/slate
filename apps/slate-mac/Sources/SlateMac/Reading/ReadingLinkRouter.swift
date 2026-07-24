@@ -104,10 +104,18 @@ struct ReadingLinkRouter {
     /// ownership matches, every run is treated as record-less
     /// (unresolved), on BOTH the styling and activation sides. The
     /// window is the link query's IO — typically a few milliseconds.
+    ///
+    /// Comparison is BYTE-EXACT (`BaseExactIdentity.matches`), not Swift's
+    /// `==`: a vault path is a byte identity, and `==` treats canonically
+    /// equivalent Unicode as equal — so an NFC-spelled retained path
+    /// would be accepted as owning a byte-distinct NFD note, letting the
+    /// previous note's records classify and activate this one's runs. The
+    /// repo uses the same helper wherever a path is an identity.
     static func recordsBelongToNote(
         recordsPath: String?, notePath: String?
     ) -> Bool {
-        recordsPath != nil && recordsPath == notePath
+        guard let recordsPath, let notePath else { return false }
+        return BaseExactIdentity.matches(recordsPath, notePath)
     }
 
     // MARK: - Dispatch
