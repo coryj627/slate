@@ -207,6 +207,7 @@ internal sealed class AvalonSpellingCoordinator : DocumentColorizingTransformer,
         CreateErrorDecorations();
 
     private readonly TextEditor _editor;
+    private readonly TextDocument _document;
     private readonly EditorPreferencesViewModel _preferences;
     private readonly DispatcherTimer _timer;
     private IReadOnlyList<EditorSpellingError> _errors = [];
@@ -218,6 +219,8 @@ internal sealed class AvalonSpellingCoordinator : DocumentColorizingTransformer,
         EditorPreferencesViewModel preferences)
     {
         _editor = editor;
+        _document = editor.Document
+            ?? throw new ArgumentException("The editor must have a document.", nameof(editor));
         _preferences = preferences;
         _timer = new DispatcherTimer(
             TimeSpan.FromMilliseconds(250),
@@ -226,7 +229,7 @@ internal sealed class AvalonSpellingCoordinator : DocumentColorizingTransformer,
             editor.Dispatcher);
         _timer.Stop();
         _editor.TextArea.TextView.LineTransformers.Add(this);
-        _editor.Document.Changed += Document_Changed;
+        _document.Changed += Document_Changed;
         _editor.TextArea.TextView.ScrollOffsetChanged += Viewport_Changed;
         _editor.TextArea.TextView.SizeChanged += Viewport_Changed;
         _preferences.PropertyChanged += Preferences_PropertyChanged;
@@ -265,7 +268,7 @@ internal sealed class AvalonSpellingCoordinator : DocumentColorizingTransformer,
 
         _disposed = true;
         _timer.Stop();
-        _editor.Document.Changed -= Document_Changed;
+        _document.Changed -= Document_Changed;
         _editor.TextArea.TextView.ScrollOffsetChanged -= Viewport_Changed;
         _editor.TextArea.TextView.SizeChanged -= Viewport_Changed;
         _preferences.PropertyChanged -= Preferences_PropertyChanged;

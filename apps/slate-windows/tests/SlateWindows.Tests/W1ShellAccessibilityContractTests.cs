@@ -8,6 +8,8 @@ using System.Windows.Automation.Peers;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
+using System.Windows.Threading;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
@@ -122,6 +124,106 @@ public sealed class W1ShellAccessibilityContractTests
                         .Count());
             },
             "Split handle automation contract test timed out.");
+
+    [Fact]
+    public void WorkspaceTabContentTemplate_LoadsMarkdownEditorWithBoundAutomationIdentity() =>
+        RunOnStaThread(
+            () =>
+            {
+                using FixtureVault fixture = FixtureVault.Create(2, "workspace-editor-template");
+                using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+                using var cancel = new CancelToken();
+                session.ScanInitial(cancel);
+                using var firstTab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                    startInteractionBackgroundWork: false);
+                using var secondTab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Markdown, "note1.md")),
+                    startInteractionBackgroundWork: false);
+                using var placeholderTab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(WorkspaceItemKind.Canvas, "canvas:test")),
+                    startInteractionBackgroundWork: false);
+                var resourceUri = new Uri(
+                    "/SlateWindows;component/WorkspaceTemplates.xaml",
+                    UriKind.Relative);
+                ResourceDictionary resources = Assert.IsType<ResourceDictionary>(
+                    Application.LoadComponent(resourceUri));
+                DataTemplate template = Assert.IsType<DataTemplate>(
+                    resources["WorkspaceTabContentTemplate"]);
+                Grid root = Assert.IsType<Grid>(template.LoadContent());
+                root.DataContext = firstTab;
+                var window = new Window { Content = root };
+                try
+                {
+                    window.Show();
+                    root.UpdateLayout();
+                    root.Dispatcher.Invoke(
+                        DispatcherPriority.DataBind,
+                        new Action(() => { }));
+                    root.UpdateLayout();
+                    SlateTextEditor editor = Assert.Single(
+                        root.Children.OfType<SlateTextEditor>());
+
+                    Assert.True(editor.IsVisible);
+                    Assert.Equal(
+                        "MarkdownEditor",
+                        AutomationProperties.GetAutomationId(editor));
+                    Assert.Equal(
+                        "note0.md editor",
+                        AutomationProperties.GetName(editor));
+                    Assert.Equal(firstTab.EditorDocument, editor.Document);
+
+                    firstTab.EditorCaretOffset = 4;
+                    Assert.Equal(4, editor.CaretOffset);
+                    editor.CaretOffset = 7;
+                    Assert.Equal(7, firstTab.EditorCaretOffset);
+
+                    firstTab.EditorCaretOffset = 5;
+                    secondTab.EditorCaretOffset = 9;
+                    root.DataContext = secondTab;
+                    root.Dispatcher.Invoke(
+                        DispatcherPriority.DataBind,
+                        new Action(() => { }));
+                    root.UpdateLayout();
+
+                    Assert.Equal(5, firstTab.EditorCaretOffset);
+                    Assert.Equal(secondTab.EditorDocument, editor.Document);
+                    Assert.Equal(9, editor.CaretOffset);
+                    Assert.Equal(
+                        "note1.md editor",
+                        AutomationProperties.GetName(editor));
+                    editor.CaretOffset = 6;
+                    Assert.Equal(6, secondTab.EditorCaretOffset);
+
+                    firstTab.EditorCaretOffset = 5;
+                    root.DataContext = firstTab;
+                    root.DataContext = secondTab;
+                    root.DataContext = firstTab;
+                    root.DataContext = placeholderTab;
+                    window.Content = null;
+                    root.Dispatcher.Invoke(
+                        DispatcherPriority.DataBind,
+                        new Action(() => { }));
+
+                    Assert.Equal(5, firstTab.EditorCaretOffset);
+                    Assert.Equal(6, secondTab.EditorCaretOffset);
+                    Assert.Null(editor.Document);
+                }
+                finally
+                {
+                    window.Close();
+                }
+            },
+            "Markdown editor template test timed out.");
 
     [Fact]
     public void WeightedSplitPanel_RearrangesWhenAChildWeightChanges() =>

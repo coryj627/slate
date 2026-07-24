@@ -4,6 +4,7 @@
 using System.Windows;
 using System.Windows.Automation.Peers;
 using System.Windows.Input;
+using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
 
 namespace SlateWindows;
@@ -35,14 +36,28 @@ internal sealed class SlateTextEditor : TextEditor
             typeof(SlateTextEditor),
             new PropertyMetadata(null, SpellingPreferences_Changed));
 
+    public static readonly DependencyProperty EditorCaretOffsetProperty =
+        DependencyProperty.Register(
+            nameof(EditorCaretOffset),
+            typeof(int),
+            typeof(SlateTextEditor),
+            new FrameworkPropertyMetadata(
+                0,
+                FrameworkPropertyMetadataOptions.BindsTwoWayByDefault,
+                EditorCaretOffset_Changed));
+
     private AvalonHighlightingCoordinator? _highlighting;
     private AvalonSpellingCoordinator? _spelling;
     private EditorInteractionCoordinator? _attachedInteraction;
+    private bool _synchronizingCaretOffset;
+    private bool _suppressingCaretPublication;
+    private int _caretRestoreGeneration;
 
     public SlateTextEditor()
     {
         Loaded += SlateTextEditor_Loaded;
         Unloaded += SlateTextEditor_Unloaded;
+        TextArea.Caret.PositionChanged += Caret_PositionChanged;
     }
 
     public AvalonDocumentBufferSession? HighlightSession
@@ -63,6 +78,12 @@ internal sealed class SlateTextEditor : TextEditor
         set => SetValue(SpellingPreferencesProperty, value);
     }
 
+    public int EditorCaretOffset
+    {
+        get => (int)GetValue(EditorCaretOffsetProperty);
+        set => SetValue(EditorCaretOffsetProperty, value);
+    }
+
     internal bool FocusInputOwner() => TextArea.Focus();
 
     internal AvalonHighlightingCoordinator? HighlightingForCensus => _highlighting;
@@ -72,7 +93,30 @@ internal sealed class SlateTextEditor : TextEditor
 
     protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
     {
-        base.OnPropertyChanged(e);
+        bool documentChanging = e.Property == DocumentProperty;
+        if (documentChanging)
+        {
+            _suppressingCaretPublication = true;
+        }
+
+        try
+        {
+            base.OnPropertyChanged(e);
+        }
+        catch
+        {
+            _suppressingCaretPublication = false;
+            throw;
+        }
+
+        if (documentChanging)
+        {
+            int generation = ++_caretRestoreGeneration;
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.DataBind,
+                new Action(() => RestoreCaretAfterDocumentChange(generation)));
+        }
+
         if (e.Property == DocumentProperty && IsLoaded)
         {
             AttachHighlighting();
@@ -177,6 +221,76 @@ internal sealed class SlateTextEditor : TextEditor
         }
     }
 
+    private static void EditorCaretOffset_Changed(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var editor = (SlateTextEditor)dependencyObject;
+        if (editor._synchronizingCaretOffset)
+        {
+            return;
+        }
+
+        int requested = (int)eventArgs.NewValue;
+        int clamped = Math.Clamp(requested, 0, editor.Document?.TextLength ?? 0);
+        editor._synchronizingCaretOffset = true;
+        try
+        {
+            editor.CaretOffset = clamped;
+            if (requested != clamped)
+            {
+                editor.SetCurrentValue(EditorCaretOffsetProperty, clamped);
+            }
+        }
+        finally
+        {
+            editor._synchronizingCaretOffset = false;
+        }
+    }
+
+    private void Caret_PositionChanged(object? sender, EventArgs e)
+    {
+        if (_synchronizingCaretOffset || _suppressingCaretPublication)
+        {
+            return;
+        }
+
+        _synchronizingCaretOffset = true;
+        try
+        {
+            SetCurrentValue(EditorCaretOffsetProperty, CaretOffset);
+        }
+        finally
+        {
+            _synchronizingCaretOffset = false;
+        }
+    }
+
+    private void RestoreCaretAfterDocumentChange(int generation)
+    {
+        if (generation != _caretRestoreGeneration)
+        {
+            return;
+        }
+
+        _synchronizingCaretOffset = true;
+        try
+        {
+            int requested = EditorCaretOffset;
+            int clamped = Math.Clamp(requested, 0, Document?.TextLength ?? 0);
+            CaretOffset = clamped;
+            if (requested != clamped)
+            {
+                SetCurrentValue(EditorCaretOffsetProperty, clamped);
+            }
+        }
+        finally
+        {
+            _synchronizingCaretOffset = false;
+            _suppressingCaretPublication = false;
+        }
+    }
+
     private void SlateTextEditor_Loaded(object sender, RoutedEventArgs e)
     {
         AttachHighlighting();
@@ -207,7 +321,7 @@ internal sealed class SlateTextEditor : TextEditor
     {
         _spelling?.Dispose();
         _spelling = null;
-        if (SpellingPreferences is not null)
+        if (SpellingPreferences is not null && Document is not null)
         {
             _spelling = new AvalonSpellingCoordinator(this, SpellingPreferences);
         }
