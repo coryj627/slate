@@ -263,7 +263,7 @@ public sealed class ShellAccessibilityTests
                 ?? throw new Xunit.Sdk.XunitException("The note TreeItem is absent.");
             Assert.True(noteItem.Patterns.SelectionItem.IsSupported);
             noteItem.Patterns.SelectionItem.Pattern.Select();
-            AutomationElement editor = WaitForNamedElement(
+            AutomationElement editor = WaitForEditor(
                 window,
                 automation,
                 "note.md editor",
@@ -596,7 +596,7 @@ public sealed class ShellAccessibilityTests
                 "Quick Open did not refocus search on its second invocation.");
             Keyboard.Press(VirtualKeyShort.ENTER);
             AssertQuickSwitcherDisappears(window, automation);
-            editor = WaitForNamedElement(
+            editor = WaitForEditor(
                 window,
                 automation,
                 "note.md editor",
@@ -916,6 +916,33 @@ public sealed class ShellAccessibilityTests
                 },
                 timeout),
             $"The UIA element named '{name}' did not appear.");
+        return element!;
+    }
+
+    private static AutomationElement WaitForEditor(
+        AutomationElement root,
+        UIA3Automation automation,
+        string name,
+        TimeSpan timeout)
+    {
+        AutomationElement? element = null;
+        string[] observedNames = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    AutomationElement[] candidates = root.FindAllDescendants(
+                        automation.ConditionFactory.ByAutomationId("MarkdownEditor"));
+                    observedNames = candidates
+                        .Select(candidate => candidate.Name)
+                        .ToArray();
+                    element = candidates.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Name, name, StringComparison.Ordinal));
+                    return element is not null;
+                },
+                timeout),
+            $"The editor named '{name}' did not appear. " +
+            $"Observed MarkdownEditor names: [{string.Join(", ", observedNames)}].");
         return element!;
     }
 

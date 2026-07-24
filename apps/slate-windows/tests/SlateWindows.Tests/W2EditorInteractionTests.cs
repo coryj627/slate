@@ -193,6 +193,7 @@ public sealed class W2EditorInteractionTests
         foreach (string required in new[]
         {
             "InteractionSession=\"{Binding EditorInteractions}\"",
+            "AutomationProperties.AutomationId=\"MarkdownEditor\"",
             "EditorActivateAtCursor",
             "EditorPreviewEmbed",
             "EditorInteractionPopover",
