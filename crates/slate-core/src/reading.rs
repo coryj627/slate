@@ -1252,6 +1252,10 @@ struct TokenRun {
     display: String,
     kind: ReadingInlineRunKind,
     ax_text: Option<String>,
+    /// The authored bytes the token replaced. Emitted instead of
+    /// `display` when the sentinel lands inside a construct that binds
+    /// tighter than a link — see [`TokenMode::Literal`].
+    source: String,
 }
 
 fn map_token(
@@ -1276,6 +1280,7 @@ fn map_token(
                 .unwrap_or_else(|| target.clone());
             let resolved = is_resolved(&target, ReadingWikiGrammar::Wikilink, sets);
             Some(TokenRun {
+                source: span_text.to_string(),
                 display,
                 kind: ReadingInlineRunKind::Wikilink {
                     target,
@@ -1294,6 +1299,7 @@ fn map_token(
         K::Embed => {
             let parts = embed_parts(span_text)?;
             Some(TokenRun {
+                source: span_text.to_string(),
                 display: parts.display,
                 kind: ReadingInlineRunKind::Embed { key: parts.key },
                 ax_text: None,
@@ -1304,6 +1310,7 @@ fn map_token(
                 return None;
             }
             Some(TokenRun {
+                source: span_text.to_string(),
                 display: span_text.to_string(),
                 kind: ReadingInlineRunKind::Tag {
                     name: span_text[1..].to_string(),
@@ -1322,6 +1329,7 @@ fn map_token(
                 .filter(|t| !t.is_empty())
                 .unwrap_or_else(|| span_text.to_string());
             Some(TokenRun {
+                source: span_text.to_string(),
                 display,
                 kind: ReadingInlineRunKind::Citation {
                     raw: span_text.to_string(),
@@ -1525,7 +1533,17 @@ fn render_inlines(
     // makes token interiors opaque to delimiter pairing (§6): a `*` or
     // backtick inside `[[a*b]]` can no longer open or close anything
     // outside it, and the token's own display text never re-parses.
-    let sentinel = pick_sentinel(source);
+    //
+    // Degradation: with no free sentinel in the whole vetted pool (see
+    // `pick_sentinel`) nothing is masked and every token contributes its
+    // authored bytes as plain text. That loses affordances for one
+    // pathological document, which is strictly better than reusing an
+    // occupied scalar — that would turn every authored occurrence into a
+    // token separator, deleting text and shifting every later payload.
+    let Some(sentinel) = pick_sentinel(source) else {
+        let (content, runs) = render_unmasked(source, sets);
+        return (content, runs);
+    };
     let mut masked = String::with_capacity(source.len());
     let mut tokens: Vec<TokenRun> = Vec::new();
     let mut cursor = 0usize;
@@ -1610,6 +1628,7 @@ fn render_inlines(
         display: String::new(),
         kind: ReadingInlineRunKind::Text,
         ax_text: None,
+        source: String::new(),
     });
     all_tokens.extend(tokens);
 
@@ -1651,20 +1670,50 @@ fn render_inlines(
 /// and could therefore let a delimiter beside a token open emphasis that
 /// the retired pipeline left inert, so the escalation deliberately stays
 /// inside the punctuation/symbol classes.
-fn pick_sentinel(text: &str) -> char {
+/// The no-sentinel degradation path: one plain-text run over the
+/// authored bytes, with no token affordances and no Markdown
+/// interpretation. Unreachable for any realistic document (it needs the
+/// entire vetted sentinel pool present in one block), and deliberately
+/// lossless — authored bytes are never dropped.
+fn render_unmasked(source: &str, _sets: &RecordSets) -> (String, Vec<ReadingInlineRun>) {
+    if source.is_empty() {
+        return (String::new(), Vec::new());
+    }
+    (
+        source.to_string(),
+        vec![ReadingInlineRun {
+            start: 0,
+            end: source.len() as u32,
+            styles: Vec::new(),
+            kind: ReadingInlineRunKind::Text,
+            ax_text: None,
+        }],
+    )
+}
+
+fn pick_sentinel(text: &str) -> Option<char> {
     // U+FFFC OBJECT REPLACEMENT CHARACTER (So) is the natural first pick;
-    // U+FFFD (So), Control Pictures (U+2400..U+241F, So) and Supplemental
-    // Punctuation (U+2E00..U+2E4F, Po) are the collision escalation.
-    let candidates = ['\u{FFFC}', '\u{FFFD}']
+    // U+FFFD (So), Control Pictures (U+2400..U+241F, all So) and
+    // Supplemental Punctuation (U+2E00..U+2E4F, all Po) are the collision
+    // escalation. U+2E2F VERTICAL TILDE is the ONE scalar excluded from
+    // that block: its category is Lm, not P/S, so it would flank like a
+    // letter and let a delimiter beside a token open emphasis the retired
+    // splice left inert — the exact hazard this vetted pool exists to
+    // avoid. Pinned by `sentinel_pool_is_punctuation_or_symbol_only`.
+    ['\u{FFFC}', '\u{FFFD}']
         .into_iter()
         .chain((0x2400u32..=0x241Fu32).filter_map(char::from_u32))
-        .chain((0x2E00u32..=0x2E4Fu32).filter_map(char::from_u32));
-    for candidate in candidates {
-        if !text.contains(candidate) {
-            return candidate;
-        }
-    }
-    '\u{FFFC}'
+        .chain(
+            (0x2E00u32..=0x2E4Fu32)
+                .filter(|code| *code != 0x2E2F)
+                .filter_map(char::from_u32),
+        )
+        .find(|candidate| !text.contains(*candidate))
+    // `None` on exhaustion is deliberate: returning an occupied scalar
+    // would make every authored occurrence of it a token separator,
+    // deleting authored text and shifting every later token's payload.
+    // The caller degrades to an unmasked walk instead — see
+    // `render_inlines`.
 }
 
 #[derive(Default)]
@@ -1722,6 +1771,16 @@ impl RunBuilder {
         });
         self.last_construct = construct;
     }
+}
+
+/// How an expanded token renders at the point the sentinel was found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenMode {
+    /// Normal: the token's display text with its affordance.
+    Affordance,
+    /// Inside a construct that binds tighter than a link (a code span,
+    /// raw HTML): the token's AUTHORED bytes, no affordance.
+    Literal,
 }
 
 struct InlineWalker<'a> {
@@ -1905,7 +1964,7 @@ impl<'a> InlineWalker<'a> {
     }
 
     /// Emit `text`, expanding every sentinel into its token's run.
-    fn emit_text(&mut self, text: &str, extra_style: Option<ReadingInlineStyle>) {
+    fn emit_text(&mut self, text: &str, extra_style: Option<ReadingInlineStyle>, mode: TokenMode) {
         let styles = self.styles_now(extra_style);
         let (kind, ax) = self.current();
         for (index, piece) in text.split(self.sentinel).enumerate() {
@@ -1915,20 +1974,37 @@ impl<'a> InlineWalker<'a> {
                     let token_kind = token.kind.clone();
                     let token_ax = token.ax_text.clone();
                     let display = token.display.clone();
+                    let source = token.source.clone();
                     self.next_token += 1;
                     // Each token is its own construct: two adjacent
                     // `[@k][@k]` must stay two runs.
                     self.construct += 1;
                     let construct = self.construct;
-                    // A token inside a link label keeps the LABEL's
-                    // affordance (the Markdown construct owns the range);
-                    // selection already dropped those, so this is defense
-                    // in depth rather than a reachable path.
-                    if self.links.is_empty() {
-                        self.out
-                            .push(&display, &styles, &token_kind, &token_ax, construct);
-                    } else {
-                        self.out.push(&display, &styles, &kind, &ax, construct);
+                    match mode {
+                        // A construct that binds tighter than a link owns
+                        // this range: the token renders as its AUTHORED
+                        // bytes with no affordance. Reachable because
+                        // selection runs on the block-parsed content while
+                        // the walk runs on the flattened probe, so a code
+                        // span or HTML tag can form across a blank line
+                        // that separated them at selection time. Code-
+                        // styled text that silently navigates would be the
+                        // alternative (the retired pipeline leaked its raw
+                        // `[label](slate-wiki://…)` splice text there
+                        // instead — this is the honest rendering).
+                        TokenMode::Literal => {
+                            self.out.push(&source, &styles, &kind, &ax, construct)
+                        }
+                        // A token inside a link label keeps the LABEL's
+                        // affordance (the Markdown construct owns the
+                        // range).
+                        TokenMode::Affordance if !self.links.is_empty() => {
+                            self.out.push(&display, &styles, &kind, &ax, construct)
+                        }
+                        TokenMode::Affordance => {
+                            self.out
+                                .push(&display, &styles, &token_kind, &token_ax, construct)
+                        }
                     }
                     self.construct += 1;
                 }
@@ -1954,7 +2030,7 @@ impl<'a> InlineWalker<'a> {
             && let Some(gap) = self.authored(&(from..upto))
         {
             let gap = gap.to_string();
-            self.emit_text(&gap, None);
+            self.emit_text(&gap, None, TokenMode::Affordance);
         }
     }
 
@@ -2011,15 +2087,27 @@ impl<'a> InlineWalker<'a> {
                 }
                 Event::Text(text) => {
                     let resolved = self.text_for(&text, &range);
-                    self.emit_text(&resolved, None);
+                    self.emit_text(&resolved, None, TokenMode::Affordance);
                     self.advance_inline(range.end);
                 }
                 Event::Code(code) => {
-                    self.emit_text(&code, Some(ReadingInlineStyle::InlineCode));
+                    // A code span binds tighter than a link (CommonMark
+                    // §6.1), and its authored line terminators are
+                    // restored like any other text.
+                    let resolved = self.text_for(&code, &range);
+                    self.emit_text(
+                        &resolved,
+                        Some(ReadingInlineStyle::InlineCode),
+                        TokenMode::Literal,
+                    );
                     self.advance_inline(range.end);
                 }
                 Event::InlineHtml(html) | Event::Html(html) => {
-                    self.emit_text(&html, None);
+                    // Raw HTML is never interpreted; CommonMark permits
+                    // line endings inside a tag, so the authored bytes
+                    // come back verbatim rather than as probe spaces.
+                    let resolved = self.text_for(&html, &range);
+                    self.emit_text(&resolved, None, TokenMode::Literal);
                     self.advance_inline(range.end);
                 }
                 // Unreachable: the probe holds no line terminators, so
@@ -2027,14 +2115,8 @@ impl<'a> InlineWalker<'a> {
                 // change degrades to the authored bytes rather than
                 // silently dropping them.
                 Event::SoftBreak | Event::HardBreak => {
-                    let authored = self
-                        .authored(&range)
-                        .unwrap_or(
-                            "
-",
-                        )
-                        .to_string();
-                    self.emit_text(&authored, None);
+                    let authored = self.authored(&range).unwrap_or("\n").to_string();
+                    self.emit_text(&authored, None, TokenMode::Affordance);
                     self.advance_inline(range.end);
                 }
                 Event::Start(_) => {
@@ -2070,7 +2152,7 @@ impl<'a> InlineWalker<'a> {
             // Block-less probe (empty content): carry the authored bytes
             // through verbatim.
             let all = self.masked.to_string();
-            self.emit_text(&all, None);
+            self.emit_text(&all, None, TokenMode::Affordance);
         }
     }
 }
@@ -3777,7 +3859,7 @@ final para
         for code in 0x2400u32..=0x241Fu32 {
             crowded.push(char::from_u32(code).unwrap());
         }
-        let picked = pick_sentinel(&crowded);
+        let picked = pick_sentinel(&crowded).expect("pool is not exhausted");
         assert!(
             !('\u{E000}'..='\u{F8FF}').contains(&picked),
             "escalation must not fall into the Private Use Area: {picked:?}"
@@ -3786,6 +3868,62 @@ final para
             !crowded.contains(picked),
             "escalation must be collision-free"
         );
+    }
+
+    /// The whole pool must be punctuation or symbol — a letter-class
+    /// placeholder (U+2E2F VERTICAL TILDE is category `Lm` and sits
+    /// inside the Supplemental Punctuation block) would flank like a
+    /// letter and let a delimiter beside a token open emphasis the
+    /// retired splice left inert.
+    #[test]
+    fn sentinel_pool_is_punctuation_or_symbol_only() {
+        let mut taken = String::new();
+        let mut pool = Vec::new();
+        while let Some(candidate) = pick_sentinel(&taken) {
+            pool.push(candidate);
+            taken.push(candidate);
+        }
+        assert!(pool.len() > 100, "pool should be generous: {}", pool.len());
+        assert!(
+            !pool.contains(&'\u{2E2F}'),
+            "U+2E2F is category Lm and must never be a sentinel"
+        );
+        for candidate in &pool {
+            // core has no Unicode-category API, so pin the two properties
+            // that actually matter to CommonMark flanking: never a word
+            // character, never whitespace.
+            assert!(
+                !candidate.is_alphanumeric() && !candidate.is_whitespace(),
+                "{candidate:?} would change delimiter flanking"
+            );
+        }
+    }
+
+    /// Exhausting the pool must DEGRADE, never reuse an occupied scalar:
+    /// reuse would turn every authored occurrence into a token separator,
+    /// deleting text and shifting every later token's payload.
+    #[test]
+    fn exhausted_sentinel_pool_degrades_losslessly() {
+        let mut taken = String::new();
+        while let Some(candidate) = pick_sentinel(&taken) {
+            taken.push(candidate);
+        }
+        assert_eq!(pick_sentinel(&taken), None);
+
+        let source = format!("{taken} [[Note]] tail");
+        let segment = only_segment(&source);
+        assert_eq!(
+            segment.content, source,
+            "every authored byte survives the degradation"
+        );
+        assert!(
+            segment
+                .runs
+                .iter()
+                .all(|r| r.kind == ReadingInlineRunKind::Text),
+            "no affordances are invented on the degraded path"
+        );
+        assert_partitions(&segment);
     }
 
     // --- Adversarial-review regressions (round 2) ---
@@ -3877,6 +4015,65 @@ final para
     #[test]
     fn inline_html_stays_literal() {
         assert_eq!(only_segment("a <b>html</b> c\n").content, "a <b>html</b> c");
+    }
+
+    /// Token selection runs on the BLOCK-parsed content while the walk
+    /// runs on the flattened probe, so a code span can form across a
+    /// blank line that separated its backticks at selection time. A code
+    /// span binds tighter than a link (CommonMark §6.1), so the token
+    /// inside it must render as its AUTHORED bytes with no affordance —
+    /// never code-styled text that silently navigates.
+    #[test]
+    fn a_token_swallowed_by_a_late_code_span_stays_literal() {
+        let segment = only_segment("- `a\n\n  [[Note]]`\n");
+        assert!(
+            segment.content.contains("[[Note]]"),
+            "the authored token bytes render literally: {:?}",
+            segment.content
+        );
+        assert!(
+            segment
+                .runs
+                .iter()
+                .all(|r| r.kind == ReadingInlineRunKind::Text),
+            "code-styled text must never carry a link affordance: {:?}",
+            segment.runs
+        );
+        assert_partitions(&segment);
+    }
+
+    /// Same rule for raw HTML: a token swallowed by a tag renders as its
+    /// authored bytes.
+    #[test]
+    fn a_token_swallowed_by_raw_html_stays_literal() {
+        let segment = only_segment("a <span title=\"[[Note]]\">b</span>\n");
+        assert!(
+            segment
+                .runs
+                .iter()
+                .all(|r| r.kind == ReadingInlineRunKind::Text),
+            "{:?}",
+            segment.runs
+        );
+    }
+
+    /// CommonMark permits line endings inside an HTML tag, and raw HTML
+    /// is never interpreted — so its authored terminators survive rather
+    /// than arriving as the probe's spaces.
+    #[test]
+    fn multiline_inline_html_keeps_its_authored_line_endings() {
+        assert_eq!(
+            only_segment("a <span\nclass=\"x\">b</span> c\n").content,
+            "a <span\nclass=\"x\">b</span> c"
+        );
+        assert_eq!(
+            only_segment("a <span\r\nclass=\"x\">b</span> c\r\n").content,
+            "a <span\r\nclass=\"x\">b</span> c"
+        );
+        assert_eq!(
+            only_segment("a <!-- one\ntwo --> b\n").content,
+            "a <!-- one\ntwo --> b"
+        );
     }
 
     // --- alignment ---

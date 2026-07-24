@@ -420,20 +420,25 @@ final class ReadingViewTests: XCTestCase {
     /// assertions — production code never re-derives these (core ships
     /// `base_target` on the run).
     private static func wikiBase(_ target: String) -> String {
-        if let hash = target.firstIndex(of: "#") {
-            return String(target[target.startIndex..<hash])
+        let trimmed = target.trimmingCharacters(in: .whitespaces)
+        if let hash = trimmed.firstIndex(of: "#") {
+            return String(trimmed[trimmed.startIndex..<hash])
+                .trimmingCharacters(in: .whitespaces)
         }
-        if let caret = target.firstIndex(of: "^") {
-            return String(target[target.startIndex..<caret])
+        if let caret = trimmed.firstIndex(of: "^") {
+            return String(trimmed[trimmed.startIndex..<caret])
+                .trimmingCharacters(in: .whitespaces)
         }
-        return target
+        return trimmed
     }
 
     private static func markdownBase(_ target: String) -> String {
-        if let hash = target.firstIndex(of: "#") {
-            return String(target[target.startIndex..<hash])
+        let trimmed = target.trimmingCharacters(in: .whitespaces)
+        if let hash = trimmed.firstIndex(of: "#") {
+            return String(trimmed[trimmed.startIndex..<hash])
+                .trimmingCharacters(in: .whitespaces)
         }
-        return target
+        return trimmed
     }
 
     /// A dangling wikilink renders in warningText (the editor's U5-3
@@ -1534,8 +1539,9 @@ final class ReadingViewTests: XCTestCase {
     func testBlockEmbedRendersEmbedViewWhenResolved() throws {
         let text = try strippedReadingViewSource()
         XCTAssertTrue(
-            text.contains("blockEmbedTarget(inSlice:"),
-            "the paragraph case must detect block-level embeds via the span authority")
+            text.contains("inline.blockEmbedKey"),
+            "the paragraph case must detect block-level embeds via core (#967), "
+                + "never a host-side string check")
         XCTAssertTrue(
             text.contains("EmbedView("),
             "a resolved block-level embed must render EmbedView")
@@ -1563,7 +1569,7 @@ final class ReadingViewTests: XCTestCase {
             raw.contains("await context.onResolveEmbed(key)"),
             "the placeholder must request resolution for its key and AWAIT it")
         XCTAssertTrue(
-            raw.contains("inlineLeaf(fallbackSlice)"),
+            raw.contains("inlineLeaf(fallback)"),
             "resolved-empty must fall back to the inline link-run rendering")
         // The fallback gate must be request COMPLETION, not request start —
         // gating on requestedEmbedKeys would flash the inline run for the
