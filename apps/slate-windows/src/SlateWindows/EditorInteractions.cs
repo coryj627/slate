@@ -177,6 +177,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private EditorEmbedPreviewNode? _popoverEmbedRoot;
     private string? _embedRequestKey;
     private string? _activeEmbedRequestKey;
+    private int _pendingEmbedPreviewGeneration;
+    private PendingEmbedPreview? _pendingEmbedPreview;
     private readonly DispatcherTimer _citationCloseTimer;
 
     public EditorInteractionCoordinator(
@@ -404,20 +406,92 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     public bool PreviewEmbedAt(int utf16Offset)
     {
         ThrowIfDisposed();
-        if (!EnsureMathRangesReady(announceWhenUnavailable: true))
+        if (_tab.IsDirty)
         {
+            CancelPendingEmbedPreview();
+            AnnounceSaveBeforeInteraction();
+            return true;
+        }
+
+        if (_tab.EditorDocument is null
+            || _tab.EditorSession is null
+            || _tab.SavedContentHash is not { } savedHash)
+        {
+            CancelPendingEmbedPreview();
+            AnnounceReloadBeforeInteraction();
+            return true;
+        }
+
+        int clamped = Math.Clamp(utf16Offset, 0, _tab.EditorDocument.TextLength);
+        int generation = ++_pendingEmbedPreviewGeneration;
+        _pendingEmbedPreview = new PendingEmbedPreview(
+            generation,
+            clamped,
+            _tab.Path,
+            savedHash,
+            _tab.EditorSession.Revision,
+            _session.InteractionGeneration());
+        return TryReplayPendingEmbedPreview() ?? true;
+    }
+
+    private bool? TryReplayPendingEmbedPreview()
+    {
+        PendingEmbedPreview? pending = _pendingEmbedPreview;
+        if (pending is null || pending.Generation != _pendingEmbedPreviewGeneration)
+        {
+            return null;
+        }
+
+        if (_disposed
+            || _tab.IsDirty
+            || !string.Equals(_tab.Path, pending.Path, StringComparison.Ordinal)
+            || !string.Equals(
+                _tab.SavedContentHash,
+                pending.SavedHash,
+                StringComparison.Ordinal)
+            || _tab.EditorSession?.Revision != pending.Revision
+            || _session.InteractionGeneration() != pending.SessionGeneration)
+        {
+            CancelPendingEmbedPreview();
             return false;
         }
 
-        int clamped = Math.Clamp(utf16Offset, 0, _tab.EditorDocument!.TextLength);
-        if (IsInsideMathRegion(clamped))
+        if (_mathRangesRevision != pending.Revision)
+        {
+            QueueMathRefresh(TimeSpan.Zero);
+            QueueArtifactCacheRefresh();
+            return null;
+        }
+
+        bool artifactMatches =
+            string.Equals(_artifactCachePath, pending.Path, StringComparison.Ordinal)
+            && string.Equals(
+                _artifactCacheHash,
+                pending.SavedHash,
+                StringComparison.Ordinal)
+            && _artifactCacheSessionGeneration == pending.SessionGeneration;
+        if (!artifactMatches)
+        {
+            QueueArtifactCacheRefresh();
+            return null;
+        }
+
+        if (!_artifactCacheSourceCurrent)
+        {
+            CancelPendingEmbedPreview();
+            AnnounceReloadBeforeInteraction();
+            return true;
+        }
+
+        _pendingEmbedPreview = null;
+        if (IsInsideMathRegion(pending.Utf16Offset))
         {
             _announce(new A11yEvent.NoEmbedAtCursor());
             return false;
         }
 
         if (TryGetActionableSpan(
-                utf16Offset,
+                pending.Utf16Offset,
                 includeRightEdge: true,
                 out EditorSemanticSpan? span)
             && span is not null
@@ -428,6 +502,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
 
         _announce(new A11yEvent.NoEmbedAtCursor());
         return false;
+    }
+
+    private void CancelPendingEmbedPreview()
+    {
+        _pendingEmbedPreviewGeneration++;
+        _pendingEmbedPreview = null;
     }
 
     public void HoverAt(int utf16Offset)
@@ -564,6 +644,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
         _pendingHoverUtf16 = null;
         _pendingHoveredCitationByteOffset = null;
+        CancelPendingEmbedPreview();
         _embedGeneration++;
         _embedRequestKey = null;
         _activeEmbedRequestKey = null;
@@ -573,7 +654,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
     }
 
-    public void CloseTransientUi() => ClosePopover(requestFocus: false);
+    public void CloseTransientUi()
+    {
+        CancelPendingEmbedPreview();
+        ClosePopover(requestFocus: false);
+    }
 
     internal void InvalidateExternalState()
     {
@@ -598,6 +683,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
         _pendingHoverUtf16 = null;
         _pendingHoveredCitationByteOffset = null;
+        CancelPendingEmbedPreview();
         _embedGeneration++;
         _embedRequestKey = null;
         _activeEmbedRequestKey = null;
@@ -1296,6 +1382,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         {
             HoverAt(pendingHover);
         }
+        _ = TryReplayPendingEmbedPreview();
     }
 
     internal void RefreshMathRangesForTests()
@@ -1316,6 +1403,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         PublishMathRanges(revision, _tab.EditorSession.Revision, ranges);
     }
     private sealed record CitationPreview(string Body, string Speech);
+
+    private sealed record PendingEmbedPreview(
+        int Generation,
+        int Utf16Offset,
+        string Path,
+        string SavedHash,
+        long Revision,
+        ulong SessionGeneration);
 
     private sealed record InteractionArtifactSnapshot(
         Dictionary<(uint Start, uint End, bool Embed), OutgoingLink> Links,
@@ -1406,6 +1501,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         InteractionArtifactSnapshot? snapshot)
     {
         bool rerun;
+        bool published = false;
         lock (_artifactCacheGate)
         {
             _artifactCacheLoading = false;
@@ -1424,6 +1520,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 _linksBySpan = snapshot.SourceCurrent ? snapshot.Links : [];
                 _tasksByLine = snapshot.SourceCurrent ? snapshot.TasksByLine : [];
                 _tasksByCheckbox = snapshot.SourceCurrent ? snapshot.TasksByCheckbox : [];
+                published = true;
             }
 
             rerun = !_disposed
@@ -1439,6 +1536,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         if (rerun)
         {
             QueueArtifactCacheRefresh();
+        }
+        if (published)
+        {
+            _ = TryReplayPendingEmbedPreview();
         }
     }
 
@@ -2047,6 +2148,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _embedGeneration++;
         _embedRequestKey = null;
         _activeEmbedRequestKey = null;
+        CancelPendingEmbedPreview();
         _mathRangesRevision = -1;
         QueueMathRefresh(TimeSpan.FromMilliseconds(250));
         if (IsPopoverOpen)

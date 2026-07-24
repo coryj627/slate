@@ -279,7 +279,14 @@ public sealed class ShellAccessibilityTests
                 window,
                 "EditorInteractionPopover",
                 TimeSpan.FromSeconds(10));
-            Assert.StartsWith("Embed preview for", interactionPopover.Name);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => interactionPopover.Name.StartsWith(
+                        "Embed preview for",
+                        StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                $"Embed preview did not finish loading: {interactionPopover.Name}");
+            Assert.True(interactionPopover.Properties.IsDialog.Value);
             AutomationElement popoverClose = WaitForElement(
                 window,
                 "EditorPopoverClose",
@@ -289,6 +296,17 @@ public sealed class ShellAccessibilityTests
             AssertEventuallyFocused(
                 popoverClose,
                 "The embed popover did not focus its Close button.");
+            Keyboard.Press(VirtualKeyShort.TAB);
+            AssertEventuallyFocusedWithin(
+                interactionPopover,
+                "Tab escaped the editor interaction popover.");
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.SHIFT,
+                VirtualKeyShort.TAB);
+            AssertEventuallyFocusedWithin(
+                interactionPopover,
+                "Shift+Tab escaped the editor interaction popover.");
+            AssertAxeClean(process, "editor-embed-popover");
             popoverClose.Patterns.Invoke.Pattern.Invoke();
             Assert.True(
                 SpinWait.SpinUntil(
@@ -311,6 +329,7 @@ public sealed class ShellAccessibilityTests
             AssertEventuallyFocused(
                 citationClose,
                 "The citation popover did not focus its Close button.");
+            AssertAxeClean(process, "editor-citation-popover");
             Keyboard.Press(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
@@ -754,6 +773,19 @@ public sealed class ShellAccessibilityTests
             message);
     }
 
+
+    private static void AssertEventuallyFocusedWithin(
+        AutomationElement root,
+        string message)
+    {
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => root.Properties.HasKeyboardFocus.Value
+                    || root.FindAllDescendants().Any(
+                        element => element.Properties.HasKeyboardFocus.Value),
+                TimeSpan.FromSeconds(10)),
+            message);
+    }
 
     private static void AssertActionButtonCensus(
         AutomationElement expander,

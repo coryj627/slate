@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 using System.Windows.Threading;
+using System.Xml.Linq;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
@@ -122,6 +123,55 @@ public sealed class W2EditorInteractionTests
     }
 
     [Fact]
+    public void EarlyEmbedPreview_ReplaysOnceAndDropsEditedOrDeactivatedRequests()
+    {
+        using InteractionFixture fixture = InteractionFixture.Create(
+            "![[target#Destination]]\n");
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+
+        using var active = OpenPendingPreviewTab(session);
+        EditorInteractionCoordinator activeInteractions = active.EditorInteractions!;
+        int activeFocusRequests = 0;
+        activeInteractions.PopoverFocusRequested += (_, _) => activeFocusRequests++;
+
+        Assert.True(activeInteractions.PreviewEmbedAt(0));
+        Assert.False(activeInteractions.IsPopoverOpen);
+        activeInteractions.RefreshMathRangesForTests();
+        activeInteractions.RefreshArtifactCacheForTests();
+        Assert.True(activeInteractions.IsPopoverOpen);
+        Assert.Equal(1, activeFocusRequests);
+        activeInteractions.RefreshMathRangesForTests();
+        activeInteractions.RefreshArtifactCacheForTests();
+        Assert.Equal(1, activeFocusRequests);
+        activeInteractions.ClosePopoverCommand.Execute(null);
+
+        using var deactivated = OpenPendingPreviewTab(session);
+        EditorInteractionCoordinator deactivatedInteractions = deactivated.EditorInteractions!;
+        int deactivatedFocusRequests = 0;
+        deactivatedInteractions.PopoverFocusRequested += (_, _) =>
+            deactivatedFocusRequests++;
+        Assert.True(deactivatedInteractions.PreviewEmbedAt(0));
+        deactivated.Deactivate();
+        deactivatedInteractions.RefreshMathRangesForTests();
+        deactivatedInteractions.RefreshArtifactCacheForTests();
+        Assert.False(deactivatedInteractions.IsPopoverOpen);
+        Assert.Equal(0, deactivatedFocusRequests);
+
+        using var edited = OpenPendingPreviewTab(session);
+        EditorInteractionCoordinator editedInteractions = edited.EditorInteractions!;
+        int editedFocusRequests = 0;
+        editedInteractions.PopoverFocusRequested += (_, _) => editedFocusRequests++;
+        Assert.True(editedInteractions.PreviewEmbedAt(0));
+        edited.Text += "\nStale pending request.\n";
+        editedInteractions.RefreshMathRangesForTests();
+        editedInteractions.RefreshArtifactCacheForTests();
+        Assert.False(editedInteractions.IsPopoverOpen);
+        Assert.Equal(0, editedFocusRequests);
+    }
+
+    [Fact]
     public void WorkspaceNavigation_UsesCoreHeadingAndBlockArtifactsToParkCaret()
     {
         using InteractionFixture fixture = InteractionFixture.Create();
@@ -204,6 +254,22 @@ public sealed class W2EditorInteractionTests
             Assert.Contains(required, templates, StringComparison.Ordinal);
         }
 
+        XDocument templateDocument = XDocument.Parse(templates);
+        XElement interactionPopover = Assert.Single(
+            templateDocument.Descendants(),
+            element => element.Attributes().Any(attribute =>
+                attribute.Name.LocalName == "AutomationProperties.AutomationId"
+                && attribute.Value == "EditorInteractionPopover"));
+        Assert.DoesNotContain(
+            interactionPopover.Ancestors(),
+            ancestor => ancestor.Name.LocalName == "Popup");
+        Assert.Contains(
+            interactionPopover.Ancestors(),
+            ancestor => ancestor.Name.LocalName == "Grid"
+                && ancestor.Attributes().Any(attribute =>
+                    attribute.Name.LocalName == "Panel.ZIndex"
+                    && attribute.Value == "100"));
+
         foreach (string required in new[]
         {
             "EditorActivateMenuItem",
@@ -224,6 +290,14 @@ public sealed class W2EditorInteractionTests
         Assert.True(start >= 0, $"Fixture token is missing: {needle}");
         return start + Math.Min(2, needle.Length - 1);
     }
+
+    private static WorkspaceTabViewModel OpenPendingPreviewTab(VaultSession session) =>
+        new(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            startInteractionBackgroundWork: false);
 
     private static void WaitForUi(Func<bool> condition)
     {
@@ -266,7 +340,7 @@ public sealed class W2EditorInteractionTests
         public string Root { get; }
         public string SourcePath { get; }
 
-        public static InteractionFixture Create()
+        public static InteractionFixture Create(string? sourceText = null)
         {
             string root = Path.Combine(
                 Path.GetTempPath(),
@@ -277,7 +351,8 @@ public sealed class W2EditorInteractionTests
                 "# Lead\n\n## Destination\n\nSection body.\n\nBlock body ^block-id\n");
             File.WriteAllText(
                 Path.Combine(root, "source.md"),
-                """
+                sourceText
+                    ?? """
                 # Source
 
                 [[target#Destination]]

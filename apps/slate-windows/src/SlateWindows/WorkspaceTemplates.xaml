@@ -100,15 +100,19 @@
                     </ContextMenu>
                 </local:SlateTextEditor.ContextMenu>
             </local:SlateTextEditor>
-            <Popup Grid.Row="0"
-                   PlacementTarget="{Binding ElementName=MarkdownEditor}"
-                   Placement="Center"
-                   AllowsTransparency="True"
-                   StaysOpen="False"
-                   IsOpen="{Binding EditorInteractions.IsPopoverOpen, Mode=TwoWay}">
+            <!-- Keep the modal interaction surface in the tab's presentation
+                 source so UIA ownership is stable across providers. The
+                 transparent layer intentionally makes Close/Escape the only
+                 dismissal paths and prevents pointer input reaching the editor. -->
+            <Grid Grid.RowSpan="2"
+                  Panel.ZIndex="100"
+                  Background="Transparent"
+                  Visibility="{Binding EditorInteractions.IsPopoverOpen, Converter={StaticResource BooleanToVisibilityConverter}}">
                 <local:EditorInteractionPopoverHost MaxWidth="620"
                                                     MaxHeight="460"
                                                     Margin="16"
+                                                    HorizontalAlignment="Center"
+                                                    VerticalAlignment="Center"
                                                     InteractionSession="{Binding EditorInteractions}"
                                                     KeyboardNavigation.TabNavigation="Cycle"
                                                     KeyboardNavigation.ControlTabNavigation="Cycle"
@@ -177,7 +181,7 @@
                     </Grid>
                     </Border>
                 </local:EditorInteractionPopoverHost>
-            </Popup>
+            </Grid>
             <StackPanel Grid.Row="0"
                         Margin="32"
                         HorizontalAlignment="Center"
