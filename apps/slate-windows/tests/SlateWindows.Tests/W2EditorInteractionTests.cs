@@ -88,6 +88,35 @@ public sealed class W2EditorInteractionTests
     }
 
     [Fact]
+    public void FrontmatterNote_LoadsWholeFileAndKeepsArtifactSpansAligned()
+    {
+        const string source =
+            "---\ntags:\n  - accessibility\n---\n\n![[target#Destination]]\n";
+        using InteractionFixture fixture = InteractionFixture.Create(source);
+        using VaultSession session = VaultSession.OpenFilesystem(fixture.Root);
+        using var cancel = new CancelToken();
+        session.ScanInitial(cancel);
+        using var tab = new WorkspaceTabViewModel(
+            session,
+            new WorkspaceTabState(
+                Guid.NewGuid(),
+                new WorkspaceItemState(WorkspaceItemKind.Markdown, "source.md")),
+            startInteractionBackgroundWork: false);
+        EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
+            tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
+        interactions.RefreshArtifactCacheForTests();
+
+        Assert.Equal(source, tab.Text);
+        Assert.True(interactions.PreviewEmbedAt(Inside(tab.Text, "![[target#Destination]]")));
+        WaitForUi(() => !interactions.PopoverTitle.StartsWith(
+            "Loading",
+            StringComparison.Ordinal));
+        Assert.True(interactions.IsPopoverOpen);
+        Assert.Contains("Section body", EmbedText(interactions.PopoverEmbedRoot!));
+    }
+
+    [Fact]
     public void ClosingPopover_DefersEditorFocusAndDropsStaleRequests()
     {
         using InteractionFixture fixture = InteractionFixture.Create();

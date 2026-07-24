@@ -706,9 +706,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
 
         try
         {
-            NotePartsBundle note = _session.ReadNoteParts(Path);
-            _text = note.FmSource + note.Body;
-            _contentHash = note.ContentHash;
+            _text = _session.ReadText(Path);
+            _contentHash = SlateUniffiMethods.EditorTextContentHash(_text);
             _isDirty = false;
         }
         catch (VaultException exception)
