@@ -4057,6 +4057,50 @@ final para
         );
     }
 
+    /// The CRLF collapse makes probe and `masked` offsets diverge, so
+    /// every slice goes through `to_masked`. These pin the mapping at the
+    /// boundaries that matter: a token immediately after a collapsed
+    /// break, immediately before one, and at the very start and end.
+    #[test]
+    fn crlf_offsets_map_exactly_around_tokens() {
+        assert_eq!(
+            only_segment("a\r\n[[Note]]\r\nb\n").content,
+            "a\r\nNote\r\nb"
+        );
+        assert_eq!(only_segment("[[Note]]\r\ntail\n").content, "Note\r\ntail");
+        assert_eq!(only_segment("lead\r\n[[Note]]\n").content, "lead\r\nNote");
+        assert_eq!(
+            only_segment("a\r\nb\r\n[[Note]] c\n").content,
+            "a\r\nb\r\nNote c",
+            "two collapses before the token"
+        );
+        // A blank CRLF line inside a loose list item: the collapses are
+        // adjacent, which is where an off-by-one in `to_masked` would show.
+        assert_eq!(
+            reading_inline_segments_source("- a\r\n\r\n  [[Note]] b\r\n", &[], &[])[0].segments[0]
+                .content,
+            "a\r\n\r\n  Note b"
+        );
+    }
+
+    /// A code span nested inside emphasis still binds tighter than a
+    /// link: the token stays literal and carries BOTH styles.
+    #[test]
+    fn literal_token_mode_survives_nesting() {
+        let segment = only_segment("*em `code [[Note]] span` tail*\n");
+        assert_eq!(segment.content, "em code [[Note]] span tail");
+        let code_run = segment
+            .runs
+            .iter()
+            .find(|r| r.styles.contains(&ReadingInlineStyle::InlineCode))
+            .expect("a code run");
+        assert_eq!(
+            code_run.styles,
+            vec![ReadingInlineStyle::Emphasis, ReadingInlineStyle::InlineCode]
+        );
+        assert_eq!(code_run.kind, ReadingInlineRunKind::Text);
+    }
+
     /// CommonMark permits line endings inside an HTML tag, and raw HTML
     /// is never interpreted — so its authored terminators survive rather
     /// than arriving as the probe's spaces.
