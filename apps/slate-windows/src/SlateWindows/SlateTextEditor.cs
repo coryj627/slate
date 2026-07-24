@@ -3,6 +3,8 @@
 
 using System.Windows;
 using System.Windows.Automation.Peers;
+using System.Windows.Input;
+using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
 
 namespace SlateWindows;
@@ -20,18 +22,66 @@ internal sealed class SlateTextEditor : TextEditor
             typeof(SlateTextEditor),
             new PropertyMetadata(null, HighlightSession_Changed));
 
+    public static readonly DependencyProperty InteractionSessionProperty =
+        DependencyProperty.Register(
+            nameof(InteractionSession),
+            typeof(EditorInteractionCoordinator),
+            typeof(SlateTextEditor),
+            new PropertyMetadata(null, InteractionSession_Changed));
+
+    public static readonly DependencyProperty SpellingPreferencesProperty =
+        DependencyProperty.Register(
+            nameof(SpellingPreferences),
+            typeof(EditorPreferencesViewModel),
+            typeof(SlateTextEditor),
+            new PropertyMetadata(null, SpellingPreferences_Changed));
+
+    public static readonly DependencyProperty EditorCaretOffsetProperty =
+        DependencyProperty.Register(
+            nameof(EditorCaretOffset),
+            typeof(int),
+            typeof(SlateTextEditor),
+            new FrameworkPropertyMetadata(
+                0,
+                FrameworkPropertyMetadataOptions.BindsTwoWayByDefault,
+                EditorCaretOffset_Changed));
+
     private AvalonHighlightingCoordinator? _highlighting;
+    private AvalonSpellingCoordinator? _spelling;
+    private EditorInteractionCoordinator? _attachedInteraction;
+    private bool _synchronizingCaretOffset;
+    private bool _suppressingCaretPublication;
+    private int _caretRestoreGeneration;
 
     public SlateTextEditor()
     {
         Loaded += SlateTextEditor_Loaded;
         Unloaded += SlateTextEditor_Unloaded;
+        TextArea.Caret.PositionChanged += Caret_PositionChanged;
     }
 
     public AvalonDocumentBufferSession? HighlightSession
     {
         get => (AvalonDocumentBufferSession?)GetValue(HighlightSessionProperty);
         set => SetValue(HighlightSessionProperty, value);
+    }
+
+    public EditorInteractionCoordinator? InteractionSession
+    {
+        get => (EditorInteractionCoordinator?)GetValue(InteractionSessionProperty);
+        set => SetValue(InteractionSessionProperty, value);
+    }
+
+    public EditorPreferencesViewModel? SpellingPreferences
+    {
+        get => (EditorPreferencesViewModel?)GetValue(SpellingPreferencesProperty);
+        set => SetValue(SpellingPreferencesProperty, value);
+    }
+
+    public int EditorCaretOffset
+    {
+        get => (int)GetValue(EditorCaretOffsetProperty);
+        set => SetValue(EditorCaretOffsetProperty, value);
     }
 
     internal bool FocusInputOwner() => TextArea.Focus();
@@ -43,11 +93,99 @@ internal sealed class SlateTextEditor : TextEditor
 
     protected override void OnPropertyChanged(DependencyPropertyChangedEventArgs e)
     {
-        base.OnPropertyChanged(e);
+        bool documentChanging = e.Property == DocumentProperty;
+        if (documentChanging)
+        {
+            _suppressingCaretPublication = true;
+        }
+
+        try
+        {
+            base.OnPropertyChanged(e);
+        }
+        catch
+        {
+            _suppressingCaretPublication = false;
+            throw;
+        }
+
+        if (documentChanging)
+        {
+            int generation = ++_caretRestoreGeneration;
+            _ = Dispatcher.BeginInvoke(
+                DispatcherPriority.DataBind,
+                new Action(() => RestoreCaretAfterDocumentChange(generation)));
+        }
+
         if (e.Property == DocumentProperty && IsLoaded)
         {
             AttachHighlighting();
+            AttachSpelling();
         }
+    }
+
+    protected override void OnPreviewMouseLeftButtonDown(MouseButtonEventArgs e)
+    {
+        if (Keyboard.Modifiers == ModifierKeys.Control
+            && TryOffsetAt(e.GetPosition(this), out int offset))
+        {
+            CaretOffset = offset;
+            if (InteractionSession?.ActivateAt(
+                    offset,
+                    EditorInteractionOrigin.Pointer) == true)
+            {
+                e.Handled = true;
+                return;
+            }
+        }
+
+        base.OnPreviewMouseLeftButtonDown(e);
+    }
+
+    protected override void OnMouseMove(MouseEventArgs e)
+    {
+        base.OnMouseMove(e);
+        if (TryOffsetAt(e.GetPosition(this), out int offset))
+        {
+            InteractionSession?.HoverAt(offset);
+        }
+    }
+
+    protected override void OnMouseLeave(MouseEventArgs e)
+    {
+        base.OnMouseLeave(e);
+        InteractionSession?.ClearCitationHover();
+    }
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
+    {
+        ModifierKeys modifiers = Keyboard.Modifiers;
+        if (modifiers == ModifierKeys.Control && e.Key == Key.E)
+        {
+            InteractionSession?.PreviewEmbedAt(CaretOffset);
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == ModifierKeys.Control
+            && e.Key == Key.Enter
+            && InteractionSession?.ActivateAt(
+                CaretOffset,
+                EditorInteractionOrigin.Keyboard) == true)
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (modifiers == ModifierKeys.None
+            && e.Key == Key.Escape
+            && InteractionSession?.IsPopoverOpen == true)
+        {
+            InteractionSession.ClosePopoverCommand.Execute(null);
+            e.Handled = true;
+            return;
+        }
+
+        base.OnPreviewKeyDown(e);
     }
 
     private static void HighlightSession_Changed(
@@ -61,12 +199,112 @@ internal sealed class SlateTextEditor : TextEditor
         }
     }
 
-    private void SlateTextEditor_Loaded(object sender, RoutedEventArgs e) => AttachHighlighting();
+    private static void InteractionSession_Changed(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var editor = (SlateTextEditor)dependencyObject;
+        if (editor.IsLoaded)
+        {
+            editor.AttachInteractions();
+        }
+    }
+
+    private static void SpellingPreferences_Changed(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var editor = (SlateTextEditor)dependencyObject;
+        if (editor.IsLoaded)
+        {
+            editor.AttachSpelling();
+        }
+    }
+
+    private static void EditorCaretOffset_Changed(
+        DependencyObject dependencyObject,
+        DependencyPropertyChangedEventArgs eventArgs)
+    {
+        var editor = (SlateTextEditor)dependencyObject;
+        if (editor._synchronizingCaretOffset)
+        {
+            return;
+        }
+
+        int requested = (int)eventArgs.NewValue;
+        int clamped = Math.Clamp(requested, 0, editor.Document?.TextLength ?? 0);
+        editor._synchronizingCaretOffset = true;
+        try
+        {
+            editor.CaretOffset = clamped;
+            if (requested != clamped)
+            {
+                editor.SetCurrentValue(EditorCaretOffsetProperty, clamped);
+            }
+        }
+        finally
+        {
+            editor._synchronizingCaretOffset = false;
+        }
+    }
+
+    private void Caret_PositionChanged(object? sender, EventArgs e)
+    {
+        if (_synchronizingCaretOffset || _suppressingCaretPublication)
+        {
+            return;
+        }
+
+        _synchronizingCaretOffset = true;
+        try
+        {
+            SetCurrentValue(EditorCaretOffsetProperty, CaretOffset);
+        }
+        finally
+        {
+            _synchronizingCaretOffset = false;
+        }
+    }
+
+    private void RestoreCaretAfterDocumentChange(int generation)
+    {
+        if (generation != _caretRestoreGeneration)
+        {
+            return;
+        }
+
+        _synchronizingCaretOffset = true;
+        try
+        {
+            int requested = EditorCaretOffset;
+            int clamped = Math.Clamp(requested, 0, Document?.TextLength ?? 0);
+            CaretOffset = clamped;
+            if (requested != clamped)
+            {
+                SetCurrentValue(EditorCaretOffsetProperty, clamped);
+            }
+        }
+        finally
+        {
+            _synchronizingCaretOffset = false;
+            _suppressingCaretPublication = false;
+        }
+    }
+
+    private void SlateTextEditor_Loaded(object sender, RoutedEventArgs e)
+    {
+        AttachHighlighting();
+        AttachSpelling();
+        AttachInteractions();
+    }
 
     private void SlateTextEditor_Unloaded(object sender, RoutedEventArgs e)
     {
         _highlighting?.Dispose();
         _highlighting = null;
+        _spelling?.Dispose();
+        _spelling = null;
+        DetachInteractions();
     }
 
     private void AttachHighlighting()
@@ -77,6 +315,72 @@ internal sealed class SlateTextEditor : TextEditor
         {
             _highlighting = new AvalonHighlightingCoordinator(this, HighlightSession);
         }
+    }
+
+    private void AttachSpelling()
+    {
+        _spelling?.Dispose();
+        _spelling = null;
+        if (SpellingPreferences is not null && Document is not null)
+        {
+            _spelling = new AvalonSpellingCoordinator(this, SpellingPreferences);
+        }
+    }
+
+    private void AttachInteractions()
+    {
+        DetachInteractions();
+        _attachedInteraction = InteractionSession;
+        if (_attachedInteraction is null)
+        {
+            return;
+        }
+
+        _attachedInteraction.FocusRequested += Interaction_FocusRequested;
+        _attachedInteraction.CaretNavigationRequested += Interaction_CaretNavigationRequested;
+        ApplyPendingCaret();
+    }
+
+    private void DetachInteractions()
+    {
+        if (_attachedInteraction is null)
+        {
+            return;
+        }
+
+        _attachedInteraction.FocusRequested -= Interaction_FocusRequested;
+        _attachedInteraction.CaretNavigationRequested -= Interaction_CaretNavigationRequested;
+        _attachedInteraction = null;
+    }
+
+    private void Interaction_FocusRequested(object? sender, EventArgs e) => FocusInputOwner();
+
+    private void Interaction_CaretNavigationRequested(object? sender, EventArgs e) =>
+        ApplyPendingCaret();
+
+    private void ApplyPendingCaret()
+    {
+        if (_attachedInteraction?.TryConsumePendingCaret(out int offset) != true)
+        {
+            return;
+        }
+
+        CaretOffset = Math.Clamp(offset, 0, Document.TextLength);
+        ScrollToLine(Document.GetLineByOffset(CaretOffset).LineNumber);
+        FocusInputOwner();
+    }
+
+    private bool TryOffsetAt(Point point, out int offset)
+    {
+        TextViewPosition? position = GetPositionFromPoint(point);
+        if (position is null)
+        {
+            offset = 0;
+            return false;
+        }
+
+        offset = Document.GetOffset(position.Value.Location);
+        return true;
     }
 }
 

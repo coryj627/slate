@@ -508,7 +508,12 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             {
                 Workspace?.InvalidatePath(@event.Path);
             }
+            else if (@event.Kind == FileChangeKind.Modified)
+            {
+                Workspace?.InvalidateModifiedPath(@event.Path);
+            }
 
+            Workspace?.InvalidateAllInteractionStates();
             QuickSwitcher?.ApplyFileChange(@event);
             int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
             _ = Task.Delay(150).ContinueWith(
@@ -654,6 +659,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         if (Workspace is not null)
         {
             Workspace.FileOpened -= Workspace_FileOpened;
+            Workspace.EditorTagActivated -= Workspace_EditorTagActivated;
             Workspace.FocusBoundaryRequested -= Workspace_FocusBoundaryRequested;
             Workspace.Dispose();
         }
@@ -710,6 +716,7 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
         var switcher = new QuickSwitcherViewModel(session, root, _announce, switcherFiles);
 
         workspace.FileOpened += Workspace_FileOpened;
+        workspace.EditorTagActivated += Workspace_EditorTagActivated;
         workspace.FocusBoundaryRequested += Workspace_FocusBoundaryRequested;
         sidebar.OpenTargetRequested += FileSidebar_OpenTargetRequested;
         switcher.OpenRequested += QuickSwitcher_OpenRequested;
@@ -800,6 +807,9 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
     {
         QuickSwitcher?.RecordOpen(path);
     }
+
+    private void Workspace_EditorTagActivated(object? sender, string tag) =>
+        FileSidebar?.ActivateTag(tag);
 
     private void Workspace_FocusBoundaryRequested(
         object? sender,

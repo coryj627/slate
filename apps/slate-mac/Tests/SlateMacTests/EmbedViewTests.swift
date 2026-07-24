@@ -35,6 +35,7 @@ final class EmbedViewTests: XCTestCase {
         let nested = NestedEmbed(
             rawTarget: "beta",
             byteOffsetInParent: 6,
+            byteEndInParent: 15,
             resolution: EmbedResolution.unresolved(
                 reason: .targetNotFound(target: "beta")
             )
@@ -59,11 +60,13 @@ final class EmbedViewTests: XCTestCase {
         let a = NestedEmbed(
             rawTarget: "two",
             byteOffsetInParent: 13,
+            byteEndInParent: 21,
             resolution: .unresolved(reason: .targetNotFound(target: "two"))
         )
         let b = NestedEmbed(
             rawTarget: "one",
             byteOffsetInParent: 2,
+            byteEndInParent: 10,
             resolution: .unresolved(reason: .targetNotFound(target: "one"))
         )
         let segments = splice(text: text, nested: [a, b])
@@ -83,6 +86,7 @@ final class EmbedViewTests: XCTestCase {
         let bad = NestedEmbed(
             rawTarget: "x",
             byteOffsetInParent: 100,
+            byteEndInParent: 101,
             resolution: .unresolved(reason: .targetNotFound(target: "x"))
         )
         let segments = splice(text: text, nested: [bad])

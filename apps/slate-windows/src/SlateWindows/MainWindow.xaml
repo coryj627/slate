@@ -42,6 +42,7 @@
         <KeyBinding Key="OemPlus" Modifiers="Control+Alt" Command="{Binding Workspace.GrowPaneCommand}" />
         <KeyBinding Key="OemMinus" Modifiers="Control+Alt" Command="{Binding Workspace.ShrinkPaneCommand}" />
         <KeyBinding Key="I" Modifiers="Control+Alt" Command="{Binding Workspace.ToggleRightPaneCommand}" />
+        <KeyBinding Key="Escape" Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ClosePopoverCommand}" />
     </Window.InputBindings>
 
     <DockPanel>
@@ -95,6 +96,33 @@
                 <MenuItem Header="_Shrink Pane" InputGestureText="Ctrl+Alt+-" Command="{Binding Workspace.ShrinkPaneCommand}" />
                 <Separator />
                 <MenuItem Header="Toggle Right _Pane" InputGestureText="Ctrl+Alt+I" Command="{Binding Workspace.ToggleRightPaneCommand}" />
+            </MenuItem>
+            <MenuItem Header="_Editor"
+                      AutomationProperties.AutomationId="EditorMenu">
+                <MenuItem Header="_Activate at Cursor"
+                          AutomationProperties.AutomationId="EditorActivateMenuItem"
+                          InputGestureText="Ctrl+Enter"
+                          Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.ActivateAtCaretCommand}" />
+                <MenuItem Header="Preview _Embed"
+                          AutomationProperties.AutomationId="EditorPreviewEmbedMenuItem"
+                          InputGestureText="Ctrl+E"
+                          Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.PreviewEmbedCommand}" />
+                <Separator />
+                <MenuItem Header="Check _Spelling While Typing"
+                          AutomationProperties.AutomationId="EditorToggleSpellCheckMenuItem"
+                          IsCheckable="True"
+                          IsChecked="{Binding Workspace.EditorPreferences.IsSpellCheckEnabled, Mode=OneWay}"
+                          Command="{Binding Workspace.EditorPreferences.ToggleSpellCheckCommand}" />
+                <Separator />
+                <MenuItem Header="Zoom _In"
+                          AutomationProperties.AutomationId="EditorZoomInMenuItem"
+                          Command="{Binding Workspace.EditorPreferences.ZoomInCommand}" />
+                <MenuItem Header="Zoom _Out"
+                          AutomationProperties.AutomationId="EditorZoomOutMenuItem"
+                          Command="{Binding Workspace.EditorPreferences.ZoomOutCommand}" />
+                <MenuItem Header="_Actual Size"
+                          AutomationProperties.AutomationId="EditorActualSizeMenuItem"
+                          Command="{Binding Workspace.EditorPreferences.ActualSizeCommand}" />
             </MenuItem>
             <MenuItem Header="_Files">
                 <MenuItem Header="_Open" Command="{Binding FileSidebar.OpenCurrentCommand}" />

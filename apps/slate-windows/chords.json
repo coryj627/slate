@@ -84,12 +84,36 @@
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#GroupedTwoDeltaMove_RemainsOneUndoRedoUnitInEveryPane",
           "apps/slate-windows/tests/SlateWindows.Tests/Censuses/AvalonDocumentBufferCensus.cs#OffsetMapperMatchesGeneratedUnicodeAndFixtureCorpusAtEveryBoundary"
         ]
+      },
+      "editorSpans": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/EditorHighlighting.cs#AvalonCanonicalSpanColorizer",
+          "apps/slate-windows/src/SlateWindows/AvalonDocumentBufferSession.cs#LatestHighlightWindow"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/Censuses/CanonicalHighlightCensus.cs#CoordinatorRetainsSameWindowItGivesTheColorizerAndInvalidatesOnEdit"
+        ]
+      },
+      "editorInteractions": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/EditorInteractions.cs#EditorInteractionCoordinator",
+          "apps/slate-windows/src/SlateWindows/SlateTextEditor.cs#OnPreviewMouseLeftButtonDown",
+          "apps/slate-windows/src/SlateWindows/WorkspaceTemplates.xaml#EditorInteractionPopover"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/W2EditorInteractionTests.cs#CoreBackedActions_CoverLinksTagsCitationsEmbedsTasksAndProtectedRegions",
+          "apps/slate-windows/tests/SlateWindows.AccessibilityTests/ShellAccessibilityTests.cs#EditorInteractionPopover"
+        ]
       }
     },
     "commands": {
       "slate.file.cancelImport": "sidebar",
       "slate.file.importFilesAndFolders": "sidebar",
       "slate.editor.save": "editorHost",
+      "slate.editor.actualSize": "editorInteractions",
+      "slate.editor.toggleSpellCheck": "editorInteractions",
+      "slate.editor.zoomIn": "editorInteractions",
+      "slate.editor.zoomOut": "editorInteractions",
       "slate.sidebar.addShortcut": "sidebar",
       "slate.sidebar.addTag": "sidebar",
       "slate.sidebar.clearRecents": "sidebar",
@@ -154,7 +178,9 @@
       "#721": "sidebar",
       "#722": "workspace",
       "#723": "quickSwitcher",
-      "#724": "editorHost"
+      "#724": "editorHost",
+      "#381": "editorSpans",
+      "#725": "editorInteractions"
     }
   }
 }

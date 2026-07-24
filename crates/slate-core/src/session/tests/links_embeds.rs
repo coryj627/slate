@@ -111,12 +111,9 @@ fn wikilink_for_path_refuses_stale_row_replaced_by_symlink() {
 
 #[test]
 fn outgoing_links_returns_mixed_kinds_in_document_order() {
+    let source = "see [[Alpha]] and [md](beta.md) and [ext](https://example.com)";
     let (_tmp, session) = make_vault(|p| {
-        p.write_file(
-            "notes/source.md",
-            b"see [[Alpha]] and [md](beta.md) and [ext](https://example.com)",
-        )
-        .unwrap();
+        p.write_file("notes/source.md", source.as_bytes()).unwrap();
         p.write_file("notes/Alpha.md", b"# Alpha").unwrap();
         p.write_file("notes/beta.md", b"# Beta").unwrap();
     });
@@ -124,6 +121,16 @@ fn outgoing_links_returns_mixed_kinds_in_document_order() {
 
     let outgoing = session.outgoing_links("notes/source.md").unwrap();
     assert_eq!(outgoing.len(), 3, "got {:?}", outgoing);
+    for (link, authored) in
+        outgoing
+            .iter()
+            .zip(["[[Alpha]]", "[md](beta.md)", "[ext](https://example.com)"])
+    {
+        assert_eq!(
+            &source[link.span_start as usize..link.span_end as usize],
+            authored
+        );
+    }
 
     // Wikilink → resolved.
     assert_eq!(outgoing[0].target_path.as_deref(), Some("notes/Alpha.md"));
@@ -856,5 +863,210 @@ fn nested_embed_byte_offset_lands_inside_parent_text() {
         "nested byte offset {} must be < parent text len {}",
         b_entry.byte_offset_in_parent,
         text.len()
+    );
+    assert_eq!(
+        &text[b_entry.byte_offset_in_parent as usize..b_entry.byte_end_in_parent as usize],
+        "![[b]]"
+    );
+}
+
+fn resolved_text_bytes(resolution: &crate::EmbedResolution) -> usize {
+    match resolution {
+        crate::EmbedResolution::FullNote { text, nested, .. }
+        | crate::EmbedResolution::Section { text, nested, .. } => {
+            text.len()
+                + nested
+                    .iter()
+                    .map(|item| resolved_text_bytes(&item.resolution))
+                    .sum::<usize>()
+        }
+        crate::EmbedResolution::Block { text, .. } => text.len(),
+        crate::EmbedResolution::Image { .. } | crate::EmbedResolution::Unresolved { .. } => 0,
+    }
+}
+
+fn resolved_image_bytes(resolution: &crate::EmbedResolution) -> usize {
+    match resolution {
+        crate::EmbedResolution::FullNote { nested, .. }
+        | crate::EmbedResolution::Section { nested, .. } => nested
+            .iter()
+            .map(|item| resolved_image_bytes(&item.resolution))
+            .sum(),
+        crate::EmbedResolution::Image { bytes, .. } => bytes.len(),
+        crate::EmbedResolution::Block { .. } | crate::EmbedResolution::Unresolved { .. } => 0,
+    }
+}
+
+#[test]
+fn preview_text_budget_preserves_utf8_boundaries_and_full_resolver_is_lossless() {
+    let prefix = "a".repeat(crate::MAX_EMBED_PREVIEW_TEXT_BYTES - 1);
+    let target = format!("{prefix}😀tail");
+    let expected = target.clone();
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("host.md", b"![[target]]").unwrap();
+        provider.write_file("target.md", target.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let preview = session
+        .resolve_embed_preview("host.md", "target", None)
+        .unwrap();
+    assert!(preview.truncated);
+    match preview.resolution {
+        crate::EmbedResolution::FullNote { text, .. } => assert_eq!(text, prefix),
+        other => panic!("expected bounded FullNote, got {other:?}"),
+    }
+    match session.resolve_embed("host.md", "target", None).unwrap() {
+        crate::EmbedResolution::FullNote { text, .. } => assert_eq!(text, expected),
+        other => panic!("expected lossless FullNote, got {other:?}"),
+    }
+}
+
+#[test]
+fn preview_node_budget_is_cumulative_across_wide_nested_graph() {
+    let root = "![[leaf]]\n".repeat(crate::MAX_EMBED_PREVIEW_NODES + 12);
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("host.md", b"![[root]]").unwrap();
+        provider.write_file("root.md", root.as_bytes()).unwrap();
+        provider.write_file("leaf.md", b"x").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let preview = session
+        .resolve_embed_preview("host.md", "root", None)
+        .unwrap();
+    assert!(preview.truncated);
+    match preview.resolution {
+        crate::EmbedResolution::FullNote { nested, .. } => {
+            assert_eq!(nested.len(), crate::MAX_EMBED_PREVIEW_NODES);
+        }
+        other => panic!("expected FullNote, got {other:?}"),
+    }
+}
+
+#[test]
+fn preview_text_budget_is_cumulative_across_nested_siblings() {
+    let one = "1".repeat(40 * 1024);
+    let two = "2".repeat(40 * 1024);
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("host.md", b"![[root]]").unwrap();
+        provider
+            .write_file("root.md", b"![[one]]\n![[two]]\n")
+            .unwrap();
+        provider.write_file("one.md", one.as_bytes()).unwrap();
+        provider.write_file("two.md", two.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let preview = session
+        .resolve_embed_preview("host.md", "root", None)
+        .unwrap();
+    assert!(preview.truncated);
+    assert!(resolved_text_bytes(&preview.resolution) <= crate::MAX_EMBED_PREVIEW_TEXT_BYTES);
+
+    let full = session.resolve_embed("host.md", "root", None).unwrap();
+    assert!(resolved_text_bytes(&full) > crate::MAX_EMBED_PREVIEW_TEXT_BYTES);
+}
+
+#[test]
+fn preview_image_budget_is_cumulative_across_nested_siblings() {
+    let image = vec![0x42; 5 * 1024 * 1024];
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("host.md", b"![[root]]").unwrap();
+        provider
+            .write_file("root.md", b"![[one.png]]\n![[two.png]]\n")
+            .unwrap();
+        provider.write_file("one.png", &image).unwrap();
+        provider.write_file("two.png", &image).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let preview = session
+        .resolve_embed_preview("host.md", "root", None)
+        .unwrap();
+    assert!(preview.truncated);
+    assert!(
+        resolved_image_bytes(&preview.resolution) <= crate::MAX_EMBED_PREVIEW_IMAGE_BYTES as usize
+    );
+
+    let full = session.resolve_embed("host.md", "root", None).unwrap();
+    assert_eq!(resolved_image_bytes(&full), image.len() * 2);
+}
+
+#[test]
+fn preview_resolves_late_heading_without_materializing_its_prefix() {
+    let prefix = format!("{}\n", "😀".repeat(17_000));
+    let target = format!("{prefix}# Late Héading\nsmall section\n");
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("host.md", "![[target#Late Héading]]".as_bytes())
+            .unwrap();
+        provider.write_file("target.md", target.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let preview = session
+        .resolve_embed_preview("host.md", "target#Late Héading", None)
+        .unwrap();
+    assert!(!preview.truncated);
+    match preview.resolution {
+        crate::EmbedResolution::Section { heading, text, .. } => {
+            assert_eq!(heading, "Late Héading");
+            assert_eq!(text, "# Late Héading\nsmall section\n");
+        }
+        other => panic!("expected late Section, got {other:?}"),
+    }
+}
+
+#[test]
+fn preview_resolves_late_block_without_materializing_its_prefix() {
+    let prefix = format!("{}\n\n", "界".repeat(24_000));
+    let target = format!("{prefix}late block body ^late-id\n");
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("host.md", b"![[target^late-id]]")
+            .unwrap();
+        provider.write_file("target.md", target.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let preview = session
+        .resolve_embed_preview("host.md", "target^late-id", None)
+        .unwrap();
+    assert!(!preview.truncated);
+    match preview.resolution {
+        crate::EmbedResolution::Block { block_id, text, .. } => {
+            assert_eq!(block_id, "late-id");
+            assert_eq!(text, "late block body ^late-id");
+        }
+        other => panic!("expected late Block, got {other:?}"),
+    }
+}
+
+#[test]
+fn nested_embed_spans_cover_exact_authored_aliases_unicode_and_markdown_images() {
+    let parent = "before ![[child#Héading|显示😀]] middle ![图 alt](pic.png) after\n";
+    let (_tmp, session) = make_vault(|provider| {
+        provider.write_file("host.md", b"![[parent]]").unwrap();
+        provider.write_file("parent.md", parent.as_bytes()).unwrap();
+        provider
+            .write_file("child.md", "# Héading\nbody\n".as_bytes())
+            .unwrap();
+        provider.write_file("pic.png", b"not-a-real-png").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let resolved = session.resolve_embed("host.md", "parent", None).unwrap();
+    let (text, nested) = match resolved {
+        crate::EmbedResolution::FullNote { text, nested, .. } => (text, nested),
+        other => panic!("expected FullNote, got {other:?}"),
+    };
+    let authored: Vec<&str> = nested
+        .iter()
+        .map(|item| &text[item.byte_offset_in_parent as usize..item.byte_end_in_parent as usize])
+        .collect();
+    assert_eq!(
+        authored,
+        vec!["![[child#Héading|显示😀]]", "![图 alt](pic.png)"]
     );
 }

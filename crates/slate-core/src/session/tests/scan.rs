@@ -119,6 +119,14 @@ fn migration_026_reindexes_typed_lists_when_file_mtime_is_the_epoch() {
     conn.execute("ALTER TABLE files DROP COLUMN birthtime_ms", [])
         .unwrap();
     conn.execute("DROP TABLE IF EXISTS file_meta", []).unwrap();
+    conn.execute("DROP INDEX IF EXISTS idx_dirs_parent_tree", [])
+        .unwrap();
+    conn.execute("DROP INDEX IF EXISTS idx_files_parent_tree", [])
+        .unwrap();
+    conn.execute("ALTER TABLE tasks DROP COLUMN checkbox_start_byte", [])
+        .unwrap();
+    conn.execute("ALTER TABLE tasks DROP COLUMN checkbox_end_byte", [])
+        .unwrap();
     let version: i64 = conn
         .query_row("SELECT MAX(version) FROM schema_version", [], |row| {
             row.get(0)

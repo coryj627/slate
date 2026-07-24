@@ -64,6 +64,20 @@ pub struct DocBufferState {
     comment_index: Arc<CommentIndex>,
 }
 
+/// Rope-only immutable snapshot for whole-document interaction analysis.
+/// It deliberately excludes the incrementally maintained structure/comment
+/// Arcs so a retained background parse cannot make the next edit copy them.
+#[derive(Debug, Clone)]
+pub struct InteractionMathSnapshot {
+    buffer: TextBuffer,
+}
+
+impl InteractionMathSnapshot {
+    pub fn display_math_ranges(&self) -> Vec<std::ops::Range<usize>> {
+        crate::math::interaction_display_math_ranges(&self.buffer.to_string())
+    }
+}
+
 impl DocBufferState {
     /// Build from the full document text (initial load).
     pub fn new(text: &str) -> Self {
@@ -135,6 +149,20 @@ impl DocBufferState {
     /// the UTF-16 offsets its text view uses.
     pub fn byte_to_utf16(&self, byte: usize) -> usize {
         self.buffer.byte_to_utf16(byte)
+    }
+
+    /// Convert a UTF-16 offset to a whole-document UTF-8 byte offset on
+    /// the live rope without materialising a contiguous text snapshot.
+    pub fn utf16_to_byte(&self, utf16: usize) -> usize {
+        self.buffer.utf16_to_byte(utf16)
+    }
+
+    /// Capture only the shared rope under the caller's short synchronization
+    /// gate; full materialization and parsing happen later on a worker.
+    pub fn interaction_math_snapshot(&self) -> InteractionMathSnapshot {
+        InteractionMathSnapshot {
+            buffer: self.buffer.clone(),
+        }
     }
 
     /// Apply one edit delta expressed in UTF-16, matching AppKit's
@@ -425,6 +453,34 @@ mod tests {
         assert_ne!(left.content_hash(), right.content_hash());
     }
 
+    #[test]
+    fn stateful_utf16_to_byte_handles_surrogate_pairs_without_snapshotting() {
+        let buffer = DocBufferState::new("a😀éz");
+        assert_eq!(buffer.utf16_to_byte(0), 0);
+        assert_eq!(buffer.utf16_to_byte(1), 1);
+        assert_eq!(buffer.utf16_to_byte(3), 5);
+        assert_eq!(buffer.utf16_to_byte(4), 7);
+        assert_eq!(buffer.utf16_to_byte(5), 8);
+    }
+
+    #[test]
+    fn retained_math_snapshot_does_not_share_structure_indexes_with_live_edits() {
+        let source = "$$x$$ ".repeat((8 * 1024 * 1024) / 6);
+        let mut live = DocBufferState::new(&source);
+        let snapshot = live.interaction_math_snapshot();
+        let structure_before = Arc::as_ptr(&live.structure);
+        let body_structure_before = Arc::as_ptr(&live.body_structure);
+        live.apply_edit(0, 0, "z");
+
+        assert_eq!(Arc::as_ptr(&live.structure), structure_before);
+        assert_eq!(Arc::as_ptr(&live.body_structure), body_structure_before);
+        assert!(snapshot.display_math_ranges().len() == 1);
+        assert!(
+            live.interaction_math_snapshot()
+                .display_math_ranges()
+                .is_empty()
+        );
+    }
     #[test]
     fn cloned_snapshot_is_isolated_from_in_place_structure_updates() {
         let original =

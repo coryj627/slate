@@ -204,6 +204,20 @@ pub fn extract_headings(source: String) -> Vec<Heading> {
         .collect()
 }
 
+/// Resolve one heading/block link anchor against the exact opened source.
+#[uniffi::export]
+pub fn link_anchor_byte_offset(
+    source: String,
+    anchor_kind: String,
+    anchor_text: String,
+) -> Option<u32> {
+    let anchor = match anchor_kind.as_str() {
+        "heading" => core::LinkAnchor::Heading(anchor_text),
+        "block" => core::LinkAnchor::Block(anchor_text),
+        _ => return None,
+    };
+    core::resolve_link_anchor_byte_offset(&source, &anchor)
+}
 /// Parse one canonical frontmatter source string into the same property wire
 /// records returned by indexed metadata queries. This is intentionally pure:
 /// callers that have just read `NoteParts` can refresh conflict UI from those
@@ -1205,6 +1219,11 @@ impl VaultSession {
         self.inner.graph_generation()
     }
 
+    /// Cheap discriminator for interaction caches backed by indexed content.
+    pub fn interaction_generation(&self) -> u64 {
+        self.inner.interaction_generation()
+    }
+
     /// Snapshot the current graph under `filter` and seed a
     /// [`LayoutSession`] (#558). The session keeps the force-directed
     /// layout state pointer-side; only flat position buffers cross the
@@ -1452,6 +1471,18 @@ impl VaultSession {
         Ok(resolution.into())
     }
 
+    /// Resolve a transient editor preview under core-owned cumulative bounds.
+    pub fn resolve_embed_preview(
+        &self,
+        host_path: String,
+        target: String,
+        alt: Option<String>,
+    ) -> Result<EmbedPreviewResolution, VaultError> {
+        Ok(self
+            .inner
+            .resolve_embed_preview(&host_path, &target, alt)?
+            .into())
+    }
     /// Read a binary attachment from the vault. Used by the read-
     /// pane image preview + future "open original" / copy flows.
     /// Returns the raw bytes alongside an inferred MIME type.
@@ -2600,6 +2631,9 @@ pub struct OutgoingLink {
     pub is_unresolved: bool,
     pub snippet: String,
     pub ordinal: u32,
+    /// Exact authored source range in whole-file UTF-8 bytes.
+    pub span_start: u32,
+    pub span_end: u32,
     /// Authored display text (`![alt](src)` → the alt; `[[t|d]]` → d).
     pub display_text: Option<String>,
 }
@@ -2618,6 +2652,8 @@ impl From<core::OutgoingLink> for OutgoingLink {
             is_unresolved: l.is_unresolved,
             snippet: l.snippet,
             ordinal: l.ordinal,
+            span_start: l.span_start,
+            span_end: l.span_end,
             display_text: l.display_text,
         }
     }
@@ -3649,6 +3685,22 @@ impl From<core::AttachmentBytes> for AttachmentBytes {
     }
 }
 
+/// One core-bounded editor preview. `truncated` covers text, nested-node,
+/// and cumulative image-byte limits reached anywhere in the tree.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct EmbedPreviewResolution {
+    pub resolution: EmbedResolution,
+    pub truncated: bool,
+}
+
+impl From<core::EmbedPreviewResolution> for EmbedPreviewResolution {
+    fn from(preview: core::EmbedPreviewResolution) -> Self {
+        Self {
+            resolution: preview.resolution.into(),
+            truncated: preview.truncated,
+        }
+    }
+}
 /// FFI mirror of `slate_core::EmbedResolution`. Variants carry the
 /// same data the resolver produces — including the pre-resolved
 /// `nested` tree on `FullNote` / `Section` so the UI never needs
@@ -3737,6 +3789,7 @@ impl From<core::EmbedResolution> for EmbedResolution {
 pub struct NestedEmbed {
     pub raw_target: String,
     pub byte_offset_in_parent: u32,
+    pub byte_end_in_parent: u32,
     pub resolution: EmbedResolution,
 }
 
@@ -3745,6 +3798,7 @@ impl From<core::NestedEmbed> for NestedEmbed {
         Self {
             raw_target: n.raw_target,
             byte_offset_in_parent: n.byte_offset_in_parent,
+            byte_end_in_parent: n.byte_end_in_parent,
             resolution: n.resolution.into(),
         }
     }
@@ -4228,6 +4282,9 @@ pub struct TaskItem {
     pub line: u32,
     /// Byte offset of the task's line start.
     pub byte_offset: u32,
+    /// Exact `[<status>]` action range in whole-source UTF-8 bytes.
+    pub checkbox_start_byte: u32,
+    pub checkbox_end_byte: u32,
 }
 
 impl From<core::TaskItem> for TaskItem {
@@ -4243,6 +4300,8 @@ impl From<core::TaskItem> for TaskItem {
             recurrence: t.recurrence,
             line: t.line,
             byte_offset: t.byte_offset,
+            checkbox_start_byte: t.checkbox_start_byte,
+            checkbox_end_byte: t.checkbox_end_byte,
         }
     }
 }
@@ -4823,6 +4882,11 @@ pub fn editor_text_content_hash(text: String) -> String {
 /// `highlight_in_range` clones the rope (O(1) — `ropey` shares chunks via
 /// `Arc`) under a short lock, then parses the snapshot lock-free, preserving
 /// the editor's immutable-snapshot semantics.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct EditorInteractionRange {
+    pub start_byte: u32,
+    pub end_byte: u32,
+}
 #[derive(uniffi::Object)]
 pub struct DocumentBuffer {
     inner: std::sync::Mutex<core::doc_buffer::DocBufferState>,
@@ -4885,6 +4949,26 @@ impl DocumentBuffer {
     /// live rope (O(log n)) — the host maps an `applied_range` back to UTF-16.
     pub fn byte_to_utf16(&self, byte: u32) -> u32 {
         self.inner.lock().unwrap().byte_to_utf16(byte as usize) as u32
+    }
+
+    /// Convert a UTF-16 offset to a whole-document UTF-8 byte offset on the
+    /// live rope (O(log n)), without copying the document into a String.
+    pub fn utf16_to_byte(&self, utf16: u32) -> u32 {
+        self.inner.lock().unwrap().utf16_to_byte(utf16 as usize) as u32
+    }
+    /// Whole-document display-math ranges for discrete editor interactions.
+    /// The O(1) rope snapshot happens under the mutex; materialization and
+    /// parsing happen after releasing it so edits never wait on a full parse.
+    pub fn editor_interaction_math_ranges(&self) -> Vec<EditorInteractionRange> {
+        let snapshot = self.inner.lock().unwrap().interaction_math_snapshot();
+        snapshot
+            .display_math_ranges()
+            .into_iter()
+            .map(|range| EditorInteractionRange {
+                start_byte: range.start as u32,
+                end_byte: range.end as u32,
+            })
+            .collect()
     }
 
     /// Windowed highlight around a dirty range (UTF-16 in). Snapshots the rope
@@ -9969,7 +10053,15 @@ mod tests {
         let tasks = session.tasks_for_file("n.md".into()).unwrap();
         assert_eq!(tasks.len(), 2);
         assert_eq!(tasks[0].status_char, " ");
+        assert_eq!(
+            (tasks[0].checkbox_start_byte, tasks[0].checkbox_end_byte),
+            (2, 5)
+        );
         assert_eq!(tasks[1].status_char, "x");
+        assert_eq!(
+            (tasks[1].checkbox_start_byte, tasks[1].checkbox_end_byte),
+            (13, 16)
+        );
         assert!(tasks[1].completed);
         assert!(tasks[1].due_ms.is_some());
     }

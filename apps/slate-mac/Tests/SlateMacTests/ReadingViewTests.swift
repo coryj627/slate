@@ -540,22 +540,22 @@ final class ReadingViewTests: XCTestCase {
                 targetPath: "n.md", targetRaw: "n", targetAnchor: nil,
                 kind: "wikilink", isEmbed: false, isExternal: false,
                 isUnresolved: false, snippet: "", ordinal: 0,
-                displayText: nil),
+                spanStart: 0, spanEnd: 0, displayText: nil),
             OutgoingLink(
                 targetPath: nil, targetRaw: "m.md", targetAnchor: nil,
                 kind: "markdown", isEmbed: false, isExternal: false,
                 isUnresolved: true, snippet: "", ordinal: 1,
-                displayText: nil),
+                spanStart: 0, spanEnd: 0, displayText: nil),
             OutgoingLink(
                 targetPath: nil, targetRaw: "e", targetAnchor: nil,
                 kind: "wikilink", isEmbed: true, isExternal: false,
                 isUnresolved: false, snippet: "", ordinal: 2,
-                displayText: nil),
+                spanStart: 0, spanEnd: 0, displayText: nil),
             OutgoingLink(
                 targetPath: nil, targetRaw: "https://x", targetAnchor: nil,
                 kind: "markdown", isEmbed: false, isExternal: true,
                 isUnresolved: false, snippet: "", ordinal: 3,
-                displayText: nil),
+                spanStart: 0, spanEnd: 0, displayText: nil),
         ]
         let sets = ReadingLinkRouter.LinkRecordSets(records: records)
         XCTAssertEqual(sets.knownWikilink, ["n"])

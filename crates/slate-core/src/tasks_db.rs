@@ -51,8 +51,9 @@ pub(crate) fn replace_tasks_for_file(
     let mut stmt = tx.prepare_cached(
         "INSERT INTO tasks (
             file_id, ordinal, text, status_char, completed,
-            due_ms, scheduled_ms, priority, recurrence, line, byte_offset
-        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            due_ms, scheduled_ms, priority, recurrence, line, byte_offset,
+            checkbox_start_byte, checkbox_end_byte
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
     )?;
     for task in tasks {
         stmt.execute(params![
@@ -67,6 +68,8 @@ pub(crate) fn replace_tasks_for_file(
             task.recurrence,
             task.line as i64,
             task.byte_offset as i64,
+            task.checkbox_start_byte as i64,
+            task.checkbox_end_byte as i64,
         ])?;
     }
     Ok(())
@@ -87,7 +90,8 @@ pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskIt
     };
     let mut stmt = conn.prepare_cached(
         "SELECT ordinal, text, status_char, completed,
-                due_ms, scheduled_ms, priority, recurrence, line, byte_offset
+                due_ms, scheduled_ms, priority, recurrence, line, byte_offset,
+                checkbox_start_byte, checkbox_end_byte
          FROM tasks WHERE file_id = ?1
          ORDER BY ordinal ASC",
     )?;
@@ -209,7 +213,7 @@ pub(crate) fn tasks_in_vault(
         "SELECT f.path, f.name,
                 t.ordinal, t.text, t.status_char, t.completed,
                 t.due_ms, t.scheduled_ms, t.priority, t.recurrence,
-                t.line, t.byte_offset,
+                t.line, t.byte_offset, t.checkbox_start_byte, t.checkbox_end_byte,
                 (SELECT COUNT(*) FROM tasks t JOIN files f ON f.id = t.file_id {count_where}) AS total_filtered
          FROM tasks t
          JOIN files f ON f.id = t.file_id
@@ -272,8 +276,10 @@ pub(crate) fn tasks_in_vault(
                 recurrence: row.get(9)?,
                 line: row.get::<_, i64>(10)? as u32,
                 byte_offset: row.get::<_, i64>(11)? as u32,
+                checkbox_start_byte: row.get::<_, i64>(12)? as u32,
+                checkbox_end_byte: row.get::<_, i64>(13)? as u32,
             };
-            let count: i64 = row.get(12)?;
+            let count: i64 = row.get(14)?;
             total_filtered = count as u64;
             Ok(TaskWithLocation {
                 task: item,
@@ -366,6 +372,8 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<TaskItem> {
         recurrence: row.get(7)?,
         line: row.get::<_, i64>(8)? as u32,
         byte_offset: row.get::<_, i64>(9)? as u32,
+        checkbox_start_byte: row.get::<_, i64>(10)? as u32,
+        checkbox_end_byte: row.get::<_, i64>(11)? as u32,
     })
 }
 

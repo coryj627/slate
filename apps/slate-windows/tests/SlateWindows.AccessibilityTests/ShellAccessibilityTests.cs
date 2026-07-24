@@ -96,7 +96,7 @@ public sealed class ShellAccessibilityTests
         Directory.CreateDirectory(vaultRoot);
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"),
-            "---\ntags:\n  - accessibility\n---\n# Accessible note\n");
+            "![[Folder/child]]\n\n---\ntags:\n  - accessibility\n---\n# Accessible note\n");
         Directory.CreateDirectory(Path.Combine(vaultRoot, "Folder"));
         File.WriteAllText(Path.Combine(vaultRoot, "Folder", "child.md"), "# Child note\n");
 
@@ -263,7 +263,7 @@ public sealed class ShellAccessibilityTests
                 ?? throw new Xunit.Sdk.XunitException("The note TreeItem is absent.");
             Assert.True(noteItem.Patterns.SelectionItem.IsSupported);
             noteItem.Patterns.SelectionItem.Pattern.Select();
-            AutomationElement editor = WaitForNamedElement(
+            AutomationElement editor = WaitForEditor(
                 window,
                 automation,
                 "note.md editor",
@@ -273,6 +273,74 @@ public sealed class ShellAccessibilityTests
             Assert.True(editor.Properties.IsKeyboardFocusable.Value);
             editor.Focus();
             AssertEventuallyFocused(editor, "The opened note editor could not receive focus.");
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.KEY_E);
+            AutomationElement interactionPopover = WaitForElement(
+                window,
+                "EditorInteractionPopover",
+                TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => interactionPopover.Name.StartsWith(
+                        "Embed preview for",
+                        StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                $"Embed preview did not finish loading: {interactionPopover.Name}");
+            Assert.True(interactionPopover.Properties.IsDialog.Value);
+            AutomationElement popoverClose = WaitForElement(
+                window,
+                "EditorPopoverClose",
+                TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.Button, popoverClose.ControlType);
+            Assert.True(popoverClose.Patterns.Invoke.IsSupported);
+            AssertEventuallyFocused(
+                popoverClose,
+                "The embed popover did not focus its Close button.");
+            Keyboard.Press(VirtualKeyShort.TAB);
+            AssertEventuallyFocusedWithin(
+                interactionPopover,
+                "Tab escaped the editor interaction popover.");
+            Keyboard.TypeSimultaneously(
+                VirtualKeyShort.SHIFT,
+                VirtualKeyShort.TAB);
+            AssertEventuallyFocusedWithin(
+                interactionPopover,
+                "Shift+Tab escaped the editor interaction popover.");
+            AssertAxeClean(process, "editor-embed-popover");
+            popoverClose.Patterns.Invoke.Pattern.Invoke();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "EditorInteractionPopover")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "The editor interaction popover did not close.");
+            AssertEventuallyFocused(
+                editor,
+                "Closing the embed popover did not return focus to the editor.");
+            editor.Focus();
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.HOME);
+            Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.ENTER);
+            _ = WaitForElement(window, "EditorInteractionPopover", TimeSpan.FromSeconds(10));
+            AutomationElement citationClose = WaitForElement(
+                window,
+                "EditorPopoverClose",
+                TimeSpan.FromSeconds(10));
+            AssertEventuallyFocused(
+                citationClose,
+                "The citation popover did not focus its Close button.");
+            AssertAxeClean(process, "editor-citation-popover");
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByAutomationId(
+                            "EditorInteractionPopover")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the editor interaction popover.");
+            AssertEventuallyFocused(
+                editor,
+                "Escape did not return focus from the popover to the editor.");
             Keyboard.Press(VirtualKeyShort.F2);
             AssertEventuallyFocused(
                 editor,
@@ -418,6 +486,24 @@ public sealed class ShellAccessibilityTests
                 "SplitRightMenuItem",
                 TimeSpan.FromSeconds(10));
             Assert.True(splitRight.IsEnabled);
+            foreach (string editorCommand in new[]
+            {
+                "EditorActivateMenuItem",
+                "EditorPreviewEmbedMenuItem",
+                "EditorToggleSpellCheckMenuItem",
+                "EditorZoomInMenuItem",
+                "EditorZoomOutMenuItem",
+                "EditorActualSizeMenuItem",
+            })
+            {
+                AutomationElement item = WaitForMenuItem(
+                    window,
+                    "EditorMenu",
+                    editorCommand,
+                    TimeSpan.FromSeconds(10));
+                Assert.Equal(ControlType.MenuItem, item.ControlType);
+                Assert.True(item.Patterns.Invoke.IsSupported);
+            }
             Assert.True(splitRight.Patterns.Invoke.IsSupported);
             splitRight.Patterns.Invoke.Pattern.Invoke();
             Assert.True(SpinWait.SpinUntil(
@@ -529,7 +615,7 @@ public sealed class ShellAccessibilityTests
                 "Quick Open did not refocus search on its second invocation.");
             Keyboard.Press(VirtualKeyShort.ENTER);
             AssertQuickSwitcherDisappears(window, automation);
-            editor = WaitForNamedElement(
+            editor = WaitForEditor(
                 window,
                 automation,
                 "note.md editor",
@@ -687,6 +773,19 @@ public sealed class ShellAccessibilityTests
             message);
     }
 
+
+    private static void AssertEventuallyFocusedWithin(
+        AutomationElement root,
+        string message)
+    {
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => root.Properties.HasKeyboardFocus.Value
+                    || root.FindAllDescendants().Any(
+                        element => element.Properties.HasKeyboardFocus.Value),
+                TimeSpan.FromSeconds(10)),
+            message);
+    }
 
     private static void AssertActionButtonCensus(
         AutomationElement expander,
@@ -849,6 +948,33 @@ public sealed class ShellAccessibilityTests
                 },
                 timeout),
             $"The UIA element named '{name}' did not appear.");
+        return element!;
+    }
+
+    private static AutomationElement WaitForEditor(
+        AutomationElement root,
+        UIA3Automation automation,
+        string name,
+        TimeSpan timeout)
+    {
+        AutomationElement? element = null;
+        string[] observedNames = [];
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    AutomationElement[] candidates = root.FindAllDescendants(
+                        automation.ConditionFactory.ByAutomationId("MarkdownEditor"));
+                    observedNames = candidates
+                        .Select(candidate => candidate.Name)
+                        .ToArray();
+                    element = candidates.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Name, name, StringComparison.Ordinal));
+                    return element is not null;
+                },
+                timeout),
+            $"The editor named '{name}' did not appear. " +
+            $"Observed MarkdownEditor names: [{string.Join(", ", observedNames)}].");
         return element!;
     }
 

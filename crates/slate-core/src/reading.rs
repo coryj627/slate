@@ -408,6 +408,60 @@ enum Container {
     Quote,
 }
 
+/// Context needed to recognize editor-suppressing display math in one
+/// CommonMark pass.
+pub(crate) struct EditorDisplayMathContext {
+    pub openers: Vec<usize>,
+    pub code_ranges: Vec<std::ops::Range<usize>>,
+}
+
+/// Exact trim-start `$$` offsets for top-level paragraphs, plus every code
+/// range in which the delimiter scanner must remain inert.
+///
+/// This is the reading-view half of the editor interaction math guard: the
+/// stateful document buffer combines these context-qualified openers with the
+/// canonical math scanner's delimiter extent. Keeping the qualification here
+/// prevents mid-line, list, blockquote, table, and code occurrences from being
+/// promoted to interactive display-math regions.
+pub(crate) fn editor_display_math_context(source: &str) -> EditorDisplayMathContext {
+    let mut stack: Vec<Container> = Vec::new();
+    let mut openers = Vec::new();
+    let mut code_ranges = Vec::new();
+    for (event, range) in Parser::new_ext(source, READING_PARSE_OPTIONS).into_offset_iter() {
+        match event {
+            Event::Code(_) | Event::Start(Tag::CodeBlock(_)) => {
+                code_ranges.push(range);
+            }
+            Event::Start(Tag::List(first_number)) => {
+                stack.push(Container::List {
+                    ordered: first_number.is_some(),
+                });
+            }
+            Event::Start(Tag::Item) => stack.push(Container::Item),
+            Event::Start(Tag::BlockQuote(_)) => stack.push(Container::Quote),
+            Event::Start(Tag::Paragraph)
+                if !inside_item(&stack)
+                    && quote_depth(&stack).is_none()
+                    && source[range.clone()].trim_start().starts_with("$$") =>
+            {
+                let paragraph = &source[range.clone()];
+                let leading = paragraph.len() - paragraph.trim_start().len();
+                openers.push(range.start + leading);
+            }
+            Event::End(TagEnd::List(_))
+            | Event::End(TagEnd::Item)
+            | Event::End(TagEnd::BlockQuote(_)) => {
+                stack.pop();
+            }
+            _ => {}
+        }
+    }
+    EditorDisplayMathContext {
+        openers,
+        code_ranges,
+    }
+}
+
 /// Number of `List` containers currently on the stack.
 fn list_depth(stack: &[Container]) -> usize {
     stack
