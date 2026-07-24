@@ -112,7 +112,11 @@ struct SidebarSortMenuItems: View {
 /// Targets the published selection's container and keeps the stable full
 /// inventory, disabling unavailable verbs with their one deterministic reason.
 struct SidebarSortMenu: View {
-  @EnvironmentObject private var appState: AppState
+  @ObservedObject private var appState: AppState
+
+  init(appState: AppState) {
+    self.appState = appState
+  }
 
   var body: some View {
     Menu("Sort Sidebar By") {

@@ -23,6 +23,20 @@ final class MenusObservabilityTests: XCTestCase {
     /// lifetime to the test case).
     private final class UndoTarget {}
 
+    // MARK: - Command-menu dependency injection
+
+    /// SwiftUI builds `.commands` in a menu graph that does not inherit
+    /// environment objects installed on a WindowGroup's root view. These
+    /// renderers must therefore require AppState at construction time instead
+    /// of trapping during applicationWillFinishLaunching when their bodies
+    /// first read an unresolved @EnvironmentObject.
+    func testCommandMenuRenderersAcceptExplicitAppState() {
+        let state = AppState()
+
+        _ = SidebarNavigationMenuItems(appState: state).body
+        _ = SidebarSortMenu(appState: state).body
+    }
+
     // MARK: - #868: the workspace → appState bridge
 
     /// The load-bearing seam: a mutation that publishes ONLY on the
