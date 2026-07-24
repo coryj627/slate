@@ -47,7 +47,11 @@ final class SlateAppDelegate: NSObject, NSApplicationDelegate {
 /// ⌘⌃[ / ⌘⌃] chords (menu-declared so they are reachable regardless of
 /// sidebar focus, matching the registry's hints).
 struct SidebarNavigationMenuItems: View {
-  @EnvironmentObject private var appState: AppState
+  @ObservedObject private var appState: AppState
+
+  init(appState: AppState) {
+    self.appState = appState
+  }
 
   private func evaluation(_ id: String) -> SidebarActionEvaluation? {
     appState.sidebarActionProjection(surface: .menuBar).first { $0.id == id }
@@ -535,13 +539,13 @@ struct SlateMacApp: App {
                 // Finder's View ▸ Sort By convention. Radio state reflects
                 // the published selection's container; every item dispatches
                 // the same catalog command the palette owns.
-                SidebarSortMenu()
+                SidebarSortMenu(appState: appState)
 
                 // FL-07 (#661): sidebar navigation's menu-bar home. The
                 // history chords' single menu owners live here (#422
                 // dead-zone rule); ⌃1–9 stay focus-scoped view chords by
                 // spec and have no menu items.
-                SidebarNavigationMenuItems()
+                SidebarNavigationMenuItems(appState: appState)
 
                 Divider()
 
