@@ -2478,8 +2478,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _hoveredCitationByteOffset = null;
         if (requestFocus)
         {
+            // Escape closes from inside WPF's input pipeline. Restore focus
+            // only after key routing and the bound overlay collapse finish.
             _dispatcher.BeginInvoke(
-                DispatcherPriority.Input,
+                DispatcherPriority.Background,
                 new Action(() =>
                 {
                     if (!_disposed

@@ -102,22 +102,31 @@ public sealed class W2EditorInteractionTests
             startInteractionBackgroundWork: false);
         EditorInteractionCoordinator interactions = Assert.IsType<EditorInteractionCoordinator>(
             tab.EditorInteractions);
+        interactions.RefreshMathRangesForTests();
         interactions.RefreshArtifactCacheForTests();
         int citation = Inside(tab.Text, "[@doe]");
         int focusRequests = 0;
         interactions.FocusRequested += (_, _) => focusRequests++;
 
         Assert.True(interactions.ActivateAt(citation));
+        Assert.True(interactions.IsPopoverOpen);
         interactions.ClosePopoverCommand.Execute(null);
 
         Assert.False(interactions.IsPopoverOpen);
         Assert.Equal(0, focusRequests);
+        int focusRequestsDuringInput = -1;
+        Dispatcher.CurrentDispatcher.BeginInvoke(
+            DispatcherPriority.Input,
+            new Action(() => focusRequestsDuringInput = focusRequests));
         DrainUi();
+        Assert.Equal(0, focusRequestsDuringInput);
         Assert.Equal(1, focusRequests);
 
         Assert.True(interactions.ActivateAt(citation));
+        Assert.True(interactions.IsPopoverOpen);
         interactions.ClosePopoverCommand.Execute(null);
         Assert.True(interactions.ActivateAt(citation));
+        Assert.True(interactions.IsPopoverOpen);
         DrainUi();
         Assert.Equal(1, focusRequests);
 
