@@ -1075,7 +1075,13 @@ public sealed class ShellAccessibilityTests
             {
                 element = window.FindFirstDescendant(
                     condition => condition.ByAutomationId(automationId));
-                return element is not null;
+                if (element is not null)
+                {
+                    return true;
+                }
+
+                Thread.Sleep(50);
+                return false;
             },
             timeout);
         return element;
@@ -1145,7 +1151,13 @@ public sealed class ShellAccessibilityTests
             {
                 element = window.FindFirstDescendant(
                     condition => condition.ByAutomationId(automationId));
-                return element is not null;
+                if (element is not null)
+                {
+                    return true;
+                }
+
+                Thread.Sleep(50);
+                return false;
             },
             timeout);
 
