@@ -2612,7 +2612,7 @@ impl From<core::DirListingPage> for DirListingPage {
 ///
 /// Kept simple (kind + text) so foreign callers don't have to model a
 /// tagged-union — the kind string is one of `"heading"` or `"block"`.
-#[derive(uniffi::Record)]
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct LinkAnchor {
     pub kind: String,
     pub text: String,
@@ -5253,6 +5253,306 @@ impl From<core::reading::ReadingTableCells> for ReadingTableCells {
 #[uniffi::export]
 pub fn reading_table_cells(source: String) -> Option<ReadingTableCells> {
     core::reading::reading_table_cells(&source).map(Into::into)
+}
+
+// ---------------------------------------------------------------------
+// Reading inline segments (#967 · specs/w3_inline_runs_spec.md)
+// ---------------------------------------------------------------------
+
+/// One inline character style on a run. Sorted + deduped by core.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ReadingInlineStyle {
+    Emphasis,
+    Strong,
+    Strikethrough,
+    InlineCode,
+}
+
+impl From<core::reading::ReadingInlineStyle> for ReadingInlineStyle {
+    fn from(s: core::reading::ReadingInlineStyle) -> Self {
+        use core::reading::ReadingInlineStyle as S;
+        match s {
+            S::Emphasis => ReadingInlineStyle::Emphasis,
+            S::Strong => ReadingInlineStyle::Strong,
+            S::Strikethrough => ReadingInlineStyle::Strikethrough,
+            S::InlineCode => ReadingInlineStyle::InlineCode,
+        }
+    }
+}
+
+/// Which authoring grammar produced a wiki-routed target — decides the
+/// anchor-cut rules [`reading_match_link`] applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ReadingWikiGrammar {
+    Wikilink,
+    MarkdownDestination,
+}
+
+impl From<core::reading::ReadingWikiGrammar> for ReadingWikiGrammar {
+    fn from(g: core::reading::ReadingWikiGrammar) -> Self {
+        match g {
+            core::reading::ReadingWikiGrammar::Wikilink => ReadingWikiGrammar::Wikilink,
+            core::reading::ReadingWikiGrammar::MarkdownDestination => {
+                ReadingWikiGrammar::MarkdownDestination
+            }
+        }
+    }
+}
+
+impl From<ReadingWikiGrammar> for core::reading::ReadingWikiGrammar {
+    fn from(g: ReadingWikiGrammar) -> Self {
+        match g {
+            ReadingWikiGrammar::Wikilink => core::reading::ReadingWikiGrammar::Wikilink,
+            ReadingWikiGrammar::MarkdownDestination => {
+                core::reading::ReadingWikiGrammar::MarkdownDestination
+            }
+        }
+    }
+}
+
+/// What one run IS — the affordance the host wires to it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum ReadingInlineRunKind {
+    /// Plain prose — also the label of a never-activatable destination
+    /// (`file:`/`javascript:`/unknown schemes, `//host`, `#anchor`),
+    /// which must render with no affordance rather than dead-click.
+    Text,
+    ExternalLink {
+        url: String,
+    },
+    Wikilink {
+        target: String,
+        base_target: String,
+        anchor: Option<LinkAnchor>,
+        grammar: ReadingWikiGrammar,
+        resolved: bool,
+    },
+    Embed {
+        key: String,
+    },
+    Tag {
+        name: String,
+    },
+    Citation {
+        raw: String,
+        speech: String,
+    },
+}
+
+impl From<core::reading::ReadingInlineRunKind> for ReadingInlineRunKind {
+    fn from(k: core::reading::ReadingInlineRunKind) -> Self {
+        use core::reading::ReadingInlineRunKind as K;
+        match k {
+            K::Text => ReadingInlineRunKind::Text,
+            K::ExternalLink { url } => ReadingInlineRunKind::ExternalLink { url },
+            K::Wikilink {
+                target,
+                base_target,
+                anchor,
+                grammar,
+                resolved,
+            } => ReadingInlineRunKind::Wikilink {
+                target,
+                base_target,
+                anchor: anchor.map(link_anchor_ffi),
+                grammar: grammar.into(),
+                resolved,
+            },
+            K::Embed { key } => ReadingInlineRunKind::Embed { key },
+            K::Tag { name } => ReadingInlineRunKind::Tag { name },
+            K::Citation { raw, speech } => ReadingInlineRunKind::Citation { raw, speech },
+        }
+    }
+}
+
+/// The `(kind, text)` pair shape the rest of the FFI already carries for
+/// anchors (`OutgoingLink::target_anchor`), so hosts read one type.
+fn link_anchor_ffi(anchor: core::links::LinkAnchor) -> LinkAnchor {
+    match anchor {
+        core::links::LinkAnchor::Heading(text) => LinkAnchor {
+            kind: "heading".to_string(),
+            text,
+        },
+        core::links::LinkAnchor::Block(text) => LinkAnchor {
+            kind: "block".to_string(),
+            text,
+        },
+    }
+}
+
+/// One flat, non-overlapping run over a segment's `content`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ReadingInlineRun {
+    pub start: u32,
+    pub end: u32,
+    pub styles: Vec<ReadingInlineStyle>,
+    pub kind: ReadingInlineRunKind,
+    /// Per-range accessible text the host stamps with its own AX-text
+    /// mechanism: citation speech, or "Unresolved link". `None` means
+    /// the run's own text is its accessible text.
+    pub ax_text: Option<String>,
+}
+
+impl From<core::reading::ReadingInlineRun> for ReadingInlineRun {
+    fn from(r: core::reading::ReadingInlineRun) -> Self {
+        Self {
+            start: r.start,
+            end: r.end,
+            styles: r.styles.into_iter().map(Into::into).collect(),
+            kind: r.kind.into(),
+            ax_text: r.ax_text,
+        }
+    }
+}
+
+/// The rendered inline content of one block. `runs` partition `content`
+/// exactly — concat(run slices) == content, no gaps, no overlaps.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ReadingInlineSegment {
+    pub content: String,
+    pub runs: Vec<ReadingInlineRun>,
+    pub task_completed: Option<bool>,
+}
+
+impl From<core::reading::ReadingInlineSegment> for ReadingInlineSegment {
+    fn from(s: core::reading::ReadingInlineSegment) -> Self {
+        Self {
+            content: s.content,
+            runs: s.runs.into_iter().map(Into::into).collect(),
+            task_completed: s.task_completed,
+        }
+    }
+}
+
+/// Per-block inline result, 1:1 and same-order with `reading_blocks_source`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct ReadingBlockInlines {
+    /// Empty for kinds with no inline content (code, math, diagram,
+    /// table, HTML, thematic break); exactly one segment otherwise.
+    pub segments: Vec<ReadingInlineSegment>,
+    /// `Some(cache-key)` when the block IS one wikilink embed and
+    /// therefore expands in place as a card.
+    pub block_embed_key: Option<String>,
+    /// The authored list marker (`-`, `3.`, `12)`) for `ListItem`
+    /// blocks, verbatim — hosts render the real ordinal rather than
+    /// re-deriving (and mis-renumbering) it.
+    pub list_marker: Option<String>,
+}
+
+impl From<core::reading::ReadingBlockInlines> for ReadingBlockInlines {
+    fn from(b: core::reading::ReadingBlockInlines) -> Self {
+        Self {
+            segments: b.segments.into_iter().map(Into::into).collect(),
+            block_embed_key: b.block_embed_key,
+            list_marker: b.list_marker,
+        }
+    }
+}
+
+impl From<LinkAnchor> for (String, String) {
+    fn from(a: LinkAnchor) -> Self {
+        (a.kind, a.text)
+    }
+}
+
+impl From<OutgoingLink> for core::links_db::OutgoingLink {
+    fn from(l: OutgoingLink) -> Self {
+        Self {
+            target_path: l.target_path,
+            target_raw: l.target_raw,
+            target_anchor: l.target_anchor.map(Into::into),
+            kind: l.kind,
+            is_embed: l.is_embed,
+            is_external: l.is_external,
+            is_unresolved: l.is_unresolved,
+            snippet: l.snippet,
+            ordinal: l.ordinal,
+            span_start: l.span_start,
+            span_end: l.span_end,
+            display_text: l.display_text,
+        }
+    }
+}
+
+impl From<RenderedCitation> for core::RenderedCitation {
+    fn from(c: RenderedCitation) -> Self {
+        Self {
+            raw: c.raw,
+            visual_text: c.visual_text,
+            speech_text: c.speech_text,
+            bib_entry: c.bib_entry.map(Into::into),
+            style_id: c.style_id,
+        }
+    }
+}
+
+/// Render every block's inline content canonically — pure, no IO.
+///
+/// 1:1 and same-order with [`reading_blocks_source`], so a host zips the
+/// two. `citations` is the owning note's rendered citations (join key:
+/// `RenderedCitation::raw`); `records` is its outgoing-link records, the
+/// resolution input. An EMPTY `records` classifies every link run
+/// unresolved — the honest value while a host's link query still belongs
+/// to the previous note.
+///
+/// Hosts map runs to their native attributed-text primitive (mac
+/// `AttributedString` runs; Windows WPF `Run`/`Hyperlink` inlines) and
+/// stamp attributes. No host re-derives wikilink/embed/tag/citation
+/// semantics — that is exactly the drift pocket this API retires
+/// (program decisions 4/5).
+#[uniffi::export]
+pub fn reading_inline_segments_source(
+    source: String,
+    citations: Vec<RenderedCitation>,
+    records: Vec<OutgoingLink>,
+) -> Vec<ReadingBlockInlines> {
+    let citations: Vec<core::RenderedCitation> = citations.into_iter().map(Into::into).collect();
+    let records: Vec<core::links_db::OutgoingLink> = records.into_iter().map(Into::into).collect();
+    core::reading::reading_inline_segments_source(&source, &citations, &records)
+        .into_iter()
+        .map(Into::into)
+        .collect()
+}
+
+/// `Some(cache-key)` iff `slice` IS a single wikilink embed — the
+/// slice-level detector for callers that already know the block is a
+/// Paragraph and only need detection, without paying for a whole
+/// document's inline segments. Scope pinned as shipped (#511): wikilink
+/// embeds only; Markdown images never block-expand.
+#[uniffi::export]
+pub fn reading_block_embed_key(slice: String) -> Option<String> {
+    core::reading::reading_block_embed_key(&slice)
+}
+
+/// The embed cache-key composition — `target_raw` plus the anchor marker
+/// (`^` for a block ref, `#` for a heading) plus the anchor text.
+///
+/// One home for the key hosts' embed-resolution dictionaries are keyed
+/// on, so a key composed from a link RECORD and a key composed from
+/// authored source text are byte-identical for the same embed.
+#[uniffi::export]
+pub fn reading_embed_key(target_raw: String, anchor: Option<LinkAnchor>) -> String {
+    let anchor = anchor.map(|a| match a.kind.as_str() {
+        "block" => core::links::LinkAnchor::Block(a.text),
+        _ => core::links::LinkAnchor::Heading(a.text),
+    });
+    core::reading::reading_embed_key(&target_raw, anchor.as_ref())
+}
+
+/// Index of the outgoing-link record one activation matches, or `None`.
+///
+/// The router's activation path and the render-time `resolved`
+/// classifier share this one implementation, so a run can never style as
+/// resolved and then announce "unresolved" on activation (#849).
+#[uniffi::export]
+pub fn reading_match_link(
+    target: String,
+    grammar: ReadingWikiGrammar,
+    embed: bool,
+    records: Vec<OutgoingLink>,
+) -> Option<u32> {
+    let records: Vec<core::links_db::OutgoingLink> = records.into_iter().map(Into::into).collect();
+    core::reading::reading_match_link(&target, grammar.into(), embed, &records)
 }
 
 // =====================================================================

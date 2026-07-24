@@ -67,18 +67,14 @@ struct ReadingView: View {
         var diagramBlocks: [DiagramBlock] = []
         var citations: [RenderedCitation] = []
         var tasks: [TaskItem] = []
-        /// #849: UNRESOLVED outgoing wikilink `targetRaw` values for this
-        /// note (from `appState.currentOutgoingLinks`, the same records
-        /// `OutgoingLinksPanel.isUnresolved` reads). Threaded as a pure
-        /// param into `ReadingInlineMapper` so dangling `[[links]]` render
-        /// in `warningText` before activation.
-        var unresolvedLinkTargets: Set<String> = []
-        /// Codex rounds 2–3 (#849): the note's saved link records,
-        /// kind-partitioned. `nil` = no classification available
-        /// (test/legacy callers — runs style resolved). Non-nil, a
-        /// target with NO same-grammar record styles unresolved,
-        /// because that is exactly what activation announces for it.
-        var linkRecordSets: ReadingLinkRouter.LinkRecordSets? = nil
+        /// The note's saved outgoing-link records — the resolution input
+        /// core's inline pipeline classifies `resolved` against (#967,
+        /// replacing the Swift-side `unresolvedLinkTargets` +
+        /// `LinkRecordSets` pair). The EMPTY value is the honest
+        /// mid-transition classification: every run unresolved, exactly
+        /// what activation announces then (the live router gates on the
+        /// same ownership predicate).
+        var records: [OutgoingLink] = []
         /// Mirrors `AppState.hasUnsavedChanges` — task toggles are disabled
         /// while true (same rule + explanation as `TasksPanel`: the toggle's
         /// post-save reload would overwrite the dirty buffer).
@@ -133,8 +129,7 @@ struct ReadingView: View {
             diagramBlocks: [DiagramBlock] = [],
             citations: [RenderedCitation] = [],
             tasks: [TaskItem] = [],
-            unresolvedLinkTargets: Set<String> = [],
-            linkRecordSets: ReadingLinkRouter.LinkRecordSets? = nil,
+            records: [OutgoingLink] = [],
             isDocumentDirty: Bool = false,
             taskMutationDisabledReason: String? = nil,
             onToggleTask: @escaping (TaskItem) -> Void = { _ in },
@@ -154,8 +149,7 @@ struct ReadingView: View {
             self.diagramBlocks = diagramBlocks
             self.citations = citations
             self.tasks = tasks
-            self.unresolvedLinkTargets = unresolvedLinkTargets
-            self.linkRecordSets = linkRecordSets
+            self.records = records
             self.isDocumentDirty = isDocumentDirty
             self.taskMutationDisabledReason = taskMutationDisabledReason
             self.onToggleTask = onToggleTask
@@ -252,7 +246,8 @@ struct ReadingView: View {
             } else if isLoading {
                 loadingState
             } else {
-                let parsed = parseCache.parsed(for: text)
+                let parsed = parseCache.parsed(
+                    for: text, citations: context.citations, records: context.records)
                 if parsed.blocks.isEmpty {
                     emptyState
                 } else {
@@ -323,6 +318,7 @@ struct ReadingView: View {
                 ForEach(Array(parsed.blocks.enumerated()), id: \.offset) { index, block in
                     blockView(
                         block, index: index,
+                        inline: parsed.inline(at: index),
                         lineStarts: parsed.lineStarts,
                         tableCells: parsed.tableCells[index])
                 }
@@ -372,36 +368,36 @@ struct ReadingView: View {
 
     @ViewBuilder
     private func blockView(
-        _ block: ReadingBlock, index: Int, lineStarts: [Int],
-        tableCells: ReadingTableCells?
+        _ block: ReadingBlock, index: Int, inline: ReadingBlockInlines,
+        lineStarts: [Int], tableCells: ReadingTableCells?
     ) -> some View {
         switch block.kind {
         case .heading(let level):
-            headingView(block, level: level)
+            headingView(inline, level: level)
         case .paragraph:
             // A paragraph that IS one `![[…]]` embed (block-level) expands to
             // an EmbedView card; anything else — prose, or an embed WITH
             // surrounding text (mid-paragraph) — stays the inline text leaf,
             // where the embed run keeps today's link-run navigate behavior (a
-            // SwiftUI `Text` can't host a card mid-run). Detection is the Rust
-            // span authority, not a string check (see `blockEmbedTarget`).
-            if let embedKey = ReadingInlineMapper.blockEmbedTarget(inSlice: block.source) {
+            // SwiftUI `Text` can't host a card mid-run). Detection is core's
+            // (`blockEmbedKey`), never a string check.
+            if let embedKey = inline.blockEmbedKey {
                 if let request = BaseEmbedRequest.wikilinkTarget(embedKey) {
                     baseEmbedBlock(request, identity: index)
                 } else {
-                    embedBlock(key: embedKey, fallbackSlice: block.source)
+                    embedBlock(key: embedKey, fallback: inline)
                 }
             } else {
-                inlineLeaf(block.source)
+                inlineLeaf(inline)
             }
-        case .listItem(let depth, let ordered, let task):
-            if let taskChar = task {
-                taskRow(block, depth: depth, taskChar: taskChar, lineStarts: lineStarts)
+        case .listItem(let depth, let ordered, _):
+            if inline.segments.first?.taskCompleted != nil {
+                taskRow(block, inline: inline, depth: depth, lineStarts: lineStarts)
             } else {
-                listItemRow(block, depth: depth, ordered: ordered)
+                listItemRow(inline, depth: depth, ordered: ordered)
             }
         case .blockQuote(let depth):
-            quoteRow(block, depth: depth)
+            quoteRow(inline, depth: depth)
         case .codeFence(let language, let interior):
             if let request = BaseEmbedRequest.codeFence(language: language, source: block.source) {
                 baseEmbedBlock(request, identity: index)
@@ -447,15 +443,15 @@ struct ReadingView: View {
     /// One inline-pipeline text leaf. `.textSelection(.enabled)` is applied
     /// HERE, at the leaf `Text`, and only here (plus the raw-source leaf) —
     /// container-scoped selection breaks VoiceOver continuous read.
+    ///
+    /// The runs arrive from core (#967); this only stamps attributes.
     private func inlineLeaf(
-        _ slice: String, font: Font = Tokens.Typography.body,
+        _ inline: ReadingBlockInlines, font: Font = Tokens.Typography.body,
         strikethrough: Bool = false
     ) -> some View {
-        let mapped = ReadingInlineMapper.map(
-            slice: slice, citations: context.citations,
-            unresolvedTargets: context.unresolvedLinkTargets,
-            recordSets: context.linkRecordSets)
-        return Text(mapped.attributed)
+        let attributed = inline.segments.first.map(ReadingInlineMapper.attributed)
+            ?? AttributedString()
+        return Text(attributed)
             .font(font)
             .foregroundStyle(Tokens.ColorRole.textPrimary)
             .strikethrough(strikethrough, color: Tokens.ColorRole.textSecondary)
@@ -464,7 +460,7 @@ struct ReadingView: View {
     }
 
     /// Block-level embed card (#511) + its render state machine. `key` is the
-    /// cache-key form (`ReadingInlineMapper.blockEmbedTarget`, == the
+    /// cache-key form (core's `blockEmbedKey`, == the
     /// `AppState.embedTargetKey` the resolutions dict is keyed on).
     ///
     /// States, driven by the dict entry plus TWO per-key guard sets
@@ -491,7 +487,7 @@ struct ReadingView: View {
     ///     branch (announces "unresolved" when the target can't open) —
     ///     never an infinite spinner.
     @ViewBuilder
-    private func embedBlock(key: String, fallbackSlice: String) -> some View {
+    private func embedBlock(key: String, fallback: ReadingBlockInlines) -> some View {
         if let resolution = context.embedResolutions[key] {
             EmbedView(
                 resolution: resolution,
@@ -503,7 +499,7 @@ struct ReadingView: View {
             // Resolved-empty terminal: the request completed, the key never
             // landed — fall back to the inline run so the embed is still
             // reachable + activation announces unresolved. Never a dead block.
-            inlineLeaf(fallbackSlice)
+            inlineLeaf(fallback)
         } else {
             embedPlaceholder(key: key)
         }
@@ -560,8 +556,8 @@ struct ReadingView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func headingView(_ block: ReadingBlock, level: UInt8) -> some View {
-        inlineLeaf(ReadingBlockSource.headingText(block.source), font: headingFont(level))
+    private func headingView(_ inline: ReadingBlockInlines, level: UInt8) -> some View {
+        inlineLeaf(inline, font: headingFont(level))
             .accessibilityAddTraits(.isHeader)
             .accessibilityHeading(axHeadingLevel(level))
     }
@@ -596,17 +592,18 @@ struct ReadingView: View {
     /// Depth is visual indent + the AX VALUE "list item, level N" (VoiceOver
     /// reads linearly; nesting is value-conveyed, not view-nested — spec).
     private func listItemRow(
-        _ block: ReadingBlock, depth: UInt8, ordered: Bool
+        _ inline: ReadingBlockInlines, depth: UInt8, ordered: Bool
     ) -> some View {
-        let parts = ReadingBlockSource.listItemParts(block.source)
-        let marker = ordered ? (parts?.marker ?? "1.") : "•"
-        let content = parts?.content ?? block.source
+        // The authored marker comes from core (#967) — the source carries
+        // the real ordinal, so no re-derivation and no wrong renumbering
+        // is possible on either host.
+        let marker = ordered ? (inline.listMarker ?? "1.") : "•"
         return HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.sm) {
             Text(verbatim: marker)
                 .font(Tokens.Typography.body)
                 .foregroundStyle(Tokens.ColorRole.textSecondary)
                 .accessibilityHidden(true)  // the value carries "list item"
-            inlineLeaf(content)
+            inlineLeaf(inline)
         }
         .padding(.leading, CGFloat(depth) * Tokens.Spacing.lg)
         .accessibilityElement(children: .contain)
@@ -619,22 +616,23 @@ struct ReadingView: View {
     /// explanation. The `TaskItem` is matched by 1-based source line (both
     /// sides derive from the same whole-source text).
     private func taskRow(
-        _ block: ReadingBlock, depth: UInt8, taskChar: String, lineStarts: [Int]
+        _ block: ReadingBlock, inline: ReadingBlockInlines, depth: UInt8,
+        lineStarts: [Int]
     ) -> some View {
-        // stripTaskBox: the KIND said task (Rust classifier) — the checkbox
-        // control replaces the authored `[c]` box.
-        let parts = ReadingBlockSource.listItemParts(
-            block.source, stripTaskBox: true)
+        // Content (checkbox stripped) and completion both come from core
+        // (#967) — the Swift `taskChar.lowercased() == "x"` fallback and
+        // the `stripTaskBox` splitter are retired.
         let line = ReadingBlockSource.lineNumber(
             forByteOffset: Int(block.byteStart), lineStarts: lineStarts)
         // Body line + delta == the record's whole-file line (U3-3).
         let item = context.tasks.first {
             Int($0.line) == line + context.taskLineOffset
         }
-        let completed = item?.completed ?? (taskChar.lowercased() == "x")
+        let completed =
+            item?.completed ?? (inline.segments.first?.taskCompleted ?? false)
         return HStack(alignment: .firstTextBaseline, spacing: Tokens.Spacing.sm) {
             taskCheckbox(item: item, completed: completed)
-            inlineLeaf(parts?.content ?? block.source, strikethrough: completed)
+            inlineLeaf(inline, strikethrough: completed)
         }
         .padding(.leading, CGFloat(depth) * Tokens.Spacing.lg)
         .accessibilityElement(children: .contain)
@@ -681,7 +679,7 @@ struct ReadingView: View {
 
     /// Quote leaf: accent bar + indent per depth; content has its `>`
     /// markers stripped. AX value parallels the list-item contract.
-    private func quoteRow(_ block: ReadingBlock, depth: UInt8) -> some View {
+    private func quoteRow(_ inline: ReadingBlockInlines, depth: UInt8) -> some View {
         HStack(alignment: .top, spacing: Tokens.Spacing.sm) {
             // Decorative rule, redundant with the value + indent (1.4.11
             // exempt, same rationale as Tokens.ColorRole.separator).
@@ -689,7 +687,7 @@ struct ReadingView: View {
                 .fill(Tokens.ColorRole.separator)
                 .frame(width: 3)
                 .accessibilityHidden(true)
-            inlineLeaf(ReadingBlockSource.quoteContent(block.source, depth: depth))
+            inlineLeaf(inline)
         }
         .padding(.leading, CGFloat(max(Int(depth) - 1, 0)) * Tokens.Spacing.lg)
         .accessibilityElement(children: .contain)
@@ -840,6 +838,10 @@ struct ReadingView: View {
 final class ReadingParseCache {
     struct Parsed {
         var blocks: [ReadingBlock]
+        /// Core-computed inline runs, 1:1 with `blocks` (#967). Computed
+        /// EAGERLY here alongside the block walk — the "one parse per
+        /// toggle" budget forbids per-render FFI.
+        var inlines: [ReadingBlockInlines]
         var lineStarts: [Int]
         /// Segmented cells for each `.table` block, keyed by its index in
         /// `blocks`. Computed EAGERLY here (once per parse), never in `body`
@@ -848,6 +850,16 @@ final class ReadingParseCache {
         /// A missing key (Rust returned nil) means the renderer falls back to
         /// the raw-source block.
         var tableCells: [Int: ReadingTableCells]
+
+        /// The inline result for `index`, or an empty one if the arrays
+        /// ever disagree (they can't — core pins 1:1 — but a renderer
+        /// must never index out of range).
+        func inline(at index: Int) -> ReadingBlockInlines {
+            index >= 0 && index < inlines.count
+                ? inlines[index]
+                : ReadingBlockInlines(
+                    segments: [], blockEmbedKey: nil, listMarker: nil)
+        }
     }
 
     /// Documented perf boundary (spec §U3-1): the eager VStack materializes
@@ -856,10 +868,37 @@ final class ReadingParseCache {
     static let perfNoteBlockThreshold = 2_000
 
     private var cachedText: String?
+    private var cachedInlineInputs: String?
     private var cached: Parsed?
 
-    func parsed(for text: String) -> Parsed {
-        if let cached, cachedText == text {
+    /// The inline pipeline is a pure function of (text, citations,
+    /// records), so the memo key must cover all three. A compact signature
+    /// avoids depending on `Equatable` conformance of the FFI records and
+    /// keeps the per-render comparison to one string compare.
+    private static func inlineInputSignature(
+        citations: [RenderedCitation], records: [OutgoingLink]
+    ) -> String {
+        var signature = ""
+        for citation in citations {
+            signature += citation.raw + "\u{1}" + citation.visualText + "\u{1}"
+                + citation.speechText + "\u{2}"
+        }
+        signature += "\u{3}"
+        for record in records {
+            signature += record.targetRaw + "\u{1}" + record.kind + "\u{1}"
+                + (record.isEmbed ? "1" : "0") + (record.isExternal ? "1" : "0")
+                + (record.isUnresolved ? "1" : "0") + "\u{2}"
+        }
+        return signature
+    }
+
+    func parsed(
+        for text: String, citations: [RenderedCitation] = [],
+        records: [OutgoingLink] = []
+    ) -> Parsed {
+        let inlineInputs = Self.inlineInputSignature(
+            citations: citations, records: records)
+        if let cached, cachedText == text, cachedInlineInputs == inlineInputs {
             return cached
         }
         let blocks = readingBlocksSource(source: text)
@@ -880,11 +919,18 @@ final class ReadingParseCache {
                 tableCells[index] = cells
             }
         }
+        // Eager, once-per-parse inline segmentation (#967): the FFI runs
+        // here, not in `body`. Same authority the block walk used — no
+        // Swift-side inline parser (the no-second-classifier invariant).
+        let inlines = readingInlineSegmentsSource(
+            source: text, citations: citations, records: records)
         let parsed = Parsed(
             blocks: blocks,
+            inlines: inlines,
             lineStarts: ReadingBlockSource.lineStartOffsets(of: text),
             tableCells: tableCells)
         cachedText = text
+        cachedInlineInputs = inlineInputs
         cached = parsed
         return parsed
     }

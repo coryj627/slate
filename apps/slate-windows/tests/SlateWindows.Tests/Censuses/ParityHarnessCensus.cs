@@ -144,7 +144,8 @@ public class ParityHarnessCensus
                     File.ReadAllBytes(Path.Combine(vaultRoot, f)));
                 File.WriteAllBytes(
                     Path.Combine(outDir, f + ".json"),
-                    System.Text.Encoding.UTF8.GetBytes(SurfaceSerializer.FileArtifact(f, text)));
+                    System.Text.Encoding.UTF8.GetBytes(
+                        SurfaceSerializer.FileArtifact(f, text, session)));
             }
             File.WriteAllBytes(
                 Path.Combine(outDir, "search.json"),

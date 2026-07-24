@@ -22,6 +22,7 @@ reading_inline_segments_source(
 ReadingBlockInlines {
     segments: Vec<ReadingInlineSegment>,   // empty for non-inline kinds (code/math/diagram/table/html/thematic-break)
     block_embed_key: Option<String>,       // §5 — Some(cache-key) when the block IS one wikilink embed
+    list_marker: Option<String>,           // §2 amendment — the authored marker (`-`, `3.`, `12)`), verbatim
 }
 ReadingInlineSegment {
     content: String,                  // the RENDERED inline text (§2): chrome stripped, token display substituted
@@ -60,7 +61,7 @@ FFI: proc-macro records/enums in `crates/slate-uniffi` with `From<core::…>` im
 
 - **Paragraph** — the block source verbatim (whitespace-preserving, as `.inlineOnlyPreservingWhitespace` does today).
 - **Heading** — text content sans ATX markers/closing-hash run, or the setext first line; trim per shipped rules.
-- **ListItem** — content after the list marker; for task items, content after the checkbox, with `task_completed` computed by the same core rule the Tasks panel rows carry (`tasks.rs`; the Swift `taskChar.lowercased() == "x"` fallback retires).
+- **ListItem** — content after the list marker; for task items, content after the checkbox, with `task_completed` computed by the same core rule the Tasks panel rows carry (`tasks.rs`; the Swift `taskChar.lowercased() == "x"` fallback retires). **Amendment (implementation PR):** the authored marker itself rides back on `ReadingBlockInlines.list_marker`. The mac renderer displays the AUTHORED ordinal verbatim ("the source carries the real ordinal, so no re-derivation — and no wrong renumbering — is possible", `ReadingView.listItemRow`), so a host without this field would have to re-split the marker out of the block source: exactly the per-host derivation decision 4 forbids. One value, both hosts.
 - **BlockQuote** — per-line `>`-prefix strip at the block's depth, lines joined with `\n` (today's `quoteContent` join).
 - Degradation contract preserved: when expected chrome is absent, content is the verbatim slice — authored bytes are never dropped.
 
@@ -73,7 +74,7 @@ Over each block's content-bearing source, core selects wikilink/embed/tag/citati
 ## 4. Token payloads (the `splitWikiBody`/`mapRun` contracts, verbatim)
 
 - **Wikilink** — interior split on the first `|`; whitespace-trim mirroring `links.rs` (the `[[ Missing ]]` red-team probe stays pinned); anchors stay attached in `target`; run text = alias ?? target, non-empty fallback to target. Implementation reuses `links.rs::split_wikilink_body` — the mapper's Swift re-derivation of it is the drift pocket being deleted.
-- **Embed (mid-paragraph run)** — `!`-strip then wikilink split; run text = alias ?? last path component of the anchor-cut base target, never empty; `key` = the cache-key form `target_raw` + (`#`|`^`) + anchor text — **the exact `AppState.embedTargetKey` composition**, which core now owns (single home; mac deletes its copy).
+- **Embed (mid-paragraph run)** — `!`-strip then wikilink split; run text = alias ?? last path component of the anchor-cut base target, never empty; `key` = the cache-key form `target_raw` + (`#`|`^`) + anchor text — **the exact `AppState.embedTargetKey` composition**, which core now owns (`reading_embed_key`; single home, mac delegates to it). Note this is the ANCHOR-CUT `target_raw` plus a re-composed marker, **not** the authored segment verbatim: the retired Swift mapper used the verbatim segment and therefore composed a key the resolution dictionary could not match for the canonical `![[Note#^blk]]` block-ref form (`Note#^blk` vs the record-derived `Note^blk`) or for padded interiors (`![[ Note # Sec ]]`). Recorded as a **core fix** row in the implementation PR's deltas ledger.
 - **Tag** — requires `#` prefix and length > 1; run text keeps the `#`, `name` drops it.
 - **Citation** — joined in core by `RenderedCitation.raw ==` span text; run text = `visual_text` (fallback: raw), `speech` = `speech_text` (fallback: raw). The Swift `citations.first { $0.raw == … }` matching retires.
 
@@ -104,9 +105,36 @@ Over each block's content-bearing source, core selects wikilink/embed/tag/citati
 Both serializer twins (`ParityHarnessTests.swift` / `SurfaceSerializer.cs` — "mirrors every rule here; change both together") add a fourth per-file array `inline_runs`, 1:1 with `blocks`:
 
 ```
-"inline_runs":[{"embed":<key|null>,"segments":[{"content":<str>,"task":<bool|null>,
+"inline_runs":[{"embed":<key|null>,"marker":<str|null>,"segments":[{"content":<str>,"task":<bool|null>,
   "runs":[{"start":N,"end":N,"styles":["strong",…],"kind":"wikilink:…",…payload fields…,"ax":<str|null>}]}]}, …]
 ```
+
+Kind strings and their payload fields (implementation PR — `kind` is the
+snake_case discriminator with **enum-ish scalars colon-joined**, mirroring
+`list_item:{depth}:{ordered}:{task}`; **free-text payloads are separate
+escaped fields**, because a URL or target contains `:` and colon-joining
+would make the value ambiguous):
+
+| Run kind | `kind` string | Following payload fields, in order |
+|---|---|---|
+| `Text` | `text` | — |
+| `ExternalLink` | `external_link` | `"url"` |
+| `Wikilink` | `wikilink:{wikilink\|markdown_destination}:{resolved\|unresolved}` | `"target"`, `"base_target"`, `"anchor"` (`"h:<text>"` / `"b:<text>"` / null) |
+| `Embed` | `embed` | `"key"` |
+| `Tag` | `tag` | `"name"` |
+| `Citation` | `citation` | `"raw"`, `"speech"` |
+
+Style strings: `emphasis`, `strong`, `strikethrough`, `inline_code`, emitted
+in core's sorted order (no re-sorting host-side).
+
+**Citation join, deliberately empty in the harness.** The fixture vault
+ships no CSL style and no bibliography, so there is nothing deterministic to
+render citations against; both twins pass an EMPTY citation list. Core still
+emits `citation` runs (the kind comes from the span classifier, not from the
+rendered list) with the raw text as both display and speech — deterministic
+on every platform. Matched-citation rendering is covered by core unit tests
+instead; committing a style + `.bib` fixture to bring it under §W-A is a
+recorded W8-4 candidate.
 
 Kind strings follow the harness naming convention (snake_case, colon-joined payloads, mirroring `BlockKindName`); exact field order is pinned by the goldens; canonical-JSON rules unchanged. `citations`/`records` inputs come from the fixture-vault session (`ListCitationsInFile`/`OutgoingLinks`) — deterministic by construction. Corpus grows fixtures covering the six behavior families: alias/anchor/trim probes (`[[ Missing ]]`, `[[a|b|c]]`, `note^draft#sec`), the markdown-destination `^`-grammar probe, resolved/unresolved pairs, tags, citations (matched + unmatched), emphasis spanning a token, tokens inside inline code/fences, mid-paragraph + block embeds, task/quote/heading chrome — with CRLF/mixed-ending twins (never normalized, decision 9). Goldens committed under `crates/slate-core/tests/fixtures/parity_golden/`.
 
@@ -115,6 +143,8 @@ Kind strings follow the harness naming convention (snake_case, colon-joined payl
 1. `ReadingInlineMapper` becomes a thin applier: segments in → `AttributedString` out (per-run attributes: link URL construction from run kind via the router's schemes, accent/warning + underline policy, `ax_text` stamping). Selection, splitting, splicing, Foundation markdown parsing, destination rewriting, and unresolved classification are **deleted, not left as fallback**.
 2. `ReadingBlockSource` inline-content functions deleted (§2); `ReadingLinkRouter` matching helpers deleted (§6); `AppState.embedTargetKey` delegates to the core key (§4). `ReadingPrintComposer` consumes the same segments.
 3. **Pre-deletion differential census, in-PR:** old pipeline vs. new applier over the fixture corpus plus randomized documents (adversarial-census methodology), comparing rendered text, per-range link/style/AX attributes, and block-embed detection. Every delta is triaged in a **deltas ledger** in the PR description — {accepted-as-canonical (pulldown-vs-Foundation divergence; e.g. strikethrough support is a known candidate) | core fix} — no silent behavior change. The ledger's accepted rows become golden-pinned canonical behavior.
+
+   **Executed form (implementation PR) — read this before assuming the checkbox below is unconditionally met.** The ledger was produced by a line-by-line differential of the retired implementation against the new one, and **every** row is pinned by a named test rather than by a runtime comparison harness. The literal old-vs-new *runtime* census was **not** run: it requires resurrecting ~750 lines of just-deleted Swift (`ReadingInlineMapper` plus the `ReadingBlockSource` strippers it consumed) as a test-only fixture that the spec then deletes again in the final commit, and it can only execute on macOS CI. Its incremental evidence over the per-delta tests is the randomized-input coverage — which the Rust side already supplies at 100k documents (`census_reading_inline_segments_align_and_partition`, `census_reading_inline_tokens_never_reparse`) against the same pipeline both hosts now consume. **Owner call to reinstate it is open**; if taken, it lands as a follow-up rather than blocking the arc.
 4. `ReadingViewTests` behavior tests stay green, re-expressed against segments where they pinned `MappedRun` shapes; test intent (the six families) is preserved 1:1.
 
 ## 10. Windows consumption contract (binds W3-1/#728)
@@ -123,7 +153,7 @@ C# maps segments/runs to WPF `Run`/`Hyperlink` inlines (+ UIA text ranges per §
 
 ## Acceptance
 
-- [ ] Core `reading_inline_segments_source` + `reading_match_link` + FFI mirrors; unit + golden tests; censuses (content partition invariant, splice-equivalence, blocks↔inlines alignment) per repo convention
-- [ ] Mac consumes; Swift selection/splitting/parsing/classification deleted; differential census run with deltas ledger recorded; `ReadingViewTests` green
-- [ ] §W-A `inline_runs` in both twins over the grown corpus; goldens committed; CRLF/mixed twins included
-- [ ] `w3_spec.md` §W3-1 + #728 updated to consume this contract (done in the decision PR); #967 closed by the implementation PR
+- [x] Core `reading_inline_segments_source` + `reading_match_link` + FFI mirrors; unit + golden tests; censuses (content partition invariant, splice-equivalence, blocks↔inlines alignment) per repo convention — plus `reading_embed_key` and `reading_block_embed_key` (§4/§5 single homes the hosts delegate to)
+- [x] Mac consumes; Swift selection/splitting/parsing/classification deleted; deltas ledger recorded; `ReadingViewTests` re-expressed (six families 1:1) — **except** the runtime old-vs-new census, see §9 item 3 for what was done instead and the open owner call
+- [x] §W-A `inline_runs` in both twins over the grown corpus; goldens committed; CRLF/mixed twins included
+- [x] `w3_spec.md` §W3-1 + #728 updated to consume this contract (done in the decision PR); #967 closed by the implementation PR

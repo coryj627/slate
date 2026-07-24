@@ -67,7 +67,9 @@ try
     {
         byte[] bytes = File.ReadAllBytes(Path.Combine(vaultRoot, f));
         string text = System.Text.Encoding.UTF8.GetString(bytes);
-        WriteArtifact(Path.Combine(outDir, f + ".json"), SurfaceSerializer.FileArtifact(f, text));
+        WriteArtifact(
+            Path.Combine(outDir, f + ".json"),
+            SurfaceSerializer.FileArtifact(f, text, session));
     }
     WriteArtifact(Path.Combine(outDir, "search.json"), SurfaceSerializer.SearchArtifact(session, cancel));
     WriteArtifact(Path.Combine(outDir, "links.json"), SurfaceSerializer.LinksArtifact(session, files));

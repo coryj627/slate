@@ -354,7 +354,7 @@ where
 /// `looks_external` runs on the FULL authored destination so a
 /// fragment-only `#intro` or a `https://x#y` URL stays external and
 /// untouched.
-fn split_markdown_target(url: &str) -> (String, Option<LinkAnchor>) {
+pub(crate) fn split_markdown_target(url: &str) -> (String, Option<LinkAnchor>) {
     match url.find('#') {
         Some(idx) => (
             url[..idx].to_string(),
@@ -494,13 +494,28 @@ fn try_parse_wikilink(source: &str, bytes: &[u8], start: usize) -> Option<Parsed
     None
 }
 
+/// The wikilink body's TARGET SEGMENT with its anchor still attached —
+/// everything before the first `|`, trimmed.
+///
+/// [`split_wikilink_body`] returns the anchor-CUT target (what the
+/// resolver matches on); the reading pipeline additionally needs the
+/// authored anchor-attached form (`Note#Sec`) because that is what the
+/// activation router carries. Both come from one `|` split here so the
+/// two forms can never disagree about where the alias starts (#967).
+pub(crate) fn wikilink_target_segment(body: &str) -> String {
+    match body.find('|') {
+        Some(idx) => body[..idx].trim().to_string(),
+        None => body.trim().to_string(),
+    }
+}
+
 /// Split a wikilink body (text between `[[` and `]]`) into
 /// `(target, display, anchor)`.
 ///
 /// Order of split: first `|` separates display from target; then `#`
 /// or `^` on the target side separates the anchor. Anchor `#`/`^` on
 /// the display side stays as literal display text.
-fn split_wikilink_body(body: &str) -> (String, Option<String>, Option<LinkAnchor>) {
+pub(crate) fn split_wikilink_body(body: &str) -> (String, Option<String>, Option<LinkAnchor>) {
     let (target_segment, display) = match body.find('|') {
         Some(idx) => (
             body[..idx].trim().to_string(),

@@ -96,7 +96,8 @@ final class ParityHarnessTests: XCTestCase {
         for f in files {
             let bytes = try Data(contentsOf: vaultRoot.appendingPathComponent(f))
             let text = String(decoding: bytes, as: UTF8.self)
-            artifacts[f + ".json"] = Data(fileArtifact(relPath: f, text: text).utf8)
+            artifacts[f + ".json"] = Data(
+                try fileArtifact(relPath: f, text: text, session: session).utf8)
         }
         artifacts["search.json"] = Data(try searchArtifact(session: session, cancel: cancel).utf8)
         artifacts["links.json"] = Data(try linksArtifact(session: session, relPaths: files).utf8)
@@ -106,7 +107,25 @@ final class ParityHarnessTests: XCTestCase {
 
     // MARK: - Surfaces (mirror SurfaceSerializer.cs)
 
-    private static func fileArtifact(relPath: String, text: String) -> String {
+    /// Per-file artifact: spans + headings + reading blocks + inline runs.
+    ///
+    /// The `inline_runs` array (#967) is 1:1 with `blocks` and closes the
+    /// §W-A gap that block-only serialization left: wikilink / embed /
+    /// tag / citation payloads, per-grammar resolution, and accessible
+    /// text are now byte-checked across platforms.
+    ///
+    /// **Citation join, deliberately empty.** The fixture vault ships no
+    /// CSL style and no bibliography, so there is nothing deterministic to
+    /// render citations against; both twins therefore pass an EMPTY
+    /// citation list. Core still emits `citation` runs — the kind comes
+    /// from the span classifier, not from the rendered list — with the raw
+    /// text as both display and speech, which is deterministic on every
+    /// platform. Matched-citation rendering is covered by the core unit
+    /// tests instead; committing a style + `.bib` fixture to bring it
+    /// under §W-A is a recorded W8-4 candidate.
+    private static func fileArtifact(
+        relPath: String, text: String, session: VaultSession
+    ) throws -> String {
         let j = CanonicalJson()
         j.raw("{\"file\":").str(relPath)
 
@@ -140,8 +159,100 @@ final class ParityHarnessTests: XCTestCase {
                 .raw(",\"source\":").str(b.source)
                 .raw("}")
         }
+        j.raw("]")
+
+        j.raw(",\"inline_runs\":[")
+        let inlines = readingInlineSegmentsSource(
+            source: text, citations: [], records: try session.outgoingLinks(path: relPath))
+        for (i, inline) in inlines.enumerated() {
+            if i > 0 { j.raw(",") }
+            appendBlockInlines(j, inline)
+        }
         j.raw("]}")
         return j.output + "\n"
+    }
+
+    private static func appendBlockInlines(
+        _ j: CanonicalJson, _ inlines: ReadingBlockInlines
+    ) {
+        j.raw("{\"embed\":")
+        if let key = inlines.blockEmbedKey { j.str(key) } else { j.null() }
+        j.raw(",\"marker\":")
+        if let marker = inlines.listMarker { j.str(marker) } else { j.null() }
+        j.raw(",\"segments\":[")
+        for (s, segment) in inlines.segments.enumerated() {
+            if s > 0 { j.raw(",") }
+            j.raw("{\"content\":").str(segment.content).raw(",\"task\":")
+            if let completed = segment.taskCompleted { j.bool(completed) } else { j.null() }
+            j.raw(",\"runs\":[")
+            for (r, run) in segment.runs.enumerated() {
+                if r > 0 { j.raw(",") }
+                appendInlineRun(j, run)
+            }
+            j.raw("]}")
+        }
+        j.raw("]}")
+    }
+
+    private static func appendInlineRun(_ j: CanonicalJson, _ run: ReadingInlineRun) {
+        j.raw("{\"start\":").num(UInt64(run.start))
+            .raw(",\"end\":").num(UInt64(run.end))
+            .raw(",\"styles\":[")
+        for (i, style) in run.styles.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.str(styleName(style))
+        }
+        j.raw("]")
+        // Naming convention (both twins): `kind` is the snake_case
+        // discriminator with enum-ish scalars colon-joined (mirroring
+        // `list_item:{depth}:{ordered}:{task}`); free-text payloads are
+        // separate escaped fields, because a URL or target contains `:`
+        // and colon-joining would make the value ambiguous.
+        switch run.kind {
+        case .text:
+            j.raw(",\"kind\":").str("text")
+        case .externalLink(let url):
+            j.raw(",\"kind\":").str("external_link").raw(",\"url\":").str(url)
+        case .wikilink(let target, let baseTarget, let anchor, let grammar, let resolved):
+            j.raw(",\"kind\":").str(
+                "wikilink:\(grammarName(grammar)):\(resolved ? "resolved" : "unresolved")")
+                .raw(",\"target\":").str(target)
+                .raw(",\"base_target\":").str(baseTarget)
+                .raw(",\"anchor\":")
+            if let anchor { j.str(anchorName(anchor)) } else { j.null() }
+        case .embed(let key):
+            j.raw(",\"kind\":").str("embed").raw(",\"key\":").str(key)
+        case .tag(let name):
+            j.raw(",\"kind\":").str("tag").raw(",\"name\":").str(name)
+        case .citation(let raw, let speech):
+            j.raw(",\"kind\":").str("citation")
+                .raw(",\"raw\":").str(raw)
+                .raw(",\"speech\":").str(speech)
+        }
+        j.raw(",\"ax\":")
+        if let ax = run.axText { j.str(ax) } else { j.null() }
+        j.raw("}")
+    }
+
+    private static func styleName(_ style: ReadingInlineStyle) -> String {
+        switch style {
+        case .emphasis: return "emphasis"
+        case .strong: return "strong"
+        case .strikethrough: return "strikethrough"
+        case .inlineCode: return "inline_code"
+        }
+    }
+
+    private static func grammarName(_ grammar: ReadingWikiGrammar) -> String {
+        switch grammar {
+        case .wikilink: return "wikilink"
+        case .markdownDestination: return "markdown_destination"
+        }
+    }
+
+    /// `h:<text>` / `b:<text>` — the anchor form both twins emit.
+    private static func anchorName(_ anchor: LinkAnchor) -> String {
+        (anchor.kind == "block" ? "b:" : "h:") + anchor.text
     }
 
     private static func editorScaleArtifact() -> String {

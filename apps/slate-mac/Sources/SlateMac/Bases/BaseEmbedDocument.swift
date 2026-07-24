@@ -587,7 +587,9 @@ extension BaseEmbedRequest {
             let request: BaseEmbedRequest?
             switch block.kind {
             case .paragraph:
-                request = ReadingInlineMapper.blockEmbedTarget(inSlice: block.source)
+                // Core owns block-embed detection (#967) — never a
+                // `"![["` string check.
+                request = readingBlockEmbedKey(slice: block.source)
                     .flatMap(wikilinkTarget)
             case .codeFence(let language, _):
                 // `BaseEmbedRequest.codeFence` re-parses the RAW fenced source

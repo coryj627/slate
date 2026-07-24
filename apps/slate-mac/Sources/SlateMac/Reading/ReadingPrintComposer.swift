@@ -11,8 +11,8 @@ import Foundation
 /// diagram / embed rows resolve asynchronously and lay out with fragile
 /// measured heights — printing it directly would race those and clip mid-row.
 /// Instead we re-segment the note through the SAME pure block source the
-/// reading view uses (`readingBlocksSource` + `ReadingBlockSource` marker
-/// strippers + `ReadingInlineMapper` for inline runs), then style each block
+/// reading view uses (`readingBlocksSource` + `readingInlineSegmentsSource`
+/// for chrome-stripped content and inline runs), then style each block
 /// into a print-safe attributed string. `NSTextView` + `NSPrintOperation`
 /// then own real multi-page pagination AND give selectable text in Preview /
 /// the Save-as-PDF panel for free.
@@ -91,10 +91,21 @@ enum ReadingPrintComposer {
         citations: [RenderedCitation] = []
     ) -> NSAttributedString {
         let blocks = readingBlocksSource(source: text)
+        // Same core inline pipeline the reading view consumes (#967).
+        // `records: []` is correct here: print drops the URL attribute
+        // entirely (a printed page can't be clicked), so link RESOLUTION
+        // never changes a printed glyph — only the visual link affordance,
+        // which every activatable run gets either way.
+        let inlines = readingInlineSegmentsSource(
+            source: text, citations: citations, records: [])
         let output = NSMutableAttributedString()
 
-        for block in blocks {
-            let fragment = fragment(for: block, citations: citations)
+        for (index, block) in blocks.enumerated() {
+            let inline =
+                index < inlines.count
+                ? inlines[index]
+                : ReadingBlockInlines(segments: [], blockEmbedKey: nil, listMarker: nil)
+            let fragment = fragment(for: block, inline: inline, citations: citations)
             // One trailing newline between blocks: the block's own paragraph
             // style carries the vertical rhythm (paragraphSpacing), so a single
             // separator is enough and empty fragments (thematic breaks are
@@ -112,36 +123,33 @@ enum ReadingPrintComposer {
     // MARK: - Per-block dispatch
 
     private static func fragment(
-        for block: ReadingBlock, citations: [RenderedCitation]
+        for block: ReadingBlock, inline: ReadingBlockInlines,
+        citations: [RenderedCitation]
     ) -> NSAttributedString {
         switch block.kind {
         case .heading(let level):
-            let text = ReadingBlockSource.headingText(block.source)
             return styledInline(
-                text,
+                inline,
                 baseFont: boldSystemFont(headingPointSize(level)),
-                citations: citations,
                 paragraphStyle: headingParagraphStyle(level))
 
         case .paragraph:
             // A block-level `![[…]]` embed degrades to its inline run (the
             // display text as a link) — print never expands embed cards.
             return styledInline(
-                block.source, baseFont: bodyFont(), citations: citations,
+                inline, baseFont: bodyFont(),
                 paragraphStyle: bodyParagraphStyle())
 
-        case .listItem(let depth, let ordered, let task):
+        case .listItem(let depth, let ordered, _):
             return listItemFragment(
-                block, depth: depth, ordered: ordered, task: task,
-                citations: citations)
+                inline, depth: depth, ordered: ordered)
 
         case .blockQuote(let depth):
-            let content = ReadingBlockSource.quoteContent(block.source, depth: depth)
             // Quotes print in the secondary ink with a hanging indent — the
             // print echo of the reading view's accent-bar + indent.
             return styledInline(
-                content, baseFont: bodyFont(),
-                citations: citations, color: PrintPalette.secondaryText,
+                inline, baseFont: bodyFont(),
+                color: PrintPalette.secondaryText,
                 paragraphStyle: indentedParagraphStyle(level: Int(max(depth, 1))))
 
         case .codeFence(let language, let interior):
@@ -185,22 +193,19 @@ enum ReadingPrintComposer {
     // MARK: - List items
 
     private static func listItemFragment(
-        _ block: ReadingBlock, depth: UInt8, ordered: Bool, task: String?,
-        citations: [RenderedCitation]
+        _ inline: ReadingBlockInlines, depth: UInt8, ordered: Bool
     ) -> NSAttributedString {
-        let stripTask = task != nil
-        let parts = ReadingBlockSource.listItemParts(
-            block.source, stripTaskBox: stripTask)
-        let content = parts?.content ?? block.source
+        // Marker, task-box strip, and completion all come from core (#967).
+        let completed = inline.segments.first?.taskCompleted
 
         let marker: String
-        if let taskChar = task {
+        if let completed {
             // Task box → a printed checkbox glyph (no live toggle on paper).
-            marker = taskChar.lowercased() == "x" ? "☑ " : "☐ "
+            marker = completed ? "☑ " : "☐ "
         } else if ordered {
             // Ordered markers print their authored ordinal verbatim (the source
             // carries the real number — no renumbering), like the reading view.
-            marker = "\(parts?.marker ?? "1.") "
+            marker = "\(inline.listMarker ?? "1.") "
         } else {
             marker = "• "
         }
@@ -217,9 +222,9 @@ enum ReadingPrintComposer {
                 ]))
         fragment.append(
             styledInline(
-                content, baseFont: bodyFont(), citations: citations,
+                inline, baseFont: bodyFont(),
                 paragraphStyle: paragraph,
-                strikethrough: task?.lowercased() == "x"))
+                strikethrough: completed == true))
         return fragment
     }
 
@@ -281,28 +286,28 @@ enum ReadingPrintComposer {
 
     /// Style one source slice's inline content into print-ready runs.
     ///
-    /// Fidelity comes from `ReadingInlineMapper.map` — the SAME pipeline the
-    /// reading view uses — which turns wikilinks / embeds / tags / citations
-    /// into their DISPLAY text (as links) and parses authored bold / italic /
-    /// inline-code. We then walk its runs and translate each run's
+    /// Fidelity comes from the core inline pipeline — the SAME runs the
+    /// reading view consumes — which turns wikilinks / embeds / tags /
+    /// citations into their DISPLAY text (as links) and resolves authored
+    /// bold / italic / inline-code. We then walk the runs and translate each
     /// `inlinePresentationIntent` into real `NSFont` traits over `baseFont`,
     /// plus fixed print colors — so a bold run prints bold, a code run prints
     /// monospaced, and a link run prints underlined in the print link ink
     /// (activation is meaningless on paper, so the URL attribute is dropped and
     /// only the visual affordance survives).
     private static func styledInline(
-        _ slice: String,
+        _ inline: ReadingBlockInlines,
         baseFont: NSFont,
-        citations: [RenderedCitation],
         color: NSColor = PrintPalette.primaryText,
         paragraphStyle: NSParagraphStyle,
         strikethrough: Bool = false
     ) -> NSAttributedString {
-        let mapped = ReadingInlineMapper.map(slice: slice, citations: citations)
+        let attributed = inline.segments.first.map(ReadingInlineMapper.attributed)
+            ?? AttributedString()
         let result = NSMutableAttributedString()
 
-        for run in mapped.attributed.runs {
-            let text = String(mapped.attributed[run.range].characters)
+        for run in attributed.runs {
+            let text = String(attributed[run.range].characters)
             guard !text.isEmpty else { continue }
 
             let intent = run.inlinePresentationIntent
