@@ -284,10 +284,17 @@ public sealed class ShellAccessibilityTests
                 previewMenu.Patterns.Invoke.IsSupported,
                 "The Preview Embed menu item does not expose Invoke.");
             previewMenu.Patterns.Invoke.Pattern.Invoke();
-            _ = WaitForElement(
+            AutomationElement? menuInteractionPopover = TryWaitForElement(
                 window,
                 "EditorInteractionPopover",
                 TimeSpan.FromSeconds(10));
+            if (menuInteractionPopover is null)
+            {
+                throw new Xunit.Sdk.XunitException(
+                    "The bound Preview Embed menu command did not open the editor " +
+                    "interaction popover. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+            }
             AutomationElement menuPopoverClose = WaitForElement(
                 window,
                 "EditorPopoverClose",
@@ -1120,6 +1127,7 @@ public sealed class ShellAccessibilityTests
                 },
                 TimeSpan.FromSeconds(5)),
             $"The editor caret did not move to '{text}'.");
+        Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
     }
     private static void PressKey(VirtualKeyShort key)
     {

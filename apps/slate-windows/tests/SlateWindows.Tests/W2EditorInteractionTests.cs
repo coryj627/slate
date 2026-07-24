@@ -142,6 +142,7 @@ public sealed class W2EditorInteractionTests
         ulong generationBefore = session.InteractionGeneration();
         _ = session.ToggleTaskStatus("unrelated.md", 0, "x", null);
         Assert.NotEqual(generationBefore, session.InteractionGeneration());
+        activeInteractions.InvalidateExternalState();
         activeInteractions.RefreshArtifactCacheForTests();
         Assert.True(activeInteractions.IsPopoverOpen);
         Assert.Equal(1, activeFocusRequests);

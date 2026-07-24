@@ -732,7 +732,6 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         }
         _pendingHoverUtf16 = null;
         _pendingHoveredCitationByteOffset = null;
-        CancelPendingEmbedPreview();
         _embedGeneration++;
         _embedRequestKey = null;
         _activeEmbedRequestKey = null;
