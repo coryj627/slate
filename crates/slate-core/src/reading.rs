@@ -4087,6 +4087,59 @@ final para
         }
     }
 
+    /// An escaped authored scalar must be invisible to the run model: it
+    /// renders as itself in whatever context it lands in, and it must NOT
+    /// break the surrounding text into extra runs (it is not a construct).
+    #[test]
+    fn escaped_markers_render_in_context_and_coalesce() {
+        let f = '\u{FFFC}';
+
+        // Plain prose: one run, not three.
+        let segment = only_segment(&format!("a{f}b\n"));
+        assert_eq!(segment.content, format!("a{f}b"));
+        assert_eq!(segment.runs.len(), 1, "{:?}", segment.runs);
+
+        let segment = only_segment(&format!("{f}{f}{f}\n"));
+        assert_eq!(segment.content, format!("{f}{f}{f}"));
+        assert_eq!(segment.runs.len(), 1);
+
+        // Inside a code span: carries the code style, no affordance.
+        let segment = only_segment(&format!("code `a{f}b` span\n"));
+        assert_eq!(segment.content, format!("code a{f}b span"));
+        let code = segment
+            .runs
+            .iter()
+            .find(|r| r.styles.contains(&ReadingInlineStyle::InlineCode))
+            .expect("a code run");
+        assert_eq!(
+            &segment.content[code.start as usize..code.end as usize],
+            format!("a{f}b")
+        );
+        assert_eq!(code.kind, ReadingInlineRunKind::Text);
+
+        // Inside a link label: carries the LINK's affordance.
+        let segment = only_segment(&format!("[lab{f}el](note.md) tail\n"));
+        assert_eq!(segment.content, format!("lab{f}el tail"));
+        assert!(matches!(
+            segment.runs[0].kind,
+            ReadingInlineRunKind::Wikilink { .. }
+        ));
+
+        // Beside a real token, under a style: the escape merges into the
+        // styled text, the token keeps its own run.
+        let segment = only_segment(&format!("**bold {f} [[a]]** tail\n"));
+        assert_eq!(segment.content, format!("bold {f} a tail"));
+        assert_eq!(
+            &segment.content[segment.runs[0].start as usize..segment.runs[0].end as usize],
+            format!("bold {f} ")
+        );
+        assert!(matches!(
+            segment.runs[1].kind,
+            ReadingInlineRunKind::Wikilink { .. }
+        ));
+        assert_partitions(&segment);
+    }
+
     /// Two adjacent masks put two marker runs back to back; the scanner
     /// must still resolve each to its own index.
     #[test]
