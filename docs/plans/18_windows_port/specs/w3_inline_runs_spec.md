@@ -19,6 +19,10 @@ reading_inline_segments_source(
     records: &[OutgoingLink],         // the owning note's outgoing-link records (resolution input)
 ) -> Vec<ReadingBlockInlines>         // 1:1 with reading_blocks_source(source), same order
 
+reading_match_link(target, grammar, embed, records) -> Option<u32>   // §6 — the ONE ordered match
+reading_embed_key(target_raw, anchor) -> String                      // §4 — the ONE cache-key composition
+reading_block_embed_key(slice) -> Option<String>                     // §5 — slice-level detection
+
 ReadingBlockInlines {
     segments: Vec<ReadingInlineSegment>,   // empty for non-inline kinds (code/math/diagram/table/html/thematic-break)
     block_embed_key: Option<String>,       // §5 — Some(cache-key) when the block IS one wikilink embed
@@ -152,7 +156,7 @@ on every platform. Matched-citation rendering is covered by core unit tests
 instead; committing a style + `.bib` fixture to bring it under §W-A is a
 recorded W8-4 candidate.
 
-Kind strings follow the harness naming convention (snake_case, colon-joined payloads, mirroring `BlockKindName`); exact field order is pinned by the goldens; canonical-JSON rules unchanged. `citations`/`records` inputs come from the fixture-vault session (`ListCitationsInFile`/`OutgoingLinks`) — deterministic by construction. Corpus grows fixtures covering the six behavior families: alias/anchor/trim probes (`[[ Missing ]]`, `[[a|b|c]]`, `note^draft#sec`), the markdown-destination `^`-grammar probe, resolved/unresolved pairs, tags, citations (unmatched only — see the citation-join note below), emphasis spanning a token, tokens inside inline code/fences, mid-paragraph + block embeds, task/quote/heading chrome — with CRLF/mixed-ending twins (never normalized, decision 9). Goldens committed under `crates/slate-core/tests/fixtures/parity_golden/`.
+Exact field order is pinned by the goldens; canonical-JSON rules unchanged. `records` comes from the fixture-vault session (`OutgoingLinks`) — deterministic by construction; `citations` is empty, per the note above. The corpus covers the six behavior families: alias/anchor/trim probes (`[[ Missing ]]`, `[[a|b|c]]`, `note^draft#sec`), the markdown-destination `^`-grammar probe, resolved/unresolved pairs, tags, unmatched citations, emphasis spanning a token, tokens inside inline code/fences, mid-paragraph + block embeds, and task/quote/heading chrome — with CRLF/mixed-ending twins (never normalized, decision 9). The implementation PR added block-lookalike, containment, marker-adjacency and line-ending-edge fixtures on top. Goldens committed under `crates/slate-core/tests/fixtures/parity_golden/`.
 
 ## 9. Mac migration (the W0.5 shape)
 
@@ -172,6 +176,97 @@ Kind strings follow the harness naming convention (snake_case, colon-joined payl
 ## 10. Windows consumption contract (binds W3-1/#728)
 
 C# maps segments/runs to WPF `Run`/`Hyperlink` inlines (+ UIA text ranges per §W-C). The "C# may contain" line for this surface: marshalling, attribute application, gesture wiring, embed-card state machine, focus/navigation. **Prohibited:** any C# markdown/inline parsing on this path (no Markdig), interior splitting, candidate-key or resolution logic, AX-string composition — §W-G grep-audits accordingly.
+
+The rest of this section is the executable form of that line. It is written against the API as shipped in #967 (PR #1042), not against the sketch in §1, so W3-1 can be built from it directly.
+
+### 10.1 The call, and where it runs
+
+One call per parse, never per render:
+
+```csharp
+ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
+    text,                            // the LIVE buffer, not the saved file
+    citations,                       // RenderedCitation[] for the owning note
+    session.OutgoingLinks(relPath)); // resolution input; EMPTY while ownership is stale
+```
+
+- **1:1 with `ReadingBlocksSource(text)`**, same order. Zip them; never index one by a position derived from the other.
+- **Pure, no session, no IO** — but it is still FFI, so it runs with the rest of the projection build on `Task.Run`, and only the WPF tree construction happens on the dispatcher (W1‑RT‑06/13/19). Publication is gated on the standard tuple — `_disposed`, generation counter, `_tab.Path`, `SavedContentHash`, `EditorSession.Revision`, `_session.InteractionGeneration()` — the shape `EditorInteractions` already uses. Retry `MaximumBackgroundRefreshAttempts` @ 100 ms; terminal failure logs `HostDiagnosticEvent` + exception type only (W1‑RT‑01), never payload text.
+- **Memoize on `(text, citations, records)`, not on `text`.** The result is a pure function of all three; keying on text alone freezes a note's link styling at whatever the first render saw. Mac learned this as `testParseCacheInvalidatesWhenRecordsChange` — the Windows projection cache inherits the same test.
+- **Records ownership is byte-exact.** Pass an empty `records` array unless the loaded link records belong to *this* note, compared byte-for-byte (`BaseExactIdentity.matches` is the mac equivalent; C# must use an ordinal comparison, never a culture- or normalization-sensitive one). Empty records is the honest mid-transition value: every link run classifies unresolved, which is exactly what activation announces in that window.
+
+### 10.2 Offsets are UTF-8 bytes
+
+`ReadingInlineRun.Start`/`End` are **UTF-8 byte offsets, half-open, into `segment.Content`**. C# strings are UTF-16. Slicing `Content` with these values directly is wrong for any non-ASCII note and silently corrupts CJK, emoji and accented text.
+
+Decode once per segment and slice the byte array:
+
+```csharp
+byte[] utf8 = Encoding.UTF8.GetBytes(segment.Content);
+string RunText(ReadingInlineRun run) =>
+    Encoding.UTF8.GetString(utf8, (int)run.Start, (int)(run.End - run.Start));
+```
+
+The runs partition `Content` exactly — concatenating every run's text reproduces it byte for byte, with no gaps and no overlaps (core census `census_reading_inline_segments_align_and_partition`). W3‑1 asserts that round-trip on the built inline collection.
+
+### 10.3 Run kind → WPF inline → UIA
+
+| `ReadingInlineRunKind` | WPF | Activation | UIA |
+|---|---|---|---|
+| `Text` | `Run` | none | inherits the paragraph's text range |
+| `ExternalLink { Url }` | `Hyperlink` | hand to the system opener | `ControlType.Hyperlink` + `Invoke` |
+| `Wikilink { Target, BaseTarget, Anchor, Grammar, Resolved }` | `Hyperlink` | `ReadingMatchLink(Target, Grammar, embed: false, records)` → open that record; `null` → announce unresolved | `ControlType.Hyperlink` + `Invoke`; `HelpText` = `AxText` when present |
+| `Embed { Key }` | `Hyperlink` | `ReadingMatchLink(Key, Wikilink, embed: true, records)` → open the embed source | as above |
+| `Tag { Name }` | `Hyperlink` | open search scoped to the tag, empty query | as above |
+| `Citation { Raw, Speech }` | `Hyperlink` | expand the citation popover, keyed on `Raw` | `HelpText` = `Speech` (arrives as `AxText`) |
+
+Three rules this table encodes, each of which was a real defect on mac:
+
+1. **`Text` is not "no kind" — it is a decision.** A `file:`, `javascript:`, unknown-scheme, protocol-relative or fragment-only destination arrives as `Text` *carrying its label*, because core already stripped the affordance. C# must not re-examine the destination to decide activability; there is no destination to examine.
+2. **Never re-derive a match.** `ReadingMatchLink` is the single ordered candidate-key implementation, and it applies the per-grammar anchor cuts, the cross-grammar prohibition, and the `!IsExternal` filter. A C# `IndexOf('#')` on a target is a §W-G violation.
+3. **`Resolved` is presentation state, `ReadingMatchLink` is activation state, and they already agree.** Style from `Resolved`; activate through `ReadingMatchLink`. Do not derive either from the other.
+
+### 10.4 Styles and unresolved treatment
+
+`Styles` arrives sorted and deduped; apply, do not re-sort.
+
+| `ReadingInlineStyle` | WPF |
+|---|---|
+| `Emphasis` | `FontStyle = Italic` |
+| `Strong` | `FontWeight = Bold` |
+| `Strikethrough` | `TextDecorations = Strikethrough` |
+| `InlineCode` | code token brush + monospace family |
+
+Every activatable run carries the accent token **and** an underline — the affordance is never colour-only (WCAG 1.4.1). A `Wikilink` run with `Resolved == false` renders in the unresolved token, **keeps** the underline, and exposes its `AxText` (`"Unresolved link"`): the state is visible and announced *before* activation, and activation still reports unresolved.
+
+**Two token obligations W3‑1 must discharge — neither is satisfied today** (checked against `ThemeManager.RequiredSlateBrushKeys` and `ThemeTokenContrastTests` at the time of writing):
+
+1. Reading text sits on `Slate.SurfaceBrush`, but the gated accent pair is `accent/window` — there is **no `accent/surface` pair**. W3‑1 adds it to `ThemeTokenContrastTests`, and it must clear the APCA floor in light, dark and both Contrast layers.
+2. There is **no warning token at all** on Windows: the required-key list runs `…AccentBrush, SelectionBackgroundBrush, SelectionTextBrush, FocusBrush, ErrorBrush`. Mac styles unresolved links with `warningText`. W3‑1 either reuses `Slate.ErrorBrush` (already gated as `error/surface`, but semantically "error", not "unresolved") or introduces a warning token — which then needs adding to `RequiredSlateBrushKeys`, to all three theme dictionaries, and to the APCA pairs. Record the choice in the PR; do not let the unresolved state fall back to the accent colour, which would erase the distinction #849 exists to make.
+
+### 10.5 Block-level fields
+
+- **`BlockEmbedKey`** — `Some` iff the block IS one wikilink embed. Drives the in-place embed card (#598/#511). **Detection is core's**; a `"![["` string test anywhere in `Reading/` is a §W-G violation. For a slice-level check outside the segment walk, call `ReadingBlockEmbedKey(slice)`.
+- **`ListMarker`** — the authored marker verbatim (`-`, `3.`, `12)`). Ordered items render the authored ordinal; unordered render `•`. Never renumber, never re-split it out of the block source.
+- **`TaskCompleted`** — `Some` iff the item is a task. `Some(true)`/`Some(false)` drive the checkbox and the strikethrough; `None` means "not a task", which is not the same as an unchecked task.
+- **Empty `Segments`** means the block has no inline content (code, math, diagram, table, HTML, thematic break) and its own W3‑2..W3‑5 renderer owns it.
+
+### 10.6 What W3-1 must pin (open, not decided here)
+
+Two mechanism choices are W3‑1's first task, in the same way the MathML UIA route is W3‑2's. Record the choice and the JAWS/NVDA evidence in the PR and in `w_c_matrix.md`:
+
+1. **The text container.** §W3‑1 requires that "text ranges expose the reading order" and that JAWS/NVDA navigate headings, links and lists natively (decision 6 — no outline crutch). A `FlowDocument`-based viewer gives a genuine Text pattern over the whole note; an `ItemsControl` of `TextBlock`s does not. Spike both against the two ATs before committing.
+2. **Heading level exposure.** Whether `AutomationProperties.HeadingLevel` reaches UIA from the chosen container, and the fallback if it does not.
+
+### 10.7 Deferred rows
+
+- **Table rows** render as plain accessible tables in W3‑1; the substrate-backed rows transfer to W4‑1 (#733) and close with Wave 4 (program wave table).
+- **`.base` embeds** render via W4‑6's grid; that row transfers to #738.
+- Neither is wave-blocking, and both stay matrix-tracked rather than silently unshipped.
+
+### 10.8 §W-G audit targets for this surface
+
+`apps/slate-windows/src/SlateWindows/Reading/**` must contain no: `Markdig` reference; `"[["` / `"]]"` / `"!["` literal; `candidateKey`-shaped helper; anchor-cutting `IndexOf('#')` or `IndexOf('^')` on a link target; scheme allowlist; or composed accessible string that core already supplies (`AxText`, `Speech`, `"Unresolved link"`). W3‑1 ships that grep as a census so the boundary is machine-checked rather than review-checked.
 
 ## Acceptance
 
