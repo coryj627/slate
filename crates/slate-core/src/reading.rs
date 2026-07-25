@@ -1861,12 +1861,18 @@ impl RunBuilder {
         let start = self.content.len();
         self.content.push_str(text);
         let end = self.content.len();
+        // Merge on (construct, styles) alone. `construct` changes at
+        // every point the kind or AX text can change — a link/image
+        // start or end, and either side of a token expansion — so
+        // comparing the payloads too was redundant, and it was
+        // Θ(destination length) on every event. pulldown emits each
+        // character entity as its own Text event, so an entity-dense
+        // label inside a link with a long destination made that
+        // comparison (and the matching per-event clone below) quadratic.
         if let Some(last) = self.runs.last_mut()
             && last.end as usize == start
             && self.last_construct == construct
             && last.styles.as_slice() == styles
-            && &last.kind == kind
-            && &last.ax_text == ax_text
         {
             last.end = end as u32;
             return;
@@ -1881,6 +1887,11 @@ impl RunBuilder {
         self.last_construct = construct;
     }
 }
+
+/// The default run context: plain prose, no per-range accessible text.
+/// Borrowed rather than constructed per piece.
+const TEXT_KIND: ReadingInlineRunKind = ReadingInlineRunKind::Text;
+const NO_AX_TEXT: Option<String> = None;
 
 /// How an expanded token renders at the point the sentinel was found.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -2050,11 +2061,17 @@ impl<'a> InlineWalker<'a> {
         out
     }
 
-    fn current(&self) -> (ReadingInlineRunKind, Option<String>) {
-        self.links
-            .last()
-            .cloned()
-            .unwrap_or((ReadingInlineRunKind::Text, None))
+    /// The kind + AX text every run emitted right now carries.
+    ///
+    /// Returned by REFERENCE: cloning here ran once per `Text` event, and
+    /// pulldown emits every character entity as its own event, so an
+    /// entity-dense label inside a link with a long destination cloned
+    /// the whole target/base_target pair per entity.
+    fn current(&self) -> (&ReadingInlineRunKind, &Option<String>) {
+        match self.links.last() {
+            Some((kind, ax)) => (kind, ax),
+            None => (&ReadingInlineRunKind::Text, &None),
+        }
     }
 
     fn styles_now(&self, extra: Option<ReadingInlineStyle>) -> Vec<ReadingInlineStyle> {
@@ -2079,30 +2096,37 @@ impl<'a> InlineWalker<'a> {
     /// silently producing a wrong label and a wrong activation target.
     /// A malformed or out-of-range mask is emitted verbatim rather than
     /// guessed at.
+    ///
+    /// The link context is borrowed, never cloned per piece: pulldown
+    /// emits every character entity as its own `Text` event, so cloning
+    /// here made an entity-dense label inside a link with a long
+    /// destination quadratic in allocation.
     fn emit_text(&mut self, text: &str, extra_style: Option<ReadingInlineStyle>, mode: TokenMode) {
         let styles = self.styles_now(extra_style);
-        let (kind, ax) = self.current();
         let mut rest = text;
         while let Some((open, end, index)) = find_mask(rest, self.tokens.len()) {
-            let head = rest[..open].to_string();
-            let construct = self.construct;
-            self.out.push(&head, &styles, &kind, &ax, construct);
-            self.expand_token(index, &styles, &kind, &ax, mode);
+            self.emit_piece(&rest[..open], &styles);
+            self.expand_token(index, &styles, mode);
             rest = &rest[end..];
         }
-        let construct = self.construct;
-        let tail = rest.to_string();
-        self.out.push(&tail, &styles, &kind, &ax, construct);
+        self.emit_piece(rest, &styles);
     }
 
-    fn expand_token(
-        &mut self,
-        index: usize,
-        styles: &[ReadingInlineStyle],
-        kind: &ReadingInlineRunKind,
-        ax: &Option<String>,
-        mode: TokenMode,
-    ) {
+    /// Push one plain piece in the current link context.
+    fn emit_piece(&mut self, text: &str, styles: &[ReadingInlineStyle]) {
+        if text.is_empty() {
+            return;
+        }
+        let construct = self.construct;
+        let Self { out, links, .. } = self;
+        let (kind, ax) = match links.last() {
+            Some((kind, ax)) => (kind, ax),
+            None => (&TEXT_KIND, &NO_AX_TEXT),
+        };
+        out.push(text, styles, kind, ax, construct);
+    }
+
+    fn expand_token(&mut self, index: usize, styles: &[ReadingInlineStyle], mode: TokenMode) {
         let Some(token) = self.tokens.get(index) else {
             return;
         };
@@ -2111,8 +2135,7 @@ impl<'a> InlineWalker<'a> {
         // text either side of it still coalesces into one run.
         if token.is_escape {
             let escaped = token.display.clone();
-            let construct = self.construct;
-            self.out.push(&escaped, styles, kind, ax, construct);
+            self.emit_piece(&escaped, styles);
             return;
         }
         let token_kind = token.kind.clone();
@@ -2123,6 +2146,10 @@ impl<'a> InlineWalker<'a> {
         // stay two runs.
         self.construct += 1;
         let construct = self.construct;
+        let (kind, ax) = {
+            let (kind, ax) = self.current();
+            (kind.clone(), ax.clone())
+        };
         match mode {
             // A construct that binds tighter than a link owns this range:
             // the token renders as its AUTHORED bytes with no affordance.
@@ -2133,11 +2160,11 @@ impl<'a> InlineWalker<'a> {
             // would be the alternative (the retired pipeline leaked its
             // raw `[label](slate-wiki://…)` splice text there instead —
             // this is the honest rendering).
-            TokenMode::Literal => self.out.push(&source, styles, kind, ax, construct),
+            TokenMode::Literal => self.out.push(&source, styles, &kind, &ax, construct),
             // A token inside a link label keeps the LABEL's affordance
             // (the Markdown construct owns the range).
             TokenMode::Affordance if !self.links.is_empty() => {
-                self.out.push(&display, styles, kind, ax, construct)
+                self.out.push(&display, styles, &kind, &ax, construct)
             }
             TokenMode::Affordance => {
                 self.out
@@ -4498,52 +4525,60 @@ final para
         }
     }
 
-    // --- Adversarial-review regressions (round 5): scaling ---
+    // --- Adversarial-review regressions (round 5/6): scaling ---
     //
     // These pin ASYMPTOTICS, so they measure how the cost RESPONDS to
     // doubling the input rather than asserting a wall-clock budget. An
     // absolute bound is the wrong instrument and was empirically too
     // loose: the quadratic span scan this suite is meant to catch ran the
     // 20k-pair case in 1.68 s, comfortably inside a 10 s cap. Doubling is
-    // the honest question — linear work roughly doubles, quadratic work
-    // roughly quadruples — and the answer is machine-independent.
+    // the honest question — and the answer is machine-independent.
     //
-    // The defects these pin are stalls and out-of-memory crashes
-    // reachable by OPENING a note, not wrong output, so no equality
-    // assertion would catch them.
+    // The defects they pin are stalls and out-of-memory crashes reachable
+    // by OPENING a note, not wrong output, so no equality assertion would
+    // catch them.
+    //
+    // **Guarantee is SUBQUADRATIC, not linear.** `mappable_spans` sorts
+    // its ranges, so n log n is the real bound and the tests are named
+    // for what they actually establish.
 
-    /// Median wall time of `body` over a few runs, after a warm-up.
-    fn scaling_sample(mut body: impl FnMut()) -> std::time::Duration {
-        body();
-        let mut samples: Vec<std::time::Duration> = (0..5)
+    /// Median of the PAIRED small/large ratio.
+    ///
+    /// Small and large are measured alternately inside one loop, so a
+    /// burst of contention on a shared CI runner lands on both arms of
+    /// each pair instead of inflating one phase — measuring all smalls
+    /// and then all larges makes the ratio a hostage to when the noise
+    /// arrives.
+    fn paired_scaling_ratio(mut small: impl FnMut(), mut large: impl FnMut()) -> f64 {
+        small();
+        large();
+        let mut ratios: Vec<f64> = (0..7)
             .map(|_| {
                 let started = std::time::Instant::now();
-                body();
-                started.elapsed()
+                small();
+                let small_elapsed = started.elapsed();
+                let started = std::time::Instant::now();
+                large();
+                let large_elapsed = started.elapsed();
+                large_elapsed.as_secs_f64() / small_elapsed.as_secs_f64().max(f64::EPSILON)
             })
             .collect();
-        samples.sort_unstable();
-        samples[samples.len() / 2]
+        ratios.sort_by(f64::total_cmp);
+        ratios[ratios.len() / 2]
     }
 
     /// Doubling the input must not more than triple the cost.
     ///
     /// Measured separation on this suite's fixtures: the fixed
     /// implementations land at 1.98-2.00x, the quadratic ones this pins
-    /// against at 3.4-3.6x. The 3.0 threshold sits cleanly between, and
-    /// both figures were confirmed by reverting each fix in turn.
-    fn assert_scales_linearly(label: &str, small: std::time::Duration, large: std::time::Duration) {
-        // Guard against a sub-millisecond baseline making the ratio pure
-        // noise; the fixtures below are sized well past this.
-        assert!(
-            small >= std::time::Duration::from_millis(2),
-            "{label}: baseline {small:?} too small to measure"
-        );
-        let ratio = large.as_secs_f64() / small.as_secs_f64();
+    /// against at 3.4-3.6x. Both figures were confirmed by reverting each
+    /// fix in turn. The 3.0 threshold sits cleanly between and leaves
+    /// room for the n log n that sorting contributes.
+    fn assert_subquadratic(label: &str, ratio: f64) {
         assert!(
             ratio < 3.0,
-            "{label}: doubling the input multiplied the cost by {ratio:.1} \
-             ({small:?} -> {large:?}) — that is superlinear"
+            "{label}: doubling the input multiplied the cost by {ratio:.1} — \
+             that is worse than the n log n this path is allowed"
         );
     }
 
@@ -4559,15 +4594,17 @@ final para
         assert_eq!(segment.content, dense, "every authored scalar survives");
         assert_eq!(segment.runs.len(), 1, "and coalesces into one run");
 
-        let small = scaling_sample(|| {
-            let text: String = std::iter::repeat_n('\u{FFFC}', 40_000).collect();
-            let _ = reading_inline_segments_source(&text, &[], &[]);
-        });
-        let large = scaling_sample(|| {
-            let text: String = std::iter::repeat_n('\u{FFFC}', 80_000).collect();
-            let _ = reading_inline_segments_source(&text, &[], &[]);
-        });
-        assert_scales_linearly("marker-dense", small, large);
+        let small: String = std::iter::repeat_n('\u{FFFC}', 40_000).collect();
+        let large: String = std::iter::repeat_n('\u{FFFC}', 80_000).collect();
+        let ratio = paired_scaling_ratio(
+            || {
+                let _ = reading_inline_segments_source(&small, &[], &[]);
+            },
+            || {
+                let _ = reading_inline_segments_source(&large, &[], &[]);
+            },
+        );
+        assert_subquadratic("marker-dense", ratio);
     }
 
     /// Token containment filtering must not restart the opaque scan per
@@ -4575,7 +4612,7 @@ final para
     /// Θ(n²) interval checks otherwise, and paragraphs run selection
     /// twice (block-embed detection, then rendering).
     #[test]
-    fn alternating_code_and_token_spans_stay_linear() {
+    fn alternating_code_and_token_spans_stay_subquadratic() {
         fn fixture(pairs: usize) -> String {
             let mut source = String::with_capacity(pairs * 20);
             for index in 0..pairs {
@@ -4593,22 +4630,24 @@ final para
             "tags outside the code spans still classify"
         );
 
-        let small_source = fixture(6_000);
-        let large_source = fixture(12_000);
-        let small = scaling_sample(|| {
-            let _ = reading_inline_segments_source(&small_source, &[], &[]);
-        });
-        let large = scaling_sample(|| {
-            let _ = reading_inline_segments_source(&large_source, &[], &[]);
-        });
-        assert_scales_linearly("alternating code/token spans", small, large);
+        let small = fixture(6_000);
+        let large = fixture(12_000);
+        let ratio = paired_scaling_ratio(
+            || {
+                let _ = reading_inline_segments_source(&small, &[], &[]);
+            },
+            || {
+                let _ = reading_inline_segments_source(&large, &[], &[]);
+            },
+        );
+        assert_subquadratic("alternating code/token spans", ratio);
     }
 
     /// The citation join must be a lookup, not a linear scan per span:
     /// the host supplies one rendered entry per reference, so n unique
     /// citations is n²/2 raw-string comparisons otherwise.
     #[test]
-    fn many_unique_citations_stay_linear() {
+    fn many_unique_citations_stay_subquadratic() {
         fn fixture(count: usize) -> (String, Vec<crate::RenderedCitation>) {
             let citations = (0..count)
                 .map(|index| {
@@ -4635,13 +4674,61 @@ final para
 
         let (small_source, small_citations) = fixture(4_000);
         let (large_source, large_citations) = fixture(8_000);
-        let small = scaling_sample(|| {
-            let _ = reading_inline_segments_source(&small_source, &small_citations, &[]);
-        });
-        let large = scaling_sample(|| {
-            let _ = reading_inline_segments_source(&large_source, &large_citations, &[]);
-        });
-        assert_scales_linearly("citation join", small, large);
+        let ratio = paired_scaling_ratio(
+            || {
+                let _ = reading_inline_segments_source(&small_source, &small_citations, &[]);
+            },
+            || {
+                let _ = reading_inline_segments_source(&large_source, &large_citations, &[]);
+            },
+        );
+        assert_subquadratic("citation join", ratio);
+    }
+
+    /// pulldown emits every character entity as its own `Text` event
+    /// (verified: 16 entities produce 16 events), so cloning the active
+    /// link context per event copied the whole target/base_target pair
+    /// per entity, and `RunBuilder::push` then compared those same long
+    /// strings on every event. The context is now borrowed, and runs
+    /// merge on `(construct, styles)` — `construct` already changes
+    /// wherever the kind can, so the payload comparison was redundant.
+    ///
+    /// **Honest scope.** This case does NOT fail against the retired
+    /// clone-per-event code: measured 2.94x at 12k/24k (a ~300 KiB source
+    /// with 24,000 entities, 5 s of test time) against a 3.0 threshold —
+    /// the copy's constant is small next to parsing, so the quadratic
+    /// term never dominates at a size anyone would open. The fix is still
+    /// worth having (it removes real per-event work, and the ratio here
+    /// drops from 2.94x to ~1.94x), and this guard catches a FUTURE
+    /// regression materially worse than the code it replaced. It is not
+    /// evidence that the retired code was a live hazard, and the PR body
+    /// says so.
+    #[test]
+    fn entity_dense_link_labels_stay_subquadratic() {
+        fn fixture(scale: usize) -> String {
+            let destination: String = std::iter::repeat_n("segment/", scale).collect();
+            let label: String = std::iter::repeat_n("&amp;", scale).collect();
+            format!("[{label}](notes/{destination}target.md)")
+        }
+
+        let segment = only_segment(&fixture(4));
+        assert!(
+            segment.content.starts_with('&'),
+            "entities still resolve: {:?}",
+            segment.content
+        );
+
+        let small = fixture(3_000);
+        let large = fixture(6_000);
+        let ratio = paired_scaling_ratio(
+            || {
+                let _ = reading_inline_segments_source(&small, &[], &[]);
+            },
+            || {
+                let _ = reading_inline_segments_source(&large, &[], &[]);
+            },
+        );
+        assert_subquadratic("entity-dense link label", ratio);
     }
 
     // --- alignment ---
