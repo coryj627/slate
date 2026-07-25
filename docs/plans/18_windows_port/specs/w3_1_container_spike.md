@@ -44,18 +44,44 @@ The UIA **client** probe was run from an interactive desktop and **agrees with t
 
 [`NvdaTestingDriver`](https://github.com/kastwey/nvda-testing-driver) drives a bundled portable NVDA through a modified NvdaRemote plugin and returns spoken text, so §10.6's "recorded AT evidence" can be a committed test instead of a manual script — for this spike and for every W3 surface after it. `ContainerSpikeProbe --nvda` runs say-all, `H`, `H1`/`H2`, `K`×4, `L`, `I`×3, table and button nav against both variants and tabulates what NVDA said against what it must say.
 
-**Currency check, per the `w3_spec.md:14` dependency doctrine:**
+**It was run, and it produced no evidence.** All 32 steps — both variants — failed identically with `Timeout while waiting for stopping speech`, including `read current line`, which would say "blank" in an empty window. A uniform capture failure measures the harness, not the container.
+
+**Currency check, per the `w3_spec.md:14` dependency doctrine. Verdict: REJECTED.**
 
 | | finding |
 |---|---|
-| version | `0.2.0-beta` — never left beta |
-| upstream | last commit **2022-12-08**, ~3.5 years stale |
-| .NET 10 | restores and loads cleanly (`NvdaTestingDriver, Version=0.2.0.0`) |
-| security | pulls `Newtonsoft.Json` **12.0.1**, GHSA-5crp-9r3c-p9vr (**high**) — overridden to 13.0.3 in the spike csproj |
-| NVDA driven | the bundled 2022-era portable copy, **not** the NVDA 2026.1.1 installed on this machine |
-| environment | needs an interactive desktop; other screen readers must be off |
+| verdict | **Do not adopt, do not re-run.** Produced zero admissible evidence for W3-1. |
+| version | `0.2.0-beta` — never left beta; two NuGet versions, both beta |
+| upstream | code frozen **2019-03-24** *(an earlier draft of this table said 2022-12-08 — that is dependabot PR activity on the repo, not a commit)* |
+| NVDA driven | **2018.4.1** — verified on disk, `nvda.exe` FileVersion `2018.4.0.16544`. Roughly eight NVDA-years behind the 2026.1.1 a user runs. |
+| **upgrade ceiling** | **Hard, and fatal.** The bundled Remote add-on declares `def play_wave(self, fileName, async, **kwargs)` (`userConfig/addons/remote/globalPlugins/remoteClient/local_machine.py`). `async` became a reserved word in **Python 3.7**, which NVDA adopted in **2019.3** — so no NVDA from 2019.3 onward can import it. Maximum drivable NVDA is 2019.2.1. |
+| failure mode | Every `*AndGetSpokenText*` entry point calls `StopReadingAsync()` first, which waits for a cancel signal NVDA never emits when idle. The throw prevents the key from being sent, so nothing is ever spoken and the state never clears — a self-perpetuating deadlock, reproducible on any quiet desktop. |
+| known bypass | `GetNextSpokenMessageAsync(timeout, actionToExecute:)` is public and skips `StopReadingAsync`. It would likely work — and would still only ever measure NVDA 2018.4.1. |
+| .NET 10 | restores and loads cleanly |
+| security | pulls `Newtonsoft.Json` 12.0.1, GHSA-5crp-9r3c-p9vr (**high**); overridden to 13.0.3 in the spike csproj |
+| side effects | rewrites `userConfig/nvda.ini` on every connect and forces `synth = silence`; `Dispose()` throws, leaving NVDA running |
 
-So: good enough to answer the container question, **not** obviously good enough to adopt into the shipped test suite. Adopting it for the wave would need a decision on the stale bundled NVDA and the CVE, and that is a separate call from this spike's.
+**Why the ceiling is disqualifying rather than merely inconvenient.** The open question is whether NVDA's browse-mode buffer reaches links through UIA **text ranges** when no `Hyperlink` control types exist. That is precisely the subsystem rewritten between 2018.4 and 2026.1. A pass from the 2018 build would not transfer forward, and a failure would not either — so there is no result this tool could produce that would settle anything. `ContainerSpikeProbe --nvda` now prints this reasoning and exits rather than running.
+
+## Closing the question: the manual pass
+
+Two minutes, and it tests the screen reader users actually run.
+
+1. Start **NVDA 2026.1.1**, and turn on **Tools → Speech Viewer** — it turns "what did you hear" into a copy-pasteable transcript. (It stops updating while the mouse is over it or focus is inside it, so leave it aside and do not click into it mid-run.)
+2. `ContainerSpike.exe --container flow`, click into the text, and confirm browse mode with `NVDA+Space`.
+3. `Ctrl+Home`, then **`K` four times**, recording each announcement verbatim.
+4. Repeat with `--container items`.
+5. Record tester, date, Windows build, NVDA version, and app commit SHA alongside the transcript — `w_c_matrix.md` requires all five for a human-AT cell to count.
+
+**The decisive cell is `flow` + `K` #1.** If NVDA announces `resolved note`, the absent `Hyperlink` control types are a red herring and FlowDocument stands. If `K` reports no next link, FlowDocument is out.
+
+The 16-step list in `NvdaProbe.cs` doubles as the fuller manual checklist if the four `K` presses come back ambiguous.
+
+## Should NVDA capture be automated for the wave?
+
+**Not now.** `w_c_matrix.md` requires a *named tester* recording build, OS, AT version, result and evidence link; a speech-capture harness produces a different artifact class than that gate accepts, so it would close **zero** matrix cells while the manual passes still had to happen. The arithmetic is also against it: ~14 surfaces × 3 ATs = 42 pending cells, of which an NVDA harness addresses at most 14 — Narrator and JAWS are untouched.
+
+Its real value is **regression detection between commits** — catching the day an `AutomationName` changes and NVDA silently starts saying the wrong thing. Worth having eventually, and the cheap form is a log tail (`nvda.exe -l 12 -f <path>`, watching for `Speaking` records) rather than a socket client. **Trigger, not a date:** build it the first time two W3 surfaces need NVDA-in-the-loop evidence inside one week. Verify the log format on a real run before writing any parser — the logged text is pre-`processText` and differs subtly from what is spoken.
 
 ## Method, and its limits
 
@@ -82,8 +108,8 @@ apps/slate-windows/tools/ContainerSpike/bin/Debug/net10.0-windows/ContainerSpike
 # client-side + axe: REQUIRES an interactive desktop (session 1)
 dotnet run --project apps/slate-windows/tools/ContainerSpikeProbe -- --out spike-evidence
 
-# what NVDA actually says: interactive desktop, and turn off any running
-# screen reader first (the driver starts its own portable NVDA)
+# NVDA: REJECTED — prints why and exits (see the currency table above).
+# The manual pass replaces it.
 dotnet run --project apps/slate-windows/tools/ContainerSpikeProbe -- --nvda --out spike-evidence
 
 # eyes/ears on one variant
