@@ -60,7 +60,7 @@ internal static class NvdaProbe
 
         Preflight();
 
-        using var nvda = new NvdaDriver();
+        var nvda = new NvdaDriver();
         Console.WriteLine("connecting to NVDA (starts the bundled portable copy) ...");
         try
         {
@@ -119,7 +119,22 @@ internal static class NvdaProbe
         Persist(outputDirectory, results);
         Console.WriteLine();
         Console.WriteLine(RenderNvda(results));
-        return results.Any(r => r.Error is not null) ? 1 : 0;
+
+        // NvdaDriver.Dispose() waits on an internal task that is already
+        // cancelled after a failed run and rethrows — which killed the
+        // process with an unhandled AggregateException AFTER the report
+        // was written, making a completed run look like a crash.
+        try
+        {
+            nvda.Dispose();
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"(ignored) NVDA driver dispose: {exception.Message}");
+        }
+
+        bool anyMeasured = results.Any(r => r.Steps.Any(s => !s.Errored));
+        return anyMeasured && results.All(r => r.Error is null) ? 0 : 1;
     }
 
     private static void Persist(string outputDirectory, List<NvdaVariantReport> results)
@@ -214,6 +229,7 @@ internal static class NvdaProbe
             foreach ((string label, INvdaCommand command, string expect) in Steps)
             {
                 string spoken;
+                bool errored = false;
                 try
                 {
                     spoken = await nvda.SendCommandAndGetSpokenTextAsync(command)
@@ -222,6 +238,7 @@ internal static class NvdaProbe
                 catch (Exception exception)
                 {
                     spoken = $"<error: {exception.Message}>";
+                    errored = true;
                 }
 
                 report.Steps.Add(new NvdaStep
@@ -229,8 +246,14 @@ internal static class NvdaProbe
                     Label = label,
                     Spoken = Collapse(spoken),
                     Expected = expect,
-                    Matched = expect.Length == 0
-                        || spoken.Contains(expect, StringComparison.OrdinalIgnoreCase),
+                    Errored = errored,
+                    // An errored step is never a match, whatever it was
+                    // expecting. A step with no expectation used to score
+                    // as a pass even when capture had thrown, which put a
+                    // reassuring "1/16" on a run that measured nothing.
+                    Matched = !errored
+                        && (expect.Length == 0
+                            || spoken.Contains(expect, StringComparison.OrdinalIgnoreCase)),
                 });
             }
         }
@@ -280,8 +303,31 @@ internal static class NvdaProbe
                 continue;
             }
             int matched = report.Steps.Count(s => s.Matched);
+            int errored = report.Steps.Count(s => s.Errored);
             sb.AppendLine($"{matched}/{report.Steps.Count} steps produced the expected speech.");
             sb.AppendLine();
+
+            // Uniform failure is a TOOLING result, not a measurement, and
+            // must be labelled as such — a table of "NO" against every
+            // container feature reads like a damning finding about the
+            // container when it is nothing of the kind.
+            if (errored == report.Steps.Count)
+            {
+                sb.AppendLine(
+                    "> **Every step errored — this measured nothing about the container.** "
+                    + "Speech capture never completed, so these rows carry no information "
+                    + "about what NVDA can or cannot reach. Do not read the `NO` column as "
+                    + "a finding about this container. See the currency note above: this is "
+                    + "the failure mode a 2022-era bundled NVDA was expected to produce.");
+                sb.AppendLine();
+            }
+            else if (errored > 0)
+            {
+                sb.AppendLine(
+                    $"> {errored} step(s) errored rather than returning speech; those rows "
+                    + "measure the harness, not the container.");
+                sb.AppendLine();
+            }
             sb.AppendLine("| step | expected | NVDA said | ok |");
             sb.AppendLine("|---|---|---|---|");
             foreach (NvdaStep step in report.Steps)
@@ -324,5 +370,9 @@ internal sealed class NvdaStep
     public string Label { get; set; } = string.Empty;
     public string Expected { get; set; } = string.Empty;
     public string Spoken { get; set; } = string.Empty;
+    /// Capture threw rather than returning speech. Kept distinct from
+    /// "spoke the wrong thing": one is a broken harness, the other is a
+    /// finding about the container.
+    public bool Errored { get; set; }
     public bool Matched { get; set; }
 }
