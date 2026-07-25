@@ -257,9 +257,16 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
         /// splices, so the authored bytes render.
         case spliceLeak
 
-        /// `[[]]` / `[[ ]]`: an empty interior produced an activatable
-        /// run with an empty target in the retired mapper.
-        case emptyWikilinkInterior
+        // NOTE: #1042's ledger also carried an `emptyWikilinkInterior`
+        // row (`[[]]` / `[[ ]]` produced an activatable empty-target run
+        // in the retired mapper). It was REMOVED here after
+        // `testEmptyInteriorsRenderIdenticallyOnBothPipelines` proved the
+        // frozen retired pipeline and core agree on every empty interior:
+        // `[[]]` fails `splitWikiBody`'s `count >= 4 && !isEmpty` guard and
+        // stays literal, and `[[ ]]` trims to the same treatment on both
+        // sides. A `Delta` row no input can match implies coverage the
+        // census does not have; dropping it only makes the sweep stricter,
+        // so a future divergence here surfaces as a finding, not a bless.
 
         func explains(source: String, old: Projection, new: Projection) -> Bool {
             switch self {
@@ -278,8 +285,6 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
                     "slate-wiki://", "slate-wikimd://", "slate-embed://",
                     "slate-tag://", "slate-cite://",
                 ].contains { old.text.contains($0) && !new.text.contains($0) }
-            case .emptyWikilinkInterior:
-                return source.contains("[[]]") || source.contains("[[ ]]")
             }
         }
 
@@ -576,6 +581,69 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
                 into: &catalogue)
         }
         assertNoUnclassified(catalogue, label: "no records")
+    }
+
+    // MARK: - Exercising the narrow ledger rows directly
+
+    // The randomized sweeps drive `embedKeyComposition` and
+    // `markdownCaretPath` in bulk, but their construction never emits the
+    // one shape that reaches `spliceLeak` — a Slate token a tighter
+    // construct swallows as TEXT — so the row's predicate went unproven.
+    // These two tests close that: one forces the splice leak, the other
+    // pins the empty-interior agreement that retired the fourth row.
+
+    /// `spliceLeak` fires only when the retired pipeline splices
+    /// `[basic](slate-wiki://basic)` into a construct that renders it as
+    /// literal text rather than re-parsing it as a link. An HTML *comment*
+    /// is the reachable case (a code span is excluded from splicing; raw
+    /// HTML like `<span>` re-parses the splice back into a proper link, so
+    /// neither leaks). Core never splices, so `[[basic]]` stays verbatim
+    /// inside the comment and the routing URL never reaches the text.
+    func testSpliceLeakRowClassifiesHtmlCommentSplice() {
+        var catalogue = Catalogue()
+        Self.compare(
+            source: "text <!-- [[basic]] --> end", citations: Self.citations,
+            records: Self.records, strictText: true, into: &catalogue)
+
+        XCTAssertEqual(
+            catalogue.counts[.spliceLeak], 1,
+            "the comment splice must be classified as spliceLeak")
+        XCTAssertEqual(
+            catalogue.findingCount, 0,
+            "the splice must classify, not surface as an unclassified finding")
+        for delta in Delta.allCases where delta != .spliceLeak {
+            XCTAssertEqual(
+                catalogue.counts[delta] ?? 0, 0,
+                "\(delta.rawValue) must not also claim the comment splice")
+        }
+    }
+
+    /// The retired pipeline and core agree on EVERY empty wikilink / embed
+    /// interior, so the difference the dropped `emptyWikilinkInterior` row
+    /// described cannot occur. This asserts that agreement head-on — the
+    /// randomized sweep can only ever observe it as an absence — and is the
+    /// evidence backing the row's removal: were core to start emitting an
+    /// empty-target affordance where the retired pipeline rendered literal
+    /// text, this fails loudly instead of being silently allow-listed.
+    func testEmptyInteriorsRenderIdenticallyOnBothPipelines() {
+        let sources = [
+            "[[]]", "[[ ]]", "[[  ]]", "a [[]] b", "text [[ ]] more",
+            "![[]]", "[[|]]", "[[#]]", "[[^]]",
+        ]
+        for source in sources {
+            var catalogue = Catalogue()
+            Self.compare(
+                source: source, citations: Self.citations, records: Self.records,
+                strictText: true, into: &catalogue)
+            XCTAssertEqual(
+                catalogue.findingCount, 0,
+                "\(source.debugDescription) diverged between the pipelines")
+            for delta in Delta.allCases {
+                XCTAssertEqual(
+                    catalogue.counts[delta] ?? 0, 0,
+                    "\(source.debugDescription) unexpectedly matched \(delta.rawValue)")
+            }
+        }
     }
 
     // MARK: - Inputs
