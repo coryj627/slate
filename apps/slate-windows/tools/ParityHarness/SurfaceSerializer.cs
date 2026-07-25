@@ -20,8 +20,29 @@ public static class SurfaceSerializer
 {
     public static readonly string[] PinnedSearchQueries = { "fixture", "heading", "parity" };
 
-    /// <summary>Per-file artifact: spans + headings + reading blocks.</summary>
-    public static string FileArtifact(string relPath, string text)
+    /// <summary>
+    /// Per-file artifact: spans + headings + reading blocks + inline runs.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The <c>inline_runs</c> array (#967) is 1:1 with <c>blocks</c> and
+    /// closes the §W-A gap that block-only serialization left: wikilink /
+    /// embed / tag / citation payloads, per-grammar resolution, and
+    /// accessible text are now byte-checked across platforms.
+    /// </para>
+    /// <para>
+    /// <b>Citation join, deliberately empty.</b> The fixture vault ships
+    /// no CSL style and no bibliography, so there is nothing deterministic
+    /// to render citations against; both twins therefore pass an EMPTY
+    /// citation list. Core still emits <c>citation</c> runs — the kind
+    /// comes from the span classifier, not from the rendered list — with
+    /// the raw text as both display and speech, which is deterministic on
+    /// every platform. Matched-citation rendering is covered by the core
+    /// unit tests instead; committing a style + <c>.bib</c> fixture to
+    /// bring it under §W-A is a recorded W8-4 candidate.
+    /// </para>
+    /// </remarks>
+    public static string FileArtifact(string relPath, string text, VaultSession session)
     {
         var j = new CanonicalJson();
         j.Raw("{\"file\":").Str(relPath);
@@ -66,9 +87,166 @@ public static class SurfaceSerializer
              .Raw(",\"source\":").Str(b.Source)
              .Raw("}");
         }
+        j.Raw("]");
+
+        j.Raw(",\"inline_runs\":[");
+        var inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
+            text, Array.Empty<RenderedCitation>(), session.OutgoingLinks(relPath));
+        for (int i = 0; i < inlines.Length; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            AppendBlockInlines(j, inlines[i]);
+        }
         j.Raw("]}");
         return j + "\n";
     }
+
+    private static void AppendBlockInlines(CanonicalJson j, ReadingBlockInlines inlines)
+    {
+        j.Raw("{\"embed\":");
+        if (inlines.BlockEmbedKey == null)
+        {
+            j.Null();
+        }
+        else
+        {
+            j.Str(inlines.BlockEmbedKey);
+        }
+        j.Raw(",\"marker\":");
+        if (inlines.ListMarker == null)
+        {
+            j.Null();
+        }
+        else
+        {
+            j.Str(inlines.ListMarker);
+        }
+        j.Raw(",\"segments\":[");
+        for (int s = 0; s < inlines.Segments.Length; s++)
+        {
+            if (s > 0)
+            {
+                j.Raw(",");
+            }
+            var segment = inlines.Segments[s];
+            j.Raw("{\"content\":").Str(segment.Content).Raw(",\"task\":");
+            if (segment.TaskCompleted is bool completed)
+            {
+                j.Bool(completed);
+            }
+            else
+            {
+                j.Null();
+            }
+            j.Raw(",\"runs\":[");
+            for (int r = 0; r < segment.Runs.Length; r++)
+            {
+                if (r > 0)
+                {
+                    j.Raw(",");
+                }
+                AppendInlineRun(j, segment.Runs[r]);
+            }
+            j.Raw("]}");
+        }
+        j.Raw("]}");
+    }
+
+    private static void AppendInlineRun(CanonicalJson j, ReadingInlineRun run)
+    {
+        j.Raw("{\"start\":").Num((ulong)run.Start)
+         .Raw(",\"end\":").Num((ulong)run.End)
+         .Raw(",\"styles\":[");
+        for (int i = 0; i < run.Styles.Length; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Str(StyleName(run.Styles[i]));
+        }
+        j.Raw("]");
+        // Naming convention (both twins): `kind` is the snake_case
+        // discriminator with enum-ish scalars colon-joined (mirroring
+        // `list_item:{depth}:{ordered}:{task}`); free-text payloads are
+        // separate escaped fields, because a URL or target contains `:`
+        // and colon-joining would make the value ambiguous.
+        switch (run.Kind)
+        {
+            case ReadingInlineRunKind.Text:
+                j.Raw(",\"kind\":").Str("text");
+                break;
+            case ReadingInlineRunKind.ExternalLink external:
+                j.Raw(",\"kind\":").Str("external_link")
+                 .Raw(",\"url\":").Str(external.Url);
+                break;
+            case ReadingInlineRunKind.Wikilink wiki:
+                j.Raw(",\"kind\":").Str(
+                    $"wikilink:{GrammarName(wiki.Grammar)}:"
+                    + (wiki.Resolved ? "resolved" : "unresolved"))
+                 .Raw(",\"target\":").Str(wiki.Target)
+                 .Raw(",\"base_target\":").Str(wiki.BaseTarget)
+                 .Raw(",\"anchor\":");
+                if (wiki.Anchor == null)
+                {
+                    j.Null();
+                }
+                else
+                {
+                    j.Str(AnchorName(wiki.Anchor));
+                }
+                break;
+            case ReadingInlineRunKind.Embed embed:
+                j.Raw(",\"kind\":").Str("embed").Raw(",\"key\":").Str(embed.Key);
+                break;
+            case ReadingInlineRunKind.Tag tag:
+                j.Raw(",\"kind\":").Str("tag").Raw(",\"name\":").Str(tag.Name);
+                break;
+            case ReadingInlineRunKind.Citation citation:
+                j.Raw(",\"kind\":").Str("citation")
+                 .Raw(",\"raw\":").Str(citation.Raw)
+                 .Raw(",\"speech\":").Str(citation.Speech);
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"unmapped ReadingInlineRunKind {run.Kind}");
+        }
+        j.Raw(",\"ax\":");
+        if (run.AxText == null)
+        {
+            j.Null();
+        }
+        else
+        {
+            j.Str(run.AxText);
+        }
+        j.Raw("}");
+    }
+
+    public static string StyleName(ReadingInlineStyle style) => style switch
+    {
+        ReadingInlineStyle.Emphasis => "emphasis",
+        ReadingInlineStyle.Strong => "strong",
+        ReadingInlineStyle.Strikethrough => "strikethrough",
+        ReadingInlineStyle.InlineCode => "inline_code",
+        _ => throw new InvalidOperationException($"unmapped ReadingInlineStyle {style}"),
+    };
+
+    public static string GrammarName(ReadingWikiGrammar grammar) => grammar switch
+    {
+        ReadingWikiGrammar.Wikilink => "wikilink",
+        ReadingWikiGrammar.MarkdownDestination => "markdown_destination",
+        _ => throw new InvalidOperationException($"unmapped ReadingWikiGrammar {grammar}"),
+    };
+
+    /// <summary>
+    /// `h:&lt;text&gt;` / `b:&lt;text&gt;` — the anchor form both twins emit.
+    /// </summary>
+    public static string AnchorName(LinkAnchor anchor) =>
+        (anchor.Kind == "block" ? "b:" : "h:") + anchor.Text;
 
     /// <summary>
     /// Editor-scale §W-A artifact. Sources are deterministic ASCII fixtures

@@ -11990,9 +11990,8 @@ final class AppState: ObservableObject {
     /// LIVE buffer, so a just-typed `![[…]]` can be visible with no dict
     /// entry. The reading view's block-embed placeholder calls this once per
     /// missing key to fill that gap. The `target` string is already the
-    /// cache-key form (`ReadingInlineMapper.blockEmbedTarget`, ==
-    /// `embedTargetKey`), so it is BOTH the resolver input and the dict key —
-    /// no re-derivation.
+    /// cache-key form (core's `readingBlockEmbedKey`, == `embedTargetKey`),
+    /// so it is BOTH the resolver input and the dict key — no re-derivation.
     ///
     /// Terminal by design: whatever the resolver returns (including a
     /// synthesized `.unresolved` on a broken target or FFI failure) is written
@@ -12583,15 +12582,14 @@ final class AppState: ObservableObject {
     /// keyed on this composite so the panel can look up "the
     /// resolution for this exact `![[…]]` reference."
     ///
-    /// `LinkAnchor.kind` is one of `"heading"` / `"block"` — we map
-    /// that back to the `#` / `^` marker so the reconstructed
-    /// target matches what the user wrote between `![[` and `]]`.
+    /// The composition itself lives in core (#967, `reading_embed_key`)
+    /// so the key a link RECORD produces and the key the reading
+    /// pipeline composes from authored source text are byte-identical
+    /// for the same embed — the Swift copy that used to live here could
+    /// disagree with core on the canonical `![[Note#^blk]]` block-ref
+    /// form and on padded interiors.
     func embedTargetKey(_ link: OutgoingLink) -> String {
-        if let anchor = link.targetAnchor {
-            let marker = anchor.kind == "block" ? "^" : "#"
-            return "\(link.targetRaw)\(marker)\(anchor.text)"
-        }
-        return link.targetRaw
+        readingEmbedKey(targetRaw: link.targetRaw, anchor: link.targetAnchor)
     }
 
     // MARK: - Tasks (per-note + vault-wide)

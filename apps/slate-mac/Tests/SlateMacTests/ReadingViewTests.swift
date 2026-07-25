@@ -204,75 +204,135 @@ final class ReadingViewTests: XCTestCase {
                 + "raw-source leaf; a new occurrence needs the same leaf audit")
     }
 
-    // MARK: - Inline mapper: runs + labels + URLs
+    // MARK: - Inline pipeline: runs + display text + URLs (#967)
+    //
+    // The semantics under test now live in `slate-core`
+    // (`reading_inline_segments_source`); these cases pin the SAME six
+    // behavior families the retired Swift mapper's tests pinned, expressed
+    // against the canonical runs and the attributes the applier stamps on
+    // them. The mac-only assertions (colour roles, underline, AX custom
+    // text) stay here because they are host presentation policy.
 
-    func testMapperWikilinkWithAlias() {
-        let mapped = ReadingInlineMapper.map(slice: "See [[Note One|the note]] now.")
-        XCTAssertEqual(
-            mapped.runs,
-            [
-                ReadingInlineMapper.MappedRun(
-                    kind: .wiki,
-                    display: "the note",
-                    target: "Note One",
-                    url: URL(string: "slate-wiki://Note%20One")!,
-                    axLabel: "the note")
-            ])
-        let rendered = String(mapped.attributed.characters)
+    /// The single inline result for a one-block slice.
+    private static func inline(
+        _ slice: String, citations: [RenderedCitation] = [],
+        records: [OutgoingLink] = []
+    ) -> ReadingBlockInlines {
+        readingInlineSegmentsSource(
+            source: slice, citations: citations, records: records
+        ).first
+            ?? ReadingBlockInlines(segments: [], blockEmbedKey: nil, listMarker: nil)
+    }
+
+    private static func segment(
+        _ slice: String, citations: [RenderedCitation] = [],
+        records: [OutgoingLink] = []
+    ) -> ReadingInlineSegment {
+        inline(slice, citations: citations, records: records).segments.first
+            ?? ReadingInlineSegment(content: "", runs: [], taskCompleted: nil)
+    }
+
+    /// `(text, kind)` per run — the shape most assertions care about.
+    private static func runs(
+        _ slice: String, citations: [RenderedCitation] = [],
+        records: [OutgoingLink] = []
+    ) -> [(text: String, kind: ReadingInlineRunKind)] {
+        let seg = segment(slice, citations: citations, records: records)
+        let utf8 = Array(seg.content.utf8)
+        return seg.runs.map { run in
+            (
+                String(decoding: utf8[Int(run.start)..<Int(run.end)], as: UTF8.self),
+                run.kind
+            )
+        }
+    }
+
+    private static func attributed(
+        _ slice: String, citations: [RenderedCitation] = [],
+        records: [OutgoingLink] = []
+    ) -> AttributedString {
+        ReadingInlineMapper.attributed(
+            segment(slice, citations: citations, records: records))
+    }
+
+    /// A saved outgoing-link record, the resolution input.
+    private static func record(
+        _ targetRaw: String, kind: String = "wikilink",
+        unresolved: Bool = false, embed: Bool = false, external: Bool = false
+    ) -> OutgoingLink {
+        OutgoingLink(
+            targetPath: unresolved ? nil : "\(targetRaw).md",
+            targetRaw: targetRaw, targetAnchor: nil, kind: kind,
+            isEmbed: embed, isExternal: external, isUnresolved: unresolved,
+            snippet: "", ordinal: 0, spanStart: 0, spanEnd: 0, displayText: nil)
+    }
+
+    func testInlineWikilinkWithAlias() {
+        let mapped = Self.runs("See [[Note One|the note]] now.")
+        XCTAssertEqual(mapped.map(\.text), ["See ", "the note", " now."])
+        guard case .wikilink(let target, _, _, let grammar, _) = mapped[1].kind else {
+            return XCTFail("expected a wikilink run, got \(mapped[1].kind)")
+        }
+        XCTAssertEqual(target, "Note One")
+        XCTAssertEqual(grammar, .wikilink)
+
+        let attributed = Self.attributed("See [[Note One|the note]] now.")
+        let rendered = String(attributed.characters)
         XCTAssertTrue(rendered.contains("the note"))
         XCTAssertFalse(rendered.contains("[["), "wikilink chrome must not render")
         XCTAssertEqual(
-            mapped.attributed.runs.compactMap(\.link),
+            attributed.runs.compactMap(\.link),
             [URL(string: "slate-wiki://Note%20One")!])
     }
 
-    func testMapperWikilinkWithoutAliasKeepsTargetWithAnchor() {
-        let mapped = ReadingInlineMapper.map(slice: "[[Note#Section]]")
-        XCTAssertEqual(mapped.runs.count, 1)
-        XCTAssertEqual(mapped.runs[0].kind, .wiki)
-        XCTAssertEqual(mapped.runs[0].display, "Note#Section")
-        XCTAssertEqual(mapped.runs[0].target, "Note#Section")
+    func testInlineWikilinkWithoutAliasKeepsTargetWithAnchor() {
+        let mapped = Self.runs("[[Note#Section]]")
+        XCTAssertEqual(mapped.count, 1)
+        XCTAssertEqual(mapped[0].text, "Note#Section")
+        guard case .wikilink(let target, let base, let anchor, _, _) = mapped[0].kind
+        else { return XCTFail("expected a wikilink run") }
+        XCTAssertEqual(target, "Note#Section")
+        XCTAssertEqual(base, "Note", "the anchor-cut form rides alongside")
+        XCTAssertEqual(anchor?.kind, "heading")
+        XCTAssertEqual(anchor?.text, "Section")
         XCTAssertEqual(
-            mapped.runs[0].url, URL(string: "slate-wiki://Note%23Section")!)
+            Self.attributed("[[Note#Section]]").runs.compactMap(\.link),
+            [URL(string: "slate-wiki://Note%23Section")!])
     }
 
-    func testMapperTag() {
-        let mapped = ReadingInlineMapper.map(slice: "Hello #alpha world")
+    func testInlineTag() {
+        let mapped = Self.runs("Hello #alpha world")
+        XCTAssertEqual(mapped.map(\.text), ["Hello ", "#alpha", " world"])
+        XCTAssertEqual(mapped[1].kind, .tag(name: "alpha"))
         XCTAssertEqual(
-            mapped.runs,
-            [
-                ReadingInlineMapper.MappedRun(
-                    kind: .tag,
-                    display: "#alpha",
-                    target: "alpha",
-                    url: URL(string: "slate-tag://alpha")!,
-                    axLabel: "#alpha")
-            ])
+            Self.attributed("Hello #alpha world").runs.compactMap(\.link),
+            [URL(string: "slate-tag://alpha")!])
     }
 
-    /// Citation runs: visible text is the RENDERED form, the AX label is the
+    /// Citation runs: visible text is the RENDERED form, the AX text is the
     /// SPEECH text (Milestone L — same `speechText` source CitationsPanel
     /// uses), carried per-range via `accessibilityTextCustom`.
-    func testMapperCitationWithMatchCarriesSpeechText() {
-        let mapped = ReadingInlineMapper.map(
-            slice: "As shown [@smith2020].",
-            citations: [Self.smithCitation])
-        XCTAssertEqual(mapped.runs.count, 1)
-        XCTAssertEqual(mapped.runs[0].kind, .citation)
-        XCTAssertEqual(mapped.runs[0].display, "(Smith, 2020)")
-        XCTAssertEqual(mapped.runs[0].target, "[@smith2020]")
-        XCTAssertEqual(mapped.runs[0].axLabel, "Smith, two thousand twenty.")
+    func testInlineCitationWithMatchCarriesSpeechText() {
+        let citations = [Self.smithCitation]
+        let mapped = Self.runs("As shown [@smith2020].", citations: citations)
+        XCTAssertEqual(mapped[1].text, "(Smith, 2020)")
         XCTAssertEqual(
-            mapped.runs[0].url,
-            URL(string: "slate-cite://%5B%40smith2020%5D")!)
+            mapped[1].kind,
+            .citation(
+                raw: "[@smith2020]", speech: "Smith, two thousand twenty."))
 
-        let rendered = String(mapped.attributed.characters)
+        let attributed = Self.attributed(
+            "As shown [@smith2020].", citations: citations)
+        let rendered = String(attributed.characters)
         XCTAssertTrue(rendered.contains("(Smith, 2020)"))
         XCTAssertFalse(rendered.contains("[@smith2020]"))
+        XCTAssertEqual(
+            attributed.runs.compactMap(\.link),
+            [URL(string: "slate-cite://%5B%40smith2020%5D")!])
 
         var speech: [String]?
-        for run in mapped.attributed.runs where run.link != nil {
-            speech = mapped.attributed[run.range][
+        for run in attributed.runs where run.link != nil {
+            speech = attributed[run.range][
                 AttributeScopes.AccessibilityAttributes.TextCustomAttribute.self]
         }
         XCTAssertEqual(
@@ -280,47 +340,53 @@ final class ReadingViewTests: XCTestCase {
             "citation run must carry its speech text for AT")
     }
 
-    func testMapperCitationWithoutMatchDegradesToRaw() {
-        let mapped = ReadingInlineMapper.map(slice: "As shown [@ghost1999].")
-        XCTAssertEqual(mapped.runs.count, 1)
-        XCTAssertEqual(mapped.runs[0].display, "[@ghost1999]")
-        XCTAssertEqual(mapped.runs[0].axLabel, "[@ghost1999]")
+    func testInlineCitationWithoutMatchDegradesToRaw() {
+        let mapped = Self.runs("As shown [@ghost1999].")
+        XCTAssertEqual(mapped[1].text, "[@ghost1999]")
+        XCTAssertEqual(
+            mapped[1].kind,
+            .citation(raw: "[@ghost1999]", speech: "[@ghost1999]"))
     }
 
     /// Embed alt-text contract: alias, else target NAME — never empty.
-    func testMapperEmbedDisplayNames() {
-        let aliased = ReadingInlineMapper.map(slice: "![[img.png|photo]]")
-        XCTAssertEqual(aliased.runs.count, 1)
-        XCTAssertEqual(aliased.runs[0].kind, .embed)
-        XCTAssertEqual(aliased.runs[0].display, "photo")
+    func testInlineEmbedDisplayNames() {
+        let aliased = Self.runs("![[img.png|photo]]")
+        XCTAssertEqual(aliased.count, 1)
+        XCTAssertEqual(aliased[0].text, "photo")
+        XCTAssertEqual(aliased[0].kind, .embed(key: "img.png"))
 
-        let named = ReadingInlineMapper.map(slice: "![[folder/pic one.png]]")
-        XCTAssertEqual(named.runs.count, 1)
-        XCTAssertEqual(named.runs[0].display, "pic one.png")
-        XCTAssertEqual(named.runs[0].target, "folder/pic one.png")
-        XCTAssertFalse(named.runs[0].axLabel.isEmpty, "image embeds need a non-empty AX label")
+        let named = Self.runs("![[folder/pic one.png]]")
+        XCTAssertEqual(named.count, 1)
+        XCTAssertEqual(named[0].text, "pic one.png")
+        XCTAssertEqual(named[0].kind, .embed(key: "folder/pic one.png"))
+        XCTAssertFalse(
+            named[0].text.isEmpty, "image embeds need a non-empty AX label")
     }
 
-    /// External markdown links are NOT remapped — they keep their real URL
-    /// (activation passes through to the system) but still get link styling.
-    func testMapperLeavesExternalLinksToFoundation() {
-        let mapped = ReadingInlineMapper.map(slice: "Visit [site](https://example.com).")
-        XCTAssertTrue(mapped.runs.isEmpty)
+    /// External markdown links keep their real URL (activation passes
+    /// through to the system) and still get link styling.
+    func testInlineExternalLinksKeepTheirURL() {
+        let mapped = Self.runs("Visit [site](https://example.com).")
         XCTAssertEqual(
-            mapped.attributed.runs.compactMap(\.link),
+            mapped[1].kind, .externalLink(url: "https://example.com"))
+        XCTAssertEqual(
+            Self.attributed("Visit [site](https://example.com).").runs
+                .compactMap(\.link),
             [URL(string: "https://example.com")!])
     }
 
     /// Every link run — slate or external — carries accent + underline (the
-    /// affordance is not conveyed by color alone).
-    func testMapperStylesLinkRuns() {
-        let mapped = ReadingInlineMapper.map(slice: "See [[Note]] and [x](https://x.com).")
+    /// affordance is not conveyed by colour alone).
+    func testInlineStylesLinkRuns() {
+        let attributed = Self.attributed(
+            "See [[Note]] and [x](https://x.com).",
+            records: [Self.record("Note")])
         var styledRuns = 0
-        for run in mapped.attributed.runs where run.link != nil {
+        for run in attributed.runs where run.link != nil {
             styledRuns += 1
-            let color = mapped.attributed[run.range][
+            let color = attributed[run.range][
                 AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self]
-            let underline = mapped.attributed[run.range][
+            let underline = attributed[run.range][
                 AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute.self]
             XCTAssertEqual(color, Tokens.ColorRole.accentText)
             XCTAssertNotNil(underline)
@@ -328,101 +394,149 @@ final class ReadingViewTests: XCTestCase {
         XCTAssertEqual(styledRuns, 2)
     }
 
-    // MARK: - Unresolved wikilink styling (#849)
+    // MARK: - Unresolved wikilink styling (#849 · #967)
 
-    /// Foreground color of the FIRST link run whose activation URL routes
+    /// Foreground colour of the FIRST link run whose activation URL routes
     /// to the given wiki target (base form).
     private func linkRunColor(
-        in mapped: ReadingInlineMapper.Mapped, target: String
+        in attributed: AttributedString, base: String
     ) -> Color? {
-        for run in mapped.attributed.runs {
+        for run in attributed.runs {
             guard let link = run.link,
-                case .wiki(let t, _) = ReadingLinkRouter.disposition(for: link),
-                ReadingLinkRouter.baseTarget(of: t) == target
+                case .wiki(let target, let grammar) =
+                    ReadingLinkRouter.disposition(for: link)
             else { continue }
-            return mapped.attributed[run.range][
+            let cut =
+                grammar == .wikilink
+                ? Self.wikiBase(target) : Self.markdownBase(target)
+            guard cut == base else { continue }
+            return attributed[run.range][
                 AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self]
         }
         return nil
     }
 
-    /// With membership, a dangling wikilink renders in warningText (the
-    /// editor's U5-3 treatment) while resolved siblings keep accent — and
-    /// the underline stays on BOTH (the affordance is never color-only).
-    func testMapperStylesUnresolvedWikilinkWithWarningText() {
-        let mapped = ReadingInlineMapper.map(
-            slice: "See [[Missing]] and [[There]].",
-            unresolvedTargets: ["Missing"])
+    /// Test-local anchor cuts, used only to FIND a run in these
+    /// assertions — production code never re-derives these (core ships
+    /// `base_target` on the run).
+    private static func wikiBase(_ target: String) -> String {
+        let trimmed = target.trimmingCharacters(in: .whitespaces)
+        if let hash = trimmed.firstIndex(of: "#") {
+            return String(trimmed[trimmed.startIndex..<hash])
+                .trimmingCharacters(in: .whitespaces)
+        }
+        if let caret = trimmed.firstIndex(of: "^") {
+            return String(trimmed[trimmed.startIndex..<caret])
+                .trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed
+    }
+
+    private static func markdownBase(_ target: String) -> String {
+        let trimmed = target.trimmingCharacters(in: .whitespaces)
+        if let hash = trimmed.firstIndex(of: "#") {
+            return String(trimmed[trimmed.startIndex..<hash])
+                .trimmingCharacters(in: .whitespaces)
+        }
+        return trimmed
+    }
+
+    /// A dangling wikilink renders in warningText (the editor's U5-3
+    /// treatment) while resolved siblings keep accent — and the underline
+    /// stays on BOTH (the affordance is never colour-only).
+    func testUnresolvedWikilinkRendersWithWarningText() {
+        let attributed = Self.attributed(
+            "See [[Missing]] and [[There]].",
+            records: [
+                Self.record("Missing", unresolved: true), Self.record("There"),
+            ])
         XCTAssertEqual(
-            linkRunColor(in: mapped, target: "Missing"),
+            linkRunColor(in: attributed, base: "Missing"),
             Tokens.ColorRole.warningText)
         XCTAssertEqual(
-            linkRunColor(in: mapped, target: "There"),
+            linkRunColor(in: attributed, base: "There"),
             Tokens.ColorRole.accentText)
-        for run in mapped.attributed.runs where run.link != nil {
+        for run in attributed.runs where run.link != nil {
             XCTAssertNotNil(
-                mapped.attributed[run.range][
+                attributed[run.range][
                     AttributeScopes.SwiftUIAttributes.UnderlineStyleAttribute.self],
                 "underline marks activatable on resolved AND unresolved runs")
         }
     }
 
-    /// Without membership nothing changes — the empty default is exactly
-    /// the pre-#849 rendering.
-    func testMapperWithoutMembershipKeepsAccentStyling() {
-        let mapped = ReadingInlineMapper.map(slice: "See [[Missing]].")
+    /// #967 semantics (unchanged in production, made honest everywhere):
+    /// with NO records the note's link index has not landed, so every run
+    /// classifies unresolved — which is exactly what activation announces
+    /// in that window. The pre-#967 default styled these accent, so a
+    /// mid-transition run could look resolved and then refuse to open.
+    func testNoRecordsClassifiesEveryLinkUnresolved() {
         XCTAssertEqual(
-            linkRunColor(in: mapped, target: "Missing"),
-            Tokens.ColorRole.accentText)
+            linkRunColor(
+                in: Self.attributed("See [[Missing]]."), base: "Missing"),
+            Tokens.ColorRole.warningText)
     }
 
     /// Key normalization: the run's target carries the anchor
-    /// (`Note#Section`); the membership key is the router's resolution key
-    /// — the anchor-STRIPPED base form `links.rs` stores as `targetRaw` —
-    /// so styling and activation agree about the same run.
-    func testUnresolvedMembershipUsesRouterBaseTargetKey() {
-        let mapped = ReadingInlineMapper.map(
-            slice: "[[Missing#Section]]",
-            unresolvedTargets: ["Missing"])
+    /// (`Note#Section`); the record key is the anchor-STRIPPED base form
+    /// `links.rs` stores as `targetRaw` — so styling and activation agree
+    /// about the same run.
+    func testUnresolvedMembershipUsesTheAnchorCutKey() {
         XCTAssertEqual(
-            linkRunColor(in: mapped, target: "Missing"),
+            linkRunColor(
+                in: Self.attributed(
+                    "[[Missing#Section]]",
+                    records: [Self.record("Missing", unresolved: true)]),
+                base: "Missing"),
             Tokens.ColorRole.warningText,
             "anchor forms resolve through the base-target key, like the router")
     }
 
-    /// Case sensitivity: the router's record match is case-SENSITIVE
-    /// (`targetRaw ==`), so membership must be too — a different-cased
-    /// entry must NOT mark the run, or styling would disagree with
-    /// activation.
     /// Codex rounds 1+2: the match keys are EXACT per grammar. Wiki
     /// grammar cuts at `#` (an earlier `^` stays in the base), else the
     /// first `^` (legacy block ref); markdown grammar never cuts at `^`.
-    /// The verbatim defense closes each list.
-    func testCandidateKeysAreExactPerGrammar() {
+    /// The verbatim target closes each list. `reading_match_link` is the
+    /// ONE implementation of that order — activation and styling share it.
+    func testCandidateKeyOrderIsExactPerGrammar() {
+        // Wiki grammar cuts at # even with an earlier ^.
         XCTAssertEqual(
-            ReadingLinkRouter.candidateKeys(for: "note^draft#sec", grammar: .wikilink),
-            ["note^draft", "note^draft#sec"],
-            "wiki grammar cuts at # even with an earlier ^")
+            readingMatchLink(
+                target: "note^draft#sec", grammar: .wikilink, embed: false,
+                records: [Self.record("note^draft")]),
+            0)
+        XCTAssertNil(
+            readingMatchLink(
+                target: "note^draft#sec", grammar: .wikilink, embed: false,
+                records: [Self.record("note")]),
+            "the ^ stays inside the hash-cut base")
+        // Legacy block ref cuts at the ^ when there is no #.
         XCTAssertEqual(
-            ReadingLinkRouter.candidateKeys(for: "note^block", grammar: .wikilink),
-            ["note", "note^block"],
-            "legacy block ref cuts FIRST — no markdown-form shadow record")
+            readingMatchLink(
+                target: "note^block", grammar: .wikilink, embed: false,
+                records: [Self.record("note")]),
+            0)
+        // Canonical block ref cuts at the #.
         XCTAssertEqual(
-            ReadingLinkRouter.candidateKeys(for: "note#^block", grammar: .wikilink),
-            ["note", "note#^block"],
-            "canonical block ref cuts at the #")
+            readingMatchLink(
+                target: "note#^block", grammar: .wikilink, embed: false,
+                records: [Self.record("note")]),
+            0)
+        // A bare ^ is a legal markdown path character — never cut.
+        XCTAssertNil(
+            readingMatchLink(
+                target: "note^draft.md", grammar: .markdownDestination,
+                embed: false, records: [Self.record("note", kind: "markdown")]))
         XCTAssertEqual(
-            ReadingLinkRouter.candidateKeys(
-                for: "note^draft.md", grammar: .markdownDestination),
-            ["note^draft.md"],
-            "a bare ^ is a legal markdown path character — never cut")
+            readingMatchLink(
+                target: "note^draft.md#sec", grammar: .markdownDestination,
+                embed: false,
+                records: [Self.record("note^draft.md", kind: "markdown")]),
+            0)
+        // The verbatim target closes the list (pre-#509 rows).
         XCTAssertEqual(
-            ReadingLinkRouter.candidateKeys(
-                for: "note^draft.md#sec", grammar: .markdownDestination),
-            ["note^draft.md", "note^draft.md#sec"])
-        XCTAssertEqual(
-            ReadingLinkRouter.candidateKeys(for: "note", grammar: .wikilink),
-            ["note"])
+            readingMatchLink(
+                target: "Note#Sec", grammar: .wikilink, embed: false,
+                records: [Self.record("Note#Sec")]),
+            0)
     }
 
     /// Codex round 2: record-ownership predicate — stale (previous
@@ -440,196 +554,190 @@ final class ReadingViewTests: XCTestCase {
         XCTAssertFalse(
             ReadingLinkRouter.recordsBelongToNote(recordsPath: nil, notePath: nil),
             "no loaded records never owns anything")
+
+        // A vault path is a BYTE identity: Swift's `==` treats canonically
+        // equivalent Unicode as equal, so an NFC-spelled retained path
+        // would otherwise be accepted as owning a byte-distinct NFD note
+        // and the previous note's records would classify and activate
+        // this one's runs.
+        let nfc = "Cafe\u{0301}.md"  // decomposed
+        let nfd = "Caf\u{00E9}.md"  // precomposed
+        XCTAssertEqual(nfc, nfd, "the two spellings are canonically equal")
+        XCTAssertFalse(
+            Array(nfc.utf8) == Array(nfd.utf8), "but byte-distinct")
+        XCTAssertFalse(
+            ReadingLinkRouter.recordsBelongToNote(
+                recordsPath: nfc, notePath: nfd),
+            "ownership must be byte-exact, not canonical")
     }
 
     /// End-to-end `#`-outranks-`^` for wiki runs: `[[note^draft#sec]]`
     /// must match a record keyed `note^draft` (links.rs cuts at the #;
     /// the old first-marker cut searched for `note` and missed).
     func testWikiHashOutranksCaretEndToEnd() {
-        let mapped = ReadingInlineMapper.map(
-            slice: "[[note^draft#sec]]",
-            unresolvedTargets: ["note^draft"])
         XCTAssertEqual(
-            linkRunColor(in: mapped, target: "note^draft"),
+            linkRunColor(
+                in: Self.attributed(
+                    "[[note^draft#sec]]",
+                    records: [Self.record("note^draft", unresolved: true)]),
+                base: "note^draft"),
             Tokens.ColorRole.warningText,
             "the record key is the hash-cut base — the ^ stays in it")
     }
 
-    /// A `^` in a markdown destination: Foundation's URL bridging
-    /// percent-encodes the authored bytes inside the native markdown
-    /// parse, BEFORE the mapper sees the link — so resolving `^`-paths
-    /// authored as markdown links is a platform limitation, not a
-    /// grammar bug. What MUST hold is agreement: activation through
-    /// `candidateKeys` finds no record for the mangled form and
-    /// announces unresolved, so styling (known set supplied) must
-    /// warn — never resolved accent. Pinned so a bridging change in a
-    /// future SDK is noticed.
-    func testMarkdownCaretPathStylingAgreesWithActivation() {
-        var sets = ReadingLinkRouter.LinkRecordSets()
-        sets.knownMarkdown = ["note^draft.md"]
-        let mapped = ReadingInlineMapper.map(
-            slice: "See [t](note^draft.md#sec).", recordSets: sets)
-        var sawWikiRun = false
-        for run in mapped.attributed.runs {
-            guard let link = run.link,
-                case .wiki = ReadingLinkRouter.disposition(for: link)
-            else { continue }
-            sawWikiRun = true
-            XCTAssertEqual(
-                mapped.attributed[run.range][
-                    AttributeScopes.SwiftUIAttributes.ForegroundColorAttribute.self],
-                Tokens.ColorRole.warningText,
-                "whatever form the bridging produced, never a resolved accent")
-        }
-        XCTAssertTrue(
-            sawWikiRun,
-            "the rewritten markdown run must survive with a wiki route")
+    /// A `^` in a markdown destination.
+    ///
+    /// **Behavior fix (#967, deltas ledger):** the retired pipeline routed
+    /// markdown destinations through Foundation's `URL`, which
+    /// percent-encoded the authored bytes before the mapper saw them, so a
+    /// `^`-path could never match its own record — a platform limitation
+    /// the old test pinned as "must at least never style resolved". Core
+    /// carries the authored destination VERBATIM (the `target_raw`
+    /// contract), so the record now matches and the run styles resolved.
+    func testMarkdownCaretPathResolvesAgainstItsOwnRecord() {
+        let attributed = Self.attributed(
+            "See [t](note^draft.md#sec).",
+            records: [Self.record("note^draft.md", kind: "markdown")])
+        XCTAssertEqual(
+            linkRunColor(in: attributed, base: "note^draft.md"),
+            Tokens.ColorRole.accentText,
+            "the authored ^-path is carried verbatim and matches its record")
+        XCTAssertEqual(
+            attributed.runs.compactMap(\.link).map {
+                ReadingLinkRouter.disposition(for: $0)
+            },
+            [.wiki("note^draft.md#sec", .markdownDestination)])
     }
 
-    /// Codex review: a run with NO saved record activates as
-    /// "unresolved. Cannot open." (live-buffer text the index hasn't
-    /// seen, or a query that hasn't landed) — accent styling would lie.
-    /// With the known set supplied, missing-record runs style
-    /// unresolved; recorded runs follow their record.
-    func testMissingRecordStylesUnresolvedWhenRecordSetsSupplied() {
-        let missing = ReadingInlineMapper.map(
-            slice: "[[Ghost]]",
-            recordSets: ReadingLinkRouter.LinkRecordSets())
+    /// A run with NO saved record activates as "unresolved. Cannot open."
+    /// (live-buffer text the index hasn't seen, or a query that hasn't
+    /// landed) — accent styling would lie.
+    func testMissingRecordStylesUnresolved() {
         XCTAssertEqual(
-            linkRunColor(in: missing, target: "Ghost"),
+            linkRunColor(in: Self.attributed("[[Ghost]]"), base: "Ghost"),
             Tokens.ColorRole.warningText,
             "no record → activation announces unresolved → styling agrees")
-
-        var known = ReadingLinkRouter.LinkRecordSets()
-        known.knownWikilink = ["Ghost"]
-        let resolved = ReadingInlineMapper.map(
-            slice: "[[Ghost]]", recordSets: known)
         XCTAssertEqual(
-            linkRunColor(in: resolved, target: "Ghost"),
+            linkRunColor(
+                in: Self.attributed("[[Ghost]]", records: [Self.record("Ghost")]),
+                base: "Ghost"),
             Tokens.ColorRole.accentText)
-
-        var dangling = known
-        dangling.unresolvedWikilink = ["Ghost"]
-        let recorded = ReadingInlineMapper.map(
-            slice: "[[Ghost]]", recordSets: dangling)
         XCTAssertEqual(
-            linkRunColor(in: recorded, target: "Ghost"),
+            linkRunColor(
+                in: Self.attributed(
+                    "[[Ghost]]",
+                    records: [Self.record("Ghost", unresolved: true)]),
+                base: "Ghost"),
             Tokens.ColorRole.warningText)
     }
 
-    /// Codex round 3: the sets are KIND-partitioned — a saved markdown
-    /// record must never vouch for an unsaved wikilink spelling the
-    /// same characters (activation applies the same rule through
-    /// `recordKindMatches`).
+    /// Codex round 3: records are KIND-partitioned — a saved markdown
+    /// record must never vouch for an unsaved wikilink spelling the same
+    /// characters (activation applies the same rule).
     func testStylingNeverClassifiesAcrossGrammars() {
-        var sets = ReadingLinkRouter.LinkRecordSets()
-        sets.knownMarkdown = ["note^block"]
-        let mapped = ReadingInlineMapper.map(
-            slice: "[[note^block]]", recordSets: sets)
         XCTAssertEqual(
-            linkRunColor(in: mapped, target: "note"),
+            linkRunColor(
+                in: Self.attributed(
+                    "[[note^block]]",
+                    records: [Self.record("note^block", kind: "markdown")]),
+                base: "note"),
             Tokens.ColorRole.warningText,
             "the markdown record is the OTHER grammar's — record-less here")
     }
 
-    /// And the record-sets builder itself partitions by `kind`,
-    /// skipping embeds and externals.
-    func testLinkRecordSetsPartitionByKind() {
-        let records = [
-            OutgoingLink(
-                targetPath: "n.md", targetRaw: "n", targetAnchor: nil,
-                kind: "wikilink", isEmbed: false, isExternal: false,
-                isUnresolved: false, snippet: "", ordinal: 0,
-                spanStart: 0, spanEnd: 0, displayText: nil),
-            OutgoingLink(
-                targetPath: nil, targetRaw: "m.md", targetAnchor: nil,
-                kind: "markdown", isEmbed: false, isExternal: false,
-                isUnresolved: true, snippet: "", ordinal: 1,
-                spanStart: 0, spanEnd: 0, displayText: nil),
-            OutgoingLink(
-                targetPath: nil, targetRaw: "e", targetAnchor: nil,
-                kind: "wikilink", isEmbed: true, isExternal: false,
-                isUnresolved: false, snippet: "", ordinal: 2,
-                spanStart: 0, spanEnd: 0, displayText: nil),
-            OutgoingLink(
-                targetPath: nil, targetRaw: "https://x", targetAnchor: nil,
-                kind: "markdown", isEmbed: false, isExternal: true,
-                isUnresolved: false, snippet: "", ordinal: 3,
-                spanStart: 0, spanEnd: 0, displayText: nil),
-        ]
-        let sets = ReadingLinkRouter.LinkRecordSets(records: records)
-        XCTAssertEqual(sets.knownWikilink, ["n"])
-        XCTAssertEqual(sets.unresolvedWikilink, [])
-        XCTAssertEqual(sets.knownMarkdown, ["m.md"])
-        XCTAssertEqual(sets.unresolvedMarkdown, ["m.md"])
+    /// Embed and external records are excluded from link classification,
+    /// exactly as the retired `LinkRecordSets` builder excluded them.
+    func testEmbedAndExternalRecordsNeverVouchForLinkRuns() {
+        XCTAssertEqual(
+            linkRunColor(
+                in: Self.attributed(
+                    "[[n]]", records: [Self.record("n", embed: true)]),
+                base: "n"),
+            Tokens.ColorRole.warningText,
+            "an embed record is not a link record")
+        XCTAssertEqual(
+            linkRunColor(
+                in: Self.attributed(
+                    "[t](https-ish.md)",
+                    records: [
+                        Self.record(
+                            "https-ish.md", kind: "markdown", external: true)
+                    ]),
+                base: "https-ish.md"),
+            Tokens.ColorRole.warningText,
+            "an external record is not an internal link record")
     }
 
-    /// Red-team probe (confirmed): whitespace-padded and anchored
-    /// targets must trim to the router's key — `[[ Missing ]]` and
+    /// Red-team probe (confirmed): whitespace-padded and anchored targets
+    /// must trim to the resolver's key — `[[ Missing ]]` and
     /// `[[Missing #Section]]` are the same unresolved target.
     func testUnresolvedMembershipTrimsWhitespaceLikeLinksRs() {
-        let padded = ReadingInlineMapper.map(
-            slice: "[[ Missing ]]",
-            unresolvedTargets: ["Missing"])
         XCTAssertEqual(
-            linkRunColor(in: padded, target: "Missing"),
+            linkRunColor(
+                in: Self.attributed(
+                    "[[ Missing ]]",
+                    records: [Self.record("Missing", unresolved: true)]),
+                base: "Missing"),
             Tokens.ColorRole.warningText,
             "padded target trims to the unresolved key")
-        let anchored = ReadingInlineMapper.map(
-            slice: "[[Missing #Section]]",
-            unresolvedTargets: ["Missing"])
         XCTAssertEqual(
-            linkRunColor(in: anchored, target: "Missing"),
+            linkRunColor(
+                in: Self.attributed(
+                    "[[Missing #Section]]",
+                    records: [Self.record("Missing", unresolved: true)]),
+                base: "Missing"),
             Tokens.ColorRole.warningText,
             "space-before-anchor trims to the base target")
     }
 
     func testUnresolvedMembershipIsCaseSensitiveLikeTheRouter() {
-        let mapped = ReadingInlineMapper.map(
-            slice: "[[Missing]]",
-            unresolvedTargets: ["missing"])
         XCTAssertEqual(
-            linkRunColor(in: mapped, target: "Missing"),
-            Tokens.ColorRole.accentText,
-            "case-mismatched membership must not style the run unresolved")
+            linkRunColor(
+                in: Self.attributed(
+                    "[[Missing]]",
+                    records: [Self.record("missing", unresolved: true)]),
+                base: "Missing"),
+            Tokens.ColorRole.warningText,
+            "a case-mismatched record is no record at all — and a run with "
+                + "no record of its own grammar is unresolved")
     }
 
-    /// Internal markdown links rewritten onto the wiki scheme take the
-    /// same unresolved treatment — they activate through the same router
-    /// branch.
-    func testUnresolvedStylingCoversRewrittenMarkdownLinks() {
-        let mapped = ReadingInlineMapper.map(
-            slice: "See [t](gone.md).",
-            unresolvedTargets: ["gone.md"])
+    /// Internal markdown links take the same unresolved treatment — they
+    /// activate through the same router branch.
+    func testUnresolvedStylingCoversMarkdownDestinations() {
         XCTAssertEqual(
-            linkRunColor(in: mapped, target: "gone.md"),
+            linkRunColor(
+                in: Self.attributed(
+                    "See [t](gone.md).",
+                    records: [
+                        Self.record("gone.md", kind: "markdown", unresolved: true)
+                    ]),
+                base: "gone.md"),
             Tokens.ColorRole.warningText)
     }
 
-    /// The unresolved state is announced, not color-only: the run carries
-    /// the AX custom-text suffix.
-    func testUnresolvedRunCarriesAccessibilitySuffix() {
-        let mapped = ReadingInlineMapper.map(
-            slice: "[[Missing]]",
-            unresolvedTargets: ["Missing"])
+    /// The unresolved state is announced, not colour-only: the run carries
+    /// the AX custom text.
+    func testUnresolvedRunCarriesAccessibilityText() {
+        let attributed = Self.attributed(
+            "[[Missing]]", records: [Self.record("Missing", unresolved: true)])
         var found = false
-        for run in mapped.attributed.runs where run.link != nil {
-            if mapped.attributed[run.range][
+        for run in attributed.runs where run.link != nil {
+            if attributed[run.range][
                 AttributeScopes.AccessibilityAttributes.TextCustomAttribute.self]
                 == ["Unresolved link"]
             {
                 found = true
             }
         }
-        XCTAssertTrue(found, "unresolved runs carry the AX custom-text suffix")
+        XCTAssertTrue(found, "unresolved runs carry the AX custom text")
     }
 
     /// Internal markdown destinations (scheme-less; Slate semantics:
-    /// vault-rooted/basename, stored literally) are rewritten onto the wiki
+    /// vault-rooted/basename, stored literally) route on the markdown-wiki
     /// scheme so they activate — never styled-then-dead.
-    func testMapperRewritesInternalMarkdownLinksToWikiScheme() {
-        let mapped = ReadingInlineMapper.map(slice: "See [t](note.md).")
-        let links = mapped.attributed.runs.compactMap(\.link)
+    func testMarkdownDestinationsRouteOnTheMarkdownScheme() {
+        let links = Self.attributed("See [t](note.md).").runs.compactMap(\.link)
         XCTAssertEqual(links.count, 1)
         XCTAssertEqual(links[0].scheme, ReadingLinkRouter.wikiMarkdownScheme)
         XCTAssertEqual(
@@ -640,26 +748,24 @@ final class ReadingViewTests: XCTestCase {
     /// The authored destination travels VERBATIM — fragments kept (markdown
     /// `targetRaw` stores them), percent-escapes NOT decoded (Slate never
     /// decodes markdown destinations).
-    func testMapperRewriteKeepsFragmentAndPercentEscapesLiteral() {
-        let anchored = ReadingInlineMapper.map(slice: "[t](note.md#sec)")
+    func testMarkdownDestinationKeepsFragmentAndPercentEscapesLiteral() {
         XCTAssertEqual(
-            anchored.attributed.runs.compactMap(\.link).compactMap {
+            Self.attributed("[t](note.md#sec)").runs.compactMap(\.link).map {
                 ReadingLinkRouter.disposition(for: $0)
             },
             [.wiki("note.md#sec", .markdownDestination)])
-        let escaped = ReadingInlineMapper.map(slice: "[t](my%20note.md)")
         XCTAssertEqual(
-            escaped.attributed.runs.compactMap(\.link).compactMap {
+            Self.attributed("[t](my%20note.md)").runs.compactMap(\.link).map {
                 ReadingLinkRouter.disposition(for: $0)
             },
             [.wiki("my%20note.md", .markdownDestination)])
     }
 
-    /// Non-activatable destinations lose the link attribute entirely: no
-    /// dead affordance visually or to VoiceOver, and nothing ever reaches
+    /// Non-activatable destinations carry no link attribute at all: no dead
+    /// affordance visually or to VoiceOver, and nothing ever reaches
     /// LaunchServices. Fragment-only and protocol-relative references mirror
-    /// `links.rs::looks_external` (not internal notes → not rewritten).
-    func testMapperStripsLinkAffordanceFromNonActivatableDestinations() {
+    /// `links.rs::looks_external` (not internal notes → not routed).
+    func testNonActivatableDestinationsCarryNoAffordance() {
         for slice in [
             "[t](javascript:alert(1))",
             "[t](file:///etc/passwd)",
@@ -667,64 +773,95 @@ final class ReadingViewTests: XCTestCase {
             "[t](#intro)",
             "[t](//host/x)",
         ] {
-            let mapped = ReadingInlineMapper.map(slice: slice)
+            let attributed = Self.attributed(slice)
             XCTAssertEqual(
-                mapped.attributed.runs.compactMap(\.link), [],
+                attributed.runs.compactMap(\.link), [],
                 "\(slice) must not render as an activatable link")
             XCTAssertTrue(
-                String(mapped.attributed.characters).contains("t"),
+                String(attributed.characters).contains("t"),
                 "\(slice) keeps its display text")
         }
     }
 
     /// Slate tokens inside markdown-link syntax stay literal — the link is
     /// the construct there. `#intro` in the label (or a fragment-only
-    /// destination) must not be spliced into a tag link, which would corrupt
-    /// the destination the native markdown parse consumes.
-    func testMapperDoesNotSpliceSlateTokensInsideMarkdownLinks() {
-        let mapped = ReadingInlineMapper.map(
-            slice: "see [about #intro](note.md) here")
-        XCTAssertTrue(
-            mapped.runs.isEmpty,
+    /// destination) must not become a tag run.
+    func testSlateTokensInsideMarkdownLinksStayLiteral() {
+        let mapped = Self.runs("see [about #intro](note.md) here")
+        XCTAssertFalse(
+            mapped.contains { if case .tag = $0.kind { return true } else { return false } },
             "no Slate-token runs may be minted inside a markdown link")
-        let links = mapped.attributed.runs.compactMap(\.link)
+        let attributed = Self.attributed("see [about #intro](note.md) here")
+        let links = attributed.runs.compactMap(\.link)
         XCTAssertEqual(links.count, 1)
         XCTAssertEqual(
             ReadingLinkRouter.disposition(for: links[0]),
             .wiki("note.md", .markdownDestination))
         XCTAssertTrue(
-            String(mapped.attributed.characters).contains("about #intro"),
+            String(attributed.characters).contains("about #intro"),
             "label text renders verbatim")
     }
 
-    func testMapperPreservesDocumentOrderAcrossKinds() {
-        let mapped = ReadingInlineMapper.map(slice: "A [[x]] then #t end.")
-        XCTAssertEqual(mapped.runs.map(\.kind), [.wiki, .tag])
+    func testRunsPreserveDocumentOrderAcrossKinds() {
+        let kinds = Self.runs("A [[x]] then #t end.").map(\.kind)
+        XCTAssertTrue(
+            kinds.contains { if case .wikilink = $0 { return true } else { return false } })
+        XCTAssertTrue(kinds.contains(.tag(name: "t")))
+        let wikiIndex = kinds.firstIndex {
+            if case .wikilink = $0 { return true } else { return false }
+        }
+        let tagIndex = kinds.firstIndex(of: .tag(name: "t"))
+        XCTAssertNotNil(wikiIndex)
+        XCTAssertNotNil(tagIndex)
+        XCTAssertLessThan(wikiIndex!, tagIndex!)
     }
 
     /// The Rust span classifier is the single syntax authority: a wikilink
     /// inside inline code is code, not a link.
-    func testMapperRespectsInlineCodeSuppression() {
-        let mapped = ReadingInlineMapper.map(slice: "`[[not a link]]` and [[real]]")
-        XCTAssertEqual(mapped.runs.count, 1)
-        XCTAssertEqual(mapped.runs[0].target, "real")
-        let rendered = String(mapped.attributed.characters)
+    func testInlineCodeSuppressesTokens() {
+        let mapped = Self.runs("`[[not a link]]` and [[real]]")
+        let wikiRuns = mapped.filter {
+            if case .wikilink = $0.kind { return true } else { return false }
+        }
+        XCTAssertEqual(wikiRuns.count, 1)
+        XCTAssertEqual(wikiRuns[0].text, "real")
         XCTAssertTrue(
-            rendered.contains("[[not a link]]"),
+            Self.segment("`[[not a link]]` and [[real]]").content
+                .contains("[[not a link]]"),
             "code-span content must stay literal")
     }
 
-    /// Markdown-meaningful characters in display text can't break out of the
-    /// link label.
-    func testMapperEscapesDisplayText() {
+    /// Markdown-meaningful characters in display text can't break out of a
+    /// run: the retired backslash-escaping splice is replaced structurally —
+    /// a selected token's bytes are opaque to the CommonMark walk, so its
+    /// display text never re-parses.
+    func testTokenDisplayTextNeverReparses() {
+        let mapped = Self.runs("[[a|x]y]]")
+        XCTAssertEqual(mapped.count, 1)
+        XCTAssertEqual(mapped[0].text, "x]y")
+
+        let starred = Self.runs("[[note|**not bold**]]")
+        XCTAssertEqual(starred.count, 1)
+        XCTAssertEqual(starred[0].text, "**not bold**")
         XCTAssertEqual(
-            ReadingInlineMapper.escapeMarkdownLabel("a*b]c[d"),
-            "a\\*b\\]c\\[d")
-        // An alias containing `]` survives end-to-end.
-        let mapped = ReadingInlineMapper.map(slice: "[[a|x]y]]")
-        XCTAssertEqual(mapped.runs.count, 1)
-        XCTAssertEqual(mapped.runs[0].display, "x]y")
-        XCTAssertTrue(String(mapped.attributed.characters).contains("x]y"))
+            Self.segment("[[note|**not bold**]]").runs[0].styles, [],
+            "the token's own text carries no emphasis")
+
+        // A delimiter INSIDE a token can't pair with one outside it.
+        XCTAssertEqual(Self.segment("[[a*b]] * tail").content, "a*b * tail")
+        XCTAssertTrue(
+            Self.segment("[[a*b]] * tail").runs.allSatisfy { $0.styles.isEmpty })
+    }
+
+    /// Emphasis SPANNING a token keeps the style on every run, including
+    /// the token's own — the overlap sweep in `highlight_spans` would have
+    /// dropped it, so the styling walk is a separate masked pass.
+    func testEmphasisSpanningATokenStylesEveryRun() {
+        let seg = Self.segment("**bold [[Target]] tail**")
+        XCTAssertEqual(seg.content, "bold Target tail")
+        XCTAssertTrue(
+            seg.runs.allSatisfy { $0.styles == [.strong] },
+            "every run inside the strong span carries it: \(seg.runs)")
     }
 
     // MARK: - URL codec
@@ -747,10 +884,16 @@ final class ReadingViewTests: XCTestCase {
         }
     }
 
-    func testBaseTargetStripsAnchors() {
-        XCTAssertEqual(ReadingLinkRouter.baseTarget(of: "Note#Sec"), "Note")
-        XCTAssertEqual(ReadingLinkRouter.baseTarget(of: "Note^blk"), "Note")
-        XCTAssertEqual(ReadingLinkRouter.baseTarget(of: "Plain"), "Plain")
+    /// Core ships the anchor-cut form on the run, so no host re-derives it.
+    func testRunsCarryTheAnchorCutBaseTarget() {
+        func base(_ slice: String) -> String? {
+            guard case .wikilink(_, let base, _, _, _) = Self.runs(slice)[0].kind
+            else { return nil }
+            return base
+        }
+        XCTAssertEqual(base("[[Note#Sec]]"), "Note")
+        XCTAssertEqual(base("[[Note^blk]]"), "Note")
+        XCTAssertEqual(base("[[Plain]]"), "Plain")
     }
 
     // MARK: - Routing table
@@ -1008,66 +1151,64 @@ final class ReadingViewTests: XCTestCase {
             "no navigation through the previous note's retained records")
     }
 
-    // MARK: - Block-source helpers
+    // MARK: - Chrome stripping (core-owned since #967)
+    //
+    // Heading ATX/setext text, the list marker + task-box split, and the
+    // blockquote depth strip moved into `slate-core` (inline-runs spec §2).
+    // These cases pin the SAME semantics through the canonical result:
+    // the Swift strippers they used to call are deleted.
 
-    func testHeadingTextStripping() {
-        XCTAssertEqual(ReadingBlockSource.headingText("## Title"), "Title")
-        XCTAssertEqual(ReadingBlockSource.headingText("# Title ##"), "Title")
-        XCTAssertEqual(ReadingBlockSource.headingText("Title\n====="), "Title")
-        XCTAssertEqual(ReadingBlockSource.headingText("Title\n---"), "Title")
+    func testHeadingChromeStripping() {
+        XCTAssertEqual(Self.segment("## Title").content, "Title")
+        XCTAssertEqual(Self.segment("# Title ##").content, "Title")
+        XCTAssertEqual(Self.segment("Title\n=====").content, "Title")
+        XCTAssertEqual(Self.segment("Title\n---").content, "Title")
     }
 
-    func testListItemParts() {
-        let bullet = ReadingBlockSource.listItemParts("- foo")
-        XCTAssertEqual(bullet?.marker, "-")
-        XCTAssertEqual(bullet?.content, "foo")
-        XCTAssertNil(bullet?.taskChar)
+    func testListItemChromeStripping() {
+        let bullet = Self.inline("- foo")
+        XCTAssertEqual(bullet.listMarker, "-")
+        XCTAssertEqual(bullet.segments.first?.content, "foo")
+        XCTAssertNil(bullet.segments.first?.taskCompleted)
 
-        let nested = ReadingBlockSource.listItemParts("  - bar")
-        XCTAssertEqual(nested?.content, "bar")
+        XCTAssertEqual(Self.inline("  - bar").segments.first?.content, "bar")
 
-        let ordered = ReadingBlockSource.listItemParts("12. twelve")
-        XCTAssertEqual(ordered?.marker, "12.")
-        XCTAssertEqual(ordered?.content, "twelve")
+        let ordered = Self.inline("12. twelve")
+        XCTAssertEqual(ordered.listMarker, "12.")
+        XCTAssertEqual(ordered.segments.first?.content, "twelve")
 
-        let paren = ReadingBlockSource.listItemParts("3) three")
-        XCTAssertEqual(paren?.marker, "3)")
+        XCTAssertEqual(Self.inline("3) three").listMarker, "3)")
 
-        let task = ReadingBlockSource.listItemParts(
-            "- [x] done thing", stripTaskBox: true)
-        XCTAssertEqual(task?.taskChar, "x")
-        XCTAssertEqual(task?.content, "done thing")
+        let task = Self.inline("- [x] done thing")
+        XCTAssertEqual(task.segments.first?.taskCompleted, true)
+        XCTAssertEqual(task.segments.first?.content, "done thing")
 
-        let multi = ReadingBlockSource.listItemParts("- a\n  continued")
-        XCTAssertEqual(multi?.content, "a\n  continued")
+        XCTAssertEqual(
+            Self.inline("- a\n  continued").segments.first?.content,
+            "a\n  continued")
 
-        XCTAssertNil(ReadingBlockSource.listItemParts("not a list"))
+        // A paragraph is not a list item — no marker is reported.
+        XCTAssertNil(Self.inline("not a list").listMarker)
     }
 
     /// Taskhood belongs to the Rust classifier — the splitter must NOT strip
     /// a boxy-looking prefix from PLAIN list items (Codoki, #514). The two
     /// reachable shapes: ordered items (never tasks in the Rust grammar) and
     /// a box with no following space.
-    func testListItemPartsKeepsBracketTextOnPlainItems() {
-        let ordered = ReadingBlockSource.listItemParts("1. [v] Visible")
-        XCTAssertEqual(ordered?.content, "[v] Visible")
-        XCTAssertNil(ordered?.taskChar)
+    func testListItemChromeKeepsBracketTextOnPlainItems() {
+        let ordered = Self.inline("1. [v] Visible")
+        XCTAssertEqual(ordered.segments.first?.content, "[v] Visible")
+        XCTAssertNil(ordered.segments.first?.taskCompleted)
 
-        let noSpace = ReadingBlockSource.listItemParts("- [v]x")
-        XCTAssertEqual(noSpace?.content, "[v]x")
-        XCTAssertNil(noSpace?.taskChar)
-
-        // Default (no flag) never strips, even for the canonical task shape.
-        let unflagged = ReadingBlockSource.listItemParts("- [x] done")
-        XCTAssertEqual(unflagged?.content, "[x] done")
-        XCTAssertNil(unflagged?.taskChar)
+        let noSpace = Self.inline("- [v]x")
+        XCTAssertEqual(noSpace.segments.first?.content, "[v]x")
+        XCTAssertNil(noSpace.segments.first?.taskCompleted)
     }
 
-    func testQuoteContentStripping() {
-        XCTAssertEqual(ReadingBlockSource.quoteContent("> quoted", depth: 1), "quoted")
-        XCTAssertEqual(ReadingBlockSource.quoteContent("> > deep", depth: 2), "deep")
-        XCTAssertEqual(
-            ReadingBlockSource.quoteContent("> a\n> b", depth: 1), "a\nb")
+    func testQuoteChromeStripping() {
+        XCTAssertEqual(Self.segment("> quoted").content, "quoted")
+        XCTAssertEqual(Self.segment("> > deep").content, "deep")
+        XCTAssertEqual(Self.segment("> a\n> b").content, "a\nb")
     }
 
     /// The code-block interior is now carried authoritatively from Rust
@@ -1147,8 +1288,34 @@ final class ReadingViewTests: XCTestCase {
         let second = cache.parsed(for: Self.everyKindFixture)
         XCTAssertEqual(first.blocks, second.blocks)
         XCTAssertEqual(first.lineStarts, second.lineStarts)
+        XCTAssertEqual(
+            first.inlines.count, first.blocks.count,
+            "inline results are 1:1 with blocks")
         let changed = cache.parsed(for: "# Other")
         XCTAssertEqual(changed.blocks.count, 1)
+    }
+
+    /// #967: the inline pipeline is a pure function of (text, citations,
+    /// records), so the memo must invalidate when the RECORDS change —
+    /// keying on text alone would freeze a note's link styling at whatever
+    /// the first render saw.
+    func testParseCacheInvalidatesWhenRecordsChange() {
+        let cache = ReadingParseCache()
+        let text = "[[Known]]\n"
+        func resolved(_ parsed: ReadingParseCache.Parsed) -> Bool? {
+            guard
+                case .wikilink(_, _, _, _, let resolved)? =
+                    parsed.inlines.first?.segments.first?.runs.first?.kind
+            else { return nil }
+            return resolved
+        }
+        XCTAssertEqual(
+            resolved(cache.parsed(for: text)), false,
+            "no records → unresolved")
+        XCTAssertEqual(
+            resolved(cache.parsed(for: text, records: [Self.record("Known")])),
+            true,
+            "a record must invalidate the memo, not be ignored")
     }
 
     // MARK: - Table grid (#510)
@@ -1292,27 +1459,27 @@ final class ReadingViewTests: XCTestCase {
     /// the EmbedsPanel look up the SAME `currentNoteEmbedResolutions` entry.
     func testBlockEmbedDetectionPositives() {
         XCTAssertEqual(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note]]"), "Note")
+            readingBlockEmbedKey(slice: "![[Note]]"), "Note")
         // Leading/trailing whitespace around the sole embed is still
         // block-level. (A ≥4-space / tab indent is NOT tested here: that is a
         // CommonMark indented-code block, which the Rust classifier correctly
         // declines to treat as an embed — and `readingBlocksSource` never hands
         // a paragraph slice such an indent anyway.)
         XCTAssertEqual(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "  ![[Note]]  "), "Note")
+            readingBlockEmbedKey(slice: "  ![[Note]]  "), "Note")
         XCTAssertEqual(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: " ![[Note]] \n"), "Note")
+            readingBlockEmbedKey(slice: " ![[Note]] \n"), "Note")
         // Heading anchor stays attached to the target (cache-key form).
         XCTAssertEqual(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note#Section A]]"),
+            readingBlockEmbedKey(slice: "![[Note#Section A]]"),
             "Note#Section A")
         // Block anchor likewise (`^id`).
         XCTAssertEqual(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note^blk]]"),
+            readingBlockEmbedKey(slice: "![[Note^blk]]"),
             "Note^blk")
         // Alias does NOT change the routing target/cache key.
         XCTAssertEqual(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note|shown]]"), "Note")
+            readingBlockEmbedKey(slice: "![[Note|shown]]"), "Note")
     }
 
     /// The detected target equals the key `AppState.embedTargetKey` composes
@@ -1321,15 +1488,15 @@ final class ReadingViewTests: XCTestCase {
     func testBlockEmbedTargetMatchesAppStateCacheKey() {
         // Plain target.
         XCTAssertEqual(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[folder/Note]]"),
+            readingBlockEmbedKey(slice: "![[folder/Note]]"),
             appStateEmbedKey(targetRaw: "folder/Note", anchorKind: nil, anchorText: nil))
         // Heading anchor.
         XCTAssertEqual(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note#Sec]]"),
+            readingBlockEmbedKey(slice: "![[Note#Sec]]"),
             appStateEmbedKey(targetRaw: "Note", anchorKind: "heading", anchorText: "Sec"))
         // Block anchor.
         XCTAssertEqual(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note^b1]]"),
+            readingBlockEmbedKey(slice: "![[Note^b1]]"),
             appStateEmbedKey(targetRaw: "Note", anchorKind: "block", anchorText: "b1"))
     }
 
@@ -1347,27 +1514,27 @@ final class ReadingViewTests: XCTestCase {
     func testBlockEmbedDetectionNegatives() {
         // Embed with surrounding prose — mid-paragraph, not block-level.
         XCTAssertNil(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "see ![[Note]] here"))
+            readingBlockEmbedKey(slice: "see ![[Note]] here"))
         XCTAssertNil(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[Note]] trailing"))
+            readingBlockEmbedKey(slice: "![[Note]] trailing"))
         XCTAssertNil(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "leading ![[Note]]"))
+            readingBlockEmbedKey(slice: "leading ![[Note]]"))
         // Two embeds in one paragraph.
         XCTAssertNil(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![[One]] ![[Two]]"))
+            readingBlockEmbedKey(slice: "![[One]] ![[Two]]"))
         // A wikilink (not an embed) is not a block-level embed.
-        XCTAssertNil(ReadingInlineMapper.blockEmbedTarget(inSlice: "[[Note]]"))
+        XCTAssertNil(readingBlockEmbedKey(slice: "[[Note]]"))
         // Plain prose.
-        XCTAssertNil(ReadingInlineMapper.blockEmbedTarget(inSlice: "just text"))
+        XCTAssertNil(readingBlockEmbedKey(slice: "just text"))
         // Empty embed body doesn't parse to a target.
-        XCTAssertNil(ReadingInlineMapper.blockEmbedTarget(inSlice: "![[]]"))
+        XCTAssertNil(readingBlockEmbedKey(slice: "![[]]"))
     }
 
     /// An embed INSIDE inline code is suppressed by the shared `mappableSpans`
     /// (rendered-as-code stays literal), so it never counts as a block embed —
     /// the no-second-classifier suppression is pinned here.
     func testBlockEmbedDetectionSuppressedInsideInlineCode() {
-        XCTAssertNil(ReadingInlineMapper.blockEmbedTarget(inSlice: "`![[Note]]`"))
+        XCTAssertNil(readingBlockEmbedKey(slice: "`![[Note]]`"))
     }
 
     /// SCOPE (pinned, #511): only WIKILINK embeds expand in place. A markdown
@@ -1376,7 +1543,7 @@ final class ReadingViewTests: XCTestCase {
     /// markdown-image rendering is a noted follow-up, not this PR.
     func testMarkdownImageEmbedIsNotBlockLevelEmbed() {
         XCTAssertNil(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "![alt](picture.png)"))
+            readingBlockEmbedKey(slice: "![alt](picture.png)"))
     }
 
     // MARK: - Block-level embed render state machine (#511)
@@ -1387,8 +1554,9 @@ final class ReadingViewTests: XCTestCase {
     func testBlockEmbedRendersEmbedViewWhenResolved() throws {
         let text = try strippedReadingViewSource()
         XCTAssertTrue(
-            text.contains("blockEmbedTarget(inSlice:"),
-            "the paragraph case must detect block-level embeds via the span authority")
+            text.contains("inline.blockEmbedKey"),
+            "the paragraph case must detect block-level embeds via core (#967), "
+                + "never a host-side string check")
         XCTAssertTrue(
             text.contains("EmbedView("),
             "a resolved block-level embed must render EmbedView")
@@ -1416,7 +1584,7 @@ final class ReadingViewTests: XCTestCase {
             raw.contains("await context.onResolveEmbed(key)"),
             "the placeholder must request resolution for its key and AWAIT it")
         XCTAssertTrue(
-            raw.contains("inlineLeaf(fallbackSlice)"),
+            raw.contains("inlineLeaf(fallback)"),
             "resolved-empty must fall back to the inline link-run rendering")
         // The fallback gate must be request COMPLETION, not request start —
         // gating on requestedEmbedKeys would flash the inline run for the
@@ -1461,18 +1629,24 @@ final class ReadingViewTests: XCTestCase {
     // MARK: - Mid-paragraph embed keeps navigate routing (#511)
 
     /// A mid-paragraph embed stays an inline run whose activation routes
-    /// through the embed scheme — unchanged from today. Asserted at the mapper:
-    /// the surrounding text keeps the embed as ONE `.embed` run.
+    /// through the embed scheme — unchanged from today. Asserted on the
+    /// canonical runs: the surrounding text keeps the embed as ONE
+    /// `.embed` run.
     func testMidParagraphEmbedStaysInlineRun() {
-        let mapped = ReadingInlineMapper.map(slice: "before ![[Note]] after")
-        XCTAssertEqual(mapped.runs.count, 1)
-        XCTAssertEqual(mapped.runs[0].kind, .embed)
-        XCTAssertEqual(mapped.runs[0].target, "Note")
-        XCTAssertEqual(mapped.runs[0].url.scheme, ReadingLinkRouter.embedScheme)
+        let mapped = Self.runs("before ![[Note]] after")
+        let embeds = mapped.filter {
+            if case .embed = $0.kind { return true } else { return false }
+        }
+        XCTAssertEqual(embeds.count, 1)
+        XCTAssertEqual(embeds[0].kind, .embed(key: "Note"))
+        XCTAssertEqual(
+            Self.attributed("before ![[Note]] after").runs
+                .compactMap(\.link).compactMap(\.scheme),
+            [ReadingLinkRouter.embedScheme])
         // And it is NOT a block-level embed, so the paragraph case renders it
         // via the inline leaf (mid-paragraph navigate behavior preserved).
         XCTAssertNil(
-            ReadingInlineMapper.blockEmbedTarget(inSlice: "before ![[Note]] after"))
+            readingBlockEmbedKey(slice: "before ![[Note]] after"))
     }
 
     // MARK: - AppState single-embed resolution (#511)

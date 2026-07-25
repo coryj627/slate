@@ -427,3 +427,240 @@ fn reading_blocks_edge_case_shapes_satisfy_invariants() {
         assert_invariants(1_000_000 + i as u64, case);
     }
 }
+
+// =========================================================================
+// Inline segments (#967 · specs/w3_inline_runs_spec.md)
+// =========================================================================
+//
+// Three invariants the hosts' attributed-text mapping depends on, over the
+// SAME deterministic generator (seeds `0..N`, so the debug subset is a
+// strict prefix of the release set and a debug failure reproduces
+// identically in release):
+//
+// 1. **Alignment** — `reading_inline_segments_source` is 1:1 and
+//    same-order with `reading_blocks_source`; kinds with no inline
+//    content carry zero segments, inline kinds carry exactly one.
+// 2. **Partition** — each segment's runs are ascending, non-overlapping,
+//    gapless, cover `0..content.len()`, and land on char boundaries.
+//    That is what makes `concat(content[run]) == content` hold, which is
+//    what lets a host stamp attributes run by run without re-slicing.
+// 3. **Splice-equivalence** — a selected token's own text never re-parses
+//    as Markdown: its run text equals the payload's display form exactly,
+//    with no delimiter consumed.
+
+use crate::reading::{ReadingBlockInlines, ReadingInlineRunKind, reading_inline_segments_source};
+
+fn assert_inline_invariants(seed: u64, source: &str) {
+    let blocks = reading_blocks_source(source);
+    let inlines = reading_inline_segments_source(source, &[], &[]);
+
+    assert_eq!(
+        blocks.len(),
+        inlines.len(),
+        "seed {seed}: inline results must be 1:1 with blocks\nsource: {source:?}"
+    );
+
+    for (block, inline) in blocks.iter().zip(inlines.iter()) {
+        let expects_segment = matches!(
+            block.kind,
+            crate::reading::ReadingBlockKind::Heading { .. }
+                | crate::reading::ReadingBlockKind::Paragraph
+                | crate::reading::ReadingBlockKind::ListItem { .. }
+                | crate::reading::ReadingBlockKind::BlockQuote { .. }
+        );
+        assert_eq!(
+            inline.segments.len(),
+            usize::from(expects_segment),
+            "seed {seed}: {:?} segment count\nsource: {source:?}",
+            block.kind
+        );
+
+        // A block-embed key is only ever reported for a Paragraph.
+        if inline.block_embed_key.is_some() {
+            assert!(
+                matches!(block.kind, crate::reading::ReadingBlockKind::Paragraph),
+                "seed {seed}: block_embed_key on {:?}\nsource: {source:?}",
+                block.kind
+            );
+        }
+        // A list marker is only ever reported for a ListItem.
+        if inline.list_marker.is_some() {
+            assert!(
+                matches!(
+                    block.kind,
+                    crate::reading::ReadingBlockKind::ListItem { .. }
+                ),
+                "seed {seed}: list_marker on {:?}\nsource: {source:?}",
+                block.kind
+            );
+        }
+
+        for segment in &inline.segments {
+            let mut cursor = 0u32;
+            for run in &segment.runs {
+                assert_eq!(
+                    run.start, cursor,
+                    "seed {seed}: run gap/overlap in {:?}\nsource: {source:?}",
+                    segment.content
+                );
+                assert!(
+                    run.end > run.start,
+                    "seed {seed}: empty run in {:?}\nsource: {source:?}",
+                    segment.content
+                );
+                assert!(
+                    segment.content.is_char_boundary(run.start as usize)
+                        && segment.content.is_char_boundary(run.end as usize),
+                    "seed {seed}: run splits a scalar in {:?}\nsource: {source:?}",
+                    segment.content
+                );
+                let mut styles = run.styles.clone();
+                styles.sort_unstable();
+                styles.dedup();
+                assert_eq!(
+                    styles, run.styles,
+                    "seed {seed}: styles must ship sorted + deduped\nsource: {source:?}"
+                );
+                cursor = run.end;
+            }
+            // Mask-leakage guard: the pipeline masks selected tokens with
+            // runs of U+FFFC, so rendered content must never carry MORE of
+            // that scalar than the author wrote. A scanner that mis-parsed
+            // a mask would spill marker scalars here and drop the token's
+            // affordance — exactly what an authored U+FFFC sitting against
+            // a wikilink used to produce.
+            let authored = block.source.matches('\u{FFFC}').count();
+            let rendered = segment.content.matches('\u{FFFC}').count();
+            assert!(
+                rendered <= authored,
+                "seed {seed}: rendered content carries {rendered} marker scalars \
+                 from {authored} authored\ncontent: {:?}\nsource: {source:?}",
+                segment.content
+            );
+
+            assert_eq!(
+                cursor as usize,
+                segment.content.len(),
+                "seed {seed}: runs must cover every byte of {:?}\nsource: {source:?}",
+                segment.content
+            );
+        }
+    }
+}
+
+/// Splice-equivalence: a selected token's run text is exactly its payload
+/// display form — the Markdown walk never consumed a delimiter out of it,
+/// and no delimiter inside it paired with anything outside.
+fn assert_token_text_never_reparses(seed: u64, source: &str) {
+    for inline in reading_inline_segments_source(source, &[], &[]) {
+        for segment in &inline.segments {
+            for run in &segment.runs {
+                let text = &segment.content[run.start as usize..run.end as usize];
+                match &run.kind {
+                    ReadingInlineRunKind::Tag { name } => assert_eq!(
+                        text,
+                        format!("#{name}"),
+                        "seed {seed}: tag run text must be the hash plus name\nsource: {source:?}"
+                    ),
+                    ReadingInlineRunKind::Citation { raw, .. } => assert_eq!(
+                        text, raw,
+                        "seed {seed}: an unmatched citation renders its raw text\nsource: {source:?}"
+                    ),
+                    // Wikilink/Embed display text is alias-dependent, so the
+                    // pinned invariant is non-emptiness: a token must never
+                    // render as a zero-width, invisible affordance.
+                    ReadingInlineRunKind::Wikilink { .. } | ReadingInlineRunKind::Embed { .. } => {
+                        assert!(
+                            !text.is_empty(),
+                            "seed {seed}: token run must render non-empty text\nsource: {source:?}"
+                        )
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+/// Determinism: the same inputs produce the same bytes, which is what
+/// makes the §W-A `inline_runs` artifact meaningful.
+fn assert_inline_determinism(seed: u64, source: &str) {
+    let a: Vec<ReadingBlockInlines> = reading_inline_segments_source(source, &[], &[]);
+    let b: Vec<ReadingBlockInlines> = reading_inline_segments_source(source, &[], &[]);
+    assert_eq!(a, b, "seed {seed}: output is not deterministic");
+}
+
+#[test]
+fn census_reading_inline_segments_align_and_partition() {
+    const DOCUMENTS: u64 = if cfg!(debug_assertions) {
+        2_000
+    } else {
+        100_000
+    };
+    for seed in 0..DOCUMENTS {
+        let mut rng = SplitMix64::new(seed);
+        let doc = generate_document(&mut rng);
+        assert_inline_invariants(seed, &doc);
+    }
+}
+
+#[test]
+fn census_reading_inline_tokens_never_reparse() {
+    const DOCUMENTS: u64 = if cfg!(debug_assertions) {
+        2_000
+    } else {
+        100_000
+    };
+    for seed in 0..DOCUMENTS {
+        let mut rng = SplitMix64::new(seed);
+        let doc = generate_document(&mut rng);
+        assert_token_text_never_reparses(seed, &doc);
+        if seed < 256 {
+            assert_inline_determinism(seed, &doc);
+        }
+    }
+}
+
+/// The same hand-picked adversarial shapes the block census pins, run
+/// through the inline invariants — plus the inline-specific families the
+/// random generator hits only rarely.
+#[test]
+fn reading_inline_edge_case_shapes_satisfy_invariants() {
+    let cases = [
+        "",
+        "   ",
+        "# only a heading",
+        "- a\n  - b\n    - c\n",
+        "> > > deeply quoted\n",
+        "```\n[[not a link]]\n```\n",
+        "`[[not a link]]` and `#nottag`\n",
+        "[[ Missing ]]\n",
+        "[[Missing #Anchor]]\n",
+        "[[a|b|c]]\n",
+        "[[note^draft#sec]]\n",
+        "[[note#^blk]]\n",
+        "![[Note#^blk]]\n",
+        "  ![[ Note # Sec ]]  \n",
+        "see ![[a]] and ![[b]] here\n",
+        "**a [[b]]** *c [[d]]* ~~e [@f]~~\n",
+        "[about #intro](note.md)\n",
+        "[x](javascript:alert(1)) [y](file:///etc) [z](//host) [w](#frag)\n",
+        "[t](my%20note.md) [u](C:\\notes\\x.md)\n",
+        "[[a*b]] * not emphasis *\n",
+        "line one\r\nline two\r\n",
+        "a\r\nb\nc\r\n",
+        "> a\r\n> b\r\n",
+        "- first para\n\n  second para\n",
+        "- [ ] open\n- [x] done\n- [/] doing\n- [v]x\n",
+        "1. [v] Visible\n",
+        "見出し\n=====\n\n本文 [[リンク]] 🎉\n",
+        "| a |\n|---|\n| [[x]] |\n",
+        "$$\n[[x]]\n$$\n",
+    ];
+    for (i, case) in cases.iter().enumerate() {
+        let seed = 2_000_000 + i as u64;
+        assert_inline_invariants(seed, case);
+        assert_token_text_never_reparses(seed, case);
+        assert_inline_determinism(seed, case);
+    }
+}

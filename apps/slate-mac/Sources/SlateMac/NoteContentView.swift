@@ -302,20 +302,15 @@ struct NoteContentView: View {
                 diagramBlocks: appState.currentNoteDiagramBlocks,
                 citations: appState.currentNoteCitations,
                 tasks: appState.currentNoteTasks,
-                // #849: unresolved wikilinks render in warningText —
-                // sourced exactly the way OutgoingLinksPanel reads
-                // `isUnresolved` (the note's saved link records).
-                // Codex rounds 1–3 (#849): kind-partitioned record
-                // sets — the classifier and the live router share one
-                // grammar-exact record match, so styling and activation
-                // can never disagree. The EMPTY value mid-transition
-                // classifies every run unresolved, exactly what
-                // activation announces then (the router gates on the
-                // same ownership predicate).
-                linkRecordSets: linkRecordsCurrent
-                    ? ReadingLinkRouter.LinkRecordSets(
-                        records: appState.currentOutgoingLinks)
-                    : ReadingLinkRouter.LinkRecordSets(),
+                // #849/#967: the note's saved link records are the
+                // resolution input core classifies `resolved` against —
+                // the classifier and the live router share ONE
+                // grammar-exact record match (`reading_match_link`), so
+                // styling and activation can never disagree. The EMPTY
+                // value mid-transition classifies every run unresolved,
+                // exactly what activation announces then (the router
+                // gates on the same ownership predicate).
+                records: linkRecordsCurrent ? appState.currentOutgoingLinks : [],
                 isDocumentDirty: appState.hasUnsavedChanges,
                 taskMutationDisabledReason: appState.activeNoteAuthoringDisabledReason,
                 onToggleTask: { [appState] item in
