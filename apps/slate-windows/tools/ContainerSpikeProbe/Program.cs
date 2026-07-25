@@ -58,7 +58,9 @@ internal static class Program
         {
             // NVDA is the pass criterion §10.6 names; the UIA table this
             // file produces is the necessary-but-not-sufficient half.
-            return NvdaProbe.RunAsync(outputDir, Variants).GetAwaiter().GetResult();
+            return NvdaProbe.RunAsync(
+                outputDir, Variants, args.Contains("--force-rejected-driver"))
+                .GetAwaiter().GetResult();
         }
 
         var results = new List<VariantReport>();

@@ -53,10 +53,57 @@ internal static class NvdaProbe
         ("read current line", NavigatingSystemCaretCommands.ReadCurrentLine, ""),
     };
 
-    public static async Task<int> RunAsync(string outputDirectory, string[] variants)
+    /// Why this path is closed, printed instead of run.
+    ///
+    /// Verified on disk rather than inferred: the bundled portable NVDA
+    /// is **2018.4.1** (`nvda.exe` FileVersion 2018.4.0.16544), and its
+    /// bundled Remote add-on declares
+    /// `def play_wave(self, fileName, async, **kwargs)` — `async` became a
+    /// reserved word in Python 3.7, which NVDA adopted in 2019.3. No NVDA
+    /// from 2019.3 onward can import that add-on, so this driver is
+    /// permanently capped at NVDA 2019.2.1 and ships one older still.
+    ///
+    /// That is fatal for the question it was added to answer. Whether
+    /// NVDA's browse-mode buffer reaches links through UIA text ranges
+    /// when no `Hyperlink` control types exist is precisely the subsystem
+    /// rewritten between 2018.4 and 2026.1. A pass from the 2018 build
+    /// would not transfer, and neither would a failure — there is no
+    /// result this tool can produce that is admissible evidence.
+    private const string RejectionNotice =
+        "REJECTED: NvdaTestingDriver cannot answer this question.\n"
+        + "\n"
+        + "  bundled NVDA   : 2018.4.1 (verified: nvda.exe FileVersion 2018.4.0.16544)\n"
+        + "  upgrade ceiling: NVDA 2019.2.1 — the bundled Remote add-on uses `async` as a\n"
+        + "                   parameter name (remoteClient/local_machine.py), a syntax\n"
+        + "                   error under Python 3.7, which NVDA adopted in 2019.3.\n"
+        + "  upstream       : code frozen 2019-03-24.\n"
+        + "\n"
+        + "The container question turns on UIA-document browse-mode behaviour, which is\n"
+        + "exactly what changed between NVDA 2018.4 and 2026.1. A result from the 2018\n"
+        + "build would not transfer in either direction.\n"
+        + "\n"
+        + "Use the manual pass against the installed NVDA instead — see the protocol in\n"
+        + "docs/plans/18_windows_port/specs/w3_1_container_spike.md. It takes ~2 minutes\n"
+        + "and tests the screen reader users actually run.\n"
+        + "\n"
+        + "Pass --force-rejected-driver to run it anyway (diagnostics only; the result is\n"
+        + "not evidence).";
+
+    public static async Task<int> RunAsync(
+        string outputDirectory, string[] variants, bool force)
     {
         Directory.CreateDirectory(outputDirectory);
         var results = new List<NvdaVariantReport>();
+
+        if (!force)
+        {
+            Console.Error.WriteLine(RejectionNotice);
+            File.WriteAllText(
+                Path.Combine(outputDirectory, "container-spike-nvda.md"),
+                "# W3-1 NVDA pass — driver rejected, not run\n\n```\n"
+                + RejectionNotice + "\n```\n");
+            return 2;
+        }
 
         Preflight();
 
