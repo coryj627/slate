@@ -25,13 +25,37 @@ Spike for [#728](https://github.com/coryj627/slate/issues/728), answering the tw
 
 **`ItemsControl` cannot satisfy §W3-1 item 4.** It exposes no Text provider, so there is no `DocumentRange`, no say-all continuity, and nothing for the existing §W-C text-range assertions (`ShellAccessibilityTests.cs:1106-1162` already drives `GetText`/`MoveEndpointByRange`/`CompareEndpoints`) to attach to. A Text pattern cannot be retrofitted onto a stack of `TextBlock`s without writing a text provider from scratch.
 
-## What is NOT settled, and must be before the choice is final
+## Client-side confirmation
 
-1. **Whether a UIA *client* sees the flow variant's hyperlinks.** The probe walks the **provider** tree via `AutomationPeer.GetChildren()`. WPF may surface `TextElement` peers (including `Hyperlink`) only through the text pattern's range children rather than the control tree, in which case the flow variant's "0 hyperlink peers" is an artefact of the walk and its real deficit is much smaller. **This is the single most decision-relevant unknown**, because §10.3's whole activation contract rides on `ControlType.Hyperlink` + `Invoke` + `HelpText`.
-2. **What JAWS and NVDA actually do.** §10.6 makes recorded AT evidence the pass criterion. UIA exposure is necessary, not sufficient — a reader may reach BlockUIContainer children through the control tree even though they are outside the text range.
-3. **axe-windows cleanliness**, which needs a live process.
+The UIA **client** probe was run from an interactive desktop and **agrees with the provider-side reading on every discriminating measurement**: `flow` = `Document` + Text pattern + 363 chars + 12/14 landmarks + **0 hyperlinks** + no `HeadingLevel`; `items` = no Text pattern + 5 hyperlinks (2 carrying `AxText` as `HelpText`) + `HeadingLevel` Level1/Level2. So "FlowDocument exposes no `Hyperlink` control types" is a real property, not an artefact of walking the provider tree.
 
-None of these can run from a session-0 shell: UIA cannot cross sessions, so the client probe must be run from an interactive desktop.
+**Two results in the first client run were the spike's own bugs, not container properties**, and are recorded here because they nearly became findings:
+
+- *"hyperlinks focusable: 0"* in both variants. Every `Hyperlink` had `Command` set to a `RoutedCommand` with **no `CommandBinding`**, so `CanExecute` was false and WPF disabled it. Replaced with a click handler. Re-measured afterwards: **the 0-vs-5 hyperlink split is unchanged**, so the headline finding survives its own correction.
+- *2 axe-windows errors in both variants* (`NameNotNull`, `SiblingUniqueAndFocusable`). Caused by the fixture naming both task checkboxes `"Task"`, not by either container — identical in both columns, so they discriminate nothing. Now named from the item text.
+
+## What is NOT settled
+
+**Whether NVDA can reach the flow variant's links.** Zero `Hyperlink` control types does not settle it: in a UIA document NVDA builds its browse-mode buffer from the **text pattern** and can find embedded objects through text ranges rather than through control-tree children. If NVDA's `K` reaches those links, the missing control types are not disqualifying; if it is silent, they are. **This is now measurable rather than a matter of opinion** — see below.
+
+**What JAWS does.** No automation path was found for JAWS; that half stays manual.
+
+## Automating the NVDA half
+
+[`NvdaTestingDriver`](https://github.com/kastwey/nvda-testing-driver) drives a bundled portable NVDA through a modified NvdaRemote plugin and returns spoken text, so §10.6's "recorded AT evidence" can be a committed test instead of a manual script — for this spike and for every W3 surface after it. `ContainerSpikeProbe --nvda` runs say-all, `H`, `H1`/`H2`, `K`×4, `L`, `I`×3, table and button nav against both variants and tabulates what NVDA said against what it must say.
+
+**Currency check, per the `w3_spec.md:14` dependency doctrine:**
+
+| | finding |
+|---|---|
+| version | `0.2.0-beta` — never left beta |
+| upstream | last commit **2022-12-08**, ~3.5 years stale |
+| .NET 10 | restores and loads cleanly (`NvdaTestingDriver, Version=0.2.0.0`) |
+| security | pulls `Newtonsoft.Json` **12.0.1**, GHSA-5crp-9r3c-p9vr (**high**) — overridden to 13.0.3 in the spike csproj |
+| NVDA driven | the bundled 2022-era portable copy, **not** the NVDA 2026.1.1 installed on this machine |
+| environment | needs an interactive desktop; other screen readers must be off |
+
+So: good enough to answer the container question, **not** obviously good enough to adopt into the shipped test suite. Adopting it for the wave would need a decision on the stale bundled NVDA and the CVE, and that is a separate call from this spike's.
 
 ## Method, and its limits
 
@@ -53,6 +77,10 @@ apps/slate-windows/tools/ContainerSpike/bin/Debug/net10.0-windows/ContainerSpike
 
 # client-side + axe: REQUIRES an interactive desktop (session 1)
 dotnet run --project apps/slate-windows/tools/ContainerSpikeProbe -- --out spike-evidence
+
+# what NVDA actually says: interactive desktop, and turn off any running
+# screen reader first (the driver starts its own portable NVDA)
+dotnet run --project apps/slate-windows/tools/ContainerSpikeProbe -- --nvda --out spike-evidence
 
 # eyes/ears on one variant
 apps/slate-windows/tools/ContainerSpike/bin/Debug/net10.0-windows/ContainerSpike.exe \

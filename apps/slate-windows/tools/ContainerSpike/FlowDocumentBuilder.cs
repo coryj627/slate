@@ -175,7 +175,12 @@ internal static class FlowDocumentBuilder
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 6, 0),
             };
-            AutomationProperties.SetName(box, "Task");
+            // Named from the item's own text: two siblings both called
+            // "Task" is an axe SiblingUniqueAndFocusable violation the
+            // FIXTURE would be causing, which would then show up
+            // identically in both variants and discriminate nothing.
+            AutomationProperties.SetName(
+                box, $"Task: {segment?.Content ?? string.Empty}".Trim());
             paragraph.Inlines.Add(new InlineUIContainer(box));
         }
 

@@ -21,12 +21,12 @@
     "Links": [],
     "InteractiveChildren": [
       {
-        "Name": "Task",
+        "Name": "Task: an open task",
         "HelpText": "",
         "InvokeProvider": true
       },
       {
-        "Name": "Task",
+        "Name": "Task: a done task",
         "HelpText": "",
         "InvokeProvider": true
       },
@@ -97,12 +97,12 @@
     "Links": [],
     "InteractiveChildren": [
       {
-        "Name": "Task",
+        "Name": "Task: an open task",
         "HelpText": "",
         "InvokeProvider": true
       },
       {
-        "Name": "Task",
+        "Name": "Task: a done task",
         "HelpText": "",
         "InvokeProvider": true
       },
@@ -203,12 +203,12 @@
     ],
     "InteractiveChildren": [
       {
-        "Name": "Task",
+        "Name": "Task: an open task",
         "HelpText": "",
         "InvokeProvider": true
       },
       {
-        "Name": "Task",
+        "Name": "Task: a done task",
         "HelpText": "",
         "InvokeProvider": true
       },
@@ -298,12 +298,12 @@
     ],
     "InteractiveChildren": [
       {
-        "Name": "Task",
+        "Name": "Task: an open task",
         "HelpText": "",
         "InvokeProvider": true
       },
       {
-        "Name": "Task",
+        "Name": "Task: a done task",
         "HelpText": "",
         "InvokeProvider": true
       },

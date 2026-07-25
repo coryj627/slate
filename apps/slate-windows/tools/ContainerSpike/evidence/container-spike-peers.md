@@ -25,8 +25,8 @@ Control types: Button=4, Text=3, Document=2, CheckBox=2, ScrollBar=2, Pane=1, Se
 
 | interactive child | invoke/toggle provider |
 |---|---|
-| Task | True |
-| Task | True |
+| Task: an open task | True |
+| Task: a done task | True |
 | Copy rust block | True |
 | Embedded note resolved note | True |
 | Decrease Zoom | True |
@@ -61,8 +61,8 @@ Control types: Button=4, Text=3, Document=2, CheckBox=2, ScrollBar=2, Pane=1, Se
 
 | interactive child | invoke/toggle provider |
 |---|---|
-| Task | True |
-| Task | True |
+| Task: an open task | True |
+| Task: a done task | True |
 | Copy rust block | True |
 | Embedded note resolved note | True |
 | Decrease Zoom | True |
@@ -109,8 +109,8 @@ Heading levels on peers:
 
 | interactive child | invoke/toggle provider |
 |---|---|
-| Task | True |
-| Task | True |
+| Task: an open task | True |
+| Task: a done task | True |
 | Copy rust block | True |
 | Embedded note resolved note | True |
 
@@ -132,8 +132,8 @@ Heading levels on peers:
 
 | interactive child | invoke/toggle provider |
 |---|---|
-| Task | True |
-| Task | True |
+| Task: an open task | True |
+| Task: a done task | True |
 | Copy rust block | True |
 | Embedded note resolved note | True |
 

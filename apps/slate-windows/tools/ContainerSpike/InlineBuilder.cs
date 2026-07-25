@@ -93,10 +93,16 @@ internal static class InlineBuilder
             Foreground = IsUnresolved(kind) ? Palette.Warning : Palette.Accent,
         };
 
-        // The spike does not route activation — it measures exposure. The
-        // command is present only so Invoke/keyboard focus are real.
-        link.Command = SpikeCommands.Activate;
-        link.CommandParameter = Describe(kind);
+        // Activation is a CLICK HANDLER, deliberately not a Command.
+        //
+        // A `RoutedCommand` with no `CommandBinding` reports CanExecute
+        // false, which disables the Hyperlink — and a disabled hyperlink
+        // is neither focusable nor, possibly, present in the UIA tree at
+        // all. The spike measures exposure, so anything that suppresses
+        // exposure for a reason unrelated to the container would corrupt
+        // the very comparison it exists to make.
+        link.Click += (_, _) => { /* exposure spike: routing is W3-1's */ };
+        link.Tag = Describe(kind);
         return link;
     }
 
@@ -125,9 +131,4 @@ internal static class Palette
     public static readonly Brush Warning = new SolidColorBrush(Color.FromRgb(0x8A, 0x4B, 0x00));
     public static readonly Brush Surface = new SolidColorBrush(Color.FromRgb(0xFF, 0xFF, 0xFF));
     public static readonly Brush Text = new SolidColorBrush(Color.FromRgb(0x11, 0x11, 0x11));
-}
-
-internal static class SpikeCommands
-{
-    public static readonly System.Windows.Input.RoutedCommand Activate = new("Activate", typeof(InlineBuilder));
 }

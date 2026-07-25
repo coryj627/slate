@@ -54,6 +54,13 @@ internal static class Program
                 + "latter.");
         }
 
+        if (args.Contains("--nvda"))
+        {
+            // NVDA is the pass criterion §10.6 names; the UIA table this
+            // file produces is the necessary-but-not-sufficient half.
+            return NvdaProbe.RunAsync(outputDir, Variants).GetAwaiter().GetResult();
+        }
+
         var results = new List<VariantReport>();
         foreach (string variant in Variants)
         {
@@ -111,14 +118,10 @@ internal static class Program
         Process? process = null;
         try
         {
-            var startInfo = new ProcessStartInfo(SpikeExe()) { UseShellExecute = false };
-            startInfo.ArgumentList.Add("--container");
-            startInfo.ArgumentList.Add(variant);
-            process = Process.Start(startInfo)
-                ?? throw new InvalidOperationException("ContainerSpike.exe did not start.");
-
+            process = SpikeLauncher.Start(variant);
             using var automation = new UIA3Automation();
-            Window window = WaitForWindow(process, automation, TimeSpan.FromSeconds(30));
+            Window window = SpikeLauncher.WaitForWindow(
+                process, automation, TimeSpan.FromSeconds(30));
 
             AutomationElement surface =
                 window.FindFirstDescendant(cf => cf.ByAutomationId("ReadingSurface"))
@@ -131,7 +134,7 @@ internal static class Program
         }
         finally
         {
-            TryKill(process);
+            SpikeLauncher.TryKill(process);
         }
         return report;
     }
@@ -286,72 +289,6 @@ internal static class Program
             return new[] { $"axe scan failed: {exception.Message}" };
         }
     }
-
-    private static Window WaitForWindow(
-        Process process, UIA3Automation automation, TimeSpan timeout)
-    {
-        var deadline = DateTime.UtcNow + timeout;
-        while (DateTime.UtcNow < deadline)
-        {
-            if (process.HasExited)
-            {
-                throw new InvalidOperationException(
-                    $"ContainerSpike exited early with code {process.ExitCode}.");
-            }
-            try
-            {
-                var app = FlaUI.Core.Application.Attach(process.Id);
-                Window? window = app.GetAllTopLevelWindows(automation).FirstOrDefault();
-                if (window is not null && !string.IsNullOrEmpty(window.Title))
-                {
-                    return window;
-                }
-            }
-            catch
-            {
-                // The window is not up yet; keep waiting until the deadline.
-            }
-            Thread.Sleep(250);
-        }
-        throw new TimeoutException("ContainerSpike window never appeared.");
-    }
-
-    private static void TryKill(Process? process)
-    {
-        if (process is null || process.HasExited)
-        {
-            return;
-        }
-        try
-        {
-            process.Kill(entireProcessTree: true);
-            process.WaitForExit(5_000);
-        }
-        catch
-        {
-            // Best effort — a leaked spike window is not worth failing the run.
-        }
-    }
-
-    private static string SpikeExe()
-    {
-        string exe = Path.GetFullPath(Path.Combine(
-            AppContext.BaseDirectory,
-            "..", "..", "..", "..", "ContainerSpike", "bin",
-            Configuration(), "net10.0-windows", "ContainerSpike.exe"));
-        if (!File.Exists(exe))
-        {
-            throw new FileNotFoundException($"ContainerSpike.exe not built at {exe}.");
-        }
-        return exe;
-    }
-
-    private static string Configuration() =>
-#if DEBUG
-        "Debug";
-#else
-        "Release";
-#endif
 
     private static T Safe<T>(Func<T> read, T fallback)
     {

@@ -17,6 +17,13 @@
   <ItemGroup>
     <PackageReference Include="Axe.Windows" Version="2.4.2" />
     <PackageReference Include="FlaUI.UIA3" Version="5.0.0" />
+    <PackageReference Include="NvdaTestingDriver" Version="0.2.0-beta" />
+    <!-- NvdaTestingDriver 0.2.0-beta pulls Newtonsoft.Json 12.0.1, which
+         carries GHSA-5crp-9r3c-p9vr (high). Overridden to a patched
+         version. This project is a THROWAWAY spike and is referenced by
+         nothing that ships, but a known-vulnerable transitive dependency
+         should not sit in the repo unremarked either way. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
   </ItemGroup>
 
   <ItemGroup>
