@@ -36,12 +36,22 @@ internal static class Program
             ?? Path.Combine(AppContext.BaseDirectory, "spike-evidence");
         Directory.CreateDirectory(outputDir);
 
+        // `UserInteractive` is a WARNING, not a gate. It is false whenever
+        // the process is not on WinSta0 — which includes an SSH session,
+        // where UIA can still work because the probe and the spike it
+        // launches share that session's own window station. The failure
+        // that actually matters is CROSS-session (a session-0 shell trying
+        // to see a session-1 desktop), and that surfaces as a real error
+        // below rather than as a guess made up front.
         if (!Environment.UserInteractive)
         {
             Console.Error.WriteLine(
-                "This probe needs an interactive Windows desktop; UIA cannot see a "
-                + "session-0 tree.");
-            return 2;
+                "warning: this process is not on an interactive window station "
+                + $"(session {GetSessionId()}). "
+                + "UIA works only between processes sharing a desktop — fine over SSH, "
+                + "impossible from a session-0 shell against your logged-in desktop. "
+                + "Attempting anyway; a timeout waiting for the window means it is the "
+                + "latter.");
         }
 
         var results = new List<VariantReport>();
@@ -69,6 +79,18 @@ internal static class Program
         Console.WriteLine(markdown);
         Console.WriteLine($"evidence written to {outputDir}");
         return results.Any(r => r.Error is not null) ? 1 : 0;
+    }
+
+    private static int GetSessionId()
+    {
+        try
+        {
+            return Process.GetCurrentProcess().SessionId;
+        }
+        catch
+        {
+            return -1;
+        }
     }
 
     private static string? ArgValue(string[] args, string name)
