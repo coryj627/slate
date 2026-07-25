@@ -58,31 +58,140 @@ internal static class NvdaProbe
         Directory.CreateDirectory(outputDirectory);
         var results = new List<NvdaVariantReport>();
 
+        Preflight();
+
         using var nvda = new NvdaDriver();
         Console.WriteLine("connecting to NVDA (starts the bundled portable copy) ...");
-        await nvda.ConnectAsync();
+        try
+        {
+            await nvda.ConnectAsync();
+        }
+        catch (Exception exception)
+        {
+            // Connect is where this fails, and it used to fail with an
+            // unhandled exception and an EMPTY output directory — the
+            // worst possible outcome, since the run has to be done by a
+            // human on an interactive desktop and there was nothing to
+            // diagnose afterwards.
+            string diagnosis = Diagnose(exception);
+            File.WriteAllText(
+                Path.Combine(outputDirectory, "container-spike-nvda.md"),
+                "# W3-1 container spike — NVDA pass FAILED TO START\n\n"
+                + diagnosis + "\n\n## Exception\n\n```\n" + exception + "\n```\n");
+            Console.Error.WriteLine(diagnosis);
+            Console.Error.WriteLine(exception.Message);
+            return 2;
+        }
+
         try
         {
             foreach (string variant in variants)
             {
                 Console.WriteLine($"NVDA pass: '{variant}' ...");
                 results.Add(await ProbeAsync(nvda, variant));
+                // Written after EVERY variant, not once at the end: a
+                // hang or crash on the second variant must not discard
+                // the first one's evidence.
+                Persist(outputDirectory, results);
             }
+        }
+        catch (Exception exception)
+        {
+            Console.Error.WriteLine($"NVDA pass aborted: {exception.Message}");
+            results.Add(new NvdaVariantReport
+            {
+                Variant = "<aborted>",
+                Error = exception.ToString(),
+            });
         }
         finally
         {
-            await nvda.DisconnectAsync();
+            try
+            {
+                await nvda.DisconnectAsync();
+            }
+            catch
+            {
+                // Disconnect failing must not discard the results above.
+            }
         }
 
+        Persist(outputDirectory, results);
+        Console.WriteLine();
+        Console.WriteLine(RenderNvda(results));
+        return results.Any(r => r.Error is not null) ? 1 : 0;
+    }
+
+    private static void Persist(string outputDirectory, List<NvdaVariantReport> results)
+    {
         File.WriteAllText(
             Path.Combine(outputDirectory, "container-spike-nvda.json"),
             JsonSerializer.Serialize(results, new JsonSerializerOptions { WriteIndented = true }));
-        string markdown = RenderNvda(results);
         File.WriteAllText(
-            Path.Combine(outputDirectory, "container-spike-nvda.md"), markdown);
-        Console.WriteLine();
-        Console.WriteLine(markdown);
-        return results.Any(r => r.Error is not null) ? 1 : 0;
+            Path.Combine(outputDirectory, "container-spike-nvda.md"), RenderNvda(results));
+    }
+
+    /// Report the two conditions that actually stop this run, BEFORE
+    /// spending a minute discovering them the hard way.
+    private static void Preflight()
+    {
+        string[] conflicting = Process.GetProcesses()
+            .Select(p =>
+            {
+                try
+                {
+                    return p.ProcessName;
+                }
+                catch
+                {
+                    return string.Empty;
+                }
+            })
+            .Where(name => name.Contains("nvda", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("jfw", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("fsdomsrv", StringComparison.OrdinalIgnoreCase))
+            .Distinct()
+            .ToArray();
+
+        if (conflicting.Length > 0)
+        {
+            Console.Error.WriteLine(
+                $"warning: screen reader process(es) already running ({string.Join(", ", conflicting)}). "
+                + "The driver starts its OWN portable NVDA; two instances fight over the "
+                + "speech channel and the connect usually fails or returns silence. Exit "
+                + "them first.");
+        }
+
+        if (!Environment.UserInteractive)
+        {
+            Console.Error.WriteLine(
+                "warning: not on an interactive window station. NVDA cannot attach to a "
+                + "desktop it has no access to.");
+        }
+    }
+
+    private static string Diagnose(Exception exception)
+    {
+        string message = exception.ToString();
+        if (message.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+            || exception is TimeoutException)
+        {
+            return "The driver started NVDA but never completed the remote handshake. The "
+                + "usual causes, in order: another screen reader is already running; the "
+                + "bundled 2022-era portable NVDA does not run on this Windows build; or "
+                + "the NvdaRemote plugin was blocked. Check whether an `nvda.exe` appeared "
+                + "in Task Manager while this ran.";
+        }
+        if (message.Contains("Access", StringComparison.OrdinalIgnoreCase)
+            || message.Contains("denied", StringComparison.OrdinalIgnoreCase))
+        {
+            return "Access denied starting or attaching to NVDA. The portable copy is "
+                + "unpacked under the package folder; SmartScreen, an EDR agent, or a "
+                + "non-elevated session can all block it.";
+        }
+        return "NVDA failed to start or connect. The bundled copy is `0.2.0-beta` from "
+            + "2022 and this is the most likely place for that staleness to bite — see the "
+            + "currency table in `w3_1_container_spike.md`.";
     }
 
     private static async Task<NvdaVariantReport> ProbeAsync(NvdaDriver nvda, string variant)
