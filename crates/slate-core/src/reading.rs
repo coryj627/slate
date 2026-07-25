@@ -1825,6 +1825,53 @@ fn mark_for(index: usize) -> String {
     format!("{TOKEN_MARKER}{index}{TOKEN_MARKER}")
 }
 
+/// An O(1) structural summary of a run's payload: the variant tag plus
+/// its owned lengths. Used only by the merge-invariant `debug_assert` —
+/// comparing the payloads themselves is the per-event cost the merge
+/// rule exists to avoid.
+fn kind_fingerprint(
+    kind: &ReadingInlineRunKind,
+    ax: &Option<String>,
+) -> (u8, usize, usize, u8, usize) {
+    // No `..` in the Wikilink arm on purpose: a new field then fails to
+    // compile here instead of silently escaping the summary.
+    let (tag, first, second, routing) = match kind {
+        ReadingInlineRunKind::Text => (0, 0, 0, 0),
+        ReadingInlineRunKind::ExternalLink { url } => (1, url.len(), 0, 0),
+        ReadingInlineRunKind::Wikilink {
+            target,
+            base_target,
+            anchor,
+            grammar,
+            resolved,
+        } => (
+            2,
+            target.len(),
+            base_target.len(),
+            // The fields that decide how a run ACTIVATES, folded in at no
+            // cost: two same-length destinations differing only in
+            // grammar or anchor kind are otherwise indistinguishable.
+            u8::from(*resolved)
+                | (u8::from(matches!(grammar, ReadingWikiGrammar::Wikilink)) << 1)
+                | (match anchor {
+                    None => 0u8,
+                    Some(crate::links::LinkAnchor::Heading(_)) => 1,
+                    Some(crate::links::LinkAnchor::Block(_)) => 2,
+                } << 2),
+        ),
+        ReadingInlineRunKind::Embed { key } => (3, key.len(), 0, 0),
+        ReadingInlineRunKind::Tag { name } => (4, name.len(), 0, 0),
+        ReadingInlineRunKind::Citation { raw, speech } => (5, raw.len(), speech.len(), 0),
+    };
+    (
+        tag,
+        first,
+        second,
+        routing,
+        ax.as_ref().map_or(usize::MAX, String::len),
+    )
+}
+
 #[derive(Default)]
 struct RunBuilder {
     content: String,
@@ -1861,6 +1908,24 @@ impl RunBuilder {
         let start = self.content.len();
         self.content.push_str(text);
         let end = self.content.len();
+        // Verification, not a tripwire: the merge below trusts that
+        // `construct` changes wherever the kind or AX text can. That is
+        // enforced structurally by `enter_link`/`leave_link` and by
+        // `expand_token` bumping only when a token contributes its own
+        // affordance — this proves it on every run of every census
+        // document. The fingerprint is O(1) on purpose: a full payload
+        // comparison here is exactly the per-event cost the merge rule
+        // was changed to avoid, and it would re-introduce the quadratic
+        // the scaling tests pin against.
+        debug_assert!(
+            self.runs.last().is_none_or(|last| {
+                last.end as usize != start
+                    || self.last_construct != construct
+                    || kind_fingerprint(&last.kind, &last.ax_text)
+                        == kind_fingerprint(kind, ax_text)
+            }),
+            "merge invariant broken: same construct, different run payload"
+        );
         // Merge on (construct, styles) alone. `construct` changes at
         // every point the kind or AX text can change — a link/image
         // start or end, and either side of a token expansion — so
@@ -2061,17 +2126,24 @@ impl<'a> InlineWalker<'a> {
         out
     }
 
-    /// The kind + AX text every run emitted right now carries.
+    /// Enter a link/image context.
     ///
-    /// Returned by REFERENCE: cloning here ran once per `Text` event, and
-    /// pulldown emits every character entity as its own event, so an
-    /// entity-dense label inside a link with a long destination cloned
-    /// the whole target/base_target pair per entity.
-    fn current(&self) -> (&ReadingInlineRunKind, &Option<String>) {
-        match self.links.last() {
-            Some((kind, ax)) => (kind, ax),
-            None => (&ReadingInlineRunKind::Text, &None),
-        }
+    /// The construct bump is INSIDE this method, not at the call sites,
+    /// because `RunBuilder::push` merges adjacent runs on
+    /// `(construct, styles)` alone — it no longer compares payloads,
+    /// which was Θ(destination length) on every event. That makes
+    /// "`construct` changes wherever the kind can" a load-bearing
+    /// invariant, and an invariant maintained by remembering to write two
+    /// lines together at six call sites is one waiting to drift. Now the
+    /// stack cannot move without the counter moving.
+    fn enter_link(&mut self, context: (ReadingInlineRunKind, Option<String>)) {
+        self.construct += 1;
+        self.links.push(context);
+    }
+
+    fn leave_link(&mut self) {
+        self.links.pop();
+        self.construct += 1;
     }
 
     fn styles_now(&self, extra: Option<ReadingInlineStyle>) -> Vec<ReadingInlineStyle> {
@@ -2138,18 +2210,7 @@ impl<'a> InlineWalker<'a> {
             self.emit_piece(&escaped, styles);
             return;
         }
-        let token_kind = token.kind.clone();
-        let token_ax = token.ax_text.clone();
-        let display = token.display.clone();
-        let source = token.source.clone();
-        // Each token is its own construct: two adjacent `[@k][@k]` must
-        // stay two runs.
-        self.construct += 1;
-        let construct = self.construct;
-        let (kind, ax) = {
-            let (kind, ax) = self.current();
-            (kind.clone(), ax.clone())
-        };
+
         match mode {
             // A construct that binds tighter than a link owns this range:
             // the token renders as its AUTHORED bytes with no affordance.
@@ -2160,18 +2221,39 @@ impl<'a> InlineWalker<'a> {
             // would be the alternative (the retired pipeline leaked its
             // raw `[label](slate-wiki://…)` splice text there instead —
             // this is the honest rendering).
-            TokenMode::Literal => self.out.push(&source, styles, &kind, &ax, construct),
+            TokenMode::Literal => {
+                let source = token.source.clone();
+                self.emit_piece(&source, styles);
+            }
             // A token inside a link label keeps the LABEL's affordance
             // (the Markdown construct owns the range).
             TokenMode::Affordance if !self.links.is_empty() => {
-                self.out.push(&display, styles, &kind, &ax, construct)
+                let display = token.display.clone();
+                self.emit_piece(&display, styles);
             }
+            // The token contributes its OWN affordance, so it IS a
+            // distinct construct: bump either side so two adjacent
+            // `[@k][@k]` stay two runs.
+            //
+            // The other two arms deliberately do NOT bump. They render in
+            // the SURROUNDING context, so a fresh construct would force a
+            // separate run — and `RunBuilder::push` owns a clone of the
+            // enclosing kind per run, so n tokens under one late-formed
+            // link with an n-length destination retained Θ(n²) bytes: a
+            // 25 KiB note held 61 MiB, measured. Coalescing is both the
+            // cheaper and the semantically honest answer, since those
+            // tokens are not separate affordances.
             TokenMode::Affordance => {
+                let token_kind = token.kind.clone();
+                let token_ax = token.ax_text.clone();
+                let display = token.display.clone();
+                self.construct += 1;
+                let construct = self.construct;
                 self.out
-                    .push(&display, styles, &token_kind, &token_ax, construct)
+                    .push(&display, styles, &token_kind, &token_ax, construct);
+                self.construct += 1;
             }
         }
-        self.construct += 1;
     }
 
     /// Emit the AUTHORED bytes pulldown left outside its paragraph — the
@@ -2225,24 +2307,20 @@ impl<'a> InlineWalker<'a> {
                     let classified = markdown_destination_kind(&dest_url, self.sets);
                     // Each link is its own construct: `[a](x)[a](x)` must
                     // stay two activatable runs, not one fused run.
-                    self.construct += 1;
-                    self.links.push(classified);
+                    self.enter_link(classified);
                 }
                 Event::End(End::Link) => {
-                    self.links.pop();
-                    self.construct += 1;
+                    self.leave_link();
                     self.advance_inline(range.end);
                 }
                 // A Markdown image's alt text renders as prose: reading
                 // v1 shows the alt, never a dead affordance. Wikilink
                 // embeds (`![[…]]`) are a token kind, not this path.
                 Event::Start(Tag::Image { .. }) => {
-                    self.construct += 1;
-                    self.links.push((ReadingInlineRunKind::Text, None));
+                    self.enter_link((ReadingInlineRunKind::Text, None));
                 }
                 Event::End(End::Image) => {
-                    self.links.pop();
-                    self.construct += 1;
+                    self.leave_link();
                     self.advance_inline(range.end);
                 }
                 Event::Text(text) => {
@@ -4525,6 +4603,88 @@ final para
         }
     }
 
+    /// A token rendering under an ENCLOSING affordance is not a separate
+    /// construct, so it must coalesce instead of minting a run that owns
+    /// its own clone of the enclosing link's payload.
+    ///
+    /// The hazard is the late-formation mechanism already known from code
+    /// spans: selection runs on the block-parsed content while the walk
+    /// runs on the flattened probe, so `- [x⏎⏎  [[a]][[a]]…](long/dest)`
+    /// has its tokens selected (no link at selection time) and then
+    /// becomes one link. Every token took the enclosing-link branch, got
+    /// a fresh construct, became its own run, and `RunBuilder::push`
+    /// cloned the destination into each — Θ(n²) RETAINED, not transient.
+    /// Measured before the fix: 25 KiB of source held 61 MiB.
+    ///
+    /// Asserted deterministically on run count and retained bytes rather
+    /// than on wall clock, because the defect is memory the output holds.
+    ///
+    /// **What this does NOT establish.** It removes one CAUSE of run
+    /// splitting inside a long-destination link, not the class. Every run
+    /// under such a link still owns a clone of the destination, so any
+    /// other run boundary reproduces the same curve — a styled label
+    /// (`[*a*b … ](notes/very/long/…)`) measures 8.0 MB retained at a 6 KB
+    /// source and 512 MB at 48 KB, the same 4x-per-doubling shape. That
+    /// residual is inherent to the PUBLIC run model (`ReadingInlineRun`
+    /// owns its `kind`, so n runs under one link hold n copies of the
+    /// payload), so closing it means changing the shape both hosts
+    /// consume — an owner call recorded in `w3_inline_runs_spec.md`, not
+    /// something to paper over here. It needs a kilobyte-scale
+    /// destination, which authored prose does not produce: a realistic
+    /// 2 KB tracking URL with a styled label yields 8 runs, ~16 KB.
+    #[test]
+    fn tokens_under_an_enclosing_link_do_not_each_mint_a_run() {
+        /// Bytes the run table's owned payloads retain.
+        fn retained(runs: &[ReadingInlineRun]) -> usize {
+            runs.iter()
+                .map(|run| {
+                    let kind = match &run.kind {
+                        ReadingInlineRunKind::Wikilink {
+                            target,
+                            base_target,
+                            ..
+                        } => target.len() + base_target.len(),
+                        ReadingInlineRunKind::ExternalLink { url } => url.len(),
+                        ReadingInlineRunKind::Embed { key } => key.len(),
+                        ReadingInlineRunKind::Tag { name } => name.len(),
+                        ReadingInlineRunKind::Citation { raw, speech } => raw.len() + speech.len(),
+                        ReadingInlineRunKind::Text => 0,
+                    };
+                    kind + run.ax_text.as_ref().map_or(0, String::len)
+                })
+                .sum()
+        }
+
+        for tokens in [250usize, 500, 1_000] {
+            let destination: String = std::iter::repeat_n("segment/", tokens).collect();
+            let label: String = std::iter::repeat_n("[[a]]", tokens).collect();
+            let source = format!("- [x\n\n  {label}](notes/{destination}target.md)\n");
+
+            let inlines = reading_inline_segments_source(&source, &[], &[]);
+            let (run_count, retained_bytes) = inlines
+                .iter()
+                .flat_map(|inline| &inline.segments)
+                .fold((0usize, 0usize), |(runs, bytes), segment| {
+                    (runs + segment.runs.len(), bytes + retained(&segment.runs))
+                });
+
+            // Run count must not track the token count: before the fix it
+            // was tokens + 1.
+            assert!(
+                run_count < 16,
+                "{tokens} tokens produced {run_count} runs — one per token \
+                 means each owns a clone of the enclosing payload"
+            );
+            // And retained payload must stay linear in the source.
+            assert!(
+                retained_bytes < source.len() * 4,
+                "{tokens} tokens retained {retained_bytes} bytes from a \
+                 {} byte source",
+                source.len()
+            );
+        }
+    }
+
     // --- Adversarial-review regressions (round 5/6): scaling ---
     //
     // These pin ASYMPTOTICS, so they measure how the cost RESPONDS to
@@ -4552,6 +4712,7 @@ final para
     fn paired_scaling_ratio(mut small: impl FnMut(), mut large: impl FnMut()) -> f64 {
         small();
         large();
+        let mut smalls: Vec<std::time::Duration> = Vec::with_capacity(7);
         let mut ratios: Vec<f64> = (0..7)
             .map(|_| {
                 let started = std::time::Instant::now();
@@ -4560,10 +4721,22 @@ final para
                 let started = std::time::Instant::now();
                 large();
                 let large_elapsed = started.elapsed();
+                smalls.push(small_elapsed);
                 large_elapsed.as_secs_f64() / small_elapsed.as_secs_f64().max(f64::EPSILON)
             })
             .collect();
         ratios.sort_by(f64::total_cmp);
+        smalls.sort_unstable();
+        // Guard restored (it was dropped in the round-6 rewrite to paired
+        // sampling): a baseline small enough to be dominated by timer
+        // noise makes the ratio meaningless, and `.max(EPSILON)` below
+        // would turn that into an absurd number rather than a clear
+        // failure. The fixtures here run tens of milliseconds.
+        assert!(
+            smalls[smalls.len() / 2] >= std::time::Duration::from_millis(1),
+            "baseline {:?} is too small to measure a ratio against",
+            smalls[smalls.len() / 2]
+        );
         ratios[ratios.len() / 2]
     }
 
