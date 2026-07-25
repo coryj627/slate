@@ -327,6 +327,21 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
         var findings: [String: String] = [:]
         var findingCount = 0
 
+        /// Blocks where BOTH pipelines produced a projection, and the
+        /// total characters those projections covered.
+        ///
+        /// Without these a green run is ambiguous: "the two pipelines
+        /// agree" and "the census compared nothing" look identical. The
+        /// tests assert a floor, so a change that silently stops
+        /// exercising a pipeline fails instead of passing quietly.
+        var comparedBlocks = 0
+        var comparedCharacters = 0
+
+        mutating func compared(characters: Int) {
+            comparedBlocks += 1
+            comparedCharacters += characters
+        }
+
         mutating func classified(_ delta: Delta) {
             counts[delta, default: 0] += 1
         }
@@ -449,6 +464,8 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
                 continue
             }
 
+            catalogue.compared(characters: old.text.utf16.count)
+
             let differing =
                 strictText
                 ? dimensions(old: old, new: new)
@@ -473,11 +490,14 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
     /// Fail once, with a bounded catalogue. `maximumShapes` keeps a
     /// pathological sweep from producing a CI log nobody reads.
     private func assertNoUnclassified(
-        _ catalogue: Catalogue, label: String, maximumShapes: Int = 25,
-        line: UInt = #line
+        _ catalogue: Catalogue, label: String, minimumBlocks: Int,
+        maximumShapes: Int = 25, line: UInt = #line
     ) {
         if ProcessInfo.processInfo.environment["SLATE_DIFFERENTIAL_REPORT"] == "1" {
             print("--- differential census (\(label)) ---")
+            print(
+                "  compared: \(catalogue.comparedBlocks) block(s), "
+                    + "\(catalogue.comparedCharacters) character(s)")
             for delta in Delta.allCases {
                 print("  \(delta.rawValue): \(catalogue.counts[delta] ?? 0)")
             }
@@ -485,6 +505,20 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
                 "  unclassified: \(catalogue.findingCount) in "
                     + "\(catalogue.findings.count) shape(s)")
         }
+
+        // Coverage floor FIRST: "the pipelines agree" and "nothing was
+        // compared" both produce an empty findings set, and only this
+        // tells them apart.
+        XCTAssertGreaterThan(
+            catalogue.comparedBlocks, minimumBlocks,
+            "[\(label)] census compared \(catalogue.comparedBlocks) blocks — too few to "
+                + "mean anything. Either the corpus stopped producing inline blocks or one "
+                + "pipeline stopped returning projections.",
+            line: line)
+        XCTAssertGreaterThan(
+            catalogue.comparedCharacters, catalogue.comparedBlocks,
+            "[\(label)] compared blocks are essentially empty", line: line)
+
         guard !catalogue.findings.isEmpty else { return }
 
         let shapes = catalogue.findings.keys.sorted()
@@ -530,7 +564,7 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
                 source: text, citations: Self.citations, records: Self.records,
                 strictText: false, into: &catalogue)
         }
-        assertNoUnclassified(catalogue, label: "corpus")
+        assertNoUnclassified(catalogue, label: "corpus", minimumBlocks: 20)
     }
 
     /// Randomized documents built ONLY from plain words and Slate
@@ -545,7 +579,7 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
                 citations: Self.citations, records: Self.records,
                 strictText: true, into: &catalogue)
         }
-        assertNoUnclassified(catalogue, label: "quiet")
+        assertNoUnclassified(catalogue, label: "quiet", minimumBlocks: 1_000)
     }
 
     /// Randomized documents mixing Slate constructs with generic
@@ -560,7 +594,7 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
                 citations: Self.citations, records: Self.records,
                 strictText: false, into: &catalogue)
         }
-        assertNoUnclassified(catalogue, label: "loud")
+        assertNoUnclassified(catalogue, label: "loud", minimumBlocks: 1_000)
     }
 
     /// The same quiet sweep with NO records: every wikilink classifies
@@ -575,7 +609,119 @@ final class ReadingInlineDifferentialCensus: XCTestCase {
                 citations: Self.citations, records: [], strictText: true,
                 into: &catalogue)
         }
-        assertNoUnclassified(catalogue, label: "no records")
+        assertNoUnclassified(catalogue, label: "no records", minimumBlocks: 1_000)
+    }
+
+    // MARK: - Proving the census can fail
+
+    /// Every dimension the census compares must be able to REPORT a
+    /// difference. A census whose comparator is inert passes for the same
+    /// reason a correct one does, and nothing else in this file
+    /// distinguishes the two.
+    ///
+    /// Built from real pipeline output, then perturbed one dimension at a
+    /// time — so this also pins that the fixture actually exercises each
+    /// dimension (an all-plain-text fixture would make the perturbations
+    /// vacuous, and the `XCTAssertTrue`s below catch that).
+    func testComparatorReportsEveryDimensionItCompares() {
+        let source = "A **bold** [[gone]] link and [@smith2020].\n"
+        let inlines = readingInlineSegmentsSource(
+            source: source, citations: Self.citations, records: Self.records)
+        guard let segment = inlines.first?.segments.first else {
+            return XCTFail("fixture produced no inline segment")
+        }
+        let base = Self.project(ReadingInlineMapper.attributed(segment))
+
+        // The fixture must actually carry each attribute, or perturbing
+        // it proves nothing.
+        XCTAssertFalse(base.text.isEmpty)
+        XCTAssertTrue(base.links.contains { $0 != nil }, "fixture has no activatable run")
+        XCTAssertTrue(base.colors.contains { $0 != nil }, "fixture has no coloured run")
+        XCTAssertTrue(base.underlines.contains { $0 != nil }, "fixture has no underline")
+        XCTAssertTrue(base.intents.contains { $0 != nil }, "fixture has no styled run")
+        XCTAssertTrue(base.axText.contains { $0 != nil }, "fixture has no AX text")
+        XCTAssertFalse(Self.affordances(base).isEmpty, "fixture has no affordances")
+
+        // Identical input: no difference, and no affordance difference.
+        XCTAssertEqual(Self.dimensions(old: base, new: base), [])
+        XCTAssertEqual(Self.affordances(base), Self.affordances(base))
+
+        // One perturbation per dimension; each must be reported, and only
+        // reporting the RIGHT dimension proves the comparison is wired to
+        // the attribute it claims.
+        var perturbed = base
+        perturbed.text += "!"
+        XCTAssertEqual(Self.dimensions(old: base, new: perturbed), ["text"])
+
+        perturbed = base
+        perturbed.links = base.links.map { $0.map { _ in "slate-wiki://elsewhere" } }
+        XCTAssertEqual(Self.dimensions(old: base, new: perturbed), ["link"])
+        XCTAssertNotEqual(
+            Self.affordances(base), Self.affordances(perturbed),
+            "a rerouted link must change the affordance ledger")
+
+        perturbed = base
+        perturbed.colors = base.colors.map { $0.map { _ in "accent" } }
+        XCTAssertEqual(Self.dimensions(old: base, new: perturbed), ["color"])
+
+        perturbed = base
+        perturbed.underlines = base.underlines.map { _ in nil }
+        XCTAssertEqual(Self.dimensions(old: base, new: perturbed), ["underline"])
+
+        perturbed = base
+        perturbed.intents = base.intents.map { _ in nil }
+        XCTAssertEqual(Self.dimensions(old: base, new: perturbed), ["intent"])
+
+        perturbed = base
+        perturbed.axText = base.axText.map { $0.map { _ in "something else" } }
+        XCTAssertEqual(Self.dimensions(old: base, new: perturbed), ["ax"])
+        XCTAssertNotEqual(
+            Self.affordances(base), Self.affordances(perturbed),
+            "a changed announcement must change the affordance ledger")
+    }
+
+    /// Every ledger row must fire on the input it was written for.
+    ///
+    /// A row that never matches is not harmless: it reads as "this
+    /// difference is known and accepted" while proving nothing, and it
+    /// widens the allow-list for free. If one of these fails, the two
+    /// pipelines AGREE on that input and the row should be deleted rather
+    /// than kept as decoration.
+    func testEveryLedgerRowFiresOnItsOwnInput() {
+        let inputs: [(Delta, String, [OutgoingLink])] = [
+            // Anchored interior: core composes `Note^blk`, the retired
+            // mapper used the authored `Note#^blk` verbatim.
+            (.embedKeyComposition, "![[Note#^blk]]\n", []),
+            // `^` in a markdown destination: the retired router
+            // percent-encoded it, so the record could never match.
+            (.markdownCaretPath, "See [m](note^block) here.\n", Self.records),
+            // A token inside a code span: the retired pipeline's splice
+            // leaked into the rendered text.
+            (.spliceLeak, "Literal `[[basic]]` span.\n", Self.records),
+            (.emptyWikilinkInterior, "An [[]] empty target.\n", Self.records),
+        ]
+
+        for (delta, source, records) in inputs {
+            var catalogue = Catalogue()
+            Self.compare(
+                source: source, citations: Self.citations, records: records,
+                strictText: true, into: &catalogue)
+            XCTAssertGreaterThanOrEqual(
+                catalogue.counts[delta] ?? 0, 1,
+                """
+                ledger row `\(delta.rawValue)` did not fire on its own input \
+                \(source.debugDescription).
+                Either the two pipelines now agree here — in which case delete the row, \
+                it is proving nothing — or the row's predicate no longer matches the \
+                difference it was written for.
+                classified: \(catalogue.counts)
+                unclassified: \(catalogue.findings.keys.sorted())
+                """)
+            XCTAssertTrue(
+                catalogue.findings.isEmpty,
+                "unexpected unclassified difference for \(delta.rawValue): "
+                    + "\(catalogue.findings)")
+        }
     }
 
     // MARK: - Inputs
