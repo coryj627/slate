@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- W3-1 container spike (#728, w3_inline_runs_spec.md §10.6). THROWAWAY:
+       this project exists to decide FlowDocument vs ItemsControl against
+       NVDA + JAWS and is deleted once the decision is recorded. It is not
+       referenced by the solution and ships in no build. -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>ContainerSpike</RootNamespace>
+    <AssemblyName>ContainerSpike</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\SlateUniffi\SlateUniffi.csproj" />
+  </ItemGroup>
+
+</Project>

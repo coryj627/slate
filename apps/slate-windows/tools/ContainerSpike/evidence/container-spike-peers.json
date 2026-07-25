@@ -1,0 +1,344 @@
+[
+  {
+    "Variant": "flow/detached",
+    "Error": null,
+    "SurfaceControlType": "Document",
+    "PeerCount": 16,
+    "ControlTypes": {
+      "Document": 2,
+      "Pane": 1,
+      "CheckBox": 2,
+      "Button": 4,
+      "Text": 3,
+      "Separator": 1,
+      "ScrollBar": 2,
+      "Slider": 1
+    },
+    "ListPeers": 0,
+    "ListItemPeers": 0,
+    "HeadingLevelSurvives": false,
+    "HeadingLevels": [],
+    "Links": [],
+    "InteractiveChildren": [
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Copy rust block",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Embedded note resolved note",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Decrease Zoom",
+        "HelpText": "Decrease Zoom",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Increase Zoom",
+        "HelpText": "Increase Zoom",
+        "InvokeProvider": true
+      }
+    ],
+    "TextProviderPresent": true,
+    "TextProviderHost": "Document",
+    "ReadingOrderText": "Reading container spike\r\nA paragraph with a resolved note link, an absent note link, a #tag, a citation (Smith, 2020), and bold plus code spans.\r\nSecond level heading\r\n\u2022\tfirst bullet\r\n\u2022\tsecond bullet\r\n\u2022\tnested bullet\r\n\u2022\tordered one\r\n\u2022\tordered two\r\n\u2022\t an open task\r\n\u2022\t a done task\r\na block quote with a resolved note link\r\n \r\nheader a\theader b\r\ncell 1\tcell 2\r\n \r\n ",
+    "ReadingOrderLength": 363,
+    "LandmarksFound": [
+      "Reading container spike",
+      "resolved note",
+      "absent note",
+      "Second level heading",
+      "first bullet",
+      "nested bullet",
+      "ordered one",
+      "an open task",
+      "a done task",
+      "block quote",
+      "header a",
+      "cell 1"
+    ],
+    "LandmarksMissing": [
+      "fn main",
+      "Embedded note"
+    ],
+    "LandmarksOutOfOrder": []
+  },
+  {
+    "Variant": "flow/windowed",
+    "Error": null,
+    "SurfaceControlType": "Document",
+    "PeerCount": 16,
+    "ControlTypes": {
+      "Document": 2,
+      "Pane": 1,
+      "CheckBox": 2,
+      "Button": 4,
+      "Text": 3,
+      "Separator": 1,
+      "ScrollBar": 2,
+      "Slider": 1
+    },
+    "ListPeers": 0,
+    "ListItemPeers": 0,
+    "HeadingLevelSurvives": false,
+    "HeadingLevels": [],
+    "Links": [],
+    "InteractiveChildren": [
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Copy rust block",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Embedded note resolved note",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Decrease Zoom",
+        "HelpText": "Decrease Zoom",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Increase Zoom",
+        "HelpText": "Increase Zoom",
+        "InvokeProvider": true
+      }
+    ],
+    "TextProviderPresent": true,
+    "TextProviderHost": "Document",
+    "ReadingOrderText": "Reading container spike\r\nA paragraph with a resolved note link, an absent note link, a #tag, a citation (Smith, 2020), and bold plus code spans.\r\nSecond level heading\r\n\u2022\tfirst bullet\r\n\u2022\tsecond bullet\r\n\u2022\tnested bullet\r\n\u2022\tordered one\r\n\u2022\tordered two\r\n\u2022\t an open task\r\n\u2022\t a done task\r\na block quote with a resolved note link\r\n \r\nheader a\theader b\r\ncell 1\tcell 2\r\n \r\n ",
+    "ReadingOrderLength": 363,
+    "LandmarksFound": [
+      "Reading container spike",
+      "resolved note",
+      "absent note",
+      "Second level heading",
+      "first bullet",
+      "nested bullet",
+      "ordered one",
+      "an open task",
+      "a done task",
+      "block quote",
+      "header a",
+      "cell 1"
+    ],
+    "LandmarksMissing": [
+      "fn main",
+      "Embedded note"
+    ],
+    "LandmarksOutOfOrder": []
+  },
+  {
+    "Variant": "items/detached",
+    "Error": null,
+    "SurfaceControlType": "Pane",
+    "PeerCount": 38,
+    "ControlTypes": {
+      "Pane": 1,
+      "List": 1,
+      "DataItem": 1,
+      "Text": 23,
+      "Hyperlink": 5,
+      "CheckBox": 2,
+      "Button": 2,
+      "Separator": 1,
+      "ScrollBar": 2
+    },
+    "ListPeers": 1,
+    "ListItemPeers": 0,
+    "HeadingLevelSurvives": true,
+    "HeadingLevels": [
+      "Level1: Reading container spike",
+      "Level2: Second level heading"
+    ],
+    "Links": [
+      {
+        "Name": "resolved note",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "absent note",
+        "HelpText": "Unresolved link",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "#tag",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "(Smith, 2020)",
+        "HelpText": "Smith, two thousand twenty.",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "resolved note",
+        "HelpText": "",
+        "InvokeProvider": true
+      }
+    ],
+    "InteractiveChildren": [
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Copy rust block",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Embedded note resolved note",
+        "HelpText": "",
+        "InvokeProvider": true
+      }
+    ],
+    "TextProviderPresent": false,
+    "TextProviderHost": null,
+    "ReadingOrderText": null,
+    "ReadingOrderLength": 0,
+    "LandmarksFound": [],
+    "LandmarksMissing": [
+      "Reading container spike",
+      "resolved note",
+      "absent note",
+      "Second level heading",
+      "first bullet",
+      "nested bullet",
+      "ordered one",
+      "an open task",
+      "a done task",
+      "block quote",
+      "fn main",
+      "header a",
+      "cell 1",
+      "Embedded note"
+    ],
+    "LandmarksOutOfOrder": []
+  },
+  {
+    "Variant": "items/windowed",
+    "Error": null,
+    "SurfaceControlType": "Pane",
+    "PeerCount": 38,
+    "ControlTypes": {
+      "Pane": 1,
+      "List": 1,
+      "DataItem": 1,
+      "Text": 23,
+      "Hyperlink": 5,
+      "CheckBox": 2,
+      "Button": 2,
+      "Separator": 1,
+      "ScrollBar": 2
+    },
+    "ListPeers": 1,
+    "ListItemPeers": 0,
+    "HeadingLevelSurvives": true,
+    "HeadingLevels": [
+      "Level1: Reading container spike",
+      "Level2: Second level heading"
+    ],
+    "Links": [
+      {
+        "Name": "resolved note",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "absent note",
+        "HelpText": "Unresolved link",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "#tag",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "(Smith, 2020)",
+        "HelpText": "Smith, two thousand twenty.",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "resolved note",
+        "HelpText": "",
+        "InvokeProvider": true
+      }
+    ],
+    "InteractiveChildren": [
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Task",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Copy rust block",
+        "HelpText": "",
+        "InvokeProvider": true
+      },
+      {
+        "Name": "Embedded note resolved note",
+        "HelpText": "",
+        "InvokeProvider": true
+      }
+    ],
+    "TextProviderPresent": false,
+    "TextProviderHost": null,
+    "ReadingOrderText": null,
+    "ReadingOrderLength": 0,
+    "LandmarksFound": [],
+    "LandmarksMissing": [
+      "Reading container spike",
+      "resolved note",
+      "absent note",
+      "Second level heading",
+      "first bullet",
+      "nested bullet",
+      "ordered one",
+      "an open task",
+      "a done task",
+      "block quote",
+      "fn main",
+      "header a",
+      "cell 1",
+      "Embedded note"
+    ],
+    "LandmarksOutOfOrder": []
+  }
+]
