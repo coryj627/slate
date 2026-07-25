@@ -65,7 +65,11 @@ The two containers consume the **same** core block model (`ReadingBlocksSource` 
 
 ## Provisional recommendation
 
-`FlowDocumentScrollViewer`, plus custom peers for heading level and list semantics — **conditional on finding 1**. The reasoning: the Text pattern is the one property that cannot be added afterwards, while heading level, link roles and list roles are all things a peer can supply. If finding 1 resolves badly (a client genuinely sees no hyperlinks in a FlowDocument), the balance shifts sharply, because link exposure would then also need custom peers on top of everything else — and that combination is worth re-opening the choice over.
+`FlowDocumentScrollViewer`, plus custom peers for heading level and list semantics — **conditional on the NVDA link result above**.
+
+The reasoning is an asymmetry in what can be added later. The Text pattern is the one property that cannot be retrofitted: giving an `ItemsControl` a document text range means writing an `ITextProvider` over a stack of `TextBlock`s from scratch, and every §W-C text-range assertion, say-all continuity and browse-mode behaviour depends on it. Heading level, link roles and list roles are all things an `AutomationPeer` can supply.
+
+The condition matters, though. If NVDA's `K` cannot reach links in the flow variant, then link exposure *also* needs custom peers — on top of headings and lists — and a container that requires re-authoring three of its four semantic layers is worth re-opening the choice over. Run `--nvda` before treating this as decided.
 
 ## Reproducing
 
