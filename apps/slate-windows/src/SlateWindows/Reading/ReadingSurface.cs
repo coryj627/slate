@@ -265,13 +265,22 @@ internal sealed class ReadingSurface : RichTextBox
 
         // Focus lands only once real content exists: focusing the empty
         // surface made NVDA announce "Reading view document blank" and
-        // the arriving content was never re-announced.
-        if (IsVisible && !IsKeyboardFocusWithin && _landmarks.Count > 0)
+        // the arriving content was never re-announced. Presence of
+        // BLOCKS is the condition — a prose-only note has content but
+        // zero landmarks, and gating on landmarks stranded its readers
+        // on the collapsed editor.
+        if (ClaimsFocusAfterApply(IsVisible, IsKeyboardFocusWithin, Document.Blocks.Count))
         {
             CaretPosition = Document.ContentStart;
             _ = Focus();
         }
     }
+
+    /// <summary>The focus-claim rule, extracted so the prose-only-note
+    /// regression is pinned without a presentation source.</summary>
+    internal static bool ClaimsFocusAfterApply(
+        bool isVisible, bool isKeyboardFocusWithin, int blockCount) =>
+        isVisible && !isKeyboardFocusWithin && blockCount > 0;
 
     /// <summary>
     /// Activate the link the CARET is inside. A caret position is not

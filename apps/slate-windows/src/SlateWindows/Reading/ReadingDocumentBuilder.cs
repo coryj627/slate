@@ -13,6 +13,20 @@ using WpfTable = System.Windows.Documents.Table;
 
 namespace SlateWindows.Reading;
 
+/// <summary>
+/// Open-list state carried ACROSS chunked builds (§W3-1 item 9). After
+/// the surface's merge the list objects live on in the persistent
+/// document, so a later chunk appends items into them directly — list
+/// structure never depends on where a chunk boundary fell, and the
+/// render ceiling can stay absolute.
+/// </summary>
+internal sealed class ReadingListBuildContext
+{
+    /// <summary>Stack[d] holds the open list accepting items at depth
+    /// d and the last item added to it (the parent of depth d+1).</summary>
+    internal List<(WpfList List, ListItem? LastItem)> Stack { get; } = new();
+}
+
 /// <summary>The built reading document plus its navigation index.</summary>
 internal sealed class ReadingDocumentModel
 {
@@ -45,7 +59,12 @@ internal sealed class ReadingDocumentModel
 internal static class ReadingDocumentBuilder
 {
     public static ReadingDocumentModel Build(
-        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model)
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model) =>
+        Build(model, new ReadingListBuildContext());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context)
     {
         var document = new FlowDocument
         {
@@ -57,8 +76,7 @@ internal static class ReadingDocumentBuilder
         };
         document.SetResourceReference(FlowDocument.FontFamilyProperty, "Slate.ReadingFontFamily");
 
-        WpfList? openList = null;
-        ListItem? lastItem = null;
+        List<(WpfList List, ListItem? LastItem)> stack = context.Stack;
 
         foreach ((ReadingBlock block, ReadingBlockInlines inlines) in model)
         {
@@ -67,89 +85,86 @@ internal static class ReadingDocumentBuilder
             // test here.
             if (inlines.BlockEmbedKey is { Length: > 0 } embedKey)
             {
-                CloseList(ref openList, ref lastItem);
+                stack.Clear();
                 document.Blocks.Add(EmbedCard(embedKey));
                 continue;
             }
 
             if (block.Kind is ReadingBlockKind.ListItem listKind)
             {
-                AppendListItem(document, ref openList, ref lastItem, listKind, block, inlines);
+                AppendListItem(document, stack, listKind, block, inlines);
                 continue;
             }
 
-            CloseList(ref openList, ref lastItem);
+            stack.Clear();
             document.Blocks.Add(NonListBlock(block, inlines));
         }
 
         return new ReadingDocumentModel(document, CollectLandmarks(document));
     }
 
-    private static void CloseList(ref WpfList? openList, ref ListItem? lastItem)
-    {
-        openList = null;
-        lastItem = null;
-    }
-
+    /// <summary>
+    /// Depth-stack list construction: every level nests inside the last
+    /// item of the level above it — structure, not indentation, is what
+    /// the ListItem peers expose. Ordered-ness is compared AT THE
+    /// ITEM'S OWN LEVEL, so an ordered sublist inside a bullet list
+    /// closes nothing above it; a marker change at one level replaces
+    /// only that level's list (two lists, two quick-nav stops — the AT
+    /// convention). A list opened in an earlier chunk continues through
+    /// <see cref="ReadingListBuildContext"/>: its object already lives
+    /// in the surface's persistent document, and items append into it
+    /// directly.
+    /// </summary>
     private static void AppendListItem(
         FlowDocument document,
-        ref WpfList? openList,
-        ref ListItem? lastItem,
+        List<(WpfList List, ListItem? LastItem)> stack,
         ReadingBlockKind.ListItem kind,
         ReadingBlock block,
         ReadingBlockInlines inlines)
     {
-        // Consecutive ListItem blocks continue one list ONLY while their
-        // ordered-ness agrees: a bullet run followed by an ordered run is
-        // two lists, not one list with lying markers — and two quick-nav
-        // stops, matching AT convention.
-        bool ordered = openList?.MarkerStyle == TextMarkerStyle.Decimal;
-        if (openList is not null && ordered != kind.Ordered)
+        // A level can only open one deeper than the deepest open level;
+        // core emits authored depths, so the clamp fires only on input
+        // this builder never sees from it (defensive).
+        int depth = Math.Min(kind.Depth, stack.Count);
+
+        // Levels deeper than this item close.
+        if (stack.Count > depth + 1)
         {
-            openList = null;
-            lastItem = null;
+            stack.RemoveRange(depth + 1, stack.Count - depth - 1);
         }
-        if (openList is null)
+
+        // Marker change at this level: close and replace this level only.
+        if (stack.Count == depth + 1
+            && (stack[depth].List.MarkerStyle == TextMarkerStyle.Decimal) != kind.Ordered)
         {
-            openList = new WpfList
+            stack.RemoveAt(depth);
+        }
+
+        if (stack.Count == depth)
+        {
+            var list = new WpfList
             {
                 MarkerStyle = kind.Ordered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
             };
-            ReadingSemantics.MarkList(openList);
-            document.Blocks.Add(openList);
+            ReadingSemantics.MarkList(list);
+            if (depth > 0 && stack[depth - 1].LastItem is { } parent)
+            {
+                parent.Blocks.Add(list);
+            }
+            else
+            {
+                document.Blocks.Add(list);
+            }
+            stack.Add((list, null));
         }
 
         Paragraph content = InlineParagraph(
             inlines,
             taskRange: kind.Task is not null ? (block.ByteStart, block.ByteEnd) : null);
-
-        // Depth > 0 nests a real child List inside the previous item —
-        // structure, not indentation, is what the ListItem peers expose.
-        if (kind.Depth > 0 && lastItem is not null)
-        {
-            WpfList nested = lastItem.Blocks.OfType<WpfList>().LastOrDefault()
-                ?? NestList(lastItem, kind.Ordered);
-            var nestedItem = new ListItem(content);
-            ReadingSemantics.MarkListItem(nestedItem);
-            nested.ListItems.Add(nestedItem);
-            return;
-        }
-
         var item = new ListItem(content);
         ReadingSemantics.MarkListItem(item);
-        openList.ListItems.Add(item);
-        lastItem = item;
-    }
-
-    private static WpfList NestList(ListItem parent, bool ordered)
-    {
-        var nested = new WpfList
-        {
-            MarkerStyle = ordered ? TextMarkerStyle.Decimal : TextMarkerStyle.Disc,
-        };
-        ReadingSemantics.MarkList(nested);
-        parent.Blocks.Add(nested);
-        return nested;
+        stack[depth].List.ListItems.Add(item);
+        stack[depth] = (stack[depth].List, item);
     }
 
     private static Block NonListBlock(ReadingBlock block, ReadingBlockInlines inlines)

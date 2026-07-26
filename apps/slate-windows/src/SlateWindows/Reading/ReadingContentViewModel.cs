@@ -258,8 +258,17 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
         if (_synchronousForTests)
         {
-            FetchResult fetched = Fetch(_session, path, text);
-            Publish(generation, path, revision, sessionGeneration, fetched);
+            try
+            {
+                FetchResult fetched = FetchGuarded(_session, path, text);
+                Publish(generation, path, revision, sessionGeneration, fetched);
+            }
+            catch (Exception exception) when (exception is VaultException or IOException)
+            {
+                HostLog.Write(
+                    HostDiagnosticEvent.ReadingRefreshTerminalFailure, exception);
+                PublishTerminalFailure(generation);
+            }
             return;
         }
 
@@ -271,17 +280,23 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             {
                 try
                 {
-                    fetched = Fetch(_session, path, text);
+                    fetched = FetchGuarded(_session, path, text);
                     break;
                 }
                 catch (Exception exception) when (exception is VaultException or IOException)
                 {
                     if (attempt == MaximumBackgroundRefreshAttempts)
                     {
-                        // Terminal: event + exception type only, never
-                        // payload text (W1-RT-01).
-                        HostLog.WriteUiAutomationDiagnostic(
-                            HostDiagnosticEvent.ReadingRefreshTerminalFailure);
+                        // Terminal: an unconditional host diagnostic
+                        // (event + exception TYPE only, never payload
+                        // text — W1-RT-01), then a generation-gated
+                        // user-visible failure state; a silently blank
+                        // surface conceals the failure.
+                        HostLog.Write(
+                            HostDiagnosticEvent.ReadingRefreshTerminalFailure,
+                            exception);
+                        _ = _dispatcher!.InvokeAsync(
+                            () => PublishTerminalFailure(generation));
                         return;
                     }
                     await Task.Delay(RetryDelay).ConfigureAwait(false);
@@ -293,6 +308,54 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     Publish(generation, path, revision, sessionGeneration, result));
             }
         });
+    }
+
+    /// <summary>Terminal-failure injection seam for tests.</summary>
+    internal Func<Exception?>? FetchFaultForTests { get; set; }
+
+    private FetchResult FetchGuarded(VaultSession session, string path, string text)
+    {
+        if (FetchFaultForTests?.Invoke() is { } fault)
+        {
+            throw fault;
+        }
+        return Fetch(session, path, text);
+    }
+
+    /// <summary>
+    /// The user-visible half of a terminal refresh failure: loading
+    /// state clears, the failure is announced with a recovery route,
+    /// and — only when there is nothing already on screen — a notice
+    /// document is published so the surface is never silently blank.
+    /// Existing content is preserved (stale beats empty); the memo is
+    /// untouched, so the next refresh retries the projection in full.
+    /// </summary>
+    private void PublishTerminalFailure(int generation)
+    {
+        if (_disposed || generation != _generation)
+        {
+            return;
+        }
+        IsLoading = false;
+        _announce(new A11yEvent.HostComposed(
+            "Reading view could not load this note. Switch to the editor to "
+            + "keep working, then toggle reading mode to retry.",
+            A11yPriority.High));
+        if (Document is not null)
+        {
+            return;
+        }
+        var document = new FlowDocument();
+        var paragraph = new Paragraph(new Run(
+            "Reading view could not load this note. Switch to the editor to "
+            + "keep working, then toggle reading mode to retry."))
+        {
+            FontStyle = System.Windows.FontStyles.Italic,
+        };
+        System.Windows.Automation.AutomationProperties.SetAutomationId(
+            paragraph, "ReadingRefreshFailedNotice");
+        document.Blocks.Add(paragraph);
+        Document = document;
     }
 
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
@@ -391,17 +454,18 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             model.Add((fetched.Blocks[i], fetched.Inlines[i]));
         }
 
-        // §W3-1 item 9: the render limit is the documented ceiling,
-        // extended past any list run so deliberate truncation never
-        // cuts mid-list (a split list is two nav stops that lie).
-        int renderLimit = model.Count > MaximumRenderedBlocks
-            ? NextChunkBoundary(model, MaximumRenderedBlocks - BuildChunkBlocks, model.Count)
-            : model.Count;
+        // §W3-1 item 9: the ceiling is ABSOLUTE — an all-list note must
+        // not bypass it (adversarial input would otherwise render in
+        // one synchronous pass). Chunk boundaries may fall anywhere:
+        // the shared build context carries open-list state across
+        // chunks, so a list is never split by where a cut landed.
+        int renderLimit = Math.Min(model.Count, MaximumRenderedBlocks);
         bool degraded = model.Count > renderLimit;
 
-        int firstEnd = NextChunkBoundary(model, 0, renderLimit);
+        var context = new ReadingListBuildContext();
+        int firstEnd = Math.Min(BuildChunkBlocks, renderLimit);
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
-            model.GetRange(0, firstEnd));
+            model.GetRange(0, firstEnd), context);
 
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
@@ -425,15 +489,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             int index = firstEnd;
             while (index < renderLimit)
             {
-                int end = NextChunkBoundary(model, index, renderLimit);
-                AppendFragment(model, index, end);
+                int end = Math.Min(index + BuildChunkBlocks, renderLimit);
+                AppendFragment(model, index, end, context);
                 index = end;
             }
             FinishPublish(key, degraded, renderLimit, streamed: true);
             return;
         }
         _ = _dispatcher!.InvokeAsync(
-            () => ContinueBuild(generation, model, firstEnd, renderLimit, key, degraded),
+            () => ContinueBuild(generation, model, firstEnd, renderLimit, key, degraded, context),
             DispatcherPriority.Background);
     }
 
@@ -447,18 +511,20 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         int index,
         int renderLimit,
         MemoKey key,
-        bool degraded)
+        bool degraded,
+        ReadingListBuildContext context)
     {
         if (_disposed || generation != _generation)
         {
             return;
         }
-        int end = NextChunkBoundary(model, index, renderLimit);
-        AppendFragment(model, index, end);
+        int end = Math.Min(index + BuildChunkBlocks, renderLimit);
+        AppendFragment(model, index, end, context);
         if (end < renderLimit)
         {
             _ = _dispatcher!.InvokeAsync(
-                () => ContinueBuild(generation, model, end, renderLimit, key, degraded),
+                () => ContinueBuild(
+                    generation, model, end, renderLimit, key, degraded, context),
                 DispatcherPriority.Background);
             return;
         }
@@ -466,9 +532,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
     private void AppendFragment(
-        List<(ReadingBlock, ReadingBlockInlines)> model, int index, int end) =>
+        List<(ReadingBlock, ReadingBlockInlines)> model,
+        int index,
+        int end,
+        ReadingListBuildContext context) =>
         BlocksAppended?.Invoke(
-            ReadingDocumentBuilder.Build(model.GetRange(index, end - index)).Document);
+            ReadingDocumentBuilder.Build(model.GetRange(index, end - index), context).Document);
 
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
     {
@@ -504,22 +573,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _announce(new A11yEvent.HostComposed(notice, A11yPriority.High));
     }
 
-    /// <summary>
-    /// Chunk boundaries never fall immediately before a ListItem
-    /// continuation: the builder tracks its open list within one Build
-    /// call, so a cut inside a list run would split one authored list
-    /// into two — wrong structure AND two quick-nav stops.
-    /// </summary>
-    private static int NextChunkBoundary(
-        List<(ReadingBlock, ReadingBlockInlines)> model, int index, int limit)
-    {
-        int end = Math.Min(index + BuildChunkBlocks, limit);
-        while (end < limit && model[end].Item1.Kind is ReadingBlockKind.ListItem)
-        {
-            end++;
-        }
-        return end;
-    }
 
     public void Dispose()
     {

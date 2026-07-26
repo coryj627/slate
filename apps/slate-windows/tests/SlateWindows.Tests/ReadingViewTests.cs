@@ -1234,6 +1234,205 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// Adversarial-review fix: a prose-only note has content but ZERO
+    /// landmarks, and the old landmark-gated focus rule stranded its
+    /// readers on the collapsed editor. Blocks, not landmarks, are the
+    /// focus condition.
+    /// </summary>
+    [Fact]
+    public void ProseOnlyNotesClaimFocusWhenContentArrives()
+    {
+        RunSta(() =>
+        {
+            ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(
+                "Just a paragraph.\n\nAnother paragraph.\n");
+            ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
+                "Just a paragraph.\n\nAnother paragraph.\n",
+                Array.Empty<RenderedCitation>(),
+                Array.Empty<OutgoingLink>());
+            var model = new List<(ReadingBlock, ReadingBlockInlines)>();
+            for (int i = 0; i < blocks.Length && i < inlines.Length; i++)
+            {
+                model.Add((blocks[i], inlines[i]));
+            }
+
+            var surface = new ReadingSurface();
+            surface.ApplyBuiltDocument(ReadingDocumentBuilder.Build(model).Document);
+
+            Assert.Empty(surface.LandmarksForTests);
+            Assert.True(surface.Document.Blocks.Count > 0);
+            Assert.True(ReadingSurface.ClaimsFocusAfterApply(
+                isVisible: true,
+                isKeyboardFocusWithin: false,
+                surface.Document.Blocks.Count));
+        });
+    }
+
+    /// <summary>
+    /// Adversarial-review fix: nested lists build from the exact
+    /// core-provided depth — an ordered sublist nests INSIDE its bullet
+    /// parent without resetting it, and three levels chain instead of
+    /// flattening to one.
+    /// </summary>
+    [Fact]
+    public void NestedListsKeepTheirAuthoredDepthAndMarkers()
+    {
+        RunSta(() =>
+        {
+            FlowDocument mixed = BuildSource(
+                "- alpha\n  1. beta\n  2. gamma\n- delta\n");
+            System.Windows.Documents.List outer = Assert.Single(
+                mixed.Blocks.OfType<System.Windows.Documents.List>());
+            Assert.Equal(System.Windows.TextMarkerStyle.Disc, outer.MarkerStyle);
+            ListItem[] outerItems = outer.ListItems.Cast<ListItem>().ToArray();
+            Assert.Equal(2, outerItems.Length);
+            System.Windows.Documents.List sublist = Assert.Single(
+                outerItems[0].Blocks.OfType<System.Windows.Documents.List>());
+            Assert.Equal(System.Windows.TextMarkerStyle.Decimal, sublist.MarkerStyle);
+            Assert.Equal(2, sublist.ListItems.Count);
+            Assert.Empty(outerItems[1].Blocks.OfType<System.Windows.Documents.List>());
+
+            FlowDocument deep = BuildSource(
+                "- one\n  - two\n    - three\n");
+            System.Windows.Documents.List level0 = Assert.Single(
+                deep.Blocks.OfType<System.Windows.Documents.List>());
+            ListItem item0 = Assert.Single(level0.ListItems.Cast<ListItem>());
+            System.Windows.Documents.List level1 = Assert.Single(
+                item0.Blocks.OfType<System.Windows.Documents.List>());
+            ListItem item1 = Assert.Single(level1.ListItems.Cast<ListItem>());
+            System.Windows.Documents.List level2 = Assert.Single(
+                item1.Blocks.OfType<System.Windows.Documents.List>());
+            Assert.Single(level2.ListItems.Cast<ListItem>());
+        });
+    }
+
+    /// <summary>
+    /// Adversarial-review fix: the ceiling is ABSOLUTE. An all-list
+    /// note cannot extend past it — exactly the ceiling's item count
+    /// renders (one list, cut mid-run, continued by nothing), the
+    /// notice follows, and the announcement fires once.
+    /// </summary>
+    [Fact]
+    public void AllListNotesCannotBypassTheCeiling()
+    {
+        RunSta(() =>
+        {
+            int total = SlateWindows.Reading.ReadingContentViewModel.MaximumRenderedBlocks + 500;
+            var text = new System.Text.StringBuilder();
+            for (int i = 0; i < total; i++)
+            {
+                text.Append("- item ").Append(i).Append('\n');
+            }
+
+            using var fixture = FixtureVault.Create(1, "reading-all-list");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            // One list (chunk cuts continued it through the shared
+            // context) holding exactly the ceiling's items, plus the
+            // notice paragraph.
+            System.Windows.Documents.List list = Assert.Single(
+                surface.Document.Blocks.OfType<System.Windows.Documents.List>());
+            Assert.Equal(
+                SlateWindows.Reading.ReadingContentViewModel.MaximumRenderedBlocks,
+                list.ListItems.Count);
+            var notice = Assert.IsType<Paragraph>(surface.Document.Blocks.LastBlock);
+            Assert.Equal(
+                "ReadingDegradedNotice",
+                System.Windows.Automation.AutomationProperties.GetAutomationId(notice));
+            Assert.Single(
+                announced.Select(item => SlateUniffiMethods.A11yRender(item).Text),
+                item => item.Contains("first 2,000 blocks", StringComparison.Ordinal));
+        });
+    }
+
+    /// <summary>
+    /// Adversarial-review fix: a terminal refresh failure is never a
+    /// silent blank surface — loading clears, the failure announces
+    /// with a recovery route, a notice document publishes when nothing
+    /// is on screen, and existing content is preserved when it is.
+    /// </summary>
+    [Fact]
+    public void TerminalRefreshFailureAnnouncesAndShowsANotice()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-fail");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "# Fine content\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, announced.Add, synchronousForTests: true);
+
+            // Failure with NOTHING on screen: notice document + announcement.
+            reading.FetchFaultForTests = () => new IOException("injected");
+            reading.Refresh();
+            Assert.False(reading.IsLoading);
+            var notice = Assert.IsType<Paragraph>(
+                Assert.IsType<FlowDocument>(reading.Document).Blocks.FirstBlock);
+            Assert.Equal(
+                "ReadingRefreshFailedNotice",
+                System.Windows.Automation.AutomationProperties.GetAutomationId(notice));
+            Assert.Contains(
+                announced,
+                item => SlateUniffiMethods.A11yRender(item).Text.Contains(
+                    "could not load this note", StringComparison.Ordinal));
+
+            // Recovery: the next refresh retries in full.
+            reading.FetchFaultForTests = null;
+            reading.Refresh();
+            Assert.Contains(
+                "Fine content",
+                new TextRange(
+                    reading.Document!.ContentStart,
+                    reading.Document.ContentEnd).Text);
+
+            // Failure with content on screen: stale beats empty.
+            FlowDocument shown = reading.Document!;
+            reading.FetchFaultForTests = () => new IOException("injected again");
+            reading.Refresh();
+            Assert.Same(shown, reading.Document);
+        });
+    }
+
+    private static FlowDocument BuildSource(string source)
+    {
+        ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(source);
+        ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
+            source, Array.Empty<RenderedCitation>(), Array.Empty<OutgoingLink>());
+        var model = new List<(ReadingBlock, ReadingBlockInlines)>();
+        for (int i = 0; i < blocks.Length && i < inlines.Length; i++)
+        {
+            model.Add((blocks[i], inlines[i]));
+        }
+        return ReadingDocumentBuilder.Build(model).Document;
+    }
+
     private static string SurfaceText(ReadingSurface surface) =>
         new TextRange(
             surface.Document.ContentStart,
