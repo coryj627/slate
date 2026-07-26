@@ -65,6 +65,40 @@ internal sealed class ReadingSurface : RichTextBox
         Document.SetResourceReference(
             FlowDocument.FontFamilyProperty, "Slate.ReadingFontFamily");
 
+        // Activation: clicks and Enter on links/cards route by the run
+        // kind the builder STAMPED on the element — never by parsing
+        // anything back out of a URI (§10.3/§10.8). Handled at the
+        // surface so the builder stays a pure projector.
+        AddHandler(
+            System.Windows.Documents.Hyperlink.ClickEvent,
+            new System.Windows.RoutedEventHandler((_, args) =>
+            {
+                if (args.Source is System.Windows.Documents.Hyperlink
+                    {
+                        Tag: uniffi.slate_uniffi.ReadingInlineRunKind kind
+                    }
+                    && _model is { } model)
+                {
+                    model.Activate(kind);
+                    args.Handled = true;
+                }
+            }));
+        AddHandler(
+            System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
+            new System.Windows.RoutedEventHandler((_, args) =>
+            {
+                if (args.Source is System.Windows.Controls.Button
+                    {
+                        Tag: string embedKey
+                    }
+                    && _model is { } model)
+                {
+                    model.Activate(
+                        new uniffi.slate_uniffi.ReadingInlineRunKind.Embed(embedKey));
+                    args.Handled = true;
+                }
+            }));
+
         // Entering reading mode swaps this surface in for the editor;
         // focus must land in the document or the mode toggle strands
         // keyboard users on a hidden control. (IsVisibleChanged is an

@@ -49,6 +49,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// <summary>Last published memo key; see <see cref="MemoKey"/>.</summary>
     private MemoKey? _memo;
 
+    /// <summary>The records the published document was built against —
+    /// activation must match against exactly these (§10.1 coherence:
+    /// styling and activation share one snapshot).</summary>
+    private OutgoingLink[] _publishedRecords = Array.Empty<OutgoingLink>();
+
+    private ReadingActivation? _activation;
+
     public ReadingContentViewModel(
         VaultSession session,
         WorkspaceTabViewModel tab,
@@ -76,6 +83,22 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
     public Action<A11yEvent> Announce => _announce;
+
+    /// <summary>Activate one run kind (surface click/Enter path).</summary>
+    public void Activate(ReadingInlineRunKind kind)
+    {
+        _activation ??= new ReadingActivation(
+            _tab, _announce, () => _publishedRecords, _openExternalForTests);
+        _activation.Activate(kind);
+    }
+
+    private Func<string, bool>? _openExternalForTests;
+
+    internal void SetExternalOpenerForTests(Func<string, bool> opener)
+    {
+        _openExternalForTests = opener;
+        _activation = null;
+    }
 
     /// <summary>
     /// Begin observing the live buffer while reading mode is active:
@@ -283,6 +306,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(model);
 
         _memo = key;
+        _publishedRecords = fetched.Records;
         // Only the DOCUMENT is published. The built model's landmarks
         // point into a container the surface's merge empties — the
         // surface re-collects over the live container, and a second

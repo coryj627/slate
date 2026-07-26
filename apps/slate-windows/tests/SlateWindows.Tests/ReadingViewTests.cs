@@ -573,6 +573,103 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// §10.3 activation, every row, through the REAL toggle path (tab VM
+    /// with a live vault session, records from the scanned index): a
+    /// resolved wikilink navigates through the editor's own seam, an
+    /// unresolved one announces core's "is unresolved. Cannot open.", a
+    /// tag routes to the tag seam, a citation speaks core's speech text,
+    /// and an embed activates via ReadingMatchLink with embed:true. The
+    /// run kinds come off the built document's own hyperlinks — exactly
+    /// what a click delivers — so nothing is re-derived in the test
+    /// either.
+    /// </summary>
+    [Fact]
+    public void ActivationRoutesEveryRunKindThroughCoreAndTheEditorSeams()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-activation");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "known.md"), "# Known\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "See [[known]] and [[absent]] and #atag and [@smith2020].\n\n![[known]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var navigations = new List<EditorNavigationRequest>();
+            var tags = new List<string>();
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                navigate: navigations.Add,
+                activateTag: tags.Add,
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+
+            tab.ToggleViewMode();
+            SlateWindows.Reading.ReadingContentViewModel reading = tab.Reading!;
+            var opened = new List<string>();
+            reading.SetExternalOpenerForTests(url =>
+            {
+                opened.Add(url);
+                return true;
+            });
+
+            ReadingInlineRunKind[] kinds = CollectHyperlinks(reading.Document!)
+                .Select(link => link.Tag)
+                .OfType<ReadingInlineRunKind>()
+                .ToArray();
+            // known, absent, #atag, and the citation — core classifies
+            // [@smith2020] as a Citation run even with no configured CSL
+            // style (unmatched raw), so it stays activatable.
+            Assert.Equal(4, kinds.Length);
+            Assert.IsType<ReadingInlineRunKind.Citation>(kinds[3]);
+
+            // Resolved wikilink → the editor's navigation seam, no announcement.
+            reading.Activate(kinds[0]);
+            EditorNavigationRequest navigation = Assert.Single(navigations);
+            Assert.Equal("known.md", navigation.Path);
+
+            // Unresolved wikilink → core's canonical refusal.
+            announced.Clear();
+            reading.Activate(kinds[1]);
+            Assert.Empty(navigations.Skip(1));
+            Assert.Equal(
+                "absent is unresolved. Cannot open.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+
+            // Tag → the tag seam.
+            reading.Activate(kinds[2]);
+            Assert.Equal("atag", Assert.Single(tags));
+
+            // External link → the system opener, announced.
+            announced.Clear();
+            reading.Activate(new ReadingInlineRunKind.ExternalLink("https://example.com/x"));
+            Assert.Equal("https://example.com/x", Assert.Single(opened));
+            Assert.Equal(
+                "Opened external link in default browser.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+
+            // Embed → ReadingMatchLink(embed: true) → navigation.
+            navigations.Clear();
+            reading.Activate(new ReadingInlineRunKind.Embed("known"));
+            Assert.Equal("known.md", Assert.Single(navigations).Path);
+
+            // Citation → core speech verbatim.
+            announced.Clear();
+            reading.Activate(new ReadingInlineRunKind.Citation("[@x]", "Speech text."));
+            Assert.Equal(
+                "Speech text.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        });
+    }
+
     private static IEnumerable<Hyperlink> CollectHyperlinks(FlowDocument document)
     {
         for (TextPointer pointer = document.ContentStart;

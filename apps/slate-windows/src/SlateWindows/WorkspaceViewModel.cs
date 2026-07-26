@@ -164,6 +164,14 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     /// <summary>Created on first entry into reading mode; null before.</summary>
     public ReadingContentViewModel? Reading { get; private set; }
 
+    /// <summary>Reading-surface activation routes through the SAME
+    /// seams the editor uses — one navigation path, one tag path.</summary>
+    internal void NavigateFromReading(EditorNavigationRequest request) =>
+        _navigate?.Invoke(request);
+
+    internal void ActivateTagFromReading(string tag) =>
+        _activateTag?.Invoke(tag);
+
     /// <summary>
     /// `slate.editor.toggleViewMode` (Ctrl+Shift+E, mac ⇧⌘E — W3-1
     /// #728): flip the persisted per-tab mode and (de)activate the
