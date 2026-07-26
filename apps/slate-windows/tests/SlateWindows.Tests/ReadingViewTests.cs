@@ -670,6 +670,110 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// Enter with the caret INSIDE a link activates it — caret position
+    /// is not element focus, so without this the keyboard has no
+    /// activation path at all (measured 2026-07-27: plain Enter did
+    /// nothing on a landed link).
+    /// </summary>
+    [Fact]
+    public void EnterActivatesTheLinkAtTheCaret()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-enter");
+            File.WriteAllText(Path.Combine(fixture.Root, "known.md"), "# Known\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "Go to [[known]] now.\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var navigations = new List<EditorNavigationRequest>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                navigate: navigations.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+
+            var surface = new ReadingSurface { Model = tab.Reading };
+            // The caret setter cannot normalize a position INSIDE a
+            // hyperlink without a text view — it silently snaps to the
+            // document start. The field always has layout; give the test
+            // host the same (the container-spike PeerProbe pattern).
+            surface.Measure(new System.Windows.Size(900, 4000));
+            surface.Arrange(new System.Windows.Rect(0, 0, 900, 4000));
+            surface.UpdateLayout();
+
+            var navigator = new ReadingNavigator(surface, _ => { });
+            navigator.SetLandmarks(surface.LandmarksForTests);
+
+            // Land on the link exactly as a user does — the chord — then
+            // Enter.
+            surface.CaretPosition = surface.Document.ContentStart;
+            navigator.Move(ReadingLandmarkKind.Link, forward: true);
+
+            Assert.True(surface.TryActivateAtCaret());
+            Assert.Equal("known.md", Assert.Single(navigations).Path);
+
+            // Caret OUTSIDE any link: no activation, no false positive.
+            surface.CaretPosition = surface.Document.ContentStart;
+            Assert.False(surface.TryActivateAtCaret());
+            Assert.Single(navigations);
+        });
+    }
+
+    /// <summary>
+    /// Navigation replaces the tab's item in place; a reading-mode tab
+    /// must re-project. Measured 2026-07-27: activating [[Target Note]]
+    /// retitled the tab but the surface kept reading the OLD note —
+    /// ReplaceItem disposed the reading VM and never rebuilt it.
+    /// </summary>
+    [Fact]
+    public void NavigationReprojectsTheReadingSurface()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-navigate");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "known.md"), "# Known target\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "Go to [[known]] now.\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            SlateWindows.Reading.ReadingContentViewModel before = tab.Reading!;
+            Assert.Contains(
+                "Go to",
+                new TextRange(
+                    before.Document!.ContentStart,
+                    before.Document.ContentEnd).Text);
+
+            tab.ReplaceItem(new WorkspaceItemState(WorkspaceItemKind.Markdown, "known.md"));
+
+            SlateWindows.Reading.ReadingContentViewModel after =
+                Assert.IsType<SlateWindows.Reading.ReadingContentViewModel>(tab.Reading);
+            Assert.NotSame(before, after);
+            Assert.True(tab.IsReadingMode, "reading mode persists across navigation");
+            Assert.Contains(
+                "Known target",
+                new TextRange(
+                    after.Document!.ContentStart,
+                    after.Document.ContentEnd).Text);
+        });
+    }
+
     private static IEnumerable<Hyperlink> CollectHyperlinks(FlowDocument document)
     {
         for (TextPointer pointer = document.ContentStart;

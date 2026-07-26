@@ -534,7 +534,8 @@ internal static class ReadingDocumentBuilder
                     landmarks.Add(new ReadingLandmark(
                         ReadingLandmarkKind.Link,
                         Insertion(link.ContentStart),
-                        text: ElementText(link)));
+                        text: ElementText(link),
+                        element: link));
                     break;
                 case Span span:
                     WalkInlines(span.Inlines, landmarks);

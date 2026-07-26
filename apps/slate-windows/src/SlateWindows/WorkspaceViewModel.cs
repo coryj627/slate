@@ -298,6 +298,31 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         NotifyItemChanged();
         Load();
         InitializeEditorSession();
+
+        // Navigation replaces the tab's item IN PLACE; a reading-mode tab
+        // must re-project or the surface keeps showing the previous
+        // note under the new title (measured 2026-07-27: activating
+        // [[Target Note]] retitled the tab but kept reading the old
+        // document — the disposed VM's last projection).
+        Reading = null;
+        if (IsReadingMode && IsMarkdown)
+        {
+            Reading = new ReadingContentViewModel(
+                _session, this, _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
+            if (_startInteractionBackgroundWork)
+            {
+                Reading.Activate();
+            }
+            else
+            {
+                Reading.Refresh();
+            }
+        }
+        OnPropertyChanged(nameof(Reading));
+        OnPropertyChanged(nameof(IsReadingMode));
+        OnPropertyChanged(nameof(IsEditorVisible));
+        OnPropertyChanged(nameof(IsReadingVisible));
         OnPropertyChanged(nameof(Text));
         OnPropertyChanged(nameof(EditorDocument));
         OnPropertyChanged(nameof(EditorSession));

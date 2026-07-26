@@ -112,6 +112,18 @@ internal sealed class ReadingNavigator
         // Alt-modified keys can arrive as Key.System carrying the real
         // key in SystemKey.
         Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+
+        // Enter (and Ctrl+Enter, the editor's activate-at-cursor parity
+        // chord) activates the run the caret is inside — caret position
+        // is not element focus, so the Hyperlink's own Enter handling
+        // never fires for it.
+        if (key == Key.Return
+            && Keyboard.Modifiers is ModifierKeys.None or ModifierKeys.Control
+            && _surface.TryActivateAtCaret())
+        {
+            e.Handled = true;
+            return;
+        }
         bool chordShaped = (Keyboard.Modifiers
             & (ModifierKeys.Control | ModifierKeys.Alt))
             == (ModifierKeys.Control | ModifierKeys.Alt);

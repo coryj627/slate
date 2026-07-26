@@ -205,6 +205,53 @@ internal sealed class ReadingSurface : RichTextBox
         }
     }
 
+    /// <summary>
+    /// Activate the link the CARET is inside. A caret position is not
+    /// element focus — measured 2026-07-27: Enter with the caret inside
+    /// a link did nothing, because the Hyperlink never had keyboard
+    /// focus and so never raised Click. The keyboard path activates
+    /// whatever run the caret sits in, mirroring the editor's
+    /// activate-at-cursor semantics.
+    /// </summary>
+    /// <summary>
+    /// Activate the link the CARET is inside. A caret position is not
+    /// element focus — measured 2026-07-27: Enter with the caret inside
+    /// a link did nothing, because the Hyperlink never had keyboard
+    /// focus and so never raised Click. Containment is tested against
+    /// the landmark index's own elements rather than by walking pointer
+    /// parents, which misses at normalized boundary positions — exactly
+    /// where a chord landing puts the caret.
+    /// </summary>
+    internal bool TryActivateAtCaret()
+    {
+        if (_model is not { } model || CaretPosition is not { } caret)
+        {
+            return false;
+        }
+        foreach (ReadingLandmark landmark in _landmarks)
+        {
+            if (landmark.Kind == ReadingLandmarkKind.Link
+                && landmark.Element is Hyperlink
+                {
+                    Tag: uniffi.slate_uniffi.ReadingInlineRunKind kind
+                } link
+                // A document with live links keeps the caret OFF the
+                // interactive interior: a chord landing rests the caret
+                // immediately BEFORE the hyperlink element (measured —
+                // compare(ElementStart) == -1 at one symbol's distance).
+                // "At the link" therefore means: inside its element
+                // range, or within one symbol before it.
+                && caret.CompareTo(link.ElementEnd) <= 0
+                && (caret.CompareTo(link.ElementStart) >= 0
+                    || caret.GetOffsetToPosition(link.ElementStart) is >= 0 and <= 1))
+            {
+                model.Activate(kind);
+                return true;
+            }
+        }
+        return false;
+    }
+
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new ReadingSurfacePeer(this);
 }

@@ -34,13 +34,23 @@ internal sealed class ReadingLandmark
         ReadingLandmarkKind kind,
         TextPointer position,
         byte headingLevel = 0,
-        string text = "")
+        string text = "",
+        TextElement? element = null)
     {
         Kind = kind;
         Position = position;
         HeadingLevel = headingLevel;
         Text = text;
+        Element = element;
     }
+
+    /// <summary>
+    /// The landmark's own element where activation needs it (the
+    /// Hyperlink for Link landmarks) — caret containment against its
+    /// content range is how Enter-at-caret finds its target, instead of
+    /// pointer-parent walking, which misses at normalized boundaries.
+    /// </summary>
+    public TextElement? Element { get; }
 
     public ReadingLandmarkKind Kind { get; }
 
