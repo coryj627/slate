@@ -96,6 +96,25 @@ internal sealed class ReadingSurface : RichTextBox
                     model.Activate(
                         new uniffi.slate_uniffi.ReadingInlineRunKind.Embed(embedKey));
                     args.Handled = true;
+                    return;
+                }
+
+                // Task checkbox (mouse, Space, or a UIA TogglePattern
+                // call — all raise Click). The checkbox never holds
+                // state: revert WPF's optimistic flip and route the
+                // stamped source range through the core task command;
+                // the re-projection renders the real outcome, and the
+                // canonical announcements ("Task completed." /
+                // conflict / unsaved refusal) narrate it.
+                if (args.Source is System.Windows.Controls.CheckBox
+                    {
+                        Tag: ValueTuple<ulong, ulong> taskRange
+                    } box
+                    && _model is { } taskModel)
+                {
+                    box.IsChecked = box.IsChecked != true;
+                    taskModel.ToggleTaskAt(taskRange.Item1, taskRange.Item2);
+                    args.Handled = true;
                 }
             }));
 
@@ -146,6 +165,10 @@ internal sealed class ReadingSurface : RichTextBox
         {
             surface._navigator ??= new ReadingNavigator(surface, model.Announce);
             model.PropertyChanged += surface.Model_PropertyChanged;
+            // A model swap is a different projection (navigation, tab
+            // switch): the merge's caret preservation is for SAME-note
+            // re-projections only, so park the caret before applying.
+            surface.CaretPosition = surface.Document.ContentStart;
             surface.ApplyModel();
         }
     }
@@ -186,6 +209,14 @@ internal sealed class ReadingSurface : RichTextBox
     /// </summary>
     internal void ApplyBuiltDocument(FlowDocument built)
     {
+        // A re-projection replaces every block, which would collapse a
+        // caret inside the old content to the document start — throwing
+        // the reader to the top after every task toggle. Preserve the
+        // position by symbol offset: a toggle changes one status char
+        // the projection never renders, so the same offset lands on the
+        // same content.
+        int caretOffset = Document.ContentStart.GetOffsetToPosition(CaretPosition);
+
         Document.Blocks.Clear();
         while (built.Blocks.FirstBlock is { } block)
         {
@@ -194,6 +225,13 @@ internal sealed class ReadingSurface : RichTextBox
         }
         _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
         _navigator?.SetLandmarks(_landmarks);
+
+        if (caretOffset > 0)
+        {
+            CaretPosition = Document.ContentStart.GetPositionAtOffset(caretOffset)
+                ?? Document.ContentEnd;
+            return;
+        }
 
         // Focus lands only once real content exists: focusing the empty
         // surface made NVDA announce "Reading view document blank" and
@@ -205,14 +243,6 @@ internal sealed class ReadingSurface : RichTextBox
         }
     }
 
-    /// <summary>
-    /// Activate the link the CARET is inside. A caret position is not
-    /// element focus — measured 2026-07-27: Enter with the caret inside
-    /// a link did nothing, because the Hyperlink never had keyboard
-    /// focus and so never raised Click. The keyboard path activates
-    /// whatever run the caret sits in, mirroring the editor's
-    /// activate-at-cursor semantics.
-    /// </summary>
     /// <summary>
     /// Activate the link the CARET is inside. A caret position is not
     /// element focus — measured 2026-07-27: Enter with the caret inside

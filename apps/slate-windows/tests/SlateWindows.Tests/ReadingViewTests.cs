@@ -887,6 +887,195 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// Task checkbox activation, full round trip: the builder-stamped
+    /// block range matches the core TaskItem by byte containment, the
+    /// tab's core task command edits buffer AND disk, the canonical
+    /// "Task completed." announces, and the re-projection renders the
+    /// new state. The reading surface never edits text itself.
+    /// </summary>
+    [Fact]
+    public void TaskCheckboxTogglesThroughTheCoreTaskCommand()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-task");
+            string notePath = Path.Combine(fixture.Root, "note0.md");
+            File.WriteAllText(
+                notePath, "# Tasks\n\n- [ ] task one\n- [x] task two\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            SlateWindows.Reading.ReadingContentViewModel reading = tab.Reading!;
+
+            System.Windows.Controls.CheckBox[] boxes =
+                CollectCheckBoxes(reading.Document!).ToArray();
+            Assert.Equal(2, boxes.Length);
+            Assert.All(boxes, box => Assert.True(box.IsEnabled));
+            Assert.False(boxes[0].IsChecked);
+            Assert.True(boxes[1].IsChecked);
+
+            (ulong start, ulong end) = Assert.IsType<(ulong, ulong)>(boxes[0].Tag);
+            reading.ToggleTaskAt(start, end);
+            WaitForUi(() => tab.Text.Contains("- [x] task one", StringComparison.Ordinal));
+            Assert.False(tab.IsDirty);
+            Assert.Contains(
+                "- [x] task one",
+                File.ReadAllText(notePath),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                announced,
+                item => SlateUniffiMethods.A11yRender(item).Text == "Task completed.");
+
+            reading.Refresh();
+            boxes = CollectCheckBoxes(reading.Document!).ToArray();
+            Assert.True(boxes[0].IsChecked);
+            Assert.True(boxes[1].IsChecked);
+        });
+    }
+
+    /// <summary>
+    /// The #158 rule holds in reading mode: a dirty buffer refuses the
+    /// toggle with the editor's canonical announcement, and nothing is
+    /// written anywhere.
+    /// </summary>
+    [Fact]
+    public void TaskToggleRefusesWhileTheBufferIsDirty()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-task-dirty");
+            string notePath = Path.Combine(fixture.Root, "note0.md");
+            File.WriteAllText(notePath, "- [ ] task one\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            SlateWindows.Reading.ReadingContentViewModel reading = tab.Reading!;
+            (ulong start, ulong end) = Assert.IsType<(ulong, ulong)>(
+                CollectCheckBoxes(reading.Document!).Single().Tag);
+
+            tab.EditorDocument!.Insert(0, "edited ");
+            WaitForUi(() => tab.IsDirty);
+
+            reading.ToggleTaskAt(start, end);
+            Assert.Contains(announced, item => item is A11yEvent.TaskToggleUnsaved);
+            Assert.DoesNotContain("[x]", File.ReadAllText(notePath), StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>A range no published task matches (snapshot older than
+    /// the click) refuses with the interim not-ready wording instead of
+    /// silently doing nothing.</summary>
+    [Fact]
+    public void TaskToggleAnnouncesWhenTheSnapshotIsStale()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-task-stale");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "- [ ] task one\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+
+            tab.Reading!.ToggleTaskAt(ulong.MaxValue - 1, ulong.MaxValue);
+            Assert.Equal(
+                "Tasks are still loading; try again.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        });
+    }
+
+    /// <summary>
+    /// A same-note re-projection (task toggle, live edit) must not throw
+    /// the reader to the document start: the caret's symbol offset
+    /// survives the block merge.
+    /// </summary>
+    [Fact]
+    public void ReprojectionPreservesTheCaretPosition()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            surface.ApplyBuiltDocument(BuildFixture().Document);
+
+            surface.CaretPosition =
+                surface.Document.ContentStart.GetPositionAtOffset(12)
+                ?? surface.Document.ContentEnd;
+            int before = surface.Document.ContentStart.GetOffsetToPosition(
+                surface.CaretPosition);
+            Assert.True(before > 0);
+
+            surface.ApplyBuiltDocument(BuildFixture().Document);
+            Assert.Equal(
+                before,
+                surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition));
+        });
+    }
+
+    private static IEnumerable<System.Windows.Controls.CheckBox> CollectCheckBoxes(
+        FlowDocument document)
+    {
+        for (TextPointer pointer = document.ContentStart;
+            pointer is not null && pointer.CompareTo(document.ContentEnd) < 0;
+            pointer = pointer.GetNextContextPosition(LogicalDirection.Forward)!)
+        {
+            if (pointer.GetPointerContext(LogicalDirection.Forward)
+                    == TextPointerContext.ElementStart
+                && pointer.GetAdjacentElement(LogicalDirection.Forward)
+                    is InlineUIContainer { Child: System.Windows.Controls.CheckBox box })
+            {
+                yield return box;
+            }
+        }
+    }
+
+    /// <summary>Pump the STA dispatcher until the condition holds — the
+    /// W2 convention for the task command's background+dispatch hop.</summary>
+    private static void WaitForUi(Func<bool> condition)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Asynchronous action timed out.");
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                new Action(() => frame.Continue = false));
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+            Thread.Yield();
+        }
+    }
+
     private static IEnumerable<Hyperlink> CollectHyperlinks(FlowDocument document)
     {
         for (TextPointer pointer = document.ContentStart;

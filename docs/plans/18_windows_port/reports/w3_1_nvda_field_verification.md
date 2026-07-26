@@ -56,6 +56,10 @@ W-E7 browse-mode add-on is the idiomatic closure: browse mode makes
 
 ## Explicitly NOT covered by this record
 
-- **Citation popover, embed-card expansion, task toggles** — later W3-1/W3-5 slices.
+- **Citation popover, embed-card expansion** — later W3-1/W3-5 slices.
+- **Task checkbox toggling** — delivered after these passes (routes the
+  builder-stamped source range through the core task command; dirty and
+  stale-snapshot refusals announced; caret preserved across the
+  re-projection) but not yet human-AT verified.
 - **JAWS** (installed, unmeasured) and **Narrator** (smoke scope) — pending per WGA-9.
 - Size behaviour beyond unit-level measurement; §W-A `inline_runs` goldens.

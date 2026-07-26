@@ -54,6 +54,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// styling and activation share one snapshot).</summary>
     private OutgoingLink[] _publishedRecords = Array.Empty<OutgoingLink>();
 
+    /// <summary>The task records fetched with the published snapshot —
+    /// checkbox activation matches against exactly these (same §10.1
+    /// coherence rule as <see cref="_publishedRecords"/>).</summary>
+    private TaskItem[] _publishedTasks = Array.Empty<TaskItem>();
+
     private ReadingActivation? _activation;
 
     public ReadingContentViewModel(
@@ -90,6 +95,39 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _activation ??= new ReadingActivation(
             _tab, _announce, () => _publishedRecords, _openExternalForTests);
         _activation.Activate(kind);
+    }
+
+    /// <summary>
+    /// Toggle the task whose checkbox lives inside the given source
+    /// block range (the range the builder stamped on the checkbox) —
+    /// the byte-containment analog of mac's line-matched `taskRow`.
+    /// Routes through the tab's core task command, so in-flight
+    /// gating, write-conflict detection, and the canonical
+    /// announcements are all the Tasks panel's.
+    /// </summary>
+    public void ToggleTaskAt(ulong blockByteStart, ulong blockByteEnd)
+    {
+        TaskItem? task = _publishedTasks.FirstOrDefault(t =>
+            t.CheckboxStartByte >= blockByteStart && t.CheckboxStartByte < blockByteEnd);
+        if (task is null)
+        {
+            // The snapshot predates the checkbox the user clicked —
+            // mid-transition, same interim wording as the citation
+            // cache's not-ready path.
+            _announce(new A11yEvent.HostComposed(
+                "Tasks are still loading; try again.",
+                A11yPriority.Medium));
+            return;
+        }
+        if (_tab.IsDirty)
+        {
+            // The editor's exact refusal (#158): the toggle's
+            // post-save reload would overwrite unsaved edits.
+            _announce(new A11yEvent.TaskToggleUnsaved(
+                Path.GetFileName(_tab.Path)));
+            return;
+        }
+        _ = _tab.ToggleTask(task, _announce);
     }
 
     private Func<string, bool>? _openExternalForTests;
@@ -217,10 +255,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // re-verifies the tab still shows that exact path (ordinal).
         OutgoingLink[] records = session.OutgoingLinks(path);
         RenderedCitation[] citations = RenderCitations(session, path);
+        TaskItem[] tasks = session.TasksForFile(path).ToArray();
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
-        return new FetchResult(text, citations, records, blocks, inlines);
+        return new FetchResult(text, citations, records, tasks, blocks, inlines);
     }
 
     /// <summary>
@@ -307,6 +346,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
         _memo = key;
         _publishedRecords = fetched.Records;
+        _publishedTasks = fetched.Tasks;
         // Only the DOCUMENT is published. The built model's landmarks
         // point into a container the surface's merge empties — the
         // surface re-collects over the live container, and a second
@@ -329,6 +369,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         string Text,
         RenderedCitation[] Citations,
         OutgoingLink[] Records,
+        TaskItem[] Tasks,
         ReadingBlock[] Blocks,
         ReadingBlockInlines[] Inlines);
 

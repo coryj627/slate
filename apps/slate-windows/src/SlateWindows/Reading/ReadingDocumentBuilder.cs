@@ -74,7 +74,7 @@ internal static class ReadingDocumentBuilder
 
             if (block.Kind is ReadingBlockKind.ListItem listKind)
             {
-                AppendListItem(document, ref openList, ref lastItem, listKind, inlines);
+                AppendListItem(document, ref openList, ref lastItem, listKind, block, inlines);
                 continue;
             }
 
@@ -96,6 +96,7 @@ internal static class ReadingDocumentBuilder
         ref WpfList? openList,
         ref ListItem? lastItem,
         ReadingBlockKind.ListItem kind,
+        ReadingBlock block,
         ReadingBlockInlines inlines)
     {
         // Consecutive ListItem blocks continue one list ONLY while their
@@ -118,7 +119,9 @@ internal static class ReadingDocumentBuilder
             document.Blocks.Add(openList);
         }
 
-        Paragraph content = InlineParagraph(inlines, task: kind.Task is not null);
+        Paragraph content = InlineParagraph(
+            inlines,
+            taskRange: kind.Task is not null ? (block.ByteStart, block.ByteEnd) : null);
 
         // Depth > 0 nests a real child List inside the previous item —
         // structure, not indentation, is what the ListItem peers expose.
@@ -155,7 +158,7 @@ internal static class ReadingDocumentBuilder
         {
             case ReadingBlockKind.Heading heading:
                 {
-                    Paragraph paragraph = InlineParagraph(inlines, task: false);
+                    Paragraph paragraph = InlineParagraph(inlines, taskRange: null);
                     paragraph.FontSize = heading.Level switch
                     {
                         1 => 26,
@@ -175,7 +178,7 @@ internal static class ReadingDocumentBuilder
 
             case ReadingBlockKind.BlockQuote:
                 {
-                    Paragraph quote = InlineParagraph(inlines, task: false);
+                    Paragraph quote = InlineParagraph(inlines, taskRange: null);
                     quote.Padding = new Thickness(12, 2, 0, 2);
                     quote.BorderThickness = new Thickness(3, 0, 0, 0);
                     quote.SetResourceReference(Block.BorderBrushProperty, "Slate.AccentBrush");
@@ -204,7 +207,7 @@ internal static class ReadingDocumentBuilder
                     {
                         return MonospaceParagraph(block.Source.TrimEnd('\n', '\r'));
                     }
-                    return InlineParagraph(inlines, task: false);
+                    return InlineParagraph(inlines, taskRange: null);
                 }
         }
     }
@@ -306,7 +309,9 @@ internal static class ReadingDocumentBuilder
         return container;
     }
 
-    private static Paragraph InlineParagraph(ReadingBlockInlines inlines, bool task)
+    private static Paragraph InlineParagraph(
+        ReadingBlockInlines inlines,
+        (ulong Start, ulong End)? taskRange)
     {
         var paragraph = new Paragraph();
         ReadingInlineSegment? segment = inlines.Segments.FirstOrDefault();
@@ -315,15 +320,20 @@ internal static class ReadingDocumentBuilder
             return paragraph;
         }
 
-        if (task)
+        if (taskRange is { } range)
         {
             var box = new CheckBox
             {
                 IsChecked = segment.TaskCompleted ?? false,
-                // Task mutation routes through the core task command in
-                // the interaction slice; the reading surface itself never
-                // edits.
-                IsEnabled = false,
+                // The stamped source range is how activation finds the
+                // core TaskItem (checkbox byte within the block — the
+                // same positional rule mac's taskRow applies by line).
+                // The checkbox itself never holds state: the surface
+                // reverts WPF's optimistic flip and routes the toggle
+                // through the SAME core task command the editor and
+                // Tasks panel use; the re-projection renders the
+                // outcome.
+                Tag = range,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 6, 0),
             };
