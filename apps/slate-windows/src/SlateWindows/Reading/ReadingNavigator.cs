@@ -1,0 +1,164 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Windows.Documents;
+using System.Windows.Input;
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Reading;
+
+/// <summary>
+/// The chorded structural-navigation layer (W3-1, gap_analysis G21).
+///
+/// Browse-mode single-letter quick-nav cannot be requested by any app in
+/// any framework — it is AT-side per-app class selection, verified in
+/// NVDA source. So the APP owns chords and semantics: these commands
+/// move the real caret (the AT speaks the landing line itself, which is
+/// why landings are not announcement events), and a MISS posts the
+/// canonical <c>ReadingNavNoTarget</c> vocabulary event. The letters
+/// belong to the AT layer (W-E7: NVDA add-on, JAWS scripts) and are
+/// never claimed here.
+///
+/// Chord policy: modified chords pass through every mode of every AT.
+/// `Ctrl+Alt` + letter is the Slate spatial prefix (W1 precedent);
+/// `Shift` reverses direction. Vetted against the known JAWS/NVDA
+/// bindings — JAWS owns `Ctrl+Alt+arrows` (table reading), which these
+/// deliberately avoid; the G18 precedent governs any future collision.
+/// AltGr caveat: `Ctrl+Alt`+letter equals `AltGr`+letter on some
+/// layouts; acceptable because the bindings are scoped to the read-only
+/// surface, where no text entry exists — revisit if any binding ever
+/// goes global.
+/// </summary>
+internal sealed class ReadingNavigator
+{
+    private readonly ReadingSurface _surface;
+    private readonly Action<A11yEvent> _announce;
+    private IReadOnlyList<ReadingLandmark> _landmarks = Array.Empty<ReadingLandmark>();
+
+    public ReadingNavigator(ReadingSurface surface, Action<A11yEvent> announce)
+    {
+        _surface = surface;
+        _announce = announce;
+        Bind();
+    }
+
+    /// <summary>Swap in the freshly built document's index.</summary>
+    public void SetLandmarks(IReadOnlyList<ReadingLandmark> landmarks) =>
+        _landmarks = landmarks;
+
+    private void Bind()
+    {
+        AddChord(Key.H, shift: false, () => Move(ReadingLandmarkKind.Heading, forward: true));
+        AddChord(Key.H, shift: true, () => Move(ReadingLandmarkKind.Heading, forward: false));
+        AddChord(Key.K, shift: false, () => Move(ReadingLandmarkKind.Link, forward: true));
+        AddChord(Key.K, shift: true, () => Move(ReadingLandmarkKind.Link, forward: false));
+        AddChord(Key.L, shift: false, () => Move(ReadingLandmarkKind.List, forward: true));
+        AddChord(Key.L, shift: true, () => Move(ReadingLandmarkKind.List, forward: false));
+        AddChord(Key.T, shift: false, () => Move(ReadingLandmarkKind.Table, forward: true));
+        AddChord(Key.T, shift: true, () => Move(ReadingLandmarkKind.Table, forward: false));
+        AddChord(Key.E, shift: false, () => Move(ReadingLandmarkKind.Embed, forward: true));
+        AddChord(Key.E, shift: true, () => Move(ReadingLandmarkKind.Embed, forward: false));
+        AddChord(Key.C, shift: false, () => Move(ReadingLandmarkKind.CodeBlock, forward: true));
+        AddChord(Key.C, shift: true, () => Move(ReadingLandmarkKind.CodeBlock, forward: false));
+
+        for (byte level = 1; level <= 6; level++)
+        {
+            byte captured = level;
+            AddChord(Key.D1 + (captured - 1), shift: false,
+                () => MoveToHeadingLevel(captured, forward: true));
+            AddChord(Key.D1 + (captured - 1), shift: true,
+                () => MoveToHeadingLevel(captured, forward: false));
+        }
+    }
+
+    private void AddChord(Key key, bool shift, Action action)
+    {
+        ModifierKeys modifiers = ModifierKeys.Control | ModifierKeys.Alt
+            | (shift ? ModifierKeys.Shift : ModifierKeys.None);
+        var command = new RoutedCommand();
+        _surface.CommandBindings.Add(
+            new CommandBinding(command, (_, args) =>
+            {
+                action();
+                args.Handled = true;
+            }));
+        _surface.InputBindings.Add(new KeyBinding(command, key, modifiers));
+    }
+
+    internal void Move(ReadingLandmarkKind kind, bool forward) =>
+        Navigate(
+            landmark => landmark.Kind == kind,
+            NoTargetEvent(kind, level: 0, forward),
+            forward);
+
+    internal void MoveToHeadingLevel(byte level, bool forward) =>
+        Navigate(
+            landmark => landmark.Kind == ReadingLandmarkKind.Heading
+                && landmark.HeadingLevel == level,
+            NoTargetEvent(ReadingLandmarkKind.Heading, level, forward),
+            forward);
+
+    /// <summary>
+    /// Strictly-beyond-the-caret search over the document-ordered
+    /// landmark list. No wrap: hitting the edge announces the miss —
+    /// wrap-around navigation disorients precisely the users this layer
+    /// exists for.
+    /// </summary>
+    private void Navigate(Func<ReadingLandmark, bool> matches, A11yEvent miss, bool forward)
+    {
+        TextPointer caret = _surface.CaretPosition;
+        ReadingLandmark? target = null;
+        if (forward)
+        {
+            foreach (ReadingLandmark landmark in _landmarks)
+            {
+                if (matches(landmark) && caret.CompareTo(landmark.Position) < 0)
+                {
+                    target = landmark;
+                    break;
+                }
+            }
+        }
+        else
+        {
+            foreach (ReadingLandmark landmark in _landmarks)
+            {
+                if (matches(landmark) && landmark.Position.CompareTo(caret) < 0)
+                {
+                    target = landmark;
+                }
+                else if (landmark.Position.CompareTo(caret) >= 0)
+                {
+                    break;
+                }
+            }
+        }
+
+        if (target is null)
+        {
+            _announce(miss);
+            return;
+        }
+
+        _surface.CaretPosition = target.Position;
+        target.Position.Paragraph?.BringIntoView();
+        // Caret speech carries the landing line; nothing more is posted.
+    }
+
+    private static A11yEvent NoTargetEvent(
+        ReadingLandmarkKind kind, byte level, bool forward)
+    {
+        ReadingNavTarget target = kind switch
+        {
+            ReadingLandmarkKind.Heading when level > 0 =>
+                new ReadingNavTarget.HeadingLevel(level),
+            ReadingLandmarkKind.Heading => new ReadingNavTarget.Heading(),
+            ReadingLandmarkKind.Link => new ReadingNavTarget.Link(),
+            ReadingLandmarkKind.List => new ReadingNavTarget.List(),
+            ReadingLandmarkKind.Table => new ReadingNavTarget.Table(),
+            ReadingLandmarkKind.Embed => new ReadingNavTarget.Embed(),
+            _ => new ReadingNavTarget.CodeBlock(),
+        };
+        return new A11yEvent.ReadingNavNoTarget(target, forward);
+    }
+}

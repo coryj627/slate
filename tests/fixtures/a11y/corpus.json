@@ -700,6 +700,41 @@
     "text": "Code copied."
   },
   {
+    "event": "ReadingNavNoTarget { target: Heading, forward: true }",
+    "priority": "medium",
+    "text": "No next heading."
+  },
+  {
+    "event": "ReadingNavNoTarget { target: HeadingLevel { level: 2 }, forward: false }",
+    "priority": "medium",
+    "text": "No previous level 2 heading."
+  },
+  {
+    "event": "ReadingNavNoTarget { target: Link, forward: true }",
+    "priority": "medium",
+    "text": "No next link."
+  },
+  {
+    "event": "ReadingNavNoTarget { target: List, forward: false }",
+    "priority": "medium",
+    "text": "No previous list."
+  },
+  {
+    "event": "ReadingNavNoTarget { target: Table, forward: true }",
+    "priority": "medium",
+    "text": "No next table."
+  },
+  {
+    "event": "ReadingNavNoTarget { target: Embed, forward: false }",
+    "priority": "medium",
+    "text": "No previous embed."
+  },
+  {
+    "event": "ReadingNavNoTarget { target: CodeBlock, forward: true }",
+    "priority": "medium",
+    "text": "No next code block."
+  },
+  {
     "event": "HostComposed { text: \"Composed by a host engine.\", priority: High }",
     "priority": "high",
     "text": "Composed by a host engine."

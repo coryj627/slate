@@ -6704,10 +6704,42 @@ pub enum A11yEvent {
     CitationInsertUnavailable,
     CitationWalkThrough,
     CodeCopied,
+    ReadingNavNoTarget {
+        target: ReadingNavTarget,
+        forward: bool,
+    },
     HostComposed {
         text: String,
         priority: A11yPriority,
     },
+}
+
+/// FFI mirror of [`core::a11y::ReadingNavTarget`] (W3-1, G21).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum ReadingNavTarget {
+    Heading,
+    HeadingLevel { level: u8 },
+    Link,
+    List,
+    Table,
+    Embed,
+    CodeBlock,
+}
+
+impl From<ReadingNavTarget> for core::a11y::ReadingNavTarget {
+    fn from(t: ReadingNavTarget) -> Self {
+        use core::a11y::ReadingNavTarget as C;
+        use ReadingNavTarget as F;
+        match t {
+            F::Heading => C::Heading,
+            F::HeadingLevel { level } => C::HeadingLevel { level },
+            F::Link => C::Link,
+            F::List => C::List,
+            F::Table => C::Table,
+            F::Embed => C::Embed,
+            F::CodeBlock => C::CodeBlock,
+        }
+    }
 }
 
 impl From<A11yEvent> for core::a11y::A11yEvent {
@@ -6908,6 +6940,10 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::CitationInsertUnavailable => C::CitationInsertUnavailable,
             F::CitationWalkThrough => C::CitationWalkThrough,
             F::CodeCopied => C::CodeCopied,
+            F::ReadingNavNoTarget { target, forward } => C::ReadingNavNoTarget {
+                target: target.into(),
+                forward,
+            },
             F::HostComposed { text, priority } => C::HostComposed {
                 text,
                 priority: priority.into(),
