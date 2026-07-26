@@ -46,6 +46,26 @@ internal static class Program
             return PeerProbe.Run(outputDirectory);
         }
 
+        // Size and stability of the selected container. Also needs no
+        // window, so it runs anywhere the peer probe does.
+        if (probe == "perf")
+        {
+            return PerfProbe.Run(outputDirectory);
+        }
+
+        if (probe == "perfone")
+        {
+            int size = 0;
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--size")
+                {
+                    _ = int.TryParse(args[i + 1], out size);
+                }
+            }
+            return PerfProbe.RunSingle(outputDirectory, size);
+        }
+
         var model = Fixture.Load();
         FrameworkElement surface = container switch
         {
