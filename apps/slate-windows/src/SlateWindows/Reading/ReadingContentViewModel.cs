@@ -42,7 +42,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     private bool _disposed;
     private int _generation;
     private FlowDocument? _document;
-    private IReadOnlyList<ReadingLandmark> _landmarks = Array.Empty<ReadingLandmark>();
     private bool _isLoading;
     private DispatcherTimer? _editDebounce;
     private ICSharpCode.AvalonEdit.Document.TextDocument? _observedDocument;
@@ -69,11 +68,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         private set => SetField(ref _document, value);
     }
 
-    public IReadOnlyList<ReadingLandmark> Landmarks
-    {
-        get => _landmarks;
-        private set => SetField(ref _landmarks, value);
-    }
 
     public bool IsLoading
     {
@@ -289,8 +283,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(model);
 
         _memo = key;
+        // Only the DOCUMENT is published. The built model's landmarks
+        // point into a container the surface's merge empties — the
+        // surface re-collects over the live container, and a second
+        // landmark source here would be a dangling-pointer trap.
         Document = built.Document;
-        Landmarks = built.Landmarks;
     }
 
     public void Dispose()

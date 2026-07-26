@@ -280,7 +280,6 @@ public sealed class ReadingViewTests
             SlateWindows.Reading.ReadingContentViewModel reading =
                 Assert.IsType<SlateWindows.Reading.ReadingContentViewModel>(tab.Reading);
             Assert.NotNull(reading.Document);
-            Assert.NotEmpty(reading.Landmarks);
 
             // Toggling back retains the projection — flipping again is a
             // memo hit, not a re-parse.
@@ -299,6 +298,56 @@ public sealed class ReadingViewTests
             placeholder.ToggleViewMode();
             Assert.Null(placeholder.Mode);
             Assert.Null(placeholder.Reading);
+        });
+    }
+
+    /// <summary>
+    /// The 2026-07-27 manual pass regression: with the UIA peer created
+    /// BEFORE the document arrives (exactly the live app's order — the
+    /// template instantiates the surface, NVDA binds, then the async
+    /// projection publishes), the text pattern must still expose the
+    /// published content. Swapping the Document property on a live
+    /// RichTextBox leaves the peer bound to the ORIGINAL text container:
+    /// NVDA announced "Reading view document blank" and every caret move
+    /// after was silent, while the visual caret moved normally.
+    /// </summary>
+    [Fact]
+    public void TextPatternSurvivesDocumentArrivingAfterThePeer()
+    {
+        RunSta(() =>
+        {
+            ReadingDocumentModel model = BuildFixture();
+            var surface = new ReadingSurface();
+
+            // Peer first — the live binding order.
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            Assert.NotNull(peer);
+            _ = peer.GetChildren();
+
+            System.Windows.Documents.FlowDocument persistent = surface.Document;
+            surface.ApplyBuiltDocument(model.Document);
+
+            // The persistent container must be retained — replacing it is
+            // exactly the binding break.
+            Assert.Same(persistent, surface.Document);
+
+            var provider = peer.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            Assert.NotNull(provider);
+            string text = provider!.DocumentRange.GetText(-1);
+            Assert.Contains("Top heading", text);
+            Assert.Contains("fn interior()", text);
+
+            // Landmarks re-collected over the LIVE container, so the
+            // navigator's pointers are never left aimed at the emptied
+            // built document.
+            IReadOnlyList<ReadingLandmark> live = surface.LandmarksForTests;
+            Assert.NotEmpty(live);
+            Assert.All(live, l => Assert.True(
+                l.Position.IsInSameDocument(surface.Document.ContentStart),
+                "landmark points into the emptied built document, not the live one"));
         });
     }
 

@@ -49,13 +49,29 @@ internal sealed class ReadingSurface : RichTextBox
         AutomationProperties.SetAutomationId(this, "ReadingSurface");
         AutomationProperties.SetName(this, "Reading view");
 
+        // ONE document for the surface's whole life. Replacing the
+        // Document property on a live RichTextBox breaks the UIA
+        // binding: the automation peer stays wired to the original text
+        // container, so a screen reader sees "blank" forever and caret
+        // moves go silent while the visual caret works — the 2026-07-27
+        // manual-pass finding. Content arrives by MERGING blocks into
+        // this document instead (ApplyBuiltDocument).
+        Document = new FlowDocument
+        {
+            FontSize = 15,
+            PagePadding = new Thickness(16),
+            ColumnWidth = double.PositiveInfinity,
+        };
+        Document.SetResourceReference(
+            FlowDocument.FontFamilyProperty, "Slate.ReadingFontFamily");
+
         // Entering reading mode swaps this surface in for the editor;
         // focus must land in the document or the mode toggle strands
         // keyboard users on a hidden control. (IsVisibleChanged is an
         // event, not a virtual, on UIElement.)
         IsVisibleChanged += (_, args) =>
         {
-            if (args.NewValue is true && _model is not null)
+            if (args.NewValue is true && _lastMerged is not null)
             {
                 _ = Focus();
             }
@@ -103,12 +119,16 @@ internal sealed class ReadingSurface : RichTextBox
     private void Model_PropertyChanged(
         object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(ReadingContentViewModel.Document)
-            or nameof(ReadingContentViewModel.Landmarks))
+        if (e.PropertyName is nameof(ReadingContentViewModel.Document))
         {
             ApplyModel();
         }
     }
+
+    private FlowDocument? _lastMerged;
+    private IReadOnlyList<ReadingLandmark> _landmarks = Array.Empty<ReadingLandmark>();
+
+    internal IReadOnlyList<ReadingLandmark> LandmarksForTests => _landmarks;
 
     private void ApplyModel()
     {
@@ -116,11 +136,39 @@ internal sealed class ReadingSurface : RichTextBox
         {
             return;
         }
-        if (model.Document is { } document && !ReferenceEquals(Document, document))
+        if (model.Document is { } built && !ReferenceEquals(_lastMerged, built))
         {
-            Document = document;
+            ApplyBuiltDocument(built);
+            _lastMerged = built;
         }
-        _navigator?.SetLandmarks(model.Landmarks);
+    }
+
+    /// <summary>
+    /// Move the built document's blocks into the surface's persistent
+    /// document, then re-collect landmarks over the LIVE container — the
+    /// built model's own pointers aim into a document this merge just
+    /// emptied, and a navigator holding them would throw on the first
+    /// caret comparison.
+    /// </summary>
+    internal void ApplyBuiltDocument(FlowDocument built)
+    {
+        Document.Blocks.Clear();
+        while (built.Blocks.FirstBlock is { } block)
+        {
+            built.Blocks.Remove(block);
+            Document.Blocks.Add(block);
+        }
+        _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
+        _navigator?.SetLandmarks(_landmarks);
+
+        // Focus lands only once real content exists: focusing the empty
+        // surface made NVDA announce "Reading view document blank" and
+        // the arriving content was never re-announced.
+        if (IsVisible && !IsKeyboardFocusWithin && _landmarks.Count > 0)
+        {
+            CaretPosition = Document.ContentStart;
+            _ = Focus();
+        }
     }
 
     protected override AutomationPeer OnCreateAutomationPeer() =>

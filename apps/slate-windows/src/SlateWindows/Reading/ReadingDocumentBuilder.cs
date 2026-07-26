@@ -442,7 +442,7 @@ internal static class ReadingDocumentBuilder
     private static TextPointer Insertion(TextPointer position) =>
         position.GetInsertionPosition(LogicalDirection.Forward) ?? position;
 
-    private static IReadOnlyList<ReadingLandmark> CollectLandmarks(FlowDocument document)
+    internal static IReadOnlyList<ReadingLandmark> CollectLandmarks(FlowDocument document)
     {
         var landmarks = new List<ReadingLandmark>();
         foreach (Block block in document.Blocks)
