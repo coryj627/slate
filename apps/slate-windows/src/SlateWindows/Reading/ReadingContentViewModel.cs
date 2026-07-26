@@ -186,6 +186,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return;
         }
+        // This is the true "no longer visible" signal — the shared
+        // surface just rebound away — so buffer observation pauses
+        // HERE, not on tab Deactivate (which also fires on split-pane
+        // focus moves while the tab stays visible). EnsureProjected
+        // re-attaches on the next bind.
+        Deactivate();
         _generation++;
         _memo = null;
         // _projectionComplete is deliberately untouched: it is already
@@ -370,8 +376,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 }
                 if (fetched is { } result)
                 {
-                    _ = _dispatcher!.InvokeAsync(() =>
-                        Publish(generation, path, revision, sessionGeneration, result));
+                    _ = _dispatcher!.InvokeAsync(() => RunPublishStep(
+                        generation,
+                        () => Publish(generation, path, revision, sessionGeneration, result)));
                 }
             }
             catch (Exception exception)
@@ -389,6 +396,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
     /// <summary>Terminal-failure injection seam for tests.</summary>
     internal Func<Exception?>? FetchFaultForTests { get; set; }
+
+    /// <summary>Dispatcher-side (publish/chunk-build) fault injection
+    /// seam for tests.</summary>
+    internal Func<Exception?>? PublishFaultForTests { get; set; }
 
     internal bool IsDisposedForTests => _disposed;
 
@@ -521,6 +532,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ulong sessionGeneration,
         FetchResult fetched)
     {
+        if (PublishFaultForTests?.Invoke() is { } fault)
+        {
+            throw fault;
+        }
         IsLoading = false;
         if (_disposed
             || generation != _generation
@@ -587,8 +602,33 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             return;
         }
         _ = _dispatcher!.InvokeAsync(
-            () => ContinueBuild(generation, model, firstEnd, renderLimit, key, degraded, context),
+            () => RunPublishStep(
+                generation,
+                () => ContinueBuild(
+                    generation, model, firstEnd, renderLimit, key, degraded, context)),
             DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// Terminal boundary for DISPATCHER-side projection work. The
+    /// fetch task's boundary cannot see these: InvokeAsync delegates
+    /// fault their discarded DispatcherOperation, not the task that
+    /// queued them — a WPF build/merge exception would strand the
+    /// surface on the loading placeholder with no notice, no
+    /// announcement, and no diagnostic.
+    /// </summary>
+    private void RunPublishStep(int generation, Action step)
+    {
+        try
+        {
+            step();
+        }
+        catch (Exception exception)
+        {
+            HostLog.Write(
+                HostDiagnosticEvent.ReadingRefreshTerminalFailure, exception);
+            PublishTerminalFailure(generation);
+        }
     }
 
     /// <summary>
@@ -608,13 +648,19 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return;
         }
+        if (PublishFaultForTests?.Invoke() is { } fault)
+        {
+            throw fault;
+        }
         int end = Math.Min(index + BuildChunkBlocks, renderLimit);
         AppendFragment(model, index, end, context);
         if (end < renderLimit)
         {
             _ = _dispatcher!.InvokeAsync(
-                () => ContinueBuild(
-                    generation, model, end, renderLimit, key, degraded, context),
+                () => RunPublishStep(
+                    generation,
+                    () => ContinueBuild(
+                        generation, model, end, renderLimit, key, degraded, context)),
                 DispatcherPriority.Background);
             return;
         }

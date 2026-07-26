@@ -482,13 +482,14 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         }
     }
 
-    public void Deactivate()
-    {
-        _editorInteractions?.CloseTransientUi();
-        // A hidden tab's projection stops observing the buffer; the
-        // surface rebind (EnsureProjected) re-attaches on return.
-        Reading?.Deactivate();
-    }
+    // Reading observation is deliberately NOT paused here: Deactivate
+    // also fires when focus merely moves to another split pane while
+    // this tab stays mounted and visible — pausing there would freeze
+    // a visible projection against peer-pane edits. The projection
+    // pauses on the true "left the surface" signal instead
+    // (ReadingContentViewModel.OnSurfaceDetached, raised by the
+    // surface rebind that hides it), and Dispose still tears it down.
+    public void Deactivate() => _editorInteractions?.CloseTransientUi();
 
     public bool ToggleTask(TaskItem task, Action<A11yEvent> announce)
     {

@@ -1668,6 +1668,137 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// Adversarial-review round 4 fix: exceptions thrown on the
+    /// DISPATCHER side (publish, chunk build/merge) reach the terminal
+    /// state too — InvokeAsync delegates fault their discarded
+    /// operation, invisible to the fetch task's boundary.
+    /// </summary>
+    [Fact]
+    public void PublicationFaultsReachTheTerminalFailureState()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-publish-fault");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "# Fine content\n");
+            var big = new System.Text.StringBuilder();
+            for (int i = 0; i < 600; i++)
+            {
+                big.Append("- item ").Append(i).Append('\n');
+            }
+            File.WriteAllText(Path.Combine(fixture.Root, "big.md"), big.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+
+            // First publish faults → notice; clearing the fault and
+            // re-projecting recovers.
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, announced.Add);
+            reading.PublishFaultForTests = () => new InvalidOperationException("wpf build");
+            reading.Refresh();
+            WaitForUi(() => reading.Document is not null);
+            Assert.Equal(
+                "ReadingRefreshFailedNotice",
+                System.Windows.Automation.AutomationProperties.GetAutomationId(
+                    Assert.IsType<Paragraph>(reading.Document!.Blocks.FirstBlock)));
+            reading.PublishFaultForTests = null;
+            reading.EnsureProjected();
+            WaitForUi(() =>
+                new TextRange(
+                    reading.Document!.ContentStart,
+                    reading.Document.ContentEnd).Text.Contains(
+                        "Fine content", StringComparison.Ordinal));
+
+            // A mid-stream CHUNK fault (second dispatcher pass) lands in
+            // the same state instead of stranding the torso.
+            using var bigTab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "big.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            using var streaming = new SlateWindows.Reading.ReadingContentViewModel(
+                session, bigTab, announced.Add);
+            int faultCalls = 0;
+            streaming.PublishFaultForTests = () =>
+                ++faultCalls >= 2 ? new InvalidOperationException("chunk build") : null;
+            announced.Clear();
+            streaming.Refresh();
+            WaitForUi(() =>
+                streaming.Document is { Blocks.FirstBlock: Paragraph first }
+                && System.Windows.Automation.AutomationProperties.GetAutomationId(first)
+                    == "ReadingRefreshFailedNotice");
+            Assert.Contains(
+                announced,
+                item => SlateUniffiMethods.A11yRender(item).Text.Contains(
+                    "could not load this note", StringComparison.Ordinal));
+        });
+    }
+
+    /// <summary>
+    /// Adversarial-review round 4 fix: tab Deactivate also fires when
+    /// focus merely moves to another split pane while this tab stays
+    /// visible — so it must NOT pause reading observation (a peer-pane
+    /// edit would leave the visible projection stale forever). The
+    /// pause belongs to the surface detach, the true hidden signal.
+    /// </summary>
+    [Fact]
+    public void SplitPaneFocusChangeKeepsAVisibleReadingProjectionLive()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-split-focus");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "# Body\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, _ => { });
+            reading.Activate();
+            WaitForUi(() => reading.Document is not null);
+            Assert.True(reading.ObservesEditorForTests);
+
+            // Focus moves to another pane: the tab deactivates but stays
+            // visible — observation must survive...
+            tab.Deactivate();
+            Assert.True(reading.ObservesEditorForTests);
+
+            // ...so a peer-pane edit still re-projects.
+            tab.EditorDocument!.Insert(
+                tab.EditorDocument.TextLength, "\nPeer edit arrived.\n");
+            WaitForUi(() =>
+                new TextRange(
+                    reading.Document!.ContentStart,
+                    reading.Document.ContentEnd).Text.Contains(
+                        "Peer edit arrived", StringComparison.Ordinal));
+
+            // The surface unbinding is what pauses observation.
+            var surface = new ReadingSurface { Model = reading };
+            surface.Model = null;
+            Assert.False(reading.ObservesEditorForTests);
+        });
+    }
+
     private static void PumpOneBackgroundPass()
     {
         var frame = new System.Windows.Threading.DispatcherFrame();
