@@ -187,12 +187,34 @@ internal sealed class ReadingSurface : RichTextBox
                 // pointing at a torso that must re-project instead.
                 return;
             }
-            // Any other rebind must RE-project: the model's published
-            // blocks may have been consumed by an earlier binding of
-            // this shared surface (see EnsureProjected).
+            // Any other rebind is a DIFFERENT note (or an untrusted
+            // projection): the outgoing content leaves the tree NOW —
+            // waiting for the incoming publish would let readers and
+            // AT read the previous note under the new tab's identity.
+            // An accessible placeholder stands in until the projection
+            // (or its failure notice) arrives through PropertyChanged.
+            surface.ClearForModelSwitch();
             model.EnsureProjected();
-            surface.ApplyModel();
         }
+    }
+
+    private void ClearForModelSwitch()
+    {
+        Document.Blocks.Clear();
+        var placeholder = new Paragraph(new Run("Loading reading view…"))
+        {
+            FontStyle = System.Windows.FontStyles.Italic,
+        };
+        System.Windows.Automation.AutomationProperties.SetAutomationId(
+            placeholder, "ReadingLoadingNotice");
+        Document.Blocks.Add(placeholder);
+        // Park the caret at the placeholder's start: a leftover offset
+        // would be "preserved" into the incoming note by the next
+        // merge, skipping its focus-on-content path.
+        CaretPosition = Document.ContentStart;
+        _landmarks = Array.Empty<ReadingLandmark>();
+        _navigator?.SetLandmarks(_landmarks);
+        _lastMerged = null;
     }
 
     private void Model_PropertyChanged(

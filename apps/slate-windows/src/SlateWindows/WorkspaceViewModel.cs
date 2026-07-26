@@ -467,6 +467,11 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         _disposed = true;
         _taskToggleGeneration++;
+        // The reading projection goes first: it observes the editor
+        // document and schedules background FFI work against this
+        // tab's session — both torn down below.
+        Reading?.Dispose();
+        Reading = null;
         _editorInteractions?.Dispose();
         _editorInteractions = null;
         _editorSession?.Dispose();
@@ -477,7 +482,13 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         }
     }
 
-    public void Deactivate() => _editorInteractions?.CloseTransientUi();
+    public void Deactivate()
+    {
+        _editorInteractions?.CloseTransientUi();
+        // A hidden tab's projection stops observing the buffer; the
+        // surface rebind (EnsureProjected) re-attaches on return.
+        Reading?.Deactivate();
+    }
 
     public bool ToggleTask(TaskItem task, Action<A11yEvent> announce)
     {

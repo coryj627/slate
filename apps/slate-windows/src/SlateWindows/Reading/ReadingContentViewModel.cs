@@ -148,7 +148,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// </summary>
     public void EnsureProjected()
     {
-        if (_disposed || _document is null)
+        if (_disposed)
+        {
+            return;
+        }
+        // Rebinding also resumes buffer observation a tab deactivation
+        // paused (Deactivate detaches; the surface's bind is the
+        // "shown again" signal).
+        AttachObserver();
+        if (_document is null)
         {
             return;
         }
@@ -249,6 +257,16 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return;
         }
+        AttachObserver();
+        Refresh();
+    }
+
+    private void AttachObserver()
+    {
+        if (_synchronousForTests)
+        {
+            return;
+        }
         if (_tab.EditorDocument is { } document
             && !ReferenceEquals(_observedDocument, document))
         {
@@ -256,7 +274,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             _observedDocument = document;
             document.TextChanged += Document_TextChanged;
         }
-        Refresh();
     }
 
     public void Deactivate()
@@ -314,7 +331,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 FetchResult fetched = FetchGuarded(_session, path, text);
                 Publish(generation, path, revision, sessionGeneration, fetched);
             }
-            catch (Exception exception) when (exception is VaultException or IOException)
+            catch (Exception exception)
             {
                 HostLog.Write(
                     HostDiagnosticEvent.ReadingRefreshTerminalFailure, exception);
@@ -326,43 +343,56 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         IsLoading = true;
         _ = Task.Run(async () =>
         {
-            FetchResult? fetched = null;
-            for (int attempt = 1; attempt <= MaximumBackgroundRefreshAttempts; attempt++)
+            // The outer boundary exists because this task is
+            // fire-and-forget: any exception the retry policy does not
+            // recognize would otherwise fault a discarded task —
+            // no diagnostic, no announcement, and (combined with a
+            // pending model switch) the PREVIOUS note left on screen.
+            try
             {
-                try
+                FetchResult? fetched = null;
+                for (int attempt = 1; attempt <= MaximumBackgroundRefreshAttempts; attempt++)
                 {
-                    fetched = FetchGuarded(_session, path, text);
-                    break;
-                }
-                catch (Exception exception) when (exception is VaultException or IOException)
-                {
-                    if (attempt == MaximumBackgroundRefreshAttempts)
+                    try
                     {
-                        // Terminal: an unconditional host diagnostic
-                        // (event + exception TYPE only, never payload
-                        // text — W1-RT-01), then a generation-gated
-                        // user-visible failure state; a silently blank
-                        // surface conceals the failure.
-                        HostLog.Write(
-                            HostDiagnosticEvent.ReadingRefreshTerminalFailure,
-                            exception);
-                        _ = _dispatcher!.InvokeAsync(
-                            () => PublishTerminalFailure(generation));
-                        return;
+                        fetched = FetchGuarded(_session, path, text);
+                        break;
                     }
-                    await Task.Delay(RetryDelay).ConfigureAwait(false);
+                    catch (Exception exception) when (
+                        exception is VaultException or IOException
+                        && attempt < MaximumBackgroundRefreshAttempts)
+                    {
+                        // Known-transient only; the last attempt and
+                        // every other exception fall through to the
+                        // terminal boundary.
+                        await Task.Delay(RetryDelay).ConfigureAwait(false);
+                    }
+                }
+                if (fetched is { } result)
+                {
+                    _ = _dispatcher!.InvokeAsync(() =>
+                        Publish(generation, path, revision, sessionGeneration, result));
                 }
             }
-            if (fetched is { } result)
+            catch (Exception exception)
             {
-                _ = _dispatcher!.InvokeAsync(() =>
-                    Publish(generation, path, revision, sessionGeneration, result));
+                // Terminal: an unconditional host diagnostic (event +
+                // exception TYPE only, never payload text — W1-RT-01),
+                // then a generation-gated user-visible failure state.
+                HostLog.Write(
+                    HostDiagnosticEvent.ReadingRefreshTerminalFailure, exception);
+                _ = _dispatcher!.InvokeAsync(
+                    () => PublishTerminalFailure(generation));
             }
         });
     }
 
     /// <summary>Terminal-failure injection seam for tests.</summary>
     internal Func<Exception?>? FetchFaultForTests { get; set; }
+
+    internal bool IsDisposedForTests => _disposed;
+
+    internal bool ObservesEditorForTests => _observedDocument is not null;
 
     private FetchResult FetchGuarded(VaultSession session, string path, string text)
     {

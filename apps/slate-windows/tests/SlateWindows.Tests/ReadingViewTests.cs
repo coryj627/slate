@@ -1477,19 +1477,25 @@ public sealed class ReadingViewTests
                 1,
                 SlateWindows.Reading.ReadingContentViewModel.BuildChunkBlocks);
 
-            // Switch mid-stream to the not-yet-published model, then
-            // drain everything A's orphaned stream had queued.
+            // Switch mid-stream to the not-yet-published model: A's
+            // content leaves the tree IMMEDIATELY (round-3 fix — a
+            // pending fetch must not leave the previous note readable
+            // under the new tab), replaced by the loading placeholder.
             surface.Model = readingB;
+            Assert.Empty(surface.Document.Blocks.OfType<System.Windows.Documents.List>());
+            Assert.DoesNotContain("item 0", SurfaceText(surface), StringComparison.Ordinal);
+            var loading = Assert.IsType<Paragraph>(surface.Document.Blocks.FirstBlock);
+            Assert.Equal(
+                "ReadingLoadingNotice",
+                System.Windows.Automation.AutomationProperties.GetAutomationId(loading));
+
+            // Drain everything A's orphaned stream had queued: the
+            // canceled continuations must not repopulate anything.
             for (int i = 0; i < 20; i++)
             {
                 PumpOneBackgroundPass();
             }
-
-            Assert.Equal(
-                mountedItems,
-                Assert.Single(
-                    surface.Document.Blocks.OfType<System.Windows.Documents.List>())
-                    .ListItems.Count);
+            Assert.Empty(surface.Document.Blocks.OfType<System.Windows.Documents.List>());
 
             // Rebinding A re-projects in full — the canceled torso is
             // never trusted by the skip path.
@@ -1552,6 +1558,113 @@ public sealed class ReadingViewTests
             surface.Model = second.Reading;
             surface.Model = first.Reading;
             Assert.Contains("First note body", SurfaceText(surface));
+        });
+    }
+
+    /// <summary>
+    /// Adversarial-review round 3 fix: exceptions the retry policy does
+    /// not recognize (interop faults, teardown races) reach the SAME
+    /// terminal-failure state as transient ones — before the outer
+    /// boundary they faulted a discarded task and vanished.
+    /// </summary>
+    [Fact]
+    public void UnexpectedFetchFaultsReachTheTerminalFailureState()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-fault-types");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "# Fine content\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+
+            // Async pipeline, non-transient exception: no retries, one
+            // terminal state.
+            using var asyncReading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, announced.Add);
+            asyncReading.FetchFaultForTests = () => new InvalidOperationException("interop");
+            asyncReading.Refresh();
+            WaitForUi(() => asyncReading.Document is not null);
+            Assert.False(asyncReading.IsLoading);
+            Assert.Equal(
+                "ReadingRefreshFailedNotice",
+                System.Windows.Automation.AutomationProperties.GetAutomationId(
+                    Assert.IsType<Paragraph>(asyncReading.Document!.Blocks.FirstBlock)));
+
+            // Sync pipeline, teardown-shaped exception: same state.
+            announced.Clear();
+            using var syncReading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, announced.Add, synchronousForTests: true);
+            syncReading.FetchFaultForTests = () => new ObjectDisposedException("session");
+            syncReading.Refresh();
+            Assert.Equal(
+                "ReadingRefreshFailedNotice",
+                System.Windows.Automation.AutomationProperties.GetAutomationId(
+                    Assert.IsType<Paragraph>(syncReading.Document!.Blocks.FirstBlock)));
+            Assert.Contains(
+                announced,
+                item => SlateUniffiMethods.A11yRender(item).Text.Contains(
+                    "could not load this note", StringComparison.Ordinal));
+        });
+    }
+
+    /// <summary>
+    /// Adversarial-review round 3 fix: tab teardown cascades into the
+    /// reading projection — disposal stops its background work, and
+    /// deactivation pauses buffer observation until the next surface
+    /// bind resumes it.
+    /// </summary>
+    [Fact]
+    public void TabLifecycleCascadesIntoTheReadingModel()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-lifecycle");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "# Body\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            SlateWindows.Reading.ReadingContentViewModel reading = tab.Reading!;
+            tab.Dispose();
+            Assert.True(reading.IsDisposedForTests);
+            Assert.Null(tab.Reading);
+
+            // Observation pause/resume across deactivation (the async
+            // pipeline owns the observer; sync mode never attaches).
+            using var observerTab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var observing = new SlateWindows.Reading.ReadingContentViewModel(
+                session, observerTab, _ => { });
+            observing.Activate();
+            Assert.True(observing.ObservesEditorForTests);
+            observing.Deactivate();
+            Assert.False(observing.ObservesEditorForTests);
+            WaitForUi(() => observing.Document is not null);
+            observing.EnsureProjected();
+            Assert.True(observing.ObservesEditorForTests);
         });
     }
 
