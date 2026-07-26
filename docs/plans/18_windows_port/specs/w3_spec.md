@@ -11,7 +11,7 @@ Program: [00_program.md](../00_program.md) (decisions 4, 6, 7; DoD §W-A/§W-C).
 
 - **The block-level read-side FFI for this wave is bound** (`SlateUniffi`, `public`): `reading_blocks`/`reading_blocks_source`, `reading_table_cells`, `get_math_blocks`, `get_diagram_blocks`, `get_syntax_tokens`, `resolve_embed`, `read_attachment`; the W0 censuses exercise the reading-blocks and span subset end-to-end. The inline-segment gap this baseline originally flagged (mac's `ReadingInlineMapper` building wikilink/embed targets, tag/citation runs, unresolved routing, and accessible text in Swift, invisible to the block-only §W-A serialization) is **resolved by the #967 Option A owner call above** — `reading_inline_segments_source` + the `inline_runs` §W-A artifact per [w3_inline_runs_spec.md](w3_inline_runs_spec.md). The W0-3 §W-A skeleton already serializes reading blocks (kind incl. heading levels, list depth/ordered/task, quote depth, code-fence language, math/diagram/table/thematic-break/html) over the `tests/fixtures/markdown/` corpus with committed goldens both platforms diff — W3's §W-A structure/token rows **extend that harness, corpus, and goldens** (tables, callouts, embeds at reading scale), not a new mechanism. Line-ending fixtures (CRLF/mixed) are in the corpus and are never normalized.
 - **Fluent theme (program decision 2 addendum):** reading-view text renders on Slate-token surfaces (the tokens own every text-bearing surface, carry APCA Lc ≥ 75, and switch through the two-layer Contrast mechanism from W1-1); Fluent supplies the stock chrome (scrollbars, context menus) and §W-C runs against those templates. The W1-1 Mica policy applies — reading text never sits on a translucent backdrop.
-- **Dependency currency checks at execution (the 07 §4.2 / AvalonEdit pattern, extended):** W3-2 records a **WPFMath/xaml-math** maintenance + .NET-compat check in its PR; W3-3 records the same for **SharpVectors**. A negative finding is a program-level alarm with an owner decision (alternative renderer or scoped fallback rows), never routed around silently.
+- **Dependency currency checks at execution (the 07 §4.2 / AvalonEdit pattern, extended):** W3-2 records a **WPFMath/xaml-math** maintenance + .NET-compat check in its PR; W3-3 records the same for **`Svg.Skia`** (gap_analysis G19 — not SharpVectors, which the app does not reference). A negative finding is a program-level alarm with an owner decision (alternative renderer or scoped fallback rows), never routed around silently.
 - **C# census conventions** (W0-3) apply to any new censuses here; the canonical-serialization rules live in `CanonicalJson.cs` + the Swift twin and change only together.
 - **XD status at the W0-4 snapshot:** unshipped (matrix dropped-rows table) — W3-5's Excalidraw rows stay dropped unless XD ships before port start; re-run the matrix generator at wave start.
 
@@ -34,11 +34,11 @@ Program: [00_program.md](../00_program.md) (decisions 4, 6, 7; DoD §W-A/§W-C).
 - [ ] Math parity + peer semantics (JAWS/NVDA read = VoiceOver read); prefs parity
 - [ ] Coverage gaps triaged as matrix rows
 
-## W3-3 · Diagrams: canonical SVG via SharpVectors — PR 3
+## W3-3 · Diagrams: canonical SVG via Svg.Skia — PR 3
 
 1. Mermaid/diagram blocks render the Rust-produced SVG artifact; accessible name/description = the canonical description artifact (AT-first diagram contract). No JS engine (§W-G).
 2. Fallback parity: source-visible fallback for unrenderable diagrams, as mac.
-3. **SharpVectors currency check** recorded in the PR (maintenance state + .NET 10 compatibility, per the baseline block); SVG features the canonical artifact uses that SharpVectors cannot render are triaged as matrix rows, never silent.
+3. **`Svg.Skia` currency check** recorded in the PR (maintenance state + .NET 10 compatibility, per the baseline block); SVG features the canonical artifact uses that the renderer cannot render are triaged as matrix rows, never silent. *(Renderer corrected from SharpVectors — `Svg.Skia` 5.1.1 is what W2-3 shipped and `EditorInteractions.cs` already renders through; gap_analysis **G19**. A currency check against a library the app does not use would pass while proving nothing.)*
 
 - [ ] Diagram rows green; description exposure verified with JAWS/NVDA
 

@@ -1,0 +1,205 @@
+# W3-1 container spike — findings
+
+Spike for [#728](https://github.com/coryj627/slate/issues/728), answering the two mechanism choices `w3_inline_runs_spec.md` §10.6 left open. Code: `apps/slate-windows/tools/ContainerSpike` (both containers over one fixture note) and `apps/slate-windows/tools/ContainerSpikeProbe` (UIA client probe). Both are **throwaway** and are deleted when W3-1 lands.
+
+## Headline
+
+**Neither container satisfies §W3-1 as written, and they fail on complementary axes.** This is not the either/or §10.6 anticipated: the shape that meets the requirements is one container *plus custom `AutomationPeer`s*, and that is scope neither §10.6 nor `w3_spec.md` costed.
+
+| requirement | `FlowDocumentScrollViewer` | `ItemsControl` of blocks |
+|---|---|---|
+| Text pattern over the note (§W3-1 item 4) | **yes** — `Document`, 363 chars | **no** — no Text provider at all |
+| reading order correct | **yes** — 12/14 landmarks, none out of order | n/a — 0/14 |
+| `HeadingLevel` reaches the peer (§10.6 item 2) | **no** | **yes** — Level1 + Level2 |
+| `Hyperlink` control types (§10.3) | **no** — 0 peers | **yes** — 5 peers |
+| `HelpText` carries `AxText` (§10.3) | n/a | **yes** — `Unresolved link`, citation speech |
+| native `List`/`ListItem` (owner call) | **no** — 0 / 0 | **no** — 1 `List` (the control's own chrome), 0 `ListItem` |
+| non-text children in the text range | **no** — code interior and embed card absent | n/a |
+| interactive children invokable | yes — 6 | yes — 4 |
+
+## What this settles
+
+**§10.6 item 2 is answered.** `AutomationProperties.HeadingLevel` does **not** survive onto the peer of a `FlowDocument` `Paragraph`; it does survive on a `TextBlock`. Heading-level exposure is therefore a cost of choosing `FlowDocument`, not a free property of it.
+
+**The owner's native-list call costs custom peers either way.** Neither container produced a single `ListItem` control type. WPF's `System.Windows.Documents.List`/`ListItem` are *layout* elements: they render markers and indentation, and in the flow variant the list arrives as document text (`•\tfirst bullet`). So "JAWS/NVDA list navigation works natively" (`w3_spec.md:23`) requires W3-1 to author `AutomationPeer`s regardless of which container wins. That is new, and it should be reflected in the issue before the PR is scoped.
+
+**`ItemsControl` cannot satisfy §W3-1 item 4.** It exposes no Text provider, so there is no `DocumentRange`, no say-all continuity, and nothing for the existing §W-C text-range assertions (`ShellAccessibilityTests.cs:1106-1162` already drives `GetText`/`MoveEndpointByRange`/`CompareEndpoints`) to attach to. A Text pattern cannot be retrofitted onto a stack of `TextBlock`s without writing a text provider from scratch.
+
+## Client-side confirmation
+
+The UIA **client** probe was run from an interactive desktop and **agrees with the provider-side reading on every discriminating measurement**: `flow` = `Document` + Text pattern + 363 chars + 12/14 landmarks + **0 hyperlinks** + no `HeadingLevel`; `items` = no Text pattern + 5 hyperlinks (2 carrying `AxText` as `HelpText`) + `HeadingLevel` Level1/Level2. So "FlowDocument exposes no `Hyperlink` control types" is a real property, not an artefact of walking the provider tree.
+
+**Two results in the first client run were the spike's own bugs, not container properties**, and are recorded here because they nearly became findings:
+
+- *"hyperlinks focusable: 0"* in both variants. Every `Hyperlink` had `Command` set to a `RoutedCommand` with **no `CommandBinding`**, so `CanExecute` was false and WPF disabled it. Replaced with a click handler. Re-measured afterwards: **the 0-vs-5 hyperlink split is unchanged**, so the headline finding survives its own correction.
+- *2 axe-windows errors in both variants* (`NameNotNull`, `SiblingUniqueAndFocusable`). Caused by the fixture naming both task checkboxes `"Task"`, not by either container — identical in both columns, so they discriminate nothing. Now named from the item text.
+
+## What is NOT settled
+
+**Whether NVDA can reach the flow variant's links.** Zero `Hyperlink` control types does not settle it: in a UIA document NVDA builds its browse-mode buffer from the **text pattern** and can find embedded objects through text ranges rather than through control-tree children. If NVDA's `K` reaches those links, the missing control types are not disqualifying; if it is silent, they are. **This is now measurable rather than a matter of opinion** — see below.
+
+**What JAWS does.** No automation path was found for JAWS; that half stays manual.
+
+## Automating the NVDA half
+
+[`NvdaTestingDriver`](https://github.com/kastwey/nvda-testing-driver) drives a bundled portable NVDA through a modified NvdaRemote plugin and returns spoken text, so §10.6's "recorded AT evidence" can be a committed test instead of a manual script — for this spike and for every W3 surface after it. `ContainerSpikeProbe --nvda` runs say-all, `H`, `H1`/`H2`, `K`×4, `L`, `I`×3, table and button nav against both variants and tabulates what NVDA said against what it must say.
+
+**It was run, and it produced no evidence.** All 32 steps — both variants — failed identically with `Timeout while waiting for stopping speech`, including `read current line`, which would say "blank" in an empty window. A uniform capture failure measures the harness, not the container.
+
+**Currency check, per the `w3_spec.md:14` dependency doctrine. Verdict: REJECTED.**
+
+| | finding |
+|---|---|
+| verdict | **Do not adopt, do not re-run.** Produced zero admissible evidence for W3-1. |
+| version | `0.2.0-beta` — never left beta; two NuGet versions, both beta |
+| upstream | code frozen **2019-03-24** *(an earlier draft of this table said 2022-12-08 — that is dependabot PR activity on the repo, not a commit)* |
+| NVDA driven | **2018.4.1** — verified on disk, `nvda.exe` FileVersion `2018.4.0.16544`. Roughly eight NVDA-years behind the 2026.1.1 a user runs. |
+| **upgrade ceiling** | **Hard, and fatal.** The bundled Remote add-on declares `def play_wave(self, fileName, async, **kwargs)` (`userConfig/addons/remote/globalPlugins/remoteClient/local_machine.py`). `async` became a reserved word in **Python 3.7**, which NVDA adopted in **2019.3** — so no NVDA from 2019.3 onward can import it. Maximum drivable NVDA is 2019.2.1. |
+| failure mode | Every `*AndGetSpokenText*` entry point calls `StopReadingAsync()` first, which waits for a cancel signal NVDA never emits when idle. The throw prevents the key from being sent, so nothing is ever spoken and the state never clears — a self-perpetuating deadlock, reproducible on any quiet desktop. |
+| known bypass | `GetNextSpokenMessageAsync(timeout, actionToExecute:)` is public and skips `StopReadingAsync`. It would likely work — and would still only ever measure NVDA 2018.4.1. |
+| .NET 10 | restores and loads cleanly |
+| security | pulls `Newtonsoft.Json` 12.0.1, GHSA-5crp-9r3c-p9vr (**high**); overridden to 13.0.3 in the spike csproj |
+| side effects | rewrites `userConfig/nvda.ini` on every connect and forces `synth = silence`; `Dispose()` throws, leaving NVDA running |
+
+**Why the ceiling is disqualifying rather than merely inconvenient.** The open question is whether NVDA's browse-mode buffer reaches links through UIA **text ranges** when no `Hyperlink` control types exist. That is precisely the subsystem rewritten between 2018.4 and 2026.1. A pass from the 2018 build would not transfer forward, and a failure would not either — so there is no result this tool could produce that would settle anything. `ContainerSpikeProbe --nvda` now prints this reasoning and exits rather than running.
+
+## Closing the question: the manual pass
+
+Two minutes, and it tests the screen reader users actually run.
+
+1. Start **NVDA 2026.1.1**, and turn on **Tools → Speech Viewer** — it turns "what did you hear" into a copy-pasteable transcript. (It stops updating while the mouse is over it or focus is inside it, so leave it aside and do not click into it mid-run.)
+2. `ContainerSpike.exe --container flow`, click into the text, and confirm browse mode with `NVDA+Space`.
+3. `Ctrl+Home`, then press **plain `k`** (no modifier) four times, recording each announcement verbatim.
+
+   **`k` and `NVDA+k` are different commands and the distinction decides the outcome.** Plain `k` is browse-mode *next link* and moves the reading cursor. `NVDA+k` is *report link destination* and moves nothing — it answers `"Not a link"` off a link, and `"Link has no apparent destination"` on a link with no `NavigateUri`. A pass driven with `NVDA+k` measures neither quick-nav nor the container. (The 2026-07-25 pass hit exactly this: both messages appeared, and neither was evidence about FlowDocument.)
+4. Repeat with `--container items`.
+5. Record tester, date, Windows build, NVDA version, and app commit SHA alongside the transcript — `w_c_matrix.md` requires all five for a human-AT cell to count.
+
+**The decisive cell is `flow` + plain `k` #1.** If NVDA announces `resolved note`, the absent `Hyperlink` control types are a red herring and FlowDocument stands. If `K` reports no next link, FlowDocument is out.
+
+The 16-step list in `NvdaProbe.cs` doubles as the fuller manual checklist if the four `K` presses come back ambiguous.
+
+## What the manual NVDA passes established (2026-07-25/26, NVDA 2026.1.1, Windows 11 26200)
+
+Two passes over the `flow` variant produced apparently contradictory transcripts. They reconcile into one finding, and it is the most consequential thing this spike produced.
+
+**Pass 1 — reading the document.** NVDA announced the note as a `document` and read it in authored order, announcing every link: `A paragraph with a link resolved note link, an link absent note link, a link #tag , a citation link (Smith, 2020) …`. So **links ARE reachable in a container whose UIA control tree contains zero `Hyperlink` control types** — NVDA finds them through the text pattern, which is what the UIA-only reading could not settle. It also confirmed, independently of UIA: headings read as plain text with no level, list items read as plain text with no list or nesting, task checkboxes announce correctly and in place, the embed card announces — and the code fence's text is **never spoken at all**, only its Copy button.
+
+**Pass 2 — navigating with the keyboard.** Arrow keys re-announced the same first line indefinitely, and Tab moved the focus ring onto links while NVDA said **nothing**.
+
+**They reconcile:** the FlowDocument exposes links as **text-range attributes**, not as **focusable UIA elements**.
+
+- Reading the text stream (say-all, review cursor) meets them, because they are ranges — pass 1.
+- Moving *focus* to one produces silence, because there is no element in the control tree to announce — pass 2, and exactly the `0 Hyperlink control types` the probe measured.
+
+Compounding it, `FlowDocumentScrollViewer` has **no keyboard caret**: WPF gives it mouse-driven selection only (`IsSelectionEnabled`), so once focus is inside the document there is nothing for arrow keys to move. That is the whole of pass 2's stuck-on-one-line behaviour.
+
+**Consequence for W3-1: a keyboard-only user gets silent focus stops on every link.** That is a shipping-blocker, not a polish item, and it is invisible to both the UIA probe and a say-all pass — it took a keyboard pass to find.
+
+*Method note:* pass 1 was driven with `NVDA+k` (report link destination) rather than plain `k` (browse-mode next link), so **browse-mode quick-nav is still unmeasured**. `NVDA+k` also reported "Link has no apparent destination", which was the spike's own missing `NavigateUri`, since fixed. Neither message was evidence about the container.
+
+## Should NVDA capture be automated for the wave?
+
+**Not now.** `w_c_matrix.md` requires a *named tester* recording build, OS, AT version, result and evidence link; a speech-capture harness produces a different artifact class than that gate accepts, so it would close **zero** matrix cells while the manual passes still had to happen. The arithmetic is also against it: ~14 surfaces × 3 ATs = 42 pending cells, of which an NVDA harness addresses at most 14 — Narrator and JAWS are untouched.
+
+Its real value is **regression detection between commits** — catching the day an `AutomationName` changes and NVDA silently starts saying the wrong thing. Worth having eventually, and the cheap form is a log tail (`nvda.exe -l 12 -f <path>`, watching for `Speaking` records) rather than a socket client. **Trigger, not a date:** build it the first time two W3 surfaces need NVDA-in-the-loop evidence inside one week. Verify the log format on a real run before writing any parser — the logged text is pre-`processText` and differs subtly from what is spoken.
+
+## Method, and its limits
+
+Two independent readings were taken to guard against measuring an artefact: one with the element laid out detached (`Measure`/`Arrange`), one hosted in an off-screen `Window` so a `PresentationSource` exists. **They agree exactly** — 16 peers for flow and 38 for items in both — so the provider-side numbers are not an artefact of the missing window. They are still provider-side, which is the limit noted above.
+
+The two containers consume the **same** core block model (`ReadingBlocksSource` + `ReadingInlineSegmentsSource`) through the **same** inline builder, so the container is the only variable. Reading-order landmark checks assert both presence and authored order.
+
+## Viability test: FlowDocument + custom peers (variant `flowpeers`)
+
+The silent-focus-stop finding put the container choice back in question, because FlowDocument's deficit was then three semantic layers rather than two. So the spike gained a third variant that attempts to close all three, and measured it.
+
+All four peer types WPF needs are **public with public constructors** — `HyperlinkAutomationPeer(Hyperlink)`, `TextElementAutomationPeer(TextElement)`, `FlowDocumentScrollViewerAutomationPeer`, `DocumentAutomationPeer` — so a `FlowDocumentScrollViewer` subclass can return semantic peers from `GetChildrenCore()`. **Additively**, on purpose: the base children carry the text pattern that is this variant's whole advantage, and replacing them would trade it away for the thing being tested.
+
+| measurement | `flow` | **`flowpeers`** | `items` |
+|---|---|---|---|
+| Text provider | yes | **yes** | no |
+| reading-order chars | 363 | **363** | 0 |
+| landmarks in order | 12/14 | **12/14** | 0/14 |
+| `HeadingLevel` survives | no | **yes** | yes |
+| `Hyperlink` peers | 0 | **5** | 5 |
+| links carrying `AxText` | 0 | **2** | 2 |
+| `List` peers | 0 | **2** | 1 |
+| `ListItem` peers | 0 | **7** | 0 |
+
+**`flowpeers` strictly dominates.** It keeps the Text pattern — the one property that cannot be retrofitted, since giving an `ItemsControl` a document text range means writing an `ITextProvider` over a stack of `TextBlock`s from scratch — and gains everything the `ItemsControl` variant had.
+
+## Decision
+
+**`FlowDocumentScrollViewer` + custom `AutomationPeer`s.** No longer provisional: the Text-pattern advantage is real and unretrofittable, and the three deficits that made it a close call are demonstrably closable.
+
+W3-1 scope, now evidenced rather than estimated:
+
+1. **Semantic peers** for heading level, list/list-item, and link elements — the `SemanticPeers.cs` shape in the spike is a working starting point, not a design.
+2. **Link elements are not optional.** Without them a keyboard user gets a silent focus stop on every link. This is invisible to UIA-only checks and to say-all; it took a Tab pass to find.
+3. **`NavigateUri` on every activatable run**, or NVDA announces "Link has no apparent destination".
+4. **Keyboard caret / focus handling.** `FlowDocumentScrollViewer` has no keyboard caret — WPF gives it mouse-driven selection only — so arrow keys have nothing to move once focus is inside. Needs solving before the surface is usable by keyboard.
+5. **`BlockUIContainer` text stays outside the text range.** The code fence's interior is never spoken; only its Copy button is reachable. W3-4 (#731) inherits this directly.
+
+Items 2, 4 and 5 are scope neither §10.6 nor `w3_spec.md` costed, and belong on #728 before that PR is scoped.
+
+## Size and stability
+
+Measured on the selected container (`FlowDocument` + semantic peers) over six synthetic corpora, each in a **fresh process** so peak working set reflects the document rather than a plateaued heap. Covers both readings of "a large file": 800k words by word count, and 10k words whose 5 MB comes from huge inline destinations — the converter or clipped-note shape.
+
+| corpus | MB | blocks | runs | parse ms | build ms | layout ms | peers | peer walk ms | model MB | peak MB |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 1k words / 20 links | 0.01 | 49 | 79 | 19 | 159 | 209 | 50 | 5 | 0.1 | 82 |
+| **10k words / 300 links** | 0.09 | 455 | 967 | 24 | 199 | 299 | 552 | 14 | 0.8 | 134 |
+| 50k words / 1.5k links | 0.43 | 2296 | 4836 | 43 | 398 | 558 | 2759 | 56 | 3.8 | 158 |
+| 200k words / 6k links | 1.72 | 9122 | 19290 | 117 | 1930 | 810 | 10980 | 179 | 14.9 | 227 |
+| 800k words / 24k links | 6.88 | 36381 | 77050 | 411 | **7428** | 911 | **43848** | 554 | 59.5 | 609 |
+| 10k words / 2k huge destinations | 4.85 | 455 | 4311 | 155 | 358 | 784 | 2252 | 24 | 39.4 | 228 |
+
+**Stability: no crashes, hangs or OOM at any size.**
+
+**Core is not the problem.** Parse is linear at ~60 ms/MB — 411 ms for a 6.9 MB note. Model retention is ~9× file size and also linear.
+
+**The payload-duplication residual holds up.** The huge-destination corpus retains **39.4 MB** against 59.5 MB for the wordy one — proportionally *less*, despite being built to stress exactly that residual. This is the first measurement supporting the ship decision rather than an argument for it.
+
+**The WPF build is the bottleneck**, at ~0.2 ms per block and linear: 455 blocks is 199 ms, 36,381 blocks is **7.4 seconds**. Nothing degrades non-linearly; there are simply too many blocks to build eagerly.
+
+**The peer tree is a flat collection of 43,848 children** at the top size, taking 554 ms to enumerate and 166 ms to name — roughly **720 ms for a screen reader to walk the document once**. That is a property of the spike's `GetChildrenCore` returning everything flat, not of WPF.
+
+### What this means for W3-1
+
+- **The usable ceiling without virtualization is roughly 0.5 MB / ~2–3k blocks**, where build + layout stays near one second. Beyond that it degrades linearly and predictably: ~2.7 s at 1.7 MB, ~8.3 s at 6.9 MB.
+- **Virtualization or incremental build is required** for large notes. `FlowDocument` builds eagerly; the fix is chunked or on-demand block construction, not a faster inner loop — the per-block cost is already flat.
+- **The peer tree must become hierarchical**, mirroring document structure, so a client enumerates a section rather than the note. The spike's flat list was the shortest path to a viability answer, not a design.
+- **A degraded mode above a size threshold** (plain text, no peers) is worth designing deliberately rather than discovering.
+- The stated target of **10k words with hundreds of links is comfortable** — ~520 ms end to end, 134 MB peak, 552 peers. Nothing here blocks that case.
+
+## Superseded: earlier provisional recommendation
+
+`FlowDocumentScrollViewer`, plus custom peers for heading level and list semantics — **conditional on the NVDA link result above**.
+
+The reasoning is an asymmetry in what can be added later. The Text pattern is the one property that cannot be retrofitted: giving an `ItemsControl` a document text range means writing an `ITextProvider` over a stack of `TextBlock`s from scratch, and every §W-C text-range assertion, say-all continuity and browse-mode behaviour depends on it. Heading level, link roles and list roles are all things an `AutomationPeer` can supply.
+
+The condition matters, though. If NVDA's `K` cannot reach links in the flow variant, then link exposure *also* needs custom peers — on top of headings and lists — and a container that requires re-authoring three of its four semantic layers is worth re-opening the choice over. Run `--nvda` before treating this as decided.
+
+## Reproducing
+
+```
+# provider-side, runs anywhere including CI and a session-0 shell
+dotnet build apps/slate-windows/tools/ContainerSpike/ContainerSpike.csproj
+apps/slate-windows/tools/ContainerSpike/bin/Debug/net10.0-windows/ContainerSpike.exe \
+  --probe peers --out spike-evidence
+
+# client-side + axe: REQUIRES an interactive desktop (session 1)
+dotnet run --project apps/slate-windows/tools/ContainerSpikeProbe -- --out spike-evidence
+
+# NVDA: REJECTED — prints why and exits (see the currency table above).
+# The manual pass replaces it.
+dotnet run --project apps/slate-windows/tools/ContainerSpikeProbe -- --nvda --out spike-evidence
+
+# eyes/ears on one variant
+apps/slate-windows/tools/ContainerSpike/bin/Debug/net10.0-windows/ContainerSpike.exe \
+  --container flow      # or: items
+```
+
+The client probe prints the manual JAWS/NVDA script (say-all, `H`, `K`, `L`/`I`, Tab, browse-vs-focus mode) that closes the remaining evidence gap. Record the outcome in `w_c_matrix.md` with AT versions.
