@@ -1848,6 +1848,84 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// Adversarial-review round 6 fix: the §10.1 publication gate
+    /// rejects a fetch whose captured tuple drifted — and the session
+    /// interaction generation is VAULT-WIDE, so an unrelated save
+    /// during the fetch used to strand the projection (placeholder on
+    /// first load, stale content after) with nothing scheduled to
+    /// retry. A drift rejection now retires the live refresh and
+    /// immediately re-refreshes with the latest tuple.
+    /// </summary>
+    [Fact]
+    public void ConcurrentVaultWritesDoNotStrandTheProjection()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-drift");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "# First body\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "tasker.md"), "- [ ] bump target\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, _ => { });
+
+            // Phase 1 — initial projection: an unrelated core write
+            // lands DURING the fetch (the seam runs between the
+            // dispatcher's tuple capture and the publish).
+            bool bumped = false;
+            reading.FetchFaultForTests = () =>
+            {
+                if (!bumped)
+                {
+                    bumped = true;
+                    _ = session.ToggleTaskStatus("tasker.md", 0, "x", null);
+                }
+                return null;
+            };
+            reading.Refresh();
+            WaitForUi(() =>
+                reading.Document is not null
+                && new TextRange(
+                    reading.Document.ContentStart,
+                    reading.Document.ContentEnd).Text.Contains(
+                        "First body", StringComparison.Ordinal));
+
+            // Phase 2 — previously published projection: the buffer
+            // changes, and the re-projection's fetch races another
+            // unrelated write. The new text must still arrive without
+            // any tab or mode cycle.
+            bumped = false;
+            reading.FetchFaultForTests = () =>
+            {
+                if (!bumped)
+                {
+                    bumped = true;
+                    _ = session.ToggleTaskStatus("tasker.md", 0, " ", null);
+                }
+                return null;
+            };
+            tab.EditorDocument!.Insert(
+                tab.EditorDocument.TextLength, "\nSecond body arrived.\n");
+            reading.Refresh();
+            WaitForUi(() =>
+                new TextRange(
+                    reading.Document!.ContentStart,
+                    reading.Document.ContentEnd).Text.Contains(
+                        "Second body arrived", StringComparison.Ordinal));
+        });
+    }
+
     private static void PumpOneBackgroundPass()
     {
         var frame = new System.Windows.Threading.DispatcherFrame();

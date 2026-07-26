@@ -446,6 +446,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return;
         }
+        _liveRefreshGeneration = -1;
         IsLoading = false;
         _announce(new A11yEvent.HostComposed(
             "Reading view could not load this note. Switch to the editor to "
@@ -555,12 +556,27 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             throw fault;
         }
         IsLoading = false;
-        if (_disposed
-            || generation != _generation
-            || !string.Equals(_tab.Path, path, StringComparison.Ordinal)
+        if (_disposed || generation != _generation)
+        {
+            // Superseded or dead: a newer refresh owns the pipeline
+            // (and re-marked itself live); nothing to repair here.
+            return;
+        }
+        // Whatever happens below, THIS generation's refresh has landed.
+        _liveRefreshGeneration = -1;
+        if (!string.Equals(_tab.Path, path, StringComparison.Ordinal)
             || (_tab.EditorSession?.Revision ?? -1) != revision
             || _session.InteractionGeneration() != sessionGeneration)
         {
+            // The captured tuple drifted while the fetch ran — and the
+            // session generation is VAULT-WIDE, so an unrelated save
+            // lands here with nothing else scheduled to re-project
+            // this tab. Silently returning stranded the surface on
+            // its placeholder (or on stale content) until a mode
+            // cycle; retry immediately with the latest tuple instead.
+            // Converges when vault activity settles; a same-text
+            // retry is one parse ending in a memo hit.
+            Refresh();
             return;
         }
 
