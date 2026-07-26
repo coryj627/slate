@@ -24,18 +24,22 @@ internal enum ReadingLandmarkKind
 /// <summary>
 /// One navigable position in the built reading document, in document
 /// order. <see cref="Position"/> is a live <see cref="TextPointer"/>
-/// into the document's text container, so navigation is a caret move —
-/// the AT speaks the landing line itself (the reason landings are not
-/// announcement events).
+/// into the document's text container, so navigation is a caret move,
+/// paired with an explicit landing announcement — measured 2026-07-27:
+/// NVDA does not echo programmatic caret moves.
 /// </summary>
 internal sealed class ReadingLandmark
 {
     public ReadingLandmark(
-        ReadingLandmarkKind kind, TextPointer position, byte headingLevel = 0)
+        ReadingLandmarkKind kind,
+        TextPointer position,
+        byte headingLevel = 0,
+        string text = "")
     {
         Kind = kind;
         Position = position;
         HeadingLevel = headingLevel;
+        Text = text;
     }
 
     public ReadingLandmarkKind Kind { get; }
@@ -44,4 +48,13 @@ internal sealed class ReadingLandmark
 
     /// <summary>1–6 for headings; 0 otherwise.</summary>
     public byte HeadingLevel { get; }
+
+    /// <summary>
+    /// The target's own document text, captured at collection time and
+    /// bounded — the payload of the landing announcement. Measured
+    /// (2026-07-27, NVDA 2026.1.1): a programmatic caret move produces
+    /// no speech, so a silent landing is an unusable one. Content, not
+    /// composition: core owns the announcement phrasing.
+    /// </summary>
+    public string Text { get; }
 }

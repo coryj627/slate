@@ -179,43 +179,43 @@ public sealed class ReadingViewTests
             navigator.SetLandmarks(model.Landmarks);
 
             surface.CaretPosition = model.Document.ContentStart;
+            string Last() => SlateUniffiMethods.A11yRender(announced[^1]).Text;
 
             // The caret starts ON the first heading's line, and quick-nav
             // convention (NVDA/JAWS alike) is that "next heading" from a
             // heading goes to the FOLLOWING one — the strict
             // caret-before-landmark comparison encodes exactly that.
+            // Every LANDING is announced with the target's own text and
+            // kind (2026-07-27: NVDA does not echo programmatic caret
+            // moves, so a silent landing is an unusable one).
             navigator.Move(ReadingLandmarkKind.Heading, forward: true);
             Assert.Equal(0, surface.CaretPosition.CompareTo(model.Landmarks[5].Position));
+            Assert.Equal("Second heading, level 2 heading.", Last());
             navigator.Move(ReadingLandmarkKind.Heading, forward: true);
-            A11yEvent miss = Assert.Single(announced);
-            string missText = SlateUniffiMethods.A11yRender(miss).Text;
-            Assert.Equal("No next heading.", missText);
+            Assert.Equal("No next heading.", Last());
 
             // Level-targeted: 1 goes back-to-start miss-free from here?
             // No — level 1 is BEHIND the caret; forward must miss.
-            announced.Clear();
             navigator.MoveToHeadingLevel(1, forward: true);
-            Assert.Equal(
-                "No next level 1 heading.",
-                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+            Assert.Equal("No next level 1 heading.", Last());
 
-            // And backward reaches it.
-            announced.Clear();
+            // And backward reaches it, announcing the landing.
             navigator.MoveToHeadingLevel(1, forward: false);
-            Assert.Empty(announced);
+            Assert.Equal("Top heading, level 1 heading.", Last());
             Assert.Equal(0, surface.CaretPosition.CompareTo(model.Landmarks[0].Position));
 
-            // Links: forward from the top hits the first link.
+            // Links: forward from the top hits the first link, spoken as
+            // the LINK's text, not the whole line.
             navigator.Move(ReadingLandmarkKind.Link, forward: true);
             Assert.Equal(0, surface.CaretPosition.CompareTo(model.Landmarks[1].Position));
+            Assert.Equal("known, link.", Last());
 
-            // A kind with one instance: table forward, then miss.
+            // A kind with one instance: table forward (first cell text),
+            // then miss.
             navigator.Move(ReadingLandmarkKind.Table, forward: true);
-            announced.Clear();
+            Assert.Equal("h1, table.", Last());
             navigator.Move(ReadingLandmarkKind.Table, forward: true);
-            Assert.Equal(
-                "No next table.",
-                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+            Assert.Equal("No next table.", Last());
         });
     }
 

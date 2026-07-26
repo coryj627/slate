@@ -735,6 +735,41 @@
     "text": "No next code block."
   },
   {
+    "event": "ReadingNavLanded { target: HeadingLevel { level: 2 }, text: \"Lists and tasks\" }",
+    "priority": "medium",
+    "text": "Lists and tasks, level 2 heading."
+  },
+  {
+    "event": "ReadingNavLanded { target: Link, text: \"Target Note\" }",
+    "priority": "medium",
+    "text": "Target Note, link."
+  },
+  {
+    "event": "ReadingNavLanded { target: List, text: \"first bullet\" }",
+    "priority": "medium",
+    "text": "first bullet, list."
+  },
+  {
+    "event": "ReadingNavLanded { target: Table, text: \"column a\" }",
+    "priority": "medium",
+    "text": "column a, table."
+  },
+  {
+    "event": "ReadingNavLanded { target: Embed, text: \"Embedded note Target Note\" }",
+    "priority": "medium",
+    "text": "Embedded note Target Note."
+  },
+  {
+    "event": "ReadingNavLanded { target: CodeBlock, text: \"fn spoken_interior() -> usize { 42 }\" }",
+    "priority": "medium",
+    "text": "fn spoken_interior() -> usize { 42 }, code block."
+  },
+  {
+    "event": "ReadingNavLanded { target: Embed, text: \"\" }",
+    "priority": "medium",
+    "text": "Embed."
+  },
+  {
     "event": "HostComposed { text: \"Composed by a host engine.\", priority: High }",
     "priority": "high",
     "text": "Composed by a host engine."

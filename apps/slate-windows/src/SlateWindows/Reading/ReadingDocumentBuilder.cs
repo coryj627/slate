@@ -460,18 +460,26 @@ internal static class ReadingDocumentBuilder
                 if (ReadingSemantics.HeadingLevelOf(paragraph) is byte level and > 0)
                 {
                     landmarks.Add(new ReadingLandmark(
-                        ReadingLandmarkKind.Heading, Insertion(paragraph.ContentStart), level));
+                        ReadingLandmarkKind.Heading,
+                        Insertion(paragraph.ContentStart),
+                        level,
+                        ElementText(paragraph)));
                 }
                 else if (ReadingSemantics.IsCodeBlock(paragraph))
                 {
                     landmarks.Add(new ReadingLandmark(
-                        ReadingLandmarkKind.CodeBlock, Insertion(paragraph.ContentStart)));
+                        ReadingLandmarkKind.CodeBlock,
+                        Insertion(paragraph.ContentStart),
+                        text: ElementText(paragraph)));
                 }
                 WalkInlines(paragraph.Inlines, landmarks);
                 break;
 
             case WpfList list:
-                landmarks.Add(new ReadingLandmark(ReadingLandmarkKind.List, Insertion(list.ContentStart)));
+                landmarks.Add(new ReadingLandmark(
+                    ReadingLandmarkKind.List,
+                    Insertion(list.ContentStart),
+                    text: FirstItemText(list)));
                 foreach (ListItem item in list.ListItems)
                 {
                     foreach (Block inner in item.Blocks)
@@ -482,12 +490,19 @@ internal static class ReadingDocumentBuilder
                 break;
 
             case WpfTable table:
-                landmarks.Add(new ReadingLandmark(ReadingLandmarkKind.Table, Insertion(table.ContentStart)));
+                landmarks.Add(new ReadingLandmark(
+                    ReadingLandmarkKind.Table,
+                    Insertion(table.ContentStart),
+                    text: FirstCellText(table)));
                 break;
 
             case BlockUIContainer container when ReadingSemantics.IsEmbed(container):
                 landmarks.Add(new ReadingLandmark(
-                    ReadingLandmarkKind.Embed, Insertion(container.ContentStart)));
+                    ReadingLandmarkKind.Embed,
+                    Insertion(container.ContentStart),
+                    text: container.Child is System.Windows.UIElement child
+                        ? AutomationProperties.GetName(child) ?? string.Empty
+                        : string.Empty));
                 break;
 
             case Section section:
@@ -507,12 +522,41 @@ internal static class ReadingDocumentBuilder
             {
                 case Hyperlink link:
                     landmarks.Add(new ReadingLandmark(
-                        ReadingLandmarkKind.Link, Insertion(link.ContentStart)));
+                        ReadingLandmarkKind.Link,
+                        Insertion(link.ContentStart),
+                        text: ElementText(link)));
                     break;
                 case Span span:
                     WalkInlines(span.Inlines, landmarks);
                     break;
             }
         }
+    }
+
+    /// <summary>Announcement payloads are bounded: a landing must never
+    /// read a whole pasted page.</summary>
+    private const int LandmarkTextLimit = 120;
+
+    private static string ElementText(TextElement element)
+    {
+        string text = new TextRange(element.ContentStart, element.ContentEnd).Text;
+        int newline = text.IndexOfAny(new[] { '\r', '\n' });
+        if (newline >= 0)
+        {
+            text = text[..newline];
+        }
+        text = text.Trim();
+        return text.Length <= LandmarkTextLimit ? text : text[..LandmarkTextLimit];
+    }
+
+    private static string FirstItemText(WpfList list) =>
+        list.ListItems.FirstListItem is { } item ? ElementText(item) : string.Empty;
+
+    private static string FirstCellText(WpfTable table)
+    {
+        TableRowGroup? group = table.RowGroups.FirstOrDefault();
+        TableRow? row = group?.Rows.FirstOrDefault();
+        TableCell? cell = row?.Cells.FirstOrDefault();
+        return cell is null ? string.Empty : ElementText(cell);
     }
 }

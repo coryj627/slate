@@ -6708,6 +6708,10 @@ pub enum A11yEvent {
         target: ReadingNavTarget,
         forward: bool,
     },
+    ReadingNavLanded {
+        target: ReadingNavTarget,
+        text: String,
+    },
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -6943,6 +6947,10 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::ReadingNavNoTarget { target, forward } => C::ReadingNavNoTarget {
                 target: target.into(),
                 forward,
+            },
+            F::ReadingNavLanded { target, text } => C::ReadingNavLanded {
+                target: target.into(),
+                text,
             },
             F::HostComposed { text, priority } => C::HostComposed {
                 text,

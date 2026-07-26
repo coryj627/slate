@@ -142,8 +142,28 @@ internal sealed class ReadingNavigator
 
         _surface.CaretPosition = target.Position;
         target.Position.Paragraph?.BringIntoView();
-        // Caret speech carries the landing line; nothing more is posted.
+
+        // Landings are announced explicitly. The design assumed caret
+        // speech was free; the 2026-07-27 NVDA pass measured otherwise —
+        // NVDA echoes lines only for keys IT recognizes as caret
+        // movement, so a programmatic move is silent. Core owns the
+        // phrasing; the landmark supplies its own document text.
+        _announce(new A11yEvent.ReadingNavLanded(
+            LandedTarget(target), target.Text));
     }
+
+    private static ReadingNavTarget LandedTarget(ReadingLandmark landmark) =>
+        landmark.Kind switch
+        {
+            ReadingLandmarkKind.Heading when landmark.HeadingLevel > 0 =>
+                new ReadingNavTarget.HeadingLevel(landmark.HeadingLevel),
+            ReadingLandmarkKind.Heading => new ReadingNavTarget.Heading(),
+            ReadingLandmarkKind.Link => new ReadingNavTarget.Link(),
+            ReadingLandmarkKind.List => new ReadingNavTarget.List(),
+            ReadingLandmarkKind.Table => new ReadingNavTarget.Table(),
+            ReadingLandmarkKind.Embed => new ReadingNavTarget.Embed(),
+            _ => new ReadingNavTarget.CodeBlock(),
+        };
 
     private static A11yEvent NoTargetEvent(
         ReadingLandmarkKind kind, byte level, bool forward)

@@ -114,6 +114,27 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         ActiveCanvasSurface = state.ActiveCanvasSurface;
         Load();
         InitializeEditorSession();
+
+        // A tab RESTORED with the persisted "reading" token must project
+        // immediately: the projection previously started only from the
+        // toggle path, so a session that ended in reading mode restored
+        // as an empty surface ("Reading view document blank" — the
+        // 2026-07-27 manual pass) with no keyboard route out but closing
+        // the tab.
+        if (IsReadingMode && IsMarkdown)
+        {
+            Reading = new ReadingContentViewModel(
+                _session, this, _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
+            if (_startInteractionBackgroundWork)
+            {
+                Reading.Activate();
+            }
+            else
+            {
+                Reading.Refresh();
+            }
+        }
     }
 
     internal int AnchorNavigationPublishCountForTests =>

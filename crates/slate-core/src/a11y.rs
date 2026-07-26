@@ -458,6 +458,16 @@ pub enum A11yEvent {
         target: ReadingNavTarget,
         forward: bool,
     },
+    /// A chorded reading-navigation command landed. Measured 2026-07-27
+    /// (NVDA 2026.1.1): a PROGRAMMATIC caret move produces no speech —
+    /// NVDA echoes lines only for keys it recognizes as caret movement —
+    /// so the landing must be announced, and core owns the phrasing.
+    /// `text` is the landing target's own document text, captured by the
+    /// host at the landmark (content, not composition).
+    ReadingNavLanded {
+        target: ReadingNavTarget,
+        text: String,
+    },
 
     HostComposed {
         text: String,
@@ -811,6 +821,27 @@ impl A11yEvent {
             ReadingNavNoTarget { target, forward } => {
                 let direction = if *forward { "next" } else { "previous" };
                 format!("No {direction} {}.", target.spoken())
+            }
+            ReadingNavLanded { target, text } => {
+                let text = text.trim();
+                if text.is_empty() {
+                    // Capitalized kind alone — an embed card with no name
+                    // still announces as something.
+                    let spoken = target.spoken();
+                    let mut chars = spoken.chars();
+                    match chars.next() {
+                        Some(first) => {
+                            format!("{}{}.", first.to_uppercase(), chars.as_str())
+                        }
+                        None => String::new(),
+                    }
+                } else if matches!(target, ReadingNavTarget::Embed) {
+                    // Embed card names already carry their kind
+                    // ("Embedded note X"); a suffix would stutter.
+                    format!("{text}.")
+                } else {
+                    format!("{text}, {}.", target.spoken())
+                }
             }
 
             HostComposed { text, .. } => text.clone(),
@@ -1201,6 +1232,34 @@ pub fn corpus() -> Vec<A11yEvent> {
             target: ReadingNavTarget::CodeBlock,
             forward: true,
         },
+        ReadingNavLanded {
+            target: ReadingNavTarget::HeadingLevel { level: 2 },
+            text: "Lists and tasks".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Link,
+            text: "Target Note".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::List,
+            text: "first bullet".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Table,
+            text: "column a".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Embed,
+            text: "Embedded note Target Note".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::CodeBlock,
+            text: "fn spoken_interior() -> usize { 42 }".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Embed,
+            text: "".into(),
+        },
         HostComposed {
             text: "Composed by a host engine.".into(),
             priority: A11yPriority::High,
@@ -1436,6 +1495,13 @@ mod tests {
             (Medium, "No next table."),
             (Medium, "No previous embed."),
             (Medium, "No next code block."),
+            (Medium, "Lists and tasks, level 2 heading."),
+            (Medium, "Target Note, link."),
+            (Medium, "first bullet, list."),
+            (Medium, "column a, table."),
+            (Medium, "Embedded note Target Note."),
+            (Medium, "fn spoken_interior() -> usize { 42 }, code block."),
+            (Medium, "Embed."),
             (High, "Composed by a host engine."),
         ];
 
