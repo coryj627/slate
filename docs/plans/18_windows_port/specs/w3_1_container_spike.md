@@ -69,11 +69,13 @@ Two minutes, and it tests the screen reader users actually run.
 
 1. Start **NVDA 2026.1.1**, and turn on **Tools → Speech Viewer** — it turns "what did you hear" into a copy-pasteable transcript. (It stops updating while the mouse is over it or focus is inside it, so leave it aside and do not click into it mid-run.)
 2. `ContainerSpike.exe --container flow`, click into the text, and confirm browse mode with `NVDA+Space`.
-3. `Ctrl+Home`, then **`K` four times**, recording each announcement verbatim.
+3. `Ctrl+Home`, then press **plain `k`** (no modifier) four times, recording each announcement verbatim.
+
+   **`k` and `NVDA+k` are different commands and the distinction decides the outcome.** Plain `k` is browse-mode *next link* and moves the reading cursor. `NVDA+k` is *report link destination* and moves nothing — it answers `"Not a link"` off a link, and `"Link has no apparent destination"` on a link with no `NavigateUri`. A pass driven with `NVDA+k` measures neither quick-nav nor the container. (The 2026-07-25 pass hit exactly this: both messages appeared, and neither was evidence about FlowDocument.)
 4. Repeat with `--container items`.
 5. Record tester, date, Windows build, NVDA version, and app commit SHA alongside the transcript — `w_c_matrix.md` requires all five for a human-AT cell to count.
 
-**The decisive cell is `flow` + `K` #1.** If NVDA announces `resolved note`, the absent `Hyperlink` control types are a red herring and FlowDocument stands. If `K` reports no next link, FlowDocument is out.
+**The decisive cell is `flow` + plain `k` #1.** If NVDA announces `resolved note`, the absent `Hyperlink` control types are a red herring and FlowDocument stands. If `K` reports no next link, FlowDocument is out.
 
 The 16-step list in `NvdaProbe.cs` doubles as the fuller manual checklist if the four `K` presses come back ambiguous.
 
