@@ -93,6 +93,21 @@ internal static class InlineBuilder
             Foreground = IsUnresolved(kind) ? Palette.Warning : Palette.Accent,
         };
 
+        // A destination is REQUIRED, not decorative. Without NavigateUri
+        // NVDA announces "Link has no apparent destination" on every link
+        // — observed in the 2026-07-25 manual pass, where it was the
+        // spike's own omission rather than anything about the container.
+        //
+        // The scheme carries the grammar, exactly as the mac applier's
+        // `activationURL(for:)` does, so the routed value keeps its source
+        // grammar and `^` cannot mean an anchor in one and a path
+        // character in the other.
+        Uri? destination = RoutingUri(kind);
+        if (destination is not null)
+        {
+            link.NavigateUri = destination;
+        }
+
         // Activation is a CLICK HANDLER, deliberately not a Command.
         //
         // A `RoutedCommand` with no `CommandBinding` reports CanExecute
@@ -108,6 +123,40 @@ internal static class InlineBuilder
 
     private static bool IsUnresolved(ReadingInlineRunKind kind) =>
         kind is ReadingInlineRunKind.Wikilink { Resolved: false };
+
+    /// The URI a run activates with. Mirrors the mac applier's scheme
+    /// table so both hosts route the same value; the spike does not
+    /// resolve it, only exposes it.
+    private static Uri? RoutingUri(ReadingInlineRunKind kind)
+    {
+        (string Scheme, string Target)? routed = kind switch
+        {
+            ReadingInlineRunKind.ExternalLink external => ("", external.Url),
+            // `slate-wiki` vs `slate-wikimd` keeps the authored grammar
+            // attached to the routed value.
+            ReadingInlineRunKind.Wikilink wiki => (
+                wiki.Grammar == ReadingWikiGrammar.Wikilink ? "slate-wiki" : "slate-wikimd",
+                wiki.Target),
+            ReadingInlineRunKind.Embed embed => ("slate-embed", embed.Key),
+            ReadingInlineRunKind.Tag tag => ("slate-tag", tag.Name),
+            ReadingInlineRunKind.Citation citation => ("slate-cite", citation.Raw),
+            _ => null,
+        };
+
+        if (routed is not { } value)
+        {
+            return null;
+        }
+        if (value.Scheme.Length == 0)
+        {
+            return Uri.TryCreate(value.Target, UriKind.Absolute, out Uri? external)
+                ? external : null;
+        }
+        return Uri.TryCreate(
+            $"{value.Scheme}://{Uri.EscapeDataString(value.Target)}",
+            UriKind.Absolute,
+            out Uri? routedUri) ? routedUri : null;
+    }
 
     public static string Describe(ReadingInlineRunKind kind) => kind switch
     {
