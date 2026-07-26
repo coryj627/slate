@@ -27,8 +27,25 @@ public sealed class ThemeTokenContrastTests
             ("secondary/surface", "Slate.SecondaryTextColor", "Slate.SurfaceColor"),
             ("secondary/raised", "Slate.SecondaryTextColor", "Slate.RaisedSurfaceColor"),
             ("accent/window", "Slate.AccentColor", "Slate.WindowBackgroundColor"),
+            // W3-1: reading text sits on Slate.SurfaceBrush, so the
+            // accent pairing that was only gated against window must be
+            // gated here too.
+            ("accent/surface", "Slate.AccentColor", "Slate.SurfaceColor"),
+            // NOT gated: accent/raised measures |Lc| 74.46 in the light
+            // theme — a real near-miss against the >75 floor, found while
+            // adding accent/surface. Deliberately left ungated rather
+            // than silently passing: fixing it means retuning
+            // Slate.AccentColor, which is shared with selection and focus
+            // and whose final values W8-2 owns (the palette is marked
+            // provisional). No surface renders accent text on the raised
+            // background today. Tracked so it is a decision, not a gap.
             ("selection", "Slate.SelectionTextColor", "Slate.SelectionBackgroundColor"),
             ("error/surface", "Slate.ErrorColor", "Slate.SurfaceColor"),
+            // Unresolved wikilinks (#849). A distinct role from error on
+            // purpose: a note you have not written yet is not a failure,
+            // and mac draws the same distinction with warningText.
+            ("warning/surface", "Slate.WarningColor", "Slate.SurfaceColor"),
+            ("warning/raised", "Slate.WarningColor", "Slate.RaisedSurfaceColor"),
         };
 
         foreach ((string name, string textKey, string backgroundKey) in pairs)
