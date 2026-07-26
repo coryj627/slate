@@ -67,6 +67,25 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// <summary>Last published memo key; see <see cref="MemoKey"/>.</summary>
     private MemoKey? _memo;
 
+    /// <summary>
+    /// True only when <see cref="Document"/> references a projection
+    /// that was FULLY built and delivered (single-shot, or a stream
+    /// that completed into a subscriber). False for torsos: canceled
+    /// streams, streams nobody heard, detached surfaces. The rebind
+    /// skip and the terminal-failure preserve decision both consult
+    /// it — Document being non-null proves nothing on its own, since
+    /// the surface merge drains published documents.
+    /// </summary>
+    private bool _projectionComplete;
+
+    /// <summary>
+    /// Set while a rebind-triggered re-projection is in flight: the
+    /// surface that just bound cannot trust what it shows, so a
+    /// terminal failure during recovery must publish the visible
+    /// notice instead of "preserving" content that may not exist.
+    /// </summary>
+    private bool _rebindRecovery;
+
     /// <summary>The records the published document was built against —
     /// activation must match against exactly these (§10.1 coherence:
     /// styling and activation share one snapshot).</summary>
@@ -134,7 +153,39 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             return;
         }
         _memo = null;
+        _rebindRecovery = true;
         Refresh();
+    }
+
+    /// <summary>True when the published document is a complete,
+    /// delivered projection — the only state a rebinding surface may
+    /// display without re-projecting.</summary>
+    internal bool ProjectionComplete => _projectionComplete;
+
+    /// <summary>
+    /// The surface unbound this model (tab switch, template rebind).
+    /// The stream MUST die here: chunk continuations append into list
+    /// objects that now belong to whatever the surface shows next —
+    /// without this, note A's stream grows a list mounted under note
+    /// B. The generation bump aborts every pending continuation and
+    /// in-flight publish at its gate (dispatcher-serial, so no chunk
+    /// can slip between detach and the check); the memo drops so the
+    /// next binding re-projects instead of trusting a torso.
+    /// </summary>
+    internal void OnSurfaceDetached()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _generation++;
+        _memo = null;
+        // _projectionComplete is deliberately untouched: it is already
+        // false for any in-flight stream (the case detach must poison),
+        // and a COMPLETED projection stays valid — its blocks remain
+        // mounted untouched across a reading→editor→back switch, which
+        // is exactly the rebind the completeness-gated skip keeps free.
+        IsLoading = false;
     }
 
     /// <summary>Activate one run kind (surface click/Enter path).</summary>
@@ -341,7 +392,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             "Reading view could not load this note. Switch to the editor to "
             + "keep working, then toggle reading mode to retry.",
             A11yPriority.High));
-        if (Document is not null)
+        // Preserve only what is PROVABLY on screen: a complete,
+        // delivered projection outside a rebind. A non-null Document
+        // proves nothing by itself — the surface merge drains it, a
+        // heard-by-nobody stream leaves a torso, and a rebinding
+        // surface may have had this model's blocks cleared by another
+        // tab entirely.
+        bool preserve = Document is not null && _projectionComplete && !_rebindRecovery;
+        _rebindRecovery = false;
+        if (preserve)
         {
             return;
         }
@@ -469,6 +528,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
+        _projectionComplete = false;
         // Only the DOCUMENT is published. The built model's landmarks
         // point into a container the surface's merge empties — the
         // surface re-collects over the live container, and a second
@@ -549,9 +609,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         if (streamed && BlocksAppended is null)
         {
             _memo = null;
+            _projectionComplete = false;
             return;
         }
         _memo = key;
+        _projectionComplete = true;
+        _rebindRecovery = false;
         if (!degraded)
         {
             return;

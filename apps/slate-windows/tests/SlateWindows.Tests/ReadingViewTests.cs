@@ -1420,6 +1420,150 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// Adversarial-review round 2 fix: switching tabs mid-stream must
+    /// KILL the outgoing model's stream — its chunk continuations hold
+    /// list objects mounted in this shared surface, and without the
+    /// detach cancellation note A's stream keeps growing a list shown
+    /// under note B. Rebinding A afterwards re-projects in full (the
+    /// completeness-gated skip refuses the torso).
+    /// </summary>
+    [Fact]
+    public void MidStreamTabSwitchCannotMutateTheSurface()
+    {
+        RunSta(() =>
+        {
+            var text = new System.Text.StringBuilder();
+            for (int i = 0; i < 600; i++)
+            {
+                text.Append("- item ").Append(i).Append('\n');
+            }
+
+            using var fixture = FixtureVault.Create(1, "reading-midstream");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "# Other note\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tabA = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var tabB = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "other.md")),
+                startInteractionBackgroundWork: false);
+            // ASYNC models on purpose — the chunk lifecycle is what is
+            // under test. B never refreshes: the not-yet-published
+            // replacement is the contamination window.
+            using var readingA = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tabA, _ => { });
+            using var readingB = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tabB, _ => { });
+            var surface = new ReadingSurface { Model = readingA };
+
+            readingA.Refresh();
+            WaitForUi(() => readingA.Document is not null);
+            int mountedItems = Assert.Single(
+                surface.Document.Blocks.OfType<System.Windows.Documents.List>())
+                .ListItems.Count;
+            Assert.InRange(
+                mountedItems,
+                1,
+                SlateWindows.Reading.ReadingContentViewModel.BuildChunkBlocks);
+
+            // Switch mid-stream to the not-yet-published model, then
+            // drain everything A's orphaned stream had queued.
+            surface.Model = readingB;
+            for (int i = 0; i < 20; i++)
+            {
+                PumpOneBackgroundPass();
+            }
+
+            Assert.Equal(
+                mountedItems,
+                Assert.Single(
+                    surface.Document.Blocks.OfType<System.Windows.Documents.List>())
+                    .ListItems.Count);
+
+            // Rebinding A re-projects in full — the canceled torso is
+            // never trusted by the skip path.
+            surface.Model = readingA;
+            WaitForUi(() =>
+                surface.Document.Blocks.OfType<System.Windows.Documents.List>()
+                    .FirstOrDefault()?.ListItems.Count == 600);
+        });
+    }
+
+    /// <summary>
+    /// Adversarial-review round 2 fix: a terminal failure during a
+    /// rebind recovery publishes the visible notice — Document being
+    /// non-null proves nothing after another tab's apply cleared this
+    /// model's blocks, and the old check left the surface blank.
+    /// </summary>
+    [Fact]
+    public void TerminalFailureAfterConsumedRebindShowsTheNotice()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-fail-rebind");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "first.md"), "# First note body\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "second.md"), "# Second note body\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var first = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "first.md")),
+                startInteractionBackgroundWork: false);
+            using var second = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "second.md")),
+                startInteractionBackgroundWork: false);
+            first.ToggleViewMode();
+            second.ToggleViewMode();
+
+            var surface = new ReadingSurface { Model = first.Reading };
+            Assert.Contains("First note body", SurfaceText(surface));
+            surface.Model = second.Reading;
+            Assert.Contains("Second note body", SurfaceText(surface));
+
+            // First's blocks were cleared by second's apply. Rebind it
+            // with its refresh terminally failing: the surface must
+            // show the failure notice, never stay blank.
+            first.Reading!.FetchFaultForTests = () => new IOException("injected");
+            surface.Model = first.Reading;
+            Assert.Contains("could not load this note", SurfaceText(surface));
+
+            // Clearing the fault and rebinding recovers in full.
+            first.Reading!.FetchFaultForTests = null;
+            surface.Model = second.Reading;
+            surface.Model = first.Reading;
+            Assert.Contains("First note body", SurfaceText(surface));
+        });
+    }
+
+    private static void PumpOneBackgroundPass()
+    {
+        var frame = new System.Windows.Threading.DispatcherFrame();
+        System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+            System.Windows.Threading.DispatcherPriority.ContextIdle,
+            new Action(() => frame.Continue = false));
+        System.Windows.Threading.Dispatcher.PushFrame(frame);
+    }
+
     private static FlowDocument BuildSource(string source)
     {
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(source);

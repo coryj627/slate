@@ -160,6 +160,11 @@ internal sealed class ReadingSurface : RichTextBox
         {
             previous.PropertyChanged -= surface.Model_PropertyChanged;
             previous.BlocksAppended -= surface.Model_BlocksAppended;
+            // Kill the outgoing model's stream BEFORE anything else:
+            // its chunk continuations hold list objects that live in
+            // THIS surface's document and would keep growing them
+            // under whatever binds next.
+            previous.OnSurfaceDetached();
         }
         surface._model = e.NewValue as ReadingContentViewModel;
         if (surface._model is { } model)
@@ -172,10 +177,14 @@ internal sealed class ReadingSurface : RichTextBox
             // re-projections only, so park the caret before applying.
             surface.CaretPosition = surface.Document.ContentStart;
             if (ReferenceEquals(surface._lastMerged, model.Document)
-                && model.Document is not null)
+                && model.Document is not null
+                && model.ProjectionComplete)
             {
-                // The persistent document already shows this exact
-                // projection (reading tab → editor tab → back): free.
+                // The persistent document already shows this exact,
+                // COMPLETE projection (reading tab → editor tab →
+                // back): free. Completeness matters — a stream this
+                // surface's own detach canceled leaves _lastMerged
+                // pointing at a torso that must re-project instead.
                 return;
             }
             // Any other rebind must RE-project: the model's published
