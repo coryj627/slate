@@ -251,12 +251,20 @@ Every activatable run carries the accent token **and** an underline — the affo
 - **`TaskCompleted`** — `Some` iff the item is a task. `Some(true)`/`Some(false)` drive the checkbox and the strikethrough; `None` means "not a task", which is not the same as an unchecked task.
 - **Empty `Segments`** means the block has no inline content (code, math, diagram, table, HTML, thematic break) and its own W3‑2..W3‑5 renderer owns it.
 
-### 10.6 What W3-1 must pin (open, not decided here)
+### 10.6 What W3-1 must pin — DECIDED 2026-07-26
 
-Two mechanism choices are W3‑1's first task, in the same way the MathML UIA route is W3‑2's. Record the choice and the JAWS/NVDA evidence in the PR and in `w_c_matrix.md`:
+Both mechanism choices are settled by the spike recorded in [`w3_1_container_spike.md`](w3_1_container_spike.md). Kept here as the binding statement; that document carries the measurements.
 
-1. **The text container.** §W3‑1 requires that "text ranges expose the reading order" and that JAWS/NVDA navigate headings, links and lists natively (decision 6 — no outline crutch). A `FlowDocument`-based viewer gives a genuine Text pattern over the whole note; an `ItemsControl` of `TextBlock`s does not. Spike both against the two ATs before committing.
-2. **Heading level exposure.** Whether `AutomationProperties.HeadingLevel` reaches UIA from the chosen container, and the fallback if it does not.
+1. **The text container: `FlowDocumentScrollViewer` + custom `AutomationPeer`s.** The Text pattern is the one property that cannot be retrofitted — giving an `ItemsControl` a document text range means writing an `ITextProvider` over a stack of `TextBlock`s from scratch, and every §W‑C text-range assertion depends on it. The three deficits that made this a close call are all closable by peers, measured: `HeadingLevel` restored, `Hyperlink` peers 0 → 5, `List` 0 → 2, `ListItem` 0 → 7, with the Text provider unchanged.
+2. **Heading level exposure: `AutomationProperties.HeadingLevel` does NOT survive onto a `FlowDocument` `Paragraph` peer** (it does on a `TextBlock`). The fallback is the required path: a `TextElementAutomationPeer` subclass overriding `GetHeadingLevelCore()`.
+
+**Three obligations the spike added, which this section previously did not anticipate:**
+
+- **Link elements are mandatory.** A plain `FlowDocument` exposes links as text-range attributes only, so NVDA announces them while *reading* but Tab produces a **silent focus stop** — no element exists to announce. Confirmed by manual NVDA pass, and invisible to both UIA-only inspection and say-all.
+- **Every activatable run needs a `NavigateUri`**, or NVDA announces "Link has no apparent destination".
+- **`FlowDocumentScrollViewer` has no keyboard caret** — WPF gives it mouse-driven selection only, so arrow keys have nothing to move once focus is inside the document. Focus and caret handling is W3‑1 work, not a container property.
+
+**Still open, and W3-1's first task:** whether NVDA browse-mode quick-nav (plain `k`/`h`/`l`, not `NVDA+k`) works in this container at all. Both spike passes used the wrong key, so §W3‑1 item 4 and decision 6's "no outline crutch" remain unverified. Measure before building the renderer — if WPF cannot present a browse-mode document, that is a program-level finding, not a W3‑1 detail.
 
 ### 10.7 Deferred rows
 

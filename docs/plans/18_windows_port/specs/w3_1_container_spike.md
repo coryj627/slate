@@ -129,19 +129,24 @@ All four peer types WPF needs are **public with public constructors** — `Hyper
 
 **`flowpeers` strictly dominates.** It keeps the Text pattern — the one property that cannot be retrofitted, since giving an `ItemsControl` a document text range means writing an `ITextProvider` over a stack of `TextBlock`s from scratch — and gains everything the `ItemsControl` variant had.
 
-## Decision
+## Decision (amended 2026-07-26 — RichTextBox host, and the browse-mode resolution)
 
-**`FlowDocumentScrollViewer` + custom `AutomationPeer`s.** No longer provisional: the Text-pattern advantage is real and unretrofittable, and the three deficits that made it a close call are demonstrably closable.
+**A read-only `RichTextBox` hosting the core-built `FlowDocument`, + custom `AutomationPeer`s.** The first form of this decision said `FlowDocumentScrollViewer`; the manual NVDA pass retired it — that control has **no keyboard caret** (arrows re-announced one line indefinitely), which makes it unusable for review. The RichTextBox variant (`--container richtext`, measured 2026-07-26) hosts the identical document and keeps every property the decision rested on — `Document` control type, Text provider, 363 reading-order chars, 12/14 landmarks, HeadingLevel, List 2 / ListItem 7 — while adding a working caret (`IsReadOnly` + `IsReadOnlyCaretVisible` + `IsDocumentEnabled`), **native table semantics** ("table with 2 rows and 2 columns" / "out of table"), and **native `Hyperlink` peers** (the additive peer walk must skip links there or it double-counts: measured 10-for-5, fixed with `includeLinks`).
 
 W3-1 scope, now evidenced rather than estimated:
 
-1. **Semantic peers** for heading level, list/list-item, and link elements — the `SemanticPeers.cs` shape in the spike is a working starting point, not a design.
-2. **Link elements are not optional.** Without them a keyboard user gets a silent focus stop on every link. This is invisible to UIA-only checks and to say-all; it took a Tab pass to find.
-3. **`NavigateUri` on every activatable run**, or NVDA announces "Link has no apparent destination".
-4. **Keyboard caret / focus handling.** `FlowDocumentScrollViewer` has no keyboard caret — WPF gives it mouse-driven selection only — so arrow keys have nothing to move once focus is inside. Needs solving before the surface is usable by keyboard.
-5. **`BlockUIContainer` text stays outside the text range.** The code fence's interior is never spoken; only its Copy button is reachable. W3-4 (#731) inherits this directly.
+1. **Semantic peers** for heading level and list/list-item — the `SemanticPeers.cs` shape in the spike is a working starting point, not a design. Link elements come free from the RichTextBox host; on any other host they must be added.
+2. **`NavigateUri` on every activatable run**, or NVDA announces "Link has no apparent destination".
+3. **Chorded structural-navigation commands** (see below) — the app layer of the G21 navigation model.
+4. **`BlockUIContainer` text stays outside the text range.** The code fence's interior is never spoken; only its Copy button is reachable. W3-4 (#731) inherits this directly.
 
-Items 2, 4 and 5 are scope neither §10.6 nor `w3_spec.md` costed, and belong on #728 before that PR is scoped.
+## Browse mode: measured, researched, resolved (G21)
+
+The one §10.6 question the container could never answer: NVDA single-letter quick-nav (`h`/`k`/`l`/`i`) did nothing in any variant, and `NVDA+Space` toggled nothing. Verified at the source, not inferred: browse mode is granted by NVDA-side per-app class selection — `_get_treeInterceptorClass` raises `NotImplementedError` by default, the 2,860-line generic UIA base class contains **zero** browse-mode wiring, and every grant in NVDA's tree is a browser engine, an Office canvas, or a bespoke app module (Kindle: 468 lines shipped in NVDA core; Acrobat; Mail). **No UIA property can request it, in any framework** — WinUI3 yields only focus-mode `XamlEditableText`, Windows 11 Notepad (same UIA shape as ours) is focus mode, and VS Code's NVDA module exists to *suppress* the interceptor its Chromium surface would get. A webview would obtain it but is prohibited (§1.3) and unnecessary.
+
+Resolution (owner, 2026-07-26 — gap_analysis **G21**): navigation ships in layers. The **app owns chords and semantics** — chorded structural-nav commands that move the real caret and announce via the canonical vocabulary, working under every AT's every mode, vetted against the JAWS/NVDA binding tables. The **letters belong to the AT layer** (reserved as W-E7): an NVDA add-on granting genuine browse mode over this document (Add-on Store, then upstreaming à la Kindle), and JAWS scripts mapping JAWS-convention letters onto the app commands. Bare in-app letters are opt-in, default off — an app must never claim keys an AT might. The add-on is gated on one spike: `TextPattern.RangeFromChild` over the custom peers, the highest-risk unknown.
+
+What the RichTextBox NVDA pass verified beyond the container question: linear caret reading announces links inline, tables natively, and task-checkbox state in place — and the code fence stays silent, confirming item 4 above a third time.
 
 ## Size and stability
 
