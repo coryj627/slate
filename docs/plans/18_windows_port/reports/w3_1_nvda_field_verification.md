@@ -33,8 +33,29 @@
 8. **`Ctrl+Alt+L` grabbed globally on the test machine** — per-key log proved zero arrivals at the app while `H`/`T`/`C`/`E` arrived; NVDA's key echo proved host receipt. Machine-local interception (suspects: global hotkey registrant, NVDA add-on gesture, Parsec host). Resolved per the G18 precedent: `Ctrl+Alt+U` aliases list navigation; `L` remains bound.
 9. App crash on focusing a document hyperlink — W1-era `VisualTreeHelper` ancestor walk meeting its first `ContentElement` (round 5 → logical/visual combined walk, regression-pinned).
 
+## Activation addendum (2026-07-27, later passes)
+
+After the activation slice landed, verified live: **click** activation for
+all four kinds (resolved wikilink opened its note; unresolved announced
+"is unresolved. Cannot open."; external opened the default browser with
+the canonical announcement; tag filtered the file list), and **Enter** /
+**Ctrl+Enter** at the caret after the containment fix. Two defects found
+and fixed by these passes: Enter dead on a landed link (the caret rests
+one symbol before a live link element), and navigation re-titling the tab
+while the reading surface kept the old note (ReplaceItem disposed the
+projection without rebuilding).
+
+**`NVDA+Enter` behaves per NVDA's own semantics, not as an app defect:**
+it acts on the *navigator object*. When that is the link (object
+navigation, or review landing on it), it invokes cleanly through the
+native Hyperlink peer. When it is the whole document, NVDA synthesizes a
+mouse click at the object's location — observed as the caret jumping a
+line with no activation. Word in focus mode behaves identically. The
+W-E7 browse-mode add-on is the idiomatic closure: browse mode makes
+`NVDA+Enter` activate at the browse caret.
+
 ## Explicitly NOT covered by this record
 
-- **Activation** (Enter/click opening notes; tags; citations; embed cards; task toggles) — unwired at verification time.
+- **Citation popover, embed-card expansion, task toggles** — later W3-1/W3-5 slices.
 - **JAWS** (installed, unmeasured) and **Narrator** (smoke scope) — pending per WGA-9.
 - Size behaviour beyond unit-level measurement; §W-A `inline_runs` goldens.
