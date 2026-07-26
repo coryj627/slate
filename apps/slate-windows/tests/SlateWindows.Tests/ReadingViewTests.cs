@@ -1799,6 +1799,55 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// Adversarial-review round 5 fix: switching away and back BEFORE
+    /// the first publication must restart the refresh the detach
+    /// canceled — without live-refresh tracking the rebind's
+    /// null-document branch returned and the surface sat on its
+    /// loading placeholder forever.
+    /// </summary>
+    [Fact]
+    public void RebindBeforeTheFirstPublishStillProjects()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-prepublish");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "# Body appears\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "other.md"), "# Other\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tabA = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var tabB = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "other.md")),
+                startInteractionBackgroundWork: false);
+            using var readingA = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tabA, _ => { });
+            using var readingB = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tabB, _ => { });
+
+            // Bind, detach, rebind — all before a single dispatcher
+            // pump, so A's first publication can never have landed.
+            var surface = new ReadingSurface { Model = readingA };
+            surface.Model = readingB;
+            surface.Model = readingA;
+
+            WaitForUi(() => SurfaceText(surface).Contains(
+                "Body appears", StringComparison.Ordinal));
+        });
+    }
+
     private static void PumpOneBackgroundPass()
     {
         var frame = new System.Windows.Threading.DispatcherFrame();

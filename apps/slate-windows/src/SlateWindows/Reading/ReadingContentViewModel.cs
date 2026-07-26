@@ -59,6 +59,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
     private bool _disposed;
     private int _generation;
+
+    /// <summary>The generation whose refresh is still live (its
+    /// publish or terminal-failure state can still land). -1 when the
+    /// current generation has no refresh — the state a surface detach
+    /// leaves behind, which a rebind must repair by refreshing even
+    /// before the first publication.</summary>
+    private int _liveRefreshGeneration = -1;
     private FlowDocument? _document;
     private bool _isLoading;
     private DispatcherTimer? _editDebounce;
@@ -158,6 +165,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         AttachObserver();
         if (_document is null)
         {
+            // Nothing published yet. If a refresh is still live its
+            // publication reaches this binding through PropertyChanged
+            // — but a detach-canceled first refresh left NOTHING
+            // pending, and returning here stranded the surface on its
+            // loading placeholder forever (A→B→A before A published).
+            if (_liveRefreshGeneration != _generation)
+            {
+                Refresh();
+            }
             return;
         }
         _memo = null;
@@ -193,6 +209,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // re-attaches on the next bind.
         Deactivate();
         _generation++;
+        _liveRefreshGeneration = -1;
         _memo = null;
         // _projectionComplete is deliberately untouched: it is already
         // false for any in-flight stream (the case detach must poison),
@@ -325,6 +342,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
 
         int generation = ++_generation;
+        _liveRefreshGeneration = generation;
         string text = _tab.Text;
         string path = _tab.Path;
         long revision = _tab.EditorSession?.Revision ?? -1;
