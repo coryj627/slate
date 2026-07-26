@@ -46,6 +46,7 @@ internal sealed class ThemeManager : IDisposable
         "Slate.SelectionTextBrush",
         "Slate.FocusBrush",
         "Slate.ErrorBrush",
+        "Slate.WarningBrush",
         EditorSyntaxPalette.HeadingBrushKey,
         EditorSyntaxPalette.CodeBrushKey,
         EditorSyntaxPalette.WikilinkBrushKey,

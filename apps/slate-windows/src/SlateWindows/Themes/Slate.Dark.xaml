@@ -11,6 +11,7 @@
     <Color x:Key="Slate.SelectionBackgroundColor">#FFB9D9FF</Color>
     <Color x:Key="Slate.SelectionTextColor">#FF101010</Color>
     <Color x:Key="Slate.ErrorColor">#FFFFD1D6</Color>
+    <Color x:Key="Slate.WarningColor">#FFFFDB94</Color>
 
     <SolidColorBrush x:Key="Slate.WindowBackgroundBrush"
                      Color="{StaticResource Slate.WindowBackgroundColor}" />
@@ -34,6 +35,8 @@
                      Color="{StaticResource Slate.AccentColor}" />
     <SolidColorBrush x:Key="Slate.ErrorBrush"
                      Color="{StaticResource Slate.ErrorColor}" />
+    <SolidColorBrush x:Key="Slate.WarningBrush"
+                     Color="{StaticResource Slate.WarningColor}" />
     <SolidColorBrush x:Key="Slate.EditorHeadingBrush"
                      Color="{StaticResource Slate.AccentColor}" />
     <SolidColorBrush x:Key="Slate.EditorCodeBrush"
