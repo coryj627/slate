@@ -55,7 +55,9 @@ pub enum A11yPriority {
 pub enum ReadingNavTarget {
     Heading,
     /// A specific level, 1-6 (the `1`..`6` chords).
-    HeadingLevel { level: u8 },
+    HeadingLevel {
+        level: u8,
+    },
     Link,
     List,
     Table,

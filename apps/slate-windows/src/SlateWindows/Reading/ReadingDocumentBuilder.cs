@@ -144,33 +144,33 @@ internal static class ReadingDocumentBuilder
         switch (block.Kind)
         {
             case ReadingBlockKind.Heading heading:
-            {
-                Paragraph paragraph = InlineParagraph(inlines, task: false);
-                paragraph.FontSize = heading.Level switch
                 {
-                    1 => 26,
-                    2 => 21,
-                    3 => 18,
-                    _ => 16,
-                };
-                paragraph.FontWeight = FontWeights.SemiBold;
-                // Narrator (and any future UIA consumer of the property)
-                // reads this; NVDA does not during linear reading — the
-                // measured limitation G21 records. The chorded commands
-                // are the cross-AT navigation path.
-                AutomationProperties.SetHeadingLevel(paragraph, ToHeadingLevel(heading.Level));
-                ReadingSemantics.MarkHeading(paragraph, heading.Level);
-                return paragraph;
-            }
+                    Paragraph paragraph = InlineParagraph(inlines, task: false);
+                    paragraph.FontSize = heading.Level switch
+                    {
+                        1 => 26,
+                        2 => 21,
+                        3 => 18,
+                        _ => 16,
+                    };
+                    paragraph.FontWeight = FontWeights.SemiBold;
+                    // Narrator (and any future UIA consumer of the property)
+                    // reads this; NVDA does not during linear reading — the
+                    // measured limitation G21 records. The chorded commands
+                    // are the cross-AT navigation path.
+                    AutomationProperties.SetHeadingLevel(paragraph, ToHeadingLevel(heading.Level));
+                    ReadingSemantics.MarkHeading(paragraph, heading.Level);
+                    return paragraph;
+                }
 
             case ReadingBlockKind.BlockQuote:
-            {
-                Paragraph quote = InlineParagraph(inlines, task: false);
-                quote.Padding = new Thickness(12, 2, 0, 2);
-                quote.BorderThickness = new Thickness(3, 0, 0, 0);
-                quote.SetResourceReference(Block.BorderBrushProperty, "Slate.AccentBrush");
-                return quote;
-            }
+                {
+                    Paragraph quote = InlineParagraph(inlines, task: false);
+                    quote.Padding = new Thickness(12, 2, 0, 2);
+                    quote.BorderThickness = new Thickness(3, 0, 0, 0);
+                    quote.SetResourceReference(Block.BorderBrushProperty, "Slate.AccentBrush");
+                    return quote;
+                }
 
             case ReadingBlockKind.CodeFence fence:
                 return CodeFenceBlock(fence);
@@ -185,17 +185,17 @@ internal static class ReadingDocumentBuilder
             case ReadingBlockKind.Diagram:
             case ReadingBlockKind.Html:
             default:
-            {
-                // Math (W3-2) and diagrams (W3-3) get their canonical
-                // renderers in their own PRs; HTML renders as source per
-                // the mac contract. Until then the block's source stays
-                // IN the text range, monospace — never silently absent.
-                if (inlines.Segments.Length == 0)
                 {
-                    return MonospaceParagraph(block.Source.TrimEnd('\n', '\r'));
+                    // Math (W3-2) and diagrams (W3-3) get their canonical
+                    // renderers in their own PRs; HTML renders as source per
+                    // the mac contract. Until then the block's source stays
+                    // IN the text range, monospace — never silently absent.
+                    if (inlines.Segments.Length == 0)
+                    {
+                        return MonospaceParagraph(block.Source.TrimEnd('\n', '\r'));
+                    }
+                    return InlineParagraph(inlines, task: false);
                 }
-                return InlineParagraph(inlines, task: false);
-            }
         }
     }
 

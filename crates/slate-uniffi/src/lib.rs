@@ -6728,8 +6728,8 @@ pub enum ReadingNavTarget {
 
 impl From<ReadingNavTarget> for core::a11y::ReadingNavTarget {
     fn from(t: ReadingNavTarget) -> Self {
-        use core::a11y::ReadingNavTarget as C;
         use ReadingNavTarget as F;
+        use core::a11y::ReadingNavTarget as C;
         match t {
             F::Heading => C::Heading,
             F::HeadingLevel { level } => C::HeadingLevel { level },
