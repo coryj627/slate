@@ -159,16 +159,29 @@ internal sealed class ReadingSurface : RichTextBox
         if (surface._model is { } previous)
         {
             previous.PropertyChanged -= surface.Model_PropertyChanged;
+            previous.BlocksAppended -= surface.Model_BlocksAppended;
         }
         surface._model = e.NewValue as ReadingContentViewModel;
         if (surface._model is { } model)
         {
             surface._navigator ??= new ReadingNavigator(surface, model.Announce);
             model.PropertyChanged += surface.Model_PropertyChanged;
+            model.BlocksAppended += surface.Model_BlocksAppended;
             // A model swap is a different projection (navigation, tab
             // switch): the merge's caret preservation is for SAME-note
             // re-projections only, so park the caret before applying.
             surface.CaretPosition = surface.Document.ContentStart;
+            if (ReferenceEquals(surface._lastMerged, model.Document)
+                && model.Document is not null)
+            {
+                // The persistent document already shows this exact
+                // projection (reading tab → editor tab → back): free.
+                return;
+            }
+            // Any other rebind must RE-project: the model's published
+            // blocks may have been consumed by an earlier binding of
+            // this shared surface (see EnsureProjected).
+            model.EnsureProjected();
             surface.ApplyModel();
         }
     }
@@ -180,6 +193,23 @@ internal sealed class ReadingSurface : RichTextBox
         {
             ApplyModel();
         }
+    }
+
+    /// <summary>
+    /// Streamed chunk arrival (§W3-1 item 9): append the fragment's
+    /// blocks to the persistent document and refresh the landmark
+    /// index so chords cover everything rendered so far. The caret is
+    /// untouched — appends only ever grow the tail.
+    /// </summary>
+    private void Model_BlocksAppended(FlowDocument fragment)
+    {
+        while (fragment.Blocks.FirstBlock is { } block)
+        {
+            fragment.Blocks.Remove(block);
+            Document.Blocks.Add(block);
+        }
+        _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
+        _navigator?.SetLandmarks(_landmarks);
     }
 
     private FlowDocument? _lastMerged;

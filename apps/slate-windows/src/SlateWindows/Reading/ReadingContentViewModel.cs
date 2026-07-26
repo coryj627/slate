@@ -33,6 +33,24 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     private static readonly TimeSpan RetryDelay = TimeSpan.FromMilliseconds(100);
     private static readonly TimeSpan EditDebounce = TimeSpan.FromMilliseconds(300);
 
+    /// <summary>
+    /// §W3-1 item 9 (spike-measured): build cost is linear at ~0.2 ms
+    /// per block, so the ceiling render is kept stall-free by CHUNKED
+    /// construction — one dispatcher pass per chunk at Background
+    /// priority — never by a faster inner loop.
+    /// </summary>
+    internal const int BuildChunkBlocks = 250;
+
+    /// <summary>
+    /// The documented ceiling (≈0.5 MB / 2–3k blocks without
+    /// virtualization). Mac logs its perf note at the same 2,000
+    /// (`perfNoteBlockThreshold`); Windows additionally enters the
+    /// deliberate degraded mode the spike obligated: the first 2,000
+    /// blocks render, a terminal notice says so, and the announcement
+    /// narrates it.
+    /// </summary>
+    internal const int MaximumRenderedBlocks = 2_000;
+
     private readonly VaultSession _session;
     private readonly WorkspaceTabViewModel _tab;
     private readonly Action<A11yEvent> _announce;
@@ -80,6 +98,14 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         private set => SetField(ref _document, value);
     }
 
+    /// <summary>
+    /// Raised once per streamed chunk after the first publish: the
+    /// surface moves the fragment's blocks into its persistent document
+    /// and re-collects landmarks. Fragments are dispatcher-built, so
+    /// the handler runs on the same thread that owns the document.
+    /// </summary>
+    public event Action<FlowDocument>? BlocksAppended;
+
 
     public bool IsLoading
     {
@@ -88,6 +114,28 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
     public Action<A11yEvent> Announce => _announce;
+
+    /// <summary>
+    /// Re-project for a (re)binding surface. The surface's merge
+    /// CONSUMES the published document's blocks, and one surface
+    /// instance is shared across a group's tabs — so a model that
+    /// rebinds after another reading tab was displayed holds an
+    /// emptied projection nothing can re-apply (measured as a blank
+    /// surface on switching back between two reading-mode tabs).
+    /// Dropping the memo forces the next publish to rebuild; streamed
+    /// chunks that fired before any surface was attached are recovered
+    /// the same way. No-op before the first publish — the in-flight
+    /// refresh will reach the new binding through PropertyChanged.
+    /// </summary>
+    public void EnsureProjected()
+    {
+        if (_disposed || _document is null)
+        {
+            return;
+        }
+        _memo = null;
+        Refresh();
+    }
 
     /// <summary>Activate one run kind (surface click/Enter path).</summary>
     public void Activate(ReadingInlineRunKind kind)
@@ -342,9 +390,19 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             model.Add((fetched.Blocks[i], fetched.Inlines[i]));
         }
-        ReadingDocumentModel built = ReadingDocumentBuilder.Build(model);
 
-        _memo = key;
+        // §W3-1 item 9: the render limit is the documented ceiling,
+        // extended past any list run so deliberate truncation never
+        // cuts mid-list (a split list is two nav stops that lie).
+        int renderLimit = model.Count > MaximumRenderedBlocks
+            ? NextChunkBoundary(model, MaximumRenderedBlocks - BuildChunkBlocks, model.Count)
+            : model.Count;
+        bool degraded = model.Count > renderLimit;
+
+        int firstEnd = NextChunkBoundary(model, 0, renderLimit);
+        ReadingDocumentModel built = ReadingDocumentBuilder.Build(
+            model.GetRange(0, firstEnd));
+
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
         // Only the DOCUMENT is published. The built model's landmarks
@@ -352,6 +410,115 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // surface re-collects over the live container, and a second
         // landmark source here would be a dangling-pointer trap.
         Document = built.Document;
+
+        if (firstEnd >= renderLimit)
+        {
+            FinishPublish(key, degraded, renderLimit, streamed: false);
+            return;
+        }
+
+        // The memo is set only when the stream COMPLETES — a memo hit
+        // on a half-built document would freeze the truncation forever.
+        _memo = null;
+        if (_synchronousForTests)
+        {
+            int index = firstEnd;
+            while (index < renderLimit)
+            {
+                int end = NextChunkBoundary(model, index, renderLimit);
+                AppendFragment(model, index, end);
+                index = end;
+            }
+            FinishPublish(key, degraded, renderLimit, streamed: true);
+            return;
+        }
+        _ = _dispatcher!.InvokeAsync(
+            () => ContinueBuild(generation, model, firstEnd, renderLimit, key, degraded),
+            DispatcherPriority.Background);
+    }
+
+    /// <summary>
+    /// One streamed chunk per dispatcher pass; a newer refresh bumps
+    /// the generation and the orphaned stream stops silently.
+    /// </summary>
+    private void ContinueBuild(
+        int generation,
+        List<(ReadingBlock, ReadingBlockInlines)> model,
+        int index,
+        int renderLimit,
+        MemoKey key,
+        bool degraded)
+    {
+        if (_disposed || generation != _generation)
+        {
+            return;
+        }
+        int end = NextChunkBoundary(model, index, renderLimit);
+        AppendFragment(model, index, end);
+        if (end < renderLimit)
+        {
+            _ = _dispatcher!.InvokeAsync(
+                () => ContinueBuild(generation, model, end, renderLimit, key, degraded),
+                DispatcherPriority.Background);
+            return;
+        }
+        FinishPublish(key, degraded, renderLimit, streamed: true);
+    }
+
+    private void AppendFragment(
+        List<(ReadingBlock, ReadingBlockInlines)> model, int index, int end) =>
+        BlocksAppended?.Invoke(
+            ReadingDocumentBuilder.Build(model.GetRange(index, end - index)).Document);
+
+    private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
+    {
+        // A stream nobody heard delivered nothing past chunk 1: leave
+        // the memo empty so the next binding's EnsureProjected (or any
+        // refresh) rebuilds instead of memo-matching a torso, and say
+        // nothing — the announcement narrates a surface that isn't
+        // showing this projection.
+        if (streamed && BlocksAppended is null)
+        {
+            _memo = null;
+            return;
+        }
+        _memo = key;
+        if (!degraded)
+        {
+            return;
+        }
+        string rendered = renderedBlocks.ToString(
+            "N0", System.Globalization.CultureInfo.InvariantCulture);
+        string notice =
+            $"Reading view shows the first {rendered} blocks of this note. "
+            + "Switch to the editor for the full text.";
+        var document = new FlowDocument();
+        var paragraph = new Paragraph(new Run(notice))
+        {
+            FontStyle = System.Windows.FontStyles.Italic,
+        };
+        System.Windows.Automation.AutomationProperties.SetAutomationId(
+            paragraph, "ReadingDegradedNotice");
+        document.Blocks.Add(paragraph);
+        BlocksAppended?.Invoke(document);
+        _announce(new A11yEvent.HostComposed(notice, A11yPriority.High));
+    }
+
+    /// <summary>
+    /// Chunk boundaries never fall immediately before a ListItem
+    /// continuation: the builder tracks its open list within one Build
+    /// call, so a cut inside a list run would split one authored list
+    /// into two — wrong structure AND two quick-nav stops.
+    /// </summary>
+    private static int NextChunkBoundary(
+        List<(ReadingBlock, ReadingBlockInlines)> model, int index, int limit)
+    {
+        int end = Math.Min(index + BuildChunkBlocks, limit);
+        while (end < limit && model[end].Item1.Kind is ReadingBlockKind.ListItem)
+        {
+            end++;
+        }
+        return end;
     }
 
     public void Dispose()

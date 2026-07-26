@@ -1042,6 +1042,203 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// §W3-1 item 9, ceiling behavior: a large note streams in chunks —
+    /// the first publish is bounded, later chunks append across
+    /// dispatcher passes (never one monolithic build), and the final
+    /// document carries every block with the landmark index covering
+    /// all of it.
+    /// </summary>
+    [Fact]
+    public void LargeNoteStreamsInChunksIntoTheSurface()
+    {
+        RunSta(() =>
+        {
+            var text = new System.Text.StringBuilder();
+            for (int i = 0; i < 600; i++)
+            {
+                text.Append("Paragraph number ").Append(i).Append(".\n\n");
+            }
+            text.Append("# Tail heading\n");
+
+            using var fixture = FixtureVault.Create(1, "reading-stream");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            // The ASYNC pipeline on purpose — chunk scheduling is the
+            // behavior under test.
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, _ => { });
+            var surface = new ReadingSurface { Model = reading };
+
+            reading.Refresh();
+            WaitForUi(() => reading.Document is not null);
+            int firstPublish = surface.Document.Blocks.Count;
+            Assert.True(
+                firstPublish
+                    <= SlateWindows.Reading.ReadingContentViewModel.BuildChunkBlocks + 8,
+                $"first publish held {firstPublish} blocks — not a bounded chunk");
+
+            WaitForUi(() => surface.Document.Blocks.Count >= 601);
+            Assert.Equal(601, surface.Document.Blocks.Count);
+            // The landmark index covers the streamed tail.
+            Assert.Contains(
+                surface.LandmarksForTests,
+                landmark => landmark.Kind == ReadingLandmarkKind.Heading);
+        });
+    }
+
+    /// <summary>
+    /// §W3-1 item 9, above the ceiling: the deliberate degraded mode —
+    /// first 2,000 blocks render, the terminal notice paragraph says
+    /// so, and the announcement narrates it.
+    /// </summary>
+    [Fact]
+    public void NotesBeyondTheCeilingDegradeDeliberately()
+    {
+        RunSta(() =>
+        {
+            int total = SlateWindows.Reading.ReadingContentViewModel.MaximumRenderedBlocks + 100;
+            var text = new System.Text.StringBuilder();
+            for (int i = 0; i < total; i++)
+            {
+                text.Append("Block ").Append(i).Append(".\n\n");
+            }
+
+            using var fixture = FixtureVault.Create(1, "reading-degraded");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            int rendered = SlateWindows.Reading.ReadingContentViewModel.MaximumRenderedBlocks;
+            // Rendered blocks + the terminal notice.
+            Assert.Equal(rendered + 1, surface.Document.Blocks.Count);
+            var notice = Assert.IsType<Paragraph>(surface.Document.Blocks.LastBlock);
+            Assert.Equal(
+                "ReadingDegradedNotice",
+                System.Windows.Automation.AutomationProperties.GetAutomationId(notice));
+            string spoken = Assert.Single(
+                announced.Select(item => SlateUniffiMethods.A11yRender(item).Text),
+                item => item.Contains("first 2,000 blocks", StringComparison.Ordinal));
+            Assert.Contains("Switch to the editor", spoken, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>Chunk boundaries never split an authored list: a list
+    /// run crossing the chunk size stays ONE list (structure and
+    /// quick-nav stop count are load-bearing, G20).</summary>
+    [Fact]
+    public void ChunkBoundariesNeverSplitAList()
+    {
+        RunSta(() =>
+        {
+            var text = new System.Text.StringBuilder();
+            // 240 paragraphs, then a 30-item list straddling the
+            // 250-block chunk boundary.
+            for (int i = 0; i < 240; i++)
+            {
+                text.Append("Paragraph ").Append(i).Append(".\n\n");
+            }
+            for (int i = 0; i < 30; i++)
+            {
+                text.Append("- item ").Append(i).Append('\n');
+            }
+
+            using var fixture = FixtureVault.Create(1, "reading-chunk-list");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            System.Windows.Documents.List list = Assert.Single(
+                surface.Document.Blocks.OfType<System.Windows.Documents.List>());
+            Assert.Equal(30, list.ListItems.Count);
+        });
+    }
+
+    /// <summary>
+    /// Two reading-mode tabs sharing the one templated surface: the
+    /// merge consumes each model's published blocks, so switching back
+    /// rendered a BLANK surface until rebinding re-projects
+    /// (EnsureProjected). Pins the fix.
+    /// </summary>
+    [Fact]
+    public void RebindingBetweenTwoReadingTabsReprojectsBoth()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-rebind");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "first.md"), "# First note body\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "second.md"), "# Second note body\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var first = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "first.md")),
+                startInteractionBackgroundWork: false);
+            using var second = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "second.md")),
+                startInteractionBackgroundWork: false);
+            first.ToggleViewMode();
+            second.ToggleViewMode();
+
+            var surface = new ReadingSurface { Model = first.Reading };
+            Assert.Contains("First note body", SurfaceText(surface));
+
+            surface.Model = second.Reading;
+            Assert.Contains("Second note body", SurfaceText(surface));
+
+            surface.Model = first.Reading;
+            Assert.Contains("First note body", SurfaceText(surface));
+
+            surface.Model = second.Reading;
+            Assert.Contains("Second note body", SurfaceText(surface));
+        });
+    }
+
+    private static string SurfaceText(ReadingSurface surface) =>
+        new TextRange(
+            surface.Document.ContentStart,
+            surface.Document.ContentEnd).Text;
+
     private static IEnumerable<System.Windows.Controls.CheckBox> CollectCheckBoxes(
         FlowDocument document)
     {
