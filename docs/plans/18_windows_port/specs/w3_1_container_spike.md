@@ -143,6 +143,37 @@ W3-1 scope, now evidenced rather than estimated:
 
 Items 2, 4 and 5 are scope neither §10.6 nor `w3_spec.md` costed, and belong on #728 before that PR is scoped.
 
+## Size and stability
+
+Measured on the selected container (`FlowDocument` + semantic peers) over six synthetic corpora, each in a **fresh process** so peak working set reflects the document rather than a plateaued heap. Covers both readings of "a large file": 800k words by word count, and 10k words whose 5 MB comes from huge inline destinations — the converter or clipped-note shape.
+
+| corpus | MB | blocks | runs | parse ms | build ms | layout ms | peers | peer walk ms | model MB | peak MB |
+|---|--:|--:|--:|--:|--:|--:|--:|--:|--:|--:|
+| 1k words / 20 links | 0.01 | 49 | 79 | 19 | 159 | 209 | 50 | 5 | 0.1 | 82 |
+| **10k words / 300 links** | 0.09 | 455 | 967 | 24 | 199 | 299 | 552 | 14 | 0.8 | 134 |
+| 50k words / 1.5k links | 0.43 | 2296 | 4836 | 43 | 398 | 558 | 2759 | 56 | 3.8 | 158 |
+| 200k words / 6k links | 1.72 | 9122 | 19290 | 117 | 1930 | 810 | 10980 | 179 | 14.9 | 227 |
+| 800k words / 24k links | 6.88 | 36381 | 77050 | 411 | **7428** | 911 | **43848** | 554 | 59.5 | 609 |
+| 10k words / 2k huge destinations | 4.85 | 455 | 4311 | 155 | 358 | 784 | 2252 | 24 | 39.4 | 228 |
+
+**Stability: no crashes, hangs or OOM at any size.**
+
+**Core is not the problem.** Parse is linear at ~60 ms/MB — 411 ms for a 6.9 MB note. Model retention is ~9× file size and also linear.
+
+**The payload-duplication residual holds up.** The huge-destination corpus retains **39.4 MB** against 59.5 MB for the wordy one — proportionally *less*, despite being built to stress exactly that residual. This is the first measurement supporting the ship decision rather than an argument for it.
+
+**The WPF build is the bottleneck**, at ~0.2 ms per block and linear: 455 blocks is 199 ms, 36,381 blocks is **7.4 seconds**. Nothing degrades non-linearly; there are simply too many blocks to build eagerly.
+
+**The peer tree is a flat collection of 43,848 children** at the top size, taking 554 ms to enumerate and 166 ms to name — roughly **720 ms for a screen reader to walk the document once**. That is a property of the spike's `GetChildrenCore` returning everything flat, not of WPF.
+
+### What this means for W3-1
+
+- **The usable ceiling without virtualization is roughly 0.5 MB / ~2–3k blocks**, where build + layout stays near one second. Beyond that it degrades linearly and predictably: ~2.7 s at 1.7 MB, ~8.3 s at 6.9 MB.
+- **Virtualization or incremental build is required** for large notes. `FlowDocument` builds eagerly; the fix is chunked or on-demand block construction, not a faster inner loop — the per-block cost is already flat.
+- **The peer tree must become hierarchical**, mirroring document structure, so a client enumerates a section rather than the note. The spike's flat list was the shortest path to a viability answer, not a design.
+- **A degraded mode above a size threshold** (plain text, no peers) is worth designing deliberately rather than discovering.
+- The stated target of **10k words with hundreds of links is comfortable** — ~520 ms end to end, 134 MB peak, 552 peers. Nothing here blocks that case.
+
 ## Superseded: earlier provisional recommendation
 
 `FlowDocumentScrollViewer`, plus custom peers for heading level and list semantics — **conditional on the NVDA link result above**.
