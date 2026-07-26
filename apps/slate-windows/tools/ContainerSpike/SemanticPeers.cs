@@ -57,14 +57,29 @@ internal sealed class ReadingSurfacePeer : FlowDocumentScrollViewerAutomationPee
             return children;
         }
 
-        foreach (Block block in document.Blocks)
-        {
-            AppendBlock(block, children);
-        }
+        AppendDocument(document, children, includeLinks: true);
         return children;
     }
 
-    private static void AppendBlock(Block block, List<AutomationPeer> children)
+    /// Shared by both surface peers so the two variants differ only in
+    /// their host control, never in what they expose.
+    ///
+    /// `includeLinks` exists because the two hosts do not start from the
+    /// same place: `FlowDocumentScrollViewer` surfaces NO `Hyperlink`
+    /// peers, so they must be added, while `RichTextBox` surfaces them
+    /// natively — adding them there produced ten links for five, which is
+    /// worse than the gap it was closing.
+    internal static void AppendDocument(
+        FlowDocument document, List<AutomationPeer> children, bool includeLinks)
+    {
+        foreach (Block block in document.Blocks)
+        {
+            AppendBlock(block, children, includeLinks);
+        }
+    }
+
+    private static void AppendBlock(
+        Block block, List<AutomationPeer> children, bool includeLinks)
     {
         switch (block)
         {
@@ -75,7 +90,10 @@ internal sealed class ReadingSurfacePeer : FlowDocumentScrollViewerAutomationPee
                 {
                     children.Add(new HeadingPeer(paragraph, level));
                 }
-                AppendInlines(paragraph.Inlines, children);
+                if (includeLinks)
+                {
+                    AppendInlines(paragraph.Inlines, children);
+                }
                 break;
 
             case WpfList list:
@@ -86,7 +104,7 @@ internal sealed class ReadingSurfacePeer : FlowDocumentScrollViewerAutomationPee
                         item, AutomationControlType.ListItem, FirstText(item)));
                     foreach (Block inner in item.Blocks)
                     {
-                        AppendBlock(inner, children);
+                        AppendBlock(inner, children, includeLinks);
                     }
                 }
                 break;
@@ -94,7 +112,7 @@ internal sealed class ReadingSurfacePeer : FlowDocumentScrollViewerAutomationPee
             case Section section:
                 foreach (Block inner in section.Blocks)
                 {
-                    AppendBlock(inner, children);
+                    AppendBlock(inner, children, includeLinks);
                 }
                 break;
         }
@@ -175,4 +193,59 @@ internal sealed class SemanticTextPeer : TextElementAutomationPeer
     protected override string GetNameCore() => _name;
 
     protected override bool IsControlElementCore() => true;
+}
+
+/// Variant D: the same `FlowDocument` hosted in a **read-only
+/// `RichTextBox`** instead of a `FlowDocumentScrollViewer`.
+///
+/// The manual passes kept getting stuck: arrow keys re-announced the same
+/// line forever, because `FlowDocumentScrollViewer` has **no keyboard
+/// caret** — WPF gives it mouse-driven selection only. A reader who
+/// cannot move the caret cannot review the note, which makes the whole
+/// surface untestable and, shipped, unusable.
+///
+/// A read-only `RichTextBox` is WPF's actual answer for a navigable
+/// read-only rich document: real caret, arrow and word navigation,
+/// selection, and `IsDocumentEnabled` keeps hyperlinks live. It hosts the
+/// identical `FlowDocument`, so everything the container decision rested
+/// on — the text pattern, reading order, the semantic peers — carries
+/// over unchanged if it works.
+internal sealed class PeeredRichTextBox : System.Windows.Controls.RichTextBox
+{
+    public PeeredRichTextBox()
+    {
+        IsReadOnly = true;
+        // Read-only, but NOT selection-disabled: the caret is the point.
+        IsReadOnlyCaretVisible = true;
+        IsDocumentEnabled = true;
+        AcceptsReturn = false;
+        AcceptsTab = false;
+        BorderThickness = new Thickness(0);
+        VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto;
+    }
+
+    protected override AutomationPeer OnCreateAutomationPeer() =>
+        new RichReadingSurfacePeer(this);
+}
+
+/// Same additive strategy as `ReadingSurfacePeer`, over the RichTextBox
+/// peer instead of the document-viewer peer.
+internal sealed class RichReadingSurfacePeer
+    : System.Windows.Automation.Peers.RichTextBoxAutomationPeer
+{
+    public RichReadingSurfacePeer(System.Windows.Controls.RichTextBox owner) : base(owner)
+    {
+    }
+
+    protected override List<AutomationPeer> GetChildrenCore()
+    {
+        List<AutomationPeer> children = base.GetChildrenCore() ?? new List<AutomationPeer>();
+        if (((System.Windows.Controls.RichTextBox)Owner).Document is not FlowDocument document)
+        {
+            return children;
+        }
+        // RichTextBox already provides Hyperlink peers.
+        ReadingSurfacePeer.AppendDocument(document, children, includeLinks: false);
+        return children;
+    }
 }

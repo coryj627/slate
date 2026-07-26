@@ -72,8 +72,10 @@ internal static class Program
             "items" => ItemsControlBuilder.Build(model),
             "flow" => FlowDocumentBuilder.Build(model),
             "flowpeers" => FlowDocumentBuilder.Build(model, withSemanticPeers: true),
+            "richtext" => FlowDocumentBuilder.Build(
+                model, withSemanticPeers: true, richTextHost: true),
             _ => throw new ArgumentException(
-                $"unknown container '{container}' (expected 'flow', 'flowpeers' or 'items')"),
+                $"unknown container '{container}' (expected 'flow', 'flowpeers', 'richtext' or 'items')"),
         };
 
         var window = new Window

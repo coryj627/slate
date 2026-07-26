@@ -24,7 +24,8 @@ internal static class FlowDocumentBuilder
 {
     public static FrameworkElement Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
-        bool withSemanticPeers = false)
+        bool withSemanticPeers = false,
+        bool richTextHost = false)
     {
         var document = new FlowDocument
         {
@@ -60,6 +61,16 @@ internal static class FlowDocumentBuilder
             openList = null;
             lastItem = null;
             document.Blocks.Add(NonListBlock(block, inlines));
+        }
+
+        // A read-only RichTextBox hosts the IDENTICAL document; only the
+        // host differs, so a difference the probe reports is the host's.
+        if (richTextHost)
+        {
+            var box = new PeeredRichTextBox { Document = document };
+            AutomationProperties.SetAutomationId(box, "ReadingSurface");
+            AutomationProperties.SetName(box, "Reading view");
+            return box;
         }
 
         FlowDocumentScrollViewer viewer = withSemanticPeers

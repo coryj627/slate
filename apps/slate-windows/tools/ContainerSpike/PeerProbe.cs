@@ -58,7 +58,7 @@ internal static class PeerProbe
         markdown.AppendLine();
 
         var summaries = new List<Summary>();
-        foreach (string variant in new[] { "flow", "flowpeers", "items" })
+        foreach (string variant in new[] { "flow", "flowpeers", "richtext", "items" })
         {
             // Measured BOTH ways on purpose. Detached Measure/Arrange is
             // enough to lay a FlowDocument out, but some WPF peers are
@@ -98,6 +98,8 @@ internal static class PeerProbe
         {
             "flow" => FlowDocumentBuilder.Build(model),
             "flowpeers" => FlowDocumentBuilder.Build(model, withSemanticPeers: true),
+            "richtext" => FlowDocumentBuilder.Build(
+                model, withSemanticPeers: true, richTextHost: true),
             _ => ItemsControlBuilder.Build(model),
         };
 
