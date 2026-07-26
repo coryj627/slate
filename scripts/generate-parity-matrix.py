@@ -419,6 +419,28 @@ IMPLEMENTED_STATUS = (
 W2_IMPLEMENTED_STATUS = (
     "implemented; local gates green 2026-07-23; interactive CI + human AT pending"
 )
+W3_IMPLEMENTED_STATUS = (
+    "implemented; local gates green 2026-07-27; interactive CI + human AT pending"
+)
+
+# W3 delivery is tracked per COMMAND, not per issue prefix: #728 also
+# owns waived rows (printNote), and a prefix rule would demand evidence
+# for a command the owner explicitly waived out of the wave.
+W3_DELIVERED_COMMANDS = {
+    "slate.editor.toggleViewMode",
+}
+
+# §W-F waivers: status text the generator must preserve across
+# regeneration — a waiver that lives only in the generated file is
+# silently erased by the next run.
+COMMAND_STATUS_OVERRIDES = {
+    "slate.file.printNote": (
+        "**§W-F waiver** — out of W3-1 (owner, 2026-07-25); a second "
+        "composition path, as mac shows by routing print through a separate "
+        "`ReadingPrintComposer` that re-segments through core. Needs its own "
+        "unit; tracked, not unshipped."
+    ),
+}
 
 
 def load_delivery_evidence(
@@ -465,7 +487,7 @@ def load_delivery_evidence(
     delivered_commands = {
         cid for cid, _, _, _, issue in cmd_rows
         if issue.startswith(("#720", "#721", "#722", "#723", "#724", "#725"))
-    }
+    } | W3_DELIVERED_COMMANDS
     mapped_commands = set(command_map)
     if mapped_commands != delivered_commands:
         missing = sorted(delivered_commands - mapped_commands)
@@ -476,7 +498,7 @@ def load_delivery_evidence(
         if group_name not in groups:
             fail(f"command {command_id} references unknown evidence group {group_name!r}")
 
-    expected_issues = {"#381", "#720", "#721", "#722", "#723", "#724", "#725"}
+    expected_issues = {"#381", "#720", "#721", "#722", "#723", "#724", "#725", "#728"}
     if set(issue_map) != expected_issues:
         fail(
             "delivery-evidence issue drift: expected "
@@ -494,8 +516,12 @@ def command_delivery_status(
     issue: str,
     evidence: dict[str, dict[str, str]],
 ) -> str:
+    if command_id in COMMAND_STATUS_OVERRIDES:
+        return COMMAND_STATUS_OVERRIDES[command_id]
     if command_id not in evidence["commands"]:
         return "pending"
+    if command_id in W3_DELIVERED_COMMANDS:
+        return W3_IMPLEMENTED_STATUS
     return (
         W2_IMPLEMENTED_STATUS
         if issue.startswith(("#381", "#724", "#725"))

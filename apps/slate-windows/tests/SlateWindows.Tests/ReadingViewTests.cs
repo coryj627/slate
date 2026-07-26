@@ -244,6 +244,64 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// `slate.editor.toggleViewMode` delivery evidence (chords.json
+    /// group `reading`): the persisted `"reading"` token flips, the
+    /// projection builds synchronously in test mode, the reading VM is
+    /// retained across toggles (§10.1 memoization), and non-markdown
+    /// tabs refuse the command.
+    /// </summary>
+    [Fact]
+    public void ReadingModeToggle_FlipsPersistedModeAndProjectsTheDocument()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-mode-toggle");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), Fixture);
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+
+            Assert.False(tab.IsReadingMode);
+            Assert.True(tab.IsEditorVisible);
+            Assert.Null(tab.Reading);
+
+            tab.ToggleViewMode();
+            Assert.Equal("reading", tab.Mode);
+            Assert.True(tab.IsReadingVisible);
+            Assert.False(tab.IsEditorVisible);
+            SlateWindows.Reading.ReadingContentViewModel reading =
+                Assert.IsType<SlateWindows.Reading.ReadingContentViewModel>(tab.Reading);
+            Assert.NotNull(reading.Document);
+            Assert.NotEmpty(reading.Landmarks);
+
+            // Toggling back retains the projection — flipping again is a
+            // memo hit, not a re-parse.
+            tab.ToggleViewMode();
+            Assert.Null(tab.Mode);
+            Assert.True(tab.IsEditorVisible);
+            Assert.Same(reading, tab.Reading);
+
+            // Non-markdown tabs refuse the command.
+            using var placeholder = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Canvas, "canvas:test")),
+                startInteractionBackgroundWork: false);
+            placeholder.ToggleViewMode();
+            Assert.Null(placeholder.Mode);
+            Assert.Null(placeholder.Reading);
+        });
+    }
+
     private static IEnumerable<Hyperlink> CollectHyperlinks(FlowDocument document)
     {
         for (TextPointer pointer = document.ContentStart;

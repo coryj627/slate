@@ -24,6 +24,7 @@
         <KeyBinding Key="O" Modifiers="Control+Shift" Command="{Binding OpenVaultCommand}" />
         <KeyBinding Key="O" Modifiers="Control" Command="{Binding QuickSwitcher.OpenCommand}" />
         <KeyBinding Key="S" Modifiers="Control" Command="{Binding Workspace.SaveActiveCommand}" />
+        <KeyBinding Key="E" Modifiers="Control+Shift" Command="{Binding Workspace.ToggleReadingModeCommand}" />
         <KeyBinding Key="W" Modifiers="Control" Command="{Binding Workspace.CloseActiveTabCommand}" />
         <KeyBinding Key="T" Modifiers="Control" Command="{Binding Workspace.DuplicateTabCommand}" />
         <KeyBinding Key="T" Modifiers="Control+Shift" Command="{Binding Workspace.ReopenClosedTabCommand}" />
@@ -107,6 +108,10 @@
                           AutomationProperties.AutomationId="EditorPreviewEmbedMenuItem"
                           InputGestureText="Ctrl+E"
                           Command="{Binding Workspace.ActiveGroup.ActiveTab.EditorInteractions.PreviewEmbedCommand}" />
+                <MenuItem Header="Toggle _Reading Mode"
+                          AutomationProperties.AutomationId="EditorToggleReadingModeMenuItem"
+                          InputGestureText="Ctrl+Shift+E"
+                          Command="{Binding Workspace.ToggleReadingModeCommand}" />
                 <Separator />
                 <MenuItem Header="Check _Spelling While Typing"
                           AutomationProperties.AutomationId="EditorToggleSpellCheckMenuItem"

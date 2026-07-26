@@ -48,6 +48,79 @@ internal sealed class ReadingSurface : RichTextBox
 
         AutomationProperties.SetAutomationId(this, "ReadingSurface");
         AutomationProperties.SetName(this, "Reading view");
+
+        // Entering reading mode swaps this surface in for the editor;
+        // focus must land in the document or the mode toggle strands
+        // keyboard users on a hidden control. (IsVisibleChanged is an
+        // event, not a virtual, on UIElement.)
+        IsVisibleChanged += (_, args) =>
+        {
+            if (args.NewValue is true && _model is not null)
+            {
+                _ = Focus();
+            }
+        };
+    }
+
+    /// <summary>
+    /// The view-model attach point: XAML binds <c>Model</c>
+    /// (RichTextBox.Document is a plain CLR property, so it cannot be
+    /// the binding target itself). The surface subscribes for document
+    /// swaps, keeps its navigator's landmark index current, and owns
+    /// the navigator lifetime.
+    /// </summary>
+    public static readonly DependencyProperty ModelProperty =
+        DependencyProperty.Register(
+            nameof(Model), typeof(object), typeof(ReadingSurface),
+            new PropertyMetadata(null, OnModelChanged));
+
+    private ReadingNavigator? _navigator;
+    private ReadingContentViewModel? _model;
+
+    public object? Model
+    {
+        get => GetValue(ModelProperty);
+        set => SetValue(ModelProperty, value);
+    }
+
+    private static void OnModelChanged(
+        DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        var surface = (ReadingSurface)d;
+        if (surface._model is { } previous)
+        {
+            previous.PropertyChanged -= surface.Model_PropertyChanged;
+        }
+        surface._model = e.NewValue as ReadingContentViewModel;
+        if (surface._model is { } model)
+        {
+            surface._navigator ??= new ReadingNavigator(surface, model.Announce);
+            model.PropertyChanged += surface.Model_PropertyChanged;
+            surface.ApplyModel();
+        }
+    }
+
+    private void Model_PropertyChanged(
+        object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(ReadingContentViewModel.Document)
+            or nameof(ReadingContentViewModel.Landmarks))
+        {
+            ApplyModel();
+        }
+    }
+
+    private void ApplyModel()
+    {
+        if (_model is not { } model)
+        {
+            return;
+        }
+        if (model.Document is { } document && !ReferenceEquals(Document, document))
+        {
+            Document = document;
+        }
+        _navigator?.SetLandmarks(model.Landmarks);
     }
 
     protected override AutomationPeer OnCreateAutomationPeer() =>

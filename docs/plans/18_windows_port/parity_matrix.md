@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-23 at `ffdb78b` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-07-26 at `f2bb35d` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -120,7 +120,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.editor.save` | Save | ⌘S | Command S | #724 (W2-1) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.togglePropertiesSource` | Show Properties Source | ⇧⌘D | Shift Command D | #736 (W4-4) | pending |
 | `slate.editor.toggleSpellCheck` | Check Spelling While Typing | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
-| `slate.editor.toggleViewMode` | Toggle Reading Mode | ⇧⌘E | Shift Command E | #728 (W3-1) | pending |
+| `slate.editor.toggleViewMode` | Toggle Reading Mode | ⇧⌘E | Shift Command E | #728 (W3-1) | implemented; local gates green 2026-07-27; interactive CI + human AT pending |
 | `slate.editor.zoomIn` | Editor: Zoom In | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.editor.zoomOut` | Editor: Zoom Out | — | — | #725 (W2-3) | implemented; local gates green 2026-07-23; interactive CI + human AT pending |
 | `slate.file.cancelImport` | Cancel Import | ⌘. | Command Period | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |

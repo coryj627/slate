@@ -9,6 +9,7 @@ using System.Text;
 using System.Windows.Input;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit.Document;
+using SlateWindows.Reading;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -120,7 +121,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public Guid Id { get; }
     public WorkspaceItemState Item { get; private set; }
-    public string? Mode { get; }
+    public string? Mode { get; private set; }
     public bool? PropsCollapsed { get; }
     public string? ActiveCanvasSurface { get; }
     public string Title => Item.Title;
@@ -133,6 +134,57 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         $"{System.IO.Path.GetFileName(Path)} editor";
     public string Path => Item.Path;
     public bool IsMarkdown => Item.Kind == WorkspaceItemKind.Markdown;
+
+    /// <summary>The persisted `"reading"` token (schema v1, G17).</summary>
+    public bool IsReadingMode => string.Equals(Mode, "reading", StringComparison.Ordinal);
+    public bool IsEditorVisible => IsMarkdown && !IsReadingMode;
+    public bool IsReadingVisible => IsMarkdown && IsReadingMode;
+
+    /// <summary>Created on first entry into reading mode; null before.</summary>
+    public ReadingContentViewModel? Reading { get; private set; }
+
+    /// <summary>
+    /// `slate.editor.toggleViewMode` (Ctrl+Shift+E, mac ⇧⌘E — W3-1
+    /// #728): flip the persisted per-tab mode and (de)activate the
+    /// reading projection. The reading VM is created lazily and kept
+    /// across toggles so flipping back is a cache hit, not a re-parse
+    /// (§10.1 memoization).
+    /// </summary>
+    public void ToggleViewMode()
+    {
+        if (!IsMarkdown)
+        {
+            return;
+        }
+        if (IsReadingMode)
+        {
+            Mode = null;
+            Reading?.Deactivate();
+        }
+        else
+        {
+            Mode = "reading";
+            if (Reading is null)
+            {
+                Reading = new ReadingContentViewModel(
+                    _session, this, _announce,
+                    synchronousForTests: !_startInteractionBackgroundWork);
+                OnPropertyChanged(nameof(Reading));
+            }
+            if (_startInteractionBackgroundWork)
+            {
+                Reading.Activate();
+            }
+            else
+            {
+                Reading.Refresh();
+            }
+        }
+        OnPropertyChanged(nameof(Mode));
+        OnPropertyChanged(nameof(IsReadingMode));
+        OnPropertyChanged(nameof(IsEditorVisible));
+        OnPropertyChanged(nameof(IsReadingVisible));
+    }
     public bool IsPlaceholder => !IsMarkdown;
     public string KindLabel => Item.Kind switch
     {
@@ -203,6 +255,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         _taskToggleGeneration++;
         _taskToggleInFlight = false;
         _editorInteractions?.Dispose();
+        Reading?.Dispose();
         _editorInteractions = null;
         _editorSession?.Dispose();
         _editorSession = null;
@@ -852,6 +905,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         ReopenClosedTabCommand = new RelayCommand(
             _ => RunWorkspaceMutation(ReopenClosedTab),
             _ => _closedTabs.Count > 0);
+        ToggleReadingModeCommand = new RelayCommand(
+            _ => RunWorkspaceMutation(() => ActiveGroup.ActiveTab?.ToggleViewMode()),
+            _ => ActiveGroup.ActiveTab?.IsMarkdown == true);
         MoveTabLeftCommand = new RelayCommand(
             _ => RunWorkspaceMutation(() => MoveActiveTab(-1)),
             _ => CanMoveActiveTab(-1));
@@ -939,6 +995,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand CloseActiveTabCommand { get; }
     public ICommand DuplicateTabCommand { get; }
     public ICommand ReopenClosedTabCommand { get; }
+    public ICommand ToggleReadingModeCommand { get; }
     public ICommand MoveTabLeftCommand { get; }
     public ICommand MoveTabRightCommand { get; }
     public ICommand NextTabCommand { get; }
