@@ -98,6 +98,16 @@ internal static class ReadingDocumentBuilder
         ReadingBlockKind.ListItem kind,
         ReadingBlockInlines inlines)
     {
+        // Consecutive ListItem blocks continue one list ONLY while their
+        // ordered-ness agrees: a bullet run followed by an ordered run is
+        // two lists, not one list with lying markers — and two quick-nav
+        // stops, matching AT convention.
+        bool ordered = openList?.MarkerStyle == TextMarkerStyle.Decimal;
+        if (openList is not null && ordered != kind.Ordered)
+        {
+            openList = null;
+            lastItem = null;
+        }
         if (openList is null)
         {
             openList = new WpfList
@@ -549,8 +559,29 @@ internal static class ReadingDocumentBuilder
         return text.Length <= LandmarkTextLimit ? text : text[..LandmarkTextLimit];
     }
 
-    private static string FirstItemText(WpfList list) =>
-        list.ListItems.FirstListItem is { } item ? ElementText(item) : string.Empty;
+    /// <summary>
+    /// The first ITEM PARAGRAPH's text, not the item's: a rendered list
+    /// item's own range includes the marker glyph, and the landing
+    /// announcement said "•	first bullet, list." (caught by the
+    /// live-document test).
+    /// </summary>
+    private static string FirstItemText(WpfList list)
+    {
+        if (list.ListItems.FirstListItem?.Blocks.OfType<Paragraph>().FirstOrDefault()
+            is not { } paragraph)
+        {
+            return string.Empty;
+        }
+        string text = ElementText(paragraph);
+        // The rendered marker ("•	", "12.	") is materialized INSIDE
+        // the paragraph's text range in a hosted document — the spike's
+        // "list arrives as document text" finding, now in announcement
+        // form: the landing said "•	first bullet, list.". The marker is
+        // presentation, not content; a short prefix ending in a tab is
+        // exactly it.
+        int tab = text.IndexOf('	');
+        return tab >= 0 && tab <= 4 ? text[(tab + 1)..].TrimStart() : text;
+    }
 
     private static string FirstCellText(WpfTable table)
     {

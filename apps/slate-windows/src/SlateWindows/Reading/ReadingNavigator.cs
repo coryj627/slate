@@ -107,18 +107,32 @@ internal sealed class ReadingNavigator
             == (ModifierKeys.Control | ModifierKeys.Alt);
         if (chordShaped)
         {
-            // Diagnostic tap (SLATE_UIA_DIAGNOSTICS=1): the 2026-07-27
-            // passes could not distinguish "the chord never reached the
-            // surface" from "it dispatched and died silently". One
-            // keypress against this log answers it.
-            HostLog.WriteUiAutomationDiagnostic(HostDiagnosticEvent.ReadingChordSeen);
+            // Diagnostic tap (SLATE_UIA_DIAGNOSTICS=1). Carries the key
+            // identity: the first tap's bare event names could not
+            // attribute seen-vs-dispatched to a specific press.
+            HostLog.WriteUiAutomationDiagnostic(
+                HostDiagnosticEvent.ReadingChordSeen,
+                $"{key}+{Keyboard.Modifiers}");
         }
         if (!_chords.TryGetValue((key, Keyboard.Modifiers), out Action? action))
         {
             return;
         }
-        HostLog.WriteUiAutomationDiagnostic(HostDiagnosticEvent.ReadingChordDispatched);
-        action();
+        HostLog.WriteUiAutomationDiagnostic(
+            HostDiagnosticEvent.ReadingChordDispatched,
+            $"{key}+{Keyboard.Modifiers}");
+        try
+        {
+            action();
+        }
+        catch (Exception exception)
+        {
+            // Visible before fatal: with no app-level exception swallow,
+            // a throw here takes the process down — make sure the log
+            // names the chord that did it first.
+            HostLog.Write(HostDiagnosticEvent.ReadingChordActionFailed, exception);
+            throw;
+        }
         e.Handled = true;
         // Releasing Alt last after a chord otherwise activates the menu
         // bar — the measured "File collapsed Alt+F" focus theft that

@@ -29,6 +29,9 @@ public sealed class ReadingViewTests
         + "- second bullet\n"
         + "  - nested bullet\n"
         + "\n"
+        + "1. ordered one\n"
+        + "2. ordered two\n"
+        + "\n"
         + "- [x] a done task\n"
         + "\n"
         + "```rust\n"
@@ -96,7 +99,9 @@ public sealed class ReadingViewTests
                     ReadingLandmarkKind.Link,      // [@smith2020]
                     ReadingLandmarkKind.Heading,   // ## Second heading
                     ReadingLandmarkKind.List,      // bullet list
-                    ReadingLandmarkKind.List,      // task list
+                    ReadingLandmarkKind.List,      // nested list
+                    ReadingLandmarkKind.List,      // ordered list (split on ordered-ness)
+                    ReadingLandmarkKind.List,      // task list (split back)
                     ReadingLandmarkKind.CodeBlock, // rust fence
                     ReadingLandmarkKind.Table,
                     ReadingLandmarkKind.Embed,     // ![[known]] card
@@ -461,6 +466,84 @@ public sealed class ReadingViewTests
                 whole,
                 System.Windows.Automation.Text.TextPatternRangeEndpoint.Start);
         });
+    }
+
+    /// <summary>
+    /// List navigation over the LIVE merged document — the exact app
+    /// path (merge → re-collected landmarks → navigator), not the
+    /// detached built document the other navigation tests use. Guards
+    /// the 2026-07-27 field failure where Ctrl+Alt+L produced nothing:
+    /// if the live path breaks for lists, this fails locally instead of
+    /// needing another manual NVDA round.
+    /// </summary>
+    [Fact]
+    public void ListNavigationWorksOverTheLiveMergedDocument()
+    {
+        RunSta(() =>
+        {
+            ReadingDocumentModel model = BuildFixture();
+            var surface = new ReadingSurface();
+            var announced = new List<A11yEvent>();
+            var navigator = new ReadingNavigator(surface, announced.Add);
+            _ = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(model.Document);
+            navigator.SetLandmarks(surface.LandmarksForTests);
+            string Last() => SlateUniffiMethods.A11yRender(announced[^1]).Text;
+
+            surface.CaretPosition = surface.Document.ContentStart;
+
+            // Structure check first: the live document must still hold
+            // FOUR list landmarks (bullet, nested, ordered, task) after
+            // the merge — if the host normalized adjacent lists into
+            // one, quick-nav stops silently vanish.
+            Assert.Equal(
+                4,
+                surface.LandmarksForTests.Count(
+                    l => l.Kind == ReadingLandmarkKind.List));
+
+            // Four stops: bullet list, its nested list (a distinct list
+            // and a distinct stop, per AT convention), then the ordered
+            // run and the task run — which are SEPARATE lists even though
+            // the ListItem blocks are consecutive, because ordered-ness
+            // changed. One fused list with lying markers was the bug.
+            navigator.Move(ReadingLandmarkKind.List, forward: true);
+            Assert.Equal("first bullet, list.", Last());
+            navigator.Move(ReadingLandmarkKind.List, forward: true);
+            Assert.Equal("nested bullet, list.", Last());
+            navigator.Move(ReadingLandmarkKind.List, forward: true);
+            Assert.Equal("ordered one, list.", Last());
+            navigator.Move(ReadingLandmarkKind.List, forward: true);
+            Assert.Equal("a done task, list.", Last());
+            navigator.Move(ReadingLandmarkKind.List, forward: true);
+            Assert.Equal("No next list.", Last());
+            navigator.Move(ReadingLandmarkKind.List, forward: false);
+            Assert.Equal("ordered one, list.", Last());
+        });
+    }
+
+    /// <summary>
+    /// The core contract the list-splitting logic depends on: mixed
+    /// consecutive list runs arrive with per-item ordered-ness.
+    /// </summary>
+    [Fact]
+    public void CoreReportsOrderednessPerListItem()
+    {
+        ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(
+            "- a\n- b\n\n1. one\n2. two\n\n- [ ] t\n");
+        var flags = blocks
+            .Select(b => b.Kind)
+            .OfType<ReadingBlockKind.ListItem>()
+            .Select(li => (li.Ordered, Task: li.Task is not null))
+            .ToArray();
+        Assert.Equal(
+            new[]
+            {
+                (false, false), (false, false),
+                (true, false), (true, false),
+                (false, true),
+            },
+            flags);
     }
 
     private static IEnumerable<Hyperlink> CollectHyperlinks(FlowDocument document)
