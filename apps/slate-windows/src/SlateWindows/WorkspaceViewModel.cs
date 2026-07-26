@@ -932,7 +932,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             dirtyNavigationDecision = null,
         Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>?
             dirtyCloseDecision = null,
-        bool startInteractionBackgroundWork = true)
+        bool startInteractionBackgroundWork = true,
+        AppPreferencesStore? preferencesStore = null)
     {
         _session = session;
         _persistence = new WorkspacePersistence(vaultRoot);
@@ -943,7 +944,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             ?? ((_, _) => WorkspaceDirtyNavigationDecision.Cancel);
         _dirtyCloseDecision = dirtyCloseDecision
             ?? (_ => WorkspaceDirtyNavigationDecision.Cancel);
-        EditorPreferences = new EditorPreferencesViewModel(_announce);
+        EditorPreferences = new EditorPreferencesViewModel(
+            _announce, preferencesStore: preferencesStore);
         _activeLeaf = Leaves[0];
         (_root, _activeGroup) = Restore(_persistence.Load());
 
@@ -1074,7 +1076,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private void OpenEditorNavigation(EditorNavigationRequest request) =>
         RunWorkspaceMutation(() =>
         {
-            if (!OpenPathCore(request.Path, WorkspaceOpenTarget.CurrentTab))
+            // New-tab is only ever requested by reading-view activations
+            // (G22 preference); editor navigation stays current-tab.
+            // TryOpenItem already reuses an existing same-target tab, so
+            // the new-tab path never duplicates.
+            if (!OpenPathCore(
+                request.Path,
+                request.OpenInNewTab
+                    ? WorkspaceOpenTarget.NewTab
+                    : WorkspaceOpenTarget.CurrentTab))
             {
                 return;
             }

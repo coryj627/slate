@@ -90,8 +90,14 @@ internal sealed class ReadingActivation
             _announce(new A11yEvent.LinkUnresolved(spokenTarget));
             return;
         }
+        // New tab by default; the Editor-menu preference flips it to the
+        // editor's in-place navigation (owner call 2026-07-25; gap G22 —
+        // mac reading links stay current-tab with ⌘-click for new tab).
         _tab.NavigateFromReading(new EditorNavigationRequest(
-            path, records[index].TargetAnchor, null));
+            path,
+            records[index].TargetAnchor,
+            null,
+            OpenInNewTab: _tab.EditorPreferences.OpenReadingLinksInNewTab));
     }
 
     private static bool OpenWithShell(string url)

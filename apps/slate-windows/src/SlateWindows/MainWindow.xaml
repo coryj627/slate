@@ -118,6 +118,11 @@
                           IsCheckable="True"
                           IsChecked="{Binding Workspace.EditorPreferences.IsSpellCheckEnabled, Mode=OneWay}"
                           Command="{Binding Workspace.EditorPreferences.ToggleSpellCheckCommand}" />
+                <MenuItem Header="Open Reading Lin_ks in New Tab"
+                          AutomationProperties.AutomationId="EditorToggleReadingLinkTargetMenuItem"
+                          IsCheckable="True"
+                          IsChecked="{Binding Workspace.EditorPreferences.OpenReadingLinksInNewTab, Mode=OneWay}"
+                          Command="{Binding Workspace.EditorPreferences.ToggleReadingLinkTargetCommand}" />
                 <Separator />
                 <MenuItem Header="Zoom _In"
                           AutomationProperties.AutomationId="EditorZoomInMenuItem"

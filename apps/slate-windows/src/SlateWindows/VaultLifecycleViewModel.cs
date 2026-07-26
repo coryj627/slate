@@ -699,7 +699,8 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             () => sidebar?.ExpandedDirectoryPaths() ?? [],
             _announce,
             _confirmDirtyNavigation,
-            _confirmDirtyClose);
+            _confirmDirtyClose,
+            preferencesStore: new AppPreferencesStore());
         sidebar = new FilesSidebarViewModel(
             session,
             _announce,

@@ -631,10 +631,24 @@ public sealed class ReadingViewTests
             Assert.Equal(4, kinds.Length);
             Assert.IsType<ReadingInlineRunKind.Citation>(kinds[3]);
 
-            // Resolved wikilink → the editor's navigation seam, no announcement.
+            // Resolved wikilink → the editor's navigation seam, no
+            // announcement — and in a NEW tab by default (G22 owner call).
             reading.Activate(kinds[0]);
             EditorNavigationRequest navigation = Assert.Single(navigations);
             Assert.Equal("known.md", navigation.Path);
+            Assert.True(navigation.OpenInNewTab);
+
+            // The Editor-menu preference flips activation back to the
+            // mac-style in-place navigation.
+            tab.EditorPreferences.OpenReadingLinksInNewTab = false;
+            navigations.Clear();
+            reading.Activate(kinds[0]);
+            Assert.False(Assert.Single(navigations).OpenInNewTab);
+            tab.EditorPreferences.OpenReadingLinksInNewTab = true;
+            navigations.Clear();
+            reading.Activate(kinds[0]);
+            Assert.True(Assert.Single(navigations).OpenInNewTab);
+            navigations.Clear();
 
             // Unresolved wikilink → core's canonical refusal.
             announced.Clear();
@@ -771,6 +785,105 @@ public sealed class ReadingViewTests
                 new TextRange(
                     after.Document!.ContentStart,
                     after.Document.ContentEnd).Text);
+        });
+    }
+
+    /// <summary>
+    /// G22 default: a reading-view link activation opens the target in a
+    /// NEW tab — the reading tab keeps its note, its mode, and therefore
+    /// the reader's position. (Editor activation is separately pinned to
+    /// current-tab by WorkspaceNavigation_UsesCoreHeadingAndBlockArtifacts…)
+    /// </summary>
+    [Fact]
+    public void ReadingActivationOpensTheTargetInANewTabByDefault()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-newtab");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "known.md"), "# Known target\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "Go to [[known]] now.\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var workspace = new WorkspaceViewModel(
+                session,
+                fixture.Root,
+                () => [],
+                _ => { },
+                startInteractionBackgroundWork: false);
+            workspace.OpenPath("note0.md");
+            WorkspaceTabViewModel reader = workspace.ActiveGroup.ActiveTab!;
+            reader.ToggleViewMode();
+
+            ReadingInlineRunKind kind = CollectHyperlinks(reader.Reading!.Document!)
+                .Select(link => link.Tag)
+                .OfType<ReadingInlineRunKind>()
+                .First();
+            reader.Reading!.Activate(kind);
+
+            Assert.Equal(2, workspace.ActiveGroup.Tabs.Count);
+            Assert.Equal("known.md", workspace.ActiveGroup.ActiveTab!.Path);
+            Assert.Equal("note0.md", reader.Path);
+            Assert.True(reader.IsReadingMode, "the reading tab is undisturbed");
+
+            // Re-activating never duplicates: TryOpenItem reuses the
+            // already-open target tab.
+            workspace.ActiveGroup.ActiveTab = reader;
+            reader.Reading!.Activate(kind);
+            Assert.Equal(2, workspace.ActiveGroup.Tabs.Count);
+            Assert.Equal("known.md", workspace.ActiveGroup.ActiveTab!.Path);
+        });
+    }
+
+    /// <summary>
+    /// The Editor-menu preference restores the mac-style in-place
+    /// navigation end-to-end: same tab, reading mode kept, surface
+    /// re-projected onto the target note.
+    /// </summary>
+    [Fact]
+    public void ReadingActivationHonorsTheCurrentTabPreference()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-curtab");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "known.md"), "# Known target\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "Go to [[known]] now.\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var workspace = new WorkspaceViewModel(
+                session,
+                fixture.Root,
+                () => [],
+                _ => { },
+                startInteractionBackgroundWork: false);
+            workspace.EditorPreferences.OpenReadingLinksInNewTab = false;
+            workspace.OpenPath("note0.md");
+            WorkspaceTabViewModel reader = workspace.ActiveGroup.ActiveTab!;
+            reader.ToggleViewMode();
+
+            ReadingInlineRunKind kind = CollectHyperlinks(reader.Reading!.Document!)
+                .Select(link => link.Tag)
+                .OfType<ReadingInlineRunKind>()
+                .First();
+            reader.Reading!.Activate(kind);
+
+            WorkspaceTabViewModel active = workspace.ActiveGroup.ActiveTab!;
+            Assert.Same(reader, active);
+            Assert.Single(workspace.ActiveGroup.Tabs);
+            Assert.Equal("known.md", active.Path);
+            Assert.True(active.IsReadingMode);
+            Assert.Contains(
+                "Known target",
+                new TextRange(
+                    active.Reading!.Document!.ContentStart,
+                    active.Reading.Document.ContentEnd).Text);
         });
     }
 

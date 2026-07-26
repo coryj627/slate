@@ -65,6 +65,7 @@ internal enum HostDiagnosticEvent
     VaultListenerUnregisterFailed,
     WindowPositionFailed,
     WindowStatePersistFailed,
+    AppPreferencesPersistFailed,
     WorkspacePersistFailed,
 }
 
