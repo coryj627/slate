@@ -79,6 +79,25 @@ Two minutes, and it tests the screen reader users actually run.
 
 The 16-step list in `NvdaProbe.cs` doubles as the fuller manual checklist if the four `K` presses come back ambiguous.
 
+## What the manual NVDA passes established (2026-07-25/26, NVDA 2026.1.1, Windows 11 26200)
+
+Two passes over the `flow` variant produced apparently contradictory transcripts. They reconcile into one finding, and it is the most consequential thing this spike produced.
+
+**Pass 1 — reading the document.** NVDA announced the note as a `document` and read it in authored order, announcing every link: `A paragraph with a link resolved note link, an link absent note link, a link #tag , a citation link (Smith, 2020) …`. So **links ARE reachable in a container whose UIA control tree contains zero `Hyperlink` control types** — NVDA finds them through the text pattern, which is what the UIA-only reading could not settle. It also confirmed, independently of UIA: headings read as plain text with no level, list items read as plain text with no list or nesting, task checkboxes announce correctly and in place, the embed card announces — and the code fence's text is **never spoken at all**, only its Copy button.
+
+**Pass 2 — navigating with the keyboard.** Arrow keys re-announced the same first line indefinitely, and Tab moved the focus ring onto links while NVDA said **nothing**.
+
+**They reconcile:** the FlowDocument exposes links as **text-range attributes**, not as **focusable UIA elements**.
+
+- Reading the text stream (say-all, review cursor) meets them, because they are ranges — pass 1.
+- Moving *focus* to one produces silence, because there is no element in the control tree to announce — pass 2, and exactly the `0 Hyperlink control types` the probe measured.
+
+Compounding it, `FlowDocumentScrollViewer` has **no keyboard caret**: WPF gives it mouse-driven selection only (`IsSelectionEnabled`), so once focus is inside the document there is nothing for arrow keys to move. That is the whole of pass 2's stuck-on-one-line behaviour.
+
+**Consequence for W3-1: a keyboard-only user gets silent focus stops on every link.** That is a shipping-blocker, not a polish item, and it is invisible to both the UIA probe and a say-all pass — it took a keyboard pass to find.
+
+*Method note:* pass 1 was driven with `NVDA+k` (report link destination) rather than plain `k` (browse-mode next link), so **browse-mode quick-nav is still unmeasured**. `NVDA+k` also reported "Link has no apparent destination", which was the spike's own missing `NavigateUri`, since fixed. Neither message was evidence about the container.
+
 ## Should NVDA capture be automated for the wave?
 
 **Not now.** `w_c_matrix.md` requires a *named tester* recording build, OS, AT version, result and evidence link; a speech-capture harness produces a different artifact class than that gate accepts, so it would close **zero** matrix cells while the manual passes still had to happen. The arithmetic is also against it: ~14 surfaces × 3 ATs = 42 pending cells, of which an NVDA harness addresses at most 14 — Narrator and JAWS are untouched.
