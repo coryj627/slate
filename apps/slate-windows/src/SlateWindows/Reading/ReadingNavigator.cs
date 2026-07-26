@@ -102,10 +102,22 @@ internal sealed class ReadingNavigator
         // Alt-modified keys can arrive as Key.System carrying the real
         // key in SystemKey.
         Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        bool chordShaped = (Keyboard.Modifiers
+            & (ModifierKeys.Control | ModifierKeys.Alt))
+            == (ModifierKeys.Control | ModifierKeys.Alt);
+        if (chordShaped)
+        {
+            // Diagnostic tap (SLATE_UIA_DIAGNOSTICS=1): the 2026-07-27
+            // passes could not distinguish "the chord never reached the
+            // surface" from "it dispatched and died silently". One
+            // keypress against this log answers it.
+            HostLog.WriteUiAutomationDiagnostic(HostDiagnosticEvent.ReadingChordSeen);
+        }
         if (!_chords.TryGetValue((key, Keyboard.Modifiers), out Action? action))
         {
             return;
         }
+        HostLog.WriteUiAutomationDiagnostic(HostDiagnosticEvent.ReadingChordDispatched);
         action();
         e.Handled = true;
         // Releasing Alt last after a chord otherwise activates the menu

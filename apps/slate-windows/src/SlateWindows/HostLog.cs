@@ -21,6 +21,8 @@ internal enum HostDiagnosticEvent
     DpiAwarenessFailed,
     DpiCensusFailed,
     EditorArtifactCacheRefreshFailed,
+    ReadingChordSeen,
+    ReadingChordDispatched,
     ReadingRefreshTerminalFailure,
     EditorCitationCacheRefreshFailed,
     EditorEmbedPreviewDeferredForArtifacts,

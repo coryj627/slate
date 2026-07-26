@@ -400,6 +400,69 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// The StyleId decorator, exercised through NVDA's exact flow:
+    /// caret on a line → GetSelection → GetAttributeValue(StyleId).
+    /// This is the pin the decorator's design depends on — it reads a
+    /// WPF-internal field by reflection, and the deal is that a WPF
+    /// change breaks THIS TEST loudly instead of silently muting heading
+    /// levels for screen readers.
+    /// </summary>
+    [Fact]
+    public void HeadingLevelsAnswerThroughTheTextPatternStyleId()
+    {
+        RunSta(() =>
+        {
+            ReadingDocumentModel model = BuildFixture();
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(model.Document);
+
+            var provider = peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            var decorated = Assert.IsType<HeadingStyleTextProvider>(provider);
+
+            IReadOnlyList<ReadingLandmark> landmarks = surface.LandmarksForTests;
+            ReadingLandmark h1 = landmarks.First(
+                l => l.Kind == ReadingLandmarkKind.Heading && l.HeadingLevel == 1);
+            ReadingLandmark h2 = landmarks.First(
+                l => l.Kind == ReadingLandmarkKind.Heading && l.HeadingLevel == 2);
+
+            // NVDA's flow: the caret's collapsed selection range answers
+            // for the line the reader is on.
+            surface.CaretPosition = h1.Position;
+            object? style = decorated.GetSelection()[0].GetAttributeValue(
+                HeadingStyleTextProvider.StyleIdAttribute);
+            Assert.Equal(HeadingStyleTextProvider.StyleIdHeading1, style);
+
+            surface.CaretPosition = h2.Position;
+            style = decorated.GetSelection()[0].GetAttributeValue(
+                HeadingStyleTextProvider.StyleIdAttribute);
+            Assert.Equal(HeadingStyleTextProvider.StyleIdHeading1 + 1, style);
+
+            // A body line is NOT a heading — the decorator must defer to
+            // the base provider rather than invent a style.
+            ReadingLandmark link = landmarks.First(l => l.Kind == ReadingLandmarkKind.Link);
+            surface.CaretPosition = link.Position;
+            style = decorated.GetSelection()[0].GetAttributeValue(
+                HeadingStyleTextProvider.StyleIdAttribute);
+            Assert.NotEqual(HeadingStyleTextProvider.StyleIdHeading1, style);
+            Assert.NotEqual(HeadingStyleTextProvider.StyleIdHeading1 + 1, style);
+
+            // Wrapped-vs-wrapped endpoint comparison must not throw: the
+            // base casts its argument to the internal adaptor type, so
+            // the decorator unwraps before forwarding.
+            var whole = decorated.DocumentRange;
+            var selection = decorated.GetSelection()[0];
+            _ = selection.CompareEndpoints(
+                System.Windows.Automation.Text.TextPatternRangeEndpoint.Start,
+                whole,
+                System.Windows.Automation.Text.TextPatternRangeEndpoint.Start);
+        });
+    }
+
     private static IEnumerable<Hyperlink> CollectHyperlinks(FlowDocument document)
     {
         for (TextPointer pointer = document.ContentStart;

@@ -192,6 +192,23 @@ internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
     {
     }
 
+    /// <summary>
+    /// The Text pattern is served through the StyleId decorator so NVDA
+    /// hears heading levels during ordinary line reading — WPF's own
+    /// provider never emits the one attribute NVDA's linear reading
+    /// keys on. Every other pattern is the base's.
+    /// </summary>
+    public override object GetPattern(PatternInterface patternInterface)
+    {
+        object pattern = base.GetPattern(patternInterface);
+        if (patternInterface == PatternInterface.Text
+            && pattern is System.Windows.Automation.Provider.ITextProvider text)
+        {
+            return new HeadingStyleTextProvider(text);
+        }
+        return pattern;
+    }
+
     protected override List<AutomationPeer> GetChildrenCore()
     {
         List<AutomationPeer> children = base.GetChildrenCore() ?? new List<AutomationPeer>();
