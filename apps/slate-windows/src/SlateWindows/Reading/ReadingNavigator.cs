@@ -66,6 +66,16 @@ internal sealed class ReadingNavigator
         AddChord(Key.K, shift: true, () => Move(ReadingLandmarkKind.Link, forward: false));
         AddChord(Key.L, shift: false, () => Move(ReadingLandmarkKind.List, forward: true));
         AddChord(Key.L, shift: true, () => Move(ReadingLandmarkKind.List, forward: false));
+        // Alias for list navigation. Field evidence (2026-07-27, per-key
+        // diagnostic log): Ctrl+Alt+L keydowns never reached the app —
+        // zero Seen lines while H/T/C/E all arrived — though NVDA's key
+        // echo proved the host received them. Something machine-local
+        // grabs the chord globally (RegisterHotKey consumer, NVDA add-on
+        // gesture, or remote-desktop host). Per the G18 collision
+        // precedent the app adjusts: L stays for unafflicted machines,
+        // U is the documented alias.
+        AddChord(Key.U, shift: false, () => Move(ReadingLandmarkKind.List, forward: true));
+        AddChord(Key.U, shift: true, () => Move(ReadingLandmarkKind.List, forward: false));
         AddChord(Key.T, shift: false, () => Move(ReadingLandmarkKind.Table, forward: true));
         AddChord(Key.T, shift: true, () => Move(ReadingLandmarkKind.Table, forward: false));
         AddChord(Key.E, shift: false, () => Move(ReadingLandmarkKind.Embed, forward: true));

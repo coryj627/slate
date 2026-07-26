@@ -383,6 +383,9 @@ public sealed class ReadingViewTests
                 System.Windows.Input.Key.H, System.Windows.Input.Key.K,
                 System.Windows.Input.Key.L, System.Windows.Input.Key.T,
                 System.Windows.Input.Key.E, System.Windows.Input.Key.C,
+                // U aliases L: the field log measured Ctrl+Alt+L grabbed
+                // globally on the reference machine before the app saw it.
+                System.Windows.Input.Key.U,
             };
             foreach (System.Windows.Input.Key key in kindKeys)
             {
