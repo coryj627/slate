@@ -549,6 +549,30 @@ public sealed class ReadingViewTests
             flags);
     }
 
+    /// <summary>
+    /// The 2026-07-26 crash regression: keyboard focus landing on a
+    /// Hyperlink INSIDE the reading document killed the app —
+    /// MainWindow's ancestor-DataContext walk called
+    /// VisualTreeHelper.GetParent on a ContentElement, which throws
+    /// InvalidOperationException. The walk must traverse content
+    /// elements logically until the tree re-enters a Visual.
+    /// </summary>
+    [Fact]
+    public void AncestorDataContextWalkSurvivesFocusOnAHyperlink()
+    {
+        RunSta(() =>
+        {
+            ReadingDocumentModel model = BuildFixture();
+            var sentinel = new object();
+            var surface = new ReadingSurface { DataContext = sentinel };
+            surface.ApplyBuiltDocument(model.Document);
+
+            Hyperlink link = CollectHyperlinks(surface.Document).First();
+            object? found = MainWindow.FindAncestorDataContext<object>(link);
+            Assert.Same(sentinel, found);
+        });
+    }
+
     private static IEnumerable<Hyperlink> CollectHyperlinks(FlowDocument document)
     {
         for (TextPointer pointer = document.ContentStart;

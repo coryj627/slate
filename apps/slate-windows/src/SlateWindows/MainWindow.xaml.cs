@@ -781,19 +781,37 @@ public partial class MainWindow : Window
         tabs.Focus();
     }
 
-    private static T? FindAncestorDataContext<T>(DependencyObject current)
+    internal static T? FindAncestorDataContext<T>(DependencyObject current)
         where T : class
     {
         while (current is not null)
         {
-            if (current is FrameworkElement { DataContext: T match })
+            if (current is FrameworkElement { DataContext: T elementMatch })
             {
-                return match;
+                return elementMatch;
+            }
+            if (current is FrameworkContentElement { DataContext: T contentMatch })
+            {
+                return contentMatch;
             }
 
-            current = current is FrameworkElement element
-                ? element.Parent ?? element.TemplatedParent ?? VisualTreeHelper.GetParent(current)
-                : VisualTreeHelper.GetParent(current);
+            // Keyboard focus can land on a CONTENT element — a Hyperlink
+            // inside the reading view's document was the first (found as
+            // an unhandled-exception crash on link focus, 2026-07-26:
+            // VisualTreeHelper.GetParent throws for non-Visuals). Walk
+            // content elements logically until the tree re-enters a
+            // Visual, then continue visually.
+            current = current switch
+            {
+                FrameworkElement element =>
+                    element.Parent ?? element.TemplatedParent
+                        ?? VisualTreeHelper.GetParent(current),
+                FrameworkContentElement content =>
+                    content.Parent ?? LogicalTreeHelper.GetParent(content),
+                System.Windows.Media.Visual or System.Windows.Media.Media3D.Visual3D =>
+                    VisualTreeHelper.GetParent(current),
+                _ => LogicalTreeHelper.GetParent(current),
+            };
         }
 
         return null;
