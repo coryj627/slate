@@ -110,7 +110,40 @@ Two independent readings were taken to guard against measuring an artefact: one 
 
 The two containers consume the **same** core block model (`ReadingBlocksSource` + `ReadingInlineSegmentsSource`) through the **same** inline builder, so the container is the only variable. Reading-order landmark checks assert both presence and authored order.
 
-## Provisional recommendation
+## Viability test: FlowDocument + custom peers (variant `flowpeers`)
+
+The silent-focus-stop finding put the container choice back in question, because FlowDocument's deficit was then three semantic layers rather than two. So the spike gained a third variant that attempts to close all three, and measured it.
+
+All four peer types WPF needs are **public with public constructors** — `HyperlinkAutomationPeer(Hyperlink)`, `TextElementAutomationPeer(TextElement)`, `FlowDocumentScrollViewerAutomationPeer`, `DocumentAutomationPeer` — so a `FlowDocumentScrollViewer` subclass can return semantic peers from `GetChildrenCore()`. **Additively**, on purpose: the base children carry the text pattern that is this variant's whole advantage, and replacing them would trade it away for the thing being tested.
+
+| measurement | `flow` | **`flowpeers`** | `items` |
+|---|---|---|---|
+| Text provider | yes | **yes** | no |
+| reading-order chars | 363 | **363** | 0 |
+| landmarks in order | 12/14 | **12/14** | 0/14 |
+| `HeadingLevel` survives | no | **yes** | yes |
+| `Hyperlink` peers | 0 | **5** | 5 |
+| links carrying `AxText` | 0 | **2** | 2 |
+| `List` peers | 0 | **2** | 1 |
+| `ListItem` peers | 0 | **7** | 0 |
+
+**`flowpeers` strictly dominates.** It keeps the Text pattern — the one property that cannot be retrofitted, since giving an `ItemsControl` a document text range means writing an `ITextProvider` over a stack of `TextBlock`s from scratch — and gains everything the `ItemsControl` variant had.
+
+## Decision
+
+**`FlowDocumentScrollViewer` + custom `AutomationPeer`s.** No longer provisional: the Text-pattern advantage is real and unretrofittable, and the three deficits that made it a close call are demonstrably closable.
+
+W3-1 scope, now evidenced rather than estimated:
+
+1. **Semantic peers** for heading level, list/list-item, and link elements — the `SemanticPeers.cs` shape in the spike is a working starting point, not a design.
+2. **Link elements are not optional.** Without them a keyboard user gets a silent focus stop on every link. This is invisible to UIA-only checks and to say-all; it took a Tab pass to find.
+3. **`NavigateUri` on every activatable run**, or NVDA announces "Link has no apparent destination".
+4. **Keyboard caret / focus handling.** `FlowDocumentScrollViewer` has no keyboard caret — WPF gives it mouse-driven selection only — so arrow keys have nothing to move once focus is inside. Needs solving before the surface is usable by keyboard.
+5. **`BlockUIContainer` text stays outside the text range.** The code fence's interior is never spoken; only its Copy button is reachable. W3-4 (#731) inherits this directly.
+
+Items 2, 4 and 5 are scope neither §10.6 nor `w3_spec.md` costed, and belong on #728 before that PR is scoped.
+
+## Superseded: earlier provisional recommendation
 
 `FlowDocumentScrollViewer`, plus custom peers for heading level and list semantics — **conditional on the NVDA link result above**.
 
