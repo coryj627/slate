@@ -23,7 +23,7 @@ Program: [00_program.md](../00_program.md) (decisions 6, 11; DoD §W-C/§W-D). T
 ## W7-3 · Spoken hotkeys + AT navigation model — PR 3
 
 1. Spoken-hotkey parity (`HotkeySpoken` semantics): command surfaces expose speakable chord strings from the chord table (W5-1) via HelpText/AcceleratorKey properties consistently.
-2. AT navigation model: the mac custom-rotor/navigation affordances re-expressed in UIA idiom (headings/links/landmarks native per W3-1; app-specific navigation — e.g. canvas rotors, panel cycling — as documented keyboard commands + peers). The mapping table (mac rotor → Windows mechanism) is the deliverable and feeds the help docs.
+2. AT navigation model: the mac custom-rotor/navigation affordances re-expressed in Windows idiom *(corrected 2026-07-26, gap_analysis G21 — AT-native structural navigation is not obtainable via UIA)*: mac rotor headings/links/lists map to the **W3-1 chorded structural-navigation commands** (+ the W-E7 AT-idiom layers where installed); app-specific navigation — e.g. canvas rotors, panel cycling — as documented keyboard commands + peers. The mapping table (mac rotor → Windows mechanism) is the deliverable and feeds the help docs.
 
 - [ ] Chord speech audit green; navigation mapping table shipped + verified
 
