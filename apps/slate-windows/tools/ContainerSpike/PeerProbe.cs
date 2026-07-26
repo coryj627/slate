@@ -58,7 +58,7 @@ internal static class PeerProbe
         markdown.AppendLine();
 
         var summaries = new List<Summary>();
-        foreach (string variant in new[] { "flow", "items" })
+        foreach (string variant in new[] { "flow", "flowpeers", "items" })
         {
             // Measured BOTH ways on purpose. Detached Measure/Arrange is
             // enough to lay a FlowDocument out, but some WPF peers are
@@ -94,9 +94,12 @@ internal static class PeerProbe
             uniffi.slate_uniffi.ReadingBlockInlines)> model, bool hosted)
     {
         string label = hosted ? $"{variant}/windowed" : $"{variant}/detached";
-        FrameworkElement surface = variant == "flow"
-            ? FlowDocumentBuilder.Build(model)
-            : ItemsControlBuilder.Build(model);
+        FrameworkElement surface = variant switch
+        {
+            "flow" => FlowDocumentBuilder.Build(model),
+            "flowpeers" => FlowDocumentBuilder.Build(model, withSemanticPeers: true),
+            _ => ItemsControlBuilder.Build(model),
+        };
 
         Window? window = null;
         try

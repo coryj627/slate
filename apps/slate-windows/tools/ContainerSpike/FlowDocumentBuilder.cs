@@ -23,7 +23,8 @@ namespace ContainerSpike;
 internal static class FlowDocumentBuilder
 {
     public static FrameworkElement Build(
-        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model)
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        bool withSemanticPeers = false)
     {
         var document = new FlowDocument
         {
@@ -61,12 +62,12 @@ internal static class FlowDocumentBuilder
             document.Blocks.Add(NonListBlock(block, inlines));
         }
 
-        var viewer = new FlowDocumentScrollViewer
-        {
-            Document = document,
-            IsSelectionEnabled = true,
-            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-        };
+        FlowDocumentScrollViewer viewer = withSemanticPeers
+            ? new PeeredFlowDocumentViewer()
+            : new FlowDocumentScrollViewer();
+        viewer.Document = document;
+        viewer.IsSelectionEnabled = true;
+        viewer.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
         AutomationProperties.SetAutomationId(viewer, "ReadingSurface");
         AutomationProperties.SetName(viewer, "Reading view");
         return viewer;
