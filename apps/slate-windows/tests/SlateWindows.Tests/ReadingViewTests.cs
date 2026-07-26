@@ -351,6 +351,55 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// The full chord table, pinned: 12 kind chords (6 kinds × 2
+    /// directions) + 12 level chords (6 levels × 2). Dispatch moved to
+    /// PreviewKeyDown after Ctrl+Alt+L was measured being consumed
+    /// before KeyDown bindings ran (2026-07-27) — this test keeps the
+    /// table itself from silently losing a row in that refactor or any
+    /// future one.
+    /// </summary>
+    [Fact]
+    public void EveryNavigationChordIsRegistered()
+    {
+        RunSta(() =>
+        {
+            var surface = new ReadingSurface();
+            var navigator = new ReadingNavigator(surface, _ => { });
+
+            const System.Windows.Input.ModifierKeys forward =
+                System.Windows.Input.ModifierKeys.Control
+                | System.Windows.Input.ModifierKeys.Alt;
+            const System.Windows.Input.ModifierKeys backward =
+                forward | System.Windows.Input.ModifierKeys.Shift;
+
+            var kindKeys = new[]
+            {
+                System.Windows.Input.Key.H, System.Windows.Input.Key.K,
+                System.Windows.Input.Key.L, System.Windows.Input.Key.T,
+                System.Windows.Input.Key.E, System.Windows.Input.Key.C,
+            };
+            foreach (System.Windows.Input.Key key in kindKeys)
+            {
+                Assert.True(navigator.HandlesChord(key, forward), $"{key} forward");
+                Assert.True(navigator.HandlesChord(key, backward), $"{key} backward");
+            }
+            for (int level = 0; level < 6; level++)
+            {
+                System.Windows.Input.Key key = System.Windows.Input.Key.D1 + level;
+                Assert.True(navigator.HandlesChord(key, forward), $"level {level + 1} forward");
+                Assert.True(navigator.HandlesChord(key, backward), $"level {level + 1} backward");
+            }
+
+            // And nothing UNMODIFIED is ever claimed — the letters belong
+            // to the AT layer (G21).
+            Assert.False(navigator.HandlesChord(
+                System.Windows.Input.Key.H, System.Windows.Input.ModifierKeys.None));
+            Assert.False(navigator.HandlesChord(
+                System.Windows.Input.Key.K, System.Windows.Input.ModifierKeys.None));
+        });
+    }
+
     private static IEnumerable<Hyperlink> CollectHyperlinks(FlowDocument document)
     {
         for (TextPointer pointer = document.ContentStart;

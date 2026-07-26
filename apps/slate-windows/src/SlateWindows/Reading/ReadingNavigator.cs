@@ -46,6 +46,18 @@ internal sealed class ReadingNavigator
     public void SetLandmarks(IReadOnlyList<ReadingLandmark> landmarks) =>
         _landmarks = landmarks;
 
+    private readonly Dictionary<(Key Key, ModifierKeys Modifiers), Action> _chords = new();
+    private bool _suppressAltMenu;
+
+    /// <summary>
+    /// Dispatch happens in the TUNNELING phase (`PreviewKeyDown`), not
+    /// through `InputBindings`. Measured 2026-07-27: `Ctrl+Alt+L` never
+    /// reached a surface `KeyBinding` — NVDA's key echo proved the chord
+    /// arrived at the app, and only the unshifted variant vanished, the
+    /// signature of a class-level RichTextBox editing binding consuming
+    /// it during the bubbling phase. Preview runs first by construction,
+    /// for `L` and for whatever else is lurking in that class table.
+    /// </summary>
     private void Bind()
     {
         AddChord(Key.H, shift: false, () => Move(ReadingLandmarkKind.Heading, forward: true));
@@ -69,20 +81,57 @@ internal sealed class ReadingNavigator
             AddChord(Key.D1 + (captured - 1), shift: true,
                 () => MoveToHeadingLevel(captured, forward: false));
         }
+
+        _surface.PreviewKeyDown += Surface_PreviewKeyDown;
+        _surface.PreviewKeyUp += Surface_PreviewKeyUp;
     }
 
     private void AddChord(Key key, bool shift, Action action)
     {
         ModifierKeys modifiers = ModifierKeys.Control | ModifierKeys.Alt
             | (shift ? ModifierKeys.Shift : ModifierKeys.None);
-        var command = new RoutedCommand();
-        _surface.CommandBindings.Add(
-            new CommandBinding(command, (_, args) =>
+        _chords[(key, modifiers)] = action;
+    }
+
+    /// <summary>The chord table, pinned by tests.</summary>
+    internal bool HandlesChord(Key key, ModifierKeys modifiers) =>
+        _chords.ContainsKey((key, modifiers));
+
+    private void Surface_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        // Alt-modified keys can arrive as Key.System carrying the real
+        // key in SystemKey.
+        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (!_chords.TryGetValue((key, Keyboard.Modifiers), out Action? action))
+        {
+            return;
+        }
+        action();
+        e.Handled = true;
+        // Releasing Alt last after a chord otherwise activates the menu
+        // bar — the measured "File collapsed Alt+F" focus theft that
+        // yanked a reader out of the document mid-navigation.
+        _suppressAltMenu = true;
+    }
+
+    private void Surface_PreviewKeyUp(object sender, KeyEventArgs e)
+    {
+        Key key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (key is Key.LeftAlt or Key.RightAlt)
+        {
+            if (_suppressAltMenu)
             {
-                action();
-                args.Handled = true;
-            }));
-        _surface.InputBindings.Add(new KeyBinding(command, key, modifiers));
+                _suppressAltMenu = false;
+                e.Handled = true;
+            }
+        }
+        else if (key is not (Key.LeftCtrl or Key.RightCtrl
+            or Key.LeftShift or Key.RightShift))
+        {
+            // Any other key between chord and Alt release means the user
+            // moved on; menu activation is theirs again.
+            _suppressAltMenu = false;
+        }
     }
 
     internal void Move(ReadingLandmarkKind kind, bool forward) =>
