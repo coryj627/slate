@@ -2860,6 +2860,62 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// W3-4 adversarial round 5 [high]: many individually
+    /// sub-threshold dense fences must not aggregate past the
+    /// projection-wide budget — later fences degrade to plain runs,
+    /// and total Run fan-out stays bounded.
+    /// </summary>
+    [Fact]
+    public void ManySubThresholdFencesStayWithinTheProjectionBudget()
+    {
+        RunSta(() =>
+        {
+            var text = new System.Text.StringBuilder();
+            for (int fence = 0; fence < 25; fence++)
+            {
+                text.Append("```json\n[");
+                for (int i = 0; i < 400; i++)
+                {
+                    text.Append("0,");
+                }
+                text.Append("0]\n```\n\n");
+            }
+
+            using var fixture = FixtureVault.Create(1, "reading-code-aggregate");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph[] fences = AllBlocks(surface.Document.Blocks)
+                .OfType<Paragraph>()
+                .Where(ReadingSemantics.IsCodeBlock)
+                .ToArray();
+            Assert.Equal(25, fences.Length);
+            // Early fences are highlighted; once the shared pool is
+            // exhausted, later fences are single plain runs.
+            Assert.True(fences[0].Inlines.Count > 1, "first fence lost its highlighting");
+            Assert.Single(fences[^1].Inlines);
+            int totalInlines = fences.Sum(paragraph => paragraph.Inlines.Count);
+            Assert.True(
+                totalInlines
+                    <= 2 * SlateWindows.Reading.ReadingDocumentBuilder
+                        .ProjectionHighlightTokenBudget
+                        + 2 * fences.Length,
+                $"aggregate inline count {totalInlines} exceeds the budget bound");
+        });
+    }
+
     private static Paragraph FindCodeParagraph(FlowDocument document) =>
         AllBlocks(document.Blocks)
             .OfType<Paragraph>()

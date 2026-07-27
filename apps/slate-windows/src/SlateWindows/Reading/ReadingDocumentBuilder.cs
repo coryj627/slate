@@ -25,6 +25,17 @@ internal sealed class ReadingListBuildContext
     /// <summary>Stack[d] holds the open list accepting items at depth
     /// d and the last item added to it (the parent of depth d+1).</summary>
     internal List<(WpfList List, ListItem? LastItem)> Stack { get; } = new();
+
+    /// <summary>
+    /// The PROJECTION-WIDE highlight budget (W3-4 adversarial round
+    /// 5): the per-fence token cap alone lets 250 sub-threshold dense
+    /// fences allocate a million Runs in one dispatcher chunk. Each
+    /// highlighted fence draws down this shared pool — carried across
+    /// chunks exactly like list state — and fences after exhaustion
+    /// degrade to plain paragraphs.
+    /// </summary>
+    internal int RemainingHighlightTokens { get; set; } =
+        ReadingDocumentBuilder.ProjectionHighlightTokenBudget;
 }
 
 /// <summary>The built reading document plus its navigation index.</summary>
@@ -103,7 +114,7 @@ internal static class ReadingDocumentBuilder
             }
 
             stack.Clear();
-            document.Blocks.Add(NonListBlock(block, inlines, codeBlocks));
+            document.Blocks.Add(NonListBlock(block, inlines, codeBlocks, context));
         }
 
         return new ReadingDocumentModel(document, CollectLandmarks(document));
@@ -176,7 +187,8 @@ internal static class ReadingDocumentBuilder
     private static Block NonListBlock(
         ReadingBlock block,
         ReadingBlockInlines inlines,
-        IReadOnlyList<CodeBlock> codeBlocks)
+        IReadOnlyList<CodeBlock> codeBlocks,
+        ReadingListBuildContext context)
     {
         switch (block.Kind)
         {
@@ -210,7 +222,7 @@ internal static class ReadingDocumentBuilder
                 }
 
             case ReadingBlockKind.CodeFence fence:
-                return CodeFenceBlock(fence, block, codeBlocks);
+                return CodeFenceBlock(fence, block, codeBlocks, context);
 
             case ReadingBlockKind.Table:
                 return TableBlock(block);
@@ -255,7 +267,8 @@ internal static class ReadingDocumentBuilder
     private static Block CodeFenceBlock(
         ReadingBlockKind.CodeFence fence,
         ReadingBlock block,
-        IReadOnlyList<CodeBlock> codeBlocks)
+        IReadOnlyList<CodeBlock> codeBlocks,
+        ReadingListBuildContext context)
     {
         CodeBlock? matched = codeBlocks.FirstOrDefault(candidate =>
             candidate.ByteOffset >= block.ByteStart
@@ -290,10 +303,22 @@ internal static class ReadingDocumentBuilder
 
         // The interior renders VERBATIM — TrimEnd ate authored trailing
         // blank lines, so display disagreed with the preamble's count
-        // and with what Copy delivered.
-        Paragraph paragraph = coherent
-            ? TokenParagraph(matched!, fence.Interior)
-            : MonospaceParagraph(fence.Interior);
+        // and with what Copy delivered. Highlighting draws down the
+        // projection-wide budget: fences after exhaustion render plain
+        // (round 5 — the per-fence cap alone lets many sub-threshold
+        // dense fences aggregate into dispatcher-scale Run fan-out).
+        bool withinBudget = coherent
+            && matched!.Tokens.Length <= context.RemainingHighlightTokens;
+        Paragraph paragraph;
+        if (withinBudget)
+        {
+            context.RemainingHighlightTokens -= matched!.Tokens.Length;
+            paragraph = TokenParagraph(matched, fence.Interior);
+        }
+        else
+        {
+            paragraph = MonospaceParagraph(fence.Interior);
+        }
         ReadingSemantics.MarkCodeBlock(paragraph);
         AutomationProperties.SetName(paragraph, preamble);
 
@@ -338,6 +363,12 @@ internal static class ReadingDocumentBuilder
     /// both hosts — recorded option, not this PR.)
     /// </summary>
     internal const int MaximumHighlightTokens = 4_000;
+
+    /// <summary>The projection-wide pool the per-fence cap draws from
+    /// (see <see cref="ReadingListBuildContext.RemainingHighlightTokens"/>):
+    /// three maximal fences, or dozens of ordinary ones — bounded Run
+    /// fan-out no matter how many fences a note holds.</summary>
+    internal const int ProjectionHighlightTokenBudget = 12_000;
 
     private static Paragraph TokenParagraph(CodeBlock matched, string interior)
     {
