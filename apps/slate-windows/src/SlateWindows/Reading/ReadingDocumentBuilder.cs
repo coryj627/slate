@@ -430,8 +430,20 @@ internal static class ReadingDocumentBuilder
         if (visual is null)
         {
             // Coverage gap (documented WPFMath subset, matrix-rowed):
-            // source stays readable in range, speech still lands.
+            // source stays readable in range — and the CORE artifacts
+            // stay retrievable (round 4: a host-only rendering failure
+            // must not hide valid braille or MathML). A zero-size
+            // focusable element at the fence end carries Name,
+            // ItemStatus, and the MathML property exactly like the
+            // rendered path; WPF text ranges blank embedded objects, so
+            // it costs the in-range source nothing.
             Paragraph gapParagraph = MonospaceParagraph(fallbackSource);
+            gapParagraph.Inlines.Add(new InlineUIContainer(
+                new ReadingMathElement(
+                    speech,
+                    matched.Mathml,
+                    matched.Source,
+                    DecodeBraille(matched.Braille))));
             ReadingSemantics.MarkMathBlock(gapParagraph, speech);
             return gapParagraph;
         }

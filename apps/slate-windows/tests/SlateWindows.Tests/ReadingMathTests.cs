@@ -156,7 +156,9 @@ public sealed class ReadingMathTests
     /// <summary>
     /// The documented WPFMath coverage boundary degrades to
     /// source-in-range (never silently absent) while the block stays a
-    /// nav stop with MathCAT speech as its landing text.
+    /// nav stop — and the CORE artifacts stay retrievable (round 4: a
+    /// host-only rendering failure must not hide valid braille or
+    /// MathML, or lie "Braille not available." while core produced it).
     /// </summary>
     [Fact]
     public void UnrenderableMathDegradesToSourceInRange()
@@ -171,26 +173,43 @@ public sealed class ReadingMathTests
             using var cancel = new CancelToken();
             session.ScanInitial(cancel);
 
+            var announced = new List<A11yEvent>();
             using var tab = new WorkspaceTabViewModel(
                 session,
                 new WorkspaceTabState(
                     Guid.NewGuid(),
                     new WorkspaceItemState(
                         WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
                 startInteractionBackgroundWork: false);
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
 
-            Assert.Empty(FindMathElements(surface.Document));
             Assert.Contains(
                 "bmatrix",
                 new System.Windows.Documents.TextRange(
                     surface.Document.ContentStart,
                     surface.Document.ContentEnd).Text,
                 StringComparison.Ordinal);
-            Assert.Single(
+            ReadingLandmark landmark = Assert.Single(
                 surface.LandmarksForTests,
                 candidate => candidate.Kind == ReadingLandmarkKind.Math);
+
+            ReadingMathElement element =
+                Assert.Single(FindMathElements(surface.Document));
+            Assert.True(element.Focusable);
+            Assert.StartsWith("<math", element.MathMl.TrimStart());
+            Assert.NotEmpty(element.Braille);
+            Assert.Equal(
+                element.Braille,
+                System.Windows.Automation.AutomationProperties
+                    .GetItemStatus(element));
+
+            surface.CaretPosition = landmark.Position;
+            Assert.True(surface.TryActivateAtCaret(brailleRequested: true));
+            Assert.Equal(
+                element.Braille,
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
         });
     }
 
