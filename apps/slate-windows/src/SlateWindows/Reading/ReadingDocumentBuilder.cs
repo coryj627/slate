@@ -329,16 +329,43 @@ internal static class ReadingDocumentBuilder
     /// </summary>
     private static Paragraph TokenParagraph(CodeBlock matched, string interior)
     {
+        // Core degrades oversized (>256 KiB) and unknown-language blocks
+        // to tokens that carry no color: build the plain paragraph with
+        // ZERO offset machinery — a large valid fence must never
+        // allocate maps on the dispatcher for nothing. Every path past
+        // this line is bounded by core's highlighting cap.
+        bool anyColor = false;
+        foreach (SyntaxToken probe in matched.Tokens)
+        {
+            if (TokenBrushKey(probe.Kind) is not null)
+            {
+                anyColor = true;
+                break;
+            }
+        }
+        if (!anyColor)
+        {
+            return MonospaceParagraph(interior);
+        }
+
         string display = interior;
         byte[] utf8 = Encoding.UTF8.GetBytes(display);
         byte[] raw = Encoding.UTF8.GetBytes(matched.Source);
-        int[] carriageReturnsBefore = new int[raw.Length + 1];
-        for (int i = 0; i < raw.Length; i++)
+        // Sparse CRLF remap: byte positions of each CR-in-CRLF in the
+        // raw saved source; an offset shifts left by the count of
+        // positions before it (binary search) — never an int per byte.
+        var carriageReturns = new List<int>();
+        for (int i = 0; i + 1 < raw.Length; i++)
         {
-            carriageReturnsBefore[i + 1] = carriageReturnsBefore[i]
-                + (raw[i] == (byte)'\r'
-                    && i + 1 < raw.Length
-                    && raw[i + 1] == (byte)'\n' ? 1 : 0);
+            if (raw[i] == (byte)'\r' && raw[i + 1] == (byte)'\n')
+            {
+                carriageReturns.Add(i);
+            }
+        }
+        int Normalized(int rawOffset)
+        {
+            int index = carriageReturns.BinarySearch(rawOffset);
+            return rawOffset - (index >= 0 ? index : ~index);
         }
         var paragraph = new Paragraph
         {
@@ -352,10 +379,8 @@ internal static class ReadingDocumentBuilder
         {
             int rawStart = Math.Min((int)token.StartByte, raw.Length);
             int rawEnd = Math.Min((int)token.EndByte, raw.Length);
-            int start = Math.Clamp(
-                rawStart - carriageReturnsBefore[rawStart], cursor, utf8.Length);
-            int end = Math.Clamp(
-                rawEnd - carriageReturnsBefore[rawEnd], start, utf8.Length);
+            int start = Math.Clamp(Normalized(rawStart), cursor, utf8.Length);
+            int end = Math.Clamp(Normalized(rawEnd), start, utf8.Length);
             if (start > cursor)
             {
                 paragraph.Inlines.Add(

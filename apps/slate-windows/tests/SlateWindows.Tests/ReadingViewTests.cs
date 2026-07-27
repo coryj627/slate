@@ -2780,6 +2780,48 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// W3-4 adversarial round 3 [high]: a fence above core's 256 KiB
+    /// highlighting cap arrives as one uncolored "oversized" token —
+    /// the builder short-circuits to the plain paragraph with zero
+    /// offset machinery instead of allocating per-byte maps on the
+    /// dispatcher for nothing.
+    /// </summary>
+    [Fact]
+    public void OversizedFencesShortCircuitToThePlainParagraph()
+    {
+        RunSta(() =>
+        {
+            var big = new System.Text.StringBuilder("```rust\n");
+            while (big.Length < 300_000)
+            {
+                big.Append("fn filler() -> usize { 123456789 }\n");
+            }
+            big.Append("```\n");
+
+            using var fixture = FixtureVault.Create(1, "reading-code-oversized");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), big.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph code = FindCodeParagraph(surface.Document);
+            Assert.Single(code.Inlines);
+            Assert.StartsWith(
+                "Code block, rust,",
+                System.Windows.Automation.AutomationProperties.GetName(code));
+        });
+    }
+
     private static Paragraph FindCodeParagraph(FlowDocument document) =>
         AllBlocks(document.Blocks)
             .OfType<Paragraph>()
