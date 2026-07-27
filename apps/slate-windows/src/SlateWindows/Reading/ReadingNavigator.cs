@@ -107,6 +107,18 @@ internal sealed class ReadingNavigator
     internal bool HandlesChord(Key key, ModifierKeys modifiers) =>
         _chords.ContainsKey((key, modifiers));
 
+    /// <summary>
+    /// The caret-activation gate (Enter/Space), pinned by tests: only
+    /// when the SURFACE ITSELF owns keyboard focus (a focused embedded
+    /// control processes its own keys — preview tunneling would
+    /// otherwise hijack them for the caret's task) and only on the
+    /// physical press (state-mutating keys must not autorepeat;
+    /// navigation chords deliberately still do).
+    /// </summary>
+    internal static bool CaretActivationApplies(
+        bool surfaceIsKeyboardFocused, bool isRepeat) =>
+        surfaceIsKeyboardFocused && !isRepeat;
+
     private void Surface_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         // Alt-modified keys can arrive as Key.System carrying the real
@@ -116,23 +128,30 @@ internal sealed class ReadingNavigator
         // Enter (and Ctrl+Enter, the editor's activate-at-cursor parity
         // chord) activates the run the caret is inside — caret position
         // is not element focus, so the Hyperlink's own Enter handling
-        // never fires for it.
-        if (key == Key.Return
-            && Keyboard.Modifiers is ModifierKeys.None or ModifierKeys.Control
-            && _surface.TryActivateAtCaret())
+        // never fires for it. Space toggles the task checkbox on the
+        // caret's line — the checkbox convention every AT user tries
+        // first (field, 2026-07-26); task-only, never a link. Both are
+        // gated: these keys mutate state, so a HELD key must fire once,
+        // and a focused embedded control (a clicked checkbox) owns its
+        // own keys — preview tunneling reaches this handler first and
+        // would otherwise hijack Space for whatever task holds the
+        // caret instead.
+        if (CaretActivationApplies(_surface.IsKeyboardFocused, e.IsRepeat))
         {
-            e.Handled = true;
-            return;
-        }
-        // Space toggles the task checkbox on the caret's line — the
-        // checkbox convention every AT user tries first (field,
-        // 2026-07-26). Task-only: Space must never activate a link.
-        if (key == Key.Space
-            && Keyboard.Modifiers is ModifierKeys.None
-            && _surface.TryToggleTaskAtCaret())
-        {
-            e.Handled = true;
-            return;
+            if (key == Key.Return
+                && Keyboard.Modifiers is ModifierKeys.None or ModifierKeys.Control
+                && _surface.TryActivateAtCaret())
+            {
+                e.Handled = true;
+                return;
+            }
+            if (key == Key.Space
+                && Keyboard.Modifiers is ModifierKeys.None
+                && _surface.TryToggleTaskAtCaret())
+            {
+                e.Handled = true;
+                return;
+            }
         }
         bool chordShaped = (Keyboard.Modifiers
             & (ModifierKeys.Control | ModifierKeys.Alt))

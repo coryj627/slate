@@ -2279,6 +2279,26 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// Adversarial round 8: Enter/Space mutate state, so the caret
+    /// gate fires only on the physical press and only when the surface
+    /// ITSELF owns focus — a held key must not replay the toggle, and
+    /// a focused embedded checkbox owns its own keys (preview
+    /// tunneling would otherwise hijack Space for the caret's task).
+    /// </summary>
+    [Fact]
+    public void CaretActivationGateRejectsRepeatsAndEmbeddedFocus()
+    {
+        Assert.True(ReadingNavigator.CaretActivationApplies(
+            surfaceIsKeyboardFocused: true, isRepeat: false));
+        Assert.False(ReadingNavigator.CaretActivationApplies(
+            surfaceIsKeyboardFocused: true, isRepeat: true));
+        Assert.False(ReadingNavigator.CaretActivationApplies(
+            surfaceIsKeyboardFocused: false, isRepeat: false));
+        Assert.False(ReadingNavigator.CaretActivationApplies(
+            surfaceIsKeyboardFocused: false, isRepeat: true));
+    }
+
     private static void PumpOneBackgroundPass()
     {
         var frame = new System.Windows.Threading.DispatcherFrame();
