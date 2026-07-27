@@ -307,10 +307,17 @@ internal static class ReadingDocumentBuilder
         // projection-wide budget: fences after exhaustion render plain
         // (round 5 — the per-fence cap alone lets many sub-threshold
         // dense fences aggregate into dispatcher-scale Run fan-out).
-        bool withinBudget = coherent
-            && matched!.Tokens.Length <= context.RemainingHighlightTokens;
+        // Charge order matters: the per-fence cap and colorability run
+        // BEFORE the pool deduction, so a fence that renders plain for
+        // its own reasons never drains the budget other fences need
+        // (round 6 — two over-cap fences silently un-highlighted the
+        // rest of the note).
+        bool highlightable = coherent
+            && matched!.Tokens.Length <= MaximumHighlightTokens
+            && HasColorableToken(matched)
+            && matched.Tokens.Length <= context.RemainingHighlightTokens;
         Paragraph paragraph;
-        if (withinBudget)
+        if (highlightable)
         {
             context.RemainingHighlightTokens -= matched!.Tokens.Length;
             paragraph = TokenParagraph(matched, fence.Interior);
@@ -370,29 +377,29 @@ internal static class ReadingDocumentBuilder
     /// fan-out no matter how many fences a note holds.</summary>
     internal const int ProjectionHighlightTokenBudget = 12_000;
 
-    private static Paragraph TokenParagraph(CodeBlock matched, string interior)
+    /// <summary>Core degrades oversized (>256 KiB) and
+    /// unknown-language blocks to tokens that carry no color — those
+    /// build the plain paragraph with zero offset machinery and must
+    /// never charge the highlight pool.</summary>
+    private static bool HasColorableToken(CodeBlock matched)
     {
-        if (matched.Tokens.Length > MaximumHighlightTokens)
-        {
-            return MonospaceParagraph(interior);
-        }
-
-        // Core degrades oversized (>256 KiB) and unknown-language blocks
-        // to tokens that carry no color: build the plain paragraph with
-        // ZERO offset machinery — a large valid fence must never
-        // allocate maps on the dispatcher for nothing. Every path past
-        // this line is bounded by core's highlighting cap AND the run
-        // budget above.
-        bool anyColor = false;
         foreach (SyntaxToken probe in matched.Tokens)
         {
             if (TokenBrushKey(probe.Kind) is not null)
             {
-                anyColor = true;
-                break;
+                return true;
             }
         }
-        if (!anyColor)
+        return false;
+    }
+
+    private static Paragraph TokenParagraph(CodeBlock matched, string interior)
+    {
+        // Defense in depth: callers gate on the per-fence cap and
+        // colorability before charging the pool, but this stays safe
+        // standalone.
+        if (matched.Tokens.Length > MaximumHighlightTokens
+            || !HasColorableToken(matched))
         {
             return MonospaceParagraph(interior);
         }

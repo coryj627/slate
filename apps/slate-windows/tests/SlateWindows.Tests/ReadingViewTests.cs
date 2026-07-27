@@ -2916,6 +2916,57 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// W3-4 adversarial round 6 [medium]: a fence that renders plain
+    /// for its own reasons (over the per-fence cap) must not drain the
+    /// projection pool — a small ordinary fence after two over-cap
+    /// ones keeps its highlighting.
+    /// </summary>
+    [Fact]
+    public void OverCapFencesDoNotDrainTheBudgetForOthers()
+    {
+        RunSta(() =>
+        {
+            var text = new System.Text.StringBuilder();
+            for (int fence = 0; fence < 2; fence++)
+            {
+                text.Append("```json\n[");
+                for (int i = 0; i < 3_500; i++)
+                {
+                    text.Append("0,");
+                }
+                text.Append("0]\n```\n\n");
+            }
+            text.Append("```rust\nfn still_colored() -> u8 { 1 }\n```\n");
+
+            using var fixture = FixtureVault.Create(1, "reading-code-overcap");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph[] fences = AllBlocks(surface.Document.Blocks)
+                .OfType<Paragraph>()
+                .Where(ReadingSemantics.IsCodeBlock)
+                .ToArray();
+            Assert.Equal(3, fences.Length);
+            Assert.Single(fences[0].Inlines);
+            Assert.Single(fences[1].Inlines);
+            Assert.True(
+                fences[2].Inlines.Count > 1,
+                "the small fence lost highlighting to over-cap fences that rendered plain");
+        });
+    }
+
     private static Paragraph FindCodeParagraph(FlowDocument document) =>
         AllBlocks(document.Blocks)
             .OfType<Paragraph>()
