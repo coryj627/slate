@@ -93,5 +93,10 @@ The confusing do-undo announcement sequence ("Task completed." →
 defect 1: the failed merge never updated the checkbox visuals, so
 re-clicks toggled against a stale snapshot. Terminal failures now also
 log a message-free stack under `SLATE_UIA_DIAGNOSTICS`.
+
+**Re-verified 2026-07-27 (`82b3003`): "works correctly now" — task
+toggling confirmed working live with NVDA after the fixes.** Task
+toggles move from delivered-not-verified to VERIFIED; the new-tab
+default and degraded mode remain the outstanding field items.
 - **JAWS** (installed, unmeasured) and **Narrator** (smoke scope) — pending per WGA-9.
 - Size behaviour beyond unit-level measurement; §W-A `inline_runs` goldens.
