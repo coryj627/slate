@@ -159,6 +159,31 @@ public static class SurfaceSerializer
             }
             j.Raw("]}");
         }
+        j.Raw("]");
+
+        // W3-2: the canonical math artifact — byte-checks MathCAT's
+        // speech and braille output cross-platform for the first time
+        // (both twins call the same core, same default prefs). Braille
+        // is hex so byte identity is exact and encoding-agnostic.
+        j.Raw(",\"math_blocks\":[");
+        var mathBlocks = session.GetMathBlocks(relPath);
+        for (int i = 0; i < mathBlocks.Length; i++)
+        {
+            var m = mathBlocks[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"line\":").Num(m.Line)
+             .Raw(",\"offset\":").Num(m.ByteOffset)
+             .Raw(",\"display\":").Str(
+                m.DisplayStyle == MathDisplayStyle.Block ? "block" : "inline")
+             .Raw(",\"source\":").Str(m.Source)
+             .Raw(",\"mathml\":").Str(m.Mathml)
+             .Raw(",\"speech\":").Str(m.Speech)
+             .Raw(",\"braille_hex\":").Str(Convert.ToHexString(m.Braille))
+             .Raw("}");
+        }
         j.Raw("]}");
         return j + "\n";
     }

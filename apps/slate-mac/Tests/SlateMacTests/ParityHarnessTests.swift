@@ -205,6 +205,26 @@ final class ParityHarnessTests: XCTestCase {
             }
             j.raw("]}")
         }
+        j.raw("]")
+
+        // W3-2: the canonical math artifact — byte-checks MathCAT's
+        // speech and braille output cross-platform for the first time.
+        // Braille is hex so byte identity is exact. Mirrors
+        // SurfaceSerializer.cs — change both together.
+        j.raw(",\"math_blocks\":[")
+        let mathBlocks = try session.getMathBlocks(path: relPath)
+        for (i, m) in mathBlocks.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"line\":").num(UInt64(m.line))
+                .raw(",\"offset\":").num(UInt64(m.byteOffset))
+                .raw(",\"display\":").str(m.displayStyle == .block ? "block" : "inline")
+                .raw(",\"source\":").str(m.source)
+                .raw(",\"mathml\":").str(m.mathml)
+                .raw(",\"speech\":").str(m.speech)
+                .raw(",\"braille_hex\":").str(
+                    m.braille.map { String(format: "%02X", $0) }.joined())
+                .raw("}")
+        }
         j.raw("]}")
         return j.output + "\n"
     }
