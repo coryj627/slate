@@ -72,9 +72,13 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         // fresh install decodes to.
         AppPreferencesState? loaded = preferencesStore?.Load();
         _openReadingLinksInNewTab = loaded?.ReadingLinksOpenInNewTab ?? true;
+        // Null-safe on purpose: the store normalizes, but version-skewed
+        // or hand-edited files must degrade to the default, never throw
+        // out of workspace initialization.
         _codePreambleVerbosity =
-            loaded is not null && CodeVerbosityNames.ContainsKey(loaded.CodePreambleVerbosity)
-                ? loaded.CodePreambleVerbosity
+            loaded?.CodePreambleVerbosity is string verbosity
+            && CodeVerbosityNames.ContainsKey(verbosity)
+                ? verbosity
                 : "preambleOnly";
         SetCodePreambleVerbosityCommand = new RelayCommand(
             parameter =>

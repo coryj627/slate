@@ -261,14 +261,31 @@ internal static class ReadingDocumentBuilder
             candidate.ByteOffset >= block.ByteStart
             && candidate.ByteOffset < block.ByteEnd);
 
-        string source = matched?.Source ?? fence.Interior;
-        string? language = matched is not null
-            ? matched.Language
-            : (fence.Language.Length == 0 ? null : fence.Language);
+        // The LIVE fence interior is authoritative for display, the
+        // preamble, and Copy — the saved artifact only contributes
+        // TOKENS, and only when it is coherent with the live content
+        // (an unsaved edit inside a fence keeps byte containment, and
+        // rendering or copying the stale saved source would lie to the
+        // reader and the clipboard). Coherence = identical source
+        // (modulo the one trailing newline the reading interior
+        // strips) and identical language.
+        bool coherent = matched is not null
+            && (string.Equals(matched.Source, fence.Interior, StringComparison.Ordinal)
+                || string.Equals(
+                    matched.Source,
+                    fence.Interior + "\n",
+                    StringComparison.Ordinal))
+            && string.Equals(
+                matched.Language ?? string.Empty,
+                fence.Language,
+                StringComparison.Ordinal);
+
+        string source = fence.Interior;
+        string? language = fence.Language.Length == 0 ? null : fence.Language;
         string preamble = SlateUniffiMethods.CodeBlockPreamble(language, source);
 
-        Paragraph paragraph = matched is not null
-            ? TokenParagraph(matched)
+        Paragraph paragraph = coherent
+            ? TokenParagraph(matched!)
             : MonospaceParagraph(fence.Interior.TrimEnd('\n', '\r'));
         ReadingSemantics.MarkCodeBlock(paragraph);
         AutomationProperties.SetName(paragraph, preamble);

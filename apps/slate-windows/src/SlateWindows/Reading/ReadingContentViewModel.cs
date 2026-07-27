@@ -502,8 +502,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         Document = document;
     }
 
+    /// <summary>Tokens-only fault seam: exercises the degraded code
+    /// fetch (empty artifact, digest "degraded") without failing the
+    /// projection itself.</summary>
+    internal Func<Exception?>? CodeTokenFaultForTests { get; set; }
+
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
-    private static FetchResult Fetch(VaultSession session, string path, string text)
+    private FetchResult Fetch(VaultSession session, string path, string text)
     {
         // Records ownership is inherent here — they are fetched for the
         // captured path inside the gated refresh, and publication
@@ -515,18 +520,25 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // renders plain un-highlighted fences with correct preambles
         // rather than failing the whole projection.
         CodeBlock[] codeBlocks;
+        bool codeFetchDegraded = false;
         try
         {
+            if (CodeTokenFaultForTests?.Invoke() is { } fault)
+            {
+                throw fault;
+            }
             codeBlocks = session.GetSyntaxTokens(path);
         }
         catch (VaultException)
         {
             codeBlocks = Array.Empty<CodeBlock>();
+            codeFetchDegraded = true;
         }
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
-        return new FetchResult(text, citations, records, tasks, codeBlocks, blocks, inlines);
+        return new FetchResult(
+            text, citations, records, tasks, codeBlocks, codeFetchDegraded, blocks, inlines);
     }
 
     /// <summary>
@@ -617,7 +629,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             return;
         }
 
-        var key = new MemoKey(fetched.Text, fetched.Citations, fetched.Records);
+        var key = new MemoKey(
+            fetched.Text,
+            fetched.Citations,
+            fetched.Records,
+            CodeArtifactDigest(fetched.CodeBlocks, fetched.CodeFetchDegraded));
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
             return;
@@ -827,6 +843,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         OutgoingLink[] Records,
         TaskItem[] Tasks,
         CodeBlock[] CodeBlocks,
+        bool CodeFetchDegraded,
         ReadingBlock[] Blocks,
         ReadingBlockInlines[] Inlines);
 
@@ -840,17 +857,53 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         private readonly string _text;
         private readonly RenderedCitation[] _citations;
         private readonly OutgoingLink[] _records;
+        private readonly string _codeDigest;
 
-        public MemoKey(string text, RenderedCitation[] citations, OutgoingLink[] records)
+        public MemoKey(
+            string text,
+            RenderedCitation[] citations,
+            OutgoingLink[] records,
+            string codeDigest)
         {
             _text = text;
             _citations = citations;
             _records = records;
+            _codeDigest = codeDigest;
         }
 
         public bool Matches(MemoKey other) =>
             string.Equals(_text, other._text, StringComparison.Ordinal)
             && _citations.SequenceEqual(other._citations)
-            && _records.SequenceEqual(other._records);
+            && _records.SequenceEqual(other._records)
+            && string.Equals(_codeDigest, other._codeDigest, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A structural identity for the saved code artifact, folded into
+    /// the memo: CodeBlock carries arrays (reference equality would
+    /// defeat every hit), but the memo must still see a save that
+    /// changed tokens with the live text unchanged, and a degraded
+    /// fetch must never memo-match the successful one that recovers
+    /// from it.
+    /// </summary>
+    private static string CodeArtifactDigest(CodeBlock[] blocks, bool degraded)
+    {
+        if (degraded)
+        {
+            return "degraded";
+        }
+        var digest = new System.Text.StringBuilder();
+        foreach (CodeBlock block in blocks)
+        {
+            digest.Append(block.ByteOffset)
+                .Append(':')
+                .Append(block.Source.Length)
+                .Append(':')
+                .Append(block.Tokens.Length)
+                .Append(':')
+                .Append(block.Language)
+                .Append(';');
+        }
+        return digest.ToString();
     }
 }

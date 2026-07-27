@@ -2389,8 +2389,11 @@ public sealed class ReadingViewTests
             copy.RaiseEvent(new System.Windows.RoutedEventArgs(
                 System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
 
+            // The LIVE fence interior (round-1 fix: never the saved
+            // artifact) — the reading parser's authoritative form,
+            // which strips the single trailing newline.
             Assert.Equal(
-                "fn copied() -> u8 { 7 }\n",
+                "fn copied() -> u8 { 7 }",
                 System.Windows.Clipboard.GetText());
             Assert.Equal(
                 "Code copied.",
@@ -2484,6 +2487,143 @@ public sealed class ReadingViewTests
                 new FakeEditorSpellingService(),
                 preferencesStore: store);
             Assert.True(second.IsCodeVerbosityFirstLine);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 1 [high]: an unsaved edit INSIDE a fence
+    /// keeps byte containment, and the saved artifact must then lose —
+    /// display, preamble, and Copy all follow the LIVE interior;
+    /// tokens simply drop until the save catches up.
+    /// </summary>
+    [Fact]
+    public void DirtyFenceEditsNeverShowOrCopyStaleSavedCode()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-dirty");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\nfn saved() -> u8 { 1 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            // Edit inside the fence without moving it, then re-project.
+            tab.EditorDocument!.Replace(
+                tab.Text.IndexOf("saved", StringComparison.Ordinal), 5, "live!");
+            tab.Reading!.Refresh();
+
+            Paragraph code = FindCodeParagraph(surface.Document);
+            Assert.Contains("fn live!()", SurfaceText(surface), StringComparison.Ordinal);
+            Assert.DoesNotContain("fn saved()", SurfaceText(surface), StringComparison.Ordinal);
+            // Preamble counts the LIVE interior; tokens dropped (single
+            // plain run) rather than lying.
+            Assert.Equal(
+                "Code block, rust, 1 line.",
+                System.Windows.Automation.AutomationProperties.GetName(code));
+            Assert.Single(code.Inlines);
+            // Copy carries the live source.
+            System.Windows.Controls.Button copy = FindVisualButtons(surface.Document)
+                .Single(button => ReadingSemantics.IsCodeCopy(button));
+            Assert.Contains(
+                "fn live!()", (string)copy.Tag, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 1 [medium]: a degraded token fetch must
+    /// not memo-match the successful fetch that recovers from it —
+    /// highlighting returns with the live text unchanged.
+    /// </summary>
+    [Fact]
+    public void DegradedTokenFetchesRecoverThroughTheMemo()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-recover");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\nfn recovered() -> u8 { 9 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, _ => { }, synchronousForTests: true);
+            var surface = new ReadingSurface { Model = reading };
+
+            // Degraded token fetch → plain single-run fence.
+            reading.CodeTokenFaultForTests =
+                () => new VaultException.Io("tokens unavailable");
+            reading.Refresh();
+            Assert.Single(FindCodeParagraph(surface.Document).Inlines);
+
+            // Recovery with IDENTICAL live text: the degraded digest
+            // must not memo-match — highlighting returns.
+            reading.CodeTokenFaultForTests = null;
+            reading.Refresh();
+            Assert.True(
+                FindCodeParagraph(surface.Document).Inlines.Count > 1,
+                "tokens did not recover after the degraded fetch");
+
+            // Baseline still holds: identical successful fetches
+            // memo-hit and skip the rebuild.
+            FlowDocument before = reading.Document!;
+            reading.Refresh();
+            Assert.Same(before, reading.Document);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 1 [medium]: explicit JSON null and
+    /// unknown verbosity values decode to the default instead of
+    /// throwing out of initialization.
+    /// </summary>
+    [Fact]
+    public void NullAndUnknownVerbosityValuesDecodeToTheDefault()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), $"slate-verbosity-null-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string path = Path.Combine(directory, "preferences.json");
+            var store = new AppPreferencesStore(path);
+
+            File.WriteAllText(
+                path,
+                "{\"readingLinksOpenInNewTab\":true,\"codePreambleVerbosity\":null}");
+            Assert.Equal("preambleOnly", store.Load().CodePreambleVerbosity);
+            using var fromNull = new EditorPreferencesViewModel(
+                _ => { }, new FakeEditorSpellingService(), preferencesStore: store);
+            Assert.True(fromNull.IsCodeVerbosityPreambleOnly);
+
+            File.WriteAllText(
+                path,
+                "{\"codePreambleVerbosity\":\"futureMode\"}");
+            using var fromUnknown = new EditorPreferencesViewModel(
+                _ => { }, new FakeEditorSpellingService(), preferencesStore: store);
+            Assert.True(fromUnknown.IsCodeVerbosityPreambleOnly);
         }
         finally
         {
