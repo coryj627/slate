@@ -129,8 +129,12 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             && CodeVerbosityNames.ContainsKey(verbosity)
                 ? verbosity
                 : "preambleOnly";
+        // "mathSpeak" is additionally rejected here (defense beyond the
+        // store normalization): while #1056 is open the style may never
+        // restore as active.
         _mathSpeechStyle =
             loaded?.MathSpeechStyle is string speechStyle
+            && speechStyle != "mathSpeak"
             && MathSpeechStyleNames.ContainsKey(speechStyle)
                 ? speechStyle
                 : "clearSpeak";

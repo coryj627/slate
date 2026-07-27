@@ -449,6 +449,98 @@ public sealed class ReadingMathTests
         });
     }
 
+    /// <summary>
+    /// W3-2 round 2 [medium]: a prefs change while an UNBOUND model's
+    /// refresh is in flight poisons that generation — the stale-prefs
+    /// publish is rejected, and the next bind restarts fresh instead
+    /// of adopting the obsolete artifact (set_math_prefs advances no
+    /// session generation, so nothing else would catch it).
+    /// </summary>
+    [Fact]
+    public void PrefsChangeDuringHiddenInFlightRefreshNeverPublishesStale()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-math-race");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "$$a+b$$ body\n\n# H\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, _ => { });
+
+            // Gate the first (hidden) fetch so the prefs change lands
+            // while it is in flight.
+            using var gate = new ManualResetEventSlim(initialState: false);
+            int fetches = 0;
+            reading.FetchFaultForTests = () =>
+            {
+                Interlocked.Increment(ref fetches);
+                gate.Wait(TimeSpan.FromSeconds(20));
+                return null;
+            };
+
+            reading.Refresh();
+            reading.InvalidateForPrefsChange();
+
+            // Bind BEFORE the old fetch is released: the poisoned
+            // generation means EnsureProjected must start a fresh
+            // refresh rather than waiting on the doomed one.
+            var surface = new ReadingSurface { Model = reading };
+            gate.Set();
+            WaitForUi(() => reading.Document is not null);
+            WaitForUi(() =>
+                new System.Windows.Documents.TextRange(
+                    surface.Document.ContentStart,
+                    surface.Document.ContentEnd).Text.Contains(
+                        "body", StringComparison.Ordinal));
+            Assert.True(
+                fetches >= 2,
+                $"expected the poisoned fetch plus a fresh one, saw {fetches}");
+        });
+    }
+
+    /// <summary>W3-2 round 2 [medium]: a persisted "mathSpeak" (older
+    /// build or hand-edited file) must restore as ClearSpeak — the
+    /// disabled style may never come back checked (#1056).</summary>
+    [Fact]
+    public void PersistedMathSpeakRestoresAsClearSpeak()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), $"slate-mathspeak-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string path = Path.Combine(directory, "preferences.json");
+            File.WriteAllText(path, "{\"mathSpeechStyle\":\"mathSpeak\"}");
+            var store = new AppPreferencesStore(path);
+            Assert.Equal("clearSpeak", store.Load().MathSpeechStyle);
+
+            using var preferences = new EditorPreferencesViewModel(
+                _ => { },
+                new FakeEditorSpellingService(),
+                preferencesStore: store);
+            Assert.True(preferences.IsMathSpeechClearSpeak);
+            Assert.False(preferences.IsMathSpeechMathSpeak);
+            Assert.Equal(
+                MathSpeechStyle.ClearSpeak,
+                preferences.CurrentMathPrefs.SpeechStyle);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     /// <summary>W3-2 round 1 [medium]: MathSpeak is unimplemented
     /// upstream (#1056) — selecting it is rejected with no false
     /// confirmation, and the style stays ClearSpeak.</summary>
@@ -499,6 +591,22 @@ public sealed class ReadingMathTests
         }
 
         public string MathMl { get; }
+    }
+
+    /// <summary>Pump the STA dispatcher until the condition holds.</summary>
+    private static void WaitForUi(Func<bool> condition)
+    {
+        DateTime deadline = DateTime.UtcNow.AddSeconds(20);
+        while (!condition())
+        {
+            Assert.True(DateTime.UtcNow < deadline, "Asynchronous action timed out.");
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            System.Windows.Threading.Dispatcher.CurrentDispatcher.BeginInvoke(
+                System.Windows.Threading.DispatcherPriority.Background,
+                new Action(() => frame.Continue = false));
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+            Thread.Yield();
+        }
     }
 
     /// <summary>WPF objects require STA; xunit runs MTA.</summary>

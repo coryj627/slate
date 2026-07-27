@@ -68,8 +68,13 @@ internal sealed class AppPreferencesStore
             {
                 state = state with { CodePreambleVerbosity = "preambleOnly" };
             }
-            if (state.MathSpeechStyle is null)
+            if (state.MathSpeechStyle is null
+                || state.MathSpeechStyle == "mathSpeak")
             {
+                // MathSpeak normalizes away while #1056 is open: the
+                // upstream engine never implemented it, and restoring
+                // it as the checked style would falsely confirm a
+                // speech convention that silently stays ClearSpeak.
                 state = state with { MathSpeechStyle = "clearSpeak" };
             }
             if (state.MathVerbosity is null)

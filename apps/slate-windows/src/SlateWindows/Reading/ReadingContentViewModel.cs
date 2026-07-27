@@ -206,7 +206,18 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         if (BlocksAppended is not null)
         {
             Refresh();
+            return;
         }
+        // Unbound, but a refresh may be IN FLIGHT (round 2: a restored
+        // tab's constructor projection races the prefs change, and
+        // set_math_prefs does not advance the session generation, so a
+        // stale-prefs publish would pass every gate and memoize).
+        // Poison the generation so nothing rendered with the old prefs
+        // can land; retiring the live marker makes the next bind's
+        // EnsureProjected restart — the pre-publication rebind
+        // machinery already handles exactly this shape.
+        _generation++;
+        _liveRefreshGeneration = -1;
     }
 
     /// <summary>
