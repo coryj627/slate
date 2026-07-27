@@ -2927,11 +2927,17 @@ public sealed class ReadingViewTests
     {
         RunSta(() =>
         {
+            // 2,998 repetitions → 5,999 tokens per fence (2,999
+            // numbers + 2,998 commas + 2 brackets): the BROKEN charge
+            // order deducts both fences (12,000 → 2) and starves the
+            // rust fence, while the fixed order charges neither —
+            // counted by the round-7 review, which caught the first
+            // fixture passing against the broken parent.
             var text = new System.Text.StringBuilder();
             for (int fence = 0; fence < 2; fence++)
             {
                 text.Append("```json\n[");
-                for (int i = 0; i < 3_500; i++)
+                for (int i = 0; i < 2_998; i++)
                 {
                     text.Append("0,");
                 }
