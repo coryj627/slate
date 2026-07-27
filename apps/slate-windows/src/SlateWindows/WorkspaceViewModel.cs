@@ -958,6 +958,20 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             ?? (_ => WorkspaceDirtyNavigationDecision.Cancel);
         EditorPreferences = new EditorPreferencesViewModel(
             _announce, preferencesStore: preferencesStore);
+        // Math prefs are session-honored (get_math_blocks reads them on
+        // every call): apply the persisted values once at construction,
+        // then on every change re-render any open reading projections
+        // (nothing else re-fetches the math artifact — no text changed).
+        _session.SetMathPrefs(EditorPreferences.CurrentMathPrefs);
+        EditorPreferences.MathPrefsChanged += prefs =>
+        {
+            _session.SetMathPrefs(prefs);
+            foreach (WorkspaceTabViewModel tab in
+                Groups.SelectMany(group => group.Tabs))
+            {
+                tab.Reading?.EnsureProjected();
+            }
+        };
         _activeLeaf = Leaves[0];
         (_root, _activeGroup) = Restore(_persistence.Load());
 

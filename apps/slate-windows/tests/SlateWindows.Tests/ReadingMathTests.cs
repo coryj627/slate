@@ -260,6 +260,92 @@ public sealed class ReadingMathTests
         });
     }
 
+    /// <summary>
+    /// W3-2 MathPrefs parity: preferences persist across view-model
+    /// lifetimes, announce through the canonical vocabulary, reject
+    /// unknown keys, and — the part nothing else covers — a change
+    /// re-renders an OPEN reading projection with the new prefs
+    /// (verbosity flips the MathCAT speech with identical live text).
+    /// </summary>
+    [Fact]
+    public void MathPrefsPersistAnnounceAndReprojectOpenReadingViews()
+    {
+        RunSta(() =>
+        {
+            string directory = Path.Combine(
+                Path.GetTempPath(), $"slate-math-prefs-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var store = new AppPreferencesStore(
+                    Path.Combine(directory, "preferences.json"));
+                using var fixture = FixtureVault.Create(1, "reading-math-prefs");
+                File.WriteAllText(
+                    Path.Combine(fixture.Root, "note0.md"),
+                    "$$\\frac{a}{b} + x^2$$\n");
+                using var session = VaultSession.OpenFilesystem(fixture.Root);
+                using var cancel = new CancelToken();
+                session.ScanInitial(cancel);
+
+                var announced = new List<A11yEvent>();
+                using var workspace = new WorkspaceViewModel(
+                    session,
+                    fixture.Root,
+                    () => [],
+                    announced.Add,
+                    startInteractionBackgroundWork: false,
+                    preferencesStore: store);
+                workspace.OpenPath("note0.md");
+                WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+                tab.ToggleViewMode();
+                var surface = new ReadingSurface { Model = tab.Reading };
+                string mediumSpeech = System.Windows.Automation.AutomationProperties
+                    .GetName(FindMathElements(surface.Document).Single());
+
+                announced.Clear();
+                System.Windows.Documents.FlowDocument before = tab.Reading!.Document!;
+                workspace.EditorPreferences.SetMathVerbosityCommand.Execute("terse");
+                Assert.Contains(
+                    announced,
+                    item => SlateUniffiMethods.A11yRender(item).Text
+                        == "Math verbosity: Terse.");
+                // The braille code flips the artifact bytes for EVERY
+                // formula (verbosity speech can coincide), so it is the
+                // deterministic proof that a prefs change reaches the
+                // session AND re-projects the open reading view: the
+                // content digest misses the memo and the document
+                // rebuilds with identical live text.
+                workspace.EditorPreferences.SetMathBrailleCodeCommand.Execute("ueb");
+                Assert.Contains(
+                    announced,
+                    item => SlateUniffiMethods.A11yRender(item).Text
+                        == "Math braille code: UEB.");
+                Assert.NotSame(before, tab.Reading!.Document);
+                Assert.Equal(
+                    mediumSpeech.Length > 0,
+                    System.Windows.Automation.AutomationProperties
+                        .GetName(FindMathElements(surface.Document).Single())
+                        .Length > 0);
+
+                // Unknown key: no change, no announcement.
+                announced.Clear();
+                workspace.EditorPreferences.SetMathVerbosityCommand.Execute("shouty");
+                Assert.Empty(announced);
+
+                // Persistence across lifetimes.
+                using var second = new EditorPreferencesViewModel(
+                    _ => { },
+                    new FakeEditorSpellingService(),
+                    preferencesStore: store);
+                Assert.True(second.IsMathVerbosityTerse);
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        });
+    }
+
     private static IEnumerable<ReadingMathElement> FindMathElements(
         System.Windows.Documents.FlowDocument document)
     {

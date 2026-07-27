@@ -17,7 +17,13 @@ internal sealed record AppPreferencesState(
     [property: JsonPropertyName("readingLinksOpenInNewTab")]
     bool ReadingLinksOpenInNewTab = true,
     [property: JsonPropertyName("codePreambleVerbosity")]
-    string CodePreambleVerbosity = "preambleOnly");
+    string CodePreambleVerbosity = "preambleOnly",
+    [property: JsonPropertyName("mathSpeechStyle")]
+    string MathSpeechStyle = "clearSpeak",
+    [property: JsonPropertyName("mathVerbosity")]
+    string MathVerbosity = "medium",
+    [property: JsonPropertyName("mathBrailleCode")]
+    string MathBrailleCode = "nemeth");
 
 /// <summary>Bounded device-local storage for app-level preferences.</summary>
 internal sealed class AppPreferencesStore
@@ -61,6 +67,18 @@ internal sealed class AppPreferencesStore
             if (state.CodePreambleVerbosity is null)
             {
                 state = state with { CodePreambleVerbosity = "preambleOnly" };
+            }
+            if (state.MathSpeechStyle is null)
+            {
+                state = state with { MathSpeechStyle = "clearSpeak" };
+            }
+            if (state.MathVerbosity is null)
+            {
+                state = state with { MathVerbosity = "medium" };
+            }
+            if (state.MathBrailleCode is null)
+            {
+                state = state with { MathBrailleCode = "nemeth" };
             }
             return state;
         }
