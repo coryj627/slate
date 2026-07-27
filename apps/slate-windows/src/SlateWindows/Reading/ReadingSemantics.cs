@@ -22,6 +22,7 @@ internal static class ReadingSemantics
         Table,
         Embed,
         CodeBlock,
+        CodeCopy,
     }
 
     private static readonly DependencyProperty MarkerProperty =
@@ -69,6 +70,15 @@ internal static class ReadingSemantics
 
     public static bool IsEmbed(BlockUIContainer container) =>
         Equals(container.GetValue(MarkerProperty), Marker.Embed);
+
+    /// <summary>The code block's Copy button — distinguished by marker,
+    /// not Tag shape, so the click router never guesses (embed-card
+    /// buttons also carry string Tags).</summary>
+    public static void MarkCodeCopy(System.Windows.Controls.Button button) =>
+        button.SetValue(MarkerProperty, Marker.CodeCopy);
+
+    public static bool IsCodeCopy(DependencyObject element) =>
+        Equals(element.GetValue(MarkerProperty), Marker.CodeCopy);
 
     /// <summary>
     /// Task-range Tag codec. WPF text machinery XamlWriter-serializes

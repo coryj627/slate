@@ -94,6 +94,20 @@ internal sealed class ReadingSurface : RichTextBox
             System.Windows.Controls.Primitives.ButtonBase.ClickEvent,
             new System.Windows.RoutedEventHandler((_, args) =>
             {
+                // Copy buttons FIRST: both they and embed cards are
+                // Buttons with string Tags, and only the marker tells
+                // them apart (W3-4).
+                if (args.Source is System.Windows.Controls.Button
+                    {
+                        Tag: string codeSource
+                    } copyButton
+                    && ReadingSemantics.IsCodeCopy(copyButton)
+                    && _model is { } copyModel)
+                {
+                    copyModel.CopyCode(codeSource);
+                    args.Handled = true;
+                    return;
+                }
                 if (args.Source is System.Windows.Controls.Button
                     {
                         Tag: string embedKey

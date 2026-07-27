@@ -2299,6 +2299,153 @@ public sealed class ReadingViewTests
             surfaceIsKeyboardFocused: false, isRepeat: true));
     }
 
+    /// <summary>
+    /// W3-4: a saved fence matches its canonical CodeBlock by byte
+    /// containment and renders TOKEN runs inside the text range — the
+    /// W3-1 in-range invariant survives, the paragraph carries core's
+    /// preamble, and the copy button precedes the code.
+    /// </summary>
+    [Fact]
+    public void CodeFenceRendersCanonicalTokensInsideTheTextRange()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-tokens");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "# Code\n\n```rust\nfn answer() -> usize { 42 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph code = FindCodeParagraph(surface.Document);
+            // Core's preamble, verbatim, on the paragraph's name.
+            Assert.Equal(
+                "Code block, rust, 1 line.",
+                System.Windows.Automation.AutomationProperties.GetName(code));
+            // Token runs: the paragraph is SPLIT (tokenized), and its
+            // concatenated text is the authoritative interior.
+            Assert.True(
+                code.Inlines.Count > 1,
+                $"expected token runs, got {code.Inlines.Count} inline(s)");
+            Assert.Equal(
+                "fn answer() -> usize { 42 }",
+                string.Concat(code.Inlines.OfType<Run>().Select(run => run.Text)));
+            // Still inside the text range (the W3-1 spike invariant).
+            Assert.Contains(
+                "fn answer()",
+                SurfaceText(surface),
+                StringComparison.Ordinal);
+            // Landmark unchanged: one code-block stop.
+            Assert.Contains(
+                surface.LandmarksForTests,
+                landmark => landmark.Kind == ReadingLandmarkKind.CodeBlock);
+        });
+    }
+
+    /// <summary>
+    /// W3-4: the Copy button copies the exact source as plain text and
+    /// announces core's "Code copied."; it is marked so the click
+    /// router never confuses it with an embed card.
+    /// </summary>
+    [Fact]
+    public void CodeCopyButtonCopiesTheSourceAndAnnounces()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-copy");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\nfn copied() -> u8 { 7 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            System.Windows.Controls.Button copy = FindVisualButtons(surface.Document)
+                .Single(button => ReadingSemantics.IsCodeCopy(button));
+            Assert.Equal(
+                "Copies the code block source as plain text.",
+                System.Windows.Automation.AutomationProperties.GetHelpText(copy));
+            copy.RaiseEvent(new System.Windows.RoutedEventArgs(
+                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+            Assert.Equal(
+                "fn copied() -> u8 { 7 }\n",
+                System.Windows.Clipboard.GetText());
+            Assert.Equal(
+                "Code copied.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 drift fallback (mac codeModel parity): a fence with no
+    /// matching pipeline block renders the authoritative interior
+    /// un-highlighted, and the preamble is still correct — including
+    /// the "plain text" spoken language for untagged fences.
+    /// </summary>
+    [Fact]
+    public void UnmatchedFencesDegradeToPlainInteriorWithCorrectPreamble()
+    {
+        RunSta(() =>
+        {
+            FlowDocument document = BuildSource("```\nplain one\nplain two\n```\n");
+            Paragraph code = FindCodeParagraph(document);
+            Assert.Equal(
+                "Code block, plain text, 2 lines.",
+                System.Windows.Automation.AutomationProperties.GetName(code));
+            Run run = Assert.IsType<Run>(Assert.Single(code.Inlines));
+            Assert.Equal("plain one\nplain two", run.Text);
+        });
+    }
+
+    private static Paragraph FindCodeParagraph(FlowDocument document) =>
+        AllBlocks(document.Blocks)
+            .OfType<Paragraph>()
+            .Single(ReadingSemantics.IsCodeBlock);
+
+    private static IEnumerable<Block> AllBlocks(BlockCollection blocks)
+    {
+        foreach (Block block in blocks)
+        {
+            yield return block;
+            if (block is Section section)
+            {
+                foreach (Block inner in AllBlocks(section.Blocks))
+                {
+                    yield return inner;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<System.Windows.Controls.Button> FindVisualButtons(
+        FlowDocument document) =>
+        AllBlocks(document.Blocks)
+            .OfType<BlockUIContainer>()
+            .Select(container => container.Child)
+            .OfType<System.Windows.Controls.Button>();
+
     private static void PumpOneBackgroundPass()
     {
         var frame = new System.Windows.Threading.DispatcherFrame();

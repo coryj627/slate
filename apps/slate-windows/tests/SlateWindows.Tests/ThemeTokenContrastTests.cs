@@ -41,6 +41,22 @@ public sealed class ThemeTokenContrastTests
             // background today. Tracked so it is a decision, not a gap.
             ("selection", "Slate.SelectionTextColor", "Slate.SelectionBackgroundColor"),
             ("error/surface", "Slate.ErrorColor", "Slate.SurfaceColor"),
+            // W3-4 code-token palette: token text renders on the code
+            // block's raised background inside the reading surface, so
+            // every REAL color is gated against BOTH. (Comment aliases
+            // the already-gated secondary text; identifier, operator,
+            // and punctuation resolve to gated brushes in the palette
+            // code and add no new colors.)
+            ("code-keyword/raised", "Slate.CodeKeywordColor", "Slate.RaisedSurfaceColor"),
+            ("code-keyword/surface", "Slate.CodeKeywordColor", "Slate.SurfaceColor"),
+            ("code-string/raised", "Slate.CodeStringColor", "Slate.RaisedSurfaceColor"),
+            ("code-string/surface", "Slate.CodeStringColor", "Slate.SurfaceColor"),
+            ("code-number/raised", "Slate.CodeNumberColor", "Slate.RaisedSurfaceColor"),
+            ("code-number/surface", "Slate.CodeNumberColor", "Slate.SurfaceColor"),
+            ("code-type/raised", "Slate.CodeTypeColor", "Slate.RaisedSurfaceColor"),
+            ("code-type/surface", "Slate.CodeTypeColor", "Slate.SurfaceColor"),
+            ("code-function/raised", "Slate.CodeFunctionColor", "Slate.RaisedSurfaceColor"),
+            ("code-function/surface", "Slate.CodeFunctionColor", "Slate.SurfaceColor"),
             // Unresolved wikilinks (#849). A distinct role from error on
             // purpose: a note you have not written yet is not a failure,
             // and mac draws the same distinction with warningText.

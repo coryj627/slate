@@ -60,11 +60,17 @@ internal static class ReadingDocumentBuilder
 {
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model) =>
-        Build(model, new ReadingListBuildContext());
+        Build(model, new ReadingListBuildContext(), Array.Empty<CodeBlock>());
 
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
-        ReadingListBuildContext context)
+        ReadingListBuildContext context) =>
+        Build(model, context, Array.Empty<CodeBlock>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks)
     {
         var document = new FlowDocument
         {
@@ -97,7 +103,7 @@ internal static class ReadingDocumentBuilder
             }
 
             stack.Clear();
-            document.Blocks.Add(NonListBlock(block, inlines));
+            document.Blocks.Add(NonListBlock(block, inlines, codeBlocks));
         }
 
         return new ReadingDocumentModel(document, CollectLandmarks(document));
@@ -167,7 +173,10 @@ internal static class ReadingDocumentBuilder
         stack[depth] = (stack[depth].List, item);
     }
 
-    private static Block NonListBlock(ReadingBlock block, ReadingBlockInlines inlines)
+    private static Block NonListBlock(
+        ReadingBlock block,
+        ReadingBlockInlines inlines,
+        IReadOnlyList<CodeBlock> codeBlocks)
     {
         switch (block.Kind)
         {
@@ -201,7 +210,7 @@ internal static class ReadingDocumentBuilder
                 }
 
             case ReadingBlockKind.CodeFence fence:
-                return CodeFenceBlock(fence);
+                return CodeFenceBlock(fence, block, codeBlocks);
 
             case ReadingBlockKind.Table:
                 return TableBlock(block);
@@ -228,19 +237,128 @@ internal static class ReadingDocumentBuilder
     }
 
     /// <summary>
-    /// W3-1 baseline for code fences, superseded by W3-4's token
-    /// renderer: the interior is a monospace paragraph INSIDE the text
-    /// range. The spike measured the alternative — a `BlockUIContainer`
-    /// child — as silently absent from say-all ("landmarks missing:
-    /// fn main"), and a reading view that skips code while reading is a
-    /// correctness failure, not a styling gap.
+    /// W3-4 code fence: canonical token rendering INSIDE the text range
+    /// (the W3-1 spike measured `BlockUIContainer` content as silently
+    /// absent from say-all — "landmarks missing: fn main" — and a
+    /// reading view that skips code is a correctness failure). The
+    /// fence matches its pipeline <see cref="CodeBlock"/> by byte
+    /// containment — mac's `codeModel` rule — and renders that block's
+    /// source as token-colored runs; a live-buffer drift miss degrades
+    /// to the authoritative interior, un-highlighted, with the preamble
+    /// still correct. The preamble is CORE's
+    /// (<c>CodeBlockPreamble</c> — hoisted for W3-4 so both hosts speak
+    /// identical strings) and rides the paragraph's AutomationName for
+    /// the peer. The visible Copy button precedes the code (mac #854:
+    /// always visible, in layout); its Tag carries the exact source to
+    /// copy — a plain string, per the undo-serialization lesson.
     /// </summary>
-    private static Block CodeFenceBlock(ReadingBlockKind.CodeFence fence)
+    private static Block CodeFenceBlock(
+        ReadingBlockKind.CodeFence fence,
+        ReadingBlock block,
+        IReadOnlyList<CodeBlock> codeBlocks)
     {
-        Paragraph paragraph = MonospaceParagraph(fence.Interior.TrimEnd('\n', '\r'));
+        CodeBlock? matched = codeBlocks.FirstOrDefault(candidate =>
+            candidate.ByteOffset >= block.ByteStart
+            && candidate.ByteOffset < block.ByteEnd);
+
+        string source = matched?.Source ?? fence.Interior;
+        string? language = matched is not null
+            ? matched.Language
+            : (fence.Language.Length == 0 ? null : fence.Language);
+        string preamble = SlateUniffiMethods.CodeBlockPreamble(language, source);
+
+        Paragraph paragraph = matched is not null
+            ? TokenParagraph(matched)
+            : MonospaceParagraph(fence.Interior.TrimEnd('\n', '\r'));
         ReadingSemantics.MarkCodeBlock(paragraph);
+        AutomationProperties.SetName(paragraph, preamble);
+
+        var copy = new Button
+        {
+            Content = "Copy code",
+            Padding = new Thickness(8, 2, 8, 2),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Tag = source,
+        };
+        ReadingSemantics.MarkCodeCopy(copy);
+        AutomationProperties.SetHelpText(
+            copy, "Copies the code block source as plain text.");
+        var section = new Section();
+        section.Blocks.Add(new BlockUIContainer(copy)
+        {
+            Padding = new Thickness(0),
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+        section.Blocks.Add(paragraph);
+        return section;
+    }
+
+    /// <summary>
+    /// The matched block's source as token-colored runs — plain
+    /// attribute application over core-computed byte ranges (§10.8:
+    /// nothing is re-derived; gaps keep the default text brush, exactly
+    /// as mac's attributed-string base layer does). Token offsets are
+    /// UTF-8 into the block source; the display trims exactly the
+    /// trailing newline, so ranges clamp to the rendered length.
+    /// </summary>
+    private static Paragraph TokenParagraph(CodeBlock matched)
+    {
+        string display = matched.Source.TrimEnd('\n', '\r');
+        byte[] utf8 = Encoding.UTF8.GetBytes(display);
+        var paragraph = new Paragraph
+        {
+            FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
+            Padding = new Thickness(8),
+        };
+        paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
+
+        int cursor = 0;
+        foreach (SyntaxToken token in matched.Tokens)
+        {
+            int start = Math.Clamp((int)token.StartByte, cursor, utf8.Length);
+            int end = Math.Clamp((int)token.EndByte, start, utf8.Length);
+            if (start > cursor)
+            {
+                paragraph.Inlines.Add(
+                    new Run(Encoding.UTF8.GetString(utf8, cursor, start - cursor)));
+            }
+            if (end > start)
+            {
+                var run = new Run(Encoding.UTF8.GetString(utf8, start, end - start));
+                if (TokenBrushKey(token.Kind) is { } key)
+                {
+                    run.SetResourceReference(TextElement.ForegroundProperty, key);
+                }
+                paragraph.Inlines.Add(run);
+            }
+            cursor = end;
+        }
+        if (cursor < utf8.Length)
+        {
+            paragraph.Inlines.Add(
+                new Run(Encoding.UTF8.GetString(utf8, cursor, utf8.Length - cursor)));
+        }
         return paragraph;
     }
+
+    /// <summary>
+    /// Token kind → theme brush key (mac `CodeTokenTheme` parity, APCA
+    /// gated in `ThemeTokenContrastTests`). Null keeps the default text
+    /// brush: identifier/operator/other match mac's label-color rule,
+    /// and `function` gets its OWN gated color rather than mac's
+    /// accent — accent/raised is the recorded #1051 near-miss.
+    /// </summary>
+    private static string? TokenBrushKey(TokenKind kind) => kind switch
+    {
+        TokenKind.Keyword => "Slate.CodeKeywordBrush",
+        TokenKind.String => "Slate.CodeStringBrush",
+        TokenKind.Number => "Slate.CodeNumberBrush",
+        TokenKind.Comment => "Slate.CodeCommentBrush",
+        TokenKind.Type => "Slate.CodeTypeBrush",
+        TokenKind.Function => "Slate.CodeFunctionBrush",
+        TokenKind.Punctuation => "Slate.SecondaryTextBrush",
+        _ => null,
+    };
 
     private static Paragraph MonospaceParagraph(string text)
     {
