@@ -33,6 +33,13 @@ internal sealed class ReadingSurface : RichTextBox
     {
         IsReadOnly = true;
         IsReadOnlyCaretVisible = true;
+        // A read-only viewer records no undo — and it MUST not: undo
+        // preservation XamlWriter-serializes removed content, and the
+        // first post-click merge died on the task checkbox's stamped
+        // payload ("Cannot serialize a generic type" — field root
+        // cause, 2026-07-26: every toggle became "could not load" and
+        // the caret went dead).
+        IsUndoEnabled = false;
         // Keeps hyperlinks live in a read-only document.
         IsDocumentEnabled = true;
         AcceptsReturn = false;
@@ -106,14 +113,19 @@ internal sealed class ReadingSurface : RichTextBox
                 // the re-projection renders the real outcome, and the
                 // canonical announcements ("Task completed." /
                 // conflict / unsaved refusal) narrate it.
-                if (args.Source is System.Windows.Controls.CheckBox
-                    {
-                        Tag: ValueTuple<ulong, ulong> taskRange
-                    } box
+                if (args.Source is System.Windows.Controls.CheckBox box
+                    && ReadingSemantics.TryDecodeTaskRange(
+                        box.Tag, out ulong taskStart, out ulong taskEnd)
                     && _model is { } taskModel)
                 {
                     box.IsChecked = box.IsChecked != true;
-                    taskModel.ToggleTaskAt(taskRange.Item1, taskRange.Item2);
+                    taskModel.ToggleTaskAt(taskStart, taskEnd);
+                    // The click focused the checkbox — an element the
+                    // re-projection is about to destroy. Return focus
+                    // to the document so the reader stays in caret
+                    // context and WPF never recovers focus from a
+                    // removed element.
+                    _ = Focus();
                     args.Handled = true;
                 }
             }));
@@ -270,13 +282,33 @@ internal sealed class ReadingSurface : RichTextBox
     /// </summary>
     internal void ApplyBuiltDocument(FlowDocument built)
     {
+        // An embedded child (a task checkbox the user just clicked) may
+        // hold keyboard focus, and this merge is about to destroy it —
+        // WPF's focus recovery from a removed element is undefined
+        // territory (measured in the field, 2026-07-26: dead caret
+        // after checkbox clicks). Reclaim focus for the document FIRST.
+        if (IsKeyboardFocusWithin && !IsKeyboardFocused)
+        {
+            _ = Focus();
+        }
+
         // A re-projection replaces every block, which would collapse a
         // caret inside the old content to the document start — throwing
         // the reader to the top after every task toggle. Preserve the
         // position by symbol offset: a toggle changes one status char
         // the projection never renders, so the same offset lands on the
-        // same content.
-        int caretOffset = Document.ContentStart.GetOffsetToPosition(CaretPosition);
+        // same content. Caret state is REPAIRABLE UI state: any failure
+        // reading or restoring it degrades to the document start and
+        // must never abort the content merge into a terminal failure.
+        int caretOffset;
+        try
+        {
+            caretOffset = Document.ContentStart.GetOffsetToPosition(CaretPosition);
+        }
+        catch (InvalidOperationException)
+        {
+            caretOffset = 0;
+        }
 
         Document.Blocks.Clear();
         while (built.Blocks.FirstBlock is { } block)
@@ -289,8 +321,15 @@ internal sealed class ReadingSurface : RichTextBox
 
         if (caretOffset > 0)
         {
-            CaretPosition = Document.ContentStart.GetPositionAtOffset(caretOffset)
-                ?? Document.ContentEnd;
+            try
+            {
+                CaretPosition = Document.ContentStart.GetPositionAtOffset(caretOffset)
+                    ?? Document.ContentEnd;
+            }
+            catch (InvalidOperationException)
+            {
+                CaretPosition = Document.ContentStart;
+            }
             return;
         }
 
@@ -346,6 +385,36 @@ internal sealed class ReadingSurface : RichTextBox
                     || caret.GetOffsetToPosition(link.ElementStart) is >= 0 and <= 1))
             {
                 model.Activate(kind);
+                return true;
+            }
+        }
+        // No link at the caret: a task checkbox on the caret's LINE is
+        // the other activatable thing. The caret can never rest inside
+        // an InlineUIContainer, so containment is by paragraph.
+        return TryToggleTaskAtCaret();
+    }
+
+    /// <summary>
+    /// Toggle the task checkbox on the caret's line (field gap,
+    /// 2026-07-26: Space and Enter at the caret did nothing — a caret
+    /// position is not element focus, so the checkbox never saw the
+    /// key. Mirrors the editor's activate-at-cursor task semantics).
+    /// </summary>
+    internal bool TryToggleTaskAtCaret()
+    {
+        if (_model is not { } model || CaretPosition?.Paragraph is not { } paragraph)
+        {
+            return false;
+        }
+        foreach (System.Windows.Controls.CheckBox candidate in paragraph.Inlines
+            .OfType<InlineUIContainer>()
+            .Select(container => container.Child)
+            .OfType<System.Windows.Controls.CheckBox>())
+        {
+            if (ReadingSemantics.TryDecodeTaskRange(
+                candidate.Tag, out ulong start, out ulong end))
+            {
+                model.ToggleTaskAt(start, end);
                 return true;
             }
         }

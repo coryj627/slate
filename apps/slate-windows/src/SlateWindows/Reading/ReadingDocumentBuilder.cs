@@ -347,8 +347,11 @@ internal static class ReadingDocumentBuilder
                 // reverts WPF's optimistic flip and routes the toggle
                 // through the SAME core task command the editor and
                 // Tasks panel use; the re-projection renders the
-                // outcome.
-                Tag = range,
+                // outcome. STRING-encoded because WPF text machinery
+                // may XamlWriter-serialize document content, and
+                // generic payloads (ValueTuple) make it throw — the
+                // 2026-07-26 field root cause.
+                Tag = ReadingSemantics.EncodeTaskRange(range.Start, range.End),
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 6, 0),
             };

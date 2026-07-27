@@ -61,5 +61,37 @@ W-E7 browse-mode add-on is the idiomatic closure: browse mode makes
   builder-stamped source range through the core task command; dirty and
   stale-snapshot refusals announced; caret preserved across the
   re-projection) but not yet human-AT verified.
+
+## Task-toggle field pass (2026-07-26, checkbox slice) — three defects
+
+1. **Every toggle became "Reading view could not load this note" and the
+   caret then died app-wide** (arrows pinned at the first character,
+   surviving mode toggles; chords announced synthetically without
+   moving). Root cause, reproduced by unit test: WPF's undo preservation
+   XamlWriter-serializes content removed by the re-projection merge, and
+   the checkbox's stamped `(ulong, ulong)` Tag is a GENERIC type —
+   "Cannot serialize a generic type", thrown from `Blocks.Clear()`, then
+   thrown again applying the failure notice, leaving the surface
+   half-merged. Fixed twice over: `IsUndoEnabled = false` (a read-only
+   viewer records no undo) and the Tag is now a plain string codec
+   (`ReadingSemantics.EncodeTaskRange`). Clipboard XAML serialization is
+   separately pinned green.
+2. **Space / NVDA-activation at the caret did nothing** — a caret
+   position is not element focus, so the checkbox never saw the key and
+   only a real mouse click worked. Space (task lines only) and
+   Enter/Ctrl+Enter (shared activation path) now toggle the task on the
+   caret's line, mirroring the editor's activate-at-cursor semantics.
+3. **A click left keyboard focus on a checkbox the next merge
+   destroyed** — focus recovery from a removed element is undefined
+   (contributor to the dead caret). The click handler returns focus to
+   the document, and the merge reclaims focus from embedded children
+   before mutating; caret restore failures degrade to the document
+   start instead of aborting the merge.
+
+The confusing do-undo announcement sequence ("Task completed." →
+"Task reopened." → "the editor no longer matches it") was downstream of
+defect 1: the failed merge never updated the checkbox visuals, so
+re-clicks toggled against a stale snapshot. Terminal failures now also
+log a message-free stack under `SLATE_UIA_DIAGNOSTICS`.
 - **JAWS** (installed, unmeasured) and **Narrator** (smoke scope) — pending per WGA-9.
 - Size behaviour beyond unit-level measurement; §W-A `inline_runs` goldens.

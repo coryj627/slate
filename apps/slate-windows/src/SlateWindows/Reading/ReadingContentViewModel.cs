@@ -357,8 +357,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             }
             catch (Exception exception)
             {
-                HostLog.Write(
-                    HostDiagnosticEvent.ReadingRefreshTerminalFailure, exception);
+                RecordTerminalFailure(exception);
                 PublishTerminalFailure(generation);
             }
             return;
@@ -404,8 +403,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 // Terminal: an unconditional host diagnostic (event +
                 // exception TYPE only, never payload text — W1-RT-01),
                 // then a generation-gated user-visible failure state.
-                HostLog.Write(
-                    HostDiagnosticEvent.ReadingRefreshTerminalFailure, exception);
+                RecordTerminalFailure(exception);
                 _ = _dispatcher!.InvokeAsync(
                     () => PublishTerminalFailure(generation));
             }
@@ -418,6 +416,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// <summary>Dispatcher-side (publish/chunk-build) fault injection
     /// seam for tests.</summary>
     internal Func<Exception?>? PublishFaultForTests { get; set; }
+
+    /// <summary>The exception behind the most recent terminal failure —
+    /// the log stores only the type (W1-RT-01), tests need the stack.</summary>
+    internal Exception? LastTerminalFailureForTests { get; private set; }
 
     internal bool IsDisposedForTests => _disposed;
 
@@ -659,10 +661,26 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
         catch (Exception exception)
         {
-            HostLog.Write(
-                HostDiagnosticEvent.ReadingRefreshTerminalFailure, exception);
+            RecordTerminalFailure(exception);
             PublishTerminalFailure(generation);
         }
+    }
+
+    /// <summary>
+    /// One recorder for every terminal boundary: the unconditional log
+    /// carries the exception TYPE only (W1-RT-01); under
+    /// SLATE_UIA_DIAGNOSTICS the STACK (never the message — messages
+    /// can carry payload text, frames cannot) is written too, so a
+    /// field recurrence pinpoints its origin.
+    /// </summary>
+    private void RecordTerminalFailure(Exception exception)
+    {
+        LastTerminalFailureForTests = exception;
+        HostLog.Write(
+            HostDiagnosticEvent.ReadingRefreshTerminalFailure, exception);
+        HostLog.WriteUiAutomationDiagnostic(
+            HostDiagnosticEvent.ReadingRefreshTerminalFailure,
+            $"{exception.GetType().Name}: {exception.StackTrace}");
     }
 
     /// <summary>

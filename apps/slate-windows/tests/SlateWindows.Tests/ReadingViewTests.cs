@@ -925,7 +925,8 @@ public sealed class ReadingViewTests
             Assert.False(boxes[0].IsChecked);
             Assert.True(boxes[1].IsChecked);
 
-            (ulong start, ulong end) = Assert.IsType<(ulong, ulong)>(boxes[0].Tag);
+            Assert.True(ReadingSemantics.TryDecodeTaskRange(
+                boxes[0].Tag, out ulong start, out ulong end));
             reading.ToggleTaskAt(start, end);
             WaitForUi(() => tab.Text.Contains("- [x] task one", StringComparison.Ordinal));
             Assert.False(tab.IsDirty);
@@ -971,8 +972,10 @@ public sealed class ReadingViewTests
                 startInteractionBackgroundWork: false);
             tab.ToggleViewMode();
             SlateWindows.Reading.ReadingContentViewModel reading = tab.Reading!;
-            (ulong start, ulong end) = Assert.IsType<(ulong, ulong)>(
-                CollectCheckBoxes(reading.Document!).Single().Tag);
+            Assert.True(ReadingSemantics.TryDecodeTaskRange(
+                CollectCheckBoxes(reading.Document!).Single().Tag,
+                out ulong start,
+                out ulong end));
 
             tab.EditorDocument!.Insert(0, "edited ");
             WaitForUi(() => tab.IsDirty);
@@ -1923,6 +1926,356 @@ public sealed class ReadingViewTests
                     reading.Document!.ContentStart,
                     reading.Document.ContentEnd).Text.Contains(
                         "Second body arrived", StringComparison.Ordinal));
+        });
+    }
+
+    /// <summary>
+    /// Field repro (2026-07-26 NVDA pass): clicking a task checkbox in
+    /// the ASYNC pipeline — buffer observation attached, debounce, the
+    /// real ButtonBase.Click route, layout in place — must complete the
+    /// round trip: text toggled, re-projection lands with the checkbox
+    /// checked, NO terminal failure, and the caret still navigates
+    /// afterwards. The sync-mode unit test missed all of this.
+    /// </summary>
+    [Fact]
+    public void TaskToggleClickRoundTripSurvivesTheFieldPath()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-field-toggle");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "# Reading smoke test\n\n- [ ] an open task\n- [x] a done task\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, announced.Add);
+            var surface = new ReadingSurface { Model = reading };
+            surface.Measure(new System.Windows.Size(900, 4000));
+            surface.Arrange(new System.Windows.Rect(0, 0, 900, 4000));
+            surface.UpdateLayout();
+            reading.Activate();
+            WaitForUi(() =>
+                CollectCheckBoxes(surface.Document).Count() == 2);
+
+            System.Windows.Controls.CheckBox box =
+                CollectCheckBoxes(surface.Document).First();
+            Assert.False(box.IsChecked);
+            box.RaiseEvent(new System.Windows.RoutedEventArgs(
+                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+            // The full field round trip: core command → buffer edit →
+            // debounce → refresh → re-projection.
+            WaitForUi(() => tab.Text.Contains("- [x] an open task", StringComparison.Ordinal));
+            WaitForUi(() =>
+                CollectCheckBoxes(surface.Document).FirstOrDefault()?.IsChecked == true);
+
+            Assert.True(
+                reading.LastTerminalFailureForTests is null,
+                $"terminal failure: {reading.LastTerminalFailureForTests}");
+            Assert.DoesNotContain(
+                announced,
+                item => SlateUniffiMethods.A11yRender(item).Text.Contains(
+                    "could not load", StringComparison.Ordinal));
+
+            // The caret survives the rebuild: park it at the start and
+            // walk down — it must MOVE.
+            surface.CaretPosition = surface.Document.ContentStart;
+            System.Windows.Documents.EditingCommands.MoveDownByLine.Execute(null, surface);
+            Assert.True(
+                surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition) > 1,
+                "the caret did not move after the toggle re-projection");
+        });
+    }
+
+    /// <summary>
+    /// Field repro, second stage: the same click round trip with REAL
+    /// keyboard focus in a shown window — the field click focuses the
+    /// CheckBox, and the debounced re-projection then destroys the
+    /// focused element mid-merge. The headless variant cannot see any
+    /// of the focus-driven failure modes.
+    /// </summary>
+    [Fact]
+    public void TaskToggleWithRealWindowFocusSurvives()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-field-focus");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "# Reading smoke test\n\n- [ ] an open task\n- [x] a done task\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, announced.Add);
+            var surface = new ReadingSurface { Model = reading };
+            var window = new System.Windows.Window
+            {
+                Content = surface,
+                Width = 900,
+                Height = 700,
+                ShowActivated = true,
+                ShowInTaskbar = false,
+                WindowStartupLocation = System.Windows.WindowStartupLocation.Manual,
+                Left = -2000,
+                Top = -2000,
+            };
+            try
+            {
+                window.Show();
+                reading.Activate();
+                WaitForUi(() => CollectCheckBoxes(surface.Document).Count() == 2);
+
+                System.Windows.Controls.CheckBox box =
+                    CollectCheckBoxes(surface.Document).First();
+                // The field path: the mouse click gives the checkbox
+                // real keyboard focus before Click is raised.
+                Assert.True(box.Focus(), "checkbox did not take focus");
+                box.RaiseEvent(new System.Windows.RoutedEventArgs(
+                    System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+                WaitForUi(() => tab.Text.Contains(
+                    "- [x] an open task", StringComparison.Ordinal));
+                WaitForUi(() =>
+                    CollectCheckBoxes(surface.Document).FirstOrDefault()?.IsChecked == true);
+
+                Assert.True(
+                    reading.LastTerminalFailureForTests is null,
+                    $"terminal failure: {reading.LastTerminalFailureForTests}");
+                Assert.DoesNotContain(
+                    announced,
+                    item => SlateUniffiMethods.A11yRender(item).Text.Contains(
+                        "could not load", StringComparison.Ordinal));
+
+                // The caret must still navigate after the focused
+                // element was destroyed by the merge.
+                _ = surface.Focus();
+                surface.CaretPosition = surface.Document.ContentStart;
+                System.Windows.Documents.EditingCommands.MoveDownByLine.Execute(null, surface);
+                Assert.True(
+                    surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition) > 1,
+                    "the caret did not move after the toggle re-projection");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>
+    /// Field repro, third stage: the EXACT smoke-note content (embed
+    /// card, table, quote, code fence, thematic break) with the caret
+    /// parked ON the task line — the field caret sat there, so the
+    /// merge's offset-restore branch runs, which the earlier repros
+    /// skipped at offset zero.
+    /// </summary>
+    [Fact]
+    public void TaskToggleWithSmokeNoteContentAndParkedCaretSurvives()
+    {
+        RunSta(() =>
+        {
+            const string smoke =
+                "# Reading smoke test\n\n"
+                + "A paragraph with a resolved [[Target Note]] link, a missing "
+                + "[[Nowhere Note]] link, a #smoke tag, an "
+                + "[external link](https://example.com/reading), plus **bold**, "
+                + "*italic* and `inline code`.\n\n"
+                + "## Lists and tasks\n\n"
+                + "- first bullet\n- second bullet\n  - nested bullet\n\n"
+                + "1. ordered one\n2. ordered two\n\n"
+                + "- [ ] an open task\n- [x] a done task\n\n"
+                + "## Structures\n\n"
+                + "> A block quote with another [[Target Note]] link.\n\n"
+                + "```rust\nfn spoken_interior() -> usize { 42 }\n```\n\n"
+                + "| column a | column b |\n| --- | --- |\n"
+                + "| cell one | cell two |\n\n---\n\n![[Target Note]]\n";
+            using var fixture = FixtureVault.Create(1, "reading-field-smoke");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), smoke);
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "Target Note.md"), "# Target\nBody.\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, announced.Add);
+            var surface = new ReadingSurface { Model = reading };
+            var window = new System.Windows.Window
+            {
+                Content = surface,
+                Width = 900,
+                Height = 700,
+                ShowInTaskbar = false,
+                WindowStartupLocation = System.Windows.WindowStartupLocation.Manual,
+                Left = -2000,
+                Top = -2000,
+            };
+            try
+            {
+                window.Show();
+                reading.Activate();
+                WaitForUi(() => CollectCheckBoxes(surface.Document).Count() == 2);
+
+                System.Windows.Controls.CheckBox box =
+                    CollectCheckBoxes(surface.Document).First();
+                // Park the caret ON the task line (the field position),
+                // then take focus and click, exactly as the mouse does.
+                var container = (InlineUIContainer)box.Parent;
+                surface.CaretPosition = container.ElementStart;
+                Assert.True(box.Focus(), "checkbox did not take focus");
+                box.RaiseEvent(new System.Windows.RoutedEventArgs(
+                    System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+                WaitForUi(() => tab.Text.Contains(
+                    "- [x] an open task", StringComparison.Ordinal));
+                WaitForUi(() =>
+                    CollectCheckBoxes(surface.Document).FirstOrDefault()?.IsChecked == true);
+
+                Assert.True(
+                    reading.LastTerminalFailureForTests is null,
+                    $"terminal failure: {reading.LastTerminalFailureForTests}");
+
+                // Toggle the second checkbox too — the field hit both.
+                System.Windows.Controls.CheckBox second =
+                    CollectCheckBoxes(surface.Document).Last();
+                Assert.True(second.IsChecked);
+                surface.CaretPosition =
+                    ((InlineUIContainer)second.Parent).ElementStart;
+                _ = second.Focus();
+                second.RaiseEvent(new System.Windows.RoutedEventArgs(
+                    System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                WaitForUi(() => tab.Text.Contains(
+                    "- [ ] a done task", StringComparison.Ordinal));
+                WaitForUi(() =>
+                    CollectCheckBoxes(surface.Document).LastOrDefault()?.IsChecked == false);
+                Assert.True(
+                    reading.LastTerminalFailureForTests is null,
+                    $"terminal failure: {reading.LastTerminalFailureForTests}");
+                Assert.DoesNotContain(
+                    announced,
+                    item => SlateUniffiMethods.A11yRender(item).Text.Contains(
+                        "could not load", StringComparison.Ordinal));
+
+                // Caret navigation must survive both rebuilds.
+                _ = surface.Focus();
+                surface.CaretPosition = surface.Document.ContentStart;
+                System.Windows.Documents.EditingCommands.MoveDownByLine.Execute(null, surface);
+                Assert.True(
+                    surface.Document.ContentStart.GetOffsetToPosition(surface.CaretPosition) > 1,
+                    "the caret did not move after the toggle re-projections");
+            }
+            finally
+            {
+                window.Close();
+            }
+        });
+    }
+
+    /// <summary>
+    /// Field gap (2026-07-26): Space and Enter at the caret on a task
+    /// line did nothing — a caret position is not element focus, so
+    /// the checkbox never saw the key. Both now toggle through the
+    /// caret path; Space on a non-task line stays unhandled.
+    /// </summary>
+    [Fact]
+    public void SpaceAndEnterAtTheCaretToggleTheTaskLine()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-caret-toggle");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "# Heading\n\nPlain paragraph.\n\n- [ ] an open task\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            surface.Measure(new System.Windows.Size(900, 4000));
+            surface.Arrange(new System.Windows.Rect(0, 0, 900, 4000));
+            surface.UpdateLayout();
+
+            // Caret on a non-task line: not handled.
+            surface.CaretPosition = surface.Document.ContentStart;
+            Assert.False(surface.TryToggleTaskAtCaret());
+
+            // Caret on the task line: Space's path toggles.
+            System.Windows.Controls.CheckBox box =
+                CollectCheckBoxes(surface.Document).Single();
+            surface.CaretPosition = ((InlineUIContainer)box.Parent).ElementStart;
+            Assert.True(surface.TryToggleTaskAtCaret());
+            WaitForUi(() => tab.Text.Contains(
+                "- [x] an open task", StringComparison.Ordinal));
+
+            // Enter's shared activation path reaches the same toggle
+            // (no link at the caret → falls through to the task line).
+            tab.Reading!.Refresh();
+            box = CollectCheckBoxes(surface.Document).Single();
+            Assert.True(box.IsChecked);
+            surface.CaretPosition = ((InlineUIContainer)box.Parent).ElementStart;
+            Assert.True(surface.TryActivateAtCaret());
+            WaitForUi(() => tab.Text.Contains(
+                "- [ ] an open task", StringComparison.Ordinal));
+        });
+    }
+
+    /// <summary>
+    /// Field root cause (2026-07-26): WPF's text engine SERIALIZES
+    /// document content — undo records on every merge, XAML clipboard
+    /// on copy — and XamlWriter refuses generic types, so a
+    /// ValueTuple checkbox Tag turned the first post-click merge into
+    /// "Reading view could not load this note" and a dead caret. Every
+    /// stamped payload must survive TextRange.Save, and copying the
+    /// whole reading document must never throw.
+    /// </summary>
+    [Fact]
+    public void ReadingDocumentContentSurvivesClipboardSerialization()
+    {
+        RunSta(() =>
+        {
+            FlowDocument document = BuildSource(
+                "# H\n\nA [[known]] link and #tag and [x](https://e.com) here.\n\n"
+                + "- [ ] an open task\n\n![[known]]\n");
+            using var stream = new MemoryStream();
+            new TextRange(document.ContentStart, document.ContentEnd)
+                .Save(stream, System.Windows.DataFormats.Xaml);
+            Assert.True(stream.Length > 0);
         });
     }
 

@@ -124,6 +124,16 @@ internal sealed class ReadingNavigator
             e.Handled = true;
             return;
         }
+        // Space toggles the task checkbox on the caret's line — the
+        // checkbox convention every AT user tries first (field,
+        // 2026-07-26). Task-only: Space must never activate a link.
+        if (key == Key.Space
+            && Keyboard.Modifiers is ModifierKeys.None
+            && _surface.TryToggleTaskAtCaret())
+        {
+            e.Handled = true;
+            return;
+        }
         bool chordShaped = (Keyboard.Modifiers
             & (ModifierKeys.Control | ModifierKeys.Alt))
             == (ModifierKeys.Control | ModifierKeys.Alt);

@@ -69,6 +69,40 @@ internal static class ReadingSemantics
 
     public static bool IsEmbed(BlockUIContainer container) =>
         Equals(container.GetValue(MarkerProperty), Marker.Embed);
+
+    /// <summary>
+    /// Task-range Tag codec. WPF text machinery XamlWriter-serializes
+    /// document content (undo preservation especially), and generic
+    /// payloads make it throw — so the stamped range is a plain string.
+    /// A HOST-INTERNAL address, not core semantics: decoding it back is
+    /// not the §10.8 re-derivation the census forbids.
+    /// </summary>
+    public static string EncodeTaskRange(ulong start, ulong end) =>
+        string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{start}:{end}");
+
+    public static bool TryDecodeTaskRange(object? tag, out ulong start, out ulong end)
+    {
+        start = 0;
+        end = 0;
+        if (tag is not string encoded)
+        {
+            return false;
+        }
+        int split = encoded.IndexOf(':', StringComparison.Ordinal);
+        return split > 0
+            && ulong.TryParse(
+                encoded.AsSpan(0, split),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out start)
+            && ulong.TryParse(
+                encoded.AsSpan(split + 1),
+                System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture,
+                out end);
+    }
 }
 
 /// <summary>
