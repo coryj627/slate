@@ -426,7 +426,17 @@ internal static class ReadingDocumentBuilder
             return unmatchedParagraph;
         }
 
-        System.Windows.UIElement? visual = TryRenderFormula(matched.Source);
+        // Core's degradation verdict gates the HOST renderer too
+        // (round 6): budget-rejected and unconvertible formulas carry
+        // empty MathML, and feeding their raw source to WPFMath would
+        // re-do on the dispatcher exactly the unbounded work the core
+        // budget refused — supported oversized TeX parses into a giant
+        // Geometry. The conservative cost: a formula pulldown-latex
+        // cannot convert loses its visual even if WPFMath could have
+        // drawn it; it keeps source-in-range + the artifact element.
+        System.Windows.UIElement? visual = matched.Mathml.Length > 0
+            ? TryRenderFormula(matched.Source)
+            : null;
         if (visual is null)
         {
             // Coverage gap (documented WPFMath subset, matrix-rowed):
@@ -502,8 +512,14 @@ internal static class ReadingDocumentBuilder
     /// documented coverage boundary (TexException family) or renderer
     /// failure — callers degrade to source-in-range.
     /// </summary>
+    /// <summary>Fires with the LaTeX whenever the WPFMath renderer is
+    /// entered — the round-6 pin that core-degraded artifacts never
+    /// reach it asserts this stays silent.</summary>
+    internal static Action<string>? FormulaRenderProbeForTests;
+
     private static System.Windows.UIElement? TryRenderFormula(string latex)
     {
+        FormulaRenderProbeForTests?.Invoke(latex);
         try
         {
             XamlMath.TexFormula formula =

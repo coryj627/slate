@@ -264,20 +264,23 @@ public sealed class ReadingMathTests
     }
 
     /// <summary>
-    /// Round 5 end-to-end: an oversized authored formula degrades in
-    /// CORE under the per-formula source budget (typed speech, no
-    /// MathML/braille, no MathCAT worker time) and the host renders it
-    /// source-in-range with honest interactions — bounded work for a
-    /// note built to exhaust the math pipeline.
+    /// Round 5/6 end-to-end: an oversized authored formula of
+    /// SUPPORTED TeX degrades in CORE under the per-formula source
+    /// budget (typed speech, no MathML/braille, no MathCAT worker
+    /// time) — and the host honors that verdict: WPFMath is never
+    /// entered (a supported oversized formula would otherwise parse
+    /// into a giant Geometry on the dispatcher), the source renders
+    /// in range, and interactions stay honest.
     /// </summary>
     [Fact]
-    public void OversizedFormulaDegradesEndToEnd()
+    public void OversizedFormulaDegradesEndToEndWithoutEnteringTheRenderer()
     {
         RunSta(() =>
         {
-            string oversized = "\\begin{bmatrix}"
-                + new string('x', 17 * 1024)
-                + "\\end{bmatrix}";
+            // Plain "x+x+…+x": WPFMath parses this happily, which is
+            // exactly why the core verdict must gate the call.
+            string oversized = string.Concat(
+                Enumerable.Repeat("x+", (17 * 1024) / 2)) + "x";
             using var fixture = FixtureVault.Create(1, "reading-math-oversized");
             File.WriteAllText(
                 Path.Combine(fixture.Root, "note0.md"),
@@ -286,34 +289,45 @@ public sealed class ReadingMathTests
             using var cancel = new CancelToken();
             session.ScanInitial(cancel);
 
-            var announced = new List<A11yEvent>();
-            using var tab = new WorkspaceTabViewModel(
-                session,
-                new WorkspaceTabState(
-                    Guid.NewGuid(),
-                    new WorkspaceItemState(
-                        WorkspaceItemKind.Markdown, "note0.md")),
-                announce: announced.Add,
-                startInteractionBackgroundWork: false);
-            tab.ToggleViewMode();
-            var surface = new ReadingSurface { Model = tab.Reading };
+            var rendererEntered = new List<string>();
+            ReadingDocumentBuilder.FormulaRenderProbeForTests = rendererEntered.Add;
+            try
+            {
+                var announced = new List<A11yEvent>();
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(
+                            WorkspaceItemKind.Markdown, "note0.md")),
+                    announce: announced.Add,
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                var surface = new ReadingSurface { Model = tab.Reading };
 
-            ReadingMathElement element =
-                Assert.Single(FindMathElements(surface.Document));
-            Assert.Equal(
-                "Math expression too large to render to accessible speech.",
-                System.Windows.Automation.AutomationProperties.GetName(element));
-            Assert.Empty(element.Braille);
-            Assert.Empty(element.MathMl);
+                Assert.Empty(rendererEntered);
+                ReadingMathElement element =
+                    Assert.Single(FindMathElements(surface.Document));
+                Assert.Null(element.Content);
+                Assert.Equal(
+                    "Math expression too large to render to accessible speech.",
+                    System.Windows.Automation.AutomationProperties.GetName(element));
+                Assert.Empty(element.Braille);
+                Assert.Empty(element.MathMl);
 
-            ReadingLandmark landmark = Assert.Single(
-                surface.LandmarksForTests,
-                candidate => candidate.Kind == ReadingLandmarkKind.Math);
-            surface.CaretPosition = landmark.Position;
-            Assert.True(surface.TryActivateAtCaret(brailleRequested: true));
-            Assert.Equal(
-                "Braille not available.",
-                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+                ReadingLandmark landmark = Assert.Single(
+                    surface.LandmarksForTests,
+                    candidate => candidate.Kind == ReadingLandmarkKind.Math);
+                surface.CaretPosition = landmark.Position;
+                Assert.True(surface.TryActivateAtCaret(brailleRequested: true));
+                Assert.Equal(
+                    "Braille not available.",
+                    SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+            }
+            finally
+            {
+                ReadingDocumentBuilder.FormulaRenderProbeForTests = null;
+            }
         });
     }
 
