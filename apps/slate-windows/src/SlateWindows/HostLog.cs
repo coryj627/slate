@@ -66,6 +66,7 @@ internal enum HostDiagnosticEvent
     WindowPositionFailed,
     WindowStatePersistFailed,
     AppPreferencesPersistFailed,
+    MathMlUiaPropertyUnavailable,
     WorkspacePersistFailed,
 }
 
