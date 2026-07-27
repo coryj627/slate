@@ -2595,6 +2595,94 @@ public sealed class ReadingViewTests
     }
 
     /// <summary>
+    /// W3-4 adversarial round 2 [medium]: a SAME-LENGTH dirty edit
+    /// (41 → 42) then a save leaves live text, offsets, lengths, and
+    /// token counts identical — only CONTENT differs, so the memo
+    /// digest must be content-complete or highlighting never returns.
+    /// </summary>
+    [Fact]
+    public void SameLengthEditThenSaveRecoversHighlighting()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-save");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\nfn f() -> u8 { 41 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            Assert.True(FindCodeParagraph(surface.Document).Inlines.Count > 1);
+
+            // Same-length dirty edit inside the fence → incoherent →
+            // plain run.
+            tab.EditorDocument!.Replace(
+                tab.Text.IndexOf("41", StringComparison.Ordinal), 2, "42");
+            tab.Reading!.Refresh();
+            Assert.Single(FindCodeParagraph(surface.Document).Inlines);
+
+            // Save: live text unchanged from the dirty refresh, saved
+            // artifact now coherent again — highlighting must return.
+            Assert.True(tab.Save());
+            tab.Reading!.Refresh();
+            Assert.True(
+                FindCodeParagraph(surface.Document).Inlines.Count > 1,
+                "highlighting did not recover after the save");
+            Assert.Contains(
+                "42",
+                string.Concat(
+                    FindCodeParagraph(surface.Document)
+                        .Inlines.OfType<Run>().Select(run => run.Text)),
+                StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 2 [high]: clipboard contention surfaces
+    /// as ExternalException — the copy handler logs, announces the
+    /// failure, and never lets it escape the click.
+    /// </summary>
+    [Fact]
+    public void ClipboardContentionAnnouncesInsteadOfCrashing()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-clip");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "```rust\nfn x() {}\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            tab.Reading!.ClipboardForTests = _ =>
+                throw new System.Runtime.InteropServices.ExternalException("busy");
+
+            tab.Reading!.CopyCode("anything");
+            Assert.Equal(
+                "Could not copy code. Try again.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        });
+    }
+
+    /// <summary>
     /// W3-4 adversarial round 1 [medium]: explicit JSON null and
     /// unknown verbosity values decode to the default instead of
     /// throwing out of initialization.
@@ -2629,6 +2717,67 @@ public sealed class ReadingViewTests
         {
             Directory.Delete(directory, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 2: CRLF-authored fences must keep their
+    /// highlighting (the saved artifact preserves raw CRLF while the
+    /// reading interior may normalize), and authored trailing blank
+    /// lines survive display — the interior renders verbatim, so
+    /// what is spoken, shown, and counted by the preamble agree.
+    /// </summary>
+    [Fact]
+    public void CrlfFencesKeepTokensAndTrailingBlankLinesSurvive()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-crlf");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\r\nfn crlf() -> u8 { 3 }\r\n```\r\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "blanks.md"),
+                "```rust\nfn a() {}\n\n\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            Paragraph crlf = FindCodeParagraph(surface.Document);
+            Assert.True(
+                crlf.Inlines.Count > 1,
+                "CRLF fence lost its highlighting — coherence must normalize line endings");
+            Assert.Contains(
+                "fn crlf()",
+                string.Concat(crlf.Inlines.OfType<Run>().Select(run => run.Text)),
+                StringComparison.Ordinal);
+
+            using var blanksTab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "blanks.md")),
+                startInteractionBackgroundWork: false);
+            blanksTab.ToggleViewMode();
+            var blanksSurface = new ReadingSurface { Model = blanksTab.Reading };
+            Paragraph blanks = FindCodeParagraph(blanksSurface.Document);
+            string displayed = string.Concat(
+                blanks.Inlines.OfType<Run>().Select(run => run.Text));
+            // Interior = "fn a() {}\n\n" (one trailing newline stripped
+            // by the parser): the authored blank line SURVIVES display,
+            // and the preamble counts the same content.
+            Assert.EndsWith("fn a() {}\n\n", displayed.Length >= 2 ? displayed : "  ");
+            Assert.Equal(
+                "Code block, rust, 2 lines.",
+                System.Windows.Automation.AutomationProperties.GetName(blanks));
+        });
     }
 
     private static Paragraph FindCodeParagraph(FlowDocument document) =>

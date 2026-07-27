@@ -236,12 +236,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     {
         try
         {
-            System.Windows.Clipboard.SetText(source);
+            (ClipboardForTests ?? System.Windows.Clipboard.SetText)(source);
         }
-        catch (System.Runtime.InteropServices.COMException)
+        catch (System.Runtime.InteropServices.ExternalException exception)
         {
-            // Another process holds the clipboard: say so instead of
-            // silently doing nothing.
+            // WPF surfaces clipboard contention as ExternalException
+            // (COMException is only its subtype) — the MainWindow
+            // CopyText precedent. Log + say so instead of letting a
+            // busy clipboard crash the UI thread out of a click.
+            HostLog.Write(HostDiagnosticEvent.ClipboardCopyFailed, exception);
             _announce(new A11yEvent.HostComposed(
                 "Could not copy code. Try again.",
                 A11yPriority.High));
@@ -249,6 +252,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
         _announce(new A11yEvent.CodeCopied());
     }
+
+    /// <summary>Clipboard injection seam for tests.</summary>
+    internal Action<string>? ClipboardForTests { get; set; }
 
     /// <summary>
     /// Toggle the task whose checkbox lives inside the given source
@@ -879,12 +885,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
     /// <summary>
-    /// A structural identity for the saved code artifact, folded into
-    /// the memo: CodeBlock carries arrays (reference equality would
-    /// defeat every hit), but the memo must still see a save that
-    /// changed tokens with the live text unchanged, and a degraded
-    /// fetch must never memo-match the successful one that recovers
-    /// from it.
+    /// A CONTENT-COMPLETE identity for the saved code artifact, folded
+    /// into the memo: CodeBlock carries arrays (reference equality
+    /// would defeat every hit), but the memo must see a save that
+    /// changed source or token CONTENT with the live text unchanged —
+    /// offsets/lengths/counts alone collide on same-length edits
+    /// (41 -> 42 froze un-highlighted rendering across its save). A
+    /// degraded fetch is its own identity so recovery always rebuilds.
     /// </summary>
     private static string CodeArtifactDigest(CodeBlock[] blocks, bool degraded)
     {
@@ -892,18 +899,28 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return "degraded";
         }
-        var digest = new System.Text.StringBuilder();
+        var canonical = new System.Text.StringBuilder();
         foreach (CodeBlock block in blocks)
         {
-            digest.Append(block.ByteOffset)
-                .Append(':')
-                .Append(block.Source.Length)
-                .Append(':')
-                .Append(block.Tokens.Length)
-                .Append(':')
+            canonical.Append(block.ByteOffset)
+                .Append('\u0001')
                 .Append(block.Language)
-                .Append(';');
+                .Append('\u0001')
+                .Append(block.Source)
+                .Append('\u0001');
+            foreach (SyntaxToken token in block.Tokens)
+            {
+                canonical.Append(token.StartByte)
+                    .Append(':')
+                    .Append(token.EndByte)
+                    .Append(':')
+                    .Append(token.Kind)
+                    .Append(';');
+            }
+            canonical.Append('\u0002');
         }
-        return digest.ToString();
+        byte[] hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(canonical.ToString()));
+        return Convert.ToHexString(hash);
     }
 }

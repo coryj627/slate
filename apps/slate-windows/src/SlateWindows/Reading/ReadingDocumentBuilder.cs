@@ -266,13 +266,17 @@ internal static class ReadingDocumentBuilder
         // TOKENS, and only when it is coherent with the live content
         // (an unsaved edit inside a fence keeps byte containment, and
         // rendering or copying the stale saved source would lie to the
-        // reader and the clipboard). Coherence = identical source
-        // (modulo the one trailing newline the reading interior
-        // strips) and identical language.
+        // reader and the clipboard). Coherence is compared over
+        // LF-NORMALIZED saved source (the saved artifact preserves raw
+        // CRLF; the reading interior is LF — measured: every CRLF
+        // fence silently lost highlighting under an exact compare),
+        // modulo the one trailing newline the reading interior strips,
+        // plus identical language.
+        string normalizedSaved = matched?.Source.Replace("\r\n", "\n") ?? string.Empty;
         bool coherent = matched is not null
-            && (string.Equals(matched.Source, fence.Interior, StringComparison.Ordinal)
+            && (string.Equals(normalizedSaved, fence.Interior, StringComparison.Ordinal)
                 || string.Equals(
-                    matched.Source,
+                    normalizedSaved,
                     fence.Interior + "\n",
                     StringComparison.Ordinal))
             && string.Equals(
@@ -284,9 +288,12 @@ internal static class ReadingDocumentBuilder
         string? language = fence.Language.Length == 0 ? null : fence.Language;
         string preamble = SlateUniffiMethods.CodeBlockPreamble(language, source);
 
+        // The interior renders VERBATIM — TrimEnd ate authored trailing
+        // blank lines, so display disagreed with the preamble's count
+        // and with what Copy delivered.
         Paragraph paragraph = coherent
-            ? TokenParagraph(matched!)
-            : MonospaceParagraph(fence.Interior.TrimEnd('\n', '\r'));
+            ? TokenParagraph(matched!, fence.Interior)
+            : MonospaceParagraph(fence.Interior);
         ReadingSemantics.MarkCodeBlock(paragraph);
         AutomationProperties.SetName(paragraph, preamble);
 
@@ -311,17 +318,28 @@ internal static class ReadingDocumentBuilder
     }
 
     /// <summary>
-    /// The matched block's source as token-colored runs — plain
-    /// attribute application over core-computed byte ranges (§10.8:
-    /// nothing is re-derived; gaps keep the default text brush, exactly
-    /// as mac's attributed-string base layer does). Token offsets are
-    /// UTF-8 into the block source; the display trims exactly the
-    /// trailing newline, so ranges clamp to the rendered length.
+    /// The LIVE interior as token-colored runs — plain attribute
+    /// application over core-computed byte ranges (§10.8: nothing is
+    /// re-derived; gaps keep the default text brush, exactly as mac's
+    /// attributed-string base layer does). Token offsets are UTF-8
+    /// into the RAW saved source, which may carry CRLF the interior
+    /// normalizes away — each offset shifts left by the count of
+    /// CR-in-CRLF bytes before it (coherence guarantees the normalized
+    /// forms are identical), then clamps to the rendered length.
     /// </summary>
-    private static Paragraph TokenParagraph(CodeBlock matched)
+    private static Paragraph TokenParagraph(CodeBlock matched, string interior)
     {
-        string display = matched.Source.TrimEnd('\n', '\r');
+        string display = interior;
         byte[] utf8 = Encoding.UTF8.GetBytes(display);
+        byte[] raw = Encoding.UTF8.GetBytes(matched.Source);
+        int[] carriageReturnsBefore = new int[raw.Length + 1];
+        for (int i = 0; i < raw.Length; i++)
+        {
+            carriageReturnsBefore[i + 1] = carriageReturnsBefore[i]
+                + (raw[i] == (byte)'\r'
+                    && i + 1 < raw.Length
+                    && raw[i + 1] == (byte)'\n' ? 1 : 0);
+        }
         var paragraph = new Paragraph
         {
             FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
@@ -332,8 +350,12 @@ internal static class ReadingDocumentBuilder
         int cursor = 0;
         foreach (SyntaxToken token in matched.Tokens)
         {
-            int start = Math.Clamp((int)token.StartByte, cursor, utf8.Length);
-            int end = Math.Clamp((int)token.EndByte, start, utf8.Length);
+            int rawStart = Math.Min((int)token.StartByte, raw.Length);
+            int rawEnd = Math.Min((int)token.EndByte, raw.Length);
+            int start = Math.Clamp(
+                rawStart - carriageReturnsBefore[rawStart], cursor, utf8.Length);
+            int end = Math.Clamp(
+                rawEnd - carriageReturnsBefore[rawEnd], start, utf8.Length);
             if (start > cursor)
             {
                 paragraph.Inlines.Add(
