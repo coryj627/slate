@@ -396,6 +396,24 @@ internal static class ReadingDocumentBuilder
             && candidate.ByteOffset >= block.ByteStart
             && candidate.ByteOffset < block.ByteEnd);
 
+        // LIVE-source coherence (the W3-4 lesson, round-1 finding
+        // here): the reading block is parsed from the live buffer, the
+        // artifact from the SAVED file, and a same-position unsaved
+        // edit ($$x$$ -> $$y$$) keeps byte containment. Speaking the
+        // old equation would be an outright lie to an AT user, so the
+        // artifact only applies when its source equals the live fence
+        // interior (delimiters stripped host-side — the mac
+        // strippedMathDelimiters precedent; a core interior field for
+        // the reading MathBlock variant is the recorded follow-up).
+        if (matched is not null
+            && !string.Equals(
+                matched.Source.Trim(),
+                StripMathDelimiters(block.Source),
+                StringComparison.Ordinal))
+        {
+            matched = null;
+        }
+
         string speech = matched is { Speech.Length: > 0 } speechful
             ? speechful.Speech.Trim()
             : "Math expression.";
@@ -429,6 +447,25 @@ internal static class ReadingDocumentBuilder
         };
         ReadingSemantics.MarkMathBlock(paragraph, speech);
         return paragraph;
+    }
+
+    /// <summary>The live fence interior for coherence comparison:
+    /// trims, then strips the $$/$ delimiter pair the reading block's
+    /// raw slice carries (mac ReadingPrintComposer precedent).</summary>
+    private static string StripMathDelimiters(string source)
+    {
+        string trimmed = source.Trim();
+        if (trimmed.StartsWith("$$", StringComparison.Ordinal)
+            && trimmed.EndsWith("$$", StringComparison.Ordinal)
+            && trimmed.Length >= 4)
+        {
+            return trimmed[2..^2].Trim();
+        }
+        if (trimmed.StartsWith('$') && trimmed.EndsWith('$') && trimmed.Length >= 2)
+        {
+            return trimmed[1..^1].Trim();
+        }
+        return trimmed;
     }
 
     /// <summary>

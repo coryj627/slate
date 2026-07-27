@@ -860,7 +860,7 @@ public sealed class ShellAccessibilityTests
         Directory.CreateDirectory(vaultRoot);
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"),
-            "# Identity note\n\nBody text.\n");
+            "# Identity note\n\nBody text.\n\n$$x^2 + 1$$\n");
 
         Process? process = null;
         try
@@ -928,6 +928,34 @@ public sealed class ShellAccessibilityTests
             Assert.True(
                 surface.Patterns.Text.IsSupported,
                 "ReadingSurface does not expose the Text pattern.");
+
+            // W3-2 external verification (round-1 [high]): the MathML
+            // convention property must be readable CROSS-PROCESS from
+            // the production app with ZERO app cooperation — this test
+            // registers the same GUID client-side exactly as NVDA does
+            // (ids are process-local; the GUID is the wire key) and
+            // reads the value off the math element's peer. The test
+            // project deliberately never links the app assembly.
+            int mathMlPropertyId = RegisterMathMlPropertyAsClient();
+            AutomationElement? math = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        math = window.FindFirstDescendant(
+                            cf => cf.ByLocalizedControlType("math"));
+                        return math is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no element with localized control type 'math' appeared");
+            var native = (FlaUI.UIA3.UIA3FrameworkAutomationElement)
+                math!.FrameworkAutomationElement;
+            object? mathMl = native.NativeElement.GetCurrentPropertyValue(
+                mathMlPropertyId);
+            Assert.True(
+                mathMl is string { Length: > 0 } markup
+                    && markup.TrimStart().StartsWith("<math", StringComparison.Ordinal),
+                $"MathML property value: {mathMl ?? "<null>"}");
         }
         finally
         {
@@ -1307,6 +1335,54 @@ public sealed class ShellAccessibilityTests
 
         Assert.True(found, $"UIA element {automationId} did not become available.");
         return element!;
+    }
+
+    /// <summary>Client-side registration of the Word/Chromium MathML
+    /// convention property — the exact dance NVDA performs. Returns
+    /// the process-local property id mapped from the shared GUID.</summary>
+    private static int RegisterMathMlPropertyAsClient()
+    {
+        var registrar = (IUIAutomationRegistrar)new CUIAutomationRegistrar();
+        nint name = Marshal.StringToCoTaskMemUni("MathML");
+        try
+        {
+            var info = new UiaPropertyInfo
+            {
+                Guid = new Guid("FA170AB3-3229-4E7C-827F-DD05EE0481D9"),
+                ProgrammaticName = name,
+                Type = 3, // UIAutomationType_String
+            };
+            registrar.RegisterProperty(ref info, out int id);
+            return id;
+        }
+        finally
+        {
+            Marshal.FreeCoTaskMem(name);
+        }
+    }
+
+    [System.Runtime.InteropServices.ComImport]
+    [System.Runtime.InteropServices.Guid("6E29FABF-9977-42D1-8D0E-CA7E61AD87E6")]
+    private class CUIAutomationRegistrar
+    {
+    }
+
+    [System.Runtime.InteropServices.ComImport]
+    [System.Runtime.InteropServices.Guid("8609C4EC-4A1A-4D88-A357-5A66E060E1CF")]
+    [System.Runtime.InteropServices.InterfaceType(
+        System.Runtime.InteropServices.ComInterfaceType.InterfaceIsIUnknown)]
+    private interface IUIAutomationRegistrar
+    {
+        void RegisterProperty(ref UiaPropertyInfo property, out int propertyId);
+    }
+
+    [System.Runtime.InteropServices.StructLayout(
+        System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct UiaPropertyInfo
+    {
+        public Guid Guid;
+        public nint ProgrammaticName;
+        public int Type;
     }
 
     private static string SlateWindowsExe()

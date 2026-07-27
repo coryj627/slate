@@ -348,7 +348,14 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         Action<string> persist,
         string? boolC = null)
     {
+        // MathSpeak is NOT selectable (round-1 [medium], #1056): the
+        // upstream engine never implemented it, and confirming a
+        // speech convention that silently stays ClearSpeak is a lie
+        // to the exact users the setting serves. The stored key stays
+        // decodable for forward compatibility; the menu item is
+        // disabled. Re-enable when #1056 lands.
         if (parameter is not string key
+            || key == "mathSpeak"
             || !names.TryGetValue(key, out string? display)
             || string.Equals(field, key, StringComparison.Ordinal))
         {

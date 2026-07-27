@@ -969,7 +969,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             foreach (WorkspaceTabViewModel tab in
                 Groups.SelectMany(group => group.Tabs))
             {
-                tab.Reading?.EnsureProjected();
+                tab.Reading?.InvalidateForPrefsChange();
             }
         };
         _activeLeaf = Leaves[0];

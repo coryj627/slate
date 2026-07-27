@@ -187,6 +187,29 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     internal bool ProjectionComplete => _projectionComplete;
 
     /// <summary>
+    /// Preference-change invalidation (W3-2 round 1): drop the memo so
+    /// the NEXT projection re-renders with the new prefs, and refresh
+    /// NOW only when a surface is actually attached (the
+    /// BlocksAppended subscription is the attachment signal). Unlike
+    /// <see cref="EnsureProjected"/> this attaches no observers and
+    /// sets no rebind-recovery state — hidden models must not start
+    /// discarded background builds, and a later terminal failure must
+    /// not replace valid displayed content with the failure notice.
+    /// </summary>
+    public void InvalidateForPrefsChange()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _memo = null;
+        if (BlocksAppended is not null)
+        {
+            Refresh();
+        }
+    }
+
+    /// <summary>
     /// The surface unbound this model (tab switch, template rebind).
     /// The stream MUST die here: chunk continuations append into list
     /// objects that now belong to whatever the surface shows next —

@@ -346,6 +346,127 @@ public sealed class ReadingMathTests
         });
     }
 
+    /// <summary>
+    /// W3-2 round 1 [high]: a same-position unsaved edit keeps byte
+    /// containment, and speaking the OLD equation would be a lie —
+    /// the artifact only applies under live-source coherence; the
+    /// stale case degrades to the live source in range.
+    /// </summary>
+    [Fact]
+    public void UnsavedMathEditsNeverSpeakTheStaleFormula()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-math-stale");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "$$x^2 + 1$$\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            Assert.Single(FindMathElements(surface.Document));
+
+            // Same-length, same-position unsaved edit inside the fence.
+            tab.EditorDocument!.Replace(
+                tab.Text.IndexOf("x^2 + 1", StringComparison.Ordinal), 7, "y^3 - 2");
+            tab.Reading!.Refresh();
+
+            Assert.Empty(FindMathElements(surface.Document));
+            string text = new System.Windows.Documents.TextRange(
+                surface.Document.ContentStart,
+                surface.Document.ContentEnd).Text;
+            Assert.Contains("y^3 - 2", text, StringComparison.Ordinal);
+            Assert.DoesNotContain("x^2 + 1", text, StringComparison.Ordinal);
+            ReadingLandmark landmark = Assert.Single(
+                surface.LandmarksForTests,
+                candidate => candidate.Kind == ReadingLandmarkKind.Math);
+            Assert.Contains("y^3", landmark.Text, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// W3-2 round 1 [medium]: a prefs change must NOT reactivate
+    /// hidden projections — an unbound model keeps its document and
+    /// starts no background work; it rebuilds with the new prefs on
+    /// its next genuine bind.
+    /// </summary>
+    [Fact]
+    public void PrefsChangesLeaveHiddenProjectionsAloneUntilRebind()
+    {
+        RunSta(() =>
+        {
+            string directory = Path.Combine(
+                Path.GetTempPath(), $"slate-math-hidden-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(directory);
+            try
+            {
+                var store = new AppPreferencesStore(
+                    Path.Combine(directory, "preferences.json"));
+                using var fixture = FixtureVault.Create(1, "reading-math-hidden");
+                File.WriteAllText(
+                    Path.Combine(fixture.Root, "first.md"), "$$a+b$$\n");
+                File.WriteAllText(
+                    Path.Combine(fixture.Root, "second.md"), "$$c+d$$\n");
+                using var session = VaultSession.OpenFilesystem(fixture.Root);
+                using var cancel = new CancelToken();
+                session.ScanInitial(cancel);
+
+                using var workspace = new WorkspaceViewModel(
+                    session,
+                    fixture.Root,
+                    () => [],
+                    _ => { },
+                    startInteractionBackgroundWork: false,
+                    preferencesStore: store);
+                workspace.OpenPath("first.md");
+                WorkspaceTabViewModel hidden = workspace.ActiveGroup.ActiveTab!;
+                hidden.ToggleViewMode();
+                System.Windows.Documents.FlowDocument hiddenDocument =
+                    hidden.Reading!.Document!;
+
+                // No surface bound anywhere: the pref flip must not
+                // touch the hidden projection.
+                workspace.EditorPreferences.SetMathBrailleCodeCommand.Execute("ueb");
+                Assert.Same(hiddenDocument, hidden.Reading!.Document);
+
+                // The next genuine bind rebuilds with the new prefs.
+                var surface = new ReadingSurface { Model = hidden.Reading };
+                Assert.NotSame(hiddenDocument, hidden.Reading!.Document);
+            }
+            finally
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        });
+    }
+
+    /// <summary>W3-2 round 1 [medium]: MathSpeak is unimplemented
+    /// upstream (#1056) — selecting it is rejected with no false
+    /// confirmation, and the style stays ClearSpeak.</summary>
+    [Fact]
+    public void MathSpeakIsNotSelectable()
+    {
+        var announced = new List<A11yEvent>();
+        using var preferences = new EditorPreferencesViewModel(
+            announced.Add,
+            new FakeEditorSpellingService());
+        Assert.True(preferences.IsMathSpeechClearSpeak);
+
+        preferences.SetMathSpeechStyleCommand.Execute("mathSpeak");
+        Assert.True(preferences.IsMathSpeechClearSpeak);
+        Assert.False(preferences.IsMathSpeechMathSpeak);
+        Assert.Empty(announced);
+    }
+
     private static IEnumerable<ReadingMathElement> FindMathElements(
         System.Windows.Documents.FlowDocument document)
     {
