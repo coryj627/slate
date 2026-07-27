@@ -836,6 +836,125 @@ public sealed class ShellAccessibilityTests
                 new JsonSerializerOptions { WriteIndented = true }));
     }
 
+    /// <summary>
+    /// W3-1 identity contract (`w3_spec.md` §W3-1): the W-E7 AT-idiom
+    /// layers — an NVDA add-on appModule keyed on the executable name,
+    /// JAWS scripts keyed on the window — depend on the exe name, the
+    /// main-window AutomationId, and the reading-surface AutomationId.
+    /// All three are externally-dependable API (recorded in
+    /// `w_c_matrix.md`); renaming any of them breaks shipped AT
+    /// configuration. (The WPF HWND class name is per-process
+    /// randomized and is deliberately NOT part of the contract.)
+    /// </summary>
+    [Fact]
+    public void ReadingIdentityContract_ExeWindowAndSurfaceIds_AreStable()
+    {
+        // The exe-name half of the contract holds in every session type.
+        Assert.Equal("SlateWindows.exe", Path.GetFileName(SlateWindowsExe()));
+
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-identity-contract-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Identity Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "note.md"),
+            "# Identity note\n\nBody text.\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-identity-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                // Session-0 fallback, as the shell gate: the desktop UIA
+                // half runs on interactive runners; here the process must
+                // still survive startup.
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the identity-contract startup smoke. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+            Assert.Equal("Slate.MainWindow", window.AutomationId);
+            Assert.Equal(
+                "SlateWindows",
+                Process.GetProcessById(process.Id).ProcessName);
+
+            // Open the note, toggle reading mode through the bound menu
+            // command, and require the ReadingSurface AutomationId.
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement noteItem = filesTree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .FirstOrDefault(item =>
+                    item.Name.StartsWith("note", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("The note TreeItem is absent.");
+            noteItem.Patterns.SelectionItem.Pattern.Select();
+            WaitForEditor(
+                window, automation, "note.md editor", TimeSpan.FromSeconds(10));
+
+            AutomationElement toggleReading = WaitForMenuItem(
+                window,
+                "EditorMenu",
+                "EditorToggleReadingModeMenuItem",
+                TimeSpan.FromSeconds(10));
+            toggleReading.Patterns.Invoke.Pattern.Invoke();
+
+            AutomationElement surface = WaitForElement(
+                window, "ReadingSurface", TimeSpan.FromSeconds(10));
+            Assert.Equal(ControlType.Document, surface.ControlType);
+            Assert.True(
+                surface.Patterns.Text.IsSupported,
+                "ReadingSurface does not expose the Text pattern.");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                    process.WaitForExit(5_000);
+                }
+            }
+
+            process?.Dispose();
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static void AssertEventuallyFocused(AutomationElement element, string message)
     {
         Assert.True(

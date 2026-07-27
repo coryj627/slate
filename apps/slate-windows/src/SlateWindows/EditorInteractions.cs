@@ -21,7 +21,8 @@ namespace SlateWindows;
 internal sealed record EditorNavigationRequest(
     string Path,
     LinkAnchor? Anchor,
-    string? ResolvedAnchorText);
+    string? ResolvedAnchorText,
+    bool OpenInNewTab = false);
 
 internal enum EditorInteractionOrigin
 {
@@ -44,14 +45,22 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
 
     private readonly Action<A11yEvent> _announce;
     private readonly IEditorSpellingService _spellingService;
+    private readonly AppPreferencesStore? _preferencesStore;
     private double _fontSize = ActualFontSize;
     private bool _isSpellCheckEnabled;
+    private bool _openReadingLinksInNewTab;
 
     public EditorPreferencesViewModel(
         Action<A11yEvent>? announce = null,
-        IEditorSpellingService? spellingService = null)
+        IEditorSpellingService? spellingService = null,
+        AppPreferencesStore? preferencesStore = null)
     {
         _announce = announce ?? (_ => { });
+        _preferencesStore = preferencesStore;
+        // No store (tab-owned instances in tests) = the same default a
+        // fresh install decodes to.
+        _openReadingLinksInNewTab =
+            preferencesStore?.Load().ReadingLinksOpenInNewTab ?? true;
 
         _spellingService = spellingService ?? WindowsEditorSpellingService.CreateForCurrentUser();
         ActualSizeCommand = new RelayCommand(
@@ -85,6 +94,17 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
                 _announce(new A11yEvent.SpellCheckToggled(IsSpellCheckEnabled));
             },
             _ => true);
+        ToggleReadingLinkTargetCommand = new RelayCommand(
+            _ =>
+            {
+                OpenReadingLinksInNewTab = !OpenReadingLinksInNewTab;
+                _announce(new A11yEvent.HostComposed(
+                    OpenReadingLinksInNewTab
+                        ? "Reading links open in a new tab."
+                        : "Reading links open in the current tab.",
+                    A11yPriority.Medium));
+            },
+            _ => true);
         ZoomInCommand = new RelayCommand(
             _ => FontSize = Math.Min(MaximumFontSize, FontSize + 1),
             _ => FontSize < MaximumFontSize);
@@ -116,8 +136,45 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         set => SetField(ref _isSpellCheckEnabled, value);
     }
 
+    /// <summary>
+    /// Reading-view link activations open in a new tab when true (the
+    /// default — owner call 2026-07-25, diverging from mac's
+    /// current-tab-with-⌘-click; gap G22). The editor's own navigation
+    /// is untouched either way.
+    /// </summary>
+    public bool OpenReadingLinksInNewTab
+    {
+        get => _openReadingLinksInNewTab;
+        set
+        {
+            if (!SetField(ref _openReadingLinksInNewTab, value))
+            {
+                return;
+            }
+
+            if (_preferencesStore is not { } store)
+            {
+                return;
+            }
+
+            try
+            {
+                store.Save(store.Load() with { ReadingLinksOpenInNewTab = value });
+            }
+            catch (IOException exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+            }
+        }
+    }
+
     public ICommand ActualSizeCommand { get; }
     public ICommand ToggleSpellCheckCommand { get; }
+    public ICommand ToggleReadingLinkTargetCommand { get; }
     public ICommand ZoomInCommand { get; }
     public ICommand ZoomOutCommand { get; }
 

@@ -48,6 +48,38 @@ pub enum A11yPriority {
 /// One announcement, as data. Rendering ([`A11yEvent::render`]) and
 /// priority ([`A11yEvent::priority`]) are canonical; hosts post the
 /// rendered pair through their platform notifier verbatim.
+/// The structure kind a reading-view navigation command searched for
+/// (W3-1, gap_analysis G21). Core owns the SPOKEN NAME of each kind so
+/// the host never composes announcement fragments (WGA-7 boundary).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadingNavTarget {
+    Heading,
+    /// A specific level, 1-6 (the `1`..`6` chords).
+    HeadingLevel {
+        level: u8,
+    },
+    Link,
+    List,
+    Table,
+    Embed,
+    CodeBlock,
+}
+
+impl ReadingNavTarget {
+    fn spoken(&self) -> String {
+        use ReadingNavTarget::*;
+        match self {
+            Heading => "heading".to_owned(),
+            HeadingLevel { level } => format!("level {level} heading"),
+            Link => "link".to_owned(),
+            List => "list".to_owned(),
+            Table => "table".to_owned(),
+            Embed => "embed".to_owned(),
+            CodeBlock => "code block".to_owned(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum A11yEvent {
     // --- Regions, panes, tabs, workspace (U4) ---
@@ -417,6 +449,26 @@ pub enum A11yEvent {
     /// its own vocabulary (see module docs). Carries its priority as
     /// data because the composing engines post at differing levels.
     /// Every producing call site is marked `// W0.5-3 residue:`.
+    // --- Reading view structural navigation (W3-1, G21) ---
+    /// A chorded reading-navigation command found no target in the
+    /// requested direction. The LANDING case is deliberately not an
+    /// event: moving the caret makes the AT speak the landing line
+    /// itself, and a second notification would double-speak.
+    ReadingNavNoTarget {
+        target: ReadingNavTarget,
+        forward: bool,
+    },
+    /// A chorded reading-navigation command landed. Measured 2026-07-27
+    /// (NVDA 2026.1.1): a PROGRAMMATIC caret move produces no speech —
+    /// NVDA echoes lines only for keys it recognizes as caret movement —
+    /// so the landing must be announced, and core owns the phrasing.
+    /// `text` is the landing target's own document text, captured by the
+    /// host at the landmark (content, not composition).
+    ReadingNavLanded {
+        target: ReadingNavTarget,
+        text: String,
+    },
+
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -765,6 +817,32 @@ impl A11yEvent {
                     .to_owned()
             }
             CodeCopied => "Code copied.".to_owned(),
+
+            ReadingNavNoTarget { target, forward } => {
+                let direction = if *forward { "next" } else { "previous" };
+                format!("No {direction} {}.", target.spoken())
+            }
+            ReadingNavLanded { target, text } => {
+                let text = text.trim();
+                if text.is_empty() {
+                    // Capitalized kind alone — an embed card with no name
+                    // still announces as something.
+                    let spoken = target.spoken();
+                    let mut chars = spoken.chars();
+                    match chars.next() {
+                        Some(first) => {
+                            format!("{}{}.", first.to_uppercase(), chars.as_str())
+                        }
+                        None => String::new(),
+                    }
+                } else if matches!(target, ReadingNavTarget::Embed) {
+                    // Embed card names already carry their kind
+                    // ("Embedded note X"); a suffix would stutter.
+                    format!("{text}.")
+                } else {
+                    format!("{text}, {}.", target.spoken())
+                }
+            }
 
             HostComposed { text, .. } => text.clone(),
         }
@@ -1126,6 +1204,62 @@ pub fn corpus() -> Vec<A11yEvent> {
         CitationInsertUnavailable,
         CitationWalkThrough,
         CodeCopied,
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::Heading,
+            forward: true,
+        },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::HeadingLevel { level: 2 },
+            forward: false,
+        },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::Link,
+            forward: true,
+        },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::List,
+            forward: false,
+        },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::Table,
+            forward: true,
+        },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::Embed,
+            forward: false,
+        },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::CodeBlock,
+            forward: true,
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::HeadingLevel { level: 2 },
+            text: "Lists and tasks".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Link,
+            text: "Target Note".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::List,
+            text: "first bullet".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Table,
+            text: "column a".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Embed,
+            text: "Embedded note Target Note".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::CodeBlock,
+            text: "fn spoken_interior() -> usize { 42 }".into(),
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Embed,
+            text: "".into(),
+        },
         HostComposed {
             text: "Composed by a host engine.".into(),
             priority: A11yPriority::High,
@@ -1354,6 +1488,20 @@ mod tests {
                 "Walk through citations. Switch to the Citations sidebar tab and arrow through the list.",
             ),
             (Medium, "Code copied."),
+            (Medium, "No next heading."),
+            (Medium, "No previous level 2 heading."),
+            (Medium, "No next link."),
+            (Medium, "No previous list."),
+            (Medium, "No next table."),
+            (Medium, "No previous embed."),
+            (Medium, "No next code block."),
+            (Medium, "Lists and tasks, level 2 heading."),
+            (Medium, "Target Note, link."),
+            (Medium, "first bullet, list."),
+            (Medium, "column a, table."),
+            (Medium, "Embedded note Target Note."),
+            (Medium, "fn spoken_interior() -> usize { 42 }, code block."),
+            (Medium, "Embed."),
             (High, "Composed by a host engine."),
         ];
 

@@ -9,6 +9,7 @@ using System.Text;
 using System.Windows.Input;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit.Document;
+using SlateWindows.Reading;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -113,6 +114,27 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         ActiveCanvasSurface = state.ActiveCanvasSurface;
         Load();
         InitializeEditorSession();
+
+        // A tab RESTORED with the persisted "reading" token must project
+        // immediately: the projection previously started only from the
+        // toggle path, so a session that ended in reading mode restored
+        // as an empty surface ("Reading view document blank" — the
+        // 2026-07-27 manual pass) with no keyboard route out but closing
+        // the tab.
+        if (IsReadingMode && IsMarkdown)
+        {
+            Reading = new ReadingContentViewModel(
+                _session, this, _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
+            if (_startInteractionBackgroundWork)
+            {
+                Reading.Activate();
+            }
+            else
+            {
+                Reading.Refresh();
+            }
+        }
     }
 
     internal int AnchorNavigationPublishCountForTests =>
@@ -120,7 +142,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
 
     public Guid Id { get; }
     public WorkspaceItemState Item { get; private set; }
-    public string? Mode { get; }
+    public string? Mode { get; private set; }
     public bool? PropsCollapsed { get; }
     public string? ActiveCanvasSurface { get; }
     public string Title => Item.Title;
@@ -133,6 +155,65 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         $"{System.IO.Path.GetFileName(Path)} editor";
     public string Path => Item.Path;
     public bool IsMarkdown => Item.Kind == WorkspaceItemKind.Markdown;
+
+    /// <summary>The persisted `"reading"` token (schema v1, G17).</summary>
+    public bool IsReadingMode => string.Equals(Mode, "reading", StringComparison.Ordinal);
+    public bool IsEditorVisible => IsMarkdown && !IsReadingMode;
+    public bool IsReadingVisible => IsMarkdown && IsReadingMode;
+
+    /// <summary>Created on first entry into reading mode; null before.</summary>
+    public ReadingContentViewModel? Reading { get; private set; }
+
+    /// <summary>Reading-surface activation routes through the SAME
+    /// seams the editor uses — one navigation path, one tag path.</summary>
+    internal void NavigateFromReading(EditorNavigationRequest request) =>
+        _navigate?.Invoke(request);
+
+    internal void ActivateTagFromReading(string tag) =>
+        _activateTag?.Invoke(tag);
+
+    /// <summary>
+    /// `slate.editor.toggleViewMode` (Ctrl+Shift+E, mac ⇧⌘E — W3-1
+    /// #728): flip the persisted per-tab mode and (de)activate the
+    /// reading projection. The reading VM is created lazily and kept
+    /// across toggles so flipping back is a cache hit, not a re-parse
+    /// (§10.1 memoization).
+    /// </summary>
+    public void ToggleViewMode()
+    {
+        if (!IsMarkdown)
+        {
+            return;
+        }
+        if (IsReadingMode)
+        {
+            Mode = null;
+            Reading?.Deactivate();
+        }
+        else
+        {
+            Mode = "reading";
+            if (Reading is null)
+            {
+                Reading = new ReadingContentViewModel(
+                    _session, this, _announce,
+                    synchronousForTests: !_startInteractionBackgroundWork);
+                OnPropertyChanged(nameof(Reading));
+            }
+            if (_startInteractionBackgroundWork)
+            {
+                Reading.Activate();
+            }
+            else
+            {
+                Reading.Refresh();
+            }
+        }
+        OnPropertyChanged(nameof(Mode));
+        OnPropertyChanged(nameof(IsReadingMode));
+        OnPropertyChanged(nameof(IsEditorVisible));
+        OnPropertyChanged(nameof(IsReadingVisible));
+    }
     public bool IsPlaceholder => !IsMarkdown;
     public string KindLabel => Item.Kind switch
     {
@@ -203,6 +284,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         _taskToggleGeneration++;
         _taskToggleInFlight = false;
         _editorInteractions?.Dispose();
+        Reading?.Dispose();
         _editorInteractions = null;
         _editorSession?.Dispose();
         _editorSession = null;
@@ -216,6 +298,31 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         NotifyItemChanged();
         Load();
         InitializeEditorSession();
+
+        // Navigation replaces the tab's item IN PLACE; a reading-mode tab
+        // must re-project or the surface keeps showing the previous
+        // note under the new title (measured 2026-07-27: activating
+        // [[Target Note]] retitled the tab but kept reading the old
+        // document — the disposed VM's last projection).
+        Reading = null;
+        if (IsReadingMode && IsMarkdown)
+        {
+            Reading = new ReadingContentViewModel(
+                _session, this, _announce,
+                synchronousForTests: !_startInteractionBackgroundWork);
+            if (_startInteractionBackgroundWork)
+            {
+                Reading.Activate();
+            }
+            else
+            {
+                Reading.Refresh();
+            }
+        }
+        OnPropertyChanged(nameof(Reading));
+        OnPropertyChanged(nameof(IsReadingMode));
+        OnPropertyChanged(nameof(IsEditorVisible));
+        OnPropertyChanged(nameof(IsReadingVisible));
         OnPropertyChanged(nameof(Text));
         OnPropertyChanged(nameof(EditorDocument));
         OnPropertyChanged(nameof(EditorSession));
@@ -360,6 +467,11 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         _disposed = true;
         _taskToggleGeneration++;
+        // The reading projection goes first: it observes the editor
+        // document and schedules background FFI work against this
+        // tab's session — both torn down below.
+        Reading?.Dispose();
+        Reading = null;
         _editorInteractions?.Dispose();
         _editorInteractions = null;
         _editorSession?.Dispose();
@@ -370,6 +482,13 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         }
     }
 
+    // Reading observation is deliberately NOT paused here: Deactivate
+    // also fires when focus merely moves to another split pane while
+    // this tab stays mounted and visible — pausing there would freeze
+    // a visible projection against peer-pane edits. The projection
+    // pauses on the true "left the surface" signal instead
+    // (ReadingContentViewModel.OnSurfaceDetached, raised by the
+    // surface rebind that hides it), and Dispose still tears it down.
     public void Deactivate() => _editorInteractions?.CloseTransientUi();
 
     public bool ToggleTask(TaskItem task, Action<A11yEvent> announce)
@@ -825,7 +944,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             dirtyNavigationDecision = null,
         Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>?
             dirtyCloseDecision = null,
-        bool startInteractionBackgroundWork = true)
+        bool startInteractionBackgroundWork = true,
+        AppPreferencesStore? preferencesStore = null)
     {
         _session = session;
         _persistence = new WorkspacePersistence(vaultRoot);
@@ -836,7 +956,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             ?? ((_, _) => WorkspaceDirtyNavigationDecision.Cancel);
         _dirtyCloseDecision = dirtyCloseDecision
             ?? (_ => WorkspaceDirtyNavigationDecision.Cancel);
-        EditorPreferences = new EditorPreferencesViewModel(_announce);
+        EditorPreferences = new EditorPreferencesViewModel(
+            _announce, preferencesStore: preferencesStore);
         _activeLeaf = Leaves[0];
         (_root, _activeGroup) = Restore(_persistence.Load());
 
@@ -852,6 +973,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         ReopenClosedTabCommand = new RelayCommand(
             _ => RunWorkspaceMutation(ReopenClosedTab),
             _ => _closedTabs.Count > 0);
+        ToggleReadingModeCommand = new RelayCommand(
+            _ => RunWorkspaceMutation(() => ActiveGroup.ActiveTab?.ToggleViewMode()),
+            _ => ActiveGroup.ActiveTab?.IsMarkdown == true);
         MoveTabLeftCommand = new RelayCommand(
             _ => RunWorkspaceMutation(() => MoveActiveTab(-1)),
             _ => CanMoveActiveTab(-1));
@@ -939,6 +1063,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand CloseActiveTabCommand { get; }
     public ICommand DuplicateTabCommand { get; }
     public ICommand ReopenClosedTabCommand { get; }
+    public ICommand ToggleReadingModeCommand { get; }
     public ICommand MoveTabLeftCommand { get; }
     public ICommand MoveTabRightCommand { get; }
     public ICommand NextTabCommand { get; }
@@ -963,7 +1088,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     private void OpenEditorNavigation(EditorNavigationRequest request) =>
         RunWorkspaceMutation(() =>
         {
-            if (!OpenPathCore(request.Path, WorkspaceOpenTarget.CurrentTab))
+            // New-tab is only ever requested by reading-view activations
+            // (G22 preference); editor navigation stays current-tab.
+            // TryOpenItem already reuses an existing same-target tab, so
+            // the new-tab path never duplicates.
+            if (!OpenPathCore(
+                request.Path,
+                request.OpenInNewTab
+                    ? WorkspaceOpenTarget.NewTab
+                    : WorkspaceOpenTarget.CurrentTab))
             {
                 return;
             }

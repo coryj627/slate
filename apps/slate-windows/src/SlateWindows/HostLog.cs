@@ -21,6 +21,10 @@ internal enum HostDiagnosticEvent
     DpiAwarenessFailed,
     DpiCensusFailed,
     EditorArtifactCacheRefreshFailed,
+    ReadingChordActionFailed,
+    ReadingChordSeen,
+    ReadingChordDispatched,
+    ReadingRefreshTerminalFailure,
     EditorCitationCacheRefreshFailed,
     EditorEmbedPreviewDeferredForArtifacts,
     EditorEmbedPreviewDeferredForMath,
@@ -61,6 +65,7 @@ internal enum HostDiagnosticEvent
     VaultListenerUnregisterFailed,
     WindowPositionFailed,
     WindowStatePersistFailed,
+    AppPreferencesPersistFailed,
     WorkspacePersistFailed,
 }
 
@@ -149,6 +154,20 @@ internal static class HostLog
                 StringComparison.Ordinal))
         {
             Write(diagnosticEvent);
+        }
+    }
+
+    /// <summary>Diagnostic with a short mechanical detail (key names,
+    /// counts) — never document or payload text (W1-RT-01).</summary>
+    public static void WriteUiAutomationDiagnostic(
+        HostDiagnosticEvent diagnosticEvent, string detail)
+    {
+        if (string.Equals(
+                Environment.GetEnvironmentVariable("SLATE_UIA_DIAGNOSTICS"),
+                "1",
+                StringComparison.Ordinal))
+        {
+            WriteWithoutThrowing($"SlateWindows.{diagnosticEvent} ({detail})");
         }
     }
 
