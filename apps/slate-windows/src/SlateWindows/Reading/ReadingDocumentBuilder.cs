@@ -327,13 +327,31 @@ internal static class ReadingDocumentBuilder
     /// CR-in-CRLF bytes before it (coherence guarantees the normalized
     /// forms are identical), then clamps to the rendered length.
     /// </summary>
+    /// <summary>
+    /// The run-budget preflight: the loop below creates a WPF Run per
+    /// token plus one per gap, and core's 256 KiB BYTE cap does not
+    /// bound token DENSITY — a valid dense JSON fence under the cap
+    /// can carry six-figure token counts, and dispatcher-scale Run
+    /// fan-out freezes the reading view. Over budget degrades to the
+    /// plain paragraph, exactly like oversized. (A core-side token
+    /// ceiling as defense in depth would change the §W-A artifact and
+    /// both hosts — recorded option, not this PR.)
+    /// </summary>
+    internal const int MaximumHighlightTokens = 4_000;
+
     private static Paragraph TokenParagraph(CodeBlock matched, string interior)
     {
+        if (matched.Tokens.Length > MaximumHighlightTokens)
+        {
+            return MonospaceParagraph(interior);
+        }
+
         // Core degrades oversized (>256 KiB) and unknown-language blocks
         // to tokens that carry no color: build the plain paragraph with
         // ZERO offset machinery — a large valid fence must never
         // allocate maps on the dispatcher for nothing. Every path past
-        // this line is bounded by core's highlighting cap.
+        // this line is bounded by core's highlighting cap AND the run
+        // budget above.
         bool anyColor = false;
         foreach (SyntaxToken probe in matched.Tokens)
         {

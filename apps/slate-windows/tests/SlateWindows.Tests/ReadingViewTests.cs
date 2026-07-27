@@ -2822,6 +2822,44 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// W3-4 adversarial round 4 [high]: token DENSITY under the byte
+    /// cap — a valid dense JSON fence would fan out a WPF Run per
+    /// token plus gaps. Over the run budget the block degrades to one
+    /// plain run, exactly like oversized.
+    /// </summary>
+    [Fact]
+    public void DenseTokenFencesDegradeToThePlainParagraph()
+    {
+        RunSta(() =>
+        {
+            var dense = new System.Text.StringBuilder("```json\n[");
+            for (int i = 0; i < 30_000; i++)
+            {
+                dense.Append("0,");
+            }
+            dense.Append("0]\n```\n");
+
+            using var fixture = FixtureVault.Create(1, "reading-code-dense");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), dense.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph code = FindCodeParagraph(surface.Document);
+            Assert.Single(code.Inlines);
+        });
+    }
+
     private static Paragraph FindCodeParagraph(FlowDocument document) =>
         AllBlocks(document.Blocks)
             .OfType<Paragraph>()
