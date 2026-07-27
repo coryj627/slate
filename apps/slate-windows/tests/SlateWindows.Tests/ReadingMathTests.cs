@@ -229,6 +229,56 @@ public sealed class ReadingMathTests
                 Assert.Single(announced)).Text;
             Assert.EndsWith(", math.", spoken);
             Assert.Contains("squared", spoken, StringComparison.OrdinalIgnoreCase);
+
+            // Ctrl+Enter reads the braille artifact — the accessible
+            // detail the Nemeth/UEB pref selects (round 3 [high]). The
+            // announced text is the element's decoded braille verbatim.
+            announced.Clear();
+            Assert.True(surface.TryActivateAtCaret(brailleRequested: true));
+            string brailleSpoken = SlateUniffiMethods.A11yRender(
+                Assert.Single(announced)).Text;
+            Assert.Equal(
+                Assert.Single(FindMathElements(surface.Document)).Braille,
+                brailleSpoken);
+            Assert.NotEmpty(brailleSpoken);
+        });
+    }
+
+    /// <summary>A math block whose artifact carries no braille (core
+    /// degradation, e.g. MathCAT rejecting the expression) answers
+    /// Ctrl+Enter honestly instead of staying silent.</summary>
+    [Fact]
+    public void CtrlEnterWithoutBrailleSaysSo()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-math-no-braille");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "$$\\alpha < \\beta$$\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            ReadingLandmark landmark = Assert.Single(
+                surface.LandmarksForTests,
+                candidate => candidate.Kind == ReadingLandmarkKind.Math);
+            surface.CaretPosition = landmark.Position;
+            Assert.True(surface.TryActivateAtCaret(brailleRequested: true));
+            Assert.Equal(
+                "Braille not available.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
         });
     }
 
@@ -244,9 +294,10 @@ public sealed class ReadingMathTests
             Assert.True(MathMlUiaProperty.IsActive, MathMlUiaProperty.InactiveReason);
 
             var element = new ReadingMathElement(
-                "x squared", "<math><mi>x</mi></math>", "x^2");
+                "x squared", "<math><mi>x</mi></math>", "x^2", "⠭⠘⠆");
             var peer = new ReadingMathElementPeer(element);
             Assert.Equal("math", peer.GetLocalizedControlType());
+            Assert.Equal("⠭⠘⠆", peer.GetItemStatus());
 
             System.Reflection.MethodInfo dispatch = typeof(AutomationPeer).GetMethod(
                 "GetPropertyValue",
@@ -301,6 +352,9 @@ public sealed class ReadingMathTests
                 var surface = new ReadingSurface { Model = tab.Reading };
                 string mediumSpeech = System.Windows.Automation.AutomationProperties
                     .GetName(FindMathElements(surface.Document).Single());
+                string nemethBraille = System.Windows.Automation.AutomationProperties
+                    .GetItemStatus(FindMathElements(surface.Document).Single());
+                Assert.NotEmpty(nemethBraille);
 
                 announced.Clear();
                 System.Windows.Documents.FlowDocument before = tab.Reading!.Document!;
@@ -326,6 +380,14 @@ public sealed class ReadingMathTests
                     System.Windows.Automation.AutomationProperties
                         .GetName(FindMathElements(surface.Document).Single())
                         .Length > 0);
+                // Round 3 [high]: the pref must change something an AT
+                // user can RETRIEVE, not merely rebuild the document —
+                // the element's ItemStatus carries the decoded braille,
+                // and Nemeth vs UEB cells differ for this formula.
+                string uebBraille = System.Windows.Automation.AutomationProperties
+                    .GetItemStatus(FindMathElements(surface.Document).Single());
+                Assert.NotEmpty(uebBraille);
+                Assert.NotEqual(nemethBraille, uebBraille);
 
                 // Unknown key: no change, no announcement.
                 announced.Clear();

@@ -18,10 +18,12 @@ namespace SlateWindows.Reading;
 /// </summary>
 internal sealed class ReadingMathElement : ContentControl
 {
-    public ReadingMathElement(string speech, string mathMl, string source)
+    public ReadingMathElement(
+        string speech, string mathMl, string source, string braille)
     {
         Speech = speech;
         MathMl = mathMl;
+        Braille = braille;
         Focusable = true;
         AutomationProperties.SetName(this, speech);
         // The authored source rides HelpText — reachable on request
@@ -30,6 +32,15 @@ internal sealed class ReadingMathElement : ContentControl
         // ordering here: speech first, source on demand).
         AutomationProperties.SetHelpText(this, source);
         ToolTip = source;
+        // The decoded braille (Nemeth or UEB cells per the session's
+        // braille-code pref) rides ItemStatus — a standard queryable
+        // UIA property, the analog of mac's "Braille" custom content
+        // and the W-E7 appModule's read channel. Ctrl+Enter at the
+        // caret announces it (ReadingSurface routing, round 3).
+        if (braille.Length > 0)
+        {
+            AutomationProperties.SetItemStatus(this, braille);
+        }
     }
 
     /// <summary>Canonical MathCAT speech ("Math expression." fallback
@@ -38,6 +49,10 @@ internal sealed class ReadingMathElement : ContentControl
 
     /// <summary>Complete <c>&lt;math&gt;…&lt;/math&gt;</c> markup.</summary>
     public string MathMl { get; }
+
+    /// <summary>Decoded braille in the session's selected code; empty
+    /// when MathCAT produced none for this expression.</summary>
+    public string Braille { get; }
 
     protected override AutomationPeer OnCreateAutomationPeer() =>
         new ReadingMathElementPeer(this);

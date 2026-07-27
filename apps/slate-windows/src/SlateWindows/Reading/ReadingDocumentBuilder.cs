@@ -436,7 +436,8 @@ internal static class ReadingDocumentBuilder
             return gapParagraph;
         }
 
-        var element = new ReadingMathElement(speech, matched.Mathml, matched.Source)
+        var element = new ReadingMathElement(
+            speech, matched.Mathml, matched.Source, DecodeBraille(matched.Braille))
         {
             Content = visual,
             Margin = new Thickness(0, 4, 0, 4),
@@ -447,6 +448,22 @@ internal static class ReadingDocumentBuilder
         };
         ReadingSemantics.MarkMathBlock(paragraph, speech);
         return paragraph;
+    }
+
+    /// <summary>The braille artifact decodes as UTF-8 (Nemeth is
+    /// ASCII, UEB is Unicode cells — MathCAT emits per the session
+    /// pref); undecodable or absent bytes become empty, which the
+    /// element treats as "no braille".</summary>
+    private static string DecodeBraille(byte[] braille)
+    {
+        try
+        {
+            return System.Text.Encoding.UTF8.GetString(braille).Trim();
+        }
+        catch (ArgumentException)
+        {
+            return string.Empty;
+        }
     }
 
     /// <summary>The live fence interior for coherence comparison:

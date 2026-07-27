@@ -142,7 +142,8 @@ internal sealed class ReadingNavigator
         {
             if (key == Key.Return
                 && Keyboard.Modifiers is ModifierKeys.None or ModifierKeys.Control
-                && _surface.TryActivateAtCaret())
+                && _surface.TryActivateAtCaret(
+                    brailleRequested: Keyboard.Modifiers == ModifierKeys.Control))
             {
                 e.Handled = true;
                 return;
