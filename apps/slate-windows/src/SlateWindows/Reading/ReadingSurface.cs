@@ -496,6 +496,10 @@ internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
                 children.Add(new ReadingHeadingPeer(paragraph, level));
                 break;
 
+            case Paragraph code when ReadingSemantics.IsCodeBlock(code):
+                children.Add(new ReadingCodeBlockPeer(code));
+                break;
+
             case WpfList list when ReadingSemantics.IsList(list):
                 children.Add(new ReadingListPeer(list));
                 break;
@@ -545,6 +549,33 @@ internal sealed class ReadingHeadingPeer : TextElementAutomationPeer
 
     protected override string GetNameCore() =>
         new TextRange(_paragraph.ContentStart, _paragraph.ContentEnd).Text.Trim();
+
+    protected override bool IsControlElementCore() => true;
+
+    protected override bool IsContentElementCore() => true;
+}
+
+/// <summary>
+/// A code block's peer (W3-4). Its Name is CORE's preamble ("Code
+/// block, rust, 3 lines.") — the K contract's "AT preamble behind a
+/// UIA peer": object navigation announces the summary, while the
+/// interior stays readable through the document's text range (never
+/// through this peer, which would double-speak it).
+/// </summary>
+internal sealed class ReadingCodeBlockPeer : TextElementAutomationPeer
+{
+    private readonly Paragraph _paragraph;
+
+    public ReadingCodeBlockPeer(Paragraph paragraph) : base(paragraph)
+    {
+        _paragraph = paragraph;
+    }
+
+    protected override AutomationControlType GetAutomationControlTypeCore() =>
+        AutomationControlType.Group;
+
+    protected override string GetNameCore() =>
+        AutomationProperties.GetName(_paragraph) ?? string.Empty;
 
     protected override bool IsControlElementCore() => true;
 

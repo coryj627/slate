@@ -49,6 +49,17 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     private double _fontSize = ActualFontSize;
     private bool _isSpellCheckEnabled;
     private bool _openReadingLinksInNewTab;
+    private string _codePreambleVerbosity = "preambleOnly";
+
+    /// <summary>The mac CodeVerbosity vocabulary: storage keys and the
+    /// display names the canonical announcement speaks.</summary>
+    internal static readonly IReadOnlyDictionary<string, string> CodeVerbosityNames =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["preambleOnly"] = "Preamble only",
+            ["preambleFirstLine"] = "Preamble + first line",
+            ["preambleAllTokens"] = "Preamble + all tokens",
+        };
 
     public EditorPreferencesViewModel(
         Action<A11yEvent>? announce = null,
@@ -59,8 +70,25 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         _preferencesStore = preferencesStore;
         // No store (tab-owned instances in tests) = the same default a
         // fresh install decodes to.
-        _openReadingLinksInNewTab =
-            preferencesStore?.Load().ReadingLinksOpenInNewTab ?? true;
+        AppPreferencesState? loaded = preferencesStore?.Load();
+        _openReadingLinksInNewTab = loaded?.ReadingLinksOpenInNewTab ?? true;
+        _codePreambleVerbosity =
+            loaded is not null && CodeVerbosityNames.ContainsKey(loaded.CodePreambleVerbosity)
+                ? loaded.CodePreambleVerbosity
+                : "preambleOnly";
+        SetCodePreambleVerbosityCommand = new RelayCommand(
+            parameter =>
+            {
+                if (parameter is not string key
+                    || !CodeVerbosityNames.TryGetValue(key, out string? display)
+                    || string.Equals(_codePreambleVerbosity, key, StringComparison.Ordinal))
+                {
+                    return;
+                }
+                CodePreambleVerbosity = key;
+                _announce(new A11yEvent.CodePreambleVerbosity(display));
+            },
+            _ => true);
 
         _spellingService = spellingService ?? WindowsEditorSpellingService.CreateForCurrentUser();
         ActualSizeCommand = new RelayCommand(
@@ -172,9 +200,58 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         }
     }
 
+    /// <summary>
+    /// W3-4 CodePrefs parity — parity with mac's SHIPPED behavior: the
+    /// verbosity is persisted and its change announced through the
+    /// canonical vocabulary, and rendering always uses the preamble
+    /// (mac marks the view binding V1.x; matrix note records the same
+    /// posture here).
+    /// </summary>
+    public string CodePreambleVerbosity
+    {
+        get => _codePreambleVerbosity;
+        set
+        {
+            if (!CodeVerbosityNames.ContainsKey(value)
+                || !SetField(ref _codePreambleVerbosity, value))
+            {
+                return;
+            }
+            OnPropertyChanged(nameof(IsCodeVerbosityPreambleOnly));
+            OnPropertyChanged(nameof(IsCodeVerbosityFirstLine));
+            OnPropertyChanged(nameof(IsCodeVerbosityAllTokens));
+            if (_preferencesStore is not { } store)
+            {
+                return;
+            }
+            try
+            {
+                store.Save(store.Load() with { CodePreambleVerbosity = value });
+            }
+            catch (IOException exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+            }
+            catch (UnauthorizedAccessException exception)
+            {
+                HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+            }
+        }
+    }
+
+    public bool IsCodeVerbosityPreambleOnly =>
+        _codePreambleVerbosity == "preambleOnly";
+
+    public bool IsCodeVerbosityFirstLine =>
+        _codePreambleVerbosity == "preambleFirstLine";
+
+    public bool IsCodeVerbosityAllTokens =>
+        _codePreambleVerbosity == "preambleAllTokens";
+
     public ICommand ActualSizeCommand { get; }
     public ICommand ToggleSpellCheckCommand { get; }
     public ICommand ToggleReadingLinkTargetCommand { get; }
+    public ICommand SetCodePreambleVerbosityCommand { get; }
     public ICommand ZoomInCommand { get; }
     public ICommand ZoomOutCommand { get; }
 

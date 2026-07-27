@@ -15,7 +15,9 @@ namespace SlateWindows;
 /// </summary>
 internal sealed record AppPreferencesState(
     [property: JsonPropertyName("readingLinksOpenInNewTab")]
-    bool ReadingLinksOpenInNewTab = true);
+    bool ReadingLinksOpenInNewTab = true,
+    [property: JsonPropertyName("codePreambleVerbosity")]
+    string CodePreambleVerbosity = "preambleOnly");
 
 /// <summary>Bounded device-local storage for app-level preferences.</summary>
 internal sealed class AppPreferencesStore

@@ -2419,6 +2419,78 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>
+    /// W3-4: the code block's UIA peer speaks CORE's preamble as its
+    /// Name (the K contract's "AT preamble behind a UIA peer") while
+    /// the interior stays in the text range — object navigation gets
+    /// the summary, say-all gets the code.
+    /// </summary>
+    [Fact]
+    public void CodeBlockPeerSpeaksTheCanonicalPreamble()
+    {
+        RunSta(() =>
+        {
+            FlowDocument document = BuildSource(
+                "```rust\nfn a() {}\nfn b() {}\n```\n");
+            var children = new List<System.Windows.Automation.Peers.AutomationPeer>();
+            foreach (Block block in document.Blocks)
+            {
+                ReadingSurfacePeer.AppendStructuralForTest(block, children);
+            }
+            System.Windows.Automation.Peers.AutomationPeer peer = Assert.Single(
+                children,
+                candidate => candidate is ReadingCodeBlockPeer);
+            Assert.Equal("Code block, rust, 2 lines.", peer.GetName());
+            Assert.Equal(
+                System.Windows.Automation.Peers.AutomationControlType.Group,
+                peer.GetAutomationControlType());
+        });
+    }
+
+    /// <summary>
+    /// W3-4 CodePrefs parity (shipped-mac behavior: persisted +
+    /// announced; rendering stays preamble-only). The verbosity
+    /// round-trips the store, announces through the canonical
+    /// vocabulary, and rejects unknown keys.
+    /// </summary>
+    [Fact]
+    public void CodeVerbosityPersistsAnnouncesAndRejectsUnknownKeys()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), $"slate-code-verbosity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var store = new AppPreferencesStore(Path.Combine(directory, "preferences.json"));
+            var announced = new List<A11yEvent>();
+            using var preferences = new EditorPreferencesViewModel(
+                announced.Add,
+                new FakeEditorSpellingService(),
+                preferencesStore: store);
+            Assert.True(preferences.IsCodeVerbosityPreambleOnly);
+
+            preferences.SetCodePreambleVerbosityCommand.Execute("preambleFirstLine");
+            Assert.True(preferences.IsCodeVerbosityFirstLine);
+            Assert.Equal(
+                "Code preamble verbosity: Preamble + first line.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+
+            preferences.SetCodePreambleVerbosityCommand.Execute("nonsense");
+            Assert.True(preferences.IsCodeVerbosityFirstLine);
+            Assert.Single(announced);
+
+            using var second = new EditorPreferencesViewModel(
+                _ => { },
+                new FakeEditorSpellingService(),
+                preferencesStore: store);
+            Assert.True(second.IsCodeVerbosityFirstLine);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static Paragraph FindCodeParagraph(FlowDocument document) =>
         AllBlocks(document.Blocks)
             .OfType<Paragraph>()
