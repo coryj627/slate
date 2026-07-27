@@ -5227,6 +5227,16 @@ pub fn reading_blocks_source(source: String) -> Vec<ReadingBlock> {
         .collect()
 }
 
+/// The canonical code-block AT preamble (Milestone K contract, W3-4):
+/// `"Code block, {language}, {N} line|lines."` — composition lives in
+/// core so both hosts speak identical strings (the #967 doctrine).
+/// Pass the language as authored (empty means none) and the block's
+/// authoritative source.
+#[uniffi::export]
+pub fn code_block_preamble(language: Option<String>, source: String) -> String {
+    core::code::code_block_preamble(language.as_deref(), &source)
+}
+
 /// FFI mirror of [`core::reading::ReadingTableCells`] (#510). `rows` is a
 /// list of rows, each a list of cell strings — uniffi carries `Vec<Vec<String>>`
 /// directly, so no row wrapper record is needed. Every row equals `header.len()`

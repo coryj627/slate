@@ -15,7 +15,9 @@ namespace SlateWindows;
 /// </summary>
 internal sealed record AppPreferencesState(
     [property: JsonPropertyName("readingLinksOpenInNewTab")]
-    bool ReadingLinksOpenInNewTab = true);
+    bool ReadingLinksOpenInNewTab = true,
+    [property: JsonPropertyName("codePreambleVerbosity")]
+    string CodePreambleVerbosity = "preambleOnly");
 
 /// <summary>Bounded device-local storage for app-level preferences.</summary>
 internal sealed class AppPreferencesStore
@@ -50,8 +52,17 @@ internal sealed class AppPreferencesStore
                 MaxFileBytes,
                 FileShare.ReadWrite | FileShare.Delete);
 
-            return JsonSerializer.Deserialize<AppPreferencesState>(buffer, JsonOptions)
-                ?? new AppPreferencesState();
+            AppPreferencesState state =
+                JsonSerializer.Deserialize<AppPreferencesState>(buffer, JsonOptions)
+                    ?? new AppPreferencesState();
+            // A reference-typed field deserializes JSON null WITHOUT
+            // throwing, sidestepping the defaults-on-unreadable rule —
+            // normalize at the boundary so no caller ever sees null.
+            if (state.CodePreambleVerbosity is null)
+            {
+                state = state with { CodePreambleVerbosity = "preambleOnly" };
+            }
+            return state;
         }
         catch (FileNotFoundException)
         {

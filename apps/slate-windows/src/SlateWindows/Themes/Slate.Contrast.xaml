@@ -36,4 +36,16 @@
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.EditorMetadataBrush"
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.CodeKeywordBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.CodeStringBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.CodeNumberBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.CodeCommentBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.CodeTypeBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <SolidColorBrush x:Key="Slate.CodeFunctionBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
 </ResourceDictionary>

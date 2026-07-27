@@ -52,6 +52,15 @@ internal sealed class ThemeManager : IDisposable
         EditorSyntaxPalette.WikilinkBrushKey,
         EditorSyntaxPalette.TagBrushKey,
         EditorSyntaxPalette.MetadataBrushKey,
+        // W3-4 reading-view token palette (mac CodeTokenTheme parity;
+        // the Contrast dictionary collapses all six to window text,
+        // mirroring the mac increase-contrast rule).
+        "Slate.CodeKeywordBrush",
+        "Slate.CodeStringBrush",
+        "Slate.CodeNumberBrush",
+        "Slate.CodeCommentBrush",
+        "Slate.CodeTypeBrush",
+        "Slate.CodeFunctionBrush",
     ];
 
     public ThemeManager(Application application, SlateTheme theme)

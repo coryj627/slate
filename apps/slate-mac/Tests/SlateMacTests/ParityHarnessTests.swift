@@ -168,8 +168,53 @@ final class ParityHarnessTests: XCTestCase {
             if i > 0 { j.raw(",") }
             appendBlockInlines(j, inline)
         }
+        j.raw("]")
+
+        // W3-4: the READING-side canonical artifact. The span rows above
+        // byte-check the editor highlight surface; these rows byte-check
+        // {source, syntax_tokens, semantic_spans} + the core preamble —
+        // exactly what both reading renderers consume. Token offsets are
+        // block-local. Mirrors SurfaceSerializer.cs — change both together.
+        j.raw(",\"code_blocks\":[")
+        let codeBlocks = try session.getSyntaxTokens(path: relPath)
+        for (i, c) in codeBlocks.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"line\":").num(UInt64(c.line))
+                .raw(",\"offset\":").num(UInt64(c.byteOffset))
+                .raw(",\"language\":")
+            if let language = c.language { j.str(language) } else { j.null() }
+            j.raw(",\"preamble\":").str(
+                codeBlockPreamble(language: c.language, source: c.source))
+                .raw(",\"source\":").str(c.source)
+                .raw(",\"tokens\":[")
+            for (t, token) in c.tokens.enumerated() {
+                if t > 0 { j.raw(",") }
+                j.raw("{\"start\":").num(UInt64(token.startByte))
+                    .raw(",\"end\":").num(UInt64(token.endByte))
+                    .raw(",\"kind\":").str(tokenKindName(token.kind))
+                    .raw("}")
+            }
+            j.raw("],\"semantic_spans\":[")
+            for (t, span) in c.semanticSpans.enumerated() {
+                if t > 0 { j.raw(",") }
+                j.raw("{\"start\":").num(UInt64(span.startByte))
+                    .raw(",\"end\":").num(UInt64(span.endByte))
+                    .raw(",\"kind\":").str(semanticKindName(span.kind))
+                    .raw(",\"name\":").str(span.name)
+                    .raw("}")
+            }
+            j.raw("]}")
+        }
         j.raw("]}")
         return j.output + "\n"
+    }
+
+    private static func semanticKindName(_ kind: SemanticKind) -> String {
+        switch kind {
+        case .function: return "function"
+        case .type: return "type"
+        case .variable: return "variable"
+        }
     }
 
     private static func appendBlockInlines(

@@ -2299,6 +2299,707 @@ public sealed class ReadingViewTests
             surfaceIsKeyboardFocused: false, isRepeat: true));
     }
 
+    /// <summary>
+    /// W3-4: a saved fence matches its canonical CodeBlock by byte
+    /// containment and renders TOKEN runs inside the text range — the
+    /// W3-1 in-range invariant survives, the paragraph carries core's
+    /// preamble, and the copy button precedes the code.
+    /// </summary>
+    [Fact]
+    public void CodeFenceRendersCanonicalTokensInsideTheTextRange()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-tokens");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "# Code\n\n```rust\nfn answer() -> usize { 42 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph code = FindCodeParagraph(surface.Document);
+            // Core's preamble, verbatim, on the paragraph's name.
+            Assert.Equal(
+                "Code block, rust, 1 line.",
+                System.Windows.Automation.AutomationProperties.GetName(code));
+            // Token runs: the paragraph is SPLIT (tokenized), and its
+            // concatenated text is the authoritative interior.
+            Assert.True(
+                code.Inlines.Count > 1,
+                $"expected token runs, got {code.Inlines.Count} inline(s)");
+            Assert.Equal(
+                "fn answer() -> usize { 42 }",
+                string.Concat(code.Inlines.OfType<Run>().Select(run => run.Text)));
+            // Still inside the text range (the W3-1 spike invariant).
+            Assert.Contains(
+                "fn answer()",
+                SurfaceText(surface),
+                StringComparison.Ordinal);
+            // Landmark unchanged: one code-block stop.
+            Assert.Contains(
+                surface.LandmarksForTests,
+                landmark => landmark.Kind == ReadingLandmarkKind.CodeBlock);
+        });
+    }
+
+    /// <summary>
+    /// W3-4: the Copy button copies the exact source as plain text and
+    /// announces core's "Code copied."; it is marked so the click
+    /// router never confuses it with an embed card.
+    /// </summary>
+    [Fact]
+    public void CodeCopyButtonCopiesTheSourceAndAnnounces()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-copy");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\nfn copied() -> u8 { 7 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            System.Windows.Controls.Button copy = FindVisualButtons(surface.Document)
+                .Single(button => ReadingSemantics.IsCodeCopy(button));
+            Assert.Equal(
+                "Copies the code block source as plain text.",
+                System.Windows.Automation.AutomationProperties.GetHelpText(copy));
+            copy.RaiseEvent(new System.Windows.RoutedEventArgs(
+                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+            // The LIVE fence interior (round-1 fix: never the saved
+            // artifact) — the reading parser's authoritative form,
+            // which strips the single trailing newline.
+            Assert.Equal(
+                "fn copied() -> u8 { 7 }",
+                System.Windows.Clipboard.GetText());
+            Assert.Equal(
+                "Code copied.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 drift fallback (mac codeModel parity): a fence with no
+    /// matching pipeline block renders the authoritative interior
+    /// un-highlighted, and the preamble is still correct — including
+    /// the "plain text" spoken language for untagged fences.
+    /// </summary>
+    [Fact]
+    public void UnmatchedFencesDegradeToPlainInteriorWithCorrectPreamble()
+    {
+        RunSta(() =>
+        {
+            FlowDocument document = BuildSource("```\nplain one\nplain two\n```\n");
+            Paragraph code = FindCodeParagraph(document);
+            Assert.Equal(
+                "Code block, plain text, 2 lines.",
+                System.Windows.Automation.AutomationProperties.GetName(code));
+            Run run = Assert.IsType<Run>(Assert.Single(code.Inlines));
+            Assert.Equal("plain one\nplain two", run.Text);
+        });
+    }
+
+    /// <summary>
+    /// W3-4: the code block's UIA peer speaks CORE's preamble as its
+    /// Name (the K contract's "AT preamble behind a UIA peer") while
+    /// the interior stays in the text range — object navigation gets
+    /// the summary, say-all gets the code.
+    /// </summary>
+    [Fact]
+    public void CodeBlockPeerSpeaksTheCanonicalPreamble()
+    {
+        RunSta(() =>
+        {
+            FlowDocument document = BuildSource(
+                "```rust\nfn a() {}\nfn b() {}\n```\n");
+            var children = new List<System.Windows.Automation.Peers.AutomationPeer>();
+            foreach (Block block in document.Blocks)
+            {
+                ReadingSurfacePeer.AppendStructuralForTest(block, children);
+            }
+            System.Windows.Automation.Peers.AutomationPeer peer = Assert.Single(
+                children,
+                candidate => candidate is ReadingCodeBlockPeer);
+            Assert.Equal("Code block, rust, 2 lines.", peer.GetName());
+            Assert.Equal(
+                System.Windows.Automation.Peers.AutomationControlType.Group,
+                peer.GetAutomationControlType());
+        });
+    }
+
+    /// <summary>
+    /// W3-4 CodePrefs parity (shipped-mac behavior: persisted +
+    /// announced; rendering stays preamble-only). The verbosity
+    /// round-trips the store, announces through the canonical
+    /// vocabulary, and rejects unknown keys.
+    /// </summary>
+    [Fact]
+    public void CodeVerbosityPersistsAnnouncesAndRejectsUnknownKeys()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), $"slate-code-verbosity-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var store = new AppPreferencesStore(Path.Combine(directory, "preferences.json"));
+            var announced = new List<A11yEvent>();
+            using var preferences = new EditorPreferencesViewModel(
+                announced.Add,
+                new FakeEditorSpellingService(),
+                preferencesStore: store);
+            Assert.True(preferences.IsCodeVerbosityPreambleOnly);
+
+            preferences.SetCodePreambleVerbosityCommand.Execute("preambleFirstLine");
+            Assert.True(preferences.IsCodeVerbosityFirstLine);
+            Assert.Equal(
+                "Code preamble verbosity: Preamble + first line.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+
+            preferences.SetCodePreambleVerbosityCommand.Execute("nonsense");
+            Assert.True(preferences.IsCodeVerbosityFirstLine);
+            Assert.Single(announced);
+
+            using var second = new EditorPreferencesViewModel(
+                _ => { },
+                new FakeEditorSpellingService(),
+                preferencesStore: store);
+            Assert.True(second.IsCodeVerbosityFirstLine);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 1 [high]: an unsaved edit INSIDE a fence
+    /// keeps byte containment, and the saved artifact must then lose —
+    /// display, preamble, and Copy all follow the LIVE interior;
+    /// tokens simply drop until the save catches up.
+    /// </summary>
+    [Fact]
+    public void DirtyFenceEditsNeverShowOrCopyStaleSavedCode()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-dirty");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\nfn saved() -> u8 { 1 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            // Edit inside the fence without moving it, then re-project.
+            tab.EditorDocument!.Replace(
+                tab.Text.IndexOf("saved", StringComparison.Ordinal), 5, "live!");
+            tab.Reading!.Refresh();
+
+            Paragraph code = FindCodeParagraph(surface.Document);
+            Assert.Contains("fn live!()", SurfaceText(surface), StringComparison.Ordinal);
+            Assert.DoesNotContain("fn saved()", SurfaceText(surface), StringComparison.Ordinal);
+            // Preamble counts the LIVE interior; tokens dropped (single
+            // plain run) rather than lying.
+            Assert.Equal(
+                "Code block, rust, 1 line.",
+                System.Windows.Automation.AutomationProperties.GetName(code));
+            Assert.Single(code.Inlines);
+            // Copy carries the live source.
+            System.Windows.Controls.Button copy = FindVisualButtons(surface.Document)
+                .Single(button => ReadingSemantics.IsCodeCopy(button));
+            Assert.Contains(
+                "fn live!()", (string)copy.Tag, StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 1 [medium]: a degraded token fetch must
+    /// not memo-match the successful fetch that recovers from it —
+    /// highlighting returns with the live text unchanged.
+    /// </summary>
+    [Fact]
+    public void DegradedTokenFetchesRecoverThroughTheMemo()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-recover");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\nfn recovered() -> u8 { 9 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            using var reading = new SlateWindows.Reading.ReadingContentViewModel(
+                session, tab, _ => { }, synchronousForTests: true);
+            var surface = new ReadingSurface { Model = reading };
+
+            // Degraded token fetch → plain single-run fence.
+            reading.CodeTokenFaultForTests =
+                () => new VaultException.Io("tokens unavailable");
+            reading.Refresh();
+            Assert.Single(FindCodeParagraph(surface.Document).Inlines);
+
+            // Recovery with IDENTICAL live text: the degraded digest
+            // must not memo-match — highlighting returns.
+            reading.CodeTokenFaultForTests = null;
+            reading.Refresh();
+            Assert.True(
+                FindCodeParagraph(surface.Document).Inlines.Count > 1,
+                "tokens did not recover after the degraded fetch");
+
+            // Baseline still holds: identical successful fetches
+            // memo-hit and skip the rebuild.
+            FlowDocument before = reading.Document!;
+            reading.Refresh();
+            Assert.Same(before, reading.Document);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 2 [medium]: a SAME-LENGTH dirty edit
+    /// (41 → 42) then a save leaves live text, offsets, lengths, and
+    /// token counts identical — only CONTENT differs, so the memo
+    /// digest must be content-complete or highlighting never returns.
+    /// </summary>
+    [Fact]
+    public void SameLengthEditThenSaveRecoversHighlighting()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-save");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\nfn f() -> u8 { 41 }\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            Assert.True(FindCodeParagraph(surface.Document).Inlines.Count > 1);
+
+            // Same-length dirty edit inside the fence → incoherent →
+            // plain run.
+            tab.EditorDocument!.Replace(
+                tab.Text.IndexOf("41", StringComparison.Ordinal), 2, "42");
+            tab.Reading!.Refresh();
+            Assert.Single(FindCodeParagraph(surface.Document).Inlines);
+
+            // Save: live text unchanged from the dirty refresh, saved
+            // artifact now coherent again — highlighting must return.
+            Assert.True(tab.Save());
+            tab.Reading!.Refresh();
+            Assert.True(
+                FindCodeParagraph(surface.Document).Inlines.Count > 1,
+                "highlighting did not recover after the save");
+            Assert.Contains(
+                "42",
+                string.Concat(
+                    FindCodeParagraph(surface.Document)
+                        .Inlines.OfType<Run>().Select(run => run.Text)),
+                StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 2 [high]: clipboard contention surfaces
+    /// as ExternalException — the copy handler logs, announces the
+    /// failure, and never lets it escape the click.
+    /// </summary>
+    [Fact]
+    public void ClipboardContentionAnnouncesInsteadOfCrashing()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-clip");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "```rust\nfn x() {}\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            tab.Reading!.ClipboardForTests = _ =>
+                throw new System.Runtime.InteropServices.ExternalException("busy");
+
+            tab.Reading!.CopyCode("anything");
+            Assert.Equal(
+                "Could not copy code. Try again.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 1 [medium]: explicit JSON null and
+    /// unknown verbosity values decode to the default instead of
+    /// throwing out of initialization.
+    /// </summary>
+    [Fact]
+    public void NullAndUnknownVerbosityValuesDecodeToTheDefault()
+    {
+        string directory = Path.Combine(
+            Path.GetTempPath(), $"slate-verbosity-null-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            string path = Path.Combine(directory, "preferences.json");
+            var store = new AppPreferencesStore(path);
+
+            File.WriteAllText(
+                path,
+                "{\"readingLinksOpenInNewTab\":true,\"codePreambleVerbosity\":null}");
+            Assert.Equal("preambleOnly", store.Load().CodePreambleVerbosity);
+            using var fromNull = new EditorPreferencesViewModel(
+                _ => { }, new FakeEditorSpellingService(), preferencesStore: store);
+            Assert.True(fromNull.IsCodeVerbosityPreambleOnly);
+
+            File.WriteAllText(
+                path,
+                "{\"codePreambleVerbosity\":\"futureMode\"}");
+            using var fromUnknown = new EditorPreferencesViewModel(
+                _ => { }, new FakeEditorSpellingService(), preferencesStore: store);
+            Assert.True(fromUnknown.IsCodeVerbosityPreambleOnly);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 2: CRLF-authored fences must keep their
+    /// highlighting (the saved artifact preserves raw CRLF while the
+    /// reading interior may normalize), and authored trailing blank
+    /// lines survive display — the interior renders verbatim, so
+    /// what is spoken, shown, and counted by the preamble agree.
+    /// </summary>
+    [Fact]
+    public void CrlfFencesKeepTokensAndTrailingBlankLinesSurvive()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-code-crlf");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "```rust\r\nfn crlf() -> u8 { 3 }\r\n```\r\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "blanks.md"),
+                "```rust\nfn a() {}\n\n\n```\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            Paragraph crlf = FindCodeParagraph(surface.Document);
+            Assert.True(
+                crlf.Inlines.Count > 1,
+                "CRLF fence lost its highlighting — coherence must normalize line endings");
+            Assert.Contains(
+                "fn crlf()",
+                string.Concat(crlf.Inlines.OfType<Run>().Select(run => run.Text)),
+                StringComparison.Ordinal);
+
+            using var blanksTab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "blanks.md")),
+                startInteractionBackgroundWork: false);
+            blanksTab.ToggleViewMode();
+            var blanksSurface = new ReadingSurface { Model = blanksTab.Reading };
+            Paragraph blanks = FindCodeParagraph(blanksSurface.Document);
+            string displayed = string.Concat(
+                blanks.Inlines.OfType<Run>().Select(run => run.Text));
+            // Interior = "fn a() {}\n\n" (one trailing newline stripped
+            // by the parser): the authored blank line SURVIVES display,
+            // and the preamble counts the same content.
+            Assert.EndsWith("fn a() {}\n\n", displayed.Length >= 2 ? displayed : "  ");
+            Assert.Equal(
+                "Code block, rust, 2 lines.",
+                System.Windows.Automation.AutomationProperties.GetName(blanks));
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 3 [high]: a fence above core's 256 KiB
+    /// highlighting cap arrives as one uncolored "oversized" token —
+    /// the builder short-circuits to the plain paragraph with zero
+    /// offset machinery instead of allocating per-byte maps on the
+    /// dispatcher for nothing.
+    /// </summary>
+    [Fact]
+    public void OversizedFencesShortCircuitToThePlainParagraph()
+    {
+        RunSta(() =>
+        {
+            var big = new System.Text.StringBuilder("```rust\n");
+            while (big.Length < 300_000)
+            {
+                big.Append("fn filler() -> usize { 123456789 }\n");
+            }
+            big.Append("```\n");
+
+            using var fixture = FixtureVault.Create(1, "reading-code-oversized");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), big.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph code = FindCodeParagraph(surface.Document);
+            Assert.Single(code.Inlines);
+            Assert.StartsWith(
+                "Code block, rust,",
+                System.Windows.Automation.AutomationProperties.GetName(code));
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 4 [high]: token DENSITY under the byte
+    /// cap — a valid dense JSON fence would fan out a WPF Run per
+    /// token plus gaps. Over the run budget the block degrades to one
+    /// plain run, exactly like oversized.
+    /// </summary>
+    [Fact]
+    public void DenseTokenFencesDegradeToThePlainParagraph()
+    {
+        RunSta(() =>
+        {
+            var dense = new System.Text.StringBuilder("```json\n[");
+            for (int i = 0; i < 30_000; i++)
+            {
+                dense.Append("0,");
+            }
+            dense.Append("0]\n```\n");
+
+            using var fixture = FixtureVault.Create(1, "reading-code-dense");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), dense.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph code = FindCodeParagraph(surface.Document);
+            Assert.Single(code.Inlines);
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 5 [high]: many individually
+    /// sub-threshold dense fences must not aggregate past the
+    /// projection-wide budget — later fences degrade to plain runs,
+    /// and total Run fan-out stays bounded.
+    /// </summary>
+    [Fact]
+    public void ManySubThresholdFencesStayWithinTheProjectionBudget()
+    {
+        RunSta(() =>
+        {
+            var text = new System.Text.StringBuilder();
+            for (int fence = 0; fence < 25; fence++)
+            {
+                text.Append("```json\n[");
+                for (int i = 0; i < 400; i++)
+                {
+                    text.Append("0,");
+                }
+                text.Append("0]\n```\n\n");
+            }
+
+            using var fixture = FixtureVault.Create(1, "reading-code-aggregate");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph[] fences = AllBlocks(surface.Document.Blocks)
+                .OfType<Paragraph>()
+                .Where(ReadingSemantics.IsCodeBlock)
+                .ToArray();
+            Assert.Equal(25, fences.Length);
+            // Early fences are highlighted; once the shared pool is
+            // exhausted, later fences are single plain runs.
+            Assert.True(fences[0].Inlines.Count > 1, "first fence lost its highlighting");
+            Assert.Single(fences[^1].Inlines);
+            int totalInlines = fences.Sum(paragraph => paragraph.Inlines.Count);
+            Assert.True(
+                totalInlines
+                    <= 2 * SlateWindows.Reading.ReadingDocumentBuilder
+                        .ProjectionHighlightTokenBudget
+                        + 2 * fences.Length,
+                $"aggregate inline count {totalInlines} exceeds the budget bound");
+        });
+    }
+
+    /// <summary>
+    /// W3-4 adversarial round 6 [medium]: a fence that renders plain
+    /// for its own reasons (over the per-fence cap) must not drain the
+    /// projection pool — a small ordinary fence after two over-cap
+    /// ones keeps its highlighting.
+    /// </summary>
+    [Fact]
+    public void OverCapFencesDoNotDrainTheBudgetForOthers()
+    {
+        RunSta(() =>
+        {
+            // 2,998 repetitions → 5,999 tokens per fence (2,999
+            // numbers + 2,998 commas + 2 brackets): the BROKEN charge
+            // order deducts both fences (12,000 → 2) and starves the
+            // rust fence, while the fixed order charges neither —
+            // counted by the round-7 review, which caught the first
+            // fixture passing against the broken parent.
+            var text = new System.Text.StringBuilder();
+            for (int fence = 0; fence < 2; fence++)
+            {
+                text.Append("```json\n[");
+                for (int i = 0; i < 2_998; i++)
+                {
+                    text.Append("0,");
+                }
+                text.Append("0]\n```\n\n");
+            }
+            text.Append("```rust\nfn still_colored() -> u8 { 1 }\n```\n");
+
+            using var fixture = FixtureVault.Create(1, "reading-code-overcap");
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), text.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Paragraph[] fences = AllBlocks(surface.Document.Blocks)
+                .OfType<Paragraph>()
+                .Where(ReadingSemantics.IsCodeBlock)
+                .ToArray();
+            Assert.Equal(3, fences.Length);
+            Assert.Single(fences[0].Inlines);
+            Assert.Single(fences[1].Inlines);
+            Assert.True(
+                fences[2].Inlines.Count > 1,
+                "the small fence lost highlighting to over-cap fences that rendered plain");
+        });
+    }
+
+    private static Paragraph FindCodeParagraph(FlowDocument document) =>
+        AllBlocks(document.Blocks)
+            .OfType<Paragraph>()
+            .Single(ReadingSemantics.IsCodeBlock);
+
+    private static IEnumerable<Block> AllBlocks(BlockCollection blocks)
+    {
+        foreach (Block block in blocks)
+        {
+            yield return block;
+            if (block is Section section)
+            {
+                foreach (Block inner in AllBlocks(section.Blocks))
+                {
+                    yield return inner;
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<System.Windows.Controls.Button> FindVisualButtons(
+        FlowDocument document) =>
+        AllBlocks(document.Blocks)
+            .OfType<BlockUIContainer>()
+            .Select(container => container.Child)
+            .OfType<System.Windows.Controls.Button>();
+
     private static void PumpOneBackgroundPass()
     {
         var frame = new System.Windows.Threading.DispatcherFrame();

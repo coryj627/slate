@@ -13,6 +13,11 @@
     <Color x:Key="Slate.SelectionTextColor">#FFFFFFFF</Color>
     <Color x:Key="Slate.ErrorColor">#FF8A0014</Color>
     <Color x:Key="Slate.WarningColor">#FF754500</Color>
+    <Color x:Key="Slate.CodeKeywordColor">#FF6A1B9A</Color>
+    <Color x:Key="Slate.CodeStringColor">#FF8E1515</Color>
+    <Color x:Key="Slate.CodeNumberColor">#FF0D47A1</Color>
+    <Color x:Key="Slate.CodeTypeColor">#FF00575B</Color>
+    <Color x:Key="Slate.CodeFunctionColor">#FF283593</Color>
 
     <SolidColorBrush x:Key="Slate.WindowBackgroundBrush"
                      Color="{StaticResource Slate.WindowBackgroundColor}" />
@@ -48,4 +53,16 @@
                      Color="{StaticResource Slate.AccentColor}" />
     <SolidColorBrush x:Key="Slate.EditorMetadataBrush"
                      Color="{StaticResource Slate.SecondaryTextColor}" />
+    <SolidColorBrush x:Key="Slate.CodeKeywordBrush"
+                     Color="{StaticResource Slate.CodeKeywordColor}" />
+    <SolidColorBrush x:Key="Slate.CodeStringBrush"
+                     Color="{StaticResource Slate.CodeStringColor}" />
+    <SolidColorBrush x:Key="Slate.CodeNumberBrush"
+                     Color="{StaticResource Slate.CodeNumberColor}" />
+    <SolidColorBrush x:Key="Slate.CodeCommentBrush"
+                     Color="{StaticResource Slate.SecondaryTextColor}" />
+    <SolidColorBrush x:Key="Slate.CodeTypeBrush"
+                     Color="{StaticResource Slate.CodeTypeColor}" />
+    <SolidColorBrush x:Key="Slate.CodeFunctionBrush"
+                     Color="{StaticResource Slate.CodeFunctionColor}" />
 </ResourceDictionary>

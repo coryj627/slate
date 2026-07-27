@@ -25,6 +25,17 @@ internal sealed class ReadingListBuildContext
     /// <summary>Stack[d] holds the open list accepting items at depth
     /// d and the last item added to it (the parent of depth d+1).</summary>
     internal List<(WpfList List, ListItem? LastItem)> Stack { get; } = new();
+
+    /// <summary>
+    /// The PROJECTION-WIDE highlight budget (W3-4 adversarial round
+    /// 5): the per-fence token cap alone lets 250 sub-threshold dense
+    /// fences allocate a million Runs in one dispatcher chunk. Each
+    /// highlighted fence draws down this shared pool — carried across
+    /// chunks exactly like list state — and fences after exhaustion
+    /// degrade to plain paragraphs.
+    /// </summary>
+    internal int RemainingHighlightTokens { get; set; } =
+        ReadingDocumentBuilder.ProjectionHighlightTokenBudget;
 }
 
 /// <summary>The built reading document plus its navigation index.</summary>
@@ -60,11 +71,17 @@ internal static class ReadingDocumentBuilder
 {
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model) =>
-        Build(model, new ReadingListBuildContext());
+        Build(model, new ReadingListBuildContext(), Array.Empty<CodeBlock>());
 
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
-        ReadingListBuildContext context)
+        ReadingListBuildContext context) =>
+        Build(model, context, Array.Empty<CodeBlock>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks)
     {
         var document = new FlowDocument
         {
@@ -97,7 +114,7 @@ internal static class ReadingDocumentBuilder
             }
 
             stack.Clear();
-            document.Blocks.Add(NonListBlock(block, inlines));
+            document.Blocks.Add(NonListBlock(block, inlines, codeBlocks, context));
         }
 
         return new ReadingDocumentModel(document, CollectLandmarks(document));
@@ -167,7 +184,11 @@ internal static class ReadingDocumentBuilder
         stack[depth] = (stack[depth].List, item);
     }
 
-    private static Block NonListBlock(ReadingBlock block, ReadingBlockInlines inlines)
+    private static Block NonListBlock(
+        ReadingBlock block,
+        ReadingBlockInlines inlines,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        ReadingListBuildContext context)
     {
         switch (block.Kind)
         {
@@ -201,7 +222,7 @@ internal static class ReadingDocumentBuilder
                 }
 
             case ReadingBlockKind.CodeFence fence:
-                return CodeFenceBlock(fence);
+                return CodeFenceBlock(fence, block, codeBlocks, context);
 
             case ReadingBlockKind.Table:
                 return TableBlock(block);
@@ -228,19 +249,236 @@ internal static class ReadingDocumentBuilder
     }
 
     /// <summary>
-    /// W3-1 baseline for code fences, superseded by W3-4's token
-    /// renderer: the interior is a monospace paragraph INSIDE the text
-    /// range. The spike measured the alternative — a `BlockUIContainer`
-    /// child — as silently absent from say-all ("landmarks missing:
-    /// fn main"), and a reading view that skips code while reading is a
-    /// correctness failure, not a styling gap.
+    /// W3-4 code fence: canonical token rendering INSIDE the text range
+    /// (the W3-1 spike measured `BlockUIContainer` content as silently
+    /// absent from say-all — "landmarks missing: fn main" — and a
+    /// reading view that skips code is a correctness failure). The
+    /// fence matches its pipeline <see cref="CodeBlock"/> by byte
+    /// containment — mac's `codeModel` rule — and renders that block's
+    /// source as token-colored runs; a live-buffer drift miss degrades
+    /// to the authoritative interior, un-highlighted, with the preamble
+    /// still correct. The preamble is CORE's
+    /// (<c>CodeBlockPreamble</c> — hoisted for W3-4 so both hosts speak
+    /// identical strings) and rides the paragraph's AutomationName for
+    /// the peer. The visible Copy button precedes the code (mac #854:
+    /// always visible, in layout); its Tag carries the exact source to
+    /// copy — a plain string, per the undo-serialization lesson.
     /// </summary>
-    private static Block CodeFenceBlock(ReadingBlockKind.CodeFence fence)
+    private static Block CodeFenceBlock(
+        ReadingBlockKind.CodeFence fence,
+        ReadingBlock block,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        ReadingListBuildContext context)
     {
-        Paragraph paragraph = MonospaceParagraph(fence.Interior.TrimEnd('\n', '\r'));
+        CodeBlock? matched = codeBlocks.FirstOrDefault(candidate =>
+            candidate.ByteOffset >= block.ByteStart
+            && candidate.ByteOffset < block.ByteEnd);
+
+        // The LIVE fence interior is authoritative for display, the
+        // preamble, and Copy — the saved artifact only contributes
+        // TOKENS, and only when it is coherent with the live content
+        // (an unsaved edit inside a fence keeps byte containment, and
+        // rendering or copying the stale saved source would lie to the
+        // reader and the clipboard). Coherence is compared over
+        // LF-NORMALIZED saved source (the saved artifact preserves raw
+        // CRLF; the reading interior is LF — measured: every CRLF
+        // fence silently lost highlighting under an exact compare),
+        // modulo the one trailing newline the reading interior strips,
+        // plus identical language.
+        string normalizedSaved = matched?.Source.Replace("\r\n", "\n") ?? string.Empty;
+        bool coherent = matched is not null
+            && (string.Equals(normalizedSaved, fence.Interior, StringComparison.Ordinal)
+                || string.Equals(
+                    normalizedSaved,
+                    fence.Interior + "\n",
+                    StringComparison.Ordinal))
+            && string.Equals(
+                matched.Language ?? string.Empty,
+                fence.Language,
+                StringComparison.Ordinal);
+
+        string source = fence.Interior;
+        string? language = fence.Language.Length == 0 ? null : fence.Language;
+        string preamble = SlateUniffiMethods.CodeBlockPreamble(language, source);
+
+        // The interior renders VERBATIM — TrimEnd ate authored trailing
+        // blank lines, so display disagreed with the preamble's count
+        // and with what Copy delivered. Highlighting draws down the
+        // projection-wide budget: fences after exhaustion render plain
+        // (round 5 — the per-fence cap alone lets many sub-threshold
+        // dense fences aggregate into dispatcher-scale Run fan-out).
+        // Charge order matters: the per-fence cap and colorability run
+        // BEFORE the pool deduction, so a fence that renders plain for
+        // its own reasons never drains the budget other fences need
+        // (round 6 — two over-cap fences silently un-highlighted the
+        // rest of the note).
+        bool highlightable = coherent
+            && matched!.Tokens.Length <= MaximumHighlightTokens
+            && HasColorableToken(matched)
+            && matched.Tokens.Length <= context.RemainingHighlightTokens;
+        Paragraph paragraph;
+        if (highlightable)
+        {
+            context.RemainingHighlightTokens -= matched!.Tokens.Length;
+            paragraph = TokenParagraph(matched, fence.Interior);
+        }
+        else
+        {
+            paragraph = MonospaceParagraph(fence.Interior);
+        }
         ReadingSemantics.MarkCodeBlock(paragraph);
+        AutomationProperties.SetName(paragraph, preamble);
+
+        var copy = new Button
+        {
+            Content = "Copy code",
+            Padding = new Thickness(8, 2, 8, 2),
+            HorizontalAlignment = HorizontalAlignment.Right,
+            Tag = source,
+        };
+        ReadingSemantics.MarkCodeCopy(copy);
+        AutomationProperties.SetHelpText(
+            copy, "Copies the code block source as plain text.");
+        var section = new Section();
+        section.Blocks.Add(new BlockUIContainer(copy)
+        {
+            Padding = new Thickness(0),
+            Margin = new Thickness(0, 4, 0, 0),
+        });
+        section.Blocks.Add(paragraph);
+        return section;
+    }
+
+    /// <summary>
+    /// The LIVE interior as token-colored runs — plain attribute
+    /// application over core-computed byte ranges (§10.8: nothing is
+    /// re-derived; gaps keep the default text brush, exactly as mac's
+    /// attributed-string base layer does). Token offsets are UTF-8
+    /// into the RAW saved source, which may carry CRLF the interior
+    /// normalizes away — each offset shifts left by the count of
+    /// CR-in-CRLF bytes before it (coherence guarantees the normalized
+    /// forms are identical), then clamps to the rendered length.
+    /// </summary>
+    /// <summary>
+    /// The run-budget preflight: the loop below creates a WPF Run per
+    /// token plus one per gap, and core's 256 KiB BYTE cap does not
+    /// bound token DENSITY — a valid dense JSON fence under the cap
+    /// can carry six-figure token counts, and dispatcher-scale Run
+    /// fan-out freezes the reading view. Over budget degrades to the
+    /// plain paragraph, exactly like oversized. (A core-side token
+    /// ceiling as defense in depth would change the §W-A artifact and
+    /// both hosts — recorded option, not this PR.)
+    /// </summary>
+    internal const int MaximumHighlightTokens = 4_000;
+
+    /// <summary>The projection-wide pool the per-fence cap draws from
+    /// (see <see cref="ReadingListBuildContext.RemainingHighlightTokens"/>):
+    /// three maximal fences, or dozens of ordinary ones — bounded Run
+    /// fan-out no matter how many fences a note holds.</summary>
+    internal const int ProjectionHighlightTokenBudget = 12_000;
+
+    /// <summary>Core degrades oversized (>256 KiB) and
+    /// unknown-language blocks to tokens that carry no color — those
+    /// build the plain paragraph with zero offset machinery and must
+    /// never charge the highlight pool.</summary>
+    private static bool HasColorableToken(CodeBlock matched)
+    {
+        foreach (SyntaxToken probe in matched.Tokens)
+        {
+            if (TokenBrushKey(probe.Kind) is not null)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Paragraph TokenParagraph(CodeBlock matched, string interior)
+    {
+        // Defense in depth: callers gate on the per-fence cap and
+        // colorability before charging the pool, but this stays safe
+        // standalone.
+        if (matched.Tokens.Length > MaximumHighlightTokens
+            || !HasColorableToken(matched))
+        {
+            return MonospaceParagraph(interior);
+        }
+
+        string display = interior;
+        byte[] utf8 = Encoding.UTF8.GetBytes(display);
+        byte[] raw = Encoding.UTF8.GetBytes(matched.Source);
+        // Sparse CRLF remap: byte positions of each CR-in-CRLF in the
+        // raw saved source; an offset shifts left by the count of
+        // positions before it (binary search) — never an int per byte.
+        var carriageReturns = new List<int>();
+        for (int i = 0; i + 1 < raw.Length; i++)
+        {
+            if (raw[i] == (byte)'\r' && raw[i + 1] == (byte)'\n')
+            {
+                carriageReturns.Add(i);
+            }
+        }
+        int Normalized(int rawOffset)
+        {
+            int index = carriageReturns.BinarySearch(rawOffset);
+            return rawOffset - (index >= 0 ? index : ~index);
+        }
+        var paragraph = new Paragraph
+        {
+            FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
+            Padding = new Thickness(8),
+        };
+        paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
+
+        int cursor = 0;
+        foreach (SyntaxToken token in matched.Tokens)
+        {
+            int rawStart = Math.Min((int)token.StartByte, raw.Length);
+            int rawEnd = Math.Min((int)token.EndByte, raw.Length);
+            int start = Math.Clamp(Normalized(rawStart), cursor, utf8.Length);
+            int end = Math.Clamp(Normalized(rawEnd), start, utf8.Length);
+            if (start > cursor)
+            {
+                paragraph.Inlines.Add(
+                    new Run(Encoding.UTF8.GetString(utf8, cursor, start - cursor)));
+            }
+            if (end > start)
+            {
+                var run = new Run(Encoding.UTF8.GetString(utf8, start, end - start));
+                if (TokenBrushKey(token.Kind) is { } key)
+                {
+                    run.SetResourceReference(TextElement.ForegroundProperty, key);
+                }
+                paragraph.Inlines.Add(run);
+            }
+            cursor = end;
+        }
+        if (cursor < utf8.Length)
+        {
+            paragraph.Inlines.Add(
+                new Run(Encoding.UTF8.GetString(utf8, cursor, utf8.Length - cursor)));
+        }
         return paragraph;
     }
+
+    /// <summary>
+    /// Token kind → theme brush key (mac `CodeTokenTheme` parity, APCA
+    /// gated in `ThemeTokenContrastTests`). Null keeps the default text
+    /// brush: identifier/operator/other match mac's label-color rule,
+    /// and `function` gets its OWN gated color rather than mac's
+    /// accent — accent/raised is the recorded #1051 near-miss.
+    /// </summary>
+    private static string? TokenBrushKey(TokenKind kind) => kind switch
+    {
+        TokenKind.Keyword => "Slate.CodeKeywordBrush",
+        TokenKind.String => "Slate.CodeStringBrush",
+        TokenKind.Number => "Slate.CodeNumberBrush",
+        TokenKind.Comment => "Slate.CodeCommentBrush",
+        TokenKind.Type => "Slate.CodeTypeBrush",
+        TokenKind.Function => "Slate.CodeFunctionBrush",
+        TokenKind.Punctuation => "Slate.SecondaryTextBrush",
+        _ => null,
+    };
 
     private static Paragraph MonospaceParagraph(string text)
     {

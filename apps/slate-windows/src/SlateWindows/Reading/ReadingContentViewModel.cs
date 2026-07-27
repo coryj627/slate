@@ -228,6 +228,35 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     }
 
     /// <summary>
+    /// Copy a code block's source - the Copy button route (W3-4). The
+    /// source travels on the button itself (a plain string Tag); the
+    /// announcement is core's canonical "Code copied.".
+    /// </summary>
+    public void CopyCode(string source)
+    {
+        try
+        {
+            (ClipboardForTests ?? System.Windows.Clipboard.SetText)(source);
+        }
+        catch (System.Runtime.InteropServices.ExternalException exception)
+        {
+            // WPF surfaces clipboard contention as ExternalException
+            // (COMException is only its subtype) — the MainWindow
+            // CopyText precedent. Log + say so instead of letting a
+            // busy clipboard crash the UI thread out of a click.
+            HostLog.Write(HostDiagnosticEvent.ClipboardCopyFailed, exception);
+            _announce(new A11yEvent.HostComposed(
+                "Could not copy code. Try again.",
+                A11yPriority.High));
+            return;
+        }
+        _announce(new A11yEvent.CodeCopied());
+    }
+
+    /// <summary>Clipboard injection seam for tests.</summary>
+    internal Action<string>? ClipboardForTests { get; set; }
+
+    /// <summary>
     /// Toggle the task whose checkbox lives inside the given source
     /// block range (the range the builder stamped on the checkbox) —
     /// the byte-containment analog of mac's line-matched `taskRow`.
@@ -479,8 +508,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         Document = document;
     }
 
+    /// <summary>Tokens-only fault seam: exercises the degraded code
+    /// fetch (empty artifact, digest "degraded") without failing the
+    /// projection itself.</summary>
+    internal Func<Exception?>? CodeTokenFaultForTests { get; set; }
+
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
-    private static FetchResult Fetch(VaultSession session, string path, string text)
+    private FetchResult Fetch(VaultSession session, string path, string text)
     {
         // Records ownership is inherent here — they are fetched for the
         // captured path inside the gated refresh, and publication
@@ -488,10 +522,29 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         OutgoingLink[] records = session.OutgoingLinks(path);
         RenderedCitation[] citations = RenderCitations(session, path);
         TaskItem[] tasks = session.TasksForFile(path).ToArray();
+        // Code blocks degrade per-fetch, mac-style: a failure here
+        // renders plain un-highlighted fences with correct preambles
+        // rather than failing the whole projection.
+        CodeBlock[] codeBlocks;
+        bool codeFetchDegraded = false;
+        try
+        {
+            if (CodeTokenFaultForTests?.Invoke() is { } fault)
+            {
+                throw fault;
+            }
+            codeBlocks = session.GetSyntaxTokens(path);
+        }
+        catch (VaultException)
+        {
+            codeBlocks = Array.Empty<CodeBlock>();
+            codeFetchDegraded = true;
+        }
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
-        return new FetchResult(text, citations, records, tasks, blocks, inlines);
+        return new FetchResult(
+            text, citations, records, tasks, codeBlocks, codeFetchDegraded, blocks, inlines);
     }
 
     /// <summary>
@@ -582,7 +635,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             return;
         }
 
-        var key = new MemoKey(fetched.Text, fetched.Citations, fetched.Records);
+        var key = new MemoKey(
+            fetched.Text,
+            fetched.Citations,
+            fetched.Records,
+            CodeArtifactDigest(fetched.CodeBlocks, fetched.CodeFetchDegraded));
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
             return;
@@ -604,8 +661,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
         var context = new ReadingListBuildContext();
         int firstEnd = Math.Min(BuildChunkBlocks, renderLimit);
+        // Excluded from the memo on purpose: CodeBlock carries arrays
+        // (reference equality would defeat every memo hit), and its
+        // content derives from the SAVED file - saved-state changes
+        // arrive through the session-generation drift retry.
+        CodeBlock[] codeBlocks = fetched.CodeBlocks;
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
-            model.GetRange(0, firstEnd), context);
+            model.GetRange(0, firstEnd), context, codeBlocks);
 
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
@@ -631,7 +693,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             while (index < renderLimit)
             {
                 int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-                AppendFragment(model, index, end, context);
+                AppendFragment(model, index, end, context, codeBlocks);
                 index = end;
             }
             FinishPublish(key, degraded, renderLimit, streamed: true);
@@ -641,7 +703,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             () => RunPublishStep(
                 generation,
                 () => ContinueBuild(
-                    generation, model, firstEnd, renderLimit, key, degraded, context)),
+                    generation, model, firstEnd, renderLimit, key, degraded, context,
+                    codeBlocks)),
             DispatcherPriority.Background);
     }
 
@@ -694,7 +757,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         int renderLimit,
         MemoKey key,
         bool degraded,
-        ReadingListBuildContext context)
+        ReadingListBuildContext context,
+        CodeBlock[] codeBlocks)
     {
         if (_disposed || generation != _generation)
         {
@@ -705,14 +769,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             throw fault;
         }
         int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-        AppendFragment(model, index, end, context);
+        AppendFragment(model, index, end, context, codeBlocks);
         if (end < renderLimit)
         {
             _ = _dispatcher!.InvokeAsync(
                 () => RunPublishStep(
                     generation,
                     () => ContinueBuild(
-                        generation, model, end, renderLimit, key, degraded, context)),
+                        generation, model, end, renderLimit, key, degraded, context,
+                        codeBlocks)),
                 DispatcherPriority.Background);
             return;
         }
@@ -723,9 +788,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         List<(ReadingBlock, ReadingBlockInlines)> model,
         int index,
         int end,
-        ReadingListBuildContext context) =>
+        ReadingListBuildContext context,
+        CodeBlock[] codeBlocks) =>
         BlocksAppended?.Invoke(
-            ReadingDocumentBuilder.Build(model.GetRange(index, end - index), context).Document);
+            ReadingDocumentBuilder.Build(
+                model.GetRange(index, end - index), context, codeBlocks).Document);
 
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
     {
@@ -781,6 +848,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         RenderedCitation[] Citations,
         OutgoingLink[] Records,
         TaskItem[] Tasks,
+        CodeBlock[] CodeBlocks,
+        bool CodeFetchDegraded,
         ReadingBlock[] Blocks,
         ReadingBlockInlines[] Inlines);
 
@@ -794,17 +863,64 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         private readonly string _text;
         private readonly RenderedCitation[] _citations;
         private readonly OutgoingLink[] _records;
+        private readonly string _codeDigest;
 
-        public MemoKey(string text, RenderedCitation[] citations, OutgoingLink[] records)
+        public MemoKey(
+            string text,
+            RenderedCitation[] citations,
+            OutgoingLink[] records,
+            string codeDigest)
         {
             _text = text;
             _citations = citations;
             _records = records;
+            _codeDigest = codeDigest;
         }
 
         public bool Matches(MemoKey other) =>
             string.Equals(_text, other._text, StringComparison.Ordinal)
             && _citations.SequenceEqual(other._citations)
-            && _records.SequenceEqual(other._records);
+            && _records.SequenceEqual(other._records)
+            && string.Equals(_codeDigest, other._codeDigest, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A CONTENT-COMPLETE identity for the saved code artifact, folded
+    /// into the memo: CodeBlock carries arrays (reference equality
+    /// would defeat every hit), but the memo must see a save that
+    /// changed source or token CONTENT with the live text unchanged —
+    /// offsets/lengths/counts alone collide on same-length edits
+    /// (41 -> 42 froze un-highlighted rendering across its save). A
+    /// degraded fetch is its own identity so recovery always rebuilds.
+    /// </summary>
+    private static string CodeArtifactDigest(CodeBlock[] blocks, bool degraded)
+    {
+        if (degraded)
+        {
+            return "degraded";
+        }
+        var canonical = new System.Text.StringBuilder();
+        foreach (CodeBlock block in blocks)
+        {
+            canonical.Append(block.ByteOffset)
+                .Append('\u0001')
+                .Append(block.Language)
+                .Append('\u0001')
+                .Append(block.Source)
+                .Append('\u0001');
+            foreach (SyntaxToken token in block.Tokens)
+            {
+                canonical.Append(token.StartByte)
+                    .Append(':')
+                    .Append(token.EndByte)
+                    .Append(':')
+                    .Append(token.Kind)
+                    .Append(';');
+            }
+            canonical.Append('\u0002');
+        }
+        byte[] hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(canonical.ToString()));
+        return Convert.ToHexString(hash);
     }
 }

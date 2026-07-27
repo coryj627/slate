@@ -188,6 +188,36 @@ const CODE_BLOCK_MAX_BYTES: usize = 256 * 1024;
 // A proper wall-clock callback can be added as a follow-up if real-
 // world profiling shows it's needed.
 
+/// The canonical AT preamble for a code block (Milestone K contract,
+/// W3-4 hoist): `"Code block, {language}, {N} line|lines."`.
+///
+/// This wording shipped host-composed in the mac `CodeBlockView`
+/// (pinned there since #218), and `07_portability_review.md` already
+/// records the doctrine as "code → AT preamble — produced in Rust".
+/// Hoisting the composition here makes that true and removes the
+/// cross-host drift risk — the same reason #967 moved inline runs.
+/// Rules, exactly as the mac goldens pin them:
+/// - `language` is trimmed; empty or absent speaks as "plain text".
+/// - Lines are `\n` counts where a trailing newline TERMINATES the
+///   last line (it never adds one); empty source is 0 lines.
+/// - Singular "line" at exactly 1.
+pub fn code_block_preamble(language: Option<&str>, source: &str) -> String {
+    let language = language.map(str::trim).filter(|l| !l.is_empty());
+    let spoken_language = language.unwrap_or("plain text");
+    let lines = if source.is_empty() {
+        0
+    } else {
+        let newlines = source.matches('\n').count();
+        if source.ends_with('\n') {
+            newlines
+        } else {
+            newlines + 1
+        }
+    };
+    let suffix = if lines == 1 { "line" } else { "lines" };
+    format!("Code block, {spoken_language}, {lines} {suffix}.")
+}
+
 /// Dispatch a raw block to the matching tree-sitter grammar.
 ///
 /// Returns a single `Other` token covering the source when the
@@ -666,6 +696,48 @@ fn classify_universal(kind: &str) -> Option<TokenKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The four mac `CodeBlockViewTests` goldens, verbatim — the
+    /// preamble is canonical here now, and the strings may never
+    /// drift from what VoiceOver users have heard since #218.
+    #[test]
+    fn preamble_matches_the_mac_goldens() {
+        assert_eq!(
+            code_block_preamble(Some("rust"), "a\nb\nc\n"),
+            "Code block, rust, 3 lines."
+        );
+        assert_eq!(
+            code_block_preamble(Some("rust"), "one line"),
+            "Code block, rust, 1 line."
+        );
+        assert_eq!(
+            code_block_preamble(None, "x\ny\n"),
+            "Code block, plain text, 2 lines."
+        );
+        assert_eq!(
+            code_block_preamble(Some("rust"), ""),
+            "Code block, rust, 0 lines."
+        );
+    }
+
+    /// Edge rules: whitespace-only language speaks as plain text; a
+    /// trailing newline terminates the last line instead of adding
+    /// one; no trailing newline still counts the last line.
+    #[test]
+    fn preamble_edge_rules() {
+        assert_eq!(
+            code_block_preamble(Some("  "), "x"),
+            "Code block, plain text, 1 line."
+        );
+        assert_eq!(
+            code_block_preamble(Some(" swift \n"), "a\nb"),
+            "Code block, swift, 2 lines."
+        );
+        assert_eq!(
+            code_block_preamble(Some("rust"), "a\nb\nc"),
+            "Code block, rust, 3 lines."
+        );
+    }
 
     #[test]
     fn extracts_fenced_block_with_language() {
