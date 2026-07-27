@@ -8,6 +8,7 @@ using WpfMath.Parsers;
 using WpfMath.Rendering;
 using XamlMath;
 using XamlMath.Exceptions;
+using uniffi.slate_uniffi;
 
 namespace SlateWindows.Tests;
 
@@ -106,6 +107,179 @@ public sealed class ReadingMathTests
             Assert.Throws<TexParseException>(() =>
                 parser.Parse(@"\begin{bmatrix} 1 \\ 2 \end{bmatrix}"));
         });
+    }
+
+    /// <summary>
+    /// W3-2 core rendering path over a REAL vault + MathCAT: a display
+    /// fence matches its canonical artifact, renders into a focusable
+    /// element whose Name is genuine MathCAT speech (not the empty
+    /// fallback), carries the MathML for the convention property, and
+    /// lands in the landmark index with the speech as landing text.
+    /// </summary>
+    [Fact]
+    public void MathBlockRendersAFocusableElementSpeakingCanonicalSpeech()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-math-basic");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "# Math\n\n$$x^2 + 1$$\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            ReadingMathElement element = FindMathElements(surface.Document).Single();
+            Assert.True(element.Focusable);
+            string name = System.Windows.Automation.AutomationProperties.GetName(element);
+            Assert.False(string.IsNullOrWhiteSpace(name));
+            Assert.NotEqual("Math expression.", name);
+            Assert.StartsWith("<math", element.MathMl.TrimStart());
+
+            ReadingLandmark landmark = Assert.Single(
+                surface.LandmarksForTests,
+                candidate => candidate.Kind == ReadingLandmarkKind.Math);
+            Assert.Equal(name, landmark.Text);
+        });
+    }
+
+    /// <summary>
+    /// The documented WPFMath coverage boundary degrades to
+    /// source-in-range (never silently absent) while the block stays a
+    /// nav stop with MathCAT speech as its landing text.
+    /// </summary>
+    [Fact]
+    public void UnrenderableMathDegradesToSourceInRange()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-math-gap");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "$$\\begin{bmatrix} 1 \\\\ 2 \\end{bmatrix}$$\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Assert.Empty(FindMathElements(surface.Document));
+            Assert.Contains(
+                "bmatrix",
+                new System.Windows.Documents.TextRange(
+                    surface.Document.ContentStart,
+                    surface.Document.ContentEnd).Text,
+                StringComparison.Ordinal);
+            Assert.Single(
+                surface.LandmarksForTests,
+                candidate => candidate.Kind == ReadingLandmarkKind.Math);
+        });
+    }
+
+    /// <summary>Enter at the caret on a math block speaks the
+    /// canonical landed vocabulary — "{speech}, math."</summary>
+    [Fact]
+    public void EnterAtTheCaretSpeaksTheMathBlock()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-math-enter");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "$$x^2$$\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            ReadingLandmark landmark = Assert.Single(
+                surface.LandmarksForTests,
+                candidate => candidate.Kind == ReadingLandmarkKind.Math);
+            surface.CaretPosition = landmark.Position;
+            Assert.True(surface.TryActivateAtCaret());
+            string spoken = SlateUniffiMethods.A11yRender(
+                Assert.Single(announced)).Text;
+            Assert.EndsWith(", math.", spoken);
+            Assert.Contains("squared", spoken, StringComparison.OrdinalIgnoreCase);
+        });
+    }
+
+    /// <summary>The real math element's peer answers the registered
+    /// MathML property through WPF's own dispatch and localizes its
+    /// control type as "math".</summary>
+    [Fact]
+    public void MathElementPeerServesTheConventionProperty()
+    {
+        RunSta(() =>
+        {
+            MathMlUiaProperty.Initialize();
+            Assert.True(MathMlUiaProperty.IsActive, MathMlUiaProperty.InactiveReason);
+
+            var element = new ReadingMathElement(
+                "x squared", "<math><mi>x</mi></math>", "x^2");
+            var peer = new ReadingMathElementPeer(element);
+            Assert.Equal("math", peer.GetLocalizedControlType());
+
+            System.Reflection.MethodInfo dispatch = typeof(AutomationPeer).GetMethod(
+                "GetPropertyValue",
+                System.Reflection.BindingFlags.NonPublic
+                    | System.Reflection.BindingFlags.Instance,
+                types: new[] { typeof(int) })!;
+            Assert.Equal(
+                "<math><mi>x</mi></math>",
+                dispatch.Invoke(
+                    peer, new object[] { MathMlUiaProperty.PropertyIdForTests }));
+        });
+    }
+
+    private static IEnumerable<ReadingMathElement> FindMathElements(
+        System.Windows.Documents.FlowDocument document)
+    {
+        foreach (System.Windows.Documents.Block block in document.Blocks)
+        {
+            if (block is not System.Windows.Documents.Paragraph paragraph)
+            {
+                continue;
+            }
+            foreach (System.Windows.Documents.Inline inline in paragraph.Inlines)
+            {
+                if (inline is System.Windows.Documents.InlineUIContainer
+                    {
+                        Child: ReadingMathElement element,
+                    })
+                {
+                    yield return element;
+                }
+            }
+        }
     }
 
     private sealed class FakeMathPeer

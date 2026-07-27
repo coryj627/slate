@@ -71,17 +71,28 @@ internal static class ReadingDocumentBuilder
 {
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model) =>
-        Build(model, new ReadingListBuildContext(), Array.Empty<CodeBlock>());
+        Build(
+            model,
+            new ReadingListBuildContext(),
+            Array.Empty<CodeBlock>(),
+            Array.Empty<MathBlock>());
 
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
         ReadingListBuildContext context) =>
-        Build(model, context, Array.Empty<CodeBlock>());
+        Build(model, context, Array.Empty<CodeBlock>(), Array.Empty<MathBlock>());
 
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
         ReadingListBuildContext context,
-        IReadOnlyList<CodeBlock> codeBlocks)
+        IReadOnlyList<CodeBlock> codeBlocks) =>
+        Build(model, context, codeBlocks, Array.Empty<MathBlock>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks)
     {
         var document = new FlowDocument
         {
@@ -114,7 +125,8 @@ internal static class ReadingDocumentBuilder
             }
 
             stack.Clear();
-            document.Blocks.Add(NonListBlock(block, inlines, codeBlocks, context));
+            document.Blocks.Add(
+                NonListBlock(block, inlines, codeBlocks, mathBlocks, context));
         }
 
         return new ReadingDocumentModel(document, CollectLandmarks(document));
@@ -188,6 +200,7 @@ internal static class ReadingDocumentBuilder
         ReadingBlock block,
         ReadingBlockInlines inlines,
         IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks,
         ReadingListBuildContext context)
     {
         switch (block.Kind)
@@ -231,6 +244,8 @@ internal static class ReadingDocumentBuilder
                 return new BlockUIContainer(new Separator { Margin = new Thickness(0, 8, 0, 8) });
 
             case ReadingBlockKind.MathBlock:
+                return MathBlockElement(block, mathBlocks);
+
             case ReadingBlockKind.Diagram:
             case ReadingBlockKind.Html:
             default:
@@ -359,6 +374,99 @@ internal static class ReadingDocumentBuilder
     /// CR-in-CRLF bytes before it (coherence guarantees the normalized
     /// forms are identical), then clamps to the rendered length.
     /// </summary>
+    /// <summary>
+    /// W3-2 math block (gap G23's guaranteed layer): the canonical
+    /// artifact matches by byte containment, BLOCK display style only
+    /// (the mac codeModel rule), and renders through WPFMath into a
+    /// focusable <see cref="ReadingMathElement"/> whose Name is the
+    /// MathCAT speech — spoken on focus/Tab/object navigation in stock
+    /// NVDA and JAWS, with the MathML convention property riding the
+    /// peer. Unmatched blocks and TexException coverage gaps (the
+    /// documented WPFMath subset) degrade to the source IN the text
+    /// range — never silently absent — with the block still a nav
+    /// stop; the landing announcement then carries the speech when the
+    /// artifact matched, or the raw source otherwise (content either
+    /// way, composition never).
+    /// </summary>
+    private static Block MathBlockElement(
+        ReadingBlock block, IReadOnlyList<MathBlock> mathBlocks)
+    {
+        MathBlock? matched = mathBlocks.FirstOrDefault(candidate =>
+            candidate.DisplayStyle == MathDisplayStyle.Block
+            && candidate.ByteOffset >= block.ByteStart
+            && candidate.ByteOffset < block.ByteEnd);
+
+        string speech = matched is { Speech.Length: > 0 } speechful
+            ? speechful.Speech.Trim()
+            : "Math expression.";
+        string fallbackSource = block.Source.TrimEnd('\n', '\r');
+
+        if (matched is null)
+        {
+            Paragraph unmatchedParagraph = MonospaceParagraph(fallbackSource);
+            ReadingSemantics.MarkMathBlock(unmatchedParagraph, fallbackSource);
+            return unmatchedParagraph;
+        }
+
+        System.Windows.UIElement? visual = TryRenderFormula(matched.Source);
+        if (visual is null)
+        {
+            // Coverage gap (documented WPFMath subset, matrix-rowed):
+            // source stays readable in range, speech still lands.
+            Paragraph gapParagraph = MonospaceParagraph(fallbackSource);
+            ReadingSemantics.MarkMathBlock(gapParagraph, speech);
+            return gapParagraph;
+        }
+
+        var element = new ReadingMathElement(speech, matched.Mathml, matched.Source)
+        {
+            Content = visual,
+            Margin = new Thickness(0, 4, 0, 4),
+        };
+        var paragraph = new Paragraph(new InlineUIContainer(element))
+        {
+            TextAlignment = TextAlignment.Center,
+        };
+        ReadingSemantics.MarkMathBlock(paragraph, speech);
+        return paragraph;
+    }
+
+    /// <summary>
+    /// LaTeX to a themed vector Path via WPFMath; null on the parser's
+    /// documented coverage boundary (TexException family) or renderer
+    /// failure — callers degrade to source-in-range.
+    /// </summary>
+    private static System.Windows.UIElement? TryRenderFormula(string latex)
+    {
+        try
+        {
+            XamlMath.TexFormula formula =
+                WpfMath.Parsers.WpfTeXFormulaParser.Instance.Parse(latex);
+            XamlMath.TexEnvironment environment =
+                WpfMath.Rendering.WpfTeXEnvironment.Create(
+                    XamlMath.TexStyle.Display, 20.0, "Arial");
+            System.Windows.Media.Geometry geometry =
+                WpfMath.Rendering.WpfTeXFormulaExtensions.RenderToGeometry(
+                    formula, environment);
+            var path = new System.Windows.Shapes.Path
+            {
+                Data = geometry,
+                Stretch = System.Windows.Media.Stretch.None,
+            };
+            path.SetResourceReference(
+                System.Windows.Shapes.Path.FillProperty, "Slate.TextBrush");
+            return path;
+        }
+        catch (XamlMath.Exceptions.TexException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
     /// <summary>
     /// The run-budget preflight: the loop below creates a WPF Run per
     /// token plus one per gap, and core's 256 KiB BYTE cap does not
@@ -747,6 +855,13 @@ internal static class ReadingDocumentBuilder
                         ReadingLandmarkKind.CodeBlock,
                         Insertion(paragraph.ContentStart),
                         text: ElementText(paragraph)));
+                }
+                else if (ReadingSemantics.IsMathBlock(paragraph))
+                {
+                    landmarks.Add(new ReadingLandmark(
+                        ReadingLandmarkKind.Math,
+                        Insertion(paragraph.ContentStart),
+                        text: ReadingSemantics.MathSpeechOf(paragraph)));
                 }
                 WalkInlines(paragraph.Inlines, landmarks);
                 break;

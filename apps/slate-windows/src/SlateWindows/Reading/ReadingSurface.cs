@@ -405,7 +405,25 @@ internal sealed class ReadingSurface : RichTextBox
         // No link at the caret: a task checkbox on the caret's LINE is
         // the other activatable thing. The caret can never rest inside
         // an InlineUIContainer, so containment is by paragraph.
-        return TryToggleTaskAtCaret();
+        if (TryToggleTaskAtCaret())
+        {
+            return true;
+        }
+        // Math block at the caret (W3-2): Enter speaks the canonical
+        // MathCAT speech through the landed vocabulary — "{speech},
+        // math." — content, never composition. This is the guaranteed
+        // layer's on-demand read; the W-E7 appModule upgrades Enter to
+        // NVDA's full math interaction later.
+        if (CaretPosition?.Paragraph is { } mathParagraph
+            && ReadingSemantics.IsMathBlock(mathParagraph)
+            && _model is { } mathModel)
+        {
+            mathModel.Announce(new uniffi.slate_uniffi.A11yEvent.ReadingNavLanded(
+                new uniffi.slate_uniffi.ReadingNavTarget.Math(),
+                ReadingSemantics.MathSpeechOf(mathParagraph)));
+            return true;
+        }
+        return false;
     }
 
     /// <summary>

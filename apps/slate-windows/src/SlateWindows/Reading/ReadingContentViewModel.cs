@@ -513,6 +513,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// projection itself.</summary>
     internal Func<Exception?>? CodeTokenFaultForTests { get; set; }
 
+    /// <summary>Math-only fault seam (W3-2), same contract.</summary>
+    internal Func<Exception?>? MathFaultForTests { get; set; }
+
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
     private FetchResult Fetch(VaultSession session, string path, string text)
     {
@@ -540,11 +543,38 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             codeBlocks = Array.Empty<CodeBlock>();
             codeFetchDegraded = true;
         }
+        // Math degrades identically (W3-2): a MathCAT failure renders
+        // source-in-range fallbacks with nav still working, never a
+        // failed projection.
+        MathBlock[] mathBlocks;
+        bool mathFetchDegraded = false;
+        try
+        {
+            if (MathFaultForTests?.Invoke() is { } mathFault)
+            {
+                throw mathFault;
+            }
+            mathBlocks = session.GetMathBlocks(path);
+        }
+        catch (VaultException)
+        {
+            mathBlocks = Array.Empty<MathBlock>();
+            mathFetchDegraded = true;
+        }
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
         return new FetchResult(
-            text, citations, records, tasks, codeBlocks, codeFetchDegraded, blocks, inlines);
+            text,
+            citations,
+            records,
+            tasks,
+            codeBlocks,
+            codeFetchDegraded,
+            mathBlocks,
+            mathFetchDegraded,
+            blocks,
+            inlines);
     }
 
     /// <summary>
@@ -639,7 +669,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             fetched.Text,
             fetched.Citations,
             fetched.Records,
-            CodeArtifactDigest(fetched.CodeBlocks, fetched.CodeFetchDegraded));
+            CodeArtifactDigest(fetched.CodeBlocks, fetched.CodeFetchDegraded)
+                + "|" + MathArtifactDigest(fetched.MathBlocks, fetched.MathFetchDegraded));
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
             return;
@@ -666,8 +697,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // content derives from the SAVED file - saved-state changes
         // arrive through the session-generation drift retry.
         CodeBlock[] codeBlocks = fetched.CodeBlocks;
+        MathBlock[] mathBlocks = fetched.MathBlocks;
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
-            model.GetRange(0, firstEnd), context, codeBlocks);
+            model.GetRange(0, firstEnd), context, codeBlocks, mathBlocks);
 
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
@@ -693,7 +725,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             while (index < renderLimit)
             {
                 int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-                AppendFragment(model, index, end, context, codeBlocks);
+                AppendFragment(model, index, end, context, codeBlocks, mathBlocks);
                 index = end;
             }
             FinishPublish(key, degraded, renderLimit, streamed: true);
@@ -704,7 +736,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 generation,
                 () => ContinueBuild(
                     generation, model, firstEnd, renderLimit, key, degraded, context,
-                    codeBlocks)),
+                    codeBlocks, mathBlocks)),
             DispatcherPriority.Background);
     }
 
@@ -758,7 +790,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         MemoKey key,
         bool degraded,
         ReadingListBuildContext context,
-        CodeBlock[] codeBlocks)
+        CodeBlock[] codeBlocks,
+        MathBlock[] mathBlocks)
     {
         if (_disposed || generation != _generation)
         {
@@ -769,7 +802,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             throw fault;
         }
         int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-        AppendFragment(model, index, end, context, codeBlocks);
+        AppendFragment(model, index, end, context, codeBlocks, mathBlocks);
         if (end < renderLimit)
         {
             _ = _dispatcher!.InvokeAsync(
@@ -777,7 +810,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     generation,
                     () => ContinueBuild(
                         generation, model, end, renderLimit, key, degraded, context,
-                        codeBlocks)),
+                        codeBlocks, mathBlocks)),
                 DispatcherPriority.Background);
             return;
         }
@@ -789,10 +822,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         int index,
         int end,
         ReadingListBuildContext context,
-        CodeBlock[] codeBlocks) =>
+        CodeBlock[] codeBlocks,
+        MathBlock[] mathBlocks) =>
         BlocksAppended?.Invoke(
             ReadingDocumentBuilder.Build(
-                model.GetRange(index, end - index), context, codeBlocks).Document);
+                model.GetRange(index, end - index), context, codeBlocks, mathBlocks)
+                .Document);
 
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
     {
@@ -850,6 +885,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         TaskItem[] Tasks,
         CodeBlock[] CodeBlocks,
         bool CodeFetchDegraded,
+        MathBlock[] MathBlocks,
+        bool MathFetchDegraded,
         ReadingBlock[] Blocks,
         ReadingBlockInlines[] Inlines);
 
@@ -918,6 +955,37 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     .Append(';');
             }
             canonical.Append('\u0002');
+        }
+        byte[] hash = System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(canonical.ToString()));
+        return Convert.ToHexString(hash);
+    }
+
+    /// <summary>The math analog of <see cref="CodeArtifactDigest"/>:
+    /// content-complete (source, MathML, speech, braille all shift the
+    /// digest — a MathPrefs change re-renders speech with identical
+    /// live text), degraded is its own identity.</summary>
+    private static string MathArtifactDigest(MathBlock[] blocks, bool degraded)
+    {
+        if (degraded)
+        {
+            return "math-degraded";
+        }
+        var canonical = new System.Text.StringBuilder();
+        foreach (MathBlock block in blocks)
+        {
+            canonical.Append(block.ByteOffset)
+                .Append('\u0001')
+                .Append(block.DisplayStyle)
+                .Append('\u0001')
+                .Append(block.Source)
+                .Append('\u0001')
+                .Append(block.Mathml)
+                .Append('\u0001')
+                .Append(block.Speech)
+                .Append('\u0001')
+                .Append(Convert.ToHexString(block.Braille))
+                .Append('\u0002');
         }
         byte[] hash = System.Security.Cryptography.SHA256.HashData(
             System.Text.Encoding.UTF8.GetBytes(canonical.ToString()));

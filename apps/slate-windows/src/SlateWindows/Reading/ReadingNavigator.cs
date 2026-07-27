@@ -82,6 +82,8 @@ internal sealed class ReadingNavigator
         AddChord(Key.E, shift: true, () => Move(ReadingLandmarkKind.Embed, forward: false));
         AddChord(Key.C, shift: false, () => Move(ReadingLandmarkKind.CodeBlock, forward: true));
         AddChord(Key.C, shift: true, () => Move(ReadingLandmarkKind.CodeBlock, forward: false));
+        AddChord(Key.M, shift: false, () => Move(ReadingLandmarkKind.Math, forward: true));
+        AddChord(Key.M, shift: true, () => Move(ReadingLandmarkKind.Math, forward: false));
 
         for (byte level = 1; level <= 6; level++)
         {
@@ -288,6 +290,7 @@ internal sealed class ReadingNavigator
             ReadingLandmarkKind.List => new ReadingNavTarget.List(),
             ReadingLandmarkKind.Table => new ReadingNavTarget.Table(),
             ReadingLandmarkKind.Embed => new ReadingNavTarget.Embed(),
+            ReadingLandmarkKind.Math => new ReadingNavTarget.Math(),
             _ => new ReadingNavTarget.CodeBlock(),
         };
 
@@ -303,6 +306,7 @@ internal sealed class ReadingNavigator
             ReadingLandmarkKind.List => new ReadingNavTarget.List(),
             ReadingLandmarkKind.Table => new ReadingNavTarget.Table(),
             ReadingLandmarkKind.Embed => new ReadingNavTarget.Embed(),
+            ReadingLandmarkKind.Math => new ReadingNavTarget.Math(),
             _ => new ReadingNavTarget.CodeBlock(),
         };
         return new A11yEvent.ReadingNavNoTarget(target, forward);
