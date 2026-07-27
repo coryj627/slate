@@ -6511,10 +6511,14 @@ impl VaultSession {
     /// no math.
     ///
     /// Reads the file fresh on each call (no cache yet — the LRU
-    /// cache is a follow-up; render time on a typical note is
-    /// dominated by MathCAT's per-block work which is bounded). The
-    /// session's `math_prefs` field is consulted on every call so a
-    /// settings change is observed immediately.
+    /// cache is a follow-up). Rendering is BOUNDED per call (W3-2
+    /// round 5): [`crate::math::render_math_blocks`] enforces the
+    /// per-note formula-count and per-formula source-byte budgets so
+    /// a dense adversarial note cannot monopolize the serialized
+    /// MathCAT worker; over-budget blocks degrade to the typed-speech
+    /// shape with source and position intact. The session's
+    /// `math_prefs` field is consulted on every call so a settings
+    /// change is observed immediately.
     pub fn get_math_blocks(&self, path: &str) -> Result<Vec<crate::math::MathBlock>, VaultError> {
         let source = self.read_text(path)?;
         let raws = crate::math::extract_math_blocks(&source);
@@ -6523,10 +6527,7 @@ impl VaultSession {
         // MathPrefs is Copy + small; the lock is held only long
         // enough to clone the value, no contention with renderers.
         let prefs = *self.math_prefs.lock().expect("math_prefs mutex poisoned");
-        Ok(raws
-            .iter()
-            .map(|raw| crate::math::render_math(raw, prefs))
-            .collect())
+        Ok(crate::math::render_math_blocks(&raws, prefs))
     }
 
     /// Swap the session's math preferences at runtime. Settings

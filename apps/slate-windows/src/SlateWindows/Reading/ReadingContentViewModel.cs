@@ -598,6 +598,13 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
+        // The artifact digest hashes the COMPLETE code + math sets, so
+        // it belongs here on the fetch task, not on the dispatcher at
+        // publication (round 5: a dense note made the memo key itself
+        // a large dispatcher allocation).
+        string artifactDigest =
+            CodeArtifactDigest(codeBlocks, codeFetchDegraded)
+            + "|" + MathArtifactDigest(mathBlocks, mathFetchDegraded);
         return new FetchResult(
             text,
             citations,
@@ -608,7 +615,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             mathBlocks,
             mathFetchDegraded,
             blocks,
-            inlines);
+            inlines,
+            artifactDigest);
     }
 
     /// <summary>
@@ -703,8 +711,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             fetched.Text,
             fetched.Citations,
             fetched.Records,
-            CodeArtifactDigest(fetched.CodeBlocks, fetched.CodeFetchDegraded)
-                + "|" + MathArtifactDigest(fetched.MathBlocks, fetched.MathFetchDegraded));
+            fetched.ArtifactDigest);
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
             return;
@@ -922,7 +929,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         MathBlock[] MathBlocks,
         bool MathFetchDegraded,
         ReadingBlock[] Blocks,
-        ReadingBlockInlines[] Inlines);
+        ReadingBlockInlines[] Inlines,
+        string ArtifactDigest);
 
     /// <summary>
     /// The §10.1 memo triple. Citations and records are uniffi records
@@ -970,59 +978,56 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return "degraded";
         }
-        var canonical = new System.Text.StringBuilder();
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
         foreach (CodeBlock block in blocks)
         {
-            canonical.Append(block.ByteOffset)
-                .Append('\u0001')
-                .Append(block.Language)
-                .Append('\u0001')
-                .Append(block.Source)
-                .Append('\u0001');
+            DigestField(hash, block.ByteOffset.ToString());
+            DigestField(hash, block.Language);
+            DigestField(hash, block.Source);
             foreach (SyntaxToken token in block.Tokens)
             {
-                canonical.Append(token.StartByte)
-                    .Append(':')
-                    .Append(token.EndByte)
-                    .Append(':')
-                    .Append(token.Kind)
-                    .Append(';');
+                DigestField(hash, $"{token.StartByte}:{token.EndByte}:{token.Kind}");
             }
-            canonical.Append('\u0002');
+            hash.AppendData(BlockSeparator);
         }
-        byte[] hash = System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(canonical.ToString()));
-        return Convert.ToHexString(hash);
+        return Convert.ToHexString(hash.GetHashAndReset());
     }
 
     /// <summary>The math analog of <see cref="CodeArtifactDigest"/>:
     /// content-complete (source, MathML, speech, braille all shift the
     /// digest — a MathPrefs change re-renders speech with identical
-    /// live text), degraded is its own identity.</summary>
+    /// live text), degraded is its own identity. Incremental (round
+    /// 5): the artifact set streams into the hash field by field,
+    /// never materialized into one canonical buffer.</summary>
     private static string MathArtifactDigest(MathBlock[] blocks, bool degraded)
     {
         if (degraded)
         {
             return "math-degraded";
         }
-        var canonical = new System.Text.StringBuilder();
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
         foreach (MathBlock block in blocks)
         {
-            canonical.Append(block.ByteOffset)
-                .Append('\u0001')
-                .Append(block.DisplayStyle)
-                .Append('\u0001')
-                .Append(block.Source)
-                .Append('\u0001')
-                .Append(block.Mathml)
-                .Append('\u0001')
-                .Append(block.Speech)
-                .Append('\u0001')
-                .Append(Convert.ToHexString(block.Braille))
-                .Append('\u0002');
+            DigestField(hash, block.ByteOffset.ToString());
+            DigestField(hash, block.DisplayStyle.ToString());
+            DigestField(hash, block.Source);
+            DigestField(hash, block.Mathml);
+            DigestField(hash, block.Speech);
+            hash.AppendData(block.Braille);
+            hash.AppendData(BlockSeparator);
         }
-        byte[] hash = System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(canonical.ToString()));
-        return Convert.ToHexString(hash);
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static readonly byte[] FieldSeparator = { 0x01 };
+    private static readonly byte[] BlockSeparator = { 0x02 };
+
+    private static void DigestField(
+        System.Security.Cryptography.IncrementalHash hash, string value)
+    {
+        hash.AppendData(System.Text.Encoding.UTF8.GetBytes(value));
+        hash.AppendData(FieldSeparator);
     }
 }

@@ -263,6 +263,60 @@ public sealed class ReadingMathTests
         });
     }
 
+    /// <summary>
+    /// Round 5 end-to-end: an oversized authored formula degrades in
+    /// CORE under the per-formula source budget (typed speech, no
+    /// MathML/braille, no MathCAT worker time) and the host renders it
+    /// source-in-range with honest interactions — bounded work for a
+    /// note built to exhaust the math pipeline.
+    /// </summary>
+    [Fact]
+    public void OversizedFormulaDegradesEndToEnd()
+    {
+        RunSta(() =>
+        {
+            string oversized = "\\begin{bmatrix}"
+                + new string('x', 17 * 1024)
+                + "\\end{bmatrix}";
+            using var fixture = FixtureVault.Create(1, "reading-math-oversized");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "$$" + oversized + "$$\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var announced = new List<A11yEvent>();
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                announce: announced.Add,
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            ReadingMathElement element =
+                Assert.Single(FindMathElements(surface.Document));
+            Assert.Equal(
+                "Math expression too large to render to accessible speech.",
+                System.Windows.Automation.AutomationProperties.GetName(element));
+            Assert.Empty(element.Braille);
+            Assert.Empty(element.MathMl);
+
+            ReadingLandmark landmark = Assert.Single(
+                surface.LandmarksForTests,
+                candidate => candidate.Kind == ReadingLandmarkKind.Math);
+            surface.CaretPosition = landmark.Position;
+            Assert.True(surface.TryActivateAtCaret(brailleRequested: true));
+            Assert.Equal(
+                "Braille not available.",
+                SlateUniffiMethods.A11yRender(Assert.Single(announced)).Text);
+        });
+    }
+
     /// <summary>A math block whose artifact carries no braille (core
     /// degradation, e.g. MathCAT rejecting the expression) answers
     /// Ctrl+Enter honestly instead of staying silent.</summary>
