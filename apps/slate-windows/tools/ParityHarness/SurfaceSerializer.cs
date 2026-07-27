@@ -100,9 +100,76 @@ public static class SurfaceSerializer
             }
             AppendBlockInlines(j, inlines[i]);
         }
+        j.Raw("]");
+
+        // W3-4: the READING-side canonical artifact. The span rows above
+        // byte-check the editor highlight surface; these rows byte-check
+        // {source, syntax_tokens, semantic_spans} + the core preamble —
+        // exactly what the WPF reading renderer consumes. Token offsets
+        // are block-local.
+        j.Raw(",\"code_blocks\":[");
+        var codeBlocks = session.GetSyntaxTokens(relPath);
+        for (int i = 0; i < codeBlocks.Length; i++)
+        {
+            var c = codeBlocks[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"line\":").Num(c.Line)
+             .Raw(",\"offset\":").Num(c.ByteOffset)
+             .Raw(",\"language\":");
+            if (c.Language == null)
+            {
+                j.Raw("null");
+            }
+            else
+            {
+                j.Str(c.Language);
+            }
+            j.Raw(",\"preamble\":").Str(
+                SlateUniffiMethods.CodeBlockPreamble(c.Language, c.Source))
+             .Raw(",\"source\":").Str(c.Source)
+             .Raw(",\"tokens\":[");
+            for (int t = 0; t < c.Tokens.Length; t++)
+            {
+                var token = c.Tokens[t];
+                if (t > 0)
+                {
+                    j.Raw(",");
+                }
+                j.Raw("{\"start\":").Num(token.StartByte)
+                 .Raw(",\"end\":").Num(token.EndByte)
+                 .Raw(",\"kind\":").Str(TokenKindName(token.Kind))
+                 .Raw("}");
+            }
+            j.Raw("],\"semantic_spans\":[");
+            for (int t = 0; t < c.SemanticSpans.Length; t++)
+            {
+                var span = c.SemanticSpans[t];
+                if (t > 0)
+                {
+                    j.Raw(",");
+                }
+                j.Raw("{\"start\":").Num(span.StartByte)
+                 .Raw(",\"end\":").Num(span.EndByte)
+                 .Raw(",\"kind\":").Str(SemanticKindName(span.Kind))
+                 .Raw(",\"name\":").Str(span.Name)
+                 .Raw("}");
+            }
+            j.Raw("]}");
+        }
         j.Raw("]}");
         return j + "\n";
     }
+
+    public static string SemanticKindName(SemanticKind kind) => kind switch
+    {
+        SemanticKind.Function => "function",
+        SemanticKind.Type => "type",
+        SemanticKind.Variable => "variable",
+        _ => throw new InvalidOperationException($"unmapped SemanticKind {kind}"),
+    };
 
     private static void AppendBlockInlines(CanonicalJson j, ReadingBlockInlines inlines)
     {
