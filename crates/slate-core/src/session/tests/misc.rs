@@ -157,6 +157,74 @@ fn diagram_blocks_concurrent_fetches_render_once() {
     );
 }
 
+/// Round 3 [high]: different-key traffic must never detach same-key
+/// waiters — flights are keyed, so concurrent fetches across TWO
+/// notes cost exactly one render pass per key no matter how the
+/// threads interleave.
+#[test]
+fn diagram_blocks_flights_are_keyed_per_note() {
+    use std::sync::atomic::Ordering;
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"```mermaid\nflowchart LR\nA --> B\n```\n")
+            .unwrap();
+        p.write_file("b.md", b"```mermaid\nflowchart LR\nX --> Y\n```\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let barrier = std::sync::Barrier::new(8);
+    std::thread::scope(|scope| {
+        for i in 0..8 {
+            let barrier = &barrier;
+            let session = &session;
+            scope.spawn(move || {
+                let path = if i % 2 == 0 { "a.md" } else { "b.md" };
+                barrier.wait();
+                let blocks = session.get_diagram_blocks(path).unwrap();
+                assert_eq!(blocks.len(), 1);
+            });
+        }
+    });
+    assert_eq!(
+        session.diagram_render_passes.load(Ordering::Relaxed),
+        2,
+        "exactly one render pass per key, regardless of interleaving"
+    );
+}
+
+/// Round 3: an owner that unwinds between claim and completion marks
+/// ITS flight abandoned and removes exactly its own entry — the next
+/// fetch recovers with a fresh render instead of hanging on a
+/// stranded claim.
+#[test]
+fn diagram_blocks_owner_panic_cleans_up_its_flight() {
+    use std::sync::atomic::Ordering;
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"```mermaid\nflowchart LR\nA --> B\n```\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    session
+        .diagram_render_panic_for_tests
+        .store(true, Ordering::SeqCst);
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.get_diagram_blocks("note.md");
+    }));
+    assert!(panicked.is_err(), "the injected panic must surface");
+
+    // Recovery: no stranded flight, no hang, a fresh render succeeds.
+    let blocks = session.get_diagram_blocks("note.md").unwrap();
+    assert_eq!(blocks.len(), 1);
+    assert_eq!(session.diagram_render_passes.load(Ordering::Relaxed), 1);
+    // And the recovered result is cached like any other.
+    let again = session.get_diagram_blocks("note.md").unwrap();
+    assert_eq!(again, blocks);
+    assert_eq!(session.diagram_render_passes.load(Ordering::Relaxed), 1);
+}
+
 #[test]
 fn set_math_prefs_handles_rapid_concurrent_swaps() {
     // The mutex around math_prefs must serialize correctly
