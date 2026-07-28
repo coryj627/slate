@@ -249,6 +249,57 @@ fn diagram_blocks_delayed_caller_joins_the_completed_result() {
     );
 }
 
+/// Round 5 [high]: cross-key completions must not evict handoff
+/// state — the completed cache is KEYED, so B completing while A's
+/// delayed caller sits between miss and admission cannot erase A's
+/// published result. Deterministic: complete A, complete B, then
+/// release the delayed A caller; exactly two render passes total.
+#[test]
+fn diagram_blocks_cross_key_completion_preserves_the_handoff() {
+    use std::sync::atomic::Ordering;
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"```mermaid\nflowchart LR\nA --> B\n```\n")
+            .unwrap();
+        p.write_file("b.md", b"```mermaid\nflowchart LR\nX --> Y\n```\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    *session.diagram_admission_gate_for_tests.lock().unwrap() = Some(gate);
+
+    std::thread::scope(|scope| {
+        let delayed = scope.spawn(|| {
+            let blocks = session.get_diagram_blocks("a.md").unwrap();
+            assert_eq!(blocks.len(), 1);
+        });
+        while session
+            .diagram_admission_gate_for_tests
+            .lock()
+            .unwrap()
+            .is_some()
+        {
+            std::thread::yield_now();
+        }
+
+        // A completes, then B completes — the interleaving that
+        // evicted A's published result from a single-slot cache.
+        session.get_diagram_blocks("a.md").unwrap();
+        session.get_diagram_blocks("b.md").unwrap();
+        assert_eq!(session.diagram_render_passes.load(Ordering::Relaxed), 2);
+
+        release.send(()).unwrap();
+        delayed.join().unwrap();
+    });
+
+    assert_eq!(
+        session.diagram_render_passes.load(Ordering::Relaxed),
+        2,
+        "the delayed A caller must join A's keyed result after B completed"
+    );
+}
+
 /// Round 3: an owner that unwinds between claim and completion marks
 /// ITS flight abandoned and removes exactly its own entry — the next
 /// fetch recovers with a fresh render instead of hanging on a

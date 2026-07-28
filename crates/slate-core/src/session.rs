@@ -830,6 +830,63 @@ enum DiagramFlightState {
     Abandoned,
 }
 
+/// Completed diagram artifacts, KEYED by (path, source hash) — W3-3
+/// round 5: a single completed slot let an unrelated note's
+/// completion evict a result whose delayed caller was still between
+/// miss and admission, silently re-opening the duplicate-render
+/// path. Keyed entries mean cross-key completions never erase
+/// handoff state; eviction is capacity policy (LRU by entry count
+/// and total SVG payload), not a correctness hole.
+#[derive(Default)]
+struct DiagramCompletedCache {
+    /// LRU order: least-recent first.
+    entries: std::collections::VecDeque<((String, u64), Vec<crate::diagram::DiagramBlock>)>,
+}
+
+/// Entry-count bound: reading refreshes touch a handful of open
+/// notes; eight covers tab groups without letting a vault crawl pin
+/// every note's artifacts.
+const MAX_CACHED_DIAGRAM_NOTES: usize = 8;
+
+/// Payload bound: per-note retention is already capped at 8 MiB
+/// (`MAX_RETAINED_SVG_BYTES_PER_NOTE`); this caps the CACHE's total
+/// SVG bytes so worst-case adversarial notes cannot multiply that by
+/// the entry count.
+const MAX_CACHED_DIAGRAM_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+
+impl DiagramCompletedCache {
+    fn lookup(&mut self, key: &(String, u64)) -> Option<Vec<crate::diagram::DiagramBlock>> {
+        let index = self.entries.iter().position(|(k, _)| k == key)?;
+        // Move-to-back keeps the LRU honest for the hot note.
+        let entry = self.entries.remove(index).expect("index in range");
+        let blocks = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(blocks)
+    }
+
+    fn insert(&mut self, key: (String, u64), blocks: Vec<crate::diagram::DiagramBlock>) {
+        self.entries.retain(|(k, _)| k != &key);
+        self.entries.push_back((key, blocks));
+        while self.entries.len() > MAX_CACHED_DIAGRAM_NOTES
+            || (self.entries.len() > 1 && self.total_payload() > MAX_CACHED_DIAGRAM_PAYLOAD_BYTES)
+        {
+            self.entries.pop_front();
+        }
+    }
+
+    fn total_payload(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|(_, blocks)| {
+                blocks
+                    .iter()
+                    .map(|b| b.svg.as_ref().map_or(0, Vec::len))
+                    .sum::<usize>()
+            })
+            .sum()
+    }
+}
+
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
@@ -854,7 +911,7 @@ pub struct VaultSession {
     /// those refreshes into clones. One slot bounds memory (the
     /// retention budget caps the payload) and covers the hot path:
     /// repeated refreshes of the note being edited.
-    diagram_cache: Mutex<Option<(String, u64, Vec<crate::diagram::DiagramBlock>)>>,
+    diagram_cache: Mutex<DiagramCompletedCache>,
     /// In-flight renders keyed by (path, source hash) — single-flight
     /// per key (rounds 2–3): concurrent same-key misses share one
     /// render, and different-key traffic runs its own flight without
@@ -1917,7 +1974,7 @@ impl VaultSession {
         db::migrate(&mut conn)?;
 
         let math_prefs = Mutex::new(config.math_prefs);
-        let diagram_cache = Mutex::new(None);
+        let diagram_cache = Mutex::new(DiagramCompletedCache::default());
 
         // Build the initial BibIndex from whatever's already in the
         // bibliography_entries table — empty after a fresh
@@ -6623,17 +6680,13 @@ impl VaultSession {
         // on other keys can never detach them, and cleanup is scoped
         // to the flight it owns.
         loop {
+            if let Some(blocks) = self
+                .diagram_cache
+                .lock()
+                .expect("diagram_cache mutex poisoned")
+                .lookup(&key)
             {
-                let cache = self
-                    .diagram_cache
-                    .lock()
-                    .expect("diagram_cache mutex poisoned");
-                if let Some((cached_path, cached_hash, blocks)) = cache.as_ref()
-                    && cached_path == path
-                    && *cached_hash == source_hash
-                {
-                    return Ok(blocks.clone());
-                }
+                return Ok(blocks);
             }
             // One-shot test gate: pauses a caller here — after its
             // fast-path miss, before admission — until the test
@@ -6662,17 +6715,13 @@ impl VaultSession {
                 // that finds no flight here is GUARANTEED to see the
                 // published result — a late arrival can never re-render
                 // content an owner already completed.
+                if let Some(blocks) = self
+                    .diagram_cache
+                    .lock()
+                    .expect("diagram_cache mutex poisoned")
+                    .lookup(&key)
                 {
-                    let cache = self
-                        .diagram_cache
-                        .lock()
-                        .expect("diagram_cache mutex poisoned");
-                    if let Some((cached_path, cached_hash, blocks)) = cache.as_ref()
-                        && cached_path == path
-                        && *cached_hash == source_hash
-                    {
-                        return Ok(blocks.clone());
-                    }
+                    return Ok(blocks);
                 }
                 match flights.get(&key) {
                     Some(flight) => (Arc::clone(flight), false),
@@ -6771,11 +6820,10 @@ impl VaultSession {
                 // 4): admission rechecks the cache under this same
                 // lock, so "no flight" always implies "result
                 // published".
-                *self
-                    .diagram_cache
+                self.diagram_cache
                     .lock()
-                    .expect("diagram_cache mutex poisoned") =
-                    Some((path.to_owned(), source_hash, blocks.clone()));
+                    .expect("diagram_cache mutex poisoned")
+                    .insert(key.clone(), blocks.clone());
                 flights.remove(&key);
             }
             *flight
