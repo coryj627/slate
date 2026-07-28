@@ -104,6 +104,59 @@ fn diagram_blocks_cache_hits_on_unchanged_content_and_misses_on_saves() {
     );
 }
 
+/// W3-3 round 2 [high]: same-key cache misses are SINGLE-FLIGHT —
+/// under concurrent identical calls exactly one render pass runs
+/// (the rest wait on the claim and clone the completed result), so
+/// overlapping background refreshes can never queue duplicate
+/// whole-note renders through the serialized renderer. A saved
+/// change still misses exactly once more.
+#[test]
+fn diagram_blocks_concurrent_fetches_render_once() {
+    use std::sync::atomic::Ordering;
+
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"```mermaid\nflowchart LR\nA --> B\n```\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let barrier = std::sync::Barrier::new(4);
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| {
+                barrier.wait();
+                let blocks = session.get_diagram_blocks("note.md").unwrap();
+                assert_eq!(blocks.len(), 1);
+            });
+        }
+    });
+    assert_eq!(
+        session.diagram_render_passes.load(Ordering::Relaxed),
+        1,
+        "concurrent identical fetches must share one render pass"
+    );
+
+    std::fs::write(
+        tmp.path().join("note.md"),
+        "```mermaid\nflowchart LR\nA --> C\n```\n",
+    )
+    .unwrap();
+    let second_barrier = std::sync::Barrier::new(4);
+    std::thread::scope(|scope| {
+        for _ in 0..4 {
+            scope.spawn(|| {
+                second_barrier.wait();
+                session.get_diagram_blocks("note.md").unwrap();
+            });
+        }
+    });
+    assert_eq!(
+        session.diagram_render_passes.load(Ordering::Relaxed),
+        2,
+        "a saved change must miss exactly once more, single-flight"
+    );
+}
+
 #[test]
 fn set_math_prefs_handles_rapid_concurrent_swaps() {
     // The mutex around math_prefs must serialize correctly

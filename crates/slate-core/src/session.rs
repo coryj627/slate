@@ -814,6 +814,16 @@ fn pin_root_identity(
     (None, None)
 }
 
+/// The diagram cache's single slot: a completed artifact set, or an
+/// in-flight render claim other same-key callers wait on (W3-3
+/// round 2 — without the claim, concurrent misses for the same
+/// content all rendered, recreating the serialized-renderer
+/// starvation the cache exists to prevent).
+enum DiagramCacheSlot {
+    Ready(String, u64, Vec<crate::diagram::DiagramBlock>),
+    Rendering(String, u64),
+}
+
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
@@ -837,8 +847,11 @@ pub struct VaultSession {
     /// serialized renderer. A content-keyed hit turns those refreshes
     /// into clones. One slot bounds memory (the retention budget caps
     /// the payload) and covers the hot path: repeated refreshes of
-    /// the note being edited.
-    diagram_cache: Mutex<Option<(String, u64, Vec<crate::diagram::DiagramBlock>)>>,
+    /// the note being edited. Filling is SINGLE-FLIGHT (round 2):
+    /// misses claim the slot, same-key callers wait on
+    /// `diagram_cache_cv` and clone the completed result.
+    diagram_cache: Mutex<Option<DiagramCacheSlot>>,
+    diagram_cache_cv: std::sync::Condvar,
     /// Test seam: cache-miss render passes, so the cache pin can
     /// prove a repeated fetch renders nothing.
     #[cfg(test)]
@@ -1971,6 +1984,7 @@ impl VaultSession {
             compaction_join: Mutex::new(Some(compaction_join)),
             math_prefs,
             diagram_cache,
+            diagram_cache_cv: std::sync::Condvar::new(),
             #[cfg(test)]
             diagram_render_passes: AtomicU64::new(0),
             bib_index: Mutex::new(bib_index),
@@ -6580,35 +6594,98 @@ impl VaultSession {
             source.hash(&mut hasher);
             hasher.finish()
         };
+        // Single-flight fill (round 2): hit → clone; same-key render
+        // in flight → wait for it; otherwise claim the slot and
+        // render. Without the claim, concurrent misses (overlapping
+        // background refreshes) all rendered the same content through
+        // the process-global serialized renderer.
         {
-            let cache = self
+            let mut cache = self
                 .diagram_cache
                 .lock()
                 .expect("diagram_cache mutex poisoned");
-            if let Some((cached_path, cached_hash, blocks)) = cache.as_ref()
-                && cached_path == path
-                && *cached_hash == source_hash
-            {
-                return Ok(blocks.clone());
+            loop {
+                match cache.as_ref() {
+                    Some(DiagramCacheSlot::Ready(cached_path, cached_hash, blocks))
+                        if cached_path == path && *cached_hash == source_hash =>
+                    {
+                        return Ok(blocks.clone());
+                    }
+                    Some(DiagramCacheSlot::Rendering(claim_path, claim_hash))
+                        if claim_path == path && *claim_hash == source_hash =>
+                    {
+                        cache = self
+                            .diagram_cache_cv
+                            .wait(cache)
+                            .expect("diagram_cache mutex poisoned");
+                    }
+                    _ => {
+                        // Different key (or empty): claim. A
+                        // different-key render that loses its slot to
+                        // this claim still returns its own result —
+                        // it just skips installing (below).
+                        *cache = Some(DiagramCacheSlot::Rendering(path.to_owned(), source_hash));
+                        break;
+                    }
+                }
             }
         }
+        // Unwind guard: a panic between claim and install would strand
+        // same-key waiters on the condvar forever.
+        struct ClaimGuard<'a> {
+            session: &'a VaultSession,
+            armed: bool,
+        }
+        impl Drop for ClaimGuard<'_> {
+            fn drop(&mut self) {
+                if self.armed {
+                    *self
+                        .session
+                        .diagram_cache
+                        .lock()
+                        .expect("diagram_cache mutex poisoned") = None;
+                    self.session.diagram_cache_cv.notify_all();
+                }
+            }
+        }
+        let mut guard = ClaimGuard {
+            session: self,
+            armed: true,
+        };
+
         let raws = crate::diagram::extract_diagram_blocks(&source);
         // Bounded per call (W3-3, the math render-budget precedent):
         // per-note count, per-diagram source and output, and
         // aggregate retention budgets; over-budget blocks degrade to
         // a typed RenderFailed with source, position, and description
-        // intact. The lock is NOT held across rendering — a second
-        // caller may render concurrently and last-write-wins, which
-        // is correct for a content-keyed cache.
+        // intact. The lock is NOT held across rendering.
         #[cfg(test)]
         self.diagram_render_passes
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let blocks = crate::diagram::render_diagram_blocks(&raws);
-        *self
-            .diagram_cache
-            .lock()
-            .expect("diagram_cache mutex poisoned") =
-            Some((path.to_owned(), source_hash, blocks.clone()));
+
+        {
+            let mut cache = self
+                .diagram_cache
+                .lock()
+                .expect("diagram_cache mutex poisoned");
+            let still_ours = matches!(
+                cache.as_ref(),
+                Some(DiagramCacheSlot::Rendering(claim_path, claim_hash))
+                    if claim_path == path && *claim_hash == source_hash
+            );
+            if still_ours || !matches!(cache.as_ref(), Some(DiagramCacheSlot::Rendering(..))) {
+                *cache = Some(DiagramCacheSlot::Ready(
+                    path.to_owned(),
+                    source_hash,
+                    blocks.clone(),
+                ));
+            }
+            // else: a newer different-key claim owns the slot — leave
+            // it; that render installs its own result.
+        }
+        guard.armed = false;
+        self.diagram_cache_cv.notify_all();
         Ok(blocks)
     }
 
