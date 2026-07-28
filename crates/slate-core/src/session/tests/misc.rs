@@ -193,6 +193,62 @@ fn diagram_blocks_flights_are_keyed_per_note() {
     );
 }
 
+/// Round 4 [high]: the completion handoff — a caller that misses the
+/// fast-path cache, then stalls until AFTER the owner has completed
+/// and removed its flight, must find the published result during
+/// admission (the cache recheck under the flights lock) instead of
+/// creating a fresh flight and re-rendering. The one-shot admission
+/// gate makes exactly this interleaving deterministic.
+#[test]
+fn diagram_blocks_delayed_caller_joins_the_completed_result() {
+    use std::sync::atomic::Ordering;
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"```mermaid\nflowchart LR\nA --> B\n```\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    *session.diagram_admission_gate_for_tests.lock().unwrap() = Some(gate);
+
+    std::thread::scope(|scope| {
+        let delayed = scope.spawn(|| {
+            // Fast-path miss (cache empty), then blocks on the gate
+            // until the owner below has fully completed.
+            let blocks = session.get_diagram_blocks("note.md").unwrap();
+            assert_eq!(blocks.len(), 1);
+        });
+
+        // Wait until the delayed caller has consumed the gate — it is
+        // now suspended between its cache miss and admission.
+        while session
+            .diagram_admission_gate_for_tests
+            .lock()
+            .unwrap()
+            .is_some()
+        {
+            std::thread::yield_now();
+        }
+
+        // Render to completion on this thread: publishes the cache
+        // and removes the flight (the state the race fired in).
+        let blocks = session.get_diagram_blocks("note.md").unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(session.diagram_render_passes.load(Ordering::Relaxed), 1);
+
+        // Release the delayed caller into admission.
+        release.send(()).unwrap();
+        delayed.join().unwrap();
+    });
+
+    assert_eq!(
+        session.diagram_render_passes.load(Ordering::Relaxed),
+        1,
+        "the delayed caller must join the published result, never re-render"
+    );
+}
+
 /// Round 3: an owner that unwinds between claim and completion marks
 /// ITS flight abandoned and removes exactly its own entry — the next
 /// fetch recovers with a fresh render instead of hanging on a

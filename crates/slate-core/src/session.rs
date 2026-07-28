@@ -869,6 +869,11 @@ pub struct VaultSession {
     /// render, so the unwind-cleanup pin can prove waiters recover.
     #[cfg(test)]
     pub(crate) diagram_render_panic_for_tests: std::sync::atomic::AtomicBool,
+    /// Test seam: one-shot admission gate — a caller that takes it
+    /// blocks after its fast-path cache miss until the test signals,
+    /// making the round-4 delayed-caller handoff deterministic.
+    #[cfg(test)]
+    pub(crate) diagram_admission_gate_for_tests: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     /// Citations index — lazy view over `bibliography_entries`.
     /// `set_bibliography_sources` bumps the version so the renderer's
     /// cache invalidates implicitly (see `RenderCache`).
@@ -2002,6 +2007,8 @@ impl VaultSession {
             diagram_render_passes: AtomicU64::new(0),
             #[cfg(test)]
             diagram_render_panic_for_tests: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            diagram_admission_gate_for_tests: Mutex::new(None),
             bib_index: Mutex::new(bib_index),
             csl_styles: Mutex::new(std::collections::HashMap::new()),
             render_cache: crate::citations::render::RenderCache::default(),
@@ -6628,11 +6635,45 @@ impl VaultSession {
                     return Ok(blocks.clone());
                 }
             }
+            // One-shot test gate: pauses a caller here — after its
+            // fast-path miss, before admission — until the test
+            // signals, making the round-4 delayed-caller handoff
+            // deterministic.
+            #[cfg(test)]
+            {
+                let gate = self
+                    .diagram_admission_gate_for_tests
+                    .lock()
+                    .expect("diagram admission gate poisoned")
+                    .take();
+                if let Some(gate) = gate {
+                    let _ = gate.recv();
+                }
+            }
             let (flight, owner) = {
                 let mut flights = self
                     .diagram_flights
                     .lock()
                     .expect("diagram_flights mutex poisoned");
+                // Round 4: recheck the completed cache UNDER the
+                // flights lock. Completion publishes the cache and
+                // removes its flight inside this same critical
+                // section (lock order flights -> cache), so a caller
+                // that finds no flight here is GUARANTEED to see the
+                // published result — a late arrival can never re-render
+                // content an owner already completed.
+                {
+                    let cache = self
+                        .diagram_cache
+                        .lock()
+                        .expect("diagram_cache mutex poisoned");
+                    if let Some((cached_path, cached_hash, blocks)) = cache.as_ref()
+                        && cached_path == path
+                        && *cached_hash == source_hash
+                    {
+                        return Ok(blocks.clone());
+                    }
+                }
                 match flights.get(&key) {
                     Some(flight) => (Arc::clone(flight), false),
                     None => {
@@ -6721,21 +6762,28 @@ impl VaultSession {
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let blocks = crate::diagram::render_diagram_blocks(&raws);
 
+            {
+                let mut flights = self
+                    .diagram_flights
+                    .lock()
+                    .expect("diagram_flights mutex poisoned");
+                // Publish BEFORE removal, atomically with it (round
+                // 4): admission rechecks the cache under this same
+                // lock, so "no flight" always implies "result
+                // published".
+                *self
+                    .diagram_cache
+                    .lock()
+                    .expect("diagram_cache mutex poisoned") =
+                    Some((path.to_owned(), source_hash, blocks.clone()));
+                flights.remove(&key);
+            }
             *flight
                 .state
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) =
                 DiagramFlightState::Done(blocks.clone());
             flight.done.notify_all();
-            self.diagram_flights
-                .lock()
-                .expect("diagram_flights mutex poisoned")
-                .remove(&key);
-            *self
-                .diagram_cache
-                .lock()
-                .expect("diagram_cache mutex poisoned") =
-                Some((path.to_owned(), source_hash, blocks.clone()));
             guard.armed = false;
             return Ok(blocks);
         }
