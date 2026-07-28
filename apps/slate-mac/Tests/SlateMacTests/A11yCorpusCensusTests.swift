@@ -204,6 +204,10 @@ final class A11yCorpusCensusTests: XCTestCase {
             .readingNavLanded(target: .table, text: "column a"),
             .readingNavLanded(target: .embed, text: "Embedded note Target Note"),
             .readingNavLanded(target: .codeBlock, text: "fn spoken_interior() -> usize { 42 }"),
+            .readingNavNoTarget(target: .math, forward: true),
+            .readingNavLanded(
+                target: .math,
+                text: "x equals negative b plus or minus the square root of b squared minus 4 a c, over 2 a"),
             .readingNavLanded(target: .embed, text: ""),
             .hostComposed(text: "Composed by a host engine.", priority: .high),
         ]

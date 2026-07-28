@@ -23,7 +23,13 @@ internal static class ReadingSemantics
         Embed,
         CodeBlock,
         CodeCopy,
+        MathBlock,
     }
+
+    private static readonly DependencyProperty MathSpeechProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingMathSpeech", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
 
     private static readonly DependencyProperty MarkerProperty =
         DependencyProperty.RegisterAttached(
@@ -76,6 +82,21 @@ internal static class ReadingSemantics
     /// buttons also carry string Tags).</summary>
     public static void MarkCodeCopy(System.Windows.Controls.Button button) =>
         button.SetValue(MarkerProperty, Marker.CodeCopy);
+
+    /// <summary>Math block (W3-2): the marker carries the canonical
+    /// MathCAT speech so the landmark walk and the caret activation
+    /// path announce content, not composition.</summary>
+    public static void MarkMathBlock(Paragraph paragraph, string speech)
+    {
+        paragraph.SetValue(MarkerProperty, Marker.MathBlock);
+        paragraph.SetValue(MathSpeechProperty, speech);
+    }
+
+    public static bool IsMathBlock(Paragraph paragraph) =>
+        Equals(paragraph.GetValue(MarkerProperty), Marker.MathBlock);
+
+    public static string MathSpeechOf(Paragraph paragraph) =>
+        paragraph.GetValue(MathSpeechProperty) as string ?? string.Empty;
 
     public static bool IsCodeCopy(DependencyObject element) =>
         Equals(element.GetValue(MarkerProperty), Marker.CodeCopy);

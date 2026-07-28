@@ -123,6 +123,53 @@
                           IsCheckable="True"
                           IsChecked="{Binding Workspace.EditorPreferences.OpenReadingLinksInNewTab, Mode=OneWay}"
                           Command="{Binding Workspace.EditorPreferences.ToggleReadingLinkTargetCommand}" />
+                <MenuItem Header="_Math"
+                          AutomationProperties.AutomationId="EditorMathPrefsMenu">
+                    <MenuItem Header="Speech Style: _ClearSpeak"
+                              AutomationProperties.AutomationId="EditorMathClearSpeakMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.EditorPreferences.IsMathSpeechClearSpeak, Mode=OneWay}"
+                              Command="{Binding Workspace.EditorPreferences.SetMathSpeechStyleCommand}"
+                              CommandParameter="clearSpeak" />
+                    <MenuItem Header="Speech Style: _MathSpeak (unavailable)"
+                              AutomationProperties.AutomationId="EditorMathMathSpeakMenuItem"
+                              IsEnabled="False"
+                              ToolTip="Not yet implemented by the speech engine (#1056)."
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.EditorPreferences.IsMathSpeechMathSpeak, Mode=OneWay}" />
+                    <Separator />
+                    <MenuItem Header="Verbosity: _Terse"
+                              AutomationProperties.AutomationId="EditorMathTerseMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityTerse, Mode=OneWay}"
+                              Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
+                              CommandParameter="terse" />
+                    <MenuItem Header="Verbosity: M_edium"
+                              AutomationProperties.AutomationId="EditorMathMediumMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityMedium, Mode=OneWay}"
+                              Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
+                              CommandParameter="medium" />
+                    <MenuItem Header="Verbosity: _Verbose"
+                              AutomationProperties.AutomationId="EditorMathVerboseMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.EditorPreferences.IsMathVerbosityVerbose, Mode=OneWay}"
+                              Command="{Binding Workspace.EditorPreferences.SetMathVerbosityCommand}"
+                              CommandParameter="verbose" />
+                    <Separator />
+                    <MenuItem Header="Braille: _Nemeth"
+                              AutomationProperties.AutomationId="EditorMathNemethMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.EditorPreferences.IsMathBrailleNemeth, Mode=OneWay}"
+                              Command="{Binding Workspace.EditorPreferences.SetMathBrailleCodeCommand}"
+                              CommandParameter="nemeth" />
+                    <MenuItem Header="Braille: _UEB"
+                              AutomationProperties.AutomationId="EditorMathUebMenuItem"
+                              IsCheckable="True"
+                              IsChecked="{Binding Workspace.EditorPreferences.IsMathBrailleUeb, Mode=OneWay}"
+                              Command="{Binding Workspace.EditorPreferences.SetMathBrailleCodeCommand}"
+                              CommandParameter="ueb" />
+                </MenuItem>
                 <MenuItem Header="Code Preamble _Verbosity"
                           AutomationProperties.AutomationId="EditorCodeVerbosityMenu">
                     <MenuItem Header="Preamble _Only"

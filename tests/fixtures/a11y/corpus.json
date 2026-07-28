@@ -765,6 +765,16 @@
     "text": "fn spoken_interior() -> usize { 42 }, code block."
   },
   {
+    "event": "ReadingNavNoTarget { target: Math, forward: true }",
+    "priority": "medium",
+    "text": "No next math."
+  },
+  {
+    "event": "ReadingNavLanded { target: Math, text: \"x equals negative b plus or minus the square root of b squared minus 4 a c, over 2 a\" }",
+    "priority": "medium",
+    "text": "x equals negative b plus or minus the square root of b squared minus 4 a c, over 2 a, math."
+  },
+  {
     "event": "ReadingNavLanded { target: Embed, text: \"\" }",
     "priority": "medium",
     "text": "Embed."

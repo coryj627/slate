@@ -256,6 +256,66 @@ pub fn extract_math_blocks(source: &str) -> Vec<RawMathBlock> {
     out
 }
 
+/// Per-note render budget (W3-2 round 5): reading projections cap at
+/// 2,000 blocks, so formulas past that count can never all be
+/// displayed — rendering them through the serialized MathCAT worker
+/// is unbounded work a dense adversarial note can weaponize.
+/// Over-budget blocks keep source and position with the standard
+/// typed-speech degradation (empty MathML/braille) so hosts render
+/// source-in-range fallbacks, never silently absent.
+pub const MAX_RENDERED_FORMULAS_PER_NOTE: usize = 2_000;
+
+/// Per-formula source cap, checked BEFORE LaTeX → MathML: MathCAT's
+/// own 1 MiB MathML cap (audit #245) fires only after conversion has
+/// already burned worker time. No legitimate authored formula
+/// approaches 16 KiB of LaTeX.
+pub const MAX_FORMULA_SOURCE_BYTES: usize = 16 * 1024;
+
+/// Render every scanned block under the per-note budgets — the
+/// bounded entry `VaultSession::get_math_blocks` uses.
+pub fn render_math_blocks(raws: &[RawMathBlock], prefs: MathPrefs) -> Vec<MathBlock> {
+    render_math_blocks_bounded(raws, prefs, MAX_RENDERED_FORMULAS_PER_NOTE)
+}
+
+/// Budget mechanism, injectable so the count cap is testable without
+/// pushing thousands of renders through the MathCAT worker.
+fn render_math_blocks_bounded(
+    raws: &[RawMathBlock],
+    prefs: MathPrefs,
+    max_rendered: usize,
+) -> Vec<MathBlock> {
+    raws.iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            if raw.source.len() > MAX_FORMULA_SOURCE_BYTES {
+                budget_degraded(
+                    raw,
+                    "Math expression too large to render to accessible speech.".to_string(),
+                )
+            } else if index >= max_rendered {
+                budget_degraded(raw, format!("Math expression: {}", raw.source))
+            } else {
+                render_math(raw, prefs)
+            }
+        })
+        .collect()
+}
+
+/// The budget-degradation shape: identical to the worker-loss
+/// fallback in [`render_math`] so hosts handle one degradation
+/// contract, not two.
+fn budget_degraded(raw: &RawMathBlock, speech: String) -> MathBlock {
+    MathBlock {
+        source: raw.source.clone(),
+        display_style: raw.display_style,
+        mathml: String::new(),
+        speech,
+        braille: Vec::new(),
+        line: raw.line,
+        byte_offset: raw.byte_offset,
+    }
+}
+
 /// Display-math ranges that suppress editor interactions.
 ///
 /// This intentionally composes two existing canonical semantics in one
@@ -673,6 +733,71 @@ fn math_error_to_vault(_err: MathCatError) -> VaultError {
 mod tests {
     use super::*;
     use std::thread;
+
+    /// W3-2 round 5: `get_math_blocks` work is bounded per call. The
+    /// count budget degrades formulas past the cap to the typed-speech
+    /// shape (source + position intact, empty MathML/braille) instead
+    /// of pushing them through the serialized MathCAT worker. The
+    /// injectable-budget seam keeps this test from rendering
+    /// thousands of formulas; the production cap value is pinned
+    /// alongside.
+    #[test]
+    fn render_budget_degrades_past_the_formula_count_cap() {
+        let raws: Vec<RawMathBlock> = (0..4)
+            .map(|i| RawMathBlock {
+                source: "x".to_string(),
+                display_style: MathDisplayStyle::Block,
+                line: i as u32 + 1,
+                byte_offset: i as u32 * 8,
+            })
+            .collect();
+        let blocks = render_math_blocks_bounded(&raws, MathPrefs::default(), 2);
+        assert_eq!(blocks.len(), 4, "over-budget blocks degrade, never drop");
+        assert!(
+            !blocks[1].mathml.is_empty(),
+            "under-budget block must render"
+        );
+        for block in &blocks[2..] {
+            assert!(block.mathml.is_empty());
+            assert_eq!(block.speech, "Math expression: x");
+            assert!(block.braille.is_empty());
+            assert_eq!(block.source, "x");
+        }
+        // Position survives so hosts still match + degrade in range.
+        assert_eq!(blocks[3].byte_offset, 24);
+        // The production cap aligns with the reading projection
+        // ceiling — formulas past it can never all be displayed.
+        assert_eq!(MAX_RENDERED_FORMULAS_PER_NOTE, 2_000);
+    }
+
+    /// An oversized formula degrades BEFORE LaTeX → MathML burns
+    /// worker time — and only that formula: neighbors render.
+    #[test]
+    fn render_budget_degrades_oversized_formulas_individually() {
+        let oversized = RawMathBlock {
+            source: "x+".repeat(MAX_FORMULA_SOURCE_BYTES / 2 + 1),
+            display_style: MathDisplayStyle::Block,
+            line: 1,
+            byte_offset: 0,
+        };
+        let small = RawMathBlock {
+            source: "y".to_string(),
+            display_style: MathDisplayStyle::Block,
+            line: 3,
+            byte_offset: 40_000,
+        };
+        let blocks = render_math_blocks(&[oversized, small], MathPrefs::default());
+        assert!(blocks[0].mathml.is_empty());
+        assert_eq!(
+            blocks[0].speech,
+            "Math expression too large to render to accessible speech."
+        );
+        assert!(blocks[0].braille.is_empty());
+        assert!(
+            !blocks[1].mathml.is_empty(),
+            "neighbor must render normally"
+        );
+    }
 
     /// Audit #269: ClearSpeak vs MathSpeak prefs *should* produce
     /// different speech even when calls cross thread boundaries.

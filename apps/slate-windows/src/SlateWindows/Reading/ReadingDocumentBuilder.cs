@@ -36,6 +36,20 @@ internal sealed class ReadingListBuildContext
     /// </summary>
     internal int RemainingHighlightTokens { get; set; } =
         ReadingDocumentBuilder.ProjectionHighlightTokenBudget;
+
+    /// <summary>
+    /// The math analog (W3-2 round 7): the CORE budgets bound MathCAT
+    /// work, not WPFMath geometry — 250 sub-threshold formulas in one
+    /// chunk would still parse into giant Geometry on the dispatcher.
+    /// Each visually rendered formula draws its LaTeX byte length
+    /// from this shared pool, carried across chunks exactly like the
+    /// highlight pool; formulas after exhaustion keep their FULL
+    /// accessibility artifacts (speech, braille, MathML) and degrade
+    /// only the visual to source-in-range.
+    /// </summary>
+    internal int RemainingMathRenderBytes { get; set; } =
+        ReadingDocumentBuilder.ProjectionMathRenderByteBudgetOverrideForTests
+            ?? ReadingDocumentBuilder.ProjectionMathRenderByteBudget;
 }
 
 /// <summary>The built reading document plus its navigation index.</summary>
@@ -71,17 +85,28 @@ internal static class ReadingDocumentBuilder
 {
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model) =>
-        Build(model, new ReadingListBuildContext(), Array.Empty<CodeBlock>());
+        Build(
+            model,
+            new ReadingListBuildContext(),
+            Array.Empty<CodeBlock>(),
+            Array.Empty<MathBlock>());
 
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
         ReadingListBuildContext context) =>
-        Build(model, context, Array.Empty<CodeBlock>());
+        Build(model, context, Array.Empty<CodeBlock>(), Array.Empty<MathBlock>());
 
     public static ReadingDocumentModel Build(
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
         ReadingListBuildContext context,
-        IReadOnlyList<CodeBlock> codeBlocks)
+        IReadOnlyList<CodeBlock> codeBlocks) =>
+        Build(model, context, codeBlocks, Array.Empty<MathBlock>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks)
     {
         var document = new FlowDocument
         {
@@ -114,7 +139,8 @@ internal static class ReadingDocumentBuilder
             }
 
             stack.Clear();
-            document.Blocks.Add(NonListBlock(block, inlines, codeBlocks, context));
+            document.Blocks.Add(
+                NonListBlock(block, inlines, codeBlocks, mathBlocks, context));
         }
 
         return new ReadingDocumentModel(document, CollectLandmarks(document));
@@ -188,6 +214,7 @@ internal static class ReadingDocumentBuilder
         ReadingBlock block,
         ReadingBlockInlines inlines,
         IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks,
         ReadingListBuildContext context)
     {
         switch (block.Kind)
@@ -231,6 +258,8 @@ internal static class ReadingDocumentBuilder
                 return new BlockUIContainer(new Separator { Margin = new Thickness(0, 8, 0, 8) });
 
             case ReadingBlockKind.MathBlock:
+                return MathBlockElement(block, mathBlocks, context);
+
             case ReadingBlockKind.Diagram:
             case ReadingBlockKind.Html:
             default:
@@ -360,6 +389,195 @@ internal static class ReadingDocumentBuilder
     /// forms are identical), then clamps to the rendered length.
     /// </summary>
     /// <summary>
+    /// W3-2 math block (gap G23's guaranteed layer): the canonical
+    /// artifact matches by byte containment, BLOCK display style only
+    /// (the mac codeModel rule), and renders through WPFMath into a
+    /// focusable <see cref="ReadingMathElement"/> whose Name is the
+    /// MathCAT speech — spoken on focus/Tab/object navigation in stock
+    /// NVDA and JAWS, with the MathML convention property riding the
+    /// peer. Unmatched blocks and TexException coverage gaps (the
+    /// documented WPFMath subset) degrade to the source IN the text
+    /// range — never silently absent — with the block still a nav
+    /// stop; the landing announcement then carries the speech when the
+    /// artifact matched, or the raw source otherwise (content either
+    /// way, composition never).
+    /// </summary>
+    private static Block MathBlockElement(
+        ReadingBlock block,
+        IReadOnlyList<MathBlock> mathBlocks,
+        ReadingListBuildContext context)
+    {
+        MathBlock? matched = mathBlocks.FirstOrDefault(candidate =>
+            candidate.DisplayStyle == MathDisplayStyle.Block
+            && candidate.ByteOffset >= block.ByteStart
+            && candidate.ByteOffset < block.ByteEnd);
+
+        // LIVE-source coherence (the W3-4 lesson, round-1 finding
+        // here): the reading block is parsed from the live buffer, the
+        // artifact from the SAVED file, and a same-position unsaved
+        // edit ($$x$$ -> $$y$$) keeps byte containment. Speaking the
+        // old equation would be an outright lie to an AT user, so the
+        // artifact only applies when its source equals the live fence
+        // interior (delimiters stripped host-side — the mac
+        // strippedMathDelimiters precedent; a core interior field for
+        // the reading MathBlock variant is the recorded follow-up).
+        if (matched is not null
+            && !string.Equals(
+                matched.Source.Trim(),
+                StripMathDelimiters(block.Source),
+                StringComparison.Ordinal))
+        {
+            matched = null;
+        }
+
+        string speech = matched is { Speech.Length: > 0 } speechful
+            ? speechful.Speech.Trim()
+            : "Math expression.";
+        string fallbackSource = block.Source.TrimEnd('\n', '\r');
+
+        if (matched is null)
+        {
+            Paragraph unmatchedParagraph = MonospaceParagraph(fallbackSource);
+            ReadingSemantics.MarkMathBlock(unmatchedParagraph, fallbackSource);
+            return unmatchedParagraph;
+        }
+
+        // Core's degradation verdict gates the HOST renderer too
+        // (round 6): budget-rejected and unconvertible formulas carry
+        // empty MathML, and feeding their raw source to WPFMath would
+        // re-do on the dispatcher exactly the unbounded work the core
+        // budget refused — supported oversized TeX parses into a giant
+        // Geometry. The conservative cost: a formula pulldown-latex
+        // cannot convert loses its visual even if WPFMath could have
+        // drawn it; it keeps source-in-range + the artifact element.
+        //
+        // Round 7 completes the W3-4 shape: within core's budgets a
+        // formula is still WPFMath work proportional to its LaTeX, so
+        // the HOST charges a per-formula cap plus the projection-wide
+        // pool before entering the renderer. Charged on entry — a
+        // failed parse burned the dispatcher too.
+        System.Windows.UIElement? visual = null;
+        int renderCost = System.Text.Encoding.UTF8.GetByteCount(matched.Source);
+        if (matched.Mathml.Length > 0
+            && renderCost <= MaximumRenderedFormulaSourceBytes
+            && renderCost <= context.RemainingMathRenderBytes)
+        {
+            context.RemainingMathRenderBytes -= renderCost;
+            visual = TryRenderFormula(matched.Source);
+        }
+        if (visual is null)
+        {
+            // Coverage gap (documented WPFMath subset, matrix-rowed):
+            // source stays readable in range — and the CORE artifacts
+            // stay retrievable (round 4: a host-only rendering failure
+            // must not hide valid braille or MathML). A zero-size
+            // focusable element at the fence end carries Name,
+            // ItemStatus, and the MathML property exactly like the
+            // rendered path; WPF text ranges blank embedded objects, so
+            // it costs the in-range source nothing.
+            Paragraph gapParagraph = MonospaceParagraph(fallbackSource);
+            gapParagraph.Inlines.Add(new InlineUIContainer(
+                new ReadingMathElement(
+                    speech,
+                    matched.Mathml,
+                    matched.Source,
+                    DecodeBraille(matched.Braille))));
+            ReadingSemantics.MarkMathBlock(gapParagraph, speech);
+            return gapParagraph;
+        }
+
+        var element = new ReadingMathElement(
+            speech, matched.Mathml, matched.Source, DecodeBraille(matched.Braille))
+        {
+            Content = visual,
+            Margin = new Thickness(0, 4, 0, 4),
+        };
+        var paragraph = new Paragraph(new InlineUIContainer(element))
+        {
+            TextAlignment = TextAlignment.Center,
+        };
+        ReadingSemantics.MarkMathBlock(paragraph, speech);
+        return paragraph;
+    }
+
+    /// <summary>The braille artifact decodes as UTF-8 (Nemeth is
+    /// ASCII, UEB is Unicode cells — MathCAT emits per the session
+    /// pref); undecodable or absent bytes become empty, which the
+    /// element treats as "no braille".</summary>
+    private static string DecodeBraille(byte[] braille)
+    {
+        try
+        {
+            return System.Text.Encoding.UTF8.GetString(braille).Trim();
+        }
+        catch (ArgumentException)
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>The live fence interior for coherence comparison:
+    /// trims, then strips the $$/$ delimiter pair the reading block's
+    /// raw slice carries (mac ReadingPrintComposer precedent).</summary>
+    private static string StripMathDelimiters(string source)
+    {
+        string trimmed = source.Trim();
+        if (trimmed.StartsWith("$$", StringComparison.Ordinal)
+            && trimmed.EndsWith("$$", StringComparison.Ordinal)
+            && trimmed.Length >= 4)
+        {
+            return trimmed[2..^2].Trim();
+        }
+        if (trimmed.StartsWith('$') && trimmed.EndsWith('$') && trimmed.Length >= 2)
+        {
+            return trimmed[1..^1].Trim();
+        }
+        return trimmed;
+    }
+
+    /// <summary>
+    /// LaTeX to a themed vector Path via WPFMath; null on the parser's
+    /// documented coverage boundary (TexException family) or renderer
+    /// failure — callers degrade to source-in-range.
+    /// </summary>
+    /// <summary>Fires with the LaTeX whenever the WPFMath renderer is
+    /// entered — the round-6 pin that core-degraded artifacts never
+    /// reach it asserts this stays silent.</summary>
+    internal static Action<string>? FormulaRenderProbeForTests;
+
+    private static System.Windows.UIElement? TryRenderFormula(string latex)
+    {
+        FormulaRenderProbeForTests?.Invoke(latex);
+        try
+        {
+            XamlMath.TexFormula formula =
+                WpfMath.Parsers.WpfTeXFormulaParser.Instance.Parse(latex);
+            XamlMath.TexEnvironment environment =
+                WpfMath.Rendering.WpfTeXEnvironment.Create(
+                    XamlMath.TexStyle.Display, 20.0, "Arial");
+            System.Windows.Media.Geometry geometry =
+                WpfMath.Rendering.WpfTeXFormulaExtensions.RenderToGeometry(
+                    formula, environment);
+            var path = new System.Windows.Shapes.Path
+            {
+                Data = geometry,
+                Stretch = System.Windows.Media.Stretch.None,
+            };
+            path.SetResourceReference(
+                System.Windows.Shapes.Path.FillProperty, "Slate.TextBrush");
+            return path;
+        }
+        catch (XamlMath.Exceptions.TexException)
+        {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
     /// The run-budget preflight: the loop below creates a WPF Run per
     /// token plus one per gap, and core's 256 KiB BYTE cap does not
     /// bound token DENSITY — a valid dense JSON fence under the cap
@@ -376,6 +594,25 @@ internal static class ReadingDocumentBuilder
     /// three maximal fences, or dozens of ordinary ones — bounded Run
     /// fan-out no matter how many fences a note holds.</summary>
     internal const int ProjectionHighlightTokenBudget = 12_000;
+
+    /// <summary>Host visual cap per formula (W3-2 round 7): core's
+    /// 16 KiB budget bounds MathCAT, but WPFMath geometry complexity
+    /// scales with the LaTeX too, and no legitimate DISPLAYED formula
+    /// approaches 4 KiB of source. Over-cap formulas keep speech,
+    /// braille, and MathML — only the visual degrades.</summary>
+    internal const int MaximumRenderedFormulaSourceBytes = 4 * 1024;
+
+    /// <summary>The projection-wide pool the per-formula cap draws
+    /// from (see
+    /// <see cref="ReadingListBuildContext.RemainingMathRenderBytes"/>)
+    /// — the exact shape of <see cref="ProjectionHighlightTokenBudget"/>:
+    /// sixteen maximal formulas, or hundreds of ordinary ones.</summary>
+    internal const int ProjectionMathRenderByteBudget = 64 * 1024;
+
+    /// <summary>Budget override so the projection-pool exhaustion test
+    /// doesn't need hundreds of MathCAT-heavy fixtures. Null in
+    /// production.</summary>
+    internal static int? ProjectionMathRenderByteBudgetOverrideForTests;
 
     /// <summary>Core degrades oversized (>256 KiB) and
     /// unknown-language blocks to tokens that carry no color — those
@@ -747,6 +984,13 @@ internal static class ReadingDocumentBuilder
                         ReadingLandmarkKind.CodeBlock,
                         Insertion(paragraph.ContentStart),
                         text: ElementText(paragraph)));
+                }
+                else if (ReadingSemantics.IsMathBlock(paragraph))
+                {
+                    landmarks.Add(new ReadingLandmark(
+                        ReadingLandmarkKind.Math,
+                        Insertion(paragraph.ContentStart),
+                        text: ReadingSemantics.MathSpeechOf(paragraph)));
                 }
                 WalkInlines(paragraph.Inlines, landmarks);
                 break;

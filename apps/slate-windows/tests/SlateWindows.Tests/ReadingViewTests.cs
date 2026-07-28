@@ -386,6 +386,8 @@ public sealed class ReadingViewTests
                 // U aliases L: the field log measured Ctrl+Alt+L grabbed
                 // globally on the reference machine before the app saw it.
                 System.Windows.Input.Key.U,
+                // W3-2: math blocks.
+                System.Windows.Input.Key.M,
             };
             foreach (System.Windows.Input.Key key in kindKeys)
             {

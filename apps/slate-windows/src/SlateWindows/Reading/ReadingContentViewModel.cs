@@ -187,6 +187,40 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     internal bool ProjectionComplete => _projectionComplete;
 
     /// <summary>
+    /// Preference-change invalidation (W3-2 round 1): drop the memo so
+    /// the NEXT projection re-renders with the new prefs, and refresh
+    /// NOW only when a surface is actually attached (the
+    /// BlocksAppended subscription is the attachment signal). Unlike
+    /// <see cref="EnsureProjected"/> this attaches no observers and
+    /// sets no rebind-recovery state — hidden models must not start
+    /// discarded background builds, and a later terminal failure must
+    /// not replace valid displayed content with the failure notice.
+    /// </summary>
+    public void InvalidateForPrefsChange()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+        _memo = null;
+        if (BlocksAppended is not null)
+        {
+            Refresh();
+            return;
+        }
+        // Unbound, but a refresh may be IN FLIGHT (round 2: a restored
+        // tab's constructor projection races the prefs change, and
+        // set_math_prefs does not advance the session generation, so a
+        // stale-prefs publish would pass every gate and memoize).
+        // Poison the generation so nothing rendered with the old prefs
+        // can land; retiring the live marker makes the next bind's
+        // EnsureProjected restart — the pre-publication rebind
+        // machinery already handles exactly this shape.
+        _generation++;
+        _liveRefreshGeneration = -1;
+    }
+
+    /// <summary>
     /// The surface unbound this model (tab switch, template rebind).
     /// The stream MUST die here: chunk continuations append into list
     /// objects that now belong to whatever the surface shows next —
@@ -513,6 +547,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// projection itself.</summary>
     internal Func<Exception?>? CodeTokenFaultForTests { get; set; }
 
+    /// <summary>Math-only fault seam (W3-2), same contract.</summary>
+    internal Func<Exception?>? MathFaultForTests { get; set; }
+
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
     private FetchResult Fetch(VaultSession session, string path, string text)
     {
@@ -540,11 +577,46 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             codeBlocks = Array.Empty<CodeBlock>();
             codeFetchDegraded = true;
         }
+        // Math degrades identically (W3-2): a MathCAT failure renders
+        // source-in-range fallbacks with nav still working, never a
+        // failed projection.
+        MathBlock[] mathBlocks;
+        bool mathFetchDegraded = false;
+        try
+        {
+            if (MathFaultForTests?.Invoke() is { } mathFault)
+            {
+                throw mathFault;
+            }
+            mathBlocks = session.GetMathBlocks(path);
+        }
+        catch (VaultException)
+        {
+            mathBlocks = Array.Empty<MathBlock>();
+            mathFetchDegraded = true;
+        }
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
+        // The artifact digest hashes the COMPLETE code + math sets, so
+        // it belongs here on the fetch task, not on the dispatcher at
+        // publication (round 5: a dense note made the memo key itself
+        // a large dispatcher allocation).
+        string artifactDigest =
+            CodeArtifactDigest(codeBlocks, codeFetchDegraded)
+            + "|" + MathArtifactDigest(mathBlocks, mathFetchDegraded);
         return new FetchResult(
-            text, citations, records, tasks, codeBlocks, codeFetchDegraded, blocks, inlines);
+            text,
+            citations,
+            records,
+            tasks,
+            codeBlocks,
+            codeFetchDegraded,
+            mathBlocks,
+            mathFetchDegraded,
+            blocks,
+            inlines,
+            artifactDigest);
     }
 
     /// <summary>
@@ -639,7 +711,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             fetched.Text,
             fetched.Citations,
             fetched.Records,
-            CodeArtifactDigest(fetched.CodeBlocks, fetched.CodeFetchDegraded));
+            fetched.ArtifactDigest);
         if (Document is not null && _memo is { } memo && memo.Matches(key))
         {
             return;
@@ -666,8 +738,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // content derives from the SAVED file - saved-state changes
         // arrive through the session-generation drift retry.
         CodeBlock[] codeBlocks = fetched.CodeBlocks;
+        MathBlock[] mathBlocks = fetched.MathBlocks;
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
-            model.GetRange(0, firstEnd), context, codeBlocks);
+            model.GetRange(0, firstEnd), context, codeBlocks, mathBlocks);
 
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
@@ -693,7 +766,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             while (index < renderLimit)
             {
                 int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-                AppendFragment(model, index, end, context, codeBlocks);
+                AppendFragment(model, index, end, context, codeBlocks, mathBlocks);
                 index = end;
             }
             FinishPublish(key, degraded, renderLimit, streamed: true);
@@ -704,7 +777,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 generation,
                 () => ContinueBuild(
                     generation, model, firstEnd, renderLimit, key, degraded, context,
-                    codeBlocks)),
+                    codeBlocks, mathBlocks)),
             DispatcherPriority.Background);
     }
 
@@ -758,7 +831,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         MemoKey key,
         bool degraded,
         ReadingListBuildContext context,
-        CodeBlock[] codeBlocks)
+        CodeBlock[] codeBlocks,
+        MathBlock[] mathBlocks)
     {
         if (_disposed || generation != _generation)
         {
@@ -769,7 +843,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             throw fault;
         }
         int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-        AppendFragment(model, index, end, context, codeBlocks);
+        AppendFragment(model, index, end, context, codeBlocks, mathBlocks);
         if (end < renderLimit)
         {
             _ = _dispatcher!.InvokeAsync(
@@ -777,7 +851,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     generation,
                     () => ContinueBuild(
                         generation, model, end, renderLimit, key, degraded, context,
-                        codeBlocks)),
+                        codeBlocks, mathBlocks)),
                 DispatcherPriority.Background);
             return;
         }
@@ -789,10 +863,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         int index,
         int end,
         ReadingListBuildContext context,
-        CodeBlock[] codeBlocks) =>
+        CodeBlock[] codeBlocks,
+        MathBlock[] mathBlocks) =>
         BlocksAppended?.Invoke(
             ReadingDocumentBuilder.Build(
-                model.GetRange(index, end - index), context, codeBlocks).Document);
+                model.GetRange(index, end - index), context, codeBlocks, mathBlocks)
+                .Document);
 
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
     {
@@ -850,8 +926,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         TaskItem[] Tasks,
         CodeBlock[] CodeBlocks,
         bool CodeFetchDegraded,
+        MathBlock[] MathBlocks,
+        bool MathFetchDegraded,
         ReadingBlock[] Blocks,
-        ReadingBlockInlines[] Inlines);
+        ReadingBlockInlines[] Inlines,
+        string ArtifactDigest);
 
     /// <summary>
     /// The §10.1 memo triple. Citations and records are uniffi records
@@ -899,28 +978,56 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             return "degraded";
         }
-        var canonical = new System.Text.StringBuilder();
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
         foreach (CodeBlock block in blocks)
         {
-            canonical.Append(block.ByteOffset)
-                .Append('\u0001')
-                .Append(block.Language)
-                .Append('\u0001')
-                .Append(block.Source)
-                .Append('\u0001');
+            DigestField(hash, block.ByteOffset.ToString());
+            DigestField(hash, block.Language);
+            DigestField(hash, block.Source);
             foreach (SyntaxToken token in block.Tokens)
             {
-                canonical.Append(token.StartByte)
-                    .Append(':')
-                    .Append(token.EndByte)
-                    .Append(':')
-                    .Append(token.Kind)
-                    .Append(';');
+                DigestField(hash, $"{token.StartByte}:{token.EndByte}:{token.Kind}");
             }
-            canonical.Append('\u0002');
+            hash.AppendData(BlockSeparator);
         }
-        byte[] hash = System.Security.Cryptography.SHA256.HashData(
-            System.Text.Encoding.UTF8.GetBytes(canonical.ToString()));
-        return Convert.ToHexString(hash);
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    /// <summary>The math analog of <see cref="CodeArtifactDigest"/>:
+    /// content-complete (source, MathML, speech, braille all shift the
+    /// digest — a MathPrefs change re-renders speech with identical
+    /// live text), degraded is its own identity. Incremental (round
+    /// 5): the artifact set streams into the hash field by field,
+    /// never materialized into one canonical buffer.</summary>
+    private static string MathArtifactDigest(MathBlock[] blocks, bool degraded)
+    {
+        if (degraded)
+        {
+            return "math-degraded";
+        }
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
+        foreach (MathBlock block in blocks)
+        {
+            DigestField(hash, block.ByteOffset.ToString());
+            DigestField(hash, block.DisplayStyle.ToString());
+            DigestField(hash, block.Source);
+            DigestField(hash, block.Mathml);
+            DigestField(hash, block.Speech);
+            hash.AppendData(block.Braille);
+            hash.AppendData(BlockSeparator);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static readonly byte[] FieldSeparator = { 0x01 };
+    private static readonly byte[] BlockSeparator = { 0x02 };
+
+    private static void DigestField(
+        System.Security.Cryptography.IncrementalHash hash, string value)
+    {
+        hash.AppendData(System.Text.Encoding.UTF8.GetBytes(value));
+        hash.AppendData(FieldSeparator);
     }
 }

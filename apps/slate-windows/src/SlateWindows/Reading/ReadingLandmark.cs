@@ -19,6 +19,7 @@ internal enum ReadingLandmarkKind
     Table,
     Embed,
     CodeBlock,
+    Math,
 }
 
 /// <summary>

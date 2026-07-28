@@ -375,7 +375,9 @@ internal sealed class ReadingSurface : RichTextBox
     /// parents, which misses at normalized boundary positions — exactly
     /// where a chord landing puts the caret.
     /// </summary>
-    internal bool TryActivateAtCaret()
+    internal bool TryActivateAtCaret() => TryActivateAtCaret(brailleRequested: false);
+
+    internal bool TryActivateAtCaret(bool brailleRequested)
     {
         if (_model is not { } model || CaretPosition is not { } caret)
         {
@@ -405,7 +407,43 @@ internal sealed class ReadingSurface : RichTextBox
         // No link at the caret: a task checkbox on the caret's LINE is
         // the other activatable thing. The caret can never rest inside
         // an InlineUIContainer, so containment is by paragraph.
-        return TryToggleTaskAtCaret();
+        if (TryToggleTaskAtCaret())
+        {
+            return true;
+        }
+        // Math block at the caret (W3-2): Enter speaks the canonical
+        // MathCAT speech through the landed vocabulary — "{speech},
+        // math." — content, never composition. This is the guaranteed
+        // layer's on-demand read; the W-E7 appModule upgrades Enter to
+        // NVDA's full math interaction later.
+        if (CaretPosition?.Paragraph is { } mathParagraph
+            && ReadingSemantics.IsMathBlock(mathParagraph)
+            && _model is { } mathModel)
+        {
+            // Ctrl+Enter reads the BRAILLE artifact — the accessible
+            // value the Nemeth/UEB pref selects (round 3: a persisted
+            // setting must change something a user can retrieve).
+            // Plain Enter reads the speech. Both announce core content.
+            if (brailleRequested)
+            {
+                ReadingMathElement? mathElement = mathParagraph.Inlines
+                    .OfType<InlineUIContainer>()
+                    .Select(container => container.Child)
+                    .OfType<ReadingMathElement>()
+                    .FirstOrDefault();
+                mathModel.Announce(new uniffi.slate_uniffi.A11yEvent.HostComposed(
+                    mathElement is { Braille.Length: > 0 }
+                        ? mathElement.Braille
+                        : "Braille not available.",
+                    uniffi.slate_uniffi.A11yPriority.Medium));
+                return true;
+            }
+            mathModel.Announce(new uniffi.slate_uniffi.A11yEvent.ReadingNavLanded(
+                new uniffi.slate_uniffi.ReadingNavTarget.Math(),
+                ReadingSemantics.MathSpeechOf(mathParagraph)));
+            return true;
+        }
+        return false;
     }
 
     /// <summary>

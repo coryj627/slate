@@ -6738,6 +6738,7 @@ pub enum ReadingNavTarget {
     Table,
     Embed,
     CodeBlock,
+    Math,
 }
 
 impl From<ReadingNavTarget> for core::a11y::ReadingNavTarget {
@@ -6752,6 +6753,7 @@ impl From<ReadingNavTarget> for core::a11y::ReadingNavTarget {
             F::Table => C::Table,
             F::Embed => C::Embed,
             F::CodeBlock => C::CodeBlock,
+            F::Math => C::Math,
         }
     }
 }

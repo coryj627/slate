@@ -61,6 +61,55 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             ["preambleAllTokens"] = "Preamble + all tokens",
         };
 
+    /// <summary>W3-2 MathPrefs vocabulary — storage keys and the
+    /// enum-verbatim names the canonical announcements speak (mac
+    /// Settings parity; #1056 records that MathSpeak is unimplemented
+    /// upstream and speaks as ClearSpeak).</summary>
+    internal static readonly IReadOnlyDictionary<string, string> MathSpeechStyleNames =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["clearSpeak"] = "ClearSpeak",
+            ["mathSpeak"] = "MathSpeak",
+        };
+
+    internal static readonly IReadOnlyDictionary<string, string> MathVerbosityNames =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["terse"] = "Terse",
+            ["medium"] = "Medium",
+            ["verbose"] = "Verbose",
+        };
+
+    internal static readonly IReadOnlyDictionary<string, string> MathBrailleCodeNames =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["nemeth"] = "Nemeth",
+            ["ueb"] = "UEB",
+        };
+
+    private string _mathSpeechStyle = "clearSpeak";
+    private string _mathVerbosity = "medium";
+    private string _mathBrailleCode = "nemeth";
+
+    /// <summary>Raised after any math preference changes, carrying the
+    /// full FFI prefs — the workspace pushes them to the session and
+    /// re-projects reading views.</summary>
+    public event Action<MathPrefs>? MathPrefsChanged;
+
+    /// <summary>The current prefs in FFI shape (applied to the session
+    /// at workspace construction and on every change).</summary>
+    public MathPrefs CurrentMathPrefs => new(
+        _mathSpeechStyle == "mathSpeak"
+            ? MathSpeechStyle.MathSpeak
+            : MathSpeechStyle.ClearSpeak,
+        _mathVerbosity switch
+        {
+            "terse" => MathVerbosity.Terse,
+            "verbose" => MathVerbosity.Verbose,
+            _ => MathVerbosity.Medium,
+        },
+        _mathBrailleCode == "ueb" ? BrailleCode.Ueb : BrailleCode.Nemeth);
+
     public EditorPreferencesViewModel(
         Action<A11yEvent>? announce = null,
         IEditorSpellingService? spellingService = null,
@@ -80,6 +129,56 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
             && CodeVerbosityNames.ContainsKey(verbosity)
                 ? verbosity
                 : "preambleOnly";
+        // "mathSpeak" is additionally rejected here (defense beyond the
+        // store normalization): while #1056 is open the style may never
+        // restore as active.
+        _mathSpeechStyle =
+            loaded?.MathSpeechStyle is string speechStyle
+            && speechStyle != "mathSpeak"
+            && MathSpeechStyleNames.ContainsKey(speechStyle)
+                ? speechStyle
+                : "clearSpeak";
+        _mathVerbosity =
+            loaded?.MathVerbosity is string mathVerbosity
+            && MathVerbosityNames.ContainsKey(mathVerbosity)
+                ? mathVerbosity
+                : "medium";
+        _mathBrailleCode =
+            loaded?.MathBrailleCode is string brailleCode
+            && MathBrailleCodeNames.ContainsKey(brailleCode)
+                ? brailleCode
+                : "nemeth";
+        SetMathSpeechStyleCommand = new RelayCommand(
+            parameter => SetMathPreference(
+                parameter,
+                MathSpeechStyleNames,
+                ref _mathSpeechStyle,
+                nameof(IsMathSpeechClearSpeak),
+                nameof(IsMathSpeechMathSpeak),
+                display => new A11yEvent.MathSpeechStyle(display),
+                value => Persist(state => state with { MathSpeechStyle = value })),
+            _ => true);
+        SetMathVerbosityCommand = new RelayCommand(
+            parameter => SetMathPreference(
+                parameter,
+                MathVerbosityNames,
+                ref _mathVerbosity,
+                nameof(IsMathVerbosityTerse),
+                nameof(IsMathVerbosityMedium),
+                display => new A11yEvent.MathVerbosity(display),
+                value => Persist(state => state with { MathVerbosity = value }),
+                nameof(IsMathVerbosityVerbose)),
+            _ => true);
+        SetMathBrailleCodeCommand = new RelayCommand(
+            parameter => SetMathPreference(
+                parameter,
+                MathBrailleCodeNames,
+                ref _mathBrailleCode,
+                nameof(IsMathBrailleNemeth),
+                nameof(IsMathBrailleUeb),
+                display => new A11yEvent.MathBrailleCode(display),
+                value => Persist(state => state with { MathBrailleCode = value })),
+            _ => true);
         SetCodePreambleVerbosityCommand = new RelayCommand(
             parameter =>
             {
@@ -243,6 +342,75 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
         }
     }
 
+    private void SetMathPreference(
+        object? parameter,
+        IReadOnlyDictionary<string, string> names,
+        ref string field,
+        string boolA,
+        string boolB,
+        Func<string, A11yEvent> announcement,
+        Action<string> persist,
+        string? boolC = null)
+    {
+        // MathSpeak is NOT selectable (round-1 [medium], #1056): the
+        // upstream engine never implemented it, and confirming a
+        // speech convention that silently stays ClearSpeak is a lie
+        // to the exact users the setting serves. The stored key stays
+        // decodable for forward compatibility; the menu item is
+        // disabled. Re-enable when #1056 lands.
+        if (parameter is not string key
+            || key == "mathSpeak"
+            || !names.TryGetValue(key, out string? display)
+            || string.Equals(field, key, StringComparison.Ordinal))
+        {
+            return;
+        }
+        field = key;
+        OnPropertyChanged(boolA);
+        OnPropertyChanged(boolB);
+        if (boolC is not null)
+        {
+            OnPropertyChanged(boolC);
+        }
+        persist(key);
+        _announce(announcement(display));
+        MathPrefsChanged?.Invoke(CurrentMathPrefs);
+    }
+
+    private void Persist(Func<AppPreferencesState, AppPreferencesState> update)
+    {
+        if (_preferencesStore is not { } store)
+        {
+            return;
+        }
+        try
+        {
+            store.Save(update(store.Load()));
+        }
+        catch (IOException exception)
+        {
+            HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+        }
+        catch (UnauthorizedAccessException exception)
+        {
+            HostLog.Write(HostDiagnosticEvent.AppPreferencesPersistFailed, exception);
+        }
+    }
+
+    public bool IsMathSpeechClearSpeak => _mathSpeechStyle == "clearSpeak";
+
+    public bool IsMathSpeechMathSpeak => _mathSpeechStyle == "mathSpeak";
+
+    public bool IsMathVerbosityTerse => _mathVerbosity == "terse";
+
+    public bool IsMathVerbosityMedium => _mathVerbosity == "medium";
+
+    public bool IsMathVerbosityVerbose => _mathVerbosity == "verbose";
+
+    public bool IsMathBrailleNemeth => _mathBrailleCode == "nemeth";
+
+    public bool IsMathBrailleUeb => _mathBrailleCode == "ueb";
+
     public bool IsCodeVerbosityPreambleOnly =>
         _codePreambleVerbosity == "preambleOnly";
 
@@ -256,6 +424,9 @@ internal sealed class EditorPreferencesViewModel : BindableBase, IDisposable
     public ICommand ToggleSpellCheckCommand { get; }
     public ICommand ToggleReadingLinkTargetCommand { get; }
     public ICommand SetCodePreambleVerbosityCommand { get; }
+    public ICommand SetMathSpeechStyleCommand { get; }
+    public ICommand SetMathVerbosityCommand { get; }
+    public ICommand SetMathBrailleCodeCommand { get; }
     public ICommand ZoomInCommand { get; }
     public ICommand ZoomOutCommand { get; }
 

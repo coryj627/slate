@@ -63,6 +63,8 @@ pub enum ReadingNavTarget {
     Table,
     Embed,
     CodeBlock,
+    /// W3-2: math blocks (the `M` chord).
+    Math,
 }
 
 impl ReadingNavTarget {
@@ -76,6 +78,7 @@ impl ReadingNavTarget {
             Table => "table".to_owned(),
             Embed => "embed".to_owned(),
             CodeBlock => "code block".to_owned(),
+            Math => "math".to_owned(),
         }
     }
 }
@@ -1256,6 +1259,16 @@ pub fn corpus() -> Vec<A11yEvent> {
             target: ReadingNavTarget::CodeBlock,
             text: "fn spoken_interior() -> usize { 42 }".into(),
         },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::Math,
+            forward: true,
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Math,
+            // The landing text is the MathCAT speech the host captured
+            // from the landed block — content, not composition.
+            text: "x equals negative b plus or minus the square root of b squared minus 4 a c, over 2 a".into(),
+        },
         ReadingNavLanded {
             target: ReadingNavTarget::Embed,
             text: "".into(),
@@ -1501,6 +1514,12 @@ mod tests {
             (Medium, "column a, table."),
             (Medium, "Embedded note Target Note."),
             (Medium, "fn spoken_interior() -> usize { 42 }, code block."),
+            (Medium, "No next math."),
+            (
+                Medium,
+                "x equals negative b plus or minus the square root of b squared \
+                 minus 4 a c, over 2 a, math.",
+            ),
             (Medium, "Embed."),
             (High, "Composed by a host engine."),
         ];
