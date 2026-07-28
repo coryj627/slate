@@ -50,6 +50,16 @@ internal sealed class ReadingListBuildContext
     internal int RemainingMathRenderBytes { get; set; } =
         ReadingDocumentBuilder.ProjectionMathRenderByteBudgetOverrideForTests
             ?? ReadingDocumentBuilder.ProjectionMathRenderByteBudget;
+
+    /// <summary>
+    /// The diagram analog (W3-3): each decoded SVG draws its byte
+    /// length from this shared pool, carried across chunks exactly
+    /// like the highlight and math pools; diagrams after exhaustion
+    /// keep description and source and degrade only the visual.
+    /// </summary>
+    internal int RemainingDiagramRenderBytes { get; set; } =
+        ReadingDocumentBuilder.ProjectionDiagramRenderByteBudgetOverrideForTests
+            ?? ReadingDocumentBuilder.ProjectionDiagramRenderByteBudget;
 }
 
 /// <summary>The built reading document plus its navigation index.</summary>
@@ -106,7 +116,15 @@ internal static class ReadingDocumentBuilder
         IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
         ReadingListBuildContext context,
         IReadOnlyList<CodeBlock> codeBlocks,
-        IReadOnlyList<MathBlock> mathBlocks)
+        IReadOnlyList<MathBlock> mathBlocks) =>
+        Build(model, context, codeBlocks, mathBlocks, Array.Empty<DiagramBlock>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks,
+        IReadOnlyList<DiagramBlock> diagramBlocks)
     {
         var document = new FlowDocument
         {
@@ -140,7 +158,7 @@ internal static class ReadingDocumentBuilder
 
             stack.Clear();
             document.Blocks.Add(
-                NonListBlock(block, inlines, codeBlocks, mathBlocks, context));
+                NonListBlock(block, inlines, codeBlocks, mathBlocks, diagramBlocks, context));
         }
 
         return new ReadingDocumentModel(document, CollectLandmarks(document));
@@ -215,6 +233,7 @@ internal static class ReadingDocumentBuilder
         ReadingBlockInlines inlines,
         IReadOnlyList<CodeBlock> codeBlocks,
         IReadOnlyList<MathBlock> mathBlocks,
+        IReadOnlyList<DiagramBlock> diagramBlocks,
         ReadingListBuildContext context)
     {
         switch (block.Kind)
@@ -260,14 +279,15 @@ internal static class ReadingDocumentBuilder
             case ReadingBlockKind.MathBlock:
                 return MathBlockElement(block, mathBlocks, context);
 
-            case ReadingBlockKind.Diagram:
+            case ReadingBlockKind.Diagram diagram:
+                return DiagramBlockElement(diagram, block, diagramBlocks, context);
+
             case ReadingBlockKind.Html:
             default:
                 {
-                    // Math (W3-2) and diagrams (W3-3) get their canonical
-                    // renderers in their own PRs; HTML renders as source per
-                    // the mac contract. Until then the block's source stays
-                    // IN the text range, monospace — never silently absent.
+                    // HTML renders as source per the mac contract: the
+                    // block's source stays IN the text range, monospace
+                    // — never silently absent.
                     if (inlines.Segments.Length == 0)
                     {
                         return MonospaceParagraph(block.Source.TrimEnd('\n', '\r'));
@@ -717,6 +737,190 @@ internal static class ReadingDocumentBuilder
         _ => null,
     };
 
+    /// <summary>
+    /// W3-3 diagram block: the canonical SVG artifact rendered through
+    /// the W2-3 hardened Svg.Skia path, with the CORE structured
+    /// description as the entire AT surface (mac contract). The fence
+    /// matches its pipeline <see cref="DiagramBlock"/> by byte
+    /// containment; a live-buffer drift miss degrades to
+    /// source-in-range (mac's unmatched fallback — never a fabricated
+    /// failure status). Every failure branch keeps the source IN the
+    /// text range and appends a zero-size focusable element carrying
+    /// the description, so Tab and object navigation always speak the
+    /// canonical content (the W3-2 round-4 lesson applied at design
+    /// time).
+    /// </summary>
+    private static Block DiagramBlockElement(
+        ReadingBlockKind.Diagram diagram,
+        ReadingBlock block,
+        IReadOnlyList<DiagramBlock> diagramBlocks,
+        ReadingListBuildContext context)
+    {
+        DiagramBlock? matched = diagramBlocks.FirstOrDefault(candidate =>
+            candidate.ByteOffset >= block.ByteStart
+            && candidate.ByteOffset < block.ByteEnd);
+
+        // LIVE-source coherence (the W3-4/W3-2 lesson): the reading
+        // block is parsed from the live buffer, the artifact from the
+        // SAVED file, and a same-position unsaved edit keeps byte
+        // containment. Diagram fences are code-shaped, so the code
+        // precedent applies: LF-normalized interior equality.
+        if (matched is not null)
+        {
+            string normalized = matched.Source.Replace("\r\n", "\n");
+            if (!string.Equals(normalized, diagram.Interior, StringComparison.Ordinal)
+                && !string.Equals(normalized, diagram.Interior + "\n", StringComparison.Ordinal)
+                && !string.Equals(normalized + "\n", diagram.Interior, StringComparison.Ordinal))
+            {
+                matched = null;
+            }
+        }
+
+        string fallbackSource = diagram.Interior.TrimEnd('\n', '\r');
+        if (matched is null)
+        {
+            // Mac's unmatched fallback: raw source, no fabricated
+            // status. The landing announcement carries the source —
+            // the math unmatched precedent.
+            Paragraph unmatchedParagraph = MonospaceParagraph(fallbackSource);
+            ReadingSemantics.MarkDiagramBlock(unmatchedParagraph, fallbackSource);
+            return unmatchedParagraph;
+        }
+
+        // The description is the entire primary AT surface — verbatim
+        // core content, never composed; "Mermaid diagram." is the mac
+        // defensive fallback for an empty artifact.
+        string description = matched.StructuredDescription.Trim();
+        if (description.Length == 0)
+        {
+            description = "Mermaid diagram.";
+        }
+        // Landing text: trailing period stripped so the canonical
+        // vocabulary's own punctuation composes ("…3 steps, diagram.").
+        string landing = description.TrimEnd('.');
+
+        System.Windows.Media.ImageSource? visual = null;
+        string? failureHeader = null;
+        string failureReason = string.Empty;
+        switch (matched.RenderStatus)
+        {
+            case DiagramRenderStatus.UnsupportedDialect unsupported:
+                failureHeader = "Diagram dialect not supported";
+                failureReason = unsupported.Reason;
+                break;
+            case DiagramRenderStatus.RenderFailed failed:
+                failureHeader = "Diagram could not be rendered";
+                failureReason = failed.Message;
+                break;
+            default:
+                if (matched.Svg is not { Length: > 0 } svg)
+                {
+                    // Mac audit #254 L1: Ok status with nil OR EMPTY
+                    // bytes routes to the decode-failure fallback.
+                    failureHeader = "Diagram could not be rendered";
+                    failureReason = "diagram rendered but image could not be decoded";
+                    break;
+                }
+                // Host visual budgets (the W3-2 round-7 shape): core
+                // bounds the RENDERER's work, not the host decoder's —
+                // per-diagram SVG cap plus the projection-wide pool,
+                // charged on entry (a failed decode burned the
+                // dispatcher too). Over-budget keeps the description
+                // and source; only the visual degrades.
+                if (svg.Length > MaximumRenderedDiagramSvgBytes
+                    || svg.Length > context.RemainingDiagramRenderBytes)
+                {
+                    failureHeader = "Diagram could not be rendered";
+                    failureReason = "diagram image exceeds the display budget";
+                    break;
+                }
+                context.RemainingDiagramRenderBytes -= svg.Length;
+                DiagramRenderProbeForTests?.Invoke(svg.Length);
+                visual = EditorInteractionCoordinator.DecodeImage(svg, "image/svg+xml");
+                if (visual is null)
+                {
+                    failureHeader = "Diagram could not be rendered";
+                    failureReason = "diagram rendered but image could not be decoded";
+                }
+                break;
+        }
+
+        if (visual is not null)
+        {
+            var element = new ReadingDiagramElement(description, matched.Source)
+            {
+                Content = new ReadingDiagramImage
+                {
+                    Source = visual,
+                    Stretch = System.Windows.Media.Stretch.Uniform,
+                    StretchDirection = StretchDirection.DownOnly,
+                    // Mac caps at a Dynamic-Type-scaled 600pt (audit
+                    // #254 M1); WPF has no text-size metric to scale
+                    // by, so the base cap ships and the scaling is a
+                    // recorded matrix note.
+                    MaxHeight = 600,
+                },
+                Margin = new Thickness(0, 4, 0, 4),
+            };
+            var renderedParagraph = new Paragraph(new InlineUIContainer(element))
+            {
+                TextAlignment = TextAlignment.Center,
+            };
+            ReadingSemantics.MarkDiagramBlock(renderedParagraph, landing);
+            return renderedParagraph;
+        }
+
+        // Failure presentation, mac shape: header, reason, then the
+        // full source — all IN the text range — plus the zero-size
+        // focusable element so the description stays Tab-reachable.
+        var paragraph = new Paragraph { Padding = new Thickness(8) };
+        paragraph.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
+        paragraph.Inlines.Add(new Run(failureHeader)
+        {
+            FontWeight = FontWeights.SemiBold,
+        });
+        if (failureReason.Length > 0)
+        {
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new Run(failureReason));
+        }
+        if (fallbackSource.Length > 0)
+        {
+            paragraph.Inlines.Add(new LineBreak());
+            paragraph.Inlines.Add(new Run(fallbackSource)
+            {
+                FontFamily = new FontFamily("Cascadia Mono, Consolas, monospace"),
+            });
+        }
+        paragraph.Inlines.Add(new InlineUIContainer(
+            new ReadingDiagramElement(description, matched.Source)));
+        ReadingSemantics.MarkDiagramBlock(paragraph, landing);
+        return paragraph;
+    }
+
+    /// <summary>Host visual cap per diagram (W3-3): core's budgets
+    /// bound the mermaid renderer, but Svg.Skia decode + raster work
+    /// scales with the SVG too. Real diagram SVGs are tens of
+    /// kilobytes; over-cap diagrams keep description and source —
+    /// only the visual degrades.</summary>
+    internal const int MaximumRenderedDiagramSvgBytes = 512 * 1024;
+
+    /// <summary>The projection-wide pool the per-diagram cap draws
+    /// from (see
+    /// <see cref="ReadingListBuildContext.RemainingDiagramRenderBytes"/>)
+    /// — the exact shape of <see cref="ProjectionMathRenderByteBudget"/>:
+    /// four maximal diagrams, or dozens of ordinary ones.</summary>
+    internal const int ProjectionDiagramRenderByteBudget = 2 * 1024 * 1024;
+
+    /// <summary>Budget override so the pool-exhaustion test doesn't
+    /// need megabytes of fixtures. Null in production.</summary>
+    internal static int? ProjectionDiagramRenderByteBudgetOverrideForTests;
+
+    /// <summary>Fires with the SVG byte length whenever the Svg.Skia
+    /// decode path is entered — the pin that degraded or over-budget
+    /// artifacts never reach it.</summary>
+    internal static Action<int>? DiagramRenderProbeForTests;
+
     private static Paragraph MonospaceParagraph(string text)
     {
         var run = new Run(text);
@@ -991,6 +1195,13 @@ internal static class ReadingDocumentBuilder
                         ReadingLandmarkKind.Math,
                         Insertion(paragraph.ContentStart),
                         text: ReadingSemantics.MathSpeechOf(paragraph)));
+                }
+                else if (ReadingSemantics.IsDiagramBlock(paragraph))
+                {
+                    landmarks.Add(new ReadingLandmark(
+                        ReadingLandmarkKind.Diagram,
+                        Insertion(paragraph.ContentStart),
+                        text: ReadingSemantics.DiagramDescriptionOf(paragraph)));
                 }
                 WalkInlines(paragraph.Inlines, landmarks);
                 break;

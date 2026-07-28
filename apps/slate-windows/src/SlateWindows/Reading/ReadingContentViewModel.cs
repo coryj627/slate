@@ -550,6 +550,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// <summary>Math-only fault seam (W3-2), same contract.</summary>
     internal Func<Exception?>? MathFaultForTests { get; set; }
 
+    /// <summary>Diagram-fetch fault seam (W3-3), mirroring
+    /// <see cref="MathFaultForTests"/>.</summary>
+    internal Func<Exception?>? DiagramFaultForTests { get; set; }
+
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
     private FetchResult Fetch(VaultSession session, string path, string text)
     {
@@ -595,16 +599,35 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             mathBlocks = Array.Empty<MathBlock>();
             mathFetchDegraded = true;
         }
+        // Diagrams degrade identically (W3-3): a renderer failure
+        // renders source-in-range fallbacks with nav still working,
+        // never a failed projection.
+        DiagramBlock[] diagramBlocks;
+        bool diagramFetchDegraded = false;
+        try
+        {
+            if (DiagramFaultForTests?.Invoke() is { } diagramFault)
+            {
+                throw diagramFault;
+            }
+            diagramBlocks = session.GetDiagramBlocks(path);
+        }
+        catch (VaultException)
+        {
+            diagramBlocks = Array.Empty<DiagramBlock>();
+            diagramFetchDegraded = true;
+        }
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
-        // The artifact digest hashes the COMPLETE code + math sets, so
+        // The artifact digest hashes the COMPLETE artifact sets, so
         // it belongs here on the fetch task, not on the dispatcher at
         // publication (round 5: a dense note made the memo key itself
         // a large dispatcher allocation).
         string artifactDigest =
             CodeArtifactDigest(codeBlocks, codeFetchDegraded)
-            + "|" + MathArtifactDigest(mathBlocks, mathFetchDegraded);
+            + "|" + MathArtifactDigest(mathBlocks, mathFetchDegraded)
+            + "|" + DiagramArtifactDigest(diagramBlocks, diagramFetchDegraded);
         return new FetchResult(
             text,
             citations,
@@ -614,6 +637,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             codeFetchDegraded,
             mathBlocks,
             mathFetchDegraded,
+            diagramBlocks,
+            diagramFetchDegraded,
             blocks,
             inlines,
             artifactDigest);
@@ -739,8 +764,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // arrive through the session-generation drift retry.
         CodeBlock[] codeBlocks = fetched.CodeBlocks;
         MathBlock[] mathBlocks = fetched.MathBlocks;
+        DiagramBlock[] diagramBlocks = fetched.DiagramBlocks;
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
-            model.GetRange(0, firstEnd), context, codeBlocks, mathBlocks);
+            model.GetRange(0, firstEnd), context, codeBlocks, mathBlocks, diagramBlocks);
 
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
@@ -766,7 +792,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             while (index < renderLimit)
             {
                 int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-                AppendFragment(model, index, end, context, codeBlocks, mathBlocks);
+                AppendFragment(model, index, end, context, codeBlocks, mathBlocks, diagramBlocks);
                 index = end;
             }
             FinishPublish(key, degraded, renderLimit, streamed: true);
@@ -777,7 +803,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 generation,
                 () => ContinueBuild(
                     generation, model, firstEnd, renderLimit, key, degraded, context,
-                    codeBlocks, mathBlocks)),
+                    codeBlocks, mathBlocks, diagramBlocks)),
             DispatcherPriority.Background);
     }
 
@@ -832,7 +858,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         bool degraded,
         ReadingListBuildContext context,
         CodeBlock[] codeBlocks,
-        MathBlock[] mathBlocks)
+        MathBlock[] mathBlocks,
+        DiagramBlock[] diagramBlocks)
     {
         if (_disposed || generation != _generation)
         {
@@ -843,7 +870,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             throw fault;
         }
         int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-        AppendFragment(model, index, end, context, codeBlocks, mathBlocks);
+        AppendFragment(model, index, end, context, codeBlocks, mathBlocks, diagramBlocks);
         if (end < renderLimit)
         {
             _ = _dispatcher!.InvokeAsync(
@@ -851,7 +878,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     generation,
                     () => ContinueBuild(
                         generation, model, end, renderLimit, key, degraded, context,
-                        codeBlocks, mathBlocks)),
+                        codeBlocks, mathBlocks, diagramBlocks)),
                 DispatcherPriority.Background);
             return;
         }
@@ -864,10 +891,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         int end,
         ReadingListBuildContext context,
         CodeBlock[] codeBlocks,
-        MathBlock[] mathBlocks) =>
+        MathBlock[] mathBlocks,
+        DiagramBlock[] diagramBlocks) =>
         BlocksAppended?.Invoke(
             ReadingDocumentBuilder.Build(
-                model.GetRange(index, end - index), context, codeBlocks, mathBlocks)
+                model.GetRange(index, end - index), context, codeBlocks, mathBlocks,
+                diagramBlocks)
                 .Document);
 
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
@@ -928,6 +957,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         bool CodeFetchDegraded,
         MathBlock[] MathBlocks,
         bool MathFetchDegraded,
+        DiagramBlock[] DiagramBlocks,
+        bool DiagramFetchDegraded,
         ReadingBlock[] Blocks,
         ReadingBlockInlines[] Inlines,
         string ArtifactDigest);
@@ -1016,6 +1047,35 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             DigestField(hash, block.Mathml);
             DigestField(hash, block.Speech);
             hash.AppendData(block.Braille);
+            hash.AppendData(BlockSeparator);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    /// <summary>The diagram analog (W3-3): content-complete —
+    /// source, description, status, and SVG bytes all shift the
+    /// digest — with degraded as its own identity, streamed
+    /// incrementally like the others.</summary>
+    private static string DiagramArtifactDigest(DiagramBlock[] blocks, bool degraded)
+    {
+        if (degraded)
+        {
+            return "diagram-degraded";
+        }
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
+        foreach (DiagramBlock block in blocks)
+        {
+            DigestField(hash, block.ByteOffset.ToString());
+            DigestField(hash, block.Source);
+            DigestField(hash, block.StructuredDescription);
+            DigestField(hash, block.RenderStatus switch
+            {
+                DiagramRenderStatus.UnsupportedDialect u => "unsupported:" + u.Reason,
+                DiagramRenderStatus.RenderFailed f => "failed:" + f.Message,
+                _ => "ok",
+            });
+            hash.AppendData(block.Svg ?? Array.Empty<byte>());
             hash.AppendData(BlockSeparator);
         }
         return Convert.ToHexString(hash.GetHashAndReset());

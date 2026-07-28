@@ -6558,7 +6558,11 @@ impl VaultSession {
     ) -> Result<Vec<crate::diagram::DiagramBlock>, VaultError> {
         let source = self.read_text(path)?;
         let raws = crate::diagram::extract_diagram_blocks(&source);
-        Ok(raws.iter().map(crate::diagram::render_diagram).collect())
+        // Bounded per call (W3-3, the math render-budget precedent):
+        // per-note diagram-count and per-diagram source-byte budgets;
+        // over-budget blocks degrade to a typed RenderFailed with
+        // source, position, and description intact.
+        Ok(crate::diagram::render_diagram_blocks(&raws))
     }
 
     /// Ordered whole-document block segmentation for the reading view

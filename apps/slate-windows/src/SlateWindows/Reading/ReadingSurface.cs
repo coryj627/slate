@@ -443,6 +443,19 @@ internal sealed class ReadingSurface : RichTextBox
                 ReadingSemantics.MathSpeechOf(mathParagraph)));
             return true;
         }
+        // Diagram block at the caret (W3-3): Enter (and Ctrl+Enter —
+        // diagrams have no braille-analog artifact) re-reads the
+        // canonical structured description through the landed
+        // vocabulary — content, never composition.
+        if (CaretPosition?.Paragraph is { } diagramParagraph
+            && ReadingSemantics.IsDiagramBlock(diagramParagraph)
+            && _model is { } diagramModel)
+        {
+            diagramModel.Announce(new uniffi.slate_uniffi.A11yEvent.ReadingNavLanded(
+                new uniffi.slate_uniffi.ReadingNavTarget.Diagram(),
+                ReadingSemantics.DiagramDescriptionOf(diagramParagraph)));
+            return true;
+        }
         return false;
     }
 

@@ -134,6 +134,65 @@ pub fn render_diagram(raw: &RawDiagramBlock) -> DiagramBlock {
     }
 }
 
+/// Per-note render budget (W3-3, the W3-2 round-5 precedent applied
+/// at design time): reading projections cap at 2,000 blocks, so
+/// diagrams past that count can never all be displayed — rendering
+/// them through mermaid-rs-renderer is unbounded work a dense
+/// adversarial note can weaponize. Over-budget blocks keep source,
+/// position, and a real structured description with a typed
+/// `RenderFailed` status, so hosts render source-in-range fallbacks —
+/// never silently absent.
+pub const MAX_RENDERED_DIAGRAMS_PER_NOTE: usize = 2_000;
+
+/// Per-diagram source cap, checked BEFORE the renderer runs. Real
+/// Mermaid sources are hundreds of bytes; no legitimate authored
+/// diagram approaches 64 KiB.
+pub const MAX_DIAGRAM_SOURCE_BYTES: usize = 64 * 1024;
+
+/// Render every extracted block under the per-note budgets — the
+/// bounded entry `VaultSession::get_diagram_blocks` uses.
+pub fn render_diagram_blocks(raws: &[RawDiagramBlock]) -> Vec<DiagramBlock> {
+    render_diagram_blocks_bounded(raws, MAX_RENDERED_DIAGRAMS_PER_NOTE)
+}
+
+/// Budget mechanism, injectable so the count cap is testable without
+/// pushing thousands of renders through the renderer.
+fn render_diagram_blocks_bounded(
+    raws: &[RawDiagramBlock],
+    max_rendered: usize,
+) -> Vec<DiagramBlock> {
+    raws.iter()
+        .enumerate()
+        .map(|(index, raw)| {
+            if raw.source.len() > MAX_DIAGRAM_SOURCE_BYTES {
+                budget_degraded(raw, "diagram source exceeds the render budget")
+            } else if index >= max_rendered {
+                budget_degraded(raw, "diagram count exceeds the per-note render budget")
+            } else {
+                render_diagram(raw)
+            }
+        })
+        .collect()
+}
+
+/// The budget-degradation shape: a typed `RenderFailed` with the
+/// description still computed from source (bounded by the Unknown
+/// dump cap), so the host fallback contract stays uniform.
+fn budget_degraded(raw: &RawDiagramBlock, message: &str) -> DiagramBlock {
+    DiagramBlock {
+        source: raw.source.clone(),
+        dialect: raw.dialect,
+        svg: None,
+        png_fallback: None,
+        structured_description: structured_description(&raw.source, raw.dialect),
+        render_status: DiagramRenderStatus::RenderFailed {
+            message: message.into(),
+        },
+        line: raw.line,
+        byte_offset: raw.byte_offset,
+    }
+}
+
 /// AT-facing description for a Mermaid source.
 ///
 /// Reads the source's first non-blank line to classify the diagram
@@ -152,20 +211,31 @@ fn mermaid_structured_description(source: &str) -> String {
     if trimmed.is_empty() {
         return "Mermaid diagram, empty source.".into();
     }
-    let first_line = trimmed
+    // Skip %% directive/comment lines when classifying — the SAME
+    // skip render validation applies (Codoki PR #245). Without it a
+    // theme-directive diagram rendered fine (status Ok) while its
+    // description degraded to the raw source dump, and the body count
+    // charged the kind line (W3-3 catch).
+    let kind_line_index = trimmed
         .lines()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    let kind = classify_mermaid_kind(&first_line);
-    let body_lines: Vec<&str> = trimmed
+        .position(|l| !l.trim().is_empty() && !l.trim().starts_with("%%"));
+    let kind = match kind_line_index {
+        Some(index) => classify_mermaid_kind(
+            &trimmed
+                .lines()
+                .nth(index)
+                .unwrap_or("")
+                .trim()
+                .to_ascii_lowercase(),
+        ),
+        None => MermaidKind::Unknown,
+    };
+    let count = trimmed
         .lines()
-        .skip(1)
+        .skip(kind_line_index.map_or(0, |index| index + 1))
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with("%%"))
-        .collect();
-    let count = body_lines.len();
+        .count();
     match kind {
         MermaidKind::Flowchart => format!(
             "Flowchart with {count} {}.",
@@ -199,7 +269,18 @@ fn mermaid_structured_description(source: &str) -> String {
             "Entity-relationship diagram with {count} {}.",
             if count == 1 { "entity" } else { "entities" }
         ),
-        MermaidKind::Unknown => format!("Mermaid diagram, source:\n{}", trimmed),
+        MermaidKind::Unknown => {
+            // Bounded dump (W3-3): the description crosses the FFI
+            // into every AT read as the accessible name; embedding an
+            // unbounded source is the defect class the render budgets
+            // close. 160 chars keeps "what is this fence" readable.
+            const DUMP_CAP: usize = 160;
+            let mut dump: String = trimmed.chars().take(DUMP_CAP).collect();
+            if trimmed.chars().count() > DUMP_CAP {
+                dump.push('…');
+            }
+            format!("Mermaid diagram, source:\n{dump}")
+        }
     }
 }
 
@@ -453,6 +534,100 @@ mod tests {
     fn structured_description_for_empty_source() {
         let desc = structured_description("", DiagramDialect::Mermaid);
         assert_eq!(desc, "Mermaid diagram, empty source.");
+    }
+
+    /// W3-3 catch: render validation skips `%%` directive lines when
+    /// classifying, but the description generator did not — a
+    /// theme-directive diagram rendered with status Ok while its
+    /// AT-facing description degraded to the raw source dump, and the
+    /// body count charged the kind line. Both walks now share the
+    /// same skip.
+    #[test]
+    fn structured_description_skips_directive_lines_like_render_validation() {
+        let src = "%%{ init: { 'theme': 'dark' } }%%\nflowchart LR\nA --> B\nB --> C\n";
+        let desc = structured_description(src, DiagramDialect::Mermaid);
+        assert_eq!(desc, "Flowchart with 2 steps.");
+    }
+
+    /// The Unknown-kind dump is bounded: the description is the
+    /// accessible NAME on both hosts, and an unbounded source embed
+    /// is the defect class the render budgets close.
+    #[test]
+    fn structured_description_unknown_dump_is_bounded() {
+        let src = format!("weirdDiagram\n{}", "x".repeat(10_000));
+        let desc = structured_description(&src, DiagramDialect::Mermaid);
+        assert!(
+            desc.starts_with("Mermaid diagram, source:"),
+            "got prefix {:?}",
+            &desc[..40]
+        );
+        assert!(desc.ends_with('…'), "over-cap dump must show truncation");
+        assert!(
+            desc.chars().count() < 220,
+            "got {} chars",
+            desc.chars().count()
+        );
+    }
+
+    /// W3-3 render budgets (the W3-2 round-5 precedent applied at
+    /// design time): blocks past the count cap degrade to a typed
+    /// RenderFailed with source, position, and description intact —
+    /// never dropped, never rendered. Injectable budget keeps the
+    /// test off the real renderer; the production cap is pinned.
+    #[test]
+    fn render_budget_degrades_past_the_diagram_count_cap() {
+        let _guard = renderer_test_guard();
+        let raws: Vec<RawDiagramBlock> = (0..4)
+            .map(|i| RawDiagramBlock {
+                source: "flowchart LR\nA --> B".to_string(),
+                dialect: DiagramDialect::Mermaid,
+                line: i as u32 + 1,
+                byte_offset: i as u32 * 32,
+            })
+            .collect();
+        let blocks = render_diagram_blocks_bounded(&raws, 2);
+        assert_eq!(blocks.len(), 4, "over-budget blocks degrade, never drop");
+        assert!(matches!(blocks[1].render_status, DiagramRenderStatus::Ok));
+        assert!(blocks[1].svg.is_some());
+        for block in &blocks[2..] {
+            assert!(matches!(
+                block.render_status,
+                DiagramRenderStatus::RenderFailed { .. }
+            ));
+            assert!(block.svg.is_none());
+            assert_eq!(block.structured_description, "Flowchart with 1 step.");
+            assert_eq!(block.source, "flowchart LR\nA --> B");
+        }
+        assert_eq!(blocks[3].byte_offset, 96);
+        assert_eq!(MAX_RENDERED_DIAGRAMS_PER_NOTE, 2_000);
+    }
+
+    /// An oversized source degrades BEFORE the renderer runs — and
+    /// only that block: neighbors render normally.
+    #[test]
+    fn render_budget_degrades_oversized_diagrams_individually() {
+        let _guard = renderer_test_guard();
+        let oversized = RawDiagramBlock {
+            source: format!("flowchart LR\n{}", "A --> B\n".repeat(9_000)),
+            dialect: DiagramDialect::Mermaid,
+            line: 1,
+            byte_offset: 0,
+        };
+        assert!(oversized.source.len() > MAX_DIAGRAM_SOURCE_BYTES);
+        let small = RawDiagramBlock {
+            source: "flowchart LR\nA --> B".to_string(),
+            dialect: DiagramDialect::Mermaid,
+            line: 100,
+            byte_offset: 80_000,
+        };
+        let blocks = render_diagram_blocks(&[oversized, small]);
+        assert!(matches!(
+            blocks[0].render_status,
+            DiagramRenderStatus::RenderFailed { .. }
+        ));
+        assert!(blocks[0].svg.is_none());
+        assert!(matches!(blocks[1].render_status, DiagramRenderStatus::Ok));
+        assert!(blocks[1].svg.is_some(), "neighbor must render normally");
     }
 
     #[test]

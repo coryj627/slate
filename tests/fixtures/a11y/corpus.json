@@ -775,6 +775,16 @@
     "text": "x equals negative b plus or minus the square root of b squared minus 4 a c, over 2 a, math."
   },
   {
+    "event": "ReadingNavNoTarget { target: Diagram, forward: true }",
+    "priority": "medium",
+    "text": "No next diagram."
+  },
+  {
+    "event": "ReadingNavLanded { target: Diagram, text: \"Flowchart with 3 steps\" }",
+    "priority": "medium",
+    "text": "Flowchart with 3 steps, diagram."
+  },
+  {
     "event": "ReadingNavLanded { target: Embed, text: \"\" }",
     "priority": "medium",
     "text": "Embed."

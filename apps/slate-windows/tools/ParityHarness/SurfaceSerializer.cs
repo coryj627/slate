@@ -184,6 +184,49 @@ public static class SurfaceSerializer
              .Raw(",\"braille_hex\":").Str(Convert.ToHexString(m.Braille))
              .Raw("}");
         }
+        j.Raw("]");
+
+        // W3-3: the canonical diagram artifact — byte-checks the
+        // structured description and render status cross-platform.
+        // SVG bytes ride as SHA-256 + length (the same pure-Rust
+        // renderer runs on both twins, so bytes are deterministic;
+        // the hash keeps artifacts compact and drift loud).
+        j.Raw(",\"diagram_blocks\":[");
+        var diagramBlocks = session.GetDiagramBlocks(relPath);
+        for (int i = 0; i < diagramBlocks.Length; i++)
+        {
+            var d = diagramBlocks[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            string status = d.RenderStatus switch
+            {
+                DiagramRenderStatus.Ok => "ok",
+                DiagramRenderStatus.UnsupportedDialect u =>
+                    "unsupported:" + u.Reason,
+                DiagramRenderStatus.RenderFailed f => "failed:" + f.Message,
+                _ => throw new InvalidOperationException(
+                    $"unmapped DiagramRenderStatus {d.RenderStatus}"),
+            };
+            byte[] svg = d.Svg ?? Array.Empty<byte>();
+            j.Raw("{\"line\":").Num(d.Line)
+             .Raw(",\"offset\":").Num(d.ByteOffset)
+             .Raw(",\"dialect\":").Str(
+                d.Dialect == DiagramDialect.Mermaid ? "mermaid"
+                    : throw new InvalidOperationException(
+                        $"unmapped DiagramDialect {d.Dialect}"))
+             .Raw(",\"source\":").Str(d.Source)
+             .Raw(",\"description\":").Str(d.StructuredDescription)
+             .Raw(",\"status\":").Str(status)
+             .Raw(",\"svg_len\":").Num((ulong)svg.Length)
+             .Raw(",\"svg_sha256\":").Str(
+                svg.Length == 0
+                    ? ""
+                    : Convert.ToHexString(
+                        System.Security.Cryptography.SHA256.HashData(svg)))
+             .Raw("}");
+        }
         j.Raw("]}");
         return j + "\n";
     }

@@ -860,7 +860,8 @@ public sealed class ShellAccessibilityTests
         Directory.CreateDirectory(vaultRoot);
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"),
-            "# Identity note\n\nBody text.\n\n$$x^2 + 1$$\n");
+            "# Identity note\n\nBody text.\n\n$$x^2 + 1$$\n\n"
+                + "```mermaid\nflowchart LR\nA --> B\n```\n");
 
         Process? process = null;
         try
@@ -956,6 +957,25 @@ public sealed class ShellAccessibilityTests
                 mathMl is string { Length: > 0 } markup
                     && markup.TrimStart().StartsWith("<math", StringComparison.Ordinal),
                 $"MathML property value: {mathMl ?? "<null>"}");
+
+            // W3-3 external verification: the diagram element's Name
+            // — the canonical structured description, the ENTIRE
+            // primary AT surface for diagrams — is readable
+            // cross-process from the production app. Standard UIA
+            // Name, no custom registration: what NVDA and JAWS speak
+            // on focus is exactly what this asserts.
+            AutomationElement? diagram = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        diagram = window.FindFirstDescendant(
+                            cf => cf.ByLocalizedControlType("diagram"));
+                        return diagram is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no element with localized control type 'diagram' appeared");
+            Assert.Equal("Flowchart with 1 step.", diagram!.Name);
         }
         finally
         {
