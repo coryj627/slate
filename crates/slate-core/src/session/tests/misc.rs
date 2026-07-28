@@ -193,10 +193,9 @@ fn diagram_blocks_flights_are_keyed_per_note() {
     );
 }
 
-/// Round 4 [high]: the completion handoff — a caller that misses the
-/// fast-path cache, then stalls until AFTER the owner has completed
-/// and removed its flight, must find the published result during
-/// admission (the cache recheck under the flights lock) instead of
+/// Round 4 [high]: the completion handoff — a caller that stalls
+/// until AFTER the owner has completed and removed its flight must
+/// find the published result during atomic admission instead of
 /// creating a fresh flight and re-rendering. The one-shot admission
 /// gate makes exactly this interleaving deterministic.
 #[test]
@@ -297,6 +296,132 @@ fn diagram_blocks_cross_key_completion_preserves_the_handoff() {
         session.diagram_render_passes.load(Ordering::Relaxed),
         2,
         "the delayed A caller must join A's keyed result after B completed"
+    );
+}
+
+/// Round 6 [high]: admission is atomic, so completed-entry EVICTION
+/// is an honest fresh miss, never a duplicate-flight hole — a
+/// delayed caller released after its key was evicted re-renders
+/// exactly once (bounded-cache policy) and returns correct content;
+/// it can never hang or race a phantom flight.
+#[test]
+fn diagram_blocks_delayed_caller_past_eviction_re_renders_exactly_once() {
+    use std::sync::atomic::Ordering;
+
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("a.md", b"```mermaid\nflowchart LR\nA --> B\n```\n")
+            .unwrap();
+        for i in 0..crate::session::MAX_CACHED_DIAGRAM_NOTES {
+            p.write_file(
+                &format!("other{i}.md"),
+                b"```mermaid\nflowchart LR\nX --> Y\n```\n",
+            )
+            .unwrap();
+        }
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let (release, gate) = std::sync::mpsc::channel::<()>();
+    *session.diagram_admission_gate_for_tests.lock().unwrap() = Some(gate);
+
+    std::thread::scope(|scope| {
+        let delayed = scope.spawn(|| {
+            let blocks = session.get_diagram_blocks("a.md").unwrap();
+            assert_eq!(blocks.len(), 1);
+            assert!(blocks[0].source.contains("A --> B"));
+        });
+        while session
+            .diagram_admission_gate_for_tests
+            .lock()
+            .unwrap()
+            .is_some()
+        {
+            std::thread::yield_now();
+        }
+
+        // A completes, then MAX_CACHED_DIAGRAM_NOTES other keys
+        // complete — evicting A's entry by count.
+        session.get_diagram_blocks("a.md").unwrap();
+        for i in 0..crate::session::MAX_CACHED_DIAGRAM_NOTES {
+            session.get_diagram_blocks(&format!("other{i}.md")).unwrap();
+        }
+        let passes_before_release = session.diagram_render_passes.load(Ordering::Relaxed);
+
+        release.send(()).unwrap();
+        delayed.join().unwrap();
+
+        assert_eq!(
+            session.diagram_render_passes.load(Ordering::Relaxed),
+            passes_before_release + 1,
+            "an evicted key is a fresh miss: exactly one more render, atomically"
+        );
+    });
+}
+
+/// Round 6 [high]: the cache budget counts the COMPLETE resident
+/// entry — a zero-SVG entry with a large preserved source must
+/// trigger eviction, an entry over the whole budget is never
+/// admitted, and lookups keep LRU order honest.
+#[test]
+fn diagram_completed_cache_budgets_resident_bytes_not_just_svg() {
+    use crate::diagram::{DiagramBlock, DiagramDialect, DiagramRenderStatus};
+    use crate::session::{
+        DiagramCompletedCache, MAX_CACHED_DIAGRAM_NOTES, MAX_CACHED_DIAGRAM_PAYLOAD_BYTES,
+    };
+
+    fn entry(source_bytes: usize) -> Vec<DiagramBlock> {
+        vec![DiagramBlock {
+            source: "s".repeat(source_bytes),
+            dialect: DiagramDialect::Mermaid,
+            svg: None,
+            png_fallback: None,
+            structured_description: "Mermaid diagram.".into(),
+            render_status: DiagramRenderStatus::RenderFailed {
+                message: "diagram source exceeds the render budget".into(),
+            },
+            line: 1,
+            byte_offset: 0,
+        }]
+    }
+
+    // Zero-SVG entries with big sources: three at ~40% of the budget
+    // cannot all stay resident.
+    let mut cache = DiagramCompletedCache::default();
+    let big = (MAX_CACHED_DIAGRAM_PAYLOAD_BYTES / 10) * 4;
+    cache.insert(("one.md".into(), 1), entry(big));
+    cache.insert(("two.md".into(), 2), entry(big));
+    cache.insert(("three.md".into(), 3), entry(big));
+    assert!(
+        cache.lookup(&("one.md".into(), 1)).is_none(),
+        "source bytes must count toward the budget: the LRU entry evicts"
+    );
+    assert!(cache.lookup(&("two.md".into(), 2)).is_some());
+    assert!(cache.lookup(&("three.md".into(), 3)).is_some());
+
+    // An entry over the entire budget is never admitted — and never
+    // flushes the residents.
+    cache.insert(
+        ("huge.md".into(), 4),
+        entry(MAX_CACHED_DIAGRAM_PAYLOAD_BYTES + 1),
+    );
+    assert!(cache.lookup(&("huge.md".into(), 4)).is_none());
+    assert!(cache.lookup(&("two.md".into(), 2)).is_some());
+
+    // Count boundary with LRU honesty: fill past the note cap; a
+    // freshly looked-up entry survives while the stale one goes.
+    let mut lru = DiagramCompletedCache::default();
+    for i in 0..MAX_CACHED_DIAGRAM_NOTES {
+        lru.insert((format!("n{i}.md"), i as u64), entry(16));
+    }
+    assert!(lru.lookup(&("n0.md".into(), 0)).is_some());
+    lru.insert(("extra.md".into(), 99), entry(16));
+    assert!(
+        lru.lookup(&("n0.md".into(), 0)).is_some(),
+        "recently used survives the count eviction"
+    );
+    assert!(
+        lru.lookup(&("n1.md".into(), 1)).is_none(),
+        "the least-recently-used entry evicts at the count boundary"
     );
 }
 

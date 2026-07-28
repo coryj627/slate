@@ -865,24 +865,53 @@ impl DiagramCompletedCache {
     }
 
     fn insert(&mut self, key: (String, u64), blocks: Vec<crate::diagram::DiagramBlock>) {
+        // Round 6: an entry whose RESIDENT size alone busts the budget
+        // is never admitted (callers of that pathological note simply
+        // re-render, already bounded by the per-call budgets) — it
+        // must not flush every other note's entry on its way through.
+        if Self::entry_resident_bytes(&key, &blocks) > MAX_CACHED_DIAGRAM_PAYLOAD_BYTES {
+            return;
+        }
         self.entries.retain(|(k, _)| k != &key);
         self.entries.push_back((key, blocks));
         while self.entries.len() > MAX_CACHED_DIAGRAM_NOTES
-            || (self.entries.len() > 1 && self.total_payload() > MAX_CACHED_DIAGRAM_PAYLOAD_BYTES)
+            || (self.entries.len() > 1
+                && self.total_resident_bytes() > MAX_CACHED_DIAGRAM_PAYLOAD_BYTES)
         {
             self.entries.pop_front();
         }
     }
 
-    fn total_payload(&self) -> usize {
+    /// The COMPLETE retained size (round 6: counting SVG alone let
+    /// eight zero-SVG notes with oversized preserved sources pin
+    /// hundreds of MiB): key, source, description, status strings,
+    /// SVG, and the reserved PNG fallback.
+    fn entry_resident_bytes(key: &(String, u64), blocks: &[crate::diagram::DiagramBlock]) -> usize {
+        key.0.len()
+            + blocks
+                .iter()
+                .map(|b| {
+                    b.source.len()
+                        + b.structured_description.len()
+                        + b.svg.as_ref().map_or(0, Vec::len)
+                        + b.png_fallback.as_ref().map_or(0, Vec::len)
+                        + match &b.render_status {
+                            crate::diagram::DiagramRenderStatus::Ok => 0,
+                            crate::diagram::DiagramRenderStatus::UnsupportedDialect { reason } => {
+                                reason.len()
+                            }
+                            crate::diagram::DiagramRenderStatus::RenderFailed { message } => {
+                                message.len()
+                            }
+                        }
+                })
+                .sum::<usize>()
+    }
+
+    fn total_resident_bytes(&self) -> usize {
         self.entries
             .iter()
-            .map(|(_, blocks)| {
-                blocks
-                    .iter()
-                    .map(|b| b.svg.as_ref().map_or(0, Vec::len))
-                    .sum::<usize>()
-            })
+            .map(|(key, blocks)| Self::entry_resident_bytes(key, blocks))
             .sum()
     }
 }
@@ -927,8 +956,9 @@ pub struct VaultSession {
     #[cfg(test)]
     pub(crate) diagram_render_panic_for_tests: std::sync::atomic::AtomicBool,
     /// Test seam: one-shot admission gate — a caller that takes it
-    /// blocks after its fast-path cache miss until the test signals,
-    /// making the round-4 delayed-caller handoff deterministic.
+    /// blocks BEFORE the atomic admission step until the test
+    /// signals, making delayed-arrival interleavings (rounds 4–6)
+    /// deterministic.
     #[cfg(test)]
     pub(crate) diagram_admission_gate_for_tests: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     /// Citations index — lazy view over `bibliography_entries`.
@@ -6674,24 +6704,21 @@ impl VaultSession {
             hasher.finish()
         };
         let key = (path.to_owned(), source_hash);
-        // Keyed single-flight fill (rounds 2-3): hit the completed
-        // cache; otherwise attach to (or create) the flight for THIS
-        // key. Waiters receive their own flight's result, so traffic
-        // on other keys can never detach them, and cleanup is scoped
-        // to the flight it owns.
+        // Keyed single-flight fill (rounds 2-6): waiters receive
+        // their own flight's result, so traffic on other keys can
+        // never detach them, and cleanup is scoped to the flight it
+        // owns.
+        // Admission is ONE atomic step under the flights lock (lock
+        // order flights -> cache): a caller either sees the completed
+        // result, joins the key's flight, or registers as its owner —
+        // there is no program point where a caller has "observed a
+        // miss" without being registered, so completed-entry eviction
+        // is an honest fresh miss (bounded-cache policy), never a
+        // duplicate-render hole (round 6).
         loop {
-            if let Some(blocks) = self
-                .diagram_cache
-                .lock()
-                .expect("diagram_cache mutex poisoned")
-                .lookup(&key)
-            {
-                return Ok(blocks);
-            }
-            // One-shot test gate: pauses a caller here — after its
-            // fast-path miss, before admission — until the test
-            // signals, making the round-4 delayed-caller handoff
-            // deterministic.
+            // One-shot test gate: suspends a caller here — BEFORE the
+            // atomic admission — so delayed-arrival interleavings are
+            // deterministically testable.
             #[cfg(test)]
             {
                 let gate = self
@@ -6708,13 +6735,6 @@ impl VaultSession {
                     .diagram_flights
                     .lock()
                     .expect("diagram_flights mutex poisoned");
-                // Round 4: recheck the completed cache UNDER the
-                // flights lock. Completion publishes the cache and
-                // removes its flight inside this same critical
-                // section (lock order flights -> cache), so a caller
-                // that finds no flight here is GUARANTEED to see the
-                // published result — a late arrival can never re-render
-                // content an owner already completed.
                 if let Some(blocks) = self
                     .diagram_cache
                     .lock()
