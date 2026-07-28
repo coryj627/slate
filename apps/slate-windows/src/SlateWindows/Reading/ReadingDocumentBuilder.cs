@@ -36,6 +36,20 @@ internal sealed class ReadingListBuildContext
     /// </summary>
     internal int RemainingHighlightTokens { get; set; } =
         ReadingDocumentBuilder.ProjectionHighlightTokenBudget;
+
+    /// <summary>
+    /// The math analog (W3-2 round 7): the CORE budgets bound MathCAT
+    /// work, not WPFMath geometry — 250 sub-threshold formulas in one
+    /// chunk would still parse into giant Geometry on the dispatcher.
+    /// Each visually rendered formula draws its LaTeX byte length
+    /// from this shared pool, carried across chunks exactly like the
+    /// highlight pool; formulas after exhaustion keep their FULL
+    /// accessibility artifacts (speech, braille, MathML) and degrade
+    /// only the visual to source-in-range.
+    /// </summary>
+    internal int RemainingMathRenderBytes { get; set; } =
+        ReadingDocumentBuilder.ProjectionMathRenderByteBudgetOverrideForTests
+            ?? ReadingDocumentBuilder.ProjectionMathRenderByteBudget;
 }
 
 /// <summary>The built reading document plus its navigation index.</summary>
@@ -244,7 +258,7 @@ internal static class ReadingDocumentBuilder
                 return new BlockUIContainer(new Separator { Margin = new Thickness(0, 8, 0, 8) });
 
             case ReadingBlockKind.MathBlock:
-                return MathBlockElement(block, mathBlocks);
+                return MathBlockElement(block, mathBlocks, context);
 
             case ReadingBlockKind.Diagram:
             case ReadingBlockKind.Html:
@@ -389,7 +403,9 @@ internal static class ReadingDocumentBuilder
     /// way, composition never).
     /// </summary>
     private static Block MathBlockElement(
-        ReadingBlock block, IReadOnlyList<MathBlock> mathBlocks)
+        ReadingBlock block,
+        IReadOnlyList<MathBlock> mathBlocks,
+        ReadingListBuildContext context)
     {
         MathBlock? matched = mathBlocks.FirstOrDefault(candidate =>
             candidate.DisplayStyle == MathDisplayStyle.Block
@@ -434,9 +450,21 @@ internal static class ReadingDocumentBuilder
         // Geometry. The conservative cost: a formula pulldown-latex
         // cannot convert loses its visual even if WPFMath could have
         // drawn it; it keeps source-in-range + the artifact element.
-        System.Windows.UIElement? visual = matched.Mathml.Length > 0
-            ? TryRenderFormula(matched.Source)
-            : null;
+        //
+        // Round 7 completes the W3-4 shape: within core's budgets a
+        // formula is still WPFMath work proportional to its LaTeX, so
+        // the HOST charges a per-formula cap plus the projection-wide
+        // pool before entering the renderer. Charged on entry — a
+        // failed parse burned the dispatcher too.
+        System.Windows.UIElement? visual = null;
+        int renderCost = System.Text.Encoding.UTF8.GetByteCount(matched.Source);
+        if (matched.Mathml.Length > 0
+            && renderCost <= MaximumRenderedFormulaSourceBytes
+            && renderCost <= context.RemainingMathRenderBytes)
+        {
+            context.RemainingMathRenderBytes -= renderCost;
+            visual = TryRenderFormula(matched.Source);
+        }
         if (visual is null)
         {
             // Coverage gap (documented WPFMath subset, matrix-rowed):
@@ -566,6 +594,25 @@ internal static class ReadingDocumentBuilder
     /// three maximal fences, or dozens of ordinary ones — bounded Run
     /// fan-out no matter how many fences a note holds.</summary>
     internal const int ProjectionHighlightTokenBudget = 12_000;
+
+    /// <summary>Host visual cap per formula (W3-2 round 7): core's
+    /// 16 KiB budget bounds MathCAT, but WPFMath geometry complexity
+    /// scales with the LaTeX too, and no legitimate DISPLAYED formula
+    /// approaches 4 KiB of source. Over-cap formulas keep speech,
+    /// braille, and MathML — only the visual degrades.</summary>
+    internal const int MaximumRenderedFormulaSourceBytes = 4 * 1024;
+
+    /// <summary>The projection-wide pool the per-formula cap draws
+    /// from (see
+    /// <see cref="ReadingListBuildContext.RemainingMathRenderBytes"/>)
+    /// — the exact shape of <see cref="ProjectionHighlightTokenBudget"/>:
+    /// sixteen maximal formulas, or hundreds of ordinary ones.</summary>
+    internal const int ProjectionMathRenderByteBudget = 64 * 1024;
+
+    /// <summary>Budget override so the projection-pool exhaustion test
+    /// doesn't need hundreds of MathCAT-heavy fixtures. Null in
+    /// production.</summary>
+    internal static int? ProjectionMathRenderByteBudgetOverrideForTests;
 
     /// <summary>Core degrades oversized (>256 KiB) and
     /// unknown-language blocks to tokens that carry no color — those

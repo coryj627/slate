@@ -331,6 +331,123 @@ public sealed class ReadingMathTests
         });
     }
 
+    /// <summary>
+    /// Round 7: the projection-wide visual pool bounds AGGREGATE
+    /// WPFMath work across a chunk of within-budget formulas —
+    /// renderer entries stop when the pool drains, and every formula
+    /// past that point keeps its full artifacts with the source
+    /// visual fallback. The override seam keeps the fixture cheap;
+    /// the production pool value is pinned alongside.
+    /// </summary>
+    [Fact]
+    public void ProjectionPoolBoundsAggregateFormulaRendering()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-math-pool");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                string.Concat(Enumerable.Repeat("$$x+1$$\n\n", 40)));
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var rendererEntered = new List<string>();
+            ReadingDocumentBuilder.FormulaRenderProbeForTests = rendererEntered.Add;
+            // "x+1" costs 3 bytes; a 6-byte pool admits exactly two.
+            ReadingDocumentBuilder.ProjectionMathRenderByteBudgetOverrideForTests = 6;
+            try
+            {
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(
+                            WorkspaceItemKind.Markdown, "note0.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                var surface = new ReadingSurface { Model = tab.Reading };
+
+                // This harness projects twice (mode toggle, then the
+                // surface-bind re-projection), and the pool is
+                // per-projection by design — the bound is 2 renderer
+                // entries per projection, never one per formula.
+                Assert.InRange(rendererEntered.Count, 2, 4);
+                List<ReadingMathElement> elements =
+                    FindMathElements(surface.Document).ToList();
+                Assert.Equal(40, elements.Count);
+                Assert.Equal(2, elements.Count(element => element.Content is not null));
+                Assert.All(elements, element =>
+                {
+                    string name = System.Windows.Automation.AutomationProperties
+                        .GetName(element);
+                    Assert.False(string.IsNullOrWhiteSpace(name));
+                    Assert.NotEqual("Math expression.", name);
+                });
+                // The production pool: sixteen maximal formulas, or
+                // hundreds of ordinary ones.
+                Assert.Equal(
+                    16 * ReadingDocumentBuilder.MaximumRenderedFormulaSourceBytes,
+                    ReadingDocumentBuilder.ProjectionMathRenderByteBudget);
+            }
+            finally
+            {
+                ReadingDocumentBuilder.FormulaRenderProbeForTests = null;
+                ReadingDocumentBuilder.ProjectionMathRenderByteBudgetOverrideForTests = null;
+            }
+        });
+    }
+
+    /// <summary>
+    /// Round 7: a formula WITHIN core's budgets (real speech and
+    /// MathML) but past the host's per-formula visual cap never
+    /// enters WPFMath — the visual degrades to source-in-range while
+    /// every accessibility artifact stays live.
+    /// </summary>
+    [Fact]
+    public void MidSizedFormulaKeepsArtifactsButSkipsTheRenderer()
+    {
+        RunSta(() =>
+        {
+            string formula = string.Concat(Enumerable.Repeat("x+", 2_200)) + "x";
+            using var fixture = FixtureVault.Create(1, "reading-math-midsize");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "$$" + formula + "$$\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var rendererEntered = new List<string>();
+            ReadingDocumentBuilder.FormulaRenderProbeForTests = rendererEntered.Add;
+            try
+            {
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(
+                            WorkspaceItemKind.Markdown, "note0.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                var surface = new ReadingSurface { Model = tab.Reading };
+
+                Assert.Empty(rendererEntered);
+                ReadingMathElement element =
+                    Assert.Single(FindMathElements(surface.Document));
+                Assert.Null(element.Content);
+                string name = System.Windows.Automation.AutomationProperties
+                    .GetName(element);
+                Assert.Contains("plus", name, StringComparison.OrdinalIgnoreCase);
+                Assert.StartsWith("<math", element.MathMl.TrimStart());
+            }
+            finally
+            {
+                ReadingDocumentBuilder.FormulaRenderProbeForTests = null;
+            }
+        });
+    }
+
     /// <summary>A math block whose artifact carries no braille (core
     /// degradation, e.g. MathCAT rejecting the expression) answers
     /// Ctrl+Enter honestly instead of staying silent.</summary>
