@@ -59,6 +59,51 @@ fn set_math_prefs_takes_effect_on_next_get_math_blocks() {
     );
 }
 
+/// W3-3 round 1 [high]: every reading refresh re-fetches diagram
+/// artifacts from the SAVED file, which live-buffer typing never
+/// changes — without a content-keyed cache each refresh re-rendered
+/// the whole note through the process-global serialized renderer,
+/// letting stale refreshes starve every tab. A repeated fetch must
+/// be a render-free cache hit; a saved change must miss and
+/// re-render.
+#[test]
+fn diagram_blocks_cache_hits_on_unchanged_content_and_misses_on_saves() {
+    use std::sync::atomic::Ordering;
+
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("note.md", b"```mermaid\nflowchart LR\nA --> B\n```\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let first = session.get_diagram_blocks("note.md").unwrap();
+    assert_eq!(first.len(), 1);
+    let passes_after_first = session.diagram_render_passes.load(Ordering::Relaxed);
+    assert_eq!(passes_after_first, 1);
+
+    let second = session.get_diagram_blocks("note.md").unwrap();
+    assert_eq!(second, first, "hit must return the identical artifact");
+    assert_eq!(
+        session.diagram_render_passes.load(Ordering::Relaxed),
+        passes_after_first,
+        "unchanged content must be a render-free cache hit"
+    );
+
+    std::fs::write(
+        tmp.path().join("note.md"),
+        "```mermaid\nflowchart LR\nA --> C\n```\n",
+    )
+    .unwrap();
+    let third = session.get_diagram_blocks("note.md").unwrap();
+    assert_eq!(third.len(), 1);
+    assert_ne!(third[0].source, first[0].source);
+    assert_eq!(
+        session.diagram_render_passes.load(Ordering::Relaxed),
+        passes_after_first + 1,
+        "a saved change must miss the cache and re-render"
+    );
+}
+
 #[test]
 fn set_math_prefs_handles_rapid_concurrent_swaps() {
     // The mutex around math_prefs must serialize correctly

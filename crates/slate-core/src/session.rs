@@ -830,6 +830,19 @@ pub struct VaultSession {
     /// through it on every call so a preference change takes
     /// effect immediately.
     math_prefs: Mutex<crate::math::MathPrefs>,
+    /// Single-slot diagram artifact cache keyed on (path, source
+    /// hash) — W3-3 round 1: every reading refresh re-reads the SAVED
+    /// file, which live-buffer typing never changes, yet each fetch
+    /// re-rendered the whole note through the process-global
+    /// serialized renderer. A content-keyed hit turns those refreshes
+    /// into clones. One slot bounds memory (the retention budget caps
+    /// the payload) and covers the hot path: repeated refreshes of
+    /// the note being edited.
+    diagram_cache: Mutex<Option<(String, u64, Vec<crate::diagram::DiagramBlock>)>>,
+    /// Test seam: cache-miss render passes, so the cache pin can
+    /// prove a repeated fetch renders nothing.
+    #[cfg(test)]
+    pub(crate) diagram_render_passes: AtomicU64,
     /// Citations index — lazy view over `bibliography_entries`.
     /// `set_bibliography_sources` bumps the version so the renderer's
     /// cache invalidates implicitly (see `RenderCache`).
@@ -1873,6 +1886,7 @@ impl VaultSession {
         db::migrate(&mut conn)?;
 
         let math_prefs = Mutex::new(config.math_prefs);
+        let diagram_cache = Mutex::new(None);
 
         // Build the initial BibIndex from whatever's already in the
         // bibliography_entries table — empty after a fresh
@@ -1956,6 +1970,9 @@ impl VaultSession {
             compaction_shutdown,
             compaction_join: Mutex::new(Some(compaction_join)),
             math_prefs,
+            diagram_cache,
+            #[cfg(test)]
+            diagram_render_passes: AtomicU64::new(0),
             bib_index: Mutex::new(bib_index),
             csl_styles: Mutex::new(std::collections::HashMap::new()),
             render_cache: crate::citations::render::RenderCache::default(),
@@ -6557,12 +6574,42 @@ impl VaultSession {
         path: &str,
     ) -> Result<Vec<crate::diagram::DiagramBlock>, VaultError> {
         let source = self.read_text(path)?;
+        let source_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            source.hash(&mut hasher);
+            hasher.finish()
+        };
+        {
+            let cache = self
+                .diagram_cache
+                .lock()
+                .expect("diagram_cache mutex poisoned");
+            if let Some((cached_path, cached_hash, blocks)) = cache.as_ref()
+                && cached_path == path
+                && *cached_hash == source_hash
+            {
+                return Ok(blocks.clone());
+            }
+        }
         let raws = crate::diagram::extract_diagram_blocks(&source);
         // Bounded per call (W3-3, the math render-budget precedent):
-        // per-note diagram-count and per-diagram source-byte budgets;
-        // over-budget blocks degrade to a typed RenderFailed with
-        // source, position, and description intact.
-        Ok(crate::diagram::render_diagram_blocks(&raws))
+        // per-note count, per-diagram source and output, and
+        // aggregate retention budgets; over-budget blocks degrade to
+        // a typed RenderFailed with source, position, and description
+        // intact. The lock is NOT held across rendering — a second
+        // caller may render concurrently and last-write-wins, which
+        // is correct for a content-keyed cache.
+        #[cfg(test)]
+        self.diagram_render_passes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let blocks = crate::diagram::render_diagram_blocks(&raws);
+        *self
+            .diagram_cache
+            .lock()
+            .expect("diagram_cache mutex poisoned") =
+            Some((path.to_owned(), source_hash, blocks.clone()));
+        Ok(blocks)
     }
 
     /// Ordered whole-document block segmentation for the reading view

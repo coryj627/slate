@@ -149,28 +149,79 @@ pub const MAX_RENDERED_DIAGRAMS_PER_NOTE: usize = 2_000;
 /// diagram approaches 64 KiB.
 pub const MAX_DIAGRAM_SOURCE_BYTES: usize = 64 * 1024;
 
+/// Per-diagram OUTPUT cap, checked after the renderer returns
+/// (round 1: the source cap does not bound the EXPANSION — a small
+/// source can legally render a large SVG, and 2,000 of them would
+/// cross the FFI as gigabytes). Real Mermaid SVGs are tens of
+/// kilobytes; over-cap output is dropped and the block degrades to
+/// the typed shape with description and source intact.
+pub const MAX_DIAGRAM_SVG_BYTES: usize = 2 * 1024 * 1024;
+
+/// Aggregate retained-SVG cap per call: the total artifact payload a
+/// single `get_diagram_blocks` may marshal. Once drained, later
+/// blocks keep description and source but carry no SVG.
+pub const MAX_RETAINED_SVG_BYTES_PER_NOTE: usize = 8 * 1024 * 1024;
+
+/// The per-call budget set, injectable for tests.
+#[derive(Debug, Clone, Copy)]
+struct DiagramBudgets {
+    max_rendered: usize,
+    max_source_bytes: usize,
+    max_svg_bytes: usize,
+    max_retained_svg_bytes: usize,
+}
+
+impl Default for DiagramBudgets {
+    fn default() -> Self {
+        Self {
+            max_rendered: MAX_RENDERED_DIAGRAMS_PER_NOTE,
+            max_source_bytes: MAX_DIAGRAM_SOURCE_BYTES,
+            max_svg_bytes: MAX_DIAGRAM_SVG_BYTES,
+            max_retained_svg_bytes: MAX_RETAINED_SVG_BYTES_PER_NOTE,
+        }
+    }
+}
+
 /// Render every extracted block under the per-note budgets — the
 /// bounded entry `VaultSession::get_diagram_blocks` uses.
 pub fn render_diagram_blocks(raws: &[RawDiagramBlock]) -> Vec<DiagramBlock> {
-    render_diagram_blocks_bounded(raws, MAX_RENDERED_DIAGRAMS_PER_NOTE)
+    render_diagram_blocks_bounded(raws, DiagramBudgets::default())
 }
 
-/// Budget mechanism, injectable so the count cap is testable without
-/// pushing thousands of renders through the renderer.
+/// Budget mechanism, injectable so the caps are testable without
+/// pushing thousands of renders (or megabytes of output) through the
+/// renderer. A pathological single render still allocates inside
+/// `mermaid-rs-renderer` for its own call — that library exposes no
+/// bounded sink — but nothing over-cap is RETAINED or marshalled.
 fn render_diagram_blocks_bounded(
     raws: &[RawDiagramBlock],
-    max_rendered: usize,
+    budgets: DiagramBudgets,
 ) -> Vec<DiagramBlock> {
+    let mut retained: usize = 0;
     raws.iter()
         .enumerate()
         .map(|(index, raw)| {
-            if raw.source.len() > MAX_DIAGRAM_SOURCE_BYTES {
-                budget_degraded(raw, "diagram source exceeds the render budget")
-            } else if index >= max_rendered {
-                budget_degraded(raw, "diagram count exceeds the per-note render budget")
-            } else {
-                render_diagram(raw)
+            if raw.source.len() > budgets.max_source_bytes {
+                return budget_degraded(raw, "diagram source exceeds the render budget");
             }
+            if index >= budgets.max_rendered {
+                return budget_degraded(raw, "diagram count exceeds the per-note render budget");
+            }
+            let mut block = render_diagram(raw);
+            if let Some(svg) = &block.svg {
+                if svg.len() > budgets.max_svg_bytes {
+                    return budget_degraded(raw, "diagram output exceeds the render budget");
+                }
+                if retained + svg.len() > budgets.max_retained_svg_bytes {
+                    block.svg = None;
+                    block.render_status = DiagramRenderStatus::RenderFailed {
+                        message: "diagram output exceeds the per-note retention budget".into(),
+                    };
+                    return block;
+                }
+                retained += svg.len();
+            }
+            block
         })
         .collect()
 }
@@ -585,7 +636,13 @@ mod tests {
                 byte_offset: i as u32 * 32,
             })
             .collect();
-        let blocks = render_diagram_blocks_bounded(&raws, 2);
+        let blocks = render_diagram_blocks_bounded(
+            &raws,
+            DiagramBudgets {
+                max_rendered: 2,
+                ..DiagramBudgets::default()
+            },
+        );
         assert_eq!(blocks.len(), 4, "over-budget blocks degrade, never drop");
         assert!(matches!(blocks[1].render_status, DiagramRenderStatus::Ok));
         assert!(blocks[1].svg.is_some());
@@ -600,6 +657,68 @@ mod tests {
         }
         assert_eq!(blocks[3].byte_offset, 96);
         assert_eq!(MAX_RENDERED_DIAGRAMS_PER_NOTE, 2_000);
+    }
+
+    /// Round 1 [high]: the source cap does not bound the EXPANSION —
+    /// per-SVG output and aggregate retention caps stop unbounded
+    /// artifact bytes from being retained or marshalled. Injectable
+    /// budgets keep the fixture small; production values are pinned.
+    #[test]
+    fn render_budget_bounds_svg_output_and_retention() {
+        let _guard = renderer_test_guard();
+        let raws: Vec<RawDiagramBlock> = (0..3)
+            .map(|i| RawDiagramBlock {
+                source: "flowchart LR\nA --> B".to_string(),
+                dialect: DiagramDialect::Mermaid,
+                line: i as u32 + 1,
+                byte_offset: i as u32 * 32,
+            })
+            .collect();
+        let probe = render_diagram(&raws[0]);
+        let svg_len = probe.svg.as_ref().expect("probe renders").len();
+
+        // Per-SVG cap below the real output: every block degrades to
+        // the typed shape and nothing is retained.
+        let capped = render_diagram_blocks_bounded(
+            &raws,
+            DiagramBudgets {
+                max_svg_bytes: svg_len - 1,
+                ..DiagramBudgets::default()
+            },
+        );
+        for block in &capped {
+            assert!(block.svg.is_none());
+            assert!(matches!(
+                block.render_status,
+                DiagramRenderStatus::RenderFailed { .. }
+            ));
+            assert_eq!(block.structured_description, "Flowchart with 1 step.");
+        }
+
+        // Aggregate retention sized for exactly two: the third keeps
+        // description and source but marshals no SVG.
+        let retained = render_diagram_blocks_bounded(
+            &raws,
+            DiagramBudgets {
+                max_retained_svg_bytes: (svg_len * 2) + (svg_len / 2),
+                ..DiagramBudgets::default()
+            },
+        );
+        assert!(retained[0].svg.is_some());
+        assert!(retained[1].svg.is_some());
+        assert!(retained[2].svg.is_none());
+        assert!(matches!(
+            retained[2].render_status,
+            DiagramRenderStatus::RenderFailed { .. }
+        ));
+        assert_eq!(retained[2].structured_description, "Flowchart with 1 step.");
+        assert_eq!(retained[2].source, "flowchart LR\nA --> B");
+
+        // Production caps stay coherent: one SVG can never exceed the
+        // note-wide retention pool.
+        assert!(MAX_DIAGRAM_SVG_BYTES <= MAX_RETAINED_SVG_BYTES_PER_NOTE);
+        assert_eq!(MAX_DIAGRAM_SVG_BYTES, 2 * 1024 * 1024);
+        assert_eq!(MAX_RETAINED_SVG_BYTES_PER_NOTE, 8 * 1024 * 1024);
     }
 
     /// An oversized source degrades BEFORE the renderer runs — and
