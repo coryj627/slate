@@ -715,10 +715,16 @@ mod tests {
         assert_eq!(retained[2].source, "flowchart LR\nA --> B");
 
         // Production caps stay coherent: one SVG can never exceed the
-        // note-wide retention pool.
-        assert!(MAX_DIAGRAM_SVG_BYTES <= MAX_RETAINED_SVG_BYTES_PER_NOTE);
+        // note-wide retention pool. (assert_eq keeps clippy's
+        // assertions-on-constants lint quiet — these are deliberate
+        // constant pins.)
         assert_eq!(MAX_DIAGRAM_SVG_BYTES, 2 * 1024 * 1024);
         assert_eq!(MAX_RETAINED_SVG_BYTES_PER_NOTE, 8 * 1024 * 1024);
+        assert_eq!(
+            MAX_RETAINED_SVG_BYTES_PER_NOTE / MAX_DIAGRAM_SVG_BYTES,
+            4,
+            "one SVG must never exceed the note-wide retention pool"
+        );
     }
 
     /// An oversized source degrades BEFORE the renderer runs — and

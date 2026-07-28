@@ -188,9 +188,12 @@ public static class SurfaceSerializer
 
         // W3-3: the canonical diagram artifact — byte-checks the
         // structured description and render status cross-platform.
-        // SVG bytes ride as SHA-256 + length (the same pure-Rust
-        // renderer runs on both twins, so bytes are deterministic;
-        // the hash keeps artifacts compact and drift loud).
+        // SVG BYTES are deliberately excluded: the renderer's float
+        // text-measurement varies by machine (measured: same-length,
+        // different-digit SVGs between two Windows hosts), so byte
+        // identity would pin an environment, not the contract. The
+        // AT-facing contract IS description/status/source/position;
+        // presence pins that rendering succeeded.
         j.Raw(",\"diagram_blocks\":[");
         var diagramBlocks = session.GetDiagramBlocks(relPath);
         for (int i = 0; i < diagramBlocks.Length; i++)
@@ -209,7 +212,6 @@ public static class SurfaceSerializer
                 _ => throw new InvalidOperationException(
                     $"unmapped DiagramRenderStatus {d.RenderStatus}"),
             };
-            byte[] svg = d.Svg ?? Array.Empty<byte>();
             j.Raw("{\"line\":").Num(d.Line)
              .Raw(",\"offset\":").Num(d.ByteOffset)
              .Raw(",\"dialect\":").Str(
@@ -219,12 +221,8 @@ public static class SurfaceSerializer
              .Raw(",\"source\":").Str(d.Source)
              .Raw(",\"description\":").Str(d.StructuredDescription)
              .Raw(",\"status\":").Str(status)
-             .Raw(",\"svg_len\":").Num((ulong)svg.Length)
-             .Raw(",\"svg_sha256\":").Str(
-                svg.Length == 0
-                    ? ""
-                    : Convert.ToHexString(
-                        System.Security.Cryptography.SHA256.HashData(svg)))
+             .Raw(",\"svg_present\":").Raw(
+                d.Svg is { Length: > 0 } ? "true" : "false")
              .Raw("}");
         }
         j.Raw("]}");

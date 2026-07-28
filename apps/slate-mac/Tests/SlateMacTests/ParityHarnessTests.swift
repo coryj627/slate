@@ -1,7 +1,6 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
-import CryptoKit
 import XCTest
 
 @testable import SlateMac
@@ -229,8 +228,10 @@ final class ParityHarnessTests: XCTestCase {
         j.raw("]")
 
         // W3-3: the canonical diagram artifact — description + render
-        // status byte-checked; SVG bytes ride as SHA-256 + length.
-        // Mirrors SurfaceSerializer.cs — change both together.
+        // status byte-checked. SVG BYTES are deliberately excluded
+        // (machine-dependent float text-measurement); presence pins
+        // that rendering succeeded. Mirrors SurfaceSerializer.cs —
+        // change both together.
         j.raw(",\"diagram_blocks\":[")
         let diagramBlocks = try session.getDiagramBlocks(path: relPath)
         for (i, d) in diagramBlocks.enumerated() {
@@ -241,18 +242,14 @@ final class ParityHarnessTests: XCTestCase {
             case .unsupportedDialect(let reason): status = "unsupported:" + reason
             case .renderFailed(let message): status = "failed:" + message
             }
-            let svg = d.svg ?? Data()
-            let digest = svg.isEmpty
-                ? ""
-                : SHA256.hash(data: svg).map { String(format: "%02X", $0) }.joined()
+            let svgPresent = !(d.svg ?? Data()).isEmpty
             j.raw("{\"line\":").num(UInt64(d.line))
                 .raw(",\"offset\":").num(UInt64(d.byteOffset))
                 .raw(",\"dialect\":").str("mermaid")
                 .raw(",\"source\":").str(d.source)
                 .raw(",\"description\":").str(d.structuredDescription)
                 .raw(",\"status\":").str(status)
-                .raw(",\"svg_len\":").num(UInt64(svg.count))
-                .raw(",\"svg_sha256\":").str(digest)
+                .raw(",\"svg_present\":").raw(svgPresent ? "true" : "false")
                 .raw("}")
         }
         j.raw("]}")
