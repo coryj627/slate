@@ -814,6 +814,108 @@ fn pin_root_identity(
     (None, None)
 }
 
+/// One in-flight diagram render (W3-3 rounds 2–3): waiters attach to
+/// the flight for THEIR key and receive that flight's completed
+/// result, so traffic on other keys can never detach them (the
+/// round-3 finding against a single shared claim slot). `Abandoned`
+/// marks an owner that unwound before completing; waiters retry.
+struct DiagramFlight {
+    state: Mutex<DiagramFlightState>,
+    done: std::sync::Condvar,
+}
+
+enum DiagramFlightState {
+    Pending,
+    Done(Vec<crate::diagram::DiagramBlock>),
+    Abandoned,
+}
+
+/// Completed diagram artifacts, KEYED by (path, source hash) — W3-3
+/// round 5: a single completed slot let an unrelated note's
+/// completion evict a result whose delayed caller was still between
+/// miss and admission, silently re-opening the duplicate-render
+/// path. Keyed entries mean cross-key completions never erase
+/// handoff state; eviction is capacity policy (LRU by entry count
+/// and total SVG payload), not a correctness hole.
+#[derive(Default)]
+struct DiagramCompletedCache {
+    /// LRU order: least-recent first.
+    entries: std::collections::VecDeque<((String, u64), Vec<crate::diagram::DiagramBlock>)>,
+}
+
+/// Entry-count bound: reading refreshes touch a handful of open
+/// notes; eight covers tab groups without letting a vault crawl pin
+/// every note's artifacts.
+const MAX_CACHED_DIAGRAM_NOTES: usize = 8;
+
+/// Payload bound: per-note retention is already capped at 8 MiB
+/// (`MAX_RETAINED_SVG_BYTES_PER_NOTE`); this caps the CACHE's total
+/// SVG bytes so worst-case adversarial notes cannot multiply that by
+/// the entry count.
+const MAX_CACHED_DIAGRAM_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+
+impl DiagramCompletedCache {
+    fn lookup(&mut self, key: &(String, u64)) -> Option<Vec<crate::diagram::DiagramBlock>> {
+        let index = self.entries.iter().position(|(k, _)| k == key)?;
+        // Move-to-back keeps the LRU honest for the hot note.
+        let entry = self.entries.remove(index).expect("index in range");
+        let blocks = entry.1.clone();
+        self.entries.push_back(entry);
+        Some(blocks)
+    }
+
+    fn insert(&mut self, key: (String, u64), blocks: Vec<crate::diagram::DiagramBlock>) {
+        // Round 6: an entry whose RESIDENT size alone busts the budget
+        // is never admitted (callers of that pathological note simply
+        // re-render, already bounded by the per-call budgets) — it
+        // must not flush every other note's entry on its way through.
+        if Self::entry_resident_bytes(&key, &blocks) > MAX_CACHED_DIAGRAM_PAYLOAD_BYTES {
+            return;
+        }
+        self.entries.retain(|(k, _)| k != &key);
+        self.entries.push_back((key, blocks));
+        while self.entries.len() > MAX_CACHED_DIAGRAM_NOTES
+            || (self.entries.len() > 1
+                && self.total_resident_bytes() > MAX_CACHED_DIAGRAM_PAYLOAD_BYTES)
+        {
+            self.entries.pop_front();
+        }
+    }
+
+    /// The COMPLETE retained size (round 6: counting SVG alone let
+    /// eight zero-SVG notes with oversized preserved sources pin
+    /// hundreds of MiB): key, source, description, status strings,
+    /// SVG, and the reserved PNG fallback.
+    fn entry_resident_bytes(key: &(String, u64), blocks: &[crate::diagram::DiagramBlock]) -> usize {
+        key.0.len()
+            + blocks
+                .iter()
+                .map(|b| {
+                    b.source.len()
+                        + b.structured_description.len()
+                        + b.svg.as_ref().map_or(0, Vec::len)
+                        + b.png_fallback.as_ref().map_or(0, Vec::len)
+                        + match &b.render_status {
+                            crate::diagram::DiagramRenderStatus::Ok => 0,
+                            crate::diagram::DiagramRenderStatus::UnsupportedDialect { reason } => {
+                                reason.len()
+                            }
+                            crate::diagram::DiagramRenderStatus::RenderFailed { message } => {
+                                message.len()
+                            }
+                        }
+                })
+                .sum::<usize>()
+    }
+
+    fn total_resident_bytes(&self) -> usize {
+        self.entries
+            .iter()
+            .map(|(key, blocks)| Self::entry_resident_bytes(key, blocks))
+            .sum()
+    }
+}
+
 pub struct VaultSession {
     provider: Arc<dyn VaultProvider>,
     conn: Mutex<Connection>,
@@ -830,6 +932,35 @@ pub struct VaultSession {
     /// through it on every call so a preference change takes
     /// effect immediately.
     math_prefs: Mutex<crate::math::MathPrefs>,
+    /// Single-slot COMPLETED diagram artifact cache keyed on (path,
+    /// source hash) — W3-3 round 1: every reading refresh re-reads
+    /// the SAVED file, which live-buffer typing never changes, yet
+    /// each fetch re-rendered the whole note through the
+    /// process-global serialized renderer. A content-keyed hit turns
+    /// those refreshes into clones. One slot bounds memory (the
+    /// retention budget caps the payload) and covers the hot path:
+    /// repeated refreshes of the note being edited.
+    diagram_cache: Mutex<DiagramCompletedCache>,
+    /// In-flight renders keyed by (path, source hash) — single-flight
+    /// per key (rounds 2–3): concurrent same-key misses share one
+    /// render, and different-key traffic runs its own flight without
+    /// detaching anyone. Entries are removed on completion or unwind,
+    /// so the map is bounded by concurrent distinct fetches.
+    diagram_flights: Mutex<std::collections::HashMap<(String, u64), Arc<DiagramFlight>>>,
+    /// Test seam: cache-miss render passes, so the cache pin can
+    /// prove a repeated fetch renders nothing.
+    #[cfg(test)]
+    pub(crate) diagram_render_passes: AtomicU64,
+    /// Test seam: one-shot injected panic between flight claim and
+    /// render, so the unwind-cleanup pin can prove waiters recover.
+    #[cfg(test)]
+    pub(crate) diagram_render_panic_for_tests: std::sync::atomic::AtomicBool,
+    /// Test seam: one-shot admission gate — a caller that takes it
+    /// blocks BEFORE the atomic admission step until the test
+    /// signals, making delayed-arrival interleavings (rounds 4–6)
+    /// deterministic.
+    #[cfg(test)]
+    pub(crate) diagram_admission_gate_for_tests: Mutex<Option<std::sync::mpsc::Receiver<()>>>,
     /// Citations index — lazy view over `bibliography_entries`.
     /// `set_bibliography_sources` bumps the version so the renderer's
     /// cache invalidates implicitly (see `RenderCache`).
@@ -1873,6 +2004,7 @@ impl VaultSession {
         db::migrate(&mut conn)?;
 
         let math_prefs = Mutex::new(config.math_prefs);
+        let diagram_cache = Mutex::new(DiagramCompletedCache::default());
 
         // Build the initial BibIndex from whatever's already in the
         // bibliography_entries table — empty after a fresh
@@ -1956,6 +2088,14 @@ impl VaultSession {
             compaction_shutdown,
             compaction_join: Mutex::new(Some(compaction_join)),
             math_prefs,
+            diagram_cache,
+            diagram_flights: Mutex::new(std::collections::HashMap::new()),
+            #[cfg(test)]
+            diagram_render_passes: AtomicU64::new(0),
+            #[cfg(test)]
+            diagram_render_panic_for_tests: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(test)]
+            diagram_admission_gate_for_tests: Mutex::new(None),
             bib_index: Mutex::new(bib_index),
             csl_styles: Mutex::new(std::collections::HashMap::new()),
             render_cache: crate::citations::render::RenderCache::default(),
@@ -6557,8 +6697,164 @@ impl VaultSession {
         path: &str,
     ) -> Result<Vec<crate::diagram::DiagramBlock>, VaultError> {
         let source = self.read_text(path)?;
-        let raws = crate::diagram::extract_diagram_blocks(&source);
-        Ok(raws.iter().map(crate::diagram::render_diagram).collect())
+        let source_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            source.hash(&mut hasher);
+            hasher.finish()
+        };
+        let key = (path.to_owned(), source_hash);
+        // Keyed single-flight fill (rounds 2-6): waiters receive
+        // their own flight's result, so traffic on other keys can
+        // never detach them, and cleanup is scoped to the flight it
+        // owns.
+        // Admission is ONE atomic step under the flights lock (lock
+        // order flights -> cache): a caller either sees the completed
+        // result, joins the key's flight, or registers as its owner —
+        // there is no program point where a caller has "observed a
+        // miss" without being registered, so completed-entry eviction
+        // is an honest fresh miss (bounded-cache policy), never a
+        // duplicate-render hole (round 6).
+        loop {
+            // One-shot test gate: suspends a caller here — BEFORE the
+            // atomic admission — so delayed-arrival interleavings are
+            // deterministically testable.
+            #[cfg(test)]
+            {
+                let gate = self
+                    .diagram_admission_gate_for_tests
+                    .lock()
+                    .expect("diagram admission gate poisoned")
+                    .take();
+                if let Some(gate) = gate {
+                    let _ = gate.recv();
+                }
+            }
+            let (flight, owner) = {
+                let mut flights = self
+                    .diagram_flights
+                    .lock()
+                    .expect("diagram_flights mutex poisoned");
+                if let Some(blocks) = self
+                    .diagram_cache
+                    .lock()
+                    .expect("diagram_cache mutex poisoned")
+                    .lookup(&key)
+                {
+                    return Ok(blocks);
+                }
+                match flights.get(&key) {
+                    Some(flight) => (Arc::clone(flight), false),
+                    None => {
+                        let flight = Arc::new(DiagramFlight {
+                            state: Mutex::new(DiagramFlightState::Pending),
+                            done: std::sync::Condvar::new(),
+                        });
+                        flights.insert(key.clone(), Arc::clone(&flight));
+                        (flight, true)
+                    }
+                }
+            };
+            if !owner {
+                let mut state = flight
+                    .state
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                loop {
+                    match &*state {
+                        DiagramFlightState::Pending => {
+                            state = flight
+                                .done
+                                .wait(state)
+                                .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        }
+                        DiagramFlightState::Done(blocks) => return Ok(blocks.clone()),
+                        // The owner unwound before completing: retry
+                        // from the top (rare; the next pass creates a
+                        // fresh flight).
+                        DiagramFlightState::Abandoned => break,
+                    }
+                }
+                continue;
+            }
+
+            // Owner path. Unwind guard: a panic between claim and
+            // completion must mark THIS flight abandoned and remove
+            // exactly this entry - never anyone else's.
+            struct FlightGuard<'a> {
+                session: &'a VaultSession,
+                key: &'a (String, u64),
+                flight: &'a Arc<DiagramFlight>,
+                armed: bool,
+            }
+            impl Drop for FlightGuard<'_> {
+                fn drop(&mut self) {
+                    if self.armed {
+                        *self
+                            .flight
+                            .state
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                            DiagramFlightState::Abandoned;
+                        self.flight.done.notify_all();
+                        self.session
+                            .diagram_flights
+                            .lock()
+                            .expect("diagram_flights mutex poisoned")
+                            .remove(self.key);
+                    }
+                }
+            }
+            let mut guard = FlightGuard {
+                session: self,
+                key: &key,
+                flight: &flight,
+                armed: true,
+            };
+
+            #[cfg(test)]
+            if self
+                .diagram_render_panic_for_tests
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                panic!("diagram render panic injected for tests");
+            }
+            let raws = crate::diagram::extract_diagram_blocks(&source);
+            // Bounded per call (W3-3, the math render-budget
+            // precedent): per-note count, per-diagram source and
+            // output, and aggregate retention budgets; over-budget
+            // blocks degrade to a typed RenderFailed with source,
+            // position, and description intact. No lock is held
+            // across rendering.
+            #[cfg(test)]
+            self.diagram_render_passes
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let blocks = crate::diagram::render_diagram_blocks(&raws);
+
+            {
+                let mut flights = self
+                    .diagram_flights
+                    .lock()
+                    .expect("diagram_flights mutex poisoned");
+                // Publish BEFORE removal, atomically with it (round
+                // 4): admission rechecks the cache under this same
+                // lock, so "no flight" always implies "result
+                // published".
+                self.diagram_cache
+                    .lock()
+                    .expect("diagram_cache mutex poisoned")
+                    .insert(key.clone(), blocks.clone());
+                flights.remove(&key);
+            }
+            *flight
+                .state
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                DiagramFlightState::Done(blocks.clone());
+            flight.done.notify_all();
+            guard.armed = false;
+            return Ok(blocks);
+        }
     }
 
     /// Ordered whole-document block segmentation for the reading view

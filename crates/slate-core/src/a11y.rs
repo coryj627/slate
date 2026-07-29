@@ -65,6 +65,8 @@ pub enum ReadingNavTarget {
     CodeBlock,
     /// W3-2: math blocks (the `M` chord).
     Math,
+    /// W3-3: diagram blocks (the `D` chord).
+    Diagram,
 }
 
 impl ReadingNavTarget {
@@ -79,6 +81,7 @@ impl ReadingNavTarget {
             Embed => "embed".to_owned(),
             CodeBlock => "code block".to_owned(),
             Math => "math".to_owned(),
+            Diagram => "diagram".to_owned(),
         }
     }
 }
@@ -1269,6 +1272,18 @@ pub fn corpus() -> Vec<A11yEvent> {
             // from the landed block — content, not composition.
             text: "x equals negative b plus or minus the square root of b squared minus 4 a c, over 2 a".into(),
         },
+        ReadingNavNoTarget {
+            target: ReadingNavTarget::Diagram,
+            forward: true,
+        },
+        ReadingNavLanded {
+            target: ReadingNavTarget::Diagram,
+            // The landing text is the canonical structured description
+            // the host captured from the landed block, trailing period
+            // stripped so the vocabulary's own punctuation composes —
+            // content, not composition.
+            text: "Flowchart with 3 steps".into(),
+        },
         ReadingNavLanded {
             target: ReadingNavTarget::Embed,
             text: "".into(),
@@ -1520,6 +1535,8 @@ mod tests {
                 "x equals negative b plus or minus the square root of b squared \
                  minus 4 a c, over 2 a, math.",
             ),
+            (Medium, "No next diagram."),
+            (Medium, "Flowchart with 3 steps, diagram."),
             (Medium, "Embed."),
             (High, "Composed by a host engine."),
         ];

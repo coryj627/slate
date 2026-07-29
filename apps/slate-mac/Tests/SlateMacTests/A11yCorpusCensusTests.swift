@@ -208,6 +208,8 @@ final class A11yCorpusCensusTests: XCTestCase {
             .readingNavLanded(
                 target: .math,
                 text: "x equals negative b plus or minus the square root of b squared minus 4 a c, over 2 a"),
+            .readingNavNoTarget(target: .diagram, forward: true),
+            .readingNavLanded(target: .diagram, text: "Flowchart with 3 steps"),
             .readingNavLanded(target: .embed, text: ""),
             .hostComposed(text: "Composed by a host engine.", priority: .high),
         ]

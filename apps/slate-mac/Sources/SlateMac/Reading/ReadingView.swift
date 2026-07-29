@@ -412,11 +412,11 @@ struct ReadingView: View {
         case .mathBlock:
             // Existing view, reused: MathCAT speech as the AX label.
             MathView(block: mathModel(block, lineStarts: lineStarts))
-        case .diagram(let dialect, _):
-            // The unmatched-diagram fallback renders the raw fenced `source`
-            // (delimiters and all) as labeled monospace — it never derived an
-            // interior, so the authoritative `interior` isn't needed here.
-            diagramView(block, dialect: dialect)
+        case .diagram(let dialect, let interior):
+            // The authoritative interior drives live-source coherence
+            // (W3-3): a matched artifact must still EQUAL the live
+            // fence, not merely contain its byte offset.
+            diagramView(block, dialect: dialect, interior: interior)
         case .table:
             // Cells come from the Rust segmentation API (#510) — the honest
             // grid, no Swift-side pipe parser (no-second-classifier). On nil
@@ -695,16 +695,24 @@ struct ReadingView: View {
     }
 
     @ViewBuilder
-    private func diagramView(_ block: ReadingBlock, dialect: String) -> some View {
+    private func diagramView(
+        _ block: ReadingBlock, dialect: String, interior: String
+    ) -> some View {
         if let matched = context.diagramBlocks.first(where: {
             contains(block, byteOffset: $0.byteOffset)
+                && ReadingDiagramCoherence.isCoherent(
+                    artifactSource: $0.source, interior: interior)
         }) {
             // Existing view, reused: backend structured description as the
             // AX label, rendered SVG when available.
             MermaidView(block: matched)
         } else {
             // No pipeline model to hand MermaidView (fabricating a "render
-            // failed" status would misinform AT users). Raw source, labeled.
+            // failed" status would misinform AT users) — either no artifact
+            // exists, or a same-position unsaved edit made the saved one
+            // stale (W3-3: showing the old SVG and speaking its old
+            // description would misinform AT users; the Windows twin
+            // guards identically). Raw source, labeled.
             rawSourceBlock(block.source, axLabel: "Diagram, \(dialect).")
         }
     }

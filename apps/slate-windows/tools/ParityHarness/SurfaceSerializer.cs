@@ -184,6 +184,47 @@ public static class SurfaceSerializer
              .Raw(",\"braille_hex\":").Str(Convert.ToHexString(m.Braille))
              .Raw("}");
         }
+        j.Raw("]");
+
+        // W3-3: the canonical diagram artifact — byte-checks the
+        // structured description and render status cross-platform.
+        // SVG BYTES are deliberately excluded: the renderer's float
+        // text-measurement varies by machine (measured: same-length,
+        // different-digit SVGs between two Windows hosts), so byte
+        // identity would pin an environment, not the contract. The
+        // AT-facing contract IS description/status/source/position;
+        // presence pins that rendering succeeded.
+        j.Raw(",\"diagram_blocks\":[");
+        var diagramBlocks = session.GetDiagramBlocks(relPath);
+        for (int i = 0; i < diagramBlocks.Length; i++)
+        {
+            var d = diagramBlocks[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            string status = d.RenderStatus switch
+            {
+                DiagramRenderStatus.Ok => "ok",
+                DiagramRenderStatus.UnsupportedDialect u =>
+                    "unsupported:" + u.Reason,
+                DiagramRenderStatus.RenderFailed f => "failed:" + f.Message,
+                _ => throw new InvalidOperationException(
+                    $"unmapped DiagramRenderStatus {d.RenderStatus}"),
+            };
+            j.Raw("{\"line\":").Num(d.Line)
+             .Raw(",\"offset\":").Num(d.ByteOffset)
+             .Raw(",\"dialect\":").Str(
+                d.Dialect == DiagramDialect.Mermaid ? "mermaid"
+                    : throw new InvalidOperationException(
+                        $"unmapped DiagramDialect {d.Dialect}"))
+             .Raw(",\"source\":").Str(d.Source)
+             .Raw(",\"description\":").Str(d.StructuredDescription)
+             .Raw(",\"status\":").Str(status)
+             .Raw(",\"svg_present\":").Raw(
+                d.Svg is { Length: > 0 } ? "true" : "false")
+             .Raw("}");
+        }
         j.Raw("]}");
         return j + "\n";
     }

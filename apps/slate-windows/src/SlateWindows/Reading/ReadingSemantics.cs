@@ -24,11 +24,17 @@ internal static class ReadingSemantics
         CodeBlock,
         CodeCopy,
         MathBlock,
+        DiagramBlock,
     }
 
     private static readonly DependencyProperty MathSpeechProperty =
         DependencyProperty.RegisterAttached(
             "ReadingMathSpeech", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty DiagramDescriptionProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingDiagramDescription", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
 
     private static readonly DependencyProperty MarkerProperty =
@@ -97,6 +103,21 @@ internal static class ReadingSemantics
 
     public static string MathSpeechOf(Paragraph paragraph) =>
         paragraph.GetValue(MathSpeechProperty) as string ?? string.Empty;
+
+    /// <summary>Diagram block (W3-3): the marker carries the canonical
+    /// structured description so the landmark walk and the caret
+    /// activation path announce content, not composition.</summary>
+    public static void MarkDiagramBlock(Paragraph paragraph, string description)
+    {
+        paragraph.SetValue(MarkerProperty, Marker.DiagramBlock);
+        paragraph.SetValue(DiagramDescriptionProperty, description);
+    }
+
+    public static bool IsDiagramBlock(Paragraph paragraph) =>
+        Equals(paragraph.GetValue(MarkerProperty), Marker.DiagramBlock);
+
+    public static string DiagramDescriptionOf(Paragraph paragraph) =>
+        paragraph.GetValue(DiagramDescriptionProperty) as string ?? string.Empty;
 
     public static bool IsCodeCopy(DependencyObject element) =>
         Equals(element.GetValue(MarkerProperty), Marker.CodeCopy);

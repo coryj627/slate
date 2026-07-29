@@ -225,6 +225,33 @@ final class ParityHarnessTests: XCTestCase {
                     m.braille.map { String(format: "%02X", $0) }.joined())
                 .raw("}")
         }
+        j.raw("]")
+
+        // W3-3: the canonical diagram artifact — description + render
+        // status byte-checked. SVG BYTES are deliberately excluded
+        // (machine-dependent float text-measurement); presence pins
+        // that rendering succeeded. Mirrors SurfaceSerializer.cs —
+        // change both together.
+        j.raw(",\"diagram_blocks\":[")
+        let diagramBlocks = try session.getDiagramBlocks(path: relPath)
+        for (i, d) in diagramBlocks.enumerated() {
+            if i > 0 { j.raw(",") }
+            let status: String
+            switch d.renderStatus {
+            case .ok: status = "ok"
+            case .unsupportedDialect(let reason): status = "unsupported:" + reason
+            case .renderFailed(let message): status = "failed:" + message
+            }
+            let svgPresent = !(d.svg ?? Data()).isEmpty
+            j.raw("{\"line\":").num(UInt64(d.line))
+                .raw(",\"offset\":").num(UInt64(d.byteOffset))
+                .raw(",\"dialect\":").str("mermaid")
+                .raw(",\"source\":").str(d.source)
+                .raw(",\"description\":").str(d.structuredDescription)
+                .raw(",\"status\":").str(status)
+                .raw(",\"svg_present\":").raw(svgPresent ? "true" : "false")
+                .raw("}")
+        }
         j.raw("]}")
         return j.output + "\n"
     }
