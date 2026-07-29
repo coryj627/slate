@@ -456,6 +456,17 @@ internal sealed class ReadingSurface : RichTextBox
                 ReadingSemantics.DiagramDescriptionOf(diagramParagraph)));
             return true;
         }
+        // Embed card header at the caret (W3-5): Enter activates the
+        // card — a chord landing rests the caret ON the header, and a
+        // caret position is not element focus (the W3-1 lesson), so
+        // the Jump button's own key handling never fires for it.
+        if (CaretPosition?.Paragraph is { } embedParagraph
+            && ReadingSemantics.EmbedHeaderKeyOf(embedParagraph) is { } embedKey
+            && _model is { } embedModel)
+        {
+            embedModel.Activate(new uniffi.slate_uniffi.ReadingInlineRunKind.Embed(embedKey));
+            return true;
+        }
         return false;
     }
 

@@ -37,6 +37,16 @@ internal static class ReadingSemantics
             "ReadingDiagramDescription", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
 
+    private static readonly DependencyProperty EmbedNameProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedName", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty EmbedKeyProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedKey", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
     private static readonly DependencyProperty MarkerProperty =
         DependencyProperty.RegisterAttached(
             "ReadingMarker", typeof(Marker?), typeof(ReadingSemantics),
@@ -64,6 +74,30 @@ internal static class ReadingSemantics
 
     public static void MarkEmbed(BlockUIContainer container) =>
         container.SetValue(MarkerProperty, Marker.Embed);
+
+    /// <summary>Embed card (W3-5): the marker carries the mac-shaped
+    /// header name so the landmark walk announces content, not a
+    /// cache key.</summary>
+    public static void MarkEmbed(Section section, string name)
+    {
+        section.SetValue(MarkerProperty, Marker.Embed);
+        section.SetValue(EmbedNameProperty, name);
+    }
+
+    public static bool IsEmbedSection(Section section) =>
+        Equals(section.GetValue(MarkerProperty), Marker.Embed);
+
+    public static string EmbedNameOf(Section section) =>
+        section.GetValue(EmbedNameProperty) as string ?? string.Empty;
+
+    /// <summary>An embed card's header paragraph carries its cache
+    /// key so Enter-at-caret can activate the card (a caret position
+    /// is not element focus — the W3-1 lesson).</summary>
+    public static void MarkEmbedHeader(Paragraph paragraph, string key) =>
+        paragraph.SetValue(EmbedKeyProperty, key);
+
+    public static string? EmbedHeaderKeyOf(Paragraph paragraph) =>
+        paragraph.GetValue(EmbedKeyProperty) as string;
 
     public static void MarkCodeBlock(Paragraph paragraph) =>
         paragraph.SetValue(MarkerProperty, Marker.CodeBlock);

@@ -554,6 +554,24 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// <see cref="MathFaultForTests"/>.</summary>
     internal Func<Exception?>? DiagramFaultForTests { get; set; }
 
+    /// <summary>Embed-resolution fault seam (W3-5), mirroring the
+    /// other artifact seams. Fired once per resolved key.</summary>
+    internal Func<Exception?>? EmbedFaultForTests { get; set; }
+
+    /// <summary>Per-note embed-resolution budgets (W3-5): each
+    /// preview call is already core-bounded (64 KiB text / 128 nodes
+    /// / 8 MiB image, cumulative per key), but a note can hold
+    /// thousands of embed paragraphs — the count cap bounds FFI round
+    /// trips and the image pool bounds bytes held by the fetch
+    /// result. Over-budget keys degrade to header-only cards that
+    /// still activate; nothing is silently absent.</summary>
+    internal const int MaximumResolvedEmbedsPerNote = 128;
+
+    /// <summary>See <see cref="MaximumResolvedEmbedsPerNote"/> —
+    /// cumulative image-byte pool across the note's resolved
+    /// embeds.</summary>
+    internal const int FetchedEmbedImageByteBudget = 16 * 1024 * 1024;
+
     /// <summary>Background-safe: FFI only, no WPF objects.</summary>
     private FetchResult Fetch(VaultSession session, string path, string text)
     {
@@ -620,6 +638,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ReadingBlock[] blocks = SlateUniffiMethods.ReadingBlocksSource(text);
         ReadingBlockInlines[] inlines = SlateUniffiMethods.ReadingInlineSegmentsSource(
             text, citations, records);
+        ReadingEmbedArtifact[] embeds = FetchEmbedResolutions(
+            session, path, records, inlines);
         // The artifact digest hashes the COMPLETE artifact sets, so
         // it belongs here on the fetch task, not on the dispatcher at
         // publication (round 5: a dense note made the memo key itself
@@ -627,7 +647,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         string artifactDigest =
             CodeArtifactDigest(codeBlocks, codeFetchDegraded)
             + "|" + MathArtifactDigest(mathBlocks, mathFetchDegraded)
-            + "|" + DiagramArtifactDigest(diagramBlocks, diagramFetchDegraded);
+            + "|" + DiagramArtifactDigest(diagramBlocks, diagramFetchDegraded)
+            + "|" + EmbedArtifactDigest(embeds);
         return new FetchResult(
             text,
             citations,
@@ -639,9 +660,91 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             mathFetchDegraded,
             diagramBlocks,
             diagramFetchDegraded,
+            embeds,
             blocks,
             inlines,
             artifactDigest);
+    }
+
+    /// <summary>
+    /// W3-5: block-embed cards resolve their content HERE, on the
+    /// fetch task — the projection pipeline IS the async layer, so
+    /// the card never needs mac's loading state machine. Resolution
+    /// is BOUNDED (core preview budgets per key + the per-note count
+    /// and image pools) and degrades PER KEY: an FFI failure or an
+    /// over-budget key yields a header-only card that still
+    /// activates, never a failed projection. Alt text threads from
+    /// the embed's own link record (the mac batch precedent — its
+    /// per-key fallback loses the alt; this path never does), last
+    /// same-key record winning as on mac.
+    /// </summary>
+    private ReadingEmbedArtifact[] FetchEmbedResolutions(
+        VaultSession session,
+        string path,
+        OutgoingLink[] records,
+        ReadingBlockInlines[] inlines)
+    {
+        var keys = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (ReadingBlockInlines blockInlines in inlines)
+        {
+            if (blockInlines.BlockEmbedKey is { Length: > 0 } key && seen.Add(key))
+            {
+                keys.Add(key);
+            }
+        }
+        if (keys.Count == 0)
+        {
+            return Array.Empty<ReadingEmbedArtifact>();
+        }
+        var altByKey = new Dictionary<string, string?>(StringComparer.Ordinal);
+        foreach (OutgoingLink record in records)
+        {
+            if (record.IsEmbed)
+            {
+                altByKey[SlateUniffiMethods.ReadingEmbedKey(
+                    record.TargetRaw, record.TargetAnchor)] = record.DisplayText;
+            }
+        }
+        var artifacts = new List<ReadingEmbedArtifact>(keys.Count);
+        int resolved = 0;
+        long imagePool = FetchedEmbedImageByteBudget;
+        foreach (string key in keys)
+        {
+            altByKey.TryGetValue(key, out string? alt);
+            if (resolved >= MaximumResolvedEmbedsPerNote)
+            {
+                artifacts.Add(new ReadingEmbedArtifact(key, alt, null));
+                continue;
+            }
+            EmbedPreviewResolution? resolution;
+            try
+            {
+                if (EmbedFaultForTests?.Invoke() is { } fault)
+                {
+                    throw fault;
+                }
+                resolution = session.ResolveEmbedPreview(path, key, alt);
+                resolved++;
+            }
+            catch (VaultException)
+            {
+                resolution = null;
+            }
+            if (resolution?.Resolution is EmbedResolution.Image image)
+            {
+                if (image.Bytes.Length > imagePool)
+                {
+                    resolution = null;
+                }
+                else
+                {
+                    imagePool -= image.Bytes.Length;
+                }
+            }
+            artifacts.Add(new ReadingEmbedArtifact(key, alt, resolution));
+        }
+        return artifacts.ToArray();
     }
 
     /// <summary>
@@ -765,8 +868,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         CodeBlock[] codeBlocks = fetched.CodeBlocks;
         MathBlock[] mathBlocks = fetched.MathBlocks;
         DiagramBlock[] diagramBlocks = fetched.DiagramBlocks;
+        ReadingEmbedArtifact[] embeds = fetched.Embeds;
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
-            model.GetRange(0, firstEnd), context, codeBlocks, mathBlocks, diagramBlocks);
+            model.GetRange(0, firstEnd), context, codeBlocks, mathBlocks, diagramBlocks,
+            embeds);
 
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
@@ -792,7 +897,9 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             while (index < renderLimit)
             {
                 int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-                AppendFragment(model, index, end, context, codeBlocks, mathBlocks, diagramBlocks);
+                AppendFragment(
+                    model, index, end, context, codeBlocks, mathBlocks, diagramBlocks,
+                    embeds);
                 index = end;
             }
             FinishPublish(key, degraded, renderLimit, streamed: true);
@@ -803,7 +910,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 generation,
                 () => ContinueBuild(
                     generation, model, firstEnd, renderLimit, key, degraded, context,
-                    codeBlocks, mathBlocks, diagramBlocks)),
+                    codeBlocks, mathBlocks, diagramBlocks, embeds)),
             DispatcherPriority.Background);
     }
 
@@ -859,7 +966,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ReadingListBuildContext context,
         CodeBlock[] codeBlocks,
         MathBlock[] mathBlocks,
-        DiagramBlock[] diagramBlocks)
+        DiagramBlock[] diagramBlocks,
+        ReadingEmbedArtifact[] embeds)
     {
         if (_disposed || generation != _generation)
         {
@@ -870,7 +978,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             throw fault;
         }
         int end = Math.Min(index + BuildChunkBlocks, renderLimit);
-        AppendFragment(model, index, end, context, codeBlocks, mathBlocks, diagramBlocks);
+        AppendFragment(
+            model, index, end, context, codeBlocks, mathBlocks, diagramBlocks, embeds);
         if (end < renderLimit)
         {
             _ = _dispatcher!.InvokeAsync(
@@ -878,7 +987,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     generation,
                     () => ContinueBuild(
                         generation, model, end, renderLimit, key, degraded, context,
-                        codeBlocks, mathBlocks, diagramBlocks)),
+                        codeBlocks, mathBlocks, diagramBlocks, embeds)),
                 DispatcherPriority.Background);
             return;
         }
@@ -892,11 +1001,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         ReadingListBuildContext context,
         CodeBlock[] codeBlocks,
         MathBlock[] mathBlocks,
-        DiagramBlock[] diagramBlocks) =>
+        DiagramBlock[] diagramBlocks,
+        ReadingEmbedArtifact[] embeds) =>
         BlocksAppended?.Invoke(
             ReadingDocumentBuilder.Build(
                 model.GetRange(index, end - index), context, codeBlocks, mathBlocks,
-                diagramBlocks)
+                diagramBlocks, embeds)
                 .Document);
 
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)
@@ -959,6 +1069,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         bool MathFetchDegraded,
         DiagramBlock[] DiagramBlocks,
         bool DiagramFetchDegraded,
+        ReadingEmbedArtifact[] Embeds,
         ReadingBlock[] Blocks,
         ReadingBlockInlines[] Inlines,
         string ArtifactDigest);
@@ -1014,7 +1125,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         foreach (CodeBlock block in blocks)
         {
             DigestField(hash, block.ByteOffset.ToString());
-            DigestField(hash, block.Language);
+            DigestField(hash, block.Language ?? string.Empty);
             DigestField(hash, block.Source);
             foreach (SyntaxToken token in block.Tokens)
             {
@@ -1079,6 +1190,70 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             hash.AppendData(BlockSeparator);
         }
         return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    /// <summary>The embed analog (W3-5): content-complete over each
+    /// key's resolution tree (kind, targets, text, truncation, nested
+    /// raw targets, image bytes); a per-key degraded resolution is
+    /// its own identity so recovery always rebuilds.</summary>
+    private static string EmbedArtifactDigest(ReadingEmbedArtifact[] embeds)
+    {
+        using var hash = System.Security.Cryptography.IncrementalHash.CreateHash(
+            System.Security.Cryptography.HashAlgorithmName.SHA256);
+        foreach (ReadingEmbedArtifact embed in embeds)
+        {
+            DigestField(hash, embed.Key);
+            DigestField(hash, embed.Alt ?? string.Empty);
+            if (embed.Resolution is null)
+            {
+                DigestField(hash, "embed-degraded");
+            }
+            else
+            {
+                DigestField(hash, embed.Resolution.Truncated ? "truncated" : "complete");
+                DigestResolution(hash, embed.Resolution.Resolution);
+            }
+            hash.AppendData(BlockSeparator);
+        }
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private static void DigestResolution(
+        System.Security.Cryptography.IncrementalHash hash, EmbedResolution resolution)
+    {
+        switch (resolution)
+        {
+            case EmbedResolution.FullNote fullNote:
+                DigestField(hash, "note:" + fullNote.TargetPath);
+                DigestField(hash, fullNote.Text);
+                foreach (NestedEmbed nested in fullNote.Nested)
+                {
+                    DigestField(hash, nested.RawTarget);
+                    DigestResolution(hash, nested.Resolution);
+                }
+                break;
+            case EmbedResolution.Section section:
+                DigestField(hash, "section:" + section.TargetPath + "#" + section.Heading);
+                DigestField(hash, section.Text);
+                foreach (NestedEmbed nested in section.Nested)
+                {
+                    DigestField(hash, nested.RawTarget);
+                    DigestResolution(hash, nested.Resolution);
+                }
+                break;
+            case EmbedResolution.Block block:
+                DigestField(hash, "block:" + block.TargetPath + "^" + block.BlockId);
+                DigestField(hash, block.Text);
+                break;
+            case EmbedResolution.Image image:
+                DigestField(hash, "image:" + image.TargetPath + ":" + image.Mime);
+                hash.AppendData(image.Bytes);
+                hash.AppendData(FieldSeparator);
+                break;
+            case EmbedResolution.Unresolved unresolved:
+                DigestField(hash, "unresolved:" + unresolved.Reason.GetType().Name);
+                break;
+        }
     }
 
     private static readonly byte[] FieldSeparator = { 0x01 };

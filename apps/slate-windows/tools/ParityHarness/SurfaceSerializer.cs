@@ -225,8 +225,114 @@ public static class SurfaceSerializer
                 d.Svg is { Length: > 0 } ? "true" : "false")
              .Raw("}");
         }
+        j.Raw("]");
+
+        // W3-5: the canonical embed-resolution artifact — the first
+        // cross-platform byte-check of resolve_embed_preview. One row
+        // per DISTINCT BlockEmbedKey in document order (the exact set
+        // the reading view resolves into cards), alt deliberately
+        // null: the section pins CORE resolution, not the host's
+        // record-threaded alt. Image bytes ride as length only (the
+        // bytes are fixture content, deterministic by construction).
+        j.Raw(",\"embed_resolutions\":[");
+        var embedKeys = new List<string>();
+        var seenEmbedKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var blockInlines in inlines)
+        {
+            if (blockInlines.BlockEmbedKey is { Length: > 0 } key
+                && seenEmbedKeys.Add(key))
+            {
+                embedKeys.Add(key);
+            }
+        }
+        for (int i = 0; i < embedKeys.Count; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            var preview = session.ResolveEmbedPreview(relPath, embedKeys[i], null);
+            j.Raw("{\"key\":").Str(embedKeys[i])
+             .Raw(",\"truncated\":").Raw(preview.Truncated ? "true" : "false")
+             .Raw(",\"resolution\":");
+            AppendEmbedResolution(j, preview.Resolution);
+            j.Raw("}");
+        }
         j.Raw("]}");
         return j + "\n";
+    }
+
+    private static void AppendEmbedResolution(CanonicalJson j, EmbedResolution resolution)
+    {
+        switch (resolution)
+        {
+            case EmbedResolution.FullNote fullNote:
+                j.Raw("{\"kind\":").Str("note")
+                 .Raw(",\"target\":").Str(fullNote.TargetPath)
+                 .Raw(",\"text\":").Str(fullNote.Text)
+                 .Raw(",\"nested\":[");
+                AppendNestedEmbeds(j, fullNote.Nested);
+                j.Raw("]}");
+                break;
+            case EmbedResolution.Section section:
+                j.Raw("{\"kind\":").Str("section")
+                 .Raw(",\"target\":").Str(section.TargetPath)
+                 .Raw(",\"heading\":").Str(section.Heading)
+                 .Raw(",\"text\":").Str(section.Text)
+                 .Raw(",\"nested\":[");
+                AppendNestedEmbeds(j, section.Nested);
+                j.Raw("]}");
+                break;
+            case EmbedResolution.Block block:
+                j.Raw("{\"kind\":").Str("block")
+                 .Raw(",\"target\":").Str(block.TargetPath)
+                 .Raw(",\"block_id\":").Str(block.BlockId)
+                 .Raw(",\"text\":").Str(block.Text)
+                 .Raw("}");
+                break;
+            case EmbedResolution.Image image:
+                j.Raw("{\"kind\":").Str("image")
+                 .Raw(",\"target\":").Str(image.TargetPath)
+                 .Raw(",\"mime\":").Str(image.Mime)
+                 .Raw(",\"image_len\":").Num((ulong)image.Bytes.Length)
+                 .Raw(",\"alt\":").Str(image.Alt ?? "")
+                 .Raw("}");
+                break;
+            case EmbedResolution.Unresolved unresolved:
+                j.Raw("{\"kind\":").Str("unresolved:" + unresolved.Reason switch
+                {
+                    EmbedUnresolvedReason.TargetNotFound n => "target_not_found:" + n.Target,
+                    EmbedUnresolvedReason.HeadingNotFound h =>
+                        "heading_not_found:" + h.TargetPath + "#" + h.Heading,
+                    EmbedUnresolvedReason.BlockNotFound b =>
+                        "block_not_found:" + b.TargetPath + "^" + b.BlockId,
+                    EmbedUnresolvedReason.DepthLimitReached => "depth_limit",
+                    EmbedUnresolvedReason.ReadError e => "read_error:" + e.Message,
+                    _ => throw new InvalidOperationException(
+                        $"unmapped EmbedUnresolvedReason {unresolved.Reason}"),
+                }).Raw("}");
+                break;
+            default:
+                throw new InvalidOperationException(
+                    $"unmapped EmbedResolution {resolution}");
+        }
+    }
+
+    private static void AppendNestedEmbeds(CanonicalJson j, NestedEmbed[] nested)
+    {
+        for (int i = 0; i < nested.Length; i++)
+        {
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"raw\":").Str(nested[i].RawTarget)
+             .Raw(",\"start\":").Num(nested[i].ByteOffsetInParent)
+             .Raw(",\"end\":").Num(nested[i].ByteEndInParent)
+             .Raw(",\"resolution\":");
+            AppendEmbedResolution(j, nested[i].Resolution);
+            j.Raw("}");
+        }
     }
 
     public static string SemanticKindName(SemanticKind kind) => kind switch

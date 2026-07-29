@@ -22,4 +22,6 @@ an inline `code span`, and a #parity tag.
 
 ### Heading Three
 
+An anchored paragraph the block-embed rows target. ^blk
+
 Final paragraph linking back to [[basic]] itself and to [[missing-target]].

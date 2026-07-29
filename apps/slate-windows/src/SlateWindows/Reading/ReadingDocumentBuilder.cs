@@ -124,7 +124,18 @@ internal static class ReadingDocumentBuilder
         ReadingListBuildContext context,
         IReadOnlyList<CodeBlock> codeBlocks,
         IReadOnlyList<MathBlock> mathBlocks,
-        IReadOnlyList<DiagramBlock> diagramBlocks)
+        IReadOnlyList<DiagramBlock> diagramBlocks) =>
+        Build(
+            model, context, codeBlocks, mathBlocks, diagramBlocks,
+            Array.Empty<ReadingEmbedArtifact>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks,
+        IReadOnlyList<DiagramBlock> diagramBlocks,
+        IReadOnlyList<ReadingEmbedArtifact> embeds)
     {
         var document = new FlowDocument
         {
@@ -146,7 +157,10 @@ internal static class ReadingDocumentBuilder
             if (inlines.BlockEmbedKey is { Length: > 0 } embedKey)
             {
                 stack.Clear();
-                document.Blocks.Add(EmbedCard(embedKey));
+                document.Blocks.Add(EmbedCard(
+                    embedKey,
+                    embeds.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Key, embedKey, StringComparison.Ordinal))));
                 continue;
             }
 
@@ -982,25 +996,273 @@ internal static class ReadingDocumentBuilder
     }
 
     /// <summary>
-    /// The embed card placeholder: a named, invokable button carrying
-    /// core's cache key. The full card state machine (#598/#511 parity)
-    /// is W3-5's; the W3-1 contract is that the card exists, is
-    /// reachable, and activates through <c>ReadingMatchLink</c>.
+    /// The embed card (W3-5, #598/#511 parity): a <see cref="Section"/>
+    /// whose content lives IN the document text range — the W3-1 spike
+    /// measured <c>BlockUIContainer</c> content as silently absent from
+    /// say-all, and an embed a reader cannot hear is a correctness
+    /// failure. The header carries the mac EmbedView name shape, the
+    /// "Jump to source" button keeps the W3-1 activation contract
+    /// (string Tag through the surface's click router), and the body
+    /// renders the CORE-resolved content: text with nested embeds
+    /// spliced as header-only child cards (mac renders nested cards
+    /// collapsed by default; Windows renders exactly that initial
+    /// state, with activation opening the source — recorded
+    /// divergence: no in-place nested expansion), images through the
+    /// hardened decode path, and unresolved shapes with mac's exact
+    /// strings. A null artifact (per-key degraded fetch) is a
+    /// header-only card that still activates — never a dead block.
     /// </summary>
-    private static Block EmbedCard(string key)
+    private static Block EmbedCard(string key, ReadingEmbedArtifact? artifact)
+    {
+        var section = new Section
+        {
+            Padding = new Thickness(10, 6, 10, 6),
+        };
+        section.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
+
+        EmbedResolution? resolution = artifact?.Resolution?.Resolution;
+        string headerName = resolution is null
+            ? $"Embedded note {key}"
+            : EmbedHeaderName(resolution, artifact?.Alt);
+        string headerSuffix = resolution is null
+            ? string.Empty
+            : EmbedHeaderAccessibilitySuffix(resolution);
+
+        var header = new Paragraph
+        {
+            FontWeight = FontWeights.SemiBold,
+            Margin = new Thickness(0),
+        };
+        header.Inlines.Add(new Run(headerName));
+        header.Inlines.Add(new Run("  "));
+        header.Inlines.Add(new InlineUIContainer(
+            JumpToSourceButton(key, headerSuffix)));
+        ReadingSemantics.MarkEmbedHeader(header, key);
+        section.Blocks.Add(header);
+
+        switch (resolution)
+        {
+            case EmbedResolution.FullNote fullNote:
+                AppendEmbedText(section, fullNote.Text, fullNote.Nested);
+                break;
+            case EmbedResolution.Section sectionResolution:
+                AppendEmbedText(
+                    section, sectionResolution.Text, sectionResolution.Nested);
+                break;
+            case EmbedResolution.Block block:
+                AppendEmbedText(section, block.Text, Array.Empty<NestedEmbed>());
+                break;
+            case EmbedResolution.Image image:
+                AppendEmbedImage(section, image);
+                break;
+            case EmbedResolution.Unresolved:
+                // The header name IS the mac unresolved string; the
+                // AX suffix rides the button's HelpText. No body.
+                break;
+            case null:
+                section.Blocks.Add(EmbedBodyParagraph(
+                    "Embed preview unavailable. Activate to open the source."));
+                break;
+        }
+        if (artifact?.Resolution is { Truncated: true })
+        {
+            section.Blocks.Add(EmbedBodyParagraph(
+                "Preview truncated. Open the source note for the full content."));
+        }
+
+        ReadingSemantics.MarkEmbed(section, headerName);
+        return section;
+    }
+
+    /// <summary>The mac EmbedView name shapes, verbatim.</summary>
+    private static string EmbedHeaderName(EmbedResolution resolution, string? alt) =>
+        resolution switch
+        {
+            EmbedResolution.FullNote fullNote =>
+                $"Embedded note: {fullNote.TargetPath}",
+            EmbedResolution.Section section =>
+                $"Embedded section: {section.Heading} from {section.TargetPath}",
+            EmbedResolution.Block block =>
+                $"Embedded block from {block.TargetPath}",
+            EmbedResolution.Image image =>
+                $"Embedded image: {ImageDescriptor(image, alt)}",
+            EmbedResolution.Unresolved unresolved =>
+                UnresolvedEmbedText(unresolved.Reason),
+            _ => "Embedded note",
+        };
+
+    /// <summary>Alt-or-filename (mac audits #196/#198/#419): trimmed
+    /// authored alt when present, else the target's filename.</summary>
+    private static string ImageDescriptor(EmbedResolution.Image image, string? alt)
+    {
+        string? trimmed = (alt ?? image.Alt)?.Trim();
+        if (!string.IsNullOrEmpty(trimmed))
+        {
+            return trimmed;
+        }
+        int slash = image.TargetPath.LastIndexOf('/');
+        return slash >= 0 ? image.TargetPath[(slash + 1)..] : image.TargetPath;
+    }
+
+    /// <summary>The mac visible unresolved strings, verbatim.</summary>
+    private static string UnresolvedEmbedText(EmbedUnresolvedReason reason) =>
+        reason switch
+        {
+            EmbedUnresolvedReason.TargetNotFound notFound =>
+                $"Unresolved embed: {notFound.Target}",
+            EmbedUnresolvedReason.HeadingNotFound heading =>
+                $"Unresolved embed: {heading.TargetPath}#{heading.Heading}",
+            EmbedUnresolvedReason.BlockNotFound block =>
+                $"Unresolved embed: {block.TargetPath}^{block.BlockId}",
+            EmbedUnresolvedReason.DepthLimitReached =>
+                "Unresolved embed: depth limit reached.",
+            EmbedUnresolvedReason.ReadError readError =>
+                $"Unresolved embed: read error — {readError.Message}",
+            _ => "Unresolved embed",
+        };
+
+    /// <summary>The mac AX-only explanatory suffixes, delivered as the
+    /// Jump button's HelpText (on request, never in the reading
+    /// flow).</summary>
+    private static string EmbedHeaderAccessibilitySuffix(EmbedResolution resolution) =>
+        resolution switch
+        {
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.TargetNotFound } =>
+                "The target note or attachment doesn't exist in this vault.",
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.HeadingNotFound } =>
+                "The heading was not found in the target note.",
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.BlockNotFound } =>
+                "The block anchor was not found in the target note.",
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.DepthLimitReached } =>
+                "Further nested embeds inside this one are not rendered.",
+            EmbedResolution.Unresolved { Reason: EmbedUnresolvedReason.ReadError } =>
+                "Reading the target failed.",
+            _ => string.Empty,
+        };
+
+    private static Button JumpToSourceButton(string key, string helpText)
     {
         var button = new Button
         {
-            Content = key,
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Padding = new Thickness(10, 6, 10, 6),
+            Content = "Jump to source",
+            Padding = new Thickness(6, 0, 6, 0),
             Tag = key,
         };
-        AutomationProperties.SetName(button, $"Embedded note {key}");
+        AutomationProperties.SetName(button, $"Jump to source: {key}");
         AutomationProperties.SetAutomationId(button, "ReadingBlockEmbed");
-        var container = new BlockUIContainer(button);
-        ReadingSemantics.MarkEmbed(container);
-        return container;
+        if (helpText.Length > 0)
+        {
+            AutomationProperties.SetHelpText(button, helpText);
+        }
+        return button;
+    }
+
+    /// <summary>
+    /// Body text with nested embeds spliced at their core-supplied
+    /// byte offsets (the host never reconstructs embed grammar):
+    /// plain-text paragraphs split on blank lines, and each nested
+    /// embed as an indented header-only child card.
+    /// </summary>
+    private static void AppendEmbedText(
+        Section section, string text, IReadOnlyList<NestedEmbed> nested)
+    {
+        byte[] utf8 = System.Text.Encoding.UTF8.GetBytes(text);
+        int cursor = 0;
+        foreach (NestedEmbed child in nested.OrderBy(child => child.ByteOffsetInParent))
+        {
+            int start = (int)Math.Min(child.ByteOffsetInParent, (uint)utf8.Length);
+            int end = (int)Math.Min(child.ByteEndInParent, (uint)utf8.Length);
+            if (start > cursor)
+            {
+                AppendEmbedPlainText(
+                    section,
+                    System.Text.Encoding.UTF8.GetString(utf8, cursor, start - cursor));
+            }
+            section.Blocks.Add(NestedEmbedHeader(child));
+            cursor = Math.Max(cursor, end);
+        }
+        if (cursor < utf8.Length)
+        {
+            AppendEmbedPlainText(
+                section,
+                System.Text.Encoding.UTF8.GetString(utf8, cursor, utf8.Length - cursor));
+        }
+    }
+
+    private static void AppendEmbedPlainText(Section section, string text)
+    {
+        foreach (string group in text.Replace("\r\n", "\n").Split(
+            "\n\n", StringSplitOptions.RemoveEmptyEntries))
+        {
+            string trimmed = group.Trim('\n');
+            if (trimmed.Trim().Length == 0)
+            {
+                continue;
+            }
+            section.Blocks.Add(EmbedBodyParagraph(trimmed));
+        }
+    }
+
+    private static Paragraph EmbedBodyParagraph(string text)
+    {
+        var paragraph = new Paragraph { Margin = new Thickness(0, 2, 0, 2) };
+        string[] lines = text.Split('\n');
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (i > 0)
+            {
+                paragraph.Inlines.Add(new LineBreak());
+            }
+            paragraph.Inlines.Add(new Run(lines[i]));
+        }
+        return paragraph;
+    }
+
+    /// <summary>A nested embed rendered in mac's initial (collapsed)
+    /// state: the header line with its own Jump button — activation
+    /// opens the nested source. Deeper resolutions (including the
+    /// core depth-limit marker) surface through the header name.</summary>
+    private static Paragraph NestedEmbedHeader(NestedEmbed child)
+    {
+        string name = EmbedHeaderName(child.Resolution, alt: null);
+        var paragraph = new Paragraph
+        {
+            Margin = new Thickness(24, 2, 0, 2),
+            FontWeight = FontWeights.SemiBold,
+        };
+        paragraph.Inlines.Add(new Run(name));
+        paragraph.Inlines.Add(new Run("  "));
+        paragraph.Inlines.Add(new InlineUIContainer(JumpToSourceButton(
+            child.RawTarget,
+            EmbedHeaderAccessibilitySuffix(child.Resolution))));
+        ReadingSemantics.MarkEmbedHeader(paragraph, child.RawTarget);
+        return paragraph;
+    }
+
+    /// <summary>Image embed body: the hardened decode path (8 MiB /
+    /// 1120 px caps; the note-wide byte pool was charged at fetch),
+    /// peer-suppressed like the diagram image — the header name IS
+    /// the announcement (mac hides the image from AT). Decode failure
+    /// shows mac's exact string.</summary>
+    private static void AppendEmbedImage(Section section, EmbedResolution.Image image)
+    {
+        System.Windows.Media.ImageSource? decoded =
+            EditorInteractionCoordinator.DecodeImage(image.Bytes, image.Mime);
+        if (decoded is null)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(
+                $"Could not decode image. MIME: {image.Mime}. "
+                + "The file may be corrupt or an unsupported codec."));
+            return;
+        }
+        var visual = new ReadingDiagramImage
+        {
+            Source = decoded,
+            Stretch = System.Windows.Media.Stretch.Uniform,
+            StretchDirection = StretchDirection.DownOnly,
+            MaxHeight = 600,
+        };
+        section.Blocks.Add(new BlockUIContainer(visual));
     }
 
     private static Paragraph InlineParagraph(
@@ -1234,6 +1496,17 @@ internal static class ReadingDocumentBuilder
                     text: container.Child is System.Windows.UIElement child
                         ? AutomationProperties.GetName(child) ?? string.Empty
                         : string.Empty));
+                break;
+
+            case Section section when ReadingSemantics.IsEmbedSection(section):
+                // ONE landmark per card, carrying the mac-shaped
+                // header name; the body is plain in-range text and is
+                // deliberately not walked (nested headers are not
+                // separate chord stops — one card, one stop).
+                landmarks.Add(new ReadingLandmark(
+                    ReadingLandmarkKind.Embed,
+                    Insertion(section.ContentStart),
+                    text: ReadingSemantics.EmbedNameOf(section)));
                 break;
 
             case Section section:

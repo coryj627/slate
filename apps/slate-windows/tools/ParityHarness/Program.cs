@@ -35,11 +35,17 @@ if (fixtures == null || outDir == null)
     return 2;
 }
 
-var files = Directory.EnumerateFiles(fixtures, "*.md")
+// EVERY fixture file enters the vault (W3-5: attachment and .canvas
+// targets make embed resolution exercisable); artifacts are still
+// generated per-.md only.
+var allFiles = Directory.EnumerateFiles(fixtures)
     .Select(Path.GetFileName)
     .Where(f => f != null)
     .Select(f => f!)
     .OrderBy(f => f, StringComparer.Ordinal)
+    .ToList();
+var files = allFiles
+    .Where(f => f.EndsWith(".md", StringComparison.Ordinal))
     .ToList();
 if (files.Count == 0)
 {
@@ -53,7 +59,7 @@ string vaultRoot = Path.Combine(Path.GetTempPath(), $"parity-harness-{Guid.NewGu
 Directory.CreateDirectory(vaultRoot);
 try
 {
-    foreach (var f in files)
+    foreach (var f in allFiles)
     {
         File.Copy(Path.Combine(fixtures, f), Path.Combine(vaultRoot, f));
     }

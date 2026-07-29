@@ -118,10 +118,16 @@ public class ParityHarnessCensus
 
     private static void RunHarness(string outDir)
     {
-        var files = Directory.EnumerateFiles(FixturesDir, "*.md")
+        // EVERY fixture file enters the vault (W3-5: attachment and
+        // .canvas targets make embed resolution exercisable);
+        // artifacts are still generated per-.md only.
+        var allFiles = Directory.EnumerateFiles(FixturesDir)
             .Select(Path.GetFileName)
             .Select(f => f!)
             .OrderBy(f => f, StringComparer.Ordinal)
+            .ToList();
+        var files = allFiles
+            .Where(f => f.EndsWith(".md", StringComparison.Ordinal))
             .ToList();
         Assert.NotEmpty(files);
 
@@ -129,7 +135,7 @@ public class ParityHarnessCensus
         Directory.CreateDirectory(vaultRoot);
         try
         {
-            foreach (var f in files)
+            foreach (var f in allFiles)
             {
                 File.Copy(Path.Combine(FixturesDir, f), Path.Combine(vaultRoot, f));
             }
