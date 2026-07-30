@@ -903,30 +903,44 @@ public sealed class ReadingEmbedTests
         });
     }
 
-    /// <summary>Nested image payloads are stripped before retention —
-    /// collapsed child cards never render bytes, and unstripped trees
-    /// bypassed the note-wide pool entirely (round 1 [high]).</summary>
+    /// <summary>Round 4 [high]: a nested image's identity survives
+    /// core's payload elision — the header-only child card titles
+    /// correctly with zero bytes marshalled (the byte-level pin lives
+    /// in core: reading_card_elides_nested_images_and_honors_the_root_pool).</summary>
     [Fact]
-    public void NestedImagePayloadsAreStripped()
+    public void NestedImageCardTitlesWithoutMarshalledBytes()
     {
-        var tree = new EmbedResolution.FullNote(
-            "host.md",
-            "Text ![[pic.png]] more.",
-            new[]
-            {
-                new NestedEmbed(
-                    "pic.png",
-                    5,
-                    17,
-                    new EmbedResolution.Image(
-                        "pic.png", new byte[] { 1, 2, 3 }, "image/png", "alt")),
-            });
-        var stripped = (EmbedResolution.FullNote)
-            ReadingContentViewModel.StripNestedImagePayloads(tree);
-        var nestedImage = (EmbedResolution.Image)stripped.Nested[0].Resolution;
-        Assert.Empty(nestedImage.Bytes);
-        Assert.Equal("image/png", nestedImage.Mime);
-        Assert.Equal("alt", nestedImage.Alt);
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-nested-image");
+            File.WriteAllBytes(
+                Path.Combine(fixture.Root, "pic.png"), TinyPng);
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"),
+                "Around ![[pic.png]] the image.\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "![[target]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            string text = new System.Windows.Documents.TextRange(
+                surface.Document.ContentStart,
+                surface.Document.ContentEnd).Text;
+            Assert.Contains(
+                "Embedded image: pic.png", text, StringComparison.Ordinal);
+            Assert.Contains("Around", text, StringComparison.Ordinal);
+        });
     }
 
     private static IEnumerable<System.Windows.Controls.Button> FindJumpButtons(

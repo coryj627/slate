@@ -1070,3 +1070,61 @@ fn nested_embed_spans_cover_exact_authored_aliases_unicode_and_markdown_images()
         vec!["![[child#Héading|显示😀]]", "![图 alt](pic.png)"]
     );
 }
+
+/// W3-5 round 4 [high]: reading-card resolution never MARSHALS
+/// nested image payloads (identity — mime/alt/target — kept so the
+/// header-only child card titles correctly), and the root payload
+/// honors the caller's note-wide pool with its TRUE size reported
+/// either way. The aggregate bound follows: N keys retain at most
+/// the pool, never N × the per-key allowance.
+#[test]
+fn reading_card_elides_nested_images_and_honors_the_root_pool() {
+    let (_tmp, session) = make_vault(|provider| {
+        provider
+            .write_file("pic.png", &[0x89, b'P', b'N', b'G', 1, 2, 3, 4])
+            .unwrap();
+        provider
+            .write_file("target.md", b"Before ![[pic.png]] after.\n")
+            .unwrap();
+        provider.write_file("host.md", b"![[target]]\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Nested image: payload elided, identity kept, no pool charge.
+    let card = session
+        .resolve_embed_reading_card("host.md", "target", None, 1024)
+        .unwrap();
+    let crate::EmbedResolution::FullNote { nested, .. } = &card.resolution else {
+        panic!("expected FullNote, got {:?}", card.resolution);
+    };
+    let crate::EmbedResolution::Image { bytes, mime, .. } = &nested[0].resolution else {
+        panic!("expected nested Image, got {:?}", nested[0].resolution);
+    };
+    assert!(bytes.is_empty(), "nested payload must not marshal");
+    assert_eq!(mime, "image/png");
+    assert!(!card.image_elided, "the root is a note, not an image");
+    assert_eq!(card.image_len, 0);
+
+    // Root image WITHIN the pool: bytes present, true size reported.
+    let within = session
+        .resolve_embed_reading_card("host.md", "pic.png", None, 1024)
+        .unwrap();
+    let crate::EmbedResolution::Image { bytes, .. } = &within.resolution else {
+        panic!("expected Image, got {:?}", within.resolution);
+    };
+    assert_eq!(bytes.len(), 8);
+    assert_eq!(within.image_len, 8);
+    assert!(!within.image_elided);
+
+    // Root image OVER the pool: elided, true size still reported so
+    // the caller can account honestly.
+    let over = session
+        .resolve_embed_reading_card("host.md", "pic.png", None, 4)
+        .unwrap();
+    let crate::EmbedResolution::Image { bytes, .. } = &over.resolution else {
+        panic!("expected Image, got {:?}", over.resolution);
+    };
+    assert!(bytes.is_empty());
+    assert_eq!(over.image_len, 8);
+    assert!(over.image_elided);
+}

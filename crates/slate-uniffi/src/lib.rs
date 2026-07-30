@@ -1483,6 +1483,23 @@ impl VaultSession {
             .resolve_embed_preview(&host_path, &target, alt)?
             .into())
     }
+
+    /// Resolve one READING-CARD embed (W3-5): preview budgets, nested
+    /// image payloads never marshalled, root image included only when
+    /// it fits `image_budget_bytes` — with its true size reported so
+    /// the caller charges its note-wide pool honestly.
+    pub fn resolve_embed_reading_card(
+        &self,
+        host_path: String,
+        target: String,
+        alt: Option<String>,
+        image_budget_bytes: u64,
+    ) -> Result<EmbedReadingCard, VaultError> {
+        Ok(self
+            .inner
+            .resolve_embed_reading_card(&host_path, &target, alt, image_budget_bytes)?
+            .into())
+    }
     /// Read a binary attachment from the vault. Used by the read-
     /// pane image preview + future "open original" / copy flows.
     /// Returns the raw bytes alongside an inferred MIME type.
@@ -3698,6 +3715,28 @@ impl From<core::EmbedPreviewResolution> for EmbedPreviewResolution {
         Self {
             resolution: preview.resolution.into(),
             truncated: preview.truncated,
+        }
+    }
+}
+
+/// One reading-card resolution (W3-5): nested image payloads are
+/// never marshalled; `image_elided`/`image_len` report the root
+/// payload's budget outcome and true size.
+#[derive(Debug, Clone, uniffi::Record)]
+pub struct EmbedReadingCard {
+    pub resolution: EmbedResolution,
+    pub truncated: bool,
+    pub image_elided: bool,
+    pub image_len: u64,
+}
+
+impl From<core::EmbedReadingCard> for EmbedReadingCard {
+    fn from(card: core::EmbedReadingCard) -> Self {
+        Self {
+            resolution: card.resolution.into(),
+            truncated: card.truncated,
+            image_elided: card.image_elided,
+            image_len: card.image_len,
         }
     }
 }

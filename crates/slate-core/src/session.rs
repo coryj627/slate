@@ -5051,6 +5051,44 @@ impl VaultSession {
         })
     }
 
+    /// Reading-card profile of the preview resolver (W3-5 round 4):
+    /// same cumulative budgets, but nested image payloads are
+    /// stripped BEFORE the result crosses the FFI (reading cards
+    /// render nested embeds header-only — their bytes were pure
+    /// marshalling churn a crafted note could multiply to ~1 GiB per
+    /// refresh), and the root image payload is included only when it
+    /// fits `image_budget_bytes` (the caller's remaining note-wide
+    /// pool). Transient allocation inside this call stays bounded by
+    /// the per-key preview budget; nothing over-budget is retained or
+    /// marshalled.
+    pub fn resolve_embed_reading_card(
+        &self,
+        host_path: &str,
+        target: &str,
+        alt: Option<String>,
+        image_budget_bytes: u64,
+    ) -> Result<crate::embeds::EmbedReadingCard, VaultError> {
+        let mut budget = crate::embeds::EmbedResolveBudget::preview();
+        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        let mut resolution = crate::embeds::strip_nested_image_payloads(resolution);
+        let mut image_elided = false;
+        let mut image_len = 0u64;
+        if let crate::EmbedResolution::Image { bytes, .. } = &mut resolution {
+            image_len = bytes.len() as u64;
+            if image_len > image_budget_bytes {
+                bytes.clear();
+                bytes.shrink_to_fit();
+                image_elided = true;
+            }
+        }
+        Ok(crate::embeds::EmbedReadingCard {
+            resolution,
+            truncated: budget.truncated(),
+            image_elided,
+            image_len,
+        })
+    }
+
     fn resolve_embed_at_depth(
         &self,
         host_path: &str,

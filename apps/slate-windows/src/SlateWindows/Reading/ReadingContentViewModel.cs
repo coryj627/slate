@@ -746,47 +746,32 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             }
             attempts++;
             EmbedPreviewResolution? resolution;
+            bool imageRefused = false;
             try
             {
                 if (EmbedFaultForTests?.Invoke() is { } fault)
                 {
                     throw fault;
                 }
-                resolution = session.ResolveEmbedPreview(path, key, alt);
+                // The reading-card resolver (round 4 [high]): nested
+                // image payloads never cross the FFI (collapsed child
+                // cards render header-only), and the root payload is
+                // included only when it fits the note-wide pool —
+                // core enforces both BEFORE marshalling; the true
+                // size comes back for honest pool accounting.
+                EmbedReadingCard card = session.ResolveEmbedReadingCard(
+                    path, key, alt, (ulong)Math.Max(0, imagePool));
+                imageRefused = card.ImageElided;
+                if (card.Resolution is EmbedResolution.Image && !card.ImageElided)
+                {
+                    imagePool -= (long)card.ImageLen;
+                }
+                resolution = new EmbedPreviewResolution(
+                    card.Resolution, card.Truncated);
             }
             catch (VaultException)
             {
                 resolution = null;
-            }
-            bool imageRefused = false;
-            if (resolution is not null)
-            {
-                // NESTED image payloads are stripped outright: nested
-                // cards render header-only (G25), so their bytes are
-                // pure retention — and they bypassed the pool (round 1
-                // [high]: 128 trees × the core 8 MiB per-key allowance
-                // is ~1 GiB the old accounting never saw).
-                EmbedResolution stripped =
-                    StripNestedImagePayloads(resolution.Resolution);
-                if (stripped is EmbedResolution.Image image
-                    && image.Bytes.Length > 0)
-                {
-                    if (image.Bytes.Length > imagePool)
-                    {
-                        imageRefused = true;
-                        stripped = new EmbedResolution.Image(
-                            image.TargetPath,
-                            Array.Empty<byte>(),
-                            image.Mime,
-                            image.Alt);
-                    }
-                    else
-                    {
-                        imagePool -= image.Bytes.Length;
-                    }
-                }
-                resolution = new EmbedPreviewResolution(
-                    stripped, resolution.Truncated);
             }
             artifacts.Add(new ReadingEmbedArtifact(key, alt, resolution, imageRefused));
         }
@@ -904,54 +889,6 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
     }
 
-    /// <summary>Rebuilds a resolution tree with every NESTED image
-    /// payload emptied — collapsed child cards never render bytes.
-    /// The root image is left intact (its pool charge happens at the
-    /// call site).</summary>
-    internal static EmbedResolution StripNestedImagePayloads(EmbedResolution resolution)
-    {
-        switch (resolution)
-        {
-            case EmbedResolution.FullNote fullNote:
-                return new EmbedResolution.FullNote(
-                    fullNote.TargetPath,
-                    fullNote.Text,
-                    StripNestedArray(fullNote.Nested));
-            case EmbedResolution.Section section:
-                return new EmbedResolution.Section(
-                    section.TargetPath,
-                    section.Heading,
-                    section.Text,
-                    StripNestedArray(section.Nested));
-            default:
-                return resolution;
-        }
-    }
-
-    private static NestedEmbed[] StripNestedArray(NestedEmbed[] nested)
-    {
-        if (nested.Length == 0)
-        {
-            return nested;
-        }
-        var stripped = new NestedEmbed[nested.Length];
-        for (int i = 0; i < nested.Length; i++)
-        {
-            EmbedResolution child = nested[i].Resolution switch
-            {
-                EmbedResolution.Image image when image.Bytes.Length > 0 =>
-                    new EmbedResolution.Image(
-                        image.TargetPath, Array.Empty<byte>(), image.Mime, image.Alt),
-                var other => StripNestedImagePayloads(other),
-            };
-            stripped[i] = new NestedEmbed(
-                nested[i].RawTarget,
-                nested[i].ByteOffsetInParent,
-                nested[i].ByteEndInParent,
-                child);
-        }
-        return stripped;
-    }
 
     /// <summary>
     /// The active-style render, following the editor popover's
