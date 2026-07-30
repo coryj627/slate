@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import CryptoKit
 import XCTest
 
 @testable import SlateMac
@@ -73,16 +74,19 @@ final class ParityHarnessTests: XCTestCase {
     /// .slate/ cache), one artifact per fixture plus search + links.
     private static func runHarness() throws -> [String: Data] {
         let fm = FileManager.default
-        let files = try fm.contentsOfDirectory(atPath: fixturesDir.path)
-            .filter { $0.hasSuffix(".md") }
+        // EVERY fixture file enters the vault (W3-5: attachment and
+        // .canvas targets make embed resolution exercisable);
+        // artifacts are still generated per-.md only.
+        let allFiles = try fm.contentsOfDirectory(atPath: fixturesDir.path)
             .sorted { Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16)) }
+        let files = allFiles.filter { $0.hasSuffix(".md") }
         XCTAssertFalse(files.isEmpty, "no fixtures at \(fixturesDir.path)")
 
         let vaultRoot = fm.temporaryDirectory
             .appendingPathComponent("parity-harness-\(UUID().uuidString)")
         try fm.createDirectory(at: vaultRoot, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: vaultRoot) }
-        for f in files {
+        for f in allFiles {
             try fm.copyItem(
                 at: fixturesDir.appendingPathComponent(f),
                 to: vaultRoot.appendingPathComponent(f))
@@ -252,8 +256,105 @@ final class ParityHarnessTests: XCTestCase {
                 .raw(",\"svg_present\":").raw(svgPresent ? "true" : "false")
                 .raw("}")
         }
+        j.raw("]")
+
+        // W3-5: the canonical embed-resolution artifact — one row per
+        // DISTINCT BlockEmbedKey in document order, alt deliberately
+        // nil (the section pins CORE resolution). Mirrors
+        // SurfaceSerializer.cs — change both together.
+        j.raw(",\"embed_resolutions\":[")
+        var embedKeys: [String] = []
+        var seenEmbedKeys = Set<String>()
+        for blockInlines in inlines {
+            if let key = blockInlines.blockEmbedKey, !key.isEmpty,
+                seenEmbedKeys.insert(key).inserted
+            {
+                embedKeys.append(key)
+            }
+        }
+        for (i, key) in embedKeys.enumerated() {
+            if i > 0 { j.raw(",") }
+            let preview = try session.resolveEmbedPreview(
+                hostPath: relPath, target: key, alt: nil)
+            j.raw("{\"key\":").str(key)
+                .raw(",\"truncated\":").raw(preview.truncated ? "true" : "false")
+                .raw(",\"resolution\":")
+            appendEmbedResolution(j, preview.resolution)
+            j.raw("}")
+        }
         j.raw("]}")
         return j.output + "\n"
+    }
+
+    private static func appendEmbedResolution(
+        _ j: CanonicalJson, _ resolution: EmbedResolution
+    ) {
+        switch resolution {
+        case .fullNote(let targetPath, let text, let nested):
+            j.raw("{\"kind\":").str("note")
+                .raw(",\"target\":").str(targetPath)
+                .raw(",\"text\":").str(text)
+                .raw(",\"nested\":[")
+            appendNestedEmbeds(j, nested)
+            j.raw("]}")
+        case .section(let targetPath, let heading, let text, let nested):
+            j.raw("{\"kind\":").str("section")
+                .raw(",\"target\":").str(targetPath)
+                .raw(",\"heading\":").str(heading)
+                .raw(",\"text\":").str(text)
+                .raw(",\"nested\":[")
+            appendNestedEmbeds(j, nested)
+            j.raw("]}")
+        case .block(let targetPath, let blockId, let text):
+            j.raw("{\"kind\":").str("block")
+                .raw(",\"target\":").str(targetPath)
+                .raw(",\"block_id\":").str(blockId)
+                .raw(",\"text\":").str(text)
+                .raw("}")
+        case .image(let targetPath, let bytes, let mime, let alt):
+            // SHA-256 over the payload — image bytes are vault
+            // CONTENT (unlike machine-dependent diagram SVG), so both
+            // twins must round-trip them byte-identically.
+            let digest = bytes.isEmpty
+                ? ""
+                : SHA256.hash(data: bytes).map { String(format: "%02X", $0) }.joined()
+            j.raw("{\"kind\":").str("image")
+                .raw(",\"target\":").str(targetPath)
+                .raw(",\"mime\":").str(mime)
+                .raw(",\"image_len\":").num(UInt64(bytes.count))
+                .raw(",\"image_sha256\":").str(digest)
+                .raw(",\"alt\":").str(alt ?? "")
+                .raw("}")
+        case .unresolved(let reason):
+            let kind: String
+            switch reason {
+            case .targetNotFound(let target):
+                kind = "unresolved:target_not_found:" + target
+            case .headingNotFound(let targetPath, let heading):
+                kind = "unresolved:heading_not_found:" + targetPath + "#" + heading
+            case .blockNotFound(let targetPath, let blockId):
+                kind = "unresolved:block_not_found:" + targetPath + "^" + blockId
+            case .depthLimitReached:
+                kind = "unresolved:depth_limit"
+            case .readError(let message):
+                kind = "unresolved:read_error:" + message
+            }
+            j.raw("{\"kind\":").str(kind).raw("}")
+        }
+    }
+
+    private static func appendNestedEmbeds(
+        _ j: CanonicalJson, _ nested: [NestedEmbed]
+    ) {
+        for (i, child) in nested.enumerated() {
+            if i > 0 { j.raw(",") }
+            j.raw("{\"raw\":").str(child.rawTarget)
+                .raw(",\"start\":").num(UInt64(child.byteOffsetInParent))
+                .raw(",\"end\":").num(UInt64(child.byteEndInParent))
+                .raw(",\"resolution\":")
+            appendEmbedResolution(j, child.resolution)
+            j.raw("}")
+        }
     }
 
     private static func semanticKindName(_ kind: SemanticKind) -> String {

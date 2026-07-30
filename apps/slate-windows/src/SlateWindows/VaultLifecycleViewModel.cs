@@ -514,6 +514,16 @@ internal sealed class VaultLifecycleViewModel : INotifyPropertyChanged, IDisposa
             }
 
             Workspace?.InvalidateAllInteractionStates();
+            // Reading embed cards depend on OTHER files (W3-5): the
+            // change stream reaches every open reading model, which
+            // applies its own reverse-dependency filter. A rename
+            // notifies both sides of the move.
+            Workspace?.NotifyReadingOfVaultChange(@event.Kind, @event.Path);
+            if (@event.Kind == FileChangeKind.Renamed
+                && @event.PreviousPath is string renamedFrom)
+            {
+                Workspace?.NotifyReadingOfVaultChange(@event.Kind, renamedFrom);
+            }
             QuickSwitcher?.ApplyFileChange(@event);
             int ticket = Interlocked.Increment(ref _sidebarRefreshTicket);
             _ = Task.Delay(150).ContinueWith(

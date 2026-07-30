@@ -1322,6 +1322,22 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
         }
     }
+
+    /// <summary>
+    /// W3-5: embed cards resolve content from OTHER files, so every
+    /// open reading model gets the vault change stream and applies
+    /// its own reverse-dependency filter (a target-note save after
+    /// publication previously refreshed nothing — stale cards until
+    /// a mode cycle).
+    /// </summary>
+    public void NotifyReadingOfVaultChange(FileChangeKind kind, string path)
+    {
+        string changed = NormalizeWorkspacePath(path);
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            tab.Reading?.NotifyVaultFileChanged(kind, changed);
+        }
+    }
     public void InvalidateAllInteractionStates()
     {
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))

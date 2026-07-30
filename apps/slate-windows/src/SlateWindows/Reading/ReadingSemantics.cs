@@ -37,6 +37,26 @@ internal static class ReadingSemantics
             "ReadingDiagramDescription", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
 
+    private static readonly DependencyProperty EmbedNameProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedName", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty EmbedKeyProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedKey", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty EmbedJumpPathProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedJumpPath", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty EmbedJumpAnchorProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedJumpAnchor", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
     private static readonly DependencyProperty MarkerProperty =
         DependencyProperty.RegisterAttached(
             "ReadingMarker", typeof(Marker?), typeof(ReadingSemantics),
@@ -64,6 +84,72 @@ internal static class ReadingSemantics
 
     public static void MarkEmbed(BlockUIContainer container) =>
         container.SetValue(MarkerProperty, Marker.Embed);
+
+    /// <summary>Embed card (W3-5): the marker carries the mac-shaped
+    /// header name so the landmark walk announces content, not a
+    /// cache key.</summary>
+    public static void MarkEmbed(Section section, string name)
+    {
+        section.SetValue(MarkerProperty, Marker.Embed);
+        section.SetValue(EmbedNameProperty, name);
+    }
+
+    public static bool IsEmbedSection(Section section) =>
+        Equals(section.GetValue(MarkerProperty), Marker.Embed);
+
+    public static string EmbedNameOf(Section section) =>
+        section.GetValue(EmbedNameProperty) as string ?? string.Empty;
+
+    /// <summary>An embed card's header paragraph carries its cache
+    /// key so Enter-at-caret can activate the card (a caret position
+    /// is not element focus — the W3-1 lesson).</summary>
+    public static void MarkEmbedHeader(Paragraph paragraph, string key) =>
+        paragraph.SetValue(EmbedKeyProperty, key);
+
+    public static string? EmbedHeaderKeyOf(Paragraph paragraph) =>
+        paragraph.GetValue(EmbedKeyProperty) as string;
+
+    /// <summary>
+    /// The Jump destination when core ALREADY RESOLVED the target
+    /// (W3-5, round 1): activation navigates directly — the mac
+    /// `openEmbedTarget(path)` contract — because the host note's
+    /// record snapshot cannot contain NESTED targets, and re-matching
+    /// there dead-ends on content the card is displaying. String-only
+    /// values (the W3-1 Tag-serialization lesson); the anchor rides a
+    /// "kind:text" codec, kinds "heading"/"block" per core.
+    /// </summary>
+    public static void MarkEmbedJump(
+        DependencyObject element, string path, string? anchorKind, string? anchorText)
+    {
+        element.SetValue(EmbedJumpPathProperty, path);
+        if (anchorKind is not null && anchorText is not null)
+        {
+            element.SetValue(EmbedJumpAnchorProperty, anchorKind + ":" + anchorText);
+        }
+    }
+
+    public static bool TryGetEmbedJump(
+        DependencyObject element,
+        out string path,
+        out LinkAnchor? anchor)
+    {
+        path = string.Empty;
+        anchor = null;
+        if (element.GetValue(EmbedJumpPathProperty) is not string jumpPath)
+        {
+            return false;
+        }
+        path = jumpPath;
+        if (element.GetValue(EmbedJumpAnchorProperty) is string encoded)
+        {
+            int split = encoded.IndexOf(':', StringComparison.Ordinal);
+            if (split > 0)
+            {
+                anchor = new LinkAnchor(encoded[..split], encoded[(split + 1)..]);
+            }
+        }
+        return true;
+    }
 
     public static void MarkCodeBlock(Paragraph paragraph) =>
         paragraph.SetValue(MarkerProperty, Marker.CodeBlock);

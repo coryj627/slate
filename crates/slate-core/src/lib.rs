@@ -113,8 +113,8 @@ pub use citations::{CitationMode, CitationReference, CitedItem, Locator, extract
 pub use commands::{Command, CommandAction, CommandError, CommandRegistry, CommandSection};
 pub use diff::diff_to_ops;
 pub use embeds::{
-    AttachmentBytes, EmbedPreviewResolution, EmbedResolution, EmbedUnresolvedReason,
-    MAX_EMBED_DEPTH, MAX_EMBED_PREVIEW_IMAGE_BYTES, MAX_EMBED_PREVIEW_NODES,
+    AttachmentBytes, EmbedPreviewResolution, EmbedReadingCard, EmbedResolution,
+    EmbedUnresolvedReason, MAX_EMBED_DEPTH, MAX_EMBED_PREVIEW_IMAGE_BYTES, MAX_EMBED_PREVIEW_NODES,
     MAX_EMBED_PREVIEW_TEXT_BYTES, NestedEmbed,
 };
 pub use frontmatter::{
