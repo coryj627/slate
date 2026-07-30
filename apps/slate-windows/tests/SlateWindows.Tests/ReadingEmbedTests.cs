@@ -832,6 +832,77 @@ public sealed class ReadingEmbedTests
         });
     }
 
+    /// <summary>
+    /// Round 3 [high]: a nested missing-anchor target MOVED to a new
+    /// path — parent text unchanged — must rebuild (content-complete
+    /// unresolved digest), retarget its Jump, and track the new path
+    /// for later saves; a type-only digest memo-hit into stale
+    /// metadata forever.
+    /// </summary>
+    [Fact]
+    public void NestedTargetMovesRetargetJumpAndDependencies()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-retarget");
+            Directory.CreateDirectory(Path.Combine(fixture.Root, "a"));
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "a", "leaf.md"), "Leaf body.\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"), "![[leaf#missing]]\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "![[target]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            string Text() => new System.Windows.Documents.TextRange(
+                surface.Document.ContentStart,
+                surface.Document.ContentEnd).Text;
+            Assert.Contains(
+                "Unresolved embed: a/leaf.md#missing", Text(), StringComparison.Ordinal);
+
+            // Move the target; the parent's text is untouched.
+            Directory.CreateDirectory(Path.Combine(fixture.Root, "b"));
+            File.Move(
+                Path.Combine(fixture.Root, "a", "leaf.md"),
+                Path.Combine(fixture.Root, "b", "leaf.md"));
+            using var rescanCancel = new CancelToken();
+            session.ScanInitial(rescanCancel);
+            tab.Reading!.NotifyVaultFileChanged(FileChangeKind.Renamed, "b/leaf.md");
+
+            Assert.Contains(
+                "Unresolved embed: b/leaf.md#missing", Text(), StringComparison.Ordinal);
+            Assert.Contains(
+                FindJumpButtons(surface.Document),
+                button =>
+                    ReadingSemantics.TryGetEmbedJump(button, out string path, out _)
+                    && path == "b/leaf.md");
+
+            // The NEW path is now a tracked dependency: adding the
+            // heading there resolves the nested card on save.
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "b", "leaf.md"),
+                "# missing\n\nLeaf body.\n");
+            using var secondRescan = new CancelToken();
+            session.ScanInitial(secondRescan);
+            tab.Reading!.NotifyVaultFileChanged(FileChangeKind.Modified, "b/leaf.md");
+            Assert.Contains(
+                "Embedded section: missing from b/leaf.md",
+                Text(),
+                StringComparison.Ordinal);
+        });
+    }
+
     /// <summary>Nested image payloads are stripped before retention —
     /// collapsed child cards never render bytes, and unstripped trees
     /// bypassed the note-wide pool entirely (round 1 [high]).</summary>

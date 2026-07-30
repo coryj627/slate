@@ -1461,7 +1461,24 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 hash.AppendData(FieldSeparator);
                 break;
             case EmbedResolution.Unresolved unresolved:
-                DigestField(hash, "unresolved:" + unresolved.Reason.GetType().Name);
+                // Content-complete (round 3 [high]): the reason's
+                // PAYLOAD carries the jump destination and dependency
+                // path — hashing the type alone let a nested target
+                // re-resolve to a different path under an unchanged
+                // parent and memo-hit into stale metadata.
+                DigestField(hash, "unresolved:" + unresolved.Reason switch
+                {
+                    EmbedUnresolvedReason.TargetNotFound notFound =>
+                        "target_not_found:" + notFound.Target,
+                    EmbedUnresolvedReason.HeadingNotFound heading =>
+                        "heading_not_found:" + heading.TargetPath + "#" + heading.Heading,
+                    EmbedUnresolvedReason.BlockNotFound block =>
+                        "block_not_found:" + block.TargetPath + "^" + block.BlockId,
+                    EmbedUnresolvedReason.DepthLimitReached => "depth_limit",
+                    EmbedUnresolvedReason.ReadError readError =>
+                        "read_error:" + readError.Message,
+                    var other => other.GetType().Name,
+                });
                 break;
         }
     }
