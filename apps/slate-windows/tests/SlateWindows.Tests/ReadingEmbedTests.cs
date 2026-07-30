@@ -943,6 +943,115 @@ public sealed class ReadingEmbedTests
         });
     }
 
+    /// <summary>
+    /// Round 5 [high]: duplicate occurrences of one image key share
+    /// ONE decoded surface per projection — encoded-byte accounting
+    /// charged once while every occurrence decoded independently
+    /// (2,000 occurrences of one small PNG approached 9 GiB of
+    /// surfaces).
+    /// </summary>
+    [Fact]
+    public void DuplicateImageOccurrencesShareOneDecodedSurface()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-dup-image");
+            File.WriteAllBytes(Path.Combine(fixture.Root, "pic.png"), TinyPng);
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "![[pic.png]]\n\n![[pic.png]]\n\n![[pic.png]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var decodes = new List<string>();
+            ReadingDocumentBuilder.EmbedImageDecodeProbeForTests = decodes.Add;
+            try
+            {
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(
+                            WorkspaceItemKind.Markdown, "note0.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                var surface = new ReadingSurface { Model = tab.Reading };
+
+                Assert.Equal(
+                    3,
+                    surface.LandmarksForTests.Count(
+                        candidate => candidate.Kind == ReadingLandmarkKind.Embed));
+                // This harness projects twice (mode toggle + surface
+                // rebind); the pin is one decode PER PROJECTION,
+                // never one per occurrence.
+                Assert.InRange(decodes.Count, 1, 2);
+            }
+            finally
+            {
+                ReadingDocumentBuilder.EmbedImageDecodeProbeForTests = null;
+            }
+        });
+    }
+
+    /// <summary>Round 5 [high]: the projection-wide decoded-pixel
+    /// pool degrades images BEFORE allocation once drained — later
+    /// distinct images keep header and destination with the honest
+    /// budget notice.</summary>
+    [Fact]
+    public void DecodedPixelPoolBoundsDistinctImages()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-pixelpool");
+            File.WriteAllBytes(Path.Combine(fixture.Root, "one.png"), TinyPng);
+            File.WriteAllBytes(Path.Combine(fixture.Root, "two.png"), TinyPng);
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "![[one.png]]\n\n![[two.png]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var decodes = new List<string>();
+            ReadingDocumentBuilder.EmbedImageDecodeProbeForTests = decodes.Add;
+            // The 1×1 fixture costs one pixel; a one-pixel pool admits
+            // exactly the first image.
+            ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = 1;
+            try
+            {
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(
+                            WorkspaceItemKind.Markdown, "note0.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                var surface = new ReadingSurface { Model = tab.Reading };
+
+                string text = new System.Windows.Documents.TextRange(
+                    surface.Document.ContentStart,
+                    surface.Document.ContentEnd).Text;
+                Assert.Contains(
+                    "Embedded image: two.png", text, StringComparison.Ordinal);
+                Assert.Contains(
+                    "Image not displayed: over this note's embedded-image budget.",
+                    text,
+                    StringComparison.Ordinal);
+                // The drained pool refuses BEFORE the decoder runs:
+                // per projection, only the admitted image decodes.
+                Assert.DoesNotContain("two.png", decodes);
+            }
+            finally
+            {
+                ReadingDocumentBuilder.EmbedImageDecodeProbeForTests = null;
+                ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests =
+                    null;
+            }
+        });
+    }
+
     private static IEnumerable<System.Windows.Controls.Button> FindJumpButtons(
         System.Windows.Documents.FlowDocument document)
     {

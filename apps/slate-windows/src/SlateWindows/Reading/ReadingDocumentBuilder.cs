@@ -60,6 +60,24 @@ internal sealed class ReadingListBuildContext
     internal int RemainingDiagramRenderBytes { get; set; } =
         ReadingDocumentBuilder.ProjectionDiagramRenderByteBudgetOverrideForTests
             ?? ReadingDocumentBuilder.ProjectionDiagramRenderByteBudget;
+
+    /// <summary>
+    /// The embed-image analog (W3-5 round 5): the encoded-byte pools
+    /// bound FFI transfer, not PIXELS — a small compressed image
+    /// repeated across the 2,000-block ceiling decoded once per
+    /// OCCURRENCE (~9 GiB of surfaces from one 16 MiB charge). One
+    /// frozen ImageSource per resolved key, shared by every
+    /// occurrence, drawing decoded pixels from this pool; images
+    /// after exhaustion keep header and destination and degrade only
+    /// the visual with the honest budget notice.
+    /// </summary>
+    internal Dictionary<string, System.Windows.Media.ImageSource> DecodedEmbedImages
+    { get; } = new(StringComparer.Ordinal);
+
+    /// <summary>See <see cref="DecodedEmbedImages"/>.</summary>
+    internal long RemainingEmbedDecodedPixels { get; set; } =
+        ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests
+            ?? ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudget;
 }
 
 /// <summary>The built reading document plus its navigation index.</summary>
@@ -160,7 +178,8 @@ internal static class ReadingDocumentBuilder
                 document.Blocks.Add(EmbedCard(
                     embedKey,
                     embeds.FirstOrDefault(candidate =>
-                        string.Equals(candidate.Key, embedKey, StringComparison.Ordinal))));
+                        string.Equals(candidate.Key, embedKey, StringComparison.Ordinal)),
+                    context));
                 continue;
             }
 
@@ -930,6 +949,23 @@ internal static class ReadingDocumentBuilder
     /// need megabytes of fixtures. Null in production.</summary>
     internal static int? ProjectionDiagramRenderByteBudgetOverrideForTests;
 
+    /// <summary>Projection-wide DECODED-pixel pool for embed images
+    /// (W3-5 round 5): ~16 MP ≈ 64 MB of BGRA surfaces — a dozen
+    /// maximum-dimension images or hundreds of ordinary ones. The
+    /// per-image dimension cap (1120 px, DecodeImage) bounds the
+    /// transient overshoot of the one decode that discovers
+    /// exhaustion.</summary>
+    internal const long ProjectionEmbedDecodedPixelBudget = 16_000_000;
+
+    /// <summary>Budget override for the pixel-pool tests. Null in
+    /// production.</summary>
+    internal static long? ProjectionEmbedDecodedPixelBudgetOverrideForTests;
+
+    /// <summary>Fires with the embed key whenever the image decoder
+    /// is entered — the pin that duplicate occurrences share one
+    /// decode and over-budget images never allocate.</summary>
+    internal static Action<string>? EmbedImageDecodeProbeForTests;
+
     /// <summary>Fires with the SVG byte length whenever the Svg.Skia
     /// decode path is entered — the pin that degraded or over-budget
     /// artifacts never reach it.</summary>
@@ -1012,7 +1048,8 @@ internal static class ReadingDocumentBuilder
     /// strings. A null artifact (per-key degraded fetch) is a
     /// header-only card that still activates — never a dead block.
     /// </summary>
-    private static Block EmbedCard(string key, ReadingEmbedArtifact? artifact)
+    private static Block EmbedCard(
+        string key, ReadingEmbedArtifact? artifact, ReadingListBuildContext context)
     {
         var section = new Section
         {
@@ -1071,7 +1108,7 @@ internal static class ReadingDocumentBuilder
                     + "budget. Open the source note to view it."));
                 break;
             case EmbedResolution.Image image:
-                AppendEmbedImage(section, image);
+                AppendEmbedImage(section, image, key, context);
                 break;
             case EmbedResolution.Unresolved:
                 // The header name IS the mac unresolved string; the
@@ -1307,17 +1344,53 @@ internal static class ReadingDocumentBuilder
     /// 1120 px caps; the note-wide byte pool was charged at fetch),
     /// peer-suppressed like the diagram image — the header name IS
     /// the announcement (mac hides the image from AT). Decode failure
-    /// shows mac's exact string.</summary>
-    private static void AppendEmbedImage(Section section, EmbedResolution.Image image)
+    /// shows mac's exact string. DECODED surfaces are bounded (round
+    /// 5): one frozen ImageSource per key shared by every occurrence,
+    /// drawing pixels from the projection pool — encoded-byte
+    /// accounting alone let one small compressed image repeated
+    /// across the block ceiling allocate gigabytes of surfaces.</summary>
+    private static void AppendEmbedImage(
+        Section section,
+        EmbedResolution.Image image,
+        string key,
+        ReadingListBuildContext context)
     {
-        System.Windows.Media.ImageSource? decoded =
-            EditorInteractionCoordinator.DecodeImage(image.Bytes, image.Mime);
-        if (decoded is null)
+        if (!context.DecodedEmbedImages.TryGetValue(
+            key, out System.Windows.Media.ImageSource? decoded))
         {
-            section.Blocks.Add(EmbedBodyParagraph(
-                $"Could not decode image. MIME: {image.Mime}. "
-                + "The file may be corrupt or an unsupported codec."));
-            return;
+            if (context.RemainingEmbedDecodedPixels <= 0)
+            {
+                section.Blocks.Add(EmbedBodyParagraph(
+                    "Image not displayed: over this note's embedded-image "
+                    + "budget. Open the source note to view it."));
+                return;
+            }
+            EmbedImageDecodeProbeForTests?.Invoke(key);
+            decoded = EditorInteractionCoordinator.DecodeImage(image.Bytes, image.Mime);
+            if (decoded is null)
+            {
+                section.Blocks.Add(EmbedBodyParagraph(
+                    $"Could not decode image. MIME: {image.Mime}. "
+                    + "The file may be corrupt or an unsupported codec."));
+                return;
+            }
+            long pixels = decoded is System.Windows.Media.Imaging.BitmapSource bitmap
+                ? (long)bitmap.PixelWidth * bitmap.PixelHeight
+                // Non-bitmap sources cannot report dimensions; charge
+                // the decode cap conservatively.
+                : 1120L * 1120L;
+            if (pixels > context.RemainingEmbedDecodedPixels)
+            {
+                // The discovering decode's surface is discarded before
+                // any element references it — the per-image dimension
+                // cap bounds this one transient.
+                section.Blocks.Add(EmbedBodyParagraph(
+                    "Image not displayed: over this note's embedded-image "
+                    + "budget. Open the source note to view it."));
+                return;
+            }
+            context.RemainingEmbedDecodedPixels -= pixels;
+            context.DecodedEmbedImages[key] = decoded;
         }
         var visual = new ReadingDiagramImage
         {
