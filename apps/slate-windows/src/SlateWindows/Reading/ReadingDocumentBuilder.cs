@@ -1171,6 +1171,19 @@ internal static class ReadingDocumentBuilder
                 (section.TargetPath, "heading", section.Heading),
             EmbedResolution.Block block => (block.TargetPath, "block", block.BlockId),
             EmbedResolution.Image image => (image.TargetPath, null, null),
+            // Missing-ANCHOR reasons still name an existing file
+            // (round 2 [high]): Jump opens it — top of file, no
+            // anchor — instead of dead-ending a nested card on the
+            // host's record snapshot. Record matching remains only
+            // where core resolved NO path at all.
+            EmbedResolution.Unresolved
+            {
+                Reason: EmbedUnresolvedReason.HeadingNotFound heading,
+            } => (heading.TargetPath, null, null),
+            EmbedResolution.Unresolved
+            {
+                Reason: EmbedUnresolvedReason.BlockNotFound block,
+            } => (block.TargetPath, null, null),
             _ => null,
         };
 

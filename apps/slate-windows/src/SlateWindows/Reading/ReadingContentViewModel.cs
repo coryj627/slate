@@ -807,9 +807,11 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
     /// </summary>
     public void NotifyVaultFileChanged(FileChangeKind kind, string path)
     {
-        if (_disposed
-            || BlocksAppended is null
-            || string.Equals(path, _tab.Path, StringComparison.Ordinal))
+        // No same-path exclusion (round 2 [medium]): a self-embed or
+        // resolved cycle legitimately depends on THIS note's saved
+        // file — the resolver reads the disk, not the buffer — and
+        // the dependency set already filters ordinary notes out.
+        if (_disposed || BlocksAppended is null)
         {
             return;
         }
@@ -883,8 +885,21 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             case EmbedResolution.Image image:
                 _publishedEmbedDependencies.Add(image.TargetPath);
                 break;
-            case EmbedResolution.Unresolved:
+            case EmbedResolution.Unresolved unresolved:
                 _publishedHasUnresolvedEmbeds = true;
+                // Missing-ANCHOR reasons name an existing target file
+                // (round 2 [high]): saving that file to add the
+                // heading/block must refresh, and only the dependency
+                // set sees Modified events.
+                switch (unresolved.Reason)
+                {
+                    case EmbedUnresolvedReason.HeadingNotFound heading:
+                        _publishedEmbedDependencies.Add(heading.TargetPath);
+                        break;
+                    case EmbedUnresolvedReason.BlockNotFound block:
+                        _publishedEmbedDependencies.Add(block.TargetPath);
+                        break;
+                }
                 break;
         }
     }

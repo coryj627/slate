@@ -682,6 +682,156 @@ public sealed class ReadingEmbedTests
         });
     }
 
+    /// <summary>
+    /// Round 2 [high]: a missing-ANCHOR card names an existing target
+    /// file — saving that file to add the heading must refresh the
+    /// card (Modified events reach only the dependency set), and its
+    /// Jump must open the file directly instead of dead-ending a
+    /// nested card on the host's record snapshot.
+    /// </summary>
+    [Fact]
+    public void MissingAnchorCardsRefreshOnTargetSaveAndJumpToTheFile()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-anchor-dep");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"), "# Existing\n\nBody.\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "![[target#Later]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            string Text() => new System.Windows.Documents.TextRange(
+                surface.Document.ContentStart,
+                surface.Document.ContentEnd).Text;
+            Assert.Contains(
+                "Unresolved embed: target.md#Later", Text(), StringComparison.Ordinal);
+
+            // The Jump still opens the EXISTING file (top, no anchor).
+            Assert.Contains(
+                FindJumpButtons(surface.Document),
+                button =>
+                    ReadingSemantics.TryGetEmbedJump(
+                        button, out string path, out var anchor)
+                    && path == "target.md"
+                    && anchor is null);
+
+            // Saving the target WITH the heading refreshes the card.
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"),
+                "# Existing\n\nBody.\n\n# Later\n\nAnchored body.\n");
+            using var rescanCancel = new CancelToken();
+            session.ScanInitial(rescanCancel);
+            tab.Reading!.NotifyVaultFileChanged(FileChangeKind.Modified, "target.md");
+            Assert.Contains(
+                "Embedded section: Later from target.md",
+                Text(),
+                StringComparison.Ordinal);
+            Assert.Contains("Anchored body.", Text(), StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>Round 2 [high], the nested shape: a nested
+    /// ![[leaf#missing]] card's Jump opens leaf.md through the
+    /// resolved path — the host snapshot has no record for it.</summary>
+    [Fact]
+    public void NestedMissingAnchorJumpOpensTheExistingFile()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-anchor-nested");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "leaf.md"), "Leaf body.\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"), "![[leaf#missing]]\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "![[target]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var workspace = new WorkspaceViewModel(
+                session,
+                fixture.Root,
+                () => [],
+                _ => { },
+                startInteractionBackgroundWork: false);
+            workspace.OpenPath("note0.md");
+            WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            System.Windows.Controls.Button nested = FindJumpButtons(surface.Document)
+                .Single(button => Equals(button.Tag, "leaf#missing"));
+            nested.RaiseEvent(new System.Windows.RoutedEventArgs(
+                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+            Assert.Contains(
+                workspace.ActiveGroup.Tabs,
+                candidate => string.Equals(
+                    candidate.Path, "leaf.md", StringComparison.Ordinal));
+        });
+    }
+
+    /// <summary>
+    /// Round 2 [medium]: a self-embed depends on THIS note's saved
+    /// file — the resolver reads the disk, not the buffer — so the
+    /// note's own save event must refresh it (the old same-path guard
+    /// dropped the only refresh; split-pane peer saves are exactly
+    /// this shape).
+    /// </summary>
+    [Fact]
+    public void SelfEmbedRefreshesOnOwnFileSave()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-self");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "![[note0#Section]]\n\n# Section\n\nSelf body one.\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            string Text() => new System.Windows.Documents.TextRange(
+                surface.Document.ContentStart,
+                surface.Document.ContentEnd).Text;
+            Assert.Contains("Self body one.", Text(), StringComparison.Ordinal);
+
+            // A peer save changes the FILE (same length, so heading
+            // offsets stay valid without a rescan).
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "![[note0#Section]]\n\n# Section\n\nSelf body two.\n");
+            tab.Reading!.NotifyVaultFileChanged(FileChangeKind.Modified, "note0.md");
+            Assert.Contains(
+                "Embedded section: Section from note0.md",
+                Text(),
+                StringComparison.Ordinal);
+            Assert.Contains("Self body two.", Text(), StringComparison.Ordinal);
+        });
+    }
+
     /// <summary>Nested image payloads are stripped before retention —
     /// collapsed child cards never render bytes, and unstripped trees
     /// bypassed the note-wide pool entirely (round 1 [high]).</summary>
