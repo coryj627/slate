@@ -108,6 +108,19 @@ internal sealed class ReadingSurface : RichTextBox
                     args.Handled = true;
                     return;
                 }
+                // Jump buttons whose target core ALREADY RESOLVED
+                // navigate directly (W3-5 round 1: nested targets are
+                // absent from the host's record snapshot, so a
+                // re-match would dead-end on content the card shows).
+                if (args.Source is System.Windows.Controls.Button jumpButton
+                    && ReadingSemantics.TryGetEmbedJump(
+                        jumpButton, out string jumpPath, out var jumpAnchor)
+                    && _model is { } jumpModel)
+                {
+                    jumpModel.ActivateResolvedEmbedSource(jumpPath, jumpAnchor);
+                    args.Handled = true;
+                    return;
+                }
                 if (args.Source is System.Windows.Controls.Button
                     {
                         Tag: string embedKey
@@ -459,11 +472,19 @@ internal sealed class ReadingSurface : RichTextBox
         // Embed card header at the caret (W3-5): Enter activates the
         // card — a chord landing rests the caret ON the header, and a
         // caret position is not element focus (the W3-1 lesson), so
-        // the Jump button's own key handling never fires for it.
+        // the Jump button's own key handling never fires for it. A
+        // core-resolved destination navigates directly; only cards
+        // without one fall back to the record match.
         if (CaretPosition?.Paragraph is { } embedParagraph
             && ReadingSemantics.EmbedHeaderKeyOf(embedParagraph) is { } embedKey
             && _model is { } embedModel)
         {
+            if (ReadingSemantics.TryGetEmbedJump(
+                embedParagraph, out string embedJumpPath, out var embedJumpAnchor))
+            {
+                embedModel.ActivateResolvedEmbedSource(embedJumpPath, embedJumpAnchor);
+                return true;
+            }
             embedModel.Activate(new uniffi.slate_uniffi.ReadingInlineRunKind.Embed(embedKey));
             return true;
         }

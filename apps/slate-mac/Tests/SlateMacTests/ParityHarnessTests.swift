@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import CryptoKit
 import XCTest
 
 @testable import SlateMac
@@ -311,10 +312,17 @@ final class ParityHarnessTests: XCTestCase {
                 .raw(",\"text\":").str(text)
                 .raw("}")
         case .image(let targetPath, let bytes, let mime, let alt):
+            // SHA-256 over the payload — image bytes are vault
+            // CONTENT (unlike machine-dependent diagram SVG), so both
+            // twins must round-trip them byte-identically.
+            let digest = bytes.isEmpty
+                ? ""
+                : SHA256.hash(data: bytes).map { String(format: "%02X", $0) }.joined()
             j.raw("{\"kind\":").str("image")
                 .raw(",\"target\":").str(targetPath)
                 .raw(",\"mime\":").str(mime)
                 .raw(",\"image_len\":").num(UInt64(bytes.count))
+                .raw(",\"image_sha256\":").str(digest)
                 .raw(",\"alt\":").str(alt ?? "")
                 .raw("}")
         case .unresolved(let reason):

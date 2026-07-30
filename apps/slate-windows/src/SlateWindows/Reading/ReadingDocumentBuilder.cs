@@ -1021,12 +1021,16 @@ internal static class ReadingDocumentBuilder
         section.SetResourceReference(Block.BackgroundProperty, "Slate.RaisedSurfaceBrush");
 
         EmbedResolution? resolution = artifact?.Resolution?.Resolution;
+        // A null resolution never claims a kind it cannot know (round
+        // 1 [medium]): the neutral label says only what is true.
         string headerName = resolution is null
-            ? $"Embedded note {key}"
+            ? $"Embed: {key}"
             : EmbedHeaderName(resolution, artifact?.Alt);
         string headerSuffix = resolution is null
             ? string.Empty
             : EmbedHeaderAccessibilitySuffix(resolution);
+        (string Path, string? AnchorKind, string? AnchorText)? jump =
+            ResolvedJump(resolution);
 
         var header = new Paragraph
         {
@@ -1036,8 +1040,13 @@ internal static class ReadingDocumentBuilder
         header.Inlines.Add(new Run(headerName));
         header.Inlines.Add(new Run("  "));
         header.Inlines.Add(new InlineUIContainer(
-            JumpToSourceButton(key, headerSuffix)));
+            JumpToSourceButton(key, headerSuffix, jump)));
         ReadingSemantics.MarkEmbedHeader(header, key);
+        if (jump is { } headerJump)
+        {
+            ReadingSemantics.MarkEmbedJump(
+                header, headerJump.Path, headerJump.AnchorKind, headerJump.AnchorText);
+        }
         section.Blocks.Add(header);
 
         switch (resolution)
@@ -1051,6 +1060,15 @@ internal static class ReadingDocumentBuilder
                 break;
             case EmbedResolution.Block block:
                 AppendEmbedText(section, block.Text, Array.Empty<NestedEmbed>());
+                break;
+            case EmbedResolution.Image image when artifact is { ImageBudgetRefused: true }:
+                // The artifact resolved — the header keeps its true
+                // image identity and destination; only the PAYLOAD was
+                // refused by the note-wide budget, and the notice says
+                // exactly that (never the decode-failure lie).
+                section.Blocks.Add(EmbedBodyParagraph(
+                    "Image not displayed: over this note's embedded-image "
+                    + "budget. Open the source note to view it."));
                 break;
             case EmbedResolution.Image image:
                 AppendEmbedImage(section, image);
@@ -1140,7 +1158,26 @@ internal static class ReadingDocumentBuilder
             _ => string.Empty,
         };
 
-    private static Button JumpToSourceButton(string key, string helpText)
+    /// <summary>The destination core already resolved, when it did —
+    /// the mac <c>openEmbedTarget(path)</c> route, and the only
+    /// correct one for nested targets absent from the host's record
+    /// snapshot (round 1 [high]).</summary>
+    private static (string Path, string? AnchorKind, string? AnchorText)? ResolvedJump(
+        EmbedResolution? resolution) =>
+        resolution switch
+        {
+            EmbedResolution.FullNote fullNote => (fullNote.TargetPath, null, null),
+            EmbedResolution.Section section =>
+                (section.TargetPath, "heading", section.Heading),
+            EmbedResolution.Block block => (block.TargetPath, "block", block.BlockId),
+            EmbedResolution.Image image => (image.TargetPath, null, null),
+            _ => null,
+        };
+
+    private static Button JumpToSourceButton(
+        string key,
+        string helpText,
+        (string Path, string? AnchorKind, string? AnchorText)? jump)
     {
         var button = new Button
         {
@@ -1153,6 +1190,11 @@ internal static class ReadingDocumentBuilder
         if (helpText.Length > 0)
         {
             AutomationProperties.SetHelpText(button, helpText);
+        }
+        if (jump is { } resolved)
+        {
+            ReadingSemantics.MarkEmbedJump(
+                button, resolved.Path, resolved.AnchorKind, resolved.AnchorText);
         }
         return button;
     }
@@ -1225,6 +1267,8 @@ internal static class ReadingDocumentBuilder
     private static Paragraph NestedEmbedHeader(NestedEmbed child)
     {
         string name = EmbedHeaderName(child.Resolution, alt: null);
+        (string Path, string? AnchorKind, string? AnchorText)? jump =
+            ResolvedJump(child.Resolution);
         var paragraph = new Paragraph
         {
             Margin = new Thickness(24, 2, 0, 2),
@@ -1234,8 +1278,15 @@ internal static class ReadingDocumentBuilder
         paragraph.Inlines.Add(new Run("  "));
         paragraph.Inlines.Add(new InlineUIContainer(JumpToSourceButton(
             child.RawTarget,
-            EmbedHeaderAccessibilitySuffix(child.Resolution))));
+            EmbedHeaderAccessibilitySuffix(child.Resolution),
+            jump)));
         ReadingSemantics.MarkEmbedHeader(paragraph, child.RawTarget);
+        if (jump is { } resolvedJump)
+        {
+            ReadingSemantics.MarkEmbedJump(
+                paragraph, resolvedJump.Path, resolvedJump.AnchorKind,
+                resolvedJump.AnchorText);
+        }
         return paragraph;
     }
 

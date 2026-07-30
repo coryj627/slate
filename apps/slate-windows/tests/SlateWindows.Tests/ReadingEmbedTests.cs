@@ -295,7 +295,9 @@ public sealed class ReadingEmbedTests
             string text = new System.Windows.Documents.TextRange(
                 surface.Document.ContentStart,
                 surface.Document.ContentEnd).Text;
-            Assert.Contains("Embedded note target", text, StringComparison.Ordinal);
+            // A degraded card never claims a kind it cannot know
+            // (round 1 [medium]): neutral label, honest body.
+            Assert.Contains("Embed: target", text, StringComparison.Ordinal);
             Assert.Contains(
                 "Embed preview unavailable. Activate to open the source.",
                 text,
@@ -457,6 +459,253 @@ public sealed class ReadingEmbedTests
                 "Embedded note: board.canvas", text, StringComparison.Ordinal);
             Assert.Contains("\"nodes\"", text, StringComparison.Ordinal);
         });
+    }
+
+    /// <summary>
+    /// Round 1 [high]: nested Jump controls navigate through the
+    /// RESOLVED destination core handed back — the host note's record
+    /// snapshot cannot contain nested targets, so the old record
+    /// re-match dead-ended on content the card was displaying. This
+    /// is the real click route end to end: bubbled Click through the
+    /// surface router into workspace navigation.
+    /// </summary>
+    [Fact]
+    public void NestedJumpNavigatesToTheResolvedChild()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-nestednav");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "leaf.md"), "Leaf body.\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"), "![[leaf]]\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "![[target]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var workspace = new WorkspaceViewModel(
+                session,
+                fixture.Root,
+                () => [],
+                _ => { },
+                startInteractionBackgroundWork: false);
+            workspace.OpenPath("note0.md");
+            WorkspaceTabViewModel tab = workspace.ActiveGroup.ActiveTab!;
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            System.Windows.Controls.Button nested = FindJumpButtons(surface.Document)
+                .Single(button => Equals(button.Tag, "leaf"));
+            nested.RaiseEvent(new System.Windows.RoutedEventArgs(
+                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+
+            Assert.Contains(
+                workspace.ActiveGroup.Tabs,
+                candidate => string.Equals(
+                    candidate.Path, "leaf.md", StringComparison.Ordinal));
+        });
+    }
+
+    /// <summary>
+    /// Round 1 [high]: a TARGET-note save after publication re-projects
+    /// the cards built from it (reverse-dependency filtered), an
+    /// unrelated change refetches nothing, and a CREATED file resolves
+    /// a previously-unresolved card.
+    /// </summary>
+    [Fact]
+    public void TargetSavesRefreshPublishedCardsWithDependencyFiltering()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-deps");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"), "Original body.\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "![[target]]\n\n![[missing-note]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            string Text() => new System.Windows.Documents.TextRange(
+                surface.Document.ContentStart,
+                surface.Document.ContentEnd).Text;
+            Assert.Contains("Original body.", Text(), StringComparison.Ordinal);
+            Assert.Contains(
+                "Unresolved embed: missing-note", Text(), StringComparison.Ordinal);
+
+            // Target save → refresh with the new content.
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"), "Saved body.\n");
+            tab.Reading!.NotifyVaultFileChanged(FileChangeKind.Modified, "target.md");
+            Assert.Contains("Saved body.", Text(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Original body.", Text(), StringComparison.Ordinal);
+
+            // Unrelated change → not even a fetch (the reverse-
+            // dependency filter; the counting seam fires per resolved
+            // key on any embed fetch).
+            int fetches = 0;
+            tab.Reading!.EmbedFaultForTests = () =>
+            {
+                fetches++;
+                return null;
+            };
+            tab.Reading!.NotifyVaultFileChanged(
+                FileChangeKind.Modified, "unrelated.md");
+            Assert.Equal(0, fetches);
+
+            // A CREATED file resolves the unresolved card. Production
+            // emits the Created event AFTER indexing (the session's
+            // own write pipeline); a direct disk write needs the scan
+            // first, exactly like any external edit.
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "missing-note.md"), "Now it exists.\n");
+            using var rescanCancel = new CancelToken();
+            session.ScanInitial(rescanCancel);
+            tab.Reading!.NotifyVaultFileChanged(
+                FileChangeKind.Created, "missing-note.md");
+            Assert.True(fetches > 0, "a create must reach the fetch");
+            Assert.Contains(
+                "Embedded note: missing-note.md", Text(), StringComparison.Ordinal);
+            Assert.Contains("Now it exists.", Text(), StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>
+    /// Round 1 [high]: the 128-key cap counts ATTEMPTS — persistent
+    /// per-key failures stop at the cap instead of making one FFI
+    /// round trip for every distinct key in an adversarial note.
+    /// </summary>
+    [Fact]
+    public void PersistentFailuresStopAtTheAttemptCap()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-attempts");
+            var note = new System.Text.StringBuilder();
+            for (int i = 0; i < 130; i++)
+            {
+                note.Append("![[t").Append(i).Append("]]\n\n");
+            }
+            File.WriteAllText(Path.Combine(fixture.Root, "note0.md"), note.ToString());
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            int attempts = 0;
+            // Attach before the first projection: the tab creates its
+            // reading model on toggle.
+            tab.ToggleViewMode();
+            tab.Reading!.EmbedFaultForTests = () =>
+            {
+                attempts++;
+                return new VaultException.Io("resolution down");
+            };
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            Assert.Equal(
+                ReadingContentViewModel.MaximumResolvedEmbedsPerNote, attempts);
+            Assert.Equal(
+                130,
+                surface.LandmarksForTests.Count(
+                    candidate => candidate.Kind == ReadingLandmarkKind.Embed));
+        });
+    }
+
+    /// <summary>
+    /// Round 1 [medium]: an image whose PAYLOAD the note-wide pool
+    /// refused keeps its true identity — image header, resolved Jump
+    /// destination, and an honest budget notice (never the
+    /// decode-failure lie, never "note").
+    /// </summary>
+    [Fact]
+    public void ImagePoolRefusalKeepsImageIdentity()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-imagepool");
+            var junk = new byte[6 * 1024 * 1024];
+            File.WriteAllBytes(Path.Combine(fixture.Root, "a.png"), junk);
+            File.WriteAllBytes(Path.Combine(fixture.Root, "b.png"), junk);
+            File.WriteAllBytes(Path.Combine(fixture.Root, "c.png"), junk);
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "![[a.png]]\n\n![[b.png]]\n\n![[c.png]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            string text = new System.Windows.Documents.TextRange(
+                surface.Document.ContentStart,
+                surface.Document.ContentEnd).Text;
+            // 6 + 6 admitted; the third exceeds the 16 MiB pool.
+            Assert.Contains(
+                "Embedded image: c.png", text, StringComparison.Ordinal);
+            Assert.Contains(
+                "Image not displayed: over this note's embedded-image budget.",
+                text,
+                StringComparison.Ordinal);
+            Assert.Single(
+                FindJumpButtons(surface.Document),
+                button =>
+                    Equals(button.Tag, "c.png")
+                    && ReadingSemantics.TryGetEmbedJump(button, out string path, out _)
+                    && path == "c.png");
+        });
+    }
+
+    /// <summary>Nested image payloads are stripped before retention —
+    /// collapsed child cards never render bytes, and unstripped trees
+    /// bypassed the note-wide pool entirely (round 1 [high]).</summary>
+    [Fact]
+    public void NestedImagePayloadsAreStripped()
+    {
+        var tree = new EmbedResolution.FullNote(
+            "host.md",
+            "Text ![[pic.png]] more.",
+            new[]
+            {
+                new NestedEmbed(
+                    "pic.png",
+                    5,
+                    17,
+                    new EmbedResolution.Image(
+                        "pic.png", new byte[] { 1, 2, 3 }, "image/png", "alt")),
+            });
+        var stripped = (EmbedResolution.FullNote)
+            ReadingContentViewModel.StripNestedImagePayloads(tree);
+        var nestedImage = (EmbedResolution.Image)stripped.Nested[0].Resolution;
+        Assert.Empty(nestedImage.Bytes);
+        Assert.Equal("image/png", nestedImage.Mime);
+        Assert.Equal("alt", nestedImage.Alt);
     }
 
     private static IEnumerable<System.Windows.Controls.Button> FindJumpButtons(

@@ -291,10 +291,20 @@ public static class SurfaceSerializer
                  .Raw("}");
                 break;
             case EmbedResolution.Image image:
+                // SHA-256 over the payload: unlike diagram SVG (a
+                // RENDERER output, machine-dependent), image bytes are
+                // vault CONTENT — identical fixtures must round-trip
+                // the FFI byte-identically on both twins (round 1
+                // [medium]: length alone couldn't prove that).
                 j.Raw("{\"kind\":").Str("image")
                  .Raw(",\"target\":").Str(image.TargetPath)
                  .Raw(",\"mime\":").Str(image.Mime)
                  .Raw(",\"image_len\":").Num((ulong)image.Bytes.Length)
+                 .Raw(",\"image_sha256\":").Str(
+                    image.Bytes.Length == 0
+                        ? ""
+                        : Convert.ToHexString(
+                            System.Security.Cryptography.SHA256.HashData(image.Bytes)))
                  .Raw(",\"alt\":").Str(image.Alt ?? "")
                  .Raw("}");
                 break;

@@ -47,6 +47,16 @@ internal static class ReadingSemantics
             "ReadingEmbedKey", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
 
+    private static readonly DependencyProperty EmbedJumpPathProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedJumpPath", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
+    private static readonly DependencyProperty EmbedJumpAnchorProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingEmbedJumpAnchor", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
     private static readonly DependencyProperty MarkerProperty =
         DependencyProperty.RegisterAttached(
             "ReadingMarker", typeof(Marker?), typeof(ReadingSemantics),
@@ -98,6 +108,48 @@ internal static class ReadingSemantics
 
     public static string? EmbedHeaderKeyOf(Paragraph paragraph) =>
         paragraph.GetValue(EmbedKeyProperty) as string;
+
+    /// <summary>
+    /// The Jump destination when core ALREADY RESOLVED the target
+    /// (W3-5, round 1): activation navigates directly — the mac
+    /// `openEmbedTarget(path)` contract — because the host note's
+    /// record snapshot cannot contain NESTED targets, and re-matching
+    /// there dead-ends on content the card is displaying. String-only
+    /// values (the W3-1 Tag-serialization lesson); the anchor rides a
+    /// "kind:text" codec, kinds "heading"/"block" per core.
+    /// </summary>
+    public static void MarkEmbedJump(
+        DependencyObject element, string path, string? anchorKind, string? anchorText)
+    {
+        element.SetValue(EmbedJumpPathProperty, path);
+        if (anchorKind is not null && anchorText is not null)
+        {
+            element.SetValue(EmbedJumpAnchorProperty, anchorKind + ":" + anchorText);
+        }
+    }
+
+    public static bool TryGetEmbedJump(
+        DependencyObject element,
+        out string path,
+        out LinkAnchor? anchor)
+    {
+        path = string.Empty;
+        anchor = null;
+        if (element.GetValue(EmbedJumpPathProperty) is not string jumpPath)
+        {
+            return false;
+        }
+        path = jumpPath;
+        if (element.GetValue(EmbedJumpAnchorProperty) is string encoded)
+        {
+            int split = encoded.IndexOf(':', StringComparison.Ordinal);
+            if (split > 0)
+            {
+                anchor = new LinkAnchor(encoded[..split], encoded[(split + 1)..]);
+            }
+        }
+        return true;
+    }
 
     public static void MarkCodeBlock(Paragraph paragraph) =>
         paragraph.SetValue(MarkerProperty, Marker.CodeBlock);

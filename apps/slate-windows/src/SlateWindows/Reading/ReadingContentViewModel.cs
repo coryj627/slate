@@ -105,6 +105,21 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
     private ReadingActivation? _activation;
 
+    /// <summary>Vault-relative paths the PUBLISHED embed cards were
+    /// resolved from (root + nested targets) — the reverse-dependency
+    /// filter for target-note saves (W3-5 round 1: a target saved
+    /// after publication scheduled nothing, leaving cards stale
+    /// indefinitely).</summary>
+    private readonly HashSet<string> _publishedEmbedDependencies =
+        new(StringComparer.Ordinal);
+
+    /// <summary>True when any published card is unresolved or
+    /// degraded — a CREATED/renamed file might resolve it, so those
+    /// events refresh even off the dependency set.</summary>
+    private bool _publishedHasUnresolvedEmbeds;
+
+    private DispatcherTimer? _dependencyDebounce;
+
     public ReadingContentViewModel(
         VaultSession session,
         WorkspaceTabViewModel tab,
@@ -259,6 +274,15 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _activation ??= new ReadingActivation(
             _tab, _announce, () => _publishedRecords, _openExternalForTests);
         _activation.Activate(kind);
+    }
+
+    /// <summary>Open an embed card's ALREADY-RESOLVED source (W3-5) —
+    /// see <see cref="ReadingActivation.ActivateResolvedEmbedSource"/>.</summary>
+    public void ActivateResolvedEmbedSource(string path, LinkAnchor? anchor)
+    {
+        _activation ??= new ReadingActivation(
+            _tab, _announce, () => _publishedRecords, _openExternalForTests);
+        _activation.ActivateResolvedEmbedSource(path, anchor);
     }
 
     /// <summary>
@@ -707,16 +731,20 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
             }
         }
         var artifacts = new List<ReadingEmbedArtifact>(keys.Count);
-        int resolved = 0;
+        int attempts = 0;
         long imagePool = FetchedEmbedImageByteBudget;
         foreach (string key in keys)
         {
             altByKey.TryGetValue(key, out string? alt);
-            if (resolved >= MaximumResolvedEmbedsPerNote)
+            // Attempts are counted BEFORE the FFI call (round 1
+            // [high]: counting successes let persistent failures make
+            // one call per distinct key, unbounded).
+            if (attempts >= MaximumResolvedEmbedsPerNote)
             {
                 artifacts.Add(new ReadingEmbedArtifact(key, alt, null));
                 continue;
             }
+            attempts++;
             EmbedPreviewResolution? resolution;
             try
             {
@@ -725,26 +753,189 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     throw fault;
                 }
                 resolution = session.ResolveEmbedPreview(path, key, alt);
-                resolved++;
             }
             catch (VaultException)
             {
                 resolution = null;
             }
-            if (resolution?.Resolution is EmbedResolution.Image image)
+            bool imageRefused = false;
+            if (resolution is not null)
             {
-                if (image.Bytes.Length > imagePool)
+                // NESTED image payloads are stripped outright: nested
+                // cards render header-only (G25), so their bytes are
+                // pure retention — and they bypassed the pool (round 1
+                // [high]: 128 trees × the core 8 MiB per-key allowance
+                // is ~1 GiB the old accounting never saw).
+                EmbedResolution stripped =
+                    StripNestedImagePayloads(resolution.Resolution);
+                if (stripped is EmbedResolution.Image image
+                    && image.Bytes.Length > 0)
                 {
-                    resolution = null;
+                    if (image.Bytes.Length > imagePool)
+                    {
+                        imageRefused = true;
+                        stripped = new EmbedResolution.Image(
+                            image.TargetPath,
+                            Array.Empty<byte>(),
+                            image.Mime,
+                            image.Alt);
+                    }
+                    else
+                    {
+                        imagePool -= image.Bytes.Length;
+                    }
                 }
-                else
-                {
-                    imagePool -= image.Bytes.Length;
-                }
+                resolution = new EmbedPreviewResolution(
+                    stripped, resolution.Truncated);
             }
-            artifacts.Add(new ReadingEmbedArtifact(key, alt, resolution));
+            artifacts.Add(new ReadingEmbedArtifact(key, alt, resolution, imageRefused));
         }
         return artifacts.ToArray();
+    }
+
+    /// <summary>
+    /// W3-5 round 1 [high]: a TARGET-note save after publication must
+    /// re-project the cards built from it. The vault event stream
+    /// (session write paths; external edits surface at the next scan)
+    /// reaches every open reading model through the workspace, and
+    /// this filter keeps it cheap: refresh only when the changed path
+    /// is one the published cards were resolved from, or when a
+    /// create/rename might resolve a card that is currently
+    /// unresolved or degraded. Debounced (saves arrive in bursts);
+    /// the artifact digest makes a no-op refresh a memo hit. Hidden
+    /// models do nothing — a rebind always re-projects (W3-2 rule).
+    /// </summary>
+    public void NotifyVaultFileChanged(FileChangeKind kind, string path)
+    {
+        if (_disposed
+            || BlocksAppended is null
+            || string.Equals(path, _tab.Path, StringComparison.Ordinal))
+        {
+            return;
+        }
+        bool relevant = _publishedEmbedDependencies.Contains(path)
+            || (_publishedHasUnresolvedEmbeds
+                && kind is FileChangeKind.Created or FileChangeKind.Renamed);
+        if (!relevant)
+        {
+            return;
+        }
+        if (_synchronousForTests)
+        {
+            Refresh();
+            return;
+        }
+        _dependencyDebounce ??= new DispatcherTimer
+        {
+            Interval = EditDebounce,
+        };
+        _dependencyDebounce.Stop();
+        _dependencyDebounce.Tick -= DependencyDebounceElapsed;
+        _dependencyDebounce.Tick += DependencyDebounceElapsed;
+        _dependencyDebounce.Start();
+    }
+
+    private void DependencyDebounceElapsed(object? sender, EventArgs e)
+    {
+        _dependencyDebounce?.Stop();
+        if (!_disposed)
+        {
+            Refresh();
+        }
+    }
+
+    private void CollectEmbedDependencies(ReadingEmbedArtifact[] embeds)
+    {
+        _publishedEmbedDependencies.Clear();
+        _publishedHasUnresolvedEmbeds = false;
+        foreach (ReadingEmbedArtifact embed in embeds)
+        {
+            if (embed.Resolution is null)
+            {
+                _publishedHasUnresolvedEmbeds = true;
+                continue;
+            }
+            AddDependencyPaths(embed.Resolution.Resolution);
+        }
+    }
+
+    private void AddDependencyPaths(EmbedResolution resolution)
+    {
+        switch (resolution)
+        {
+            case EmbedResolution.FullNote fullNote:
+                _publishedEmbedDependencies.Add(fullNote.TargetPath);
+                foreach (NestedEmbed nested in fullNote.Nested)
+                {
+                    AddDependencyPaths(nested.Resolution);
+                }
+                break;
+            case EmbedResolution.Section section:
+                _publishedEmbedDependencies.Add(section.TargetPath);
+                foreach (NestedEmbed nested in section.Nested)
+                {
+                    AddDependencyPaths(nested.Resolution);
+                }
+                break;
+            case EmbedResolution.Block block:
+                _publishedEmbedDependencies.Add(block.TargetPath);
+                break;
+            case EmbedResolution.Image image:
+                _publishedEmbedDependencies.Add(image.TargetPath);
+                break;
+            case EmbedResolution.Unresolved:
+                _publishedHasUnresolvedEmbeds = true;
+                break;
+        }
+    }
+
+    /// <summary>Rebuilds a resolution tree with every NESTED image
+    /// payload emptied — collapsed child cards never render bytes.
+    /// The root image is left intact (its pool charge happens at the
+    /// call site).</summary>
+    internal static EmbedResolution StripNestedImagePayloads(EmbedResolution resolution)
+    {
+        switch (resolution)
+        {
+            case EmbedResolution.FullNote fullNote:
+                return new EmbedResolution.FullNote(
+                    fullNote.TargetPath,
+                    fullNote.Text,
+                    StripNestedArray(fullNote.Nested));
+            case EmbedResolution.Section section:
+                return new EmbedResolution.Section(
+                    section.TargetPath,
+                    section.Heading,
+                    section.Text,
+                    StripNestedArray(section.Nested));
+            default:
+                return resolution;
+        }
+    }
+
+    private static NestedEmbed[] StripNestedArray(NestedEmbed[] nested)
+    {
+        if (nested.Length == 0)
+        {
+            return nested;
+        }
+        var stripped = new NestedEmbed[nested.Length];
+        for (int i = 0; i < nested.Length; i++)
+        {
+            EmbedResolution child = nested[i].Resolution switch
+            {
+                EmbedResolution.Image image when image.Bytes.Length > 0 =>
+                    new EmbedResolution.Image(
+                        image.TargetPath, Array.Empty<byte>(), image.Mime, image.Alt),
+                var other => StripNestedImagePayloads(other),
+            };
+            stripped[i] = new NestedEmbed(
+                nested[i].RawTarget,
+                nested[i].ByteOffsetInParent,
+                nested[i].ByteEndInParent,
+                child);
+        }
+        return stripped;
     }
 
     /// <summary>
@@ -875,6 +1066,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
+        CollectEmbedDependencies(fetched.Embeds);
         _projectionComplete = false;
         // Only the DOCUMENT is published. The built model's landmarks
         // point into a container the surface's merge empties — the
@@ -1056,6 +1248,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         _disposed = true;
         Deactivate();
         _editDebounce = null;
+        _dependencyDebounce?.Stop();
+        _dependencyDebounce = null;
     }
 
     private sealed record FetchResult(
@@ -1204,6 +1398,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         {
             DigestField(hash, embed.Key);
             DigestField(hash, embed.Alt ?? string.Empty);
+            DigestField(hash, embed.ImageBudgetRefused ? "image-refused" : "image-ok");
             if (embed.Resolution is null)
             {
                 DigestField(hash, "embed-degraded");
