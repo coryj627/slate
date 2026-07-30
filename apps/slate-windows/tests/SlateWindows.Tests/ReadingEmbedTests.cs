@@ -1052,6 +1052,77 @@ public sealed class ReadingEmbedTests
         });
     }
 
+    /// <summary>A 2×2 red PNG — big enough to overshoot a 1-pixel
+    /// pool WITHOUT the pool being pre-drained (the non-exact
+    /// exhaustion path).</summary>
+    private static readonly byte[] TwoByTwoPng = Convert.FromBase64String(
+        "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP4"
+        + "z8AARAwQCgAf7gP9i18U1AAAAABJRU5ErkJggg==");
+
+    /// <summary>
+    /// Round 6 [high]: the exhaustion-DISCOVERING decode is the
+    /// projection's last — the pool drains and the refusal memoizes,
+    /// so repeating the over-budget key (or adding more images)
+    /// never decodes again; an undrained pool re-decoded the same
+    /// over-budget key at every one of up to 2,000 occurrences.
+    /// </summary>
+    [Fact]
+    public void ExhaustionDiscoveryDrainsThePoolAndMemoizesTheRefusal()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-drain");
+            File.WriteAllBytes(Path.Combine(fixture.Root, "big.png"), TwoByTwoPng);
+            File.WriteAllBytes(Path.Combine(fixture.Root, "tiny.png"), TinyPng);
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "![[big.png]]\n\n![[big.png]]\n\n![[tiny.png]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            var decodes = new List<string>();
+            ReadingDocumentBuilder.EmbedImageDecodeProbeForTests = decodes.Add;
+            // One pixel remaining: the 2×2 (4 px) decode DISCOVERS
+            // exhaustion rather than hitting a pre-drained pool.
+            ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests = 1;
+            try
+            {
+                using var tab = new WorkspaceTabViewModel(
+                    session,
+                    new WorkspaceTabState(
+                        Guid.NewGuid(),
+                        new WorkspaceItemState(
+                            WorkspaceItemKind.Markdown, "note0.md")),
+                    startInteractionBackgroundWork: false);
+                tab.ToggleViewMode();
+                var surface = new ReadingSurface { Model = tab.Reading };
+
+                // Only the discovering decode reaches the decoder —
+                // per projection (this harness projects twice), and
+                // never for the repeat or the follow-on tiny image.
+                Assert.InRange(decodes.Count, 1, 2);
+                Assert.All(decodes, key => Assert.Equal("big.png", key));
+
+                string text = new System.Windows.Documents.TextRange(
+                    surface.Document.ContentStart,
+                    surface.Document.ContentEnd).Text;
+                Assert.Contains(
+                    "Image not displayed: over this note's embedded-image budget.",
+                    text,
+                    StringComparison.Ordinal);
+                Assert.Contains(
+                    "Embedded image: tiny.png", text, StringComparison.Ordinal);
+            }
+            finally
+            {
+                ReadingDocumentBuilder.EmbedImageDecodeProbeForTests = null;
+                ReadingDocumentBuilder.ProjectionEmbedDecodedPixelBudgetOverrideForTests =
+                    null;
+            }
+        });
+    }
+
     private static IEnumerable<System.Windows.Controls.Button> FindJumpButtons(
         System.Windows.Documents.FlowDocument document)
     {

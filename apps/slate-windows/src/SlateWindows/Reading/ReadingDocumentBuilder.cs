@@ -71,7 +71,14 @@ internal sealed class ReadingListBuildContext
     /// after exhaustion keep header and destination and degrade only
     /// the visual with the honest budget notice.
     /// </summary>
-    internal Dictionary<string, System.Windows.Media.ImageSource> DecodedEmbedImages
+    /// <summary>Per-key TERMINAL outcomes (round 6): a refused or
+    /// undecodable key memoizes too, so no key is ever decoded more
+    /// than once per projection — an admitted-only cache let an
+    /// over-budget key re-decode at every occurrence.</summary>
+    internal Dictionary<
+        string,
+        (System.Windows.Media.ImageSource? Source, bool BudgetRefused)>
+        DecodedEmbedImages
     { get; } = new(StringComparer.Ordinal);
 
     /// <summary>See <see cref="DecodedEmbedImages"/>.</summary>
@@ -1355,46 +1362,63 @@ internal static class ReadingDocumentBuilder
         string key,
         ReadingListBuildContext context)
     {
-        if (!context.DecodedEmbedImages.TryGetValue(
-            key, out System.Windows.Media.ImageSource? decoded))
+        if (!context.DecodedEmbedImages.TryGetValue(key, out var outcome))
         {
             if (context.RemainingEmbedDecodedPixels <= 0)
             {
-                section.Blocks.Add(EmbedBodyParagraph(
-                    "Image not displayed: over this note's embedded-image "
-                    + "budget. Open the source note to view it."));
-                return;
+                outcome = (null, true);
             }
-            EmbedImageDecodeProbeForTests?.Invoke(key);
-            decoded = EditorInteractionCoordinator.DecodeImage(image.Bytes, image.Mime);
-            if (decoded is null)
+            else
             {
-                section.Blocks.Add(EmbedBodyParagraph(
-                    $"Could not decode image. MIME: {image.Mime}. "
-                    + "The file may be corrupt or an unsupported codec."));
-                return;
+                EmbedImageDecodeProbeForTests?.Invoke(key);
+                System.Windows.Media.ImageSource? decoded =
+                    EditorInteractionCoordinator.DecodeImage(image.Bytes, image.Mime);
+                if (decoded is null)
+                {
+                    outcome = (null, false);
+                }
+                else
+                {
+                    long pixels =
+                        decoded is System.Windows.Media.Imaging.BitmapSource bitmap
+                            ? (long)bitmap.PixelWidth * bitmap.PixelHeight
+                            // Non-bitmap sources cannot report
+                            // dimensions; charge the decode cap
+                            // conservatively.
+                            : 1120L * 1120L;
+                    if (pixels > context.RemainingEmbedDecodedPixels)
+                    {
+                        // Exhaustion discovered (round 6): DRAIN the
+                        // pool — every later image refuses pre-decode
+                        // — and memoize the refusal, so this is the
+                        // projection's LAST decode. The discovering
+                        // surface is discarded unreferenced, bounded
+                        // by the per-image dimension cap.
+                        context.RemainingEmbedDecodedPixels = 0;
+                        outcome = (null, true);
+                    }
+                    else
+                    {
+                        context.RemainingEmbedDecodedPixels -= pixels;
+                        outcome = (decoded, false);
+                    }
+                }
             }
-            long pixels = decoded is System.Windows.Media.Imaging.BitmapSource bitmap
-                ? (long)bitmap.PixelWidth * bitmap.PixelHeight
-                // Non-bitmap sources cannot report dimensions; charge
-                // the decode cap conservatively.
-                : 1120L * 1120L;
-            if (pixels > context.RemainingEmbedDecodedPixels)
-            {
-                // The discovering decode's surface is discarded before
-                // any element references it — the per-image dimension
-                // cap bounds this one transient.
-                section.Blocks.Add(EmbedBodyParagraph(
-                    "Image not displayed: over this note's embedded-image "
-                    + "budget. Open the source note to view it."));
-                return;
-            }
-            context.RemainingEmbedDecodedPixels -= pixels;
-            context.DecodedEmbedImages[key] = decoded;
+            context.DecodedEmbedImages[key] = outcome;
+        }
+        if (outcome.Source is null)
+        {
+            section.Blocks.Add(EmbedBodyParagraph(
+                outcome.BudgetRefused
+                    ? "Image not displayed: over this note's embedded-image "
+                        + "budget. Open the source note to view it."
+                    : $"Could not decode image. MIME: {image.Mime}. "
+                        + "The file may be corrupt or an unsupported codec."));
+            return;
         }
         var visual = new ReadingDiagramImage
         {
-            Source = decoded,
+            Source = outcome.Source,
             Stretch = System.Windows.Media.Stretch.Uniform,
             StretchDirection = StretchDirection.DownOnly,
             MaxHeight = 600,
