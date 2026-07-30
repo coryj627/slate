@@ -143,7 +143,14 @@ public sealed class ReadingViewTests
         RunSta(() =>
         {
             ReadingDocumentModel model = BuildFixture();
-            Hyperlink[] links = CollectHyperlinks(model.Document).ToArray();
+            // Card chrome (the embed Jump link, AutomationId
+            // "ReadingBlockEmbed") is excluded: the pin is about the
+            // INLINE run population — the embed itself is a card, not
+            // an inline link.
+            Hyperlink[] links = CollectHyperlinks(model.Document)
+                .Where(link => System.Windows.Automation.AutomationProperties
+                    .GetAutomationId(link) != "ReadingBlockEmbed")
+                .ToArray();
 
             // [[known]], [[absent]], #tag, [@smith2020] — the embed is a
             // card, not an inline link.
@@ -624,12 +631,16 @@ public sealed class ReadingViewTests
             });
 
             ReadingInlineRunKind[] kinds = CollectHyperlinks(reading.Document!)
+                .Where(link => System.Windows.Automation.AutomationProperties
+                    .GetAutomationId(link) != "ReadingBlockEmbed")
                 .Select(link => link.Tag)
                 .OfType<ReadingInlineRunKind>()
                 .ToArray();
             // known, absent, #atag, and the citation — core classifies
             // [@smith2020] as a Citation run even with no configured CSL
-            // style (unmatched raw), so it stays activatable.
+            // style (unmatched raw), so it stays activatable. The embed
+            // card's Jump link (AutomationId "ReadingBlockEmbed") is
+            // card chrome, not an inline run.
             Assert.Equal(4, kinds.Length);
             Assert.IsType<ReadingInlineRunKind.Citation>(kinds[3]);
 

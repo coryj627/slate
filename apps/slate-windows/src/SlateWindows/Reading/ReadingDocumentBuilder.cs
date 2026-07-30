@@ -1083,8 +1083,7 @@ internal static class ReadingDocumentBuilder
         };
         header.Inlines.Add(new Run(headerName));
         header.Inlines.Add(new Run("  "));
-        header.Inlines.Add(new InlineUIContainer(
-            JumpToSourceButton(key, headerSuffix, jump)));
+        header.Inlines.Add(JumpToSourceLink(key, headerSuffix, jump));
         ReadingSemantics.MarkEmbedHeader(header, key);
         if (jump is { } headerJump)
         {
@@ -1231,29 +1230,49 @@ internal static class ReadingDocumentBuilder
             _ => null,
         };
 
-    private static Button JumpToSourceButton(
+    /// <summary>
+    /// The card's Jump affordance is a <see cref="Hyperlink"/>, not a
+    /// Button (field, 2026-07-30): a Button in an InlineUIContainer
+    /// is an EMBEDDED OBJECT — blank in the text range, its Name
+    /// suppressed during caret reading (the G23 mechanism) — so the
+    /// caret heard a bare "button". A FlowDocument hyperlink is real
+    /// in-range TEXT: the caret reads "Jump to source, link", Tab
+    /// focuses it with the full Name, and Enter/click route exactly
+    /// as reading links do.
+    /// </summary>
+    private static Hyperlink JumpToSourceLink(
         string key,
         string helpText,
         (string Path, string? AnchorKind, string? AnchorText)? jump)
     {
-        var button = new Button
+        var link = new Hyperlink(new Run("Jump to source"))
         {
-            Content = "Jump to source",
-            Padding = new Thickness(6, 0, 6, 0),
-            Tag = key,
+            TextDecorations = TextDecorations.Underline,
+            Tag = new ReadingInlineRunKind.Embed(key),
         };
-        AutomationProperties.SetName(button, $"Jump to source: {key}");
-        AutomationProperties.SetAutomationId(button, "ReadingBlockEmbed");
+        link.SetResourceReference(
+            TextElement.ForegroundProperty, "Slate.AccentBrush");
+        // A destination is REQUIRED: without NavigateUri NVDA
+        // announces "Link has no apparent destination" (W3-1,
+        // measured).
+        Uri? destination = ReadingRouting.RoutingUri(
+            new ReadingInlineRunKind.Embed(key));
+        if (destination is not null)
+        {
+            link.NavigateUri = destination;
+        }
+        AutomationProperties.SetName(link, $"Jump to source: {key}");
+        AutomationProperties.SetAutomationId(link, "ReadingBlockEmbed");
         if (helpText.Length > 0)
         {
-            AutomationProperties.SetHelpText(button, helpText);
+            AutomationProperties.SetHelpText(link, helpText);
         }
         if (jump is { } resolved)
         {
             ReadingSemantics.MarkEmbedJump(
-                button, resolved.Path, resolved.AnchorKind, resolved.AnchorText);
+                link, resolved.Path, resolved.AnchorKind, resolved.AnchorText);
         }
-        return button;
+        return link;
     }
 
     /// <summary>
@@ -1333,10 +1352,10 @@ internal static class ReadingDocumentBuilder
         };
         paragraph.Inlines.Add(new Run(name));
         paragraph.Inlines.Add(new Run("  "));
-        paragraph.Inlines.Add(new InlineUIContainer(JumpToSourceButton(
+        paragraph.Inlines.Add(JumpToSourceLink(
             child.RawTarget,
             EmbedHeaderAccessibilitySuffix(child.Resolution),
-            jump)));
+            jump));
         ReadingSemantics.MarkEmbedHeader(paragraph, child.RawTarget);
         if (jump is { } resolvedJump)
         {

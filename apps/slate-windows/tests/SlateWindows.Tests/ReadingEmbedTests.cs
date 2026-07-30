@@ -256,7 +256,8 @@ public sealed class ReadingEmbedTests
                 candidate => candidate.Kind == ReadingLandmarkKind.Embed);
             Assert.Equal("Unresolved embed: missing-note", landmark.Text);
 
-            System.Windows.Controls.Button jump = FindJumpButtons(surface.Document).Single();
+            System.Windows.Documents.Hyperlink jump =
+                FindJumpLinks(surface.Document).Single();
             Assert.Equal(
                 "The target note or attachment doesn't exist in this vault.",
                 System.Windows.Automation.AutomationProperties.GetHelpText(jump));
@@ -358,10 +359,10 @@ public sealed class ReadingEmbedTests
                 "Leaf body content.", text, StringComparison.Ordinal);
             Assert.DoesNotContain("![[", text, StringComparison.Ordinal);
 
-            // The nested Jump button activates the NESTED source.
+            // The nested Jump link activates the NESTED source.
             Assert.Contains(
-                FindJumpButtons(surface.Document),
-                button => Equals(button.Tag, "leaf"));
+                FindJumpLinks(surface.Document),
+                link => JumpKeyOf(link) == "leaf");
         });
     }
 
@@ -496,10 +497,10 @@ public sealed class ReadingEmbedTests
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
 
-            System.Windows.Controls.Button nested = FindJumpButtons(surface.Document)
-                .Single(button => Equals(button.Tag, "leaf"));
+            System.Windows.Documents.Hyperlink nested = FindJumpLinks(surface.Document)
+                .Single(link => JumpKeyOf(link) == "leaf");
             nested.RaiseEvent(new System.Windows.RoutedEventArgs(
-                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                System.Windows.Documents.Hyperlink.ClickEvent));
 
             Assert.Contains(
                 workspace.ActiveGroup.Tabs,
@@ -674,10 +675,10 @@ public sealed class ReadingEmbedTests
                 text,
                 StringComparison.Ordinal);
             Assert.Single(
-                FindJumpButtons(surface.Document),
-                button =>
-                    Equals(button.Tag, "c.png")
-                    && ReadingSemantics.TryGetEmbedJump(button, out string path, out _)
+                FindJumpLinks(surface.Document),
+                link =>
+                    JumpKeyOf(link) == "c.png"
+                    && ReadingSemantics.TryGetEmbedJump(link, out string path, out _)
                     && path == "c.png");
         });
     }
@@ -720,10 +721,10 @@ public sealed class ReadingEmbedTests
 
             // The Jump still opens the EXISTING file (top, no anchor).
             Assert.Contains(
-                FindJumpButtons(surface.Document),
-                button =>
+                FindJumpLinks(surface.Document),
+                link =>
                     ReadingSemantics.TryGetEmbedJump(
-                        button, out string path, out var anchor)
+                        link, out string path, out var anchor)
                     && path == "target.md"
                     && anchor is null);
 
@@ -772,10 +773,10 @@ public sealed class ReadingEmbedTests
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
 
-            System.Windows.Controls.Button nested = FindJumpButtons(surface.Document)
-                .Single(button => Equals(button.Tag, "leaf#missing"));
+            System.Windows.Documents.Hyperlink nested = FindJumpLinks(surface.Document)
+                .Single(link => JumpKeyOf(link) == "leaf#missing");
             nested.RaiseEvent(new System.Windows.RoutedEventArgs(
-                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                System.Windows.Documents.Hyperlink.ClickEvent));
 
             Assert.Contains(
                 workspace.ActiveGroup.Tabs,
@@ -883,9 +884,9 @@ public sealed class ReadingEmbedTests
             Assert.Contains(
                 "Unresolved embed: b/leaf.md#missing", Text(), StringComparison.Ordinal);
             Assert.Contains(
-                FindJumpButtons(surface.Document),
-                button =>
-                    ReadingSemantics.TryGetEmbedJump(button, out string path, out _)
+                FindJumpLinks(surface.Document),
+                link =>
+                    ReadingSemantics.TryGetEmbedJump(link, out string path, out _)
                     && path == "b/leaf.md");
 
             // The NEW path is now a tracked dependency: adding the
@@ -1123,7 +1124,7 @@ public sealed class ReadingEmbedTests
         });
     }
 
-    private static IEnumerable<System.Windows.Controls.Button> FindJumpButtons(
+    private static IEnumerable<System.Windows.Documents.Hyperlink> FindJumpLinks(
         System.Windows.Documents.FlowDocument document)
     {
         foreach (System.Windows.Documents.Block block in document.Blocks)
@@ -1140,17 +1141,21 @@ public sealed class ReadingEmbedTests
                 }
                 foreach (System.Windows.Documents.Inline inline in paragraph.Inlines)
                 {
-                    if (inline is System.Windows.Documents.InlineUIContainer
-                        {
-                            Child: System.Windows.Controls.Button button,
-                        })
+                    if (inline is System.Windows.Documents.Hyperlink link
+                        && System.Windows.Automation.AutomationProperties
+                            .GetAutomationId(link) == "ReadingBlockEmbed")
                     {
-                        yield return button;
+                        yield return link;
                     }
                 }
             }
         }
     }
+
+    /// <summary>The cache key a Jump link's run-kind fallback Tag
+    /// carries.</summary>
+    private static string JumpKeyOf(System.Windows.Documents.Hyperlink link) =>
+        link.Tag is ReadingInlineRunKind.Embed embed ? embed.Key : string.Empty;
 
     /// <summary>WPF objects require STA; xunit runs MTA.</summary>
     private static void RunSta(Action body)

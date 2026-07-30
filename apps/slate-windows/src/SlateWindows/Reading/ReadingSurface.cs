@@ -80,6 +80,18 @@ internal sealed class ReadingSurface : RichTextBox
             System.Windows.Documents.Hyperlink.ClickEvent,
             new System.Windows.RoutedEventHandler((_, args) =>
             {
+                // Embed Jump links whose target core ALREADY RESOLVED
+                // navigate directly (the W3-5 contract) — the run-kind
+                // fallback below covers degraded cards only.
+                if (args.Source is System.Windows.Documents.Hyperlink jumpLink
+                    && ReadingSemantics.TryGetEmbedJump(
+                        jumpLink, out string jumpPath, out var jumpAnchor)
+                    && _model is { } jumpModel)
+                {
+                    jumpModel.ActivateResolvedEmbedSource(jumpPath, jumpAnchor);
+                    args.Handled = true;
+                    return;
+                }
                 if (args.Source is System.Windows.Documents.Hyperlink
                     {
                         Tag: uniffi.slate_uniffi.ReadingInlineRunKind kind
