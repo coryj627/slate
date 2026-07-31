@@ -41,10 +41,21 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
     /// <summary>StyleId_Heading1; levels 1–9 are contiguous.</summary>
     internal const int StyleIdHeading1 = 70001;
 
-    /// <summary>StyleId_Quote — the same linear-reading channel, for
-    /// block quotes (field, 2026-07-30: quotes read as plain
-    /// prose).</summary>
+    /// <summary>StyleId_Quote. NVDA-source-verified UNCONSUMED (field
+    /// pass 3, 2026-07-31, nvaccess/nvda@5ba9521: StyleId maps only
+    /// Heading1—9); kept for non-NVDA ATs that do read it. NVDA users
+    /// get quotes through <see cref="StyleNameAttribute"/>.</summary>
     internal const int StyleIdQuote = 70014;
+
+    /// <summary>UIA_StyleNameAttributeId — NVDA's "report style"
+    /// channel (speaks "style Quote"; the setting is OFF by default and
+    /// the owner accepted that: no visible in-range prefix, zero visual
+    /// change, quotes silent until Report Style is enabled. Owner call,
+    /// field pass 3 2026-07-31).</summary>
+    internal const int StyleNameAttribute = 40033;
+
+    /// <summary>The style name answered for quote paragraphs.</summary>
+    internal const string QuoteStyleName = "Quote";
 
     private readonly ITextProvider _inner;
 
@@ -110,6 +121,12 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             {
                 return HeadingStyleTextProvider.StyleIdQuote;
             }
+        }
+        if (attributeId == HeadingStyleTextProvider.StyleNameAttribute
+            && ParagraphAtStart() is { } styled
+            && ReadingSemantics.IsQuote(styled))
+        {
+            return HeadingStyleTextProvider.QuoteStyleName;
         }
         return _inner.GetAttributeValue(attributeId);
     }

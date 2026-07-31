@@ -169,6 +169,19 @@ public sealed class ReadingEmbedTests
                 "Embedded image: A tiny chart", text, StringComparison.Ordinal);
             Assert.Contains(
                 "Embedded image: pic.png", text, StringComparison.Ordinal);
+
+            // Never upscale (owner call, field pass 3 2026-07-31):
+            // natural size, downscale-only — the G26 divergence from
+            // mac's scale-to-column-width.
+            var images = AllBlocks(surface.Document.Blocks)
+                .OfType<System.Windows.Documents.BlockUIContainer>()
+                .Select(container => container.Child)
+                .OfType<ReadingDiagramImage>()
+                .ToList();
+            Assert.Equal(2, images.Count);
+            Assert.All(images, image => Assert.Equal(
+                System.Windows.Controls.StretchDirection.DownOnly,
+                image.StretchDirection));
         });
     }
 
@@ -1244,6 +1257,23 @@ public sealed class ReadingEmbedTests
         link.Tag is ReadingInlineRunKind.Embed embed ? embed.Key : string.Empty;
 
     /// <summary>WPF objects require STA; xunit runs MTA.</summary>
+    private static IEnumerable<System.Windows.Documents.Block> AllBlocks(
+        System.Windows.Documents.BlockCollection blocks)
+    {
+        foreach (System.Windows.Documents.Block block in blocks)
+        {
+            yield return block;
+            if (block is System.Windows.Documents.Section section)
+            {
+                foreach (System.Windows.Documents.Block nested
+                    in AllBlocks(section.Blocks))
+                {
+                    yield return nested;
+                }
+            }
+        }
+    }
+
     private static void RunSta(Action body)
     {
         Exception? failure = null;
