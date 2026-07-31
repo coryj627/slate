@@ -32,11 +32,10 @@
 # refs and branch dispatches, reads+commits slate-arm64-pr), and the
 # trusted lineage must additionally carry Namespace's per-volume
 # branch allow-list ("main") in the dashboard, because in-workflow
-# routing cannot bind PR-controlled YAML. BOOTSTRAP (adversarial
-# round 1): the tag names are public before protection exists, so a
-# fork PR could seed a trusted volume first — after applying the
-# allow-list, RESET each trusted volume in the dashboard so its first
-# protected generation is built from scratch by main (one cold run).
+# routing cannot bind PR-controlled YAML. The tag names are public
+# before protection exists, so a fork PR could seed a trusted volume
+# first — the mandatory bootstrap runbook (quiesce, allow-list,
+# reset, verify-cold) is recorded in windows.yml's header.
 # audit.yml and nightly.yml share these lineages (they share this
 # profile's volume family); windows.yml documents the full reasoning.
 # The first run per new tag starts cold once.

@@ -31,12 +31,16 @@ permissions:
 # content stopped being true once dispatch-on-any-ref was
 # acknowledged). Same-ref runs still serialize with
 # cancel-in-progress: false, so the cron is never cancelled and a
-# same-ref re-dispatch replaces only its own equivalent pending run;
-# different refs may run concurrently (two census jobs fit the
-# Namespace concurrency pool).
+# same-ref runs queue FIFO without replacement (queue: max,
+# adversarial round 2: with the default single pending slot, a main
+# dispatch arriving while a run was active would cancel a PENDING
+# cron - cancel-in-progress only protects the running one); different
+# refs may run concurrently (two census jobs fit the Namespace
+# concurrency pool).
 concurrency:
   group: nightly-deep-verification-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   full-census:

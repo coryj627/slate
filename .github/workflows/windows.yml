@@ -59,20 +59,31 @@
 # -pr lineage — restoring untrusted artifacts in a trusted context).
 # Runs on refs/heads/main — pushes and main dispatches — commit the
 # trusted lineages (slate-windows-rust / slate-windows-app); every
-# other ref reads and commits the parallel *-pr lineages. BOOTSTRAP:
-# after applying the dashboard allow-list, RESET each trusted volume
-# so its first protected generation is built from scratch by main.
+# other ref reads and commits the parallel *-pr lineages.
 # PR-controlled build code can therefore never write state a main
 # build consumes, while the 7–9 adversarial-review rounds per PR still
 # inherit each other's warm state inside the PR lineage (the blast
 # radius of a poisoned PR volume is other PR builds, never main
 # artifacts — the same bound GitHub's own cache scoping draws).
-# Namespace's per-tag cache-protection allow-list (runner-
-# configuration#advanced-protect-caches-from-updates) is available as
-# dashboard belt-and-braces. NOTE: rust.yml, swift-tests.yml, and
-# audit.yml still run unconditional shared volumes — the pre-existing
-# repo-wide exposure this scheme fixes here; propagate the same
-# event-conditional tags there in a follow-up.
+# rust.yml, swift-tests.yml, audit.yml, and nightly.yml carry the
+# same ref-conditional tags (#1068).
+#
+# The dashboard allow-list is MANDATORY enforcement, not optional
+# hardening: in-workflow routing cannot bind PR-controlled YAML, and
+# the trusted tag names are public before protection exists. The ONE
+# bootstrap runbook (adversarial round 2 on #1068):
+#   1. QUIESCE — let every cache-using CI run finish (or cancel it);
+#      a pre-protection job that already mounted a volume commits its
+#      fork on clean exit, and that commit must not land post-reset;
+#   2. apply the per-volume branch allow-list ("main") to all four
+#      trusted volumes: slate-windows-rust, slate-windows-app,
+#      slate-arm64, slate-mac (dashboard — cache volume
+#      configuration — Show Advanced features);
+#   3. RESET each trusted volume, discarding any generation seeded
+#      before protection;
+#   4. VERIFY the next main run mounts COLD (footprint report near
+#      zero) and goes green — its commit is the first protected
+#      generation. Leave every *-pr volume unprotected.
 
 name: windows
 
