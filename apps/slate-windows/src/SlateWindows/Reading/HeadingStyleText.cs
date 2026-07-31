@@ -175,10 +175,6 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             : null;
     }
 
-    /// <summary>Walk cap: the paragraph walk must terminate even if a
-    /// future adaptor's Move misbehaves on an exotic block.</summary>
-    private const int MaximumSyntheticWalk = 10_000;
-
     /// <summary>
     /// Paragraph sub-ranges overlapping this range, in document order,
     /// built from PUBLIC range operations on fresh clones of the raw
@@ -186,13 +182,20 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     /// degenerate at paragraph starts; each yield expands a probe to
     /// the enclosing paragraph. Non-paragraph positions (container
     /// blocks) contribute nothing and the walk continues past them.
+    ///
+    /// Termination is STRICT FORWARD PROGRESS, not a count cap
+    /// (adversarial round 2: a 10k ceiling silently truncated
+    /// documents a single 64 KiB embed preview can legally exceed,
+    /// hiding later headings and quotes). Each iteration either
+    /// advances the cursor strictly forward or the walk ends; the
+    /// document is finite, so the walk is too.
     /// </summary>
     private IEnumerable<(ITextRangeProvider Range, Paragraph Paragraph)> ParagraphRanges()
     {
         ITextRangeProvider cursor = _inner.Clone();
         cursor.MoveEndpointByRange(
             TextPatternRangeEndpoint.End, cursor, TextPatternRangeEndpoint.Start);
-        for (int i = 0; i < MaximumSyntheticWalk; i++)
+        while (true)
         {
             ITextRangeProvider probe = cursor.Clone();
             probe.ExpandToEnclosingUnit(TextUnit.Paragraph);
@@ -200,7 +203,15 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             {
                 yield return (probe, paragraph);
             }
+            ITextRangeProvider previous = cursor.Clone();
             if (cursor.Move(TextUnit.Paragraph, 1) == 0)
+            {
+                yield break;
+            }
+            if (cursor.CompareEndpoints(
+                TextPatternRangeEndpoint.Start,
+                previous,
+                TextPatternRangeEndpoint.Start) <= 0)
             {
                 yield break;
             }

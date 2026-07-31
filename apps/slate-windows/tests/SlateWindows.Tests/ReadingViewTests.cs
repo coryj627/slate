@@ -601,6 +601,56 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>The paragraph walk has NO count ceiling (adversarial
+    /// round 2: a 10k cap silently truncated documents a 64 KiB embed
+    /// preview can legally exceed, hiding later quotes/headings from
+    /// both GetAttributeValue and FindAttribute). 10,050 plain
+    /// paragraphs precede the only quote; every synthetic answer must
+    /// still see it.</summary>
+    [Fact]
+    public void SyntheticAttributeWalkSurvivesHugeDocuments()
+    {
+        RunSta(() =>
+        {
+            var source = new System.Text.StringBuilder();
+            for (int i = 0; i < 10_050; i++)
+            {
+                source.Append('p').Append(i).Append("\n\n");
+            }
+            source.Append("> a quoted line\n");
+            FlowDocument built = BuildSource(source.ToString());
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers
+                .UIElementAutomationPeer.CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(built);
+            var provider = peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            var whole = provider!.DocumentRange;
+
+            Assert.Same(
+                System.Windows.Automation.TextPattern.MixedAttributeValue,
+                whole.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+
+            var forward = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName,
+                false);
+            Assert.NotNull(forward);
+            Assert.Contains(
+                "a quoted line", forward!.GetText(-1), StringComparison.Ordinal);
+
+            var backward = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote,
+                true);
+            Assert.NotNull(backward);
+            Assert.Contains(
+                "a quoted line", backward!.GetText(-1), StringComparison.Ordinal);
+        });
+    }
+
     /// <summary>FindAttribute resolves synthetic styles (adversarial
     /// round 1): WPF's own search cannot see the quote marker, so the
     /// decorator answers — both directions, headings too, and no
