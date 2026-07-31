@@ -9,7 +9,12 @@
 #     it instead of serially in front of it.
 #   windows — release cdylib + C# bindings, app build, xUnit suite, the
 #     FlaUI/axe-windows shell gate, and the `dotnet format` promise.
-#     Keeps the historical check name "build + test (windows x64)".
+#
+# The historical check name "build + test (windows x64)" belongs to the
+# `gate` aggregate job, which fails unless BOTH lanes succeed — a branch
+# rule (or a human) requiring the historical name still gates on the
+# platform witnesses, exactly as the serial job did (adversarial review:
+# GitHub evaluates required checks individually, not by sibling status).
 #
 # Runner selection recorded per §W0-2 item 3, revised 2026-07-30:
 # GitHub-hosted. Namespace ships Windows runners now (early access since
@@ -26,10 +31,14 @@
 # re-did the full cold release graph (~9.5 min) and discarded it, while
 # a feature-only manifest edit (985061e, invisible to a Cargo.lock hash)
 # quietly poisoned the test graph the same way. The replacement:
-#   - keys are unique per commit (…-${{ github.sha }}), so a save can
-#     never be skipped as an exact-key "hit";
-#   - restore-keys fall back by prefix — manifest-compatible lineage
-#     first, then any lineage — newest entry wins;
+#   - keys are unique per run attempt (…-sha-run_id-run_attempt), so a
+#     save can never be skipped as an exact-key "hit", and a failed main
+#     run's partial snapshot can never block the completed retry from
+#     saving (cache entries are immutable — a same-key retry save is
+#     silently dropped);
+#   - restore-keys fall back by prefix — same-commit earlier attempt
+#     first (the retry case), then manifest-compatible lineage, then any
+#     lineage — newest entry wins within each tier;
 #   - saves happen on main pushes only: PR-scoped cache entries are not
 #     readable by other PRs, main-scoped entries are readable everywhere,
 #     so PRs always restore a snapshot at most one main push stale;
@@ -84,8 +93,9 @@ jobs:
           path: |
             ~/.cargo/registry
             target
-          key: windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}
+          key: windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
+            windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-
             windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-
             windows-cargo-tests-
 
@@ -126,10 +136,10 @@ jobs:
           path: |
             ~/.cargo/registry
             target
-          key: windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}
+          key: windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   windows:
-    name: build + test (windows x64)
+    name: app build + test (windows x64)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -145,8 +155,9 @@ jobs:
           path: |
             ~/.cargo/registry
             target
-          key: windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}
+          key: windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
+            windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-
             windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-
             windows-cargo-app-
 
@@ -230,4 +241,22 @@ jobs:
           path: |
             ~/.cargo/registry
             target
-          key: windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}
+          key: windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # The historical required-check identity. Fails unless BOTH lanes
+  # succeed, so "build + test (windows x64)" green still means what it
+  # meant when the lanes were one serial job. Runs on a Linux runner:
+  # it evaluates two strings, and ubuntu boots faster and bills at 1x.
+  gate:
+    name: build + test (windows x64)
+    needs: [rust-tests, windows]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify both windows lanes succeeded
+        run: |
+          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ]; then
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }}"
+            exit 1
+          fi
