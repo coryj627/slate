@@ -160,7 +160,19 @@ internal static class ReadingDocumentBuilder
         IReadOnlyList<CodeBlock> codeBlocks,
         IReadOnlyList<MathBlock> mathBlocks,
         IReadOnlyList<DiagramBlock> diagramBlocks,
-        IReadOnlyList<ReadingEmbedArtifact> embeds)
+        IReadOnlyList<ReadingEmbedArtifact> embeds) =>
+        Build(
+            model, context, codeBlocks, mathBlocks, diagramBlocks, embeds,
+            Array.Empty<OutgoingLink>());
+
+    public static ReadingDocumentModel Build(
+        IReadOnlyList<(ReadingBlock Block, ReadingBlockInlines Inlines)> model,
+        ReadingListBuildContext context,
+        IReadOnlyList<CodeBlock> codeBlocks,
+        IReadOnlyList<MathBlock> mathBlocks,
+        IReadOnlyList<DiagramBlock> diagramBlocks,
+        IReadOnlyList<ReadingEmbedArtifact> embeds,
+        IReadOnlyList<OutgoingLink> records)
     {
         var document = new FlowDocument
         {
@@ -186,6 +198,8 @@ internal static class ReadingDocumentBuilder
                     embedKey,
                     embeds.FirstOrDefault(candidate =>
                         string.Equals(candidate.Key, embedKey, StringComparison.Ordinal)),
+                    block,
+                    records,
                     context));
                 continue;
             }
@@ -304,6 +318,10 @@ internal static class ReadingDocumentBuilder
                     quote.Padding = new Thickness(12, 2, 0, 2);
                     quote.BorderThickness = new Thickness(3, 0, 0, 0);
                     quote.SetResourceReference(Block.BorderBrushProperty, "Slate.AccentBrush");
+                    // StyleId_Quote through the heading decorator's
+                    // channel (field, 2026-07-30: linear reading gave
+                    // no structure cue).
+                    ReadingSemantics.MarkQuote(quote);
                     return quote;
                 }
 
@@ -418,22 +436,46 @@ internal static class ReadingDocumentBuilder
         ReadingSemantics.MarkCodeBlock(paragraph);
         AutomationProperties.SetName(paragraph, preamble);
 
-        var copy = new Button
+        // The preamble is IN-RANGE text (field, 2026-07-30): the
+        // paragraph Name feeds object navigation but linear caret
+        // reading gave no structure cue at all — a reader arrowed
+        // straight into raw code. The same line carries the Copy
+        // affordance as a HYPERLINK (the G23-proof idiom the embed
+        // Jump link established: a Button in a container is an
+        // embedded object, nameless in the caret stream).
+        var preambleParagraph = new Paragraph
         {
-            Content = "Copy code",
-            Padding = new Thickness(8, 2, 8, 2),
-            HorizontalAlignment = HorizontalAlignment.Right,
+            Margin = new Thickness(0, 4, 0, 0),
+        };
+        var preambleRun = new Run(preamble)
+        {
+            FontStyle = FontStyles.Italic,
+        };
+        preambleRun.SetResourceReference(
+            TextElement.ForegroundProperty, "Slate.SecondaryTextBrush");
+        preambleParagraph.Inlines.Add(preambleRun);
+        preambleParagraph.Inlines.Add(new Run("  "));
+        var copy = new Hyperlink(new Run("Copy code"))
+        {
+            TextDecorations = TextDecorations.Underline,
             Tag = source,
         };
+        copy.SetResourceReference(
+            TextElement.ForegroundProperty, "Slate.AccentBrush");
         ReadingSemantics.MarkCodeCopy(copy);
+        AutomationProperties.SetName(copy, "Copy code");
         AutomationProperties.SetHelpText(
             copy, "Copies the code block source as plain text.");
-        var section = new Section();
-        section.Blocks.Add(new BlockUIContainer(copy)
+        // Destination-less links announce "no apparent destination"
+        // (W3-1, measured) — the copy action rides its own scheme.
+        if (Uri.TryCreate(
+            "slate-copy:///code", UriKind.Absolute, out Uri? copyDestination))
         {
-            Padding = new Thickness(0),
-            Margin = new Thickness(0, 4, 0, 0),
-        });
+            copy.NavigateUri = copyDestination;
+        }
+        preambleParagraph.Inlines.Add(copy);
+        var section = new Section();
+        section.Blocks.Add(preambleParagraph);
         section.Blocks.Add(paragraph);
         return section;
     }
@@ -1056,8 +1098,28 @@ internal static class ReadingDocumentBuilder
     /// header-only card that still activates — never a dead block.
     /// </summary>
     private static Block EmbedCard(
-        string key, ReadingEmbedArtifact? artifact, ReadingListBuildContext context)
+        string key,
+        ReadingEmbedArtifact? artifact,
+        ReadingBlock block,
+        IReadOnlyList<OutgoingLink> records,
+        ReadingListBuildContext context)
     {
+        // PER-OCCURRENCE alt (field, 2026-07-30): the artifact's alt
+        // follows mac's last-record-wins rule, so an aliased and an
+        // alias-less occurrence of the SAME image key shared one alt
+        // and both titled with the filename. The card's own block
+        // knows its own record — its authored alias wins here, fixing
+        // the deferral mac documented rather than porting it.
+        string? occurrenceAlt = null;
+        foreach (OutgoingLink record in records)
+        {
+            if (record.IsEmbed
+                && record.SpanStart >= block.ByteStart
+                && record.SpanEnd <= block.ByteEnd)
+            {
+                occurrenceAlt = record.DisplayText;
+            }
+        }
         var section = new Section
         {
             Padding = new Thickness(10, 6, 10, 6),
@@ -1069,7 +1131,7 @@ internal static class ReadingDocumentBuilder
         // 1 [medium]): the neutral label says only what is true.
         string headerName = resolution is null
             ? $"Embed: {key}"
-            : EmbedHeaderName(resolution, artifact?.Alt);
+            : EmbedHeaderName(resolution, occurrenceAlt ?? artifact?.Alt);
         string headerSuffix = resolution is null
             ? string.Empty
             : EmbedHeaderAccessibilitySuffix(resolution);
@@ -1101,8 +1163,9 @@ internal static class ReadingDocumentBuilder
                 AppendEmbedText(
                     section, sectionResolution.Text, sectionResolution.Nested);
                 break;
-            case EmbedResolution.Block block:
-                AppendEmbedText(section, block.Text, Array.Empty<NestedEmbed>());
+            case EmbedResolution.Block blockResolution:
+                AppendEmbedText(
+                    section, blockResolution.Text, Array.Empty<NestedEmbed>());
                 break;
             case EmbedResolution.Image image when artifact is { ImageBudgetRefused: true }:
                 // The artifact resolved — the header keeps its true
@@ -1439,7 +1502,10 @@ internal static class ReadingDocumentBuilder
         {
             Source = outcome.Source,
             Stretch = System.Windows.Media.Stretch.Uniform,
-            StretchDirection = StretchDirection.DownOnly,
+            // Both directions (field, 2026-07-30): mac's scaledToFit
+            // scales small images UP toward the frame — DownOnly left
+            // a small image at raw pixel size, effectively invisible.
+            StretchDirection = StretchDirection.Both,
             MaxHeight = 600,
         };
         section.Blocks.Add(new BlockUIContainer(visual));
@@ -1704,7 +1770,11 @@ internal static class ReadingDocumentBuilder
         {
             switch (inline)
             {
-                case Hyperlink link:
+                // Chrome links — the code Copy affordance — are not
+                // K-chord stops: the LINK landmark population is the
+                // note's authored links (field, 2026-07-30: the Copy
+                // hyperlink conversion must not add copy stops).
+                case Hyperlink link when !ReadingSemantics.IsCodeCopy(link):
                     landmarks.Add(new ReadingLandmark(
                         ReadingLandmarkKind.Link,
                         Insertion(link.ContentStart),

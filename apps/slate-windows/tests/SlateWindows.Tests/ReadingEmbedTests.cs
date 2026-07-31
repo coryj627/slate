@@ -141,15 +141,14 @@ public sealed class ReadingEmbedTests
             Directory.CreateDirectory(Path.Combine(fixture.Root, "attachments"));
             File.WriteAllBytes(
                 Path.Combine(fixture.Root, "attachments", "pic.png"), TinyPng);
-            // The aliased and alias-less occurrences live in SEPARATE
-            // notes deliberately: duplicates of one key inside a note
-            // share the LAST record's alt (mac's documented duplicate
-            // rule; per-occurrence alt deferred with rationale there).
+            // BOTH occurrences in ONE note (field, 2026-07-30): each
+            // card titles from ITS OWN record's authored alias — the
+            // shared-key resolution stays deduplicated, but the alt is
+            // per occurrence (the deferral mac documented is fixed
+            // here, not ported).
             File.WriteAllText(
                 Path.Combine(fixture.Root, "note0.md"),
-                "![[pic.png|A tiny chart]]\n");
-            File.WriteAllText(
-                Path.Combine(fixture.Root, "note1.md"), "![[pic.png]]\n");
+                "![[pic.png|A tiny chart]]\n\n![[pic.png]]\n");
             using var session = VaultSession.OpenFilesystem(fixture.Root);
             using var cancel = new CancelToken();
             session.ScanInitial(cancel);
@@ -168,22 +167,109 @@ public sealed class ReadingEmbedTests
                 surface.Document.ContentEnd).Text;
             Assert.Contains(
                 "Embedded image: A tiny chart", text, StringComparison.Ordinal);
+            Assert.Contains(
+                "Embedded image: pic.png", text, StringComparison.Ordinal);
+        });
+    }
 
-            using var second = new WorkspaceTabViewModel(
+    /// <summary>
+    /// Field, 2026-07-30 (the stale-cards bug): the surface's
+    /// same-projection rebind FAST PATH reused the published document
+    /// verbatim, and hidden models skipped dependency notifications —
+    /// so a target saved in ANOTHER tab stayed stale until a mode
+    /// cycle. The hidden model now records the pending change and the
+    /// fast path re-fetches on rebind.
+    /// </summary>
+    [Fact]
+    public void TargetSaveWhileHiddenRefreshesOnTabReturn()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-hidden-save");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"), "Original body.\n");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"), "![[target]]\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
                 session,
                 new WorkspaceTabState(
                     Guid.NewGuid(),
                     new WorkspaceItemState(
-                        WorkspaceItemKind.Markdown, "note1.md")),
+                        WorkspaceItemKind.Markdown, "note0.md")),
                 startInteractionBackgroundWork: false);
-            second.ToggleViewMode();
-            var secondSurface = new ReadingSurface { Model = second.Reading };
-            Assert.Contains(
-                "Embedded image: pic.png",
-                new System.Windows.Documents.TextRange(
-                    secondSurface.Document.ContentStart,
-                    secondSurface.Document.ContentEnd).Text,
-                StringComparison.Ordinal);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+            string Text() => new System.Windows.Documents.TextRange(
+                surface.Document.ContentStart,
+                surface.Document.ContentEnd).Text;
+            Assert.Contains("Original body.", Text(), StringComparison.Ordinal);
+
+            // The reader switches to the target's editor tab: the
+            // surface unbinds this model (hidden).
+            surface.Model = null;
+
+            // The save lands while hidden: file changes, the vault
+            // event reaches the hidden model, no work starts.
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "target.md"), "Saved body.\n");
+            tab.Reading!.NotifyVaultFileChanged(FileChangeKind.Modified, "target.md");
+            Assert.True(tab.Reading!.HasPendingDependencyRefresh);
+
+            // Returning to the tab takes the same-projection fast
+            // path — which must now re-fetch.
+            surface.Model = tab.Reading;
+            Assert.Contains("Saved body.", Text(), StringComparison.Ordinal);
+            Assert.DoesNotContain("Original body.", Text(), StringComparison.Ordinal);
+            Assert.False(tab.Reading!.HasPendingDependencyRefresh);
+        });
+    }
+
+    /// <summary>
+    /// Field, 2026-07-30: the unconditional caret park sent a
+    /// returning reader to the top of the note — the same-projection
+    /// fast path now restores where they left off.
+    /// </summary>
+    [Fact]
+    public void CaretPositionSurvivesTabSwitchAndReturn()
+    {
+        RunSta(() =>
+        {
+            using var fixture = FixtureVault.Create(1, "reading-embed-caret");
+            File.WriteAllText(
+                Path.Combine(fixture.Root, "note0.md"),
+                "# Top\n\nFirst paragraph.\n\nSecond paragraph.\n\n# Deep heading\n\nDeep body.\n");
+            using var session = VaultSession.OpenFilesystem(fixture.Root);
+            using var cancel = new CancelToken();
+            session.ScanInitial(cancel);
+
+            using var tab = new WorkspaceTabViewModel(
+                session,
+                new WorkspaceTabState(
+                    Guid.NewGuid(),
+                    new WorkspaceItemState(
+                        WorkspaceItemKind.Markdown, "note0.md")),
+                startInteractionBackgroundWork: false);
+            tab.ToggleViewMode();
+            var surface = new ReadingSurface { Model = tab.Reading };
+
+            ReadingLandmark deep = surface.LandmarksForTests.Last(
+                candidate => candidate.Kind == ReadingLandmarkKind.Heading);
+            surface.CaretPosition = deep.Position;
+            int savedOffset = surface.Document.ContentStart
+                .GetOffsetToPosition(surface.CaretPosition);
+            Assert.True(savedOffset > 0, "the caret must start away from the top");
+
+            surface.Model = null;
+            surface.Model = tab.Reading;
+
+            Assert.Equal(
+                savedOffset,
+                surface.Document.ContentStart
+                    .GetOffsetToPosition(surface.CaretPosition));
         });
     }
 

@@ -25,6 +25,7 @@ internal static class ReadingSemantics
         CodeCopy,
         MathBlock,
         DiagramBlock,
+        Quote,
     }
 
     private static readonly DependencyProperty MathSpeechProperty =
@@ -154,6 +155,17 @@ internal static class ReadingSemantics
     public static void MarkCodeBlock(Paragraph paragraph) =>
         paragraph.SetValue(MarkerProperty, Marker.CodeBlock);
 
+    /// <summary>Block quote (field, 2026-07-30): linear reading gave
+    /// no structure cue — the StyleId decorator answers
+    /// <c>StyleId_Quote</c> for marked paragraphs, the same mechanism
+    /// heading levels ride (mac parity: an AX value announces the
+    /// quote).</summary>
+    public static void MarkQuote(Paragraph paragraph) =>
+        paragraph.SetValue(MarkerProperty, Marker.Quote);
+
+    public static bool IsQuote(Paragraph paragraph) =>
+        Equals(paragraph.GetValue(MarkerProperty), Marker.Quote);
+
     /// <summary>0 when the paragraph is not a heading.</summary>
     public static byte HeadingLevelOf(Paragraph paragraph) =>
         Equals(paragraph.GetValue(MarkerProperty), Marker.Heading)
@@ -172,8 +184,8 @@ internal static class ReadingSemantics
     /// <summary>The code block's Copy button — distinguished by marker,
     /// not Tag shape, so the click router never guesses (embed-card
     /// buttons also carry string Tags).</summary>
-    public static void MarkCodeCopy(System.Windows.Controls.Button button) =>
-        button.SetValue(MarkerProperty, Marker.CodeCopy);
+    public static void MarkCodeCopy(DependencyObject element) =>
+        element.SetValue(MarkerProperty, Marker.CodeCopy);
 
     /// <summary>Math block (W3-2): the marker carries the canonical
     /// MathCAT speech so the landmark walk and the caret activation
