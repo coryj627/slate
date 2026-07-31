@@ -174,16 +174,32 @@ jobs:
         # content for every cache mode).
         run: |
           $root = $env:NSC_CACHE_PATH
-          if (-not $root -or -not (Test-Path $root)) {
+          if (-not $root) {
             Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
             exit 1
           }
-          $children = Get-ChildItem $root -Force -ErrorAction SilentlyContinue
-          if (-not $children) { "cache volume empty (cold mount)" }
+          try {
+            # Fail CLOSED (adversarial round 7): SilentlyContinue let a
+            # failed root enumeration print the cold sentinel and an
+            # unreadable child render as 0.00 GiB (System Volume
+            # Information, observed live) - a mount or access failure
+            # must never masquerade as a cold or zero attestation.
+            $children = @(Get-ChildItem $root -Force -ErrorAction Stop)
+          } catch {
+            Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
+            exit 1
+          }
+          $metadata = @('System Volume Information', '$RECYCLE.BIN', 'containerscache', 'gitmirror', 'lost+found')
+          $children = @($children | Where-Object { $metadata -notcontains $_.Name })
+          if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
           foreach ($child in $children) {
-            $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction SilentlyContinue |
-              Measure-Object Length -Sum).Sum
-            '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            try {
+              $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction Stop |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            } catch {
+              Write-Host "::warning::cannot measure $($child.Name) - measurement incomplete, NOT cold"
+            }
           }
 
       - name: ARM64 cross-compile check (slate-uniffi)
@@ -221,16 +237,32 @@ jobs:
         if: ${{ always() }}
         run: |
           $root = $env:NSC_CACHE_PATH
-          if (-not $root -or -not (Test-Path $root)) {
+          if (-not $root) {
             Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
             exit 1
           }
-          $children = Get-ChildItem $root -Force -ErrorAction SilentlyContinue
-          if (-not $children) { "cache volume empty (cold mount)" }
+          try {
+            # Fail CLOSED (adversarial round 7): SilentlyContinue let a
+            # failed root enumeration print the cold sentinel and an
+            # unreadable child render as 0.00 GiB (System Volume
+            # Information, observed live) - a mount or access failure
+            # must never masquerade as a cold or zero attestation.
+            $children = @(Get-ChildItem $root -Force -ErrorAction Stop)
+          } catch {
+            Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
+            exit 1
+          }
+          $metadata = @('System Volume Information', '$RECYCLE.BIN', 'containerscache', 'gitmirror', 'lost+found')
+          $children = @($children | Where-Object { $metadata -notcontains $_.Name })
+          if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
           foreach ($child in $children) {
-            $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction SilentlyContinue |
-              Measure-Object Length -Sum).Sum
-            '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            try {
+              $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction Stop |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            } catch {
+              Write-Host "::warning::cannot measure $($child.Name) - measurement incomplete, NOT cold"
+            }
           }
 
   windows:
@@ -273,16 +305,32 @@ jobs:
         # content for every cache mode).
         run: |
           $root = $env:NSC_CACHE_PATH
-          if (-not $root -or -not (Test-Path $root)) {
+          if (-not $root) {
             Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
             exit 1
           }
-          $children = Get-ChildItem $root -Force -ErrorAction SilentlyContinue
-          if (-not $children) { "cache volume empty (cold mount)" }
+          try {
+            # Fail CLOSED (adversarial round 7): SilentlyContinue let a
+            # failed root enumeration print the cold sentinel and an
+            # unreadable child render as 0.00 GiB (System Volume
+            # Information, observed live) - a mount or access failure
+            # must never masquerade as a cold or zero attestation.
+            $children = @(Get-ChildItem $root -Force -ErrorAction Stop)
+          } catch {
+            Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
+            exit 1
+          }
+          $metadata = @('System Volume Information', '$RECYCLE.BIN', 'containerscache', 'gitmirror', 'lost+found')
+          $children = @($children | Where-Object { $metadata -notcontains $_.Name })
+          if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
           foreach ($child in $children) {
-            $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction SilentlyContinue |
-              Measure-Object Length -Sum).Sum
-            '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            try {
+              $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction Stop |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            } catch {
+              Write-Host "::warning::cannot measure $($child.Name) - measurement incomplete, NOT cold"
+            }
           }
 
       - name: Cache uniffi-bindgen-cs
@@ -342,16 +390,32 @@ jobs:
         if: ${{ always() }}
         run: |
           $root = $env:NSC_CACHE_PATH
-          if (-not $root -or -not (Test-Path $root)) {
+          if (-not $root) {
             Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
             exit 1
           }
-          $children = Get-ChildItem $root -Force -ErrorAction SilentlyContinue
-          if (-not $children) { "cache volume empty (cold mount)" }
+          try {
+            # Fail CLOSED (adversarial round 7): SilentlyContinue let a
+            # failed root enumeration print the cold sentinel and an
+            # unreadable child render as 0.00 GiB (System Volume
+            # Information, observed live) - a mount or access failure
+            # must never masquerade as a cold or zero attestation.
+            $children = @(Get-ChildItem $root -Force -ErrorAction Stop)
+          } catch {
+            Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
+            exit 1
+          }
+          $metadata = @('System Volume Information', '$RECYCLE.BIN', 'containerscache', 'gitmirror', 'lost+found')
+          $children = @($children | Where-Object { $metadata -notcontains $_.Name })
+          if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
           foreach ($child in $children) {
-            $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction SilentlyContinue |
-              Measure-Object Length -Sum).Sum
-            '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            try {
+              $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction Stop |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            } catch {
+              Write-Host "::warning::cannot measure $($child.Name) - measurement incomplete, NOT cold"
+            }
           }
 
   # W1-1 / §W-C: launch the real Fluent-styled WinExe, drive its shell

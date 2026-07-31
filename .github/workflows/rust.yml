@@ -124,8 +124,17 @@ jobs:
               *) return 1 ;;
             esac
           }
+          root="${NSC_CACHE_PATH:?cache volume root missing}"
+          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
+            # Fail CLOSED (adversarial round 7): with nullglob, a
+            # missing or unreadable root yields zero entries and the
+            # cold sentinel - a mount failure must never masquerade as
+            # bootstrap proof.
+            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
+            exit 1
+          fi
           entries=()
-          for entry in "${NSC_CACHE_PATH:?cache volume root missing}"/*; do
+          for entry in "$root"/*; do
             is_metadata "$entry" || entries+=("$entry")
           done
           if [ ${#entries[@]} -eq 0 ]; then
@@ -196,8 +205,17 @@ jobs:
               *) return 1 ;;
             esac
           }
+          root="${NSC_CACHE_PATH:?cache volume root missing}"
+          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
+            # Fail CLOSED (adversarial round 7): with nullglob, a
+            # missing or unreadable root yields zero entries and the
+            # cold sentinel - a mount failure must never masquerade as
+            # bootstrap proof.
+            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
+            exit 1
+          fi
           entries=()
-          for entry in "${NSC_CACHE_PATH:?cache volume root missing}"/*; do
+          for entry in "$root"/*; do
             is_metadata "$entry" || entries+=("$entry")
           done
           if [ ${#entries[@]} -eq 0 ]; then
@@ -323,8 +341,17 @@ jobs:
               *) return 1 ;;
             esac
           }
+          root="${NSC_CACHE_PATH:?cache volume root missing}"
+          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
+            # Fail CLOSED (adversarial round 7): with nullglob, a
+            # missing or unreadable root yields zero entries and the
+            # cold sentinel - a mount failure must never masquerade as
+            # bootstrap proof.
+            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
+            exit 1
+          fi
           entries=()
-          for entry in "${NSC_CACHE_PATH:?cache volume root missing}"/*; do
+          for entry in "$root"/*; do
             is_metadata "$entry" || entries+=("$entry")
           done
           if [ ${#entries[@]} -eq 0 ]; then
