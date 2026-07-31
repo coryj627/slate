@@ -131,29 +131,45 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     /// </summary>
     private object? SyntheticAttributeValue(int attributeId)
     {
-        object? first = null;
+        // Mixed detection runs on style IDENTITY (the StyleId-level
+        // value: heading level, quote, or none), not on the emitted
+        // attribute (adversarial round 4): headings emit no synthetic
+        // StyleName, so an H1+body or H1+H2 range compared by emitted
+        // StyleName looked uniformly empty and delegated to WPF's
+        // NotSupported — UIA requires Mixed for BOTH style attributes
+        // whenever the style changes across the range.
+        object? firstIdentity = null;
         bool haveFirst = false;
-        bool anySynthetic = false;
         foreach ((ITextRangeProvider _, Paragraph paragraph) in ParagraphRanges())
         {
-            object? value = SyntheticValueOf(paragraph, attributeId);
-            anySynthetic |= value is not null;
+            object? identity = SyntheticValueOf(
+                paragraph, HeadingStyleTextProvider.StyleIdAttribute);
             if (!haveFirst)
             {
-                first = value;
+                firstIdentity = identity;
                 haveFirst = true;
                 continue;
             }
-            if (!Equals(first, value))
+            if (!Equals(firstIdentity, identity))
             {
                 return System.Windows.Automation.TextPattern.MixedAttributeValue;
             }
         }
-        if (!anySynthetic)
+        if (firstIdentity is null)
         {
             return _inner.GetAttributeValue(attributeId);
         }
-        return first;
+        if (attributeId == HeadingStyleTextProvider.StyleIdAttribute)
+        {
+            return firstIdentity;
+        }
+        // Uniform identity, StyleName requested: only quotes carry a
+        // synthetic name (headings deliberately don't — NVDA would
+        // double-speak "style Heading 1" + "heading level 1" under
+        // report-style); uniform heading ranges delegate.
+        return Equals(firstIdentity, HeadingStyleTextProvider.StyleIdQuote)
+            ? HeadingStyleTextProvider.QuoteStyleName
+            : _inner.GetAttributeValue(attributeId);
     }
 
     /// <summary>The synthetic value a single paragraph contributes to
