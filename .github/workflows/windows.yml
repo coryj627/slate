@@ -8,22 +8,36 @@
 #     check. Independent of the bindings→dotnet chain, so it runs beside
 #     it instead of serially in front of it.
 #   windows — release cdylib + C# bindings, app build, xUnit suite, the
-#     FlaUI/axe-windows shell gate, and the `dotnet format` promise.
+#     `dotnet format` promise, and the FlaUI binaries handoff.
+#   flaui — the FlaUI/axe-windows shell gate, on GITHUB-HOSTED
+#     windows-latest: the 2026-07-31 spike run proved the Namespace
+#     Windows session is NON-INTERACTIVE, and the W1-1 gate launches
+#     the real WinExe and drives it through UIA3, which requires a
+#     desktop (the suite's own guard failed loudly, by design). The
+#     gate consumes the app lane's built binaries as an artifact — the
+#     exe resolver walks RELATIVE from the test assembly
+#     (ShellAccessibilityTests.SlateWindowsExe), so the artifact
+#     preserves the apps/slate-windows bin layout and needs no
+#     checkout. Revisit if Namespace ships interactive Windows
+#     sessions (they ship RDP, so a desktop plainly can exist).
 #
 # The historical check name "build + test (windows x64)" belongs to the
-# `gate` aggregate job, which fails unless BOTH lanes succeed — a branch
-# rule (or a human) requiring the historical name still gates on the
-# platform witnesses, exactly as the serial job did (adversarial review:
-# GitHub evaluates required checks individually, not by sibling status).
+# `gate` aggregate job, which fails unless ALL THREE lanes succeed — a
+# branch rule (or a human) requiring the historical name still gates on
+# the platform witnesses and the accessibility gate, exactly as the
+# serial job did (adversarial review: GitHub evaluates required checks
+# individually, not by sibling status).
 #
 # Runner selection recorded per §W0-2 item 3, revised 2026-07-31: the
 # Namespace Windows profile namespace-profile-winx64-fast (dashboard-
 # configured, Cache Volumes enabled — owner-confirmed with Namespace
-# support) replaces GitHub-hosted windows-latest, joining every other
-# lane on the vendor-standard runners. Windows on Namespace is early
-# access (Server 2022, amd64 only; Cache Volumes reached Windows
-# 2026-07-29) — if the lane regresses on image parity, the per-attempt
-# actions/cache scheme this replaces is in git history at a5037b35.
+# support) replaces GitHub-hosted windows-latest for the build/test
+# lanes, joining every other lane on the vendor-standard runners
+# (owner call: full Namespace + artifact handoff over a hybrid).
+# Windows on Namespace is early access (Server 2022, amd64 only; Cache
+# Volumes reached Windows 2026-07-29) — if the lanes regress on image
+# parity, the per-attempt actions/cache scheme this replaces is in git
+# history at a5037b35.
 #
 # Cache: Namespace NVMe cache volumes — fork-on-mount, commit-on-clean-
 # exit, last-write-wins (namespace.so/docs/architecture/storage/
@@ -36,6 +50,20 @@
 # by the lane shapes here). A volume resets to EMPTY if content exceeds
 # its dashboard-configured size — each lane ends with a footprint report;
 # watch the trend and grow the volume before the cliff.
+#
+# Cache-trust posture (adversarial review, recorded owner decision):
+# volumes COMMIT FROM PR RUNS, deliberately. This matches every other
+# Namespace lane in the repo (rust.yml/swift-tests.yml/audit.yml run
+# the identical last-write-wins posture) and is what makes the 7–9
+# adversarial-review rounds per PR inherit each other's warm state —
+# main-only commits would refork every round from the main baseline
+# and recompile the PR's own changes each push. The poisoning surface
+# this trades away is fork PRs, which this single-owner private repo
+# does not accept; if that ever changes, Namespace's cache-protection
+# allow-list (runner-configuration#advanced-protect-caches-from-
+# updates) restricts commits per tag from the dashboard — apply it to
+# BOTH tags here and to the rust.yml/swift-tests.yml/audit.yml
+# volumes in the same pass, not to this lane alone.
 
 name: windows
 
@@ -206,16 +234,70 @@ jobs:
       - name: Test
         run: dotnet test apps/slate-windows/tests/SlateWindows.Tests/SlateWindows.Tests.csproj --configuration Release --no-build
 
-      # W1-1 / §W-C: launch the real Fluent-styled WinExe, drive its shell
-      # through UIA3, and run the axe-windows rule set against the live tree.
-      # Keep this process-owning gate separate from the in-process censuses so
-      # the two test hosts cannot race for Slate's single-instance identity.
+      # Handoff to the flaui job: the exe resolver walks relative from
+      # the test assembly, so the artifact root is apps/slate-windows
+      # (upload-artifact stores paths relative to the least common
+      # ancestor) and the download recreates the exact bin layout.
+      # Named per run attempt so a re-run can't collide with a prior
+      # attempt's artifact.
+      - name: Upload FlaUI gate binaries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
+        with:
+          name: flaui-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            apps/slate-windows/src/SlateWindows/bin/Release/**/*
+            apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/**/*
+          if-no-files-found: error
+          retention-days: 1
+
+      - name: Format gate (dotnet format --verify-no-changes)
+        run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes
+
+      - name: Cache footprint report
+        # See the rust-tests twin. This lineage additionally carries the
+        # NuGet packages folder.
+        if: ${{ always() }}
+        run: |
+          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry", "$env:USERPROFILE\.nuget\packages")) {
+            if (Test-Path $dir) {
+              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
+            }
+          }
+
+  # W1-1 / §W-C: launch the real Fluent-styled WinExe, drive its shell
+  # through UIA3, and run the axe-windows rule set against the live
+  # tree. GitHub-hosted: the Namespace Windows session is
+  # non-interactive (2026-07-31 spike) and this gate needs a desktop.
+  # Runs on the app lane's built binaries — no checkout, no compilers,
+  # no cache; setup-dotnet supplies the runtime.
+  flaui:
+    name: shell accessibility gate (windows x64)
+    needs: [windows]
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68  # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download FlaUI gate binaries
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
+        with:
+          name: flaui-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/slate-windows
+
+      # Keep this process-owning gate separate from the in-process
+      # censuses so the two test hosts cannot race for Slate's
+      # single-instance identity. VSTest assembly mode: the adapters
+      # ship in the bin folder, so no project file (and no source) is
+      # needed on this runner.
       - name: Shell accessibility gate (FlaUI + axe-windows)
         run: >-
           dotnet test
-          apps/slate-windows/tests/SlateWindows.AccessibilityTests/SlateWindows.AccessibilityTests.csproj
-          --configuration Release
-          --no-build
+          apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/net10.0-windows/SlateWindows.AccessibilityTests.dll
           --logger "trx;LogFileName=slate-windows-accessibility.trx"
           --results-directory "${{ runner.temp }}\slate-accessibility-results"
         env:
@@ -236,37 +318,22 @@ jobs:
           if-no-files-found: warn
           retention-days: 30
 
-      - name: Format gate (dotnet format --verify-no-changes)
-        run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes
-
-      - name: Cache footprint report
-        # See the rust-tests twin. This lineage additionally carries the
-        # NuGet packages folder.
-        if: ${{ always() }}
-        run: |
-          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry", "$env:USERPROFILE\.nuget\packages")) {
-            if (Test-Path $dir) {
-              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
-                Measure-Object Length -Sum).Sum
-              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
-            }
-          }
-
-  # The historical required-check identity. Fails unless BOTH lanes
+  # The historical required-check identity. Fails unless ALL lanes
   # succeed, so "build + test (windows x64)" green still means what it
   # meant when the lanes were one serial job. Runs on the Namespace
-  # Linux x64 profile (license-headers.yml's runner): it evaluates two
-  # strings, and the vendor-standard runner boots fast and bills at 1x.
+  # Linux x64 profile (license-headers.yml's runner): it evaluates
+  # three strings, and the vendor-standard runner boots fast and bills
+  # at 1x.
   gate:
     name: build + test (windows x64)
-    needs: [rust-tests, windows]
+    needs: [rust-tests, windows, flaui]
     if: ${{ always() }}
     runs-on: namespace-profile-x64-fast
     timeout-minutes: 5
     steps:
-      - name: Verify both windows lanes succeeded
+      - name: Verify all windows lanes succeeded
         run: |
-          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ]; then
-            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }}"
+          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ] || [ "${{ needs.flaui.result }}" != "success" ]; then
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }} flaui=${{ needs.flaui.result }}"
             exit 1
           fi
