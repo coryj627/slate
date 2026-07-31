@@ -62,6 +62,13 @@ public sealed class ThemeTokenContrastTests
             // and mac draws the same distinction with warningText.
             ("warning/surface", "Slate.WarningColor", "Slate.SurfaceColor"),
             ("warning/raised", "Slate.WarningColor", "Slate.RaisedSurfaceColor"),
+            // Field pass 3 caption token (adversarial round 1: the first
+            // cut shipped #B0B0B0 at |Lc| 57.70 ungated). Gated against
+            // raised too so a future in-card use can't regress silently.
+            // Dark tertiary EQUALS secondary — no dimming headroom at
+            // this floor — so the dark caption dims by size only.
+            ("tertiary/surface", "Slate.TertiaryTextColor", "Slate.SurfaceColor"),
+            ("tertiary/raised", "Slate.TertiaryTextColor", "Slate.RaisedSurfaceColor"),
         };
 
         foreach ((string name, string textKey, string backgroundKey) in pairs)

@@ -19,7 +19,10 @@ namespace SlateWindows.Reading;
 /// `TextRangeAdaptor` registers ~30 text attributes with no `StyleId`
 /// among them. Measured across three manual passes: down-arrow onto a
 /// heading reads only its text. This decorator forwards everything to
-/// the base provider and answers exactly one extra question.
+/// the base provider and answers two extra questions (StyleId,
+/// StyleName) with range-aware Mixed semantics and synthetic
+/// FindAttribute (adversarial round 1: the UIA range contract, not
+/// just the caret).
 ///
 /// The two known hazards, both handled:
 /// - Base methods taking another range (`CompareEndpoints`,
@@ -110,38 +113,118 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 
     public object? GetAttributeValue(int attributeId)
     {
-        if (attributeId == HeadingStyleTextProvider.StyleIdAttribute
-            && ParagraphAtStart() is { } paragraph)
+        if (attributeId is HeadingStyleTextProvider.StyleIdAttribute
+            or HeadingStyleTextProvider.StyleNameAttribute)
         {
-            if (ReadingSemantics.HeadingLevelOf(paragraph) is byte level and > 0)
-            {
-                return HeadingStyleTextProvider.StyleIdHeading1 + (level - 1);
-            }
-            if (ReadingSemantics.IsQuote(paragraph))
-            {
-                return HeadingStyleTextProvider.StyleIdQuote;
-            }
-        }
-        if (attributeId == HeadingStyleTextProvider.StyleNameAttribute
-            && ParagraphAtStart() is { } styled
-            && ReadingSemantics.IsQuote(styled))
-        {
-            return HeadingStyleTextProvider.QuoteStyleName;
+            return SyntheticAttributeValue(attributeId);
         }
         return _inner.GetAttributeValue(attributeId);
     }
 
     /// <summary>
-    /// The range's paragraph, via the adaptor's internal start pointer.
+    /// Range-aware synthetic evaluation (adversarial round 1): UIA
+    /// requires MixedAttributeValue when a range spans differing
+    /// values — paragraph-at-start alone made the answer depend on
+    /// which end of a selection came first. When NO paragraph in the
+    /// range carries a synthetic value the base provider keeps its
+    /// answer, preserving pre-decorator behavior for plain text.
+    /// </summary>
+    private object? SyntheticAttributeValue(int attributeId)
+    {
+        object? first = null;
+        bool haveFirst = false;
+        bool anySynthetic = false;
+        foreach ((ITextRangeProvider _, Paragraph paragraph) in ParagraphRanges())
+        {
+            object? value = SyntheticValueOf(paragraph, attributeId);
+            anySynthetic |= value is not null;
+            if (!haveFirst)
+            {
+                first = value;
+                haveFirst = true;
+                continue;
+            }
+            if (!Equals(first, value))
+            {
+                return System.Windows.Automation.TextPattern.MixedAttributeValue;
+            }
+        }
+        if (!anySynthetic)
+        {
+            return _inner.GetAttributeValue(attributeId);
+        }
+        return first;
+    }
+
+    /// <summary>The synthetic value a single paragraph contributes to
+    /// <paramref name="attributeId"/>, or null when it has none.</summary>
+    private static object? SyntheticValueOf(Paragraph paragraph, int attributeId)
+    {
+        if (attributeId == HeadingStyleTextProvider.StyleIdAttribute)
+        {
+            if (ReadingSemantics.HeadingLevelOf(paragraph) is byte level and > 0)
+            {
+                return HeadingStyleTextProvider.StyleIdHeading1 + (level - 1);
+            }
+            return ReadingSemantics.IsQuote(paragraph)
+                ? HeadingStyleTextProvider.StyleIdQuote
+                : null;
+        }
+        return ReadingSemantics.IsQuote(paragraph)
+            ? HeadingStyleTextProvider.QuoteStyleName
+            : null;
+    }
+
+    /// <summary>Walk cap: the paragraph walk must terminate even if a
+    /// future adaptor's Move misbehaves on an exotic block.</summary>
+    private const int MaximumSyntheticWalk = 10_000;
+
+    /// <summary>
+    /// Paragraph sub-ranges overlapping this range, in document order,
+    /// built from PUBLIC range operations on fresh clones of the raw
+    /// adaptor range (no new reflection surface). The cursor stays
+    /// degenerate at paragraph starts; each yield expands a probe to
+    /// the enclosing paragraph. Non-paragraph positions (container
+    /// blocks) contribute nothing and the walk continues past them.
+    /// </summary>
+    private IEnumerable<(ITextRangeProvider Range, Paragraph Paragraph)> ParagraphRanges()
+    {
+        ITextRangeProvider cursor = _inner.Clone();
+        cursor.MoveEndpointByRange(
+            TextPatternRangeEndpoint.End, cursor, TextPatternRangeEndpoint.Start);
+        for (int i = 0; i < MaximumSyntheticWalk; i++)
+        {
+            ITextRangeProvider probe = cursor.Clone();
+            probe.ExpandToEnclosingUnit(TextUnit.Paragraph);
+            if (ParagraphAtStartOf(probe) is { } paragraph)
+            {
+                yield return (probe, paragraph);
+            }
+            if (cursor.Move(TextUnit.Paragraph, 1) == 0)
+            {
+                yield break;
+            }
+            if (cursor.CompareEndpoints(
+                TextPatternRangeEndpoint.Start,
+                _inner,
+                TextPatternRangeEndpoint.End) >= 0)
+            {
+                yield break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// A range's paragraph, via the adaptor's internal start pointer.
     /// Any failure — field missing, unexpected type — degrades to "no
     /// style" rather than throwing into UIA marshalling.
     /// </summary>
-    private Paragraph? ParagraphAtStart()
+    private static Paragraph? ParagraphAtStartOf(ITextRangeProvider range)
     {
         try
         {
-            if (StartPointerField.ForType(_inner.GetType()) is not { } field
-                || field.GetValue(_inner) is not TextPointer start)
+            if (StartPointerField.ForType(range.GetType()) is not { } field
+                || field.GetValue(range) is not TextPointer start)
             {
                 return null;
             }
@@ -169,8 +252,51 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
 
     public ITextRangeProvider? FindAttribute(int attribute, object value, bool backward)
     {
-        ITextRangeProvider? found = _inner.FindAttribute(attribute, value, backward);
-        return found is null ? null : new HeadingStyleTextRange(found);
+        if (attribute is HeadingStyleTextProvider.StyleIdAttribute
+            or HeadingStyleTextProvider.StyleNameAttribute)
+        {
+            // Synthetic values are invisible to WPF's own search
+            // (adversarial round 1): without this branch, "find
+            // StyleName Quote" answered nothing while GetAttributeValue
+            // advertised the value.
+            ITextRangeProvider? last = null;
+            foreach ((ITextRangeProvider paragraphRange, Paragraph paragraph)
+                in ParagraphRanges())
+            {
+                if (!Equals(SyntheticValueOf(paragraph, attribute), value))
+                {
+                    continue;
+                }
+                ITextRangeProvider found = ClampToThisRange(paragraphRange);
+                if (!backward)
+                {
+                    return new HeadingStyleTextRange(found);
+                }
+                last = found;
+            }
+            return last is null ? null : new HeadingStyleTextRange(last);
+        }
+        ITextRangeProvider? foundInner = _inner.FindAttribute(attribute, value, backward);
+        return foundInner is null ? null : new HeadingStyleTextRange(foundInner);
+    }
+
+    /// <summary>FindAttribute results must stay inside the searched
+    /// range; a paragraph can begin before it or end after it.</summary>
+    private ITextRangeProvider ClampToThisRange(ITextRangeProvider candidate)
+    {
+        if (candidate.CompareEndpoints(
+            TextPatternRangeEndpoint.Start, _inner, TextPatternRangeEndpoint.Start) < 0)
+        {
+            candidate.MoveEndpointByRange(
+                TextPatternRangeEndpoint.Start, _inner, TextPatternRangeEndpoint.Start);
+        }
+        if (candidate.CompareEndpoints(
+            TextPatternRangeEndpoint.End, _inner, TextPatternRangeEndpoint.End) > 0)
+        {
+            candidate.MoveEndpointByRange(
+                TextPatternRangeEndpoint.End, _inner, TextPatternRangeEndpoint.End);
+        }
+        return candidate;
     }
 
     public ITextRangeProvider? FindText(string text, bool backward, bool ignoreCase)

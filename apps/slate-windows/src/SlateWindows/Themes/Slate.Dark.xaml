@@ -6,7 +6,11 @@
     <Color x:Key="Slate.RaisedSurfaceColor">#FF292929</Color>
     <Color x:Key="Slate.TextColor">#FFF5F5F5</Color>
     <Color x:Key="Slate.SecondaryTextColor">#FFD4D4D4</Color>
-    <Color x:Key="Slate.TertiaryTextColor">#FFB0B0B0</Color>
+    <!-- Equals SecondaryText DELIBERATELY (adversarial round 1): at
+         the >75 APCA floor the dark palette has zero dimming headroom
+         (secondary itself measures 76.85 on the raised surface), so the
+         caption role dims by SIZE only here. W8-2 owns retuning. -->
+    <Color x:Key="Slate.TertiaryTextColor">#FFD4D4D4</Color>
     <Color x:Key="Slate.BorderColor">#FFAAAAAA</Color>
     <Color x:Key="Slate.AccentColor">#FFB9D9FF</Color>
     <Color x:Key="Slate.SelectionBackgroundColor">#FFB9D9FF</Color>
