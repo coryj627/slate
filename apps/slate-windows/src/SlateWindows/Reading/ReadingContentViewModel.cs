@@ -120,6 +120,31 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
 
     private DispatcherTimer? _dependencyDebounce;
 
+    /// <summary>Set when a dependency changed while this model was
+    /// HIDDEN — the surface's same-projection rebind fast path
+    /// consults it (field, 2026-07-30: the fast path reused a stale
+    /// projection after a target-note save in another tab).</summary>
+    internal bool HasPendingDependencyRefresh { get; private set; }
+
+    /// <summary>The reader's caret offset when the surface detached —
+    /// restored by the same-projection rebind fast path (field,
+    /// 2026-07-30: the unconditional park lost the reading
+    /// position on every tab switch).</summary>
+    internal int SavedCaretOffsetForRebind { get; set; }
+
+    /// <summary>The fast-path companion: re-fetch NOW that a surface
+    /// is attached again. The artifact digest turns a false alarm
+    /// into a memo hit; real changes republish through the normal
+    /// pipeline (the current document stays visible meanwhile).</summary>
+    public void RefreshForDependencies()
+    {
+        HasPendingDependencyRefresh = false;
+        if (!_disposed)
+        {
+            Refresh();
+        }
+    }
+
     public ReadingContentViewModel(
         VaultSession session,
         WorkspaceTabViewModel tab,
@@ -193,6 +218,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
         _memo = null;
         _rebindRecovery = true;
+        HasPendingDependencyRefresh = false;
         Refresh();
     }
 
@@ -796,7 +822,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         // resolved cycle legitimately depends on THIS note's saved
         // file — the resolver reads the disk, not the buffer — and
         // the dependency set already filters ordinary notes out.
-        if (_disposed || BlocksAppended is null)
+        if (_disposed)
         {
             return;
         }
@@ -805,6 +831,17 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 && kind is FileChangeKind.Created or FileChangeKind.Renamed);
         if (!relevant)
         {
+            return;
+        }
+        if (BlocksAppended is null)
+        {
+            // Hidden model (field, 2026-07-30): starting work here is
+            // still wrong (the W3-2 rule), but the surface's
+            // same-projection rebind FAST PATH reuses the published
+            // document verbatim — it must know a dependency moved
+            // underneath it, or a target saved in another tab stays
+            // stale until a mode cycle.
+            HasPendingDependencyRefresh = true;
             return;
         }
         if (_synchronousForTests)
@@ -1012,9 +1049,10 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         MathBlock[] mathBlocks = fetched.MathBlocks;
         DiagramBlock[] diagramBlocks = fetched.DiagramBlocks;
         ReadingEmbedArtifact[] embeds = fetched.Embeds;
+        OutgoingLink[] records = fetched.Records;
         ReadingDocumentModel built = ReadingDocumentBuilder.Build(
             model.GetRange(0, firstEnd), context, codeBlocks, mathBlocks, diagramBlocks,
-            embeds);
+            embeds, records);
 
         _publishedRecords = fetched.Records;
         _publishedTasks = fetched.Tasks;
@@ -1043,7 +1081,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 int end = Math.Min(index + BuildChunkBlocks, renderLimit);
                 AppendFragment(
                     model, index, end, context, codeBlocks, mathBlocks, diagramBlocks,
-                    embeds);
+                    embeds, records);
                 index = end;
             }
             FinishPublish(key, degraded, renderLimit, streamed: true);
@@ -1054,7 +1092,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                 generation,
                 () => ContinueBuild(
                     generation, model, firstEnd, renderLimit, key, degraded, context,
-                    codeBlocks, mathBlocks, diagramBlocks, embeds)),
+                    codeBlocks, mathBlocks, diagramBlocks, embeds, records)),
             DispatcherPriority.Background);
     }
 
@@ -1111,7 +1149,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         CodeBlock[] codeBlocks,
         MathBlock[] mathBlocks,
         DiagramBlock[] diagramBlocks,
-        ReadingEmbedArtifact[] embeds)
+        ReadingEmbedArtifact[] embeds,
+        OutgoingLink[] records)
     {
         if (_disposed || generation != _generation)
         {
@@ -1123,7 +1162,8 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         }
         int end = Math.Min(index + BuildChunkBlocks, renderLimit);
         AppendFragment(
-            model, index, end, context, codeBlocks, mathBlocks, diagramBlocks, embeds);
+            model, index, end, context, codeBlocks, mathBlocks, diagramBlocks, embeds,
+            records);
         if (end < renderLimit)
         {
             _ = _dispatcher!.InvokeAsync(
@@ -1131,7 +1171,7 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
                     generation,
                     () => ContinueBuild(
                         generation, model, end, renderLimit, key, degraded, context,
-                        codeBlocks, mathBlocks, diagramBlocks, embeds)),
+                        codeBlocks, mathBlocks, diagramBlocks, embeds, records)),
                 DispatcherPriority.Background);
             return;
         }
@@ -1146,11 +1186,12 @@ internal sealed class ReadingContentViewModel : BindableBase, IDisposable
         CodeBlock[] codeBlocks,
         MathBlock[] mathBlocks,
         DiagramBlock[] diagramBlocks,
-        ReadingEmbedArtifact[] embeds) =>
+        ReadingEmbedArtifact[] embeds,
+        OutgoingLink[] records) =>
         BlocksAppended?.Invoke(
             ReadingDocumentBuilder.Build(
                 model.GetRange(index, end - index), context, codeBlocks, mathBlocks,
-                diagramBlocks, embeds)
+                diagramBlocks, embeds, records)
                 .Document);
 
     private void FinishPublish(MemoKey key, bool degraded, int renderedBlocks, bool streamed)

@@ -41,6 +41,11 @@ internal sealed class HeadingStyleTextProvider : ITextProvider
     /// <summary>StyleId_Heading1; levels 1–9 are contiguous.</summary>
     internal const int StyleIdHeading1 = 70001;
 
+    /// <summary>StyleId_Quote — the same linear-reading channel, for
+    /// block quotes (field, 2026-07-30: quotes read as plain
+    /// prose).</summary>
+    internal const int StyleIdQuote = 70014;
+
     private readonly ITextProvider _inner;
 
     public HeadingStyleTextProvider(ITextProvider inner)
@@ -95,33 +100,39 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
     public object? GetAttributeValue(int attributeId)
     {
         if (attributeId == HeadingStyleTextProvider.StyleIdAttribute
-            && HeadingLevelAtStart() is byte level and > 0)
+            && ParagraphAtStart() is { } paragraph)
         {
-            return HeadingStyleTextProvider.StyleIdHeading1 + (level - 1);
+            if (ReadingSemantics.HeadingLevelOf(paragraph) is byte level and > 0)
+            {
+                return HeadingStyleTextProvider.StyleIdHeading1 + (level - 1);
+            }
+            if (ReadingSemantics.IsQuote(paragraph))
+            {
+                return HeadingStyleTextProvider.StyleIdQuote;
+            }
         }
         return _inner.GetAttributeValue(attributeId);
     }
 
     /// <summary>
     /// The range's paragraph, via the adaptor's internal start pointer.
-    /// Any failure — field missing, unexpected type — degrades to "not a
-    /// heading" rather than throwing into UIA marshalling.
+    /// Any failure — field missing, unexpected type — degrades to "no
+    /// style" rather than throwing into UIA marshalling.
     /// </summary>
-    private byte HeadingLevelAtStart()
+    private Paragraph? ParagraphAtStart()
     {
         try
         {
             if (StartPointerField.ForType(_inner.GetType()) is not { } field
-                || field.GetValue(_inner) is not TextPointer start
-                || start.Paragraph is not { } paragraph)
+                || field.GetValue(_inner) is not TextPointer start)
             {
-                return 0;
+                return null;
             }
-            return ReadingSemantics.HeadingLevelOf(paragraph);
+            return start.Paragraph;
         }
         catch
         {
-            return 0;
+            return null;
         }
     }
 

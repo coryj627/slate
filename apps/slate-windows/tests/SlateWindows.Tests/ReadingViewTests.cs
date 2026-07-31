@@ -150,6 +150,7 @@ public sealed class ReadingViewTests
             Hyperlink[] links = CollectHyperlinks(model.Document)
                 .Where(link => System.Windows.Automation.AutomationProperties
                     .GetAutomationId(link) != "ReadingBlockEmbed")
+                .Where(link => !ReadingSemantics.IsCodeCopy(link))
                 .ToArray();
 
             // [[known]], [[absent]], #tag, [@smith2020] — the embed is a
@@ -395,6 +396,11 @@ public sealed class ReadingViewTests
                 System.Windows.Input.Key.U,
                 // W3-2: math blocks.
                 System.Windows.Input.Key.M,
+                // W3-3: diagram blocks; G aliases D (field 2026-07-30:
+                // Ctrl+Alt+D never reached the app on the tester's
+                // machine — the same theft class as L).
+                System.Windows.Input.Key.D,
+                System.Windows.Input.Key.G,
             };
             foreach (System.Windows.Input.Key key in kindKeys)
             {
@@ -477,6 +483,65 @@ public sealed class ReadingViewTests
                 System.Windows.Automation.Text.TextPatternRangeEndpoint.Start,
                 whole,
                 System.Windows.Automation.Text.TextPatternRangeEndpoint.Start);
+        });
+    }
+
+    /// <summary>Block quotes answer StyleId_Quote through the same
+    /// decorator channel (field, 2026-07-30: linear reading gave no
+    /// structure cue for quotes).</summary>
+    [Fact]
+    public void BlockQuotesAnswerThroughTheTextPatternStyleId()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource(
+                "plain paragraph\n\n> a quoted line\n");
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers.UIElementAutomationPeer
+                .CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(built);
+
+            var provider = peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            var decorated = Assert.IsType<HeadingStyleTextProvider>(provider);
+
+            Paragraph quote = surface.Document.Blocks
+                .OfType<Paragraph>()
+                .Single(ReadingSemantics.IsQuote);
+            surface.CaretPosition = quote.ContentStart;
+            Assert.Equal(
+                HeadingStyleTextProvider.StyleIdQuote,
+                decorated.GetSelection()[0].GetAttributeValue(
+                    HeadingStyleTextProvider.StyleIdAttribute));
+
+            Paragraph plain = surface.Document.Blocks
+                .OfType<Paragraph>()
+                .First(p => !ReadingSemantics.IsQuote(p));
+            surface.CaretPosition = plain.ContentStart;
+            Assert.NotEqual(
+                HeadingStyleTextProvider.StyleIdQuote,
+                decorated.GetSelection()[0].GetAttributeValue(
+                    HeadingStyleTextProvider.StyleIdAttribute));
+        });
+    }
+
+    /// <summary>The code preamble is IN-RANGE text (field,
+    /// 2026-07-30: the paragraph Name feeds object navigation, but
+    /// linear caret reading arrowed straight into raw code with no
+    /// structure cue), with the Copy affordance a labelled hyperlink
+    /// on the same line.</summary>
+    [Fact]
+    public void CodePreambleReadsInTheTextRange()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource("```rust\nfn f() {}\n```\n");
+            string text = new TextRange(
+                built.ContentStart, built.ContentEnd).Text;
+            Assert.Contains(
+                "Code block, rust, 1 line.", text, StringComparison.Ordinal);
+            Assert.Contains("Copy code", text, StringComparison.Ordinal);
         });
     }
 
@@ -2394,13 +2459,13 @@ public sealed class ReadingViewTests
             tab.ToggleViewMode();
             var surface = new ReadingSurface { Model = tab.Reading };
 
-            System.Windows.Controls.Button copy = FindVisualButtons(surface.Document)
-                .Single(button => ReadingSemantics.IsCodeCopy(button));
+            System.Windows.Documents.Hyperlink copy =
+                FindCopyLinks(surface.Document).Single();
             Assert.Equal(
                 "Copies the code block source as plain text.",
                 System.Windows.Automation.AutomationProperties.GetHelpText(copy));
             copy.RaiseEvent(new System.Windows.RoutedEventArgs(
-                System.Windows.Controls.Primitives.ButtonBase.ClickEvent));
+                System.Windows.Documents.Hyperlink.ClickEvent));
 
             // The LIVE fence interior (round-1 fix: never the saved
             // artifact) — the reading parser's authoritative form,
@@ -2550,8 +2615,8 @@ public sealed class ReadingViewTests
                 System.Windows.Automation.AutomationProperties.GetName(code));
             Assert.Single(code.Inlines);
             // Copy carries the live source.
-            System.Windows.Controls.Button copy = FindVisualButtons(surface.Document)
-                .Single(button => ReadingSemantics.IsCodeCopy(button));
+            System.Windows.Documents.Hyperlink copy =
+                FindCopyLinks(surface.Document).Single();
             Assert.Contains(
                 "fn live!()", (string)copy.Tag, StringComparison.Ordinal);
         });
@@ -3012,6 +3077,15 @@ public sealed class ReadingViewTests
             .OfType<BlockUIContainer>()
             .Select(container => container.Child)
             .OfType<System.Windows.Controls.Button>();
+
+    /// <summary>The code Copy affordance — a hyperlink since the
+    /// 2026-07-30 field fix (in-range text, labelled in the caret
+    /// stream).</summary>
+    private static IEnumerable<Hyperlink> FindCopyLinks(FlowDocument document) =>
+        AllBlocks(document.Blocks)
+            .OfType<Paragraph>()
+            .SelectMany(paragraph => paragraph.Inlines.OfType<Hyperlink>())
+            .Where(link => ReadingSemantics.IsCodeCopy(link));
 
     private static void PumpOneBackgroundPass()
     {

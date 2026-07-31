@@ -44,6 +44,13 @@ internal sealed class ReadingSurface : RichTextBox
         IsDocumentEnabled = true;
         AcceptsReturn = false;
         AcceptsTab = false;
+        // Tab walks the document's focusable children — links, Jump
+        // links, math/diagram elements, checkboxes — then continues
+        // out (field, 2026-07-30: without an explicit mode, Tab from
+        // the caret exited straight to the pane thumb and the
+        // embedded objects were unreachable by keyboard focus).
+        System.Windows.Input.KeyboardNavigation.SetTabNavigation(
+            this, System.Windows.Input.KeyboardNavigationMode.Continue);
         BorderThickness = new Thickness(0);
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
         HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled;
@@ -80,6 +87,21 @@ internal sealed class ReadingSurface : RichTextBox
             System.Windows.Documents.Hyperlink.ClickEvent,
             new System.Windows.RoutedEventHandler((_, args) =>
             {
+                // Copy-code links FIRST (field, 2026-07-30: the Copy
+                // affordance became a hyperlink for the same caret-
+                // stream reason as the embed Jump link); the marker
+                // tells them apart from every navigation link.
+                if (args.Source is System.Windows.Documents.Hyperlink
+                    {
+                        Tag: string copySource
+                    } copyLink
+                    && ReadingSemantics.IsCodeCopy(copyLink)
+                    && _model is { } copyLinkModel)
+                {
+                    copyLinkModel.CopyCode(copySource);
+                    args.Handled = true;
+                    return;
+                }
                 // Embed Jump links whose target core ALREADY RESOLVED
                 // navigate directly (the W3-5 contract) — the run-kind
                 // fallback below covers degraded cards only.
@@ -209,6 +231,13 @@ internal sealed class ReadingSurface : RichTextBox
         var surface = (ReadingSurface)d;
         if (surface._model is { } previous)
         {
+            // Remember where the reader WAS (field, 2026-07-30: the
+            // unconditional caret park sent a returning reader back
+            // to the top of the note). Captured on the outgoing model
+            // so the same-projection fast path below can restore it.
+            previous.SavedCaretOffsetForRebind =
+                surface.Document.ContentStart.GetOffsetToPosition(
+                    surface.CaretPosition);
             previous.PropertyChanged -= surface.Model_PropertyChanged;
             previous.BlocksAppended -= surface.Model_BlocksAppended;
             // Kill the outgoing model's stream BEFORE anything else:
@@ -223,10 +252,6 @@ internal sealed class ReadingSurface : RichTextBox
             surface._navigator ??= new ReadingNavigator(surface, model.Announce);
             model.PropertyChanged += surface.Model_PropertyChanged;
             model.BlocksAppended += surface.Model_BlocksAppended;
-            // A model swap is a different projection (navigation, tab
-            // switch): the merge's caret preservation is for SAME-note
-            // re-projections only, so park the caret before applying.
-            surface.CaretPosition = surface.Document.ContentStart;
             if (ReferenceEquals(surface._lastMerged, model.Document)
                 && model.Document is not null
                 && model.ProjectionComplete)
@@ -236,8 +261,27 @@ internal sealed class ReadingSurface : RichTextBox
                 // back): free. Completeness matters — a stream this
                 // surface's own detach canceled leaves _lastMerged
                 // pointing at a torso that must re-project instead.
+                // Restore the reader's caret (field, 2026-07-30: the
+                // old unconditional park sent them to the top), and
+                // re-fetch if a dependency moved while hidden (same
+                // field pass: a target saved in another tab stayed
+                // stale forever — the current content remains visible
+                // while the digest decides whether anything changed).
+                surface.CaretPosition =
+                    surface.Document.ContentStart.GetPositionAtOffset(
+                        Math.Max(0, model.SavedCaretOffsetForRebind))
+                    ?? surface.Document.ContentEnd;
+                if (model.HasPendingDependencyRefresh)
+                {
+                    model.RefreshForDependencies();
+                }
                 return;
             }
+            // A model swap is a different projection (navigation, tab
+            // switch): the merge's caret preservation is for SAME-note
+            // re-projections only, so park the caret before applying
+            // (ClearForModelSwitch parks again with the placeholder).
+            surface.CaretPosition = surface.Document.ContentStart;
             // Any other rebind is a DIFFERENT note (or an untrusted
             // projection): the outgoing content leaves the tree NOW —
             // waiting for the incoming publish would let readers and

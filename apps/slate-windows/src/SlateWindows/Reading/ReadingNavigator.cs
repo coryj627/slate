@@ -86,6 +86,13 @@ internal sealed class ReadingNavigator
         AddChord(Key.M, shift: true, () => Move(ReadingLandmarkKind.Math, forward: false));
         AddChord(Key.D, shift: false, () => Move(ReadingLandmarkKind.Diagram, forward: true));
         AddChord(Key.D, shift: true, () => Move(ReadingLandmarkKind.Diagram, forward: false));
+        // Alias for diagram navigation (field, 2026-07-30: Ctrl+Alt+D
+        // never reached the app on the tester's machine — the G18
+        // machine-local chord-theft class, remote-desktop hosts being
+        // prime suspects). D stays for unafflicted machines; G is the
+        // documented alias, the U-for-L precedent.
+        AddChord(Key.G, shift: false, () => Move(ReadingLandmarkKind.Diagram, forward: true));
+        AddChord(Key.G, shift: true, () => Move(ReadingLandmarkKind.Diagram, forward: false));
 
         for (byte level = 1; level <= 6; level++)
         {
