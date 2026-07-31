@@ -6,6 +6,7 @@
     <Color x:Key="Slate.RaisedSurfaceColor">#FF292929</Color>
     <Color x:Key="Slate.TextColor">#FFF5F5F5</Color>
     <Color x:Key="Slate.SecondaryTextColor">#FFD4D4D4</Color>
+    <Color x:Key="Slate.TertiaryTextColor">#FFB0B0B0</Color>
     <Color x:Key="Slate.BorderColor">#FFAAAAAA</Color>
     <Color x:Key="Slate.AccentColor">#FFB9D9FF</Color>
     <Color x:Key="Slate.SelectionBackgroundColor">#FFB9D9FF</Color>
@@ -28,6 +29,8 @@
                      Color="{StaticResource Slate.TextColor}" />
     <SolidColorBrush x:Key="Slate.SecondaryTextBrush"
                      Color="{StaticResource Slate.SecondaryTextColor}" />
+    <SolidColorBrush x:Key="Slate.TertiaryTextBrush"
+                     Color="{StaticResource Slate.TertiaryTextColor}" />
     <SolidColorBrush x:Key="Slate.BorderBrush"
                      Color="{StaticResource Slate.BorderColor}" />
     <SolidColorBrush x:Key="Slate.AccentBrush"

@@ -439,23 +439,28 @@ internal static class ReadingDocumentBuilder
         // The preamble is IN-RANGE text (field, 2026-07-30): the
         // paragraph Name feeds object navigation but linear caret
         // reading gave no structure cue at all — a reader arrowed
-        // straight into raw code. The same line carries the Copy
-        // affordance as a HYPERLINK (the G23-proof idiom the embed
-        // Jump link established: a Button in a container is an
-        // embedded object, nameless in the caret stream).
+        // straight into raw code. Styled as a CAPTION (owner call,
+        // field pass 3 2026-07-31): mac hides its preamble entirely
+        // (AX-only label), Windows must keep it in-range, so
+        // visible-but-subtle is the recorded divergence. The same line
+        // carries the Copy affordance as a HYPERLINK announcing as a
+        // BUTTON (CodeCopyHyperlink: the G23-proof idiom the embed
+        // Jump link established, with the control type an in-place
+        // action deserves).
         var preambleParagraph = new Paragraph
         {
-            Margin = new Thickness(0, 4, 0, 0),
+            Margin = new Thickness(0, 2, 0, 0),
+            FontSize = PreambleCaptionFontSize,
         };
         var preambleRun = new Run(preamble)
         {
             FontStyle = FontStyles.Italic,
         };
         preambleRun.SetResourceReference(
-            TextElement.ForegroundProperty, "Slate.SecondaryTextBrush");
+            TextElement.ForegroundProperty, "Slate.TertiaryTextBrush");
         preambleParagraph.Inlines.Add(preambleRun);
         preambleParagraph.Inlines.Add(new Run("  "));
-        var copy = new Hyperlink(new Run("Copy code"))
+        var copy = new CodeCopyHyperlink(new Run("Copy code"))
         {
             TextDecorations = TextDecorations.Underline,
             Tag = source,
@@ -690,6 +695,11 @@ internal static class ReadingDocumentBuilder
     /// both hosts — recorded option, not this PR.)
     /// </summary>
     internal const int MaximumHighlightTokens = 4_000;
+
+    /// <summary>Code preamble caption size — 0.8x the 15px body
+    /// (owner call, field pass 3 2026-07-31: a caption, not a
+    /// paragraph; mac hides its preamble entirely).</summary>
+    internal const double PreambleCaptionFontSize = 12;
 
     /// <summary>The projection-wide pool the per-fence cap draws from
     /// (see <see cref="ReadingListBuildContext.RemainingHighlightTokens"/>):
@@ -1502,10 +1512,16 @@ internal static class ReadingDocumentBuilder
         {
             Source = outcome.Source,
             Stretch = System.Windows.Media.Stretch.Uniform,
-            // Both directions (field, 2026-07-30): mac's scaledToFit
-            // scales small images UP toward the frame — DownOnly left
-            // a small image at raw pixel size, effectively invisible.
-            StretchDirection = StretchDirection.Both,
+            // Never upscale (owner call, field pass 3 2026-07-31):
+            // natural size, downscale-only to fit — Obsidian's
+            // behavior, a recorded divergence (G26) from mac's
+            // scaledToFit, which stretches small images up to the full
+            // column width (EmbedView.swift .resizable().scaledToFit()
+            // .frame(maxWidth: .infinity)). The 2026-07-30 Both call
+            // was made against a 2x2 test fixture whose NATURAL size
+            // was invisible; a real image at natural size is the
+            // wanted rendering.
+            StretchDirection = StretchDirection.DownOnly,
             MaxHeight = 600,
         };
         section.Blocks.Add(new BlockUIContainer(visual));

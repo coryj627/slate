@@ -12,6 +12,11 @@
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.SecondaryTextBrush"
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
+    <!-- Deliberately NOT dimmer here: dimming in a contrast theme is an
+         accessibility hazard, so tertiary text keeps full window-text
+         contrast. -->
+    <SolidColorBrush x:Key="Slate.TertiaryTextBrush"
+                     Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.BorderBrush"
                      Color="{DynamicResource {x:Static SystemColors.WindowTextColorKey}}" />
     <SolidColorBrush x:Key="Slate.AccentBrush"

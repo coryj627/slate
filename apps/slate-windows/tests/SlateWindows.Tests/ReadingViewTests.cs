@@ -486,9 +486,11 @@ public sealed class ReadingViewTests
         });
     }
 
-    /// <summary>Block quotes answer StyleId_Quote through the same
-    /// decorator channel (field, 2026-07-30: linear reading gave no
-    /// structure cue for quotes).</summary>
+    /// <summary>Block quotes answer StyleId_Quote AND StyleName
+    /// "Quote" through the decorator. NVDA consumes only StyleName (its
+    /// "report style" setting, off by default — owner call, field pass
+    /// 3 2026-07-31: zero visual change accepted over a visible
+    /// prefix); StyleId stays for other ATs.</summary>
     [Fact]
     public void BlockQuotesAnswerThroughTheTextPatternStyleId()
     {
@@ -523,6 +525,62 @@ public sealed class ReadingViewTests
                 HeadingStyleTextProvider.StyleIdQuote,
                 decorated.GetSelection()[0].GetAttributeValue(
                     HeadingStyleTextProvider.StyleIdAttribute));
+
+            surface.CaretPosition = quote.ContentStart;
+            Assert.Equal(
+                HeadingStyleTextProvider.QuoteStyleName,
+                decorated.GetSelection()[0].GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+            surface.CaretPosition = plain.ContentStart;
+            Assert.NotEqual(
+                HeadingStyleTextProvider.QuoteStyleName,
+                decorated.GetSelection()[0].GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+        });
+    }
+
+    /// <summary>The Copy affordance announces as a BUTTON: the
+    /// CodeCopyHyperlink peer overrides only the control type; Invoke
+    /// and the in-range name stay HyperlinkAutomationPeer's (field,
+    /// 2026-07-31: "link Copy code" misread an in-place action as
+    /// navigation).</summary>
+    [Fact]
+    public void CopyCodeAnnouncesAsAButton()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource("```rust\nfn f() {}\n```\n");
+            var surface = new ReadingSurface();
+            surface.ApplyBuiltDocument(built);
+            Hyperlink copy = FindCopyLinks(surface.Document).Single();
+            Assert.IsType<CodeCopyHyperlink>(copy);
+            var peer = System.Windows.Automation.Peers
+                .ContentElementAutomationPeer.CreatePeerForElement(copy);
+            Assert.NotNull(peer);
+            Assert.Equal(
+                System.Windows.Automation.Peers.AutomationControlType.Button,
+                peer!.GetAutomationControlType());
+        });
+    }
+
+    /// <summary>The preamble is a CAPTION (owner call, field pass 3
+    /// 2026-07-31): smaller than the 15px body with a tight margin —
+    /// visible but subtle, the recorded divergence from mac's hidden
+    /// AX-only preamble.</summary>
+    [Fact]
+    public void CodePreambleIsCaptionStyled()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource("```rust\nfn f() {}\n```\n");
+            var surface = new ReadingSurface();
+            surface.ApplyBuiltDocument(built);
+            Hyperlink copy = FindCopyLinks(surface.Document).Single();
+            var paragraph = Assert.IsType<Paragraph>(copy.Parent);
+            Assert.Equal(
+                ReadingDocumentBuilder.PreambleCaptionFontSize,
+                paragraph.FontSize);
+            Assert.Equal(2, paragraph.Margin.Top);
         });
     }
 
