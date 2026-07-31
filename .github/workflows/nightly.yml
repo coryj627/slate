@@ -24,27 +24,31 @@ on:
 permissions:
   contents: read
 
-# A manual workflow_dispatch never overlaps the RUNNING cron (or vice
-# versa): the group serializes them, and cancel-in-progress: false means
-# an in-flight census is never cancelled. Honest limitation
-# (adversarial review): GitHub keeps at most ONE pending run per group —
-# a newer dispatch replaces an older *pending* one. Acceptable here:
-# dispatches take no inputs and always run the same content on the
-# default branch, so the newest pending run is equivalent to the one it
-# replaced.
+# The group is keyed BY REF (adversarial round 1: with one constant
+# group, a pending dispatch for ref A was silently replaced by a newer
+# dispatch for ref B - dropping a requested verification - and the old
+# comment's claim that all dispatches run equivalent default-branch
+# content stopped being true once dispatch-on-any-ref was
+# acknowledged). Same-ref runs still serialize with
+# cancel-in-progress: false, so the cron is never cancelled and a
+# same-ref re-dispatch replaces only its own equivalent pending run;
+# different refs may run concurrently (two census jobs fit the
+# Namespace concurrency pool).
 concurrency:
-  group: nightly-deep-verification
+  group: nightly-deep-verification-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   full-census:
     name: full-tier censuses (400 seeds)
-    # Cache trust: the cron runs the default branch and shares
-    # rust.yml's trusted slate-arm64 lineage; a manual dispatch can
-    # target any ref, so it routes to the -pr lineage (see rust.yml
-    # header; the trusted volume carries a dashboard branch
-    # allow-list).
-    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.event_name != 'schedule' && '-pr' || '' }}
+    # Cache trust (adversarial round 1: an event-based rule sent a
+    # maintainer's MAIN dispatch to the fork-writable -pr lineage -
+    # restoring untrusted artifacts in a trusted context): routing is
+    # by REF. The cron and any dispatch on main share rust.yml's
+    # trusted slate-arm64 lineage; a dispatch on any other ref routes
+    # to -pr (see rust.yml header; the trusted volume carries a
+    # dashboard branch allow-list).
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     # A hung census must not burn the runner all night; per-PR runs finish
     # in ~4 min, full tier is expected in the 15-30 min band.
     timeout-minutes: 60

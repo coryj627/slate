@@ -27,13 +27,19 @@
 # Cache-trust posture (windows.yml adversarial rounds 2–3, applied
 # repo-wide): this repository is PUBLIC, and a fork PR controls both
 # the build code and this YAML — so the volume lineages are
-# EVENT-CONDITIONAL (main pushes commit the trusted slate-arm64
-# lineage; PRs read+commit slate-arm64-pr), and the trusted lineage
-# must additionally carry Namespace's per-volume branch allow-list
-# ("main") in the dashboard, because in-workflow routing cannot bind
-# PR-controlled YAML. audit.yml and nightly.yml share these lineages
-# (they share this profile's volume family); windows.yml documents the
-# full reasoning. The first run per new tag starts cold once.
+# REF-CONDITIONAL (runs on refs/heads/main — pushes and crons — commit
+# the trusted slate-arm64 lineage; every other ref, including PR merge
+# refs and branch dispatches, reads+commits slate-arm64-pr), and the
+# trusted lineage must additionally carry Namespace's per-volume
+# branch allow-list ("main") in the dashboard, because in-workflow
+# routing cannot bind PR-controlled YAML. BOOTSTRAP (adversarial
+# round 1): the tag names are public before protection exists, so a
+# fork PR could seed a trusted volume first — after applying the
+# allow-list, RESET each trusted volume in the dashboard so its first
+# protected generation is built from scratch by main (one cold run).
+# audit.yml and nightly.yml share these lineages (they share this
+# profile's volume family); windows.yml documents the full reasoning.
+# The first run per new tag starts cold once.
 
 name: Rust
 
@@ -70,7 +76,7 @@ jobs:
     name: fmt / clippy
     # Namespace Linux runner profile (dashboard-configured; re-pinned to
     # genuine ARM64 by the owner on 2026-07-18 — the name is truthful now).
-    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.event_name != 'push' && '-pr' || '' }}
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     permissions:
       contents: read
     steps:
@@ -108,7 +114,7 @@ jobs:
 
   test:
     name: test (nextest, ci profile)
-    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.event_name != 'push' && '-pr' || '' }}
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     permissions:
       contents: read
     env:
@@ -199,7 +205,7 @@ jobs:
 
   bench-compile:
     name: bench-compile
-    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.event_name != 'push' && '-pr' || '' }}
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     permissions:
       contents: read
     steps:

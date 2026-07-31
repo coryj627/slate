@@ -48,11 +48,12 @@ jobs:
     # (e.g. MainSplitView) require a current Swift toolchain — Swift 6.2.4
     # specifically regressed the expression type-checker and times out on
     # MainSplitView.body, so this profile must track latest Xcode.
-    # Cache trust: main pushes commit the trusted slate-mac lineage,
-    # PRs the -pr lineage (windows.yml documents the full reasoning;
-    # the trusted volume carries a dashboard branch allow-list). First
-    # run per new tag is cold once - a full Xcode/SwiftPM rebuild here.
-    runs-on: namespace-profile-mac-actions;overrides.cache-tag=slate-mac${{ github.event_name != 'push' && '-pr' || '' }}
+    # Cache trust: runs on main commit the trusted slate-mac lineage,
+    # every other ref the -pr lineage (windows.yml documents the full
+    # reasoning; the trusted volume carries a dashboard branch
+    # allow-list). First run per new tag is cold once - a full
+    # Xcode/SwiftPM rebuild here.
+    runs-on: namespace-profile-mac-actions;overrides.cache-tag=slate-mac${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     permissions:
       contents: read
     steps:

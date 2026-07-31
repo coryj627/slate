@@ -54,9 +54,14 @@
 # Cache-trust posture (adversarial rounds 1–2 — round 2 corrected the
 # round-1 premise: this repository is PUBLIC, so fork PRs are possible
 # even with workflow-approval gates): the cache tags are
-# EVENT-CONDITIONAL. Main pushes commit the trusted lineages
-# (slate-windows-rust / slate-windows-app); every other event — PRs,
-# workflow_dispatch — reads and commits the parallel *-pr lineages.
+# REF-CONDITIONAL (adversarial follow-up on #1068: the event-based
+# rule sent a maintainer's MAIN workflow_dispatch to the fork-writable
+# -pr lineage — restoring untrusted artifacts in a trusted context).
+# Runs on refs/heads/main — pushes and main dispatches — commit the
+# trusted lineages (slate-windows-rust / slate-windows-app); every
+# other ref reads and commits the parallel *-pr lineages. BOOTSTRAP:
+# after applying the dashboard allow-list, RESET each trusted volume
+# so its first protected generation is built from scratch by main.
 # PR-controlled build code can therefore never write state a main
 # build consumes, while the 7–9 adversarial-review rounds per PR still
 # inherit each other's warm state inside the PR lineage (the blast
@@ -101,7 +106,7 @@ permissions:
 jobs:
   rust-tests:
     name: rust tests (windows x64)
-    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-rust${{ github.event_name != 'push' && '-pr' || '' }}
+    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-rust${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -178,7 +183,7 @@ jobs:
 
   windows:
     name: app build + test (windows x64)
-    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-app${{ github.event_name != 'push' && '-pr' || '' }}
+    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-app${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
