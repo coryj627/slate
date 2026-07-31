@@ -96,7 +96,7 @@ jobs:
           # buries a real measurement failure).
           is_metadata() {
             case "$(basename "$1")" in
-              "lost+found"|containerscache|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
+              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
               *) return 1 ;;
             esac
           }
