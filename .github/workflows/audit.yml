@@ -113,9 +113,12 @@ jobs:
       - name: Cache mount state (pre-build)
         # Bootstrap attestation (windows.yml runbook step 4): read
         # BEFORE any build repopulates the volume, so a cold mount is
-        # distinguishable from a surviving stale generation. Growth
-        # monitoring stays with the end-of-job report.
-        run: du -sh ~/.cargo/registry target 2>/dev/null || echo "cache dirs absent (cold mount)"
+        # distinguishable from a surviving stale generation. Measured
+        # at the VOLUME ROOT (adversarial round 4: the mount points are
+        # symlinks/junctions on mac/Windows and du reported link nodes,
+        # 0B even fully warm; NSC_CACHE_PATH holds the real content for
+        # every cache mode).
+        run: du -sh "${NSC_CACHE_PATH:?cache volume root missing}"/* 2>/dev/null || echo "cache volume empty (cold mount)"
 
       - name: Install cargo-audit
         # Prebuilt, checksum-verified binary in seconds instead of

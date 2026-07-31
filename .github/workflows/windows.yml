@@ -72,22 +72,23 @@
 # hardening: in-workflow routing cannot bind PR-controlled YAML, and
 # the trusted tag names are public before protection exists. The ONE
 # bootstrap runbook (adversarial round 2 on #1068):
-#   1. FREEZE — disable all five cache-using workflows first
-#      (gh workflow disable — rust.yml, windows.yml, audit.yml,
-#      nightly.yml, swift-tests.yml), THEN cancel or await every
-#      queued and running run, and keep the workflows disabled through
-#      steps 2—3. Draining alone is raceable: a run that mounts a
-#      trusted volume pre-reset commits its fork on clean exit, and an
-#      allow-listed main run finishing after the reset would promote
-#      the pre-reset generation. The freeze makes new mounts
-#      impossible, not merely unlikely;
+#   1. FREEZE — disable Actions for the ENTIRE repository
+#      (gh api -X PUT repos/OWNER/REPO/actions/permissions
+#      -F enabled=false), THEN drain every non-terminal run — queued,
+#      in_progress, waiting, action_required — and keep Actions
+#      disabled through steps 2—3. Per-workflow disable is NOT enough
+#      (adversarial round 4): completed runs stay re-runnable for 30
+#      days with their original main ref, so an old run re-run during
+#      the critical section would mount pre-reset and promote its
+#      fork on clean exit. The repo-level disable fences re-runs too;
 #   2. apply the per-volume branch allow-list ("main") to all four
 #      trusted volumes: slate-windows-rust, slate-windows-app,
 #      slate-arm64, slate-mac (dashboard — cache volume
 #      configuration — Show Advanced features);
 #   3. RESET each trusted volume, discarding any generation seeded
 #      before protection;
-#   4. RE-ENABLE the workflows and VERIFY on the next main run that
+#   4. RE-ENABLE Actions (enabled=true) and VERIFY on the next main
+#      run that
 #      every trusted lane's "Cache mount state (pre-build)" step reads
 #      absent/near-zero — that step runs BEFORE the build repopulates
 #      the volume, so it is the cold-mount proof (end-of-job reports
@@ -163,17 +164,22 @@ jobs:
       - name: Cache mount state (pre-build)
         # Bootstrap attestation (runbook step 4): read BEFORE any build
         # repopulates the volume, so a cold mount is distinguishable
-        # from a surviving stale generation. Growth monitoring stays
-        # with the end-of-job report.
+        # from a surviving stale generation. Measured at the VOLUME
+        # ROOT (adversarial round 4: junction/symlink mount points make
+        # per-directory sizing lie; NSC_CACHE_PATH holds the real
+        # content for every cache mode).
         run: |
-          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry", "$env:USERPROFILE\.nuget\packages")) {
-            if (Test-Path $dir) {
-              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
-                Measure-Object Length -Sum).Sum
-              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
-            } else {
-              "absent (cold): $dir"
-            }
+          $root = $env:NSC_CACHE_PATH
+          if (-not $root -or -not (Test-Path $root)) {
+            Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
+            exit 1
+          }
+          $children = Get-ChildItem $root -Force -ErrorAction SilentlyContinue
+          if (-not $children) { "cache volume empty (cold mount)" }
+          foreach ($child in $children) {
+            $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction SilentlyContinue |
+              Measure-Object Length -Sum).Sum
+            '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
           }
 
       - name: ARM64 cross-compile check (slate-uniffi)
@@ -210,12 +216,17 @@ jobs:
         # the fork it measured is still the size the next run inherits.
         if: ${{ always() }}
         run: |
-          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry")) {
-            if (Test-Path $dir) {
-              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
-                Measure-Object Length -Sum).Sum
-              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
-            }
+          $root = $env:NSC_CACHE_PATH
+          if (-not $root -or -not (Test-Path $root)) {
+            Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
+            exit 1
+          }
+          $children = Get-ChildItem $root -Force -ErrorAction SilentlyContinue
+          if (-not $children) { "cache volume empty (cold mount)" }
+          foreach ($child in $children) {
+            $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction SilentlyContinue |
+              Measure-Object Length -Sum).Sum
+            '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
           }
 
   windows:
@@ -252,17 +263,22 @@ jobs:
       - name: Cache mount state (pre-build)
         # Bootstrap attestation (runbook step 4): read BEFORE any build
         # repopulates the volume, so a cold mount is distinguishable
-        # from a surviving stale generation. Growth monitoring stays
-        # with the end-of-job report.
+        # from a surviving stale generation. Measured at the VOLUME
+        # ROOT (adversarial round 4: junction/symlink mount points make
+        # per-directory sizing lie; NSC_CACHE_PATH holds the real
+        # content for every cache mode).
         run: |
-          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry", "$env:USERPROFILE\.nuget\packages")) {
-            if (Test-Path $dir) {
-              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
-                Measure-Object Length -Sum).Sum
-              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
-            } else {
-              "absent (cold): $dir"
-            }
+          $root = $env:NSC_CACHE_PATH
+          if (-not $root -or -not (Test-Path $root)) {
+            Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
+            exit 1
+          }
+          $children = Get-ChildItem $root -Force -ErrorAction SilentlyContinue
+          if (-not $children) { "cache volume empty (cold mount)" }
+          foreach ($child in $children) {
+            $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction SilentlyContinue |
+              Measure-Object Length -Sum).Sum
+            '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
           }
 
       - name: Cache uniffi-bindgen-cs
@@ -321,12 +337,17 @@ jobs:
         # NuGet packages folder.
         if: ${{ always() }}
         run: |
-          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry", "$env:USERPROFILE\.nuget\packages")) {
-            if (Test-Path $dir) {
-              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
-                Measure-Object Length -Sum).Sum
-              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
-            }
+          $root = $env:NSC_CACHE_PATH
+          if (-not $root -or -not (Test-Path $root)) {
+            Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
+            exit 1
+          }
+          $children = Get-ChildItem $root -Force -ErrorAction SilentlyContinue
+          if (-not $children) { "cache volume empty (cold mount)" }
+          foreach ($child in $children) {
+            $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction SilentlyContinue |
+              Measure-Object Length -Sum).Sum
+            '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
           }
 
   # W1-1 / §W-C: launch the real Fluent-styled WinExe, drive its shell
