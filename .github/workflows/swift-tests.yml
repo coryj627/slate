@@ -90,7 +90,16 @@ jobs:
         # every cache mode).
         run: |
           shopt -s nullglob dotglob
-          entries=("${NSC_CACHE_PATH:?cache volume root missing}"/*)
+          entries=()
+          for entry in "${NSC_CACHE_PATH:?cache volume root missing}"/*; do
+            # lost+found is an ext4 artifact, not cache content: it is
+            # root-owned (du warns on every healthy run) and present on
+            # a FRESH volume (a root containing only lost+found IS a
+            # cold mount, observed live when the -pr volume was
+            # silently recreated on 2026-07-31).
+            [ "$(basename "$entry")" = "lost+found" ] && continue
+            entries+=("$entry")
+          done
           if [ ${#entries[@]} -eq 0 ]; then
             echo "cache volume empty (cold mount)"
           else
@@ -138,7 +147,11 @@ jobs:
         if: ${{ always() }}
         run: |
           shopt -s nullglob dotglob
-          entries=("$NSC_CACHE_PATH"/*)
+          entries=()
+          for entry in "$NSC_CACHE_PATH"/*; do
+            [ "$(basename "$entry")" = "lost+found" ] && continue
+            entries+=("$entry")
+          done
           if [ ${#entries[@]} -eq 0 ]; then
             echo "cache volume empty"
           else
