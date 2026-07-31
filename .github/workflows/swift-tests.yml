@@ -80,6 +80,12 @@ jobs:
           path: |
             apps/slate-mac/.build
 
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation.
+        run: du -sh ~/.cargo/registry target apps/slate-mac/.build 2>/dev/null || echo "cache dirs absent (cold mount)"
+
       - name: Build slate-uniffi + generate Swift bindings + swift build
         # scripts/build-mac-app.sh runs:
         #   cargo build -p slate-uniffi
@@ -109,3 +115,10 @@ jobs:
         # that isn't handled fails to compile. Building it here turns that
         # into a red CI run instead of a silently-rotting example (#390).
         run: make swift-cli
+
+      - name: Cache footprint report
+        # Growth monitoring (the volume resets to EMPTY past its
+        # configured size - the windows.yml/rust.yml doctrine; this
+        # lane previously had no report at all).
+        if: ${{ always() }}
+        run: du -sh ~/.cargo/registry target apps/slate-mac/.build 2>/dev/null || true

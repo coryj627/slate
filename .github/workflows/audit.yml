@@ -110,6 +110,13 @@ jobs:
         with:
           cache: rust
 
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation. Growth
+        # monitoring stays with the end-of-job report.
+        run: du -sh ~/.cargo/registry target 2>/dev/null || echo "cache dirs absent (cold mount)"
+
       - name: Install cargo-audit
         # Prebuilt, checksum-verified binary in seconds instead of
         # `cargo install` compiling from source every run (~/.cargo/bin

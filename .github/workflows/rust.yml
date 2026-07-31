@@ -102,6 +102,13 @@ jobs:
         with:
           cache: rust
 
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation. Growth
+        # monitoring stays with the end-of-job report.
+        run: du -sh ~/.cargo/registry target 2>/dev/null || echo "cache dirs absent (cold mount)"
+
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
@@ -135,6 +142,13 @@ jobs:
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: rust
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation. Growth
+        # monitoring stays with the end-of-job report.
+        run: du -sh ~/.cargo/registry target 2>/dev/null || echo "cache dirs absent (cold mount)"
 
       - name: Install cargo-nextest
         # Prebuilt, checksum-verified binary in seconds. Installs into
@@ -224,6 +238,13 @@ jobs:
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: rust
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation. Growth
+        # monitoring stays with the end-of-job report.
+        run: du -sh ~/.cargo/registry target 2>/dev/null || echo "cache dirs absent (cold mount)"
 
       - name: cargo bench --no-run (PR — LTO off)
         # Compile every bench without running it, so a broken bench

@@ -72,17 +72,27 @@
 # hardening: in-workflow routing cannot bind PR-controlled YAML, and
 # the trusted tag names are public before protection exists. The ONE
 # bootstrap runbook (adversarial round 2 on #1068):
-#   1. QUIESCE — let every cache-using CI run finish (or cancel it);
-#      a pre-protection job that already mounted a volume commits its
-#      fork on clean exit, and that commit must not land post-reset;
+#   1. FREEZE — disable all five cache-using workflows first
+#      (gh workflow disable — rust.yml, windows.yml, audit.yml,
+#      nightly.yml, swift-tests.yml), THEN cancel or await every
+#      queued and running run, and keep the workflows disabled through
+#      steps 2—3. Draining alone is raceable: a run that mounts a
+#      trusted volume pre-reset commits its fork on clean exit, and an
+#      allow-listed main run finishing after the reset would promote
+#      the pre-reset generation. The freeze makes new mounts
+#      impossible, not merely unlikely;
 #   2. apply the per-volume branch allow-list ("main") to all four
 #      trusted volumes: slate-windows-rust, slate-windows-app,
 #      slate-arm64, slate-mac (dashboard — cache volume
 #      configuration — Show Advanced features);
 #   3. RESET each trusted volume, discarding any generation seeded
 #      before protection;
-#   4. VERIFY the next main run mounts COLD (footprint report near
-#      zero) and goes green — its commit is the first protected
+#   4. RE-ENABLE the workflows and VERIFY on the next main run that
+#      every trusted lane's "Cache mount state (pre-build)" step reads
+#      absent/near-zero — that step runs BEFORE the build repopulates
+#      the volume, so it is the cold-mount proof (end-of-job reports
+#      only track growth and cannot distinguish a cold mount from a
+#      surviving stale generation). Its commit is the first protected
 #      generation. Leave every *-pr volume unprotected.
 
 name: windows
@@ -149,6 +159,22 @@ jobs:
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: rust
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (runbook step 4): read BEFORE any build
+        # repopulates the volume, so a cold mount is distinguishable
+        # from a surviving stale generation. Growth monitoring stays
+        # with the end-of-job report.
+        run: |
+          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry", "$env:USERPROFILE\.nuget\packages")) {
+            if (Test-Path $dir) {
+              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
+            } else {
+              "absent (cold): $dir"
+            }
+          }
 
       - name: ARM64 cross-compile check (slate-uniffi)
         run: |
@@ -222,6 +248,22 @@ jobs:
           cache: rust
           path: |
             ~/.nuget/packages
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (runbook step 4): read BEFORE any build
+        # repopulates the volume, so a cold mount is distinguishable
+        # from a surviving stale generation. Growth monitoring stays
+        # with the end-of-job report.
+        run: |
+          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry", "$env:USERPROFILE\.nuget\packages")) {
+            if (Test-Path $dir) {
+              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
+            } else {
+              "absent (cold): $dir"
+            }
+          }
 
       - name: Cache uniffi-bindgen-cs
         id: bindgen-cache
