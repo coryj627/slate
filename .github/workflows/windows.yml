@@ -1,12 +1,50 @@
 # Windows frontend CI (w0_spec §W0-2 item 3, #603): path-filtered so a
 # Windows PR doesn't block on mac checks and vice versa (the per-area
-# pattern of a11y-check.yml / swift-tests.yml). Builds core (x64 host +
-# ARM64 cross-compile check), generates the C# bindings, builds the app,
-# runs the xUnit suite, and enforces the program's `dotnet format`
-# pre-push promise as a gate.
+# pattern of a11y-check.yml / swift-tests.yml). Two parallel jobs:
 #
-# Runner selection recorded per §W0-2 item 3: GitHub-hosted default (no
-# Namespace Windows profiles exist as of 2026-07).
+#   rust-tests — the deliberate platform witnesses (slate-core, slate-cli
+#     suites: MoveFileExW no-clobber, reserved-name validation,
+#     case-insensitive identity, long paths) plus the ARM64 cross-compile
+#     check. Independent of the bindings→dotnet chain, so it runs beside
+#     it instead of serially in front of it.
+#   windows — release cdylib + C# bindings, app build, xUnit suite, the
+#     FlaUI/axe-windows shell gate, and the `dotnet format` promise.
+#
+# The historical check name "build + test (windows x64)" belongs to the
+# `gate` aggregate job, which fails unless BOTH lanes succeed — a branch
+# rule (or a human) requiring the historical name still gates on the
+# platform witnesses, exactly as the serial job did (adversarial review:
+# GitHub evaluates required checks individually, not by sibling status).
+#
+# Runner selection recorded per §W0-2 item 3, revised 2026-07-30:
+# GitHub-hosted. Namespace ships Windows runners now (early access since
+# 2025-06; Cache Volumes reached Windows 2026-07-29) but Windows is
+# plan-gated (N/A on the Developer tier) and the workspace is blocked on
+# that today. When it unblocks, move both jobs to a namespace-profile-*
+# Windows runner + nscloud-cache-action `cache: rust` (rust.yml's
+# pattern) and delete the actions/cache scheme below.
+#
+# Cargo cache scheme (replaces the frozen-snapshot design, 2026-07-30):
+# actions/cache never re-saves after an exact-key hit, and the old
+# single-key/no-restore-keys block froze a snapshot taken before the
+# bindings build switched to --release (999e505) — every later run
+# re-did the full cold release graph (~9.5 min) and discarded it, while
+# a feature-only manifest edit (985061e, invisible to a Cargo.lock hash)
+# quietly poisoned the test graph the same way. The replacement:
+#   - keys are unique per run attempt (…-sha-run_id-run_attempt), so a
+#     save can never be skipped as an exact-key "hit", and a failed main
+#     run's partial snapshot can never block the completed retry from
+#     saving (cache entries are immutable — a same-key retry save is
+#     silently dropped);
+#   - restore-keys fall back by prefix — same-commit earlier attempt
+#     first (the retry case), then manifest-compatible lineage, then any
+#     lineage — newest entry wins within each tier;
+#   - saves happen on main pushes only: PR-scoped cache entries are not
+#     readable by other PRs, main-scoped entries are readable everywhere,
+#     so PRs always restore a snapshot at most one main push stale;
+#   - the two jobs keep separate lineages (disjoint target profile dirs:
+#     ci + aarch64 check artifacts vs release), so their parallel saves
+#     cannot alternately evict each other's warm artifacts.
 
 name: windows
 
@@ -15,6 +53,7 @@ on:
     paths:
       - 'apps/slate-windows/**'
       - 'crates/**'
+      - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - '.github/workflows/windows.yml'
@@ -23,6 +62,7 @@ on:
     paths:
       - 'apps/slate-windows/**'
       - 'crates/**'
+      - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
       - '.github/workflows/windows.yml'
@@ -36,8 +76,8 @@ permissions:
   contents: read
 
 jobs:
-  windows:
-    name: build + test (windows x64)
+  rust-tests:
+    name: rust tests (windows x64)
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -47,13 +87,79 @@ jobs:
       # rust-toolchain.toml pins 1.95.0; rustup materializes it (plus the
       # x86_64-pc-windows-msvc host target) on the first cargo call.
 
-      - name: Cache cargo registry + targets
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+      - name: Restore cargo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
         with:
           path: |
             ~/.cargo/registry
             target
-          key: windows-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-
+            windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-
+            windows-cargo-tests-
+
+      - name: ARM64 cross-compile check (slate-uniffi)
+        run: |
+          rustup target add aarch64-pc-windows-msvc
+          cargo check -p slate-uniffi --target aarch64-pc-windows-msvc --locked
+
+      # Windows is the load-bearing witness for MoveFileExW no-clobber,
+      # reserved-name validation, case-insensitive identity, long paths, and
+      # every other platform-sensitive core contract. Run the complete package
+      # suite except the intentionally long randomized censuses and the
+      # hardware-timing guard (both remain covered by the Rust lanes).
+      #
+      # `--profile ci` for the same reason rust.yml adopted it: the suite's
+      # wall time was dominated by EXECUTING tests at opt-level 0 (~182s for
+      # the lib binary here), not compiling them. The ci profile is opt-level
+      # 2 with debug-assertions + overflow-checks still armed (Cargo.toml).
+      - name: slate-core non-census test suite (ci profile)
+        run: >-
+          cargo test -p slate-core --profile ci --locked
+          -- --skip census_
+          --skip perf_guard_root_listing_under_100ms_on_10k_files
+
+      # Program decision 19 / w0_spec §W0-3 item 3: the CLI builds and its
+      # suite runs on the Windows runner — the full extent of Windows CLI
+      # scope (distribution reserved as W-E5).
+      - name: slate-cli test suite (ci profile)
+        run: cargo test -p slate-cli --profile ci --locked
+
+      # Runs on failure too (!cancelled()): compile artifacts are valid even
+      # when a test fails, and a red main run shouldn't cost the next run its
+      # warm cache.
+      - name: Save cargo cache (main pushes only)
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: windows-cargo-tests-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+  windows:
+    name: app build + test (windows x64)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7
+
+      # rust-toolchain.toml pins 1.95.0; rustup materializes it (plus the
+      # x86_64-pc-windows-msvc host target) on the first cargo call.
+
+      - name: Restore cargo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-
+            windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-
+            windows-cargo-app-
 
       - name: Cache uniffi-bindgen-cs
         id: bindgen-cache
@@ -73,27 +179,15 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
-      - name: ARM64 cross-compile check (slate-uniffi)
-        run: |
-          rustup target add aarch64-pc-windows-msvc
-          cargo check -p slate-uniffi --target aarch64-pc-windows-msvc --locked
-
-      # Windows is the load-bearing witness for MoveFileExW no-clobber,
-      # reserved-name validation, case-insensitive identity, long paths, and
-      # every other platform-sensitive core contract. Run the complete package
-      # suite except the intentionally long randomized censuses and the
-      # hardware-timing guard (both remain covered by the Rust lanes).
-      - name: slate-core non-census test suite
-        run: >-
-          cargo test -p slate-core --locked
-          -- --skip census_
-          --skip perf_guard_root_listing_under_100ms_on_10k_files
-
-      # Program decision 19 / w0_spec §W0-3 item 3: the CLI builds and its
-      # suite runs on the Windows runner — the full extent of Windows CLI
-      # scope (distribution reserved as W-E5).
-      - name: slate-cli test suite
-        run: cargo test -p slate-cli --locked
+      # Package versions are pinned in the csproj files, so their hash fully
+      # determines the package set; restore-keys still salvage the overlap
+      # after a version bump.
+      - name: Cache NuGet packages
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+        with:
+          path: ~/.nuget/packages
+          key: windows-nuget-${{ hashFiles('apps/slate-windows/**/*.csproj') }}
+          restore-keys: windows-nuget-
 
       - name: Generate C# bindings (builds slate_uniffi x64 cdylib)
         run: ./apps/slate-windows/generate-bindings.ps1 -Locked
@@ -136,3 +230,33 @@ jobs:
 
       - name: Format gate (dotnet format --verify-no-changes)
         run: dotnet format apps/slate-windows/SlateWindows.slnx --verify-no-changes
+
+      # Runs on failure too (!cancelled()): the release graph is the
+      # expensive artifact here, and it is valid even when a downstream
+      # gate fails.
+      - name: Save cargo cache (main pushes only)
+        if: ${{ !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9  # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            target
+          key: windows-cargo-app-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'Cargo.toml', 'crates/**/Cargo.toml') }}-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+  # The historical required-check identity. Fails unless BOTH lanes
+  # succeed, so "build + test (windows x64)" green still means what it
+  # meant when the lanes were one serial job. Runs on a Linux runner:
+  # it evaluates two strings, and ubuntu boots faster and bills at 1x.
+  gate:
+    name: build + test (windows x64)
+    needs: [rust-tests, windows]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verify both windows lanes succeeded
+        run: |
+          if [ "${{ needs.rust-tests.result }}" != "success" ] || [ "${{ needs.windows.result }}" != "success" ]; then
+            echo "::error::rust-tests=${{ needs.rust-tests.result }} app=${{ needs.windows.result }}"
+            exit 1
+          fi
