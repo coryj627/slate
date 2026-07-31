@@ -601,6 +601,69 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>Mixed detection runs on style IDENTITY (adversarial
+    /// round 4): heading transitions must answer MixedAttributeValue on
+    /// the StyleName channel too, even though headings emit no
+    /// synthetic name — while a uniform heading range still delegates
+    /// (no "style Heading 1" double-speak under report-style).</summary>
+    [Fact]
+    public void HeadingRangesReportMixedStyleNameIdentity()
+    {
+        RunSta(() =>
+        {
+            foreach (string source in new[]
+            {
+                "# Heading one\n\nplain paragraph\n",
+                "# Heading one\n\n## Heading two\n",
+            })
+            {
+                FlowDocument built = BuildSource(source);
+                var surface = new ReadingSurface();
+                var peer = System.Windows.Automation.Peers
+                    .UIElementAutomationPeer.CreatePeerForElement(surface);
+                surface.ApplyBuiltDocument(built);
+                var provider = peer!.GetPattern(
+                    System.Windows.Automation.Peers.PatternInterface.Text)
+                    as System.Windows.Automation.Provider.ITextProvider;
+                surface.Selection.Select(
+                    surface.Document.ContentStart, surface.Document.ContentEnd);
+                var range = provider!.GetSelection()[0];
+                Assert.Same(
+                    System.Windows.Automation.TextPattern.MixedAttributeValue,
+                    range.GetAttributeValue(
+                        HeadingStyleTextProvider.StyleNameAttribute));
+                Assert.Same(
+                    System.Windows.Automation.TextPattern.MixedAttributeValue,
+                    range.GetAttributeValue(
+                        HeadingStyleTextProvider.StyleIdAttribute));
+            }
+
+            FlowDocument uniform = BuildSource("# Heading one\n");
+            var uniformSurface = new ReadingSurface();
+            var uniformPeer = System.Windows.Automation.Peers
+                .UIElementAutomationPeer.CreatePeerForElement(uniformSurface);
+            uniformSurface.ApplyBuiltDocument(uniform);
+            var uniformProvider = uniformPeer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            uniformSurface.Selection.Select(
+                uniformSurface.Document.ContentStart,
+                uniformSurface.Document.ContentEnd);
+            var uniformRange = uniformProvider!.GetSelection()[0];
+            Assert.Equal(
+                HeadingStyleTextProvider.StyleIdHeading1,
+                uniformRange.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleIdAttribute));
+            object? uniformName = uniformRange.GetAttributeValue(
+                HeadingStyleTextProvider.StyleNameAttribute);
+            Assert.NotSame(
+                System.Windows.Automation.TextPattern.MixedAttributeValue,
+                uniformName);
+            Assert.NotEqual(
+                HeadingStyleTextProvider.QuoteStyleName, uniformName);
+        });
+    }
+
     /// <summary>The paragraph walk has NO count ceiling (adversarial
     /// round 2: a 10k cap silently truncated documents a 64 KiB embed
     /// preview can legally exceed, hiding later quotes/headings from
