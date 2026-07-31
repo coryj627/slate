@@ -51,19 +51,23 @@
 # its dashboard-configured size — each lane ends with a footprint report;
 # watch the trend and grow the volume before the cliff.
 #
-# Cache-trust posture (adversarial review, recorded owner decision):
-# volumes COMMIT FROM PR RUNS, deliberately. This matches every other
-# Namespace lane in the repo (rust.yml/swift-tests.yml/audit.yml run
-# the identical last-write-wins posture) and is what makes the 7–9
-# adversarial-review rounds per PR inherit each other's warm state —
-# main-only commits would refork every round from the main baseline
-# and recompile the PR's own changes each push. The poisoning surface
-# this trades away is fork PRs, which this single-owner private repo
-# does not accept; if that ever changes, Namespace's cache-protection
-# allow-list (runner-configuration#advanced-protect-caches-from-
-# updates) restricts commits per tag from the dashboard — apply it to
-# BOTH tags here and to the rust.yml/swift-tests.yml/audit.yml
-# volumes in the same pass, not to this lane alone.
+# Cache-trust posture (adversarial rounds 1–2 — round 2 corrected the
+# round-1 premise: this repository is PUBLIC, so fork PRs are possible
+# even with workflow-approval gates): the cache tags are
+# EVENT-CONDITIONAL. Main pushes commit the trusted lineages
+# (slate-windows-rust / slate-windows-app); every other event — PRs,
+# workflow_dispatch — reads and commits the parallel *-pr lineages.
+# PR-controlled build code can therefore never write state a main
+# build consumes, while the 7–9 adversarial-review rounds per PR still
+# inherit each other's warm state inside the PR lineage (the blast
+# radius of a poisoned PR volume is other PR builds, never main
+# artifacts — the same bound GitHub's own cache scoping draws).
+# Namespace's per-tag cache-protection allow-list (runner-
+# configuration#advanced-protect-caches-from-updates) is available as
+# dashboard belt-and-braces. NOTE: rust.yml, swift-tests.yml, and
+# audit.yml still run unconditional shared volumes — the pre-existing
+# repo-wide exposure this scheme fixes here; propagate the same
+# event-conditional tags there in a follow-up.
 
 name: windows
 
@@ -97,7 +101,7 @@ permissions:
 jobs:
   rust-tests:
     name: rust tests (windows x64)
-    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-rust
+    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-rust${{ github.event_name != 'push' && '-pr' || '' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -174,7 +178,7 @@ jobs:
 
   windows:
     name: app build + test (windows x64)
-    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-app
+    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-app${{ github.event_name != 'push' && '-pr' || '' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -243,7 +247,8 @@ jobs:
       - name: Upload FlaUI gate binaries
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
-          name: flaui-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          name: flaui-binaries-${{ github.run_id }}
+          overwrite: true
           path: |
             apps/slate-windows/src/SlateWindows/bin/Release/**/*
             apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/**/*
@@ -286,7 +291,7 @@ jobs:
       - name: Download FlaUI gate binaries
         uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7
         with:
-          name: flaui-binaries-${{ github.run_id }}-${{ github.run_attempt }}
+          name: flaui-binaries-${{ github.run_id }}
           path: apps/slate-windows
 
       # Keep this process-owning gate separate from the in-process
@@ -312,6 +317,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7
         with:
           name: slate-windows-accessibility-${{ github.sha }}
+          overwrite: true
           path: |
             ${{ runner.temp }}\slate-accessibility-results\**\*
             ${{ runner.temp }}\slate-accessibility-evidence\**\*
