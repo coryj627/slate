@@ -120,24 +120,32 @@ jobs:
         # every cache mode).
         run: |
           shopt -s nullglob dotglob
+          # Platform/vendor metadata is not cache content: skipped
+          # silently for both the cold decision and measurement
+          # (adversarial round 6: lost+found and containerscache on
+          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
+          # every attestation in the warning path, and permanent noise
+          # buries a real measurement failure).
+          is_metadata() {
+            case "$(basename "$1")" in
+              "lost+found"|containerscache|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
           entries=()
           for entry in "${NSC_CACHE_PATH:?cache volume root missing}"/*; do
-            # lost+found is an ext4 artifact, not cache content: it is
-            # root-owned (du warns on every healthy run) and present on
-            # a FRESH volume (a root containing only lost+found IS a
-            # cold mount, observed live when the -pr volume was
-            # silently recreated on 2026-07-31).
-            [ "$(basename "$entry")" = "lost+found" ] && continue
-            entries+=("$entry")
+            is_metadata "$entry" || entries+=("$entry")
           done
           if [ ${#entries[@]} -eq 0 ]; then
             echo "cache volume empty (cold mount)"
           else
-            # Emptiness is decided by ENUMERATION, never by du's exit
-            # status (adversarial round 5: one unreadable root child
-            # made du exit nonzero and the fallback stamped the cold
-            # sentinel under 9GB of warm cache).
-            du -sh "${entries[@]}" || echo "::warning::du failed on some entries - measurement incomplete, NOT cold"
+            for entry in "${entries[@]}"; do
+              # Per-entry measurement: one unreadable entry must not
+              # taint the rest, and emptiness is decided by
+              # enumeration, never by du's exit status (rounds 5-6).
+              du -sh "$entry" 2>/dev/null \
+                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
+            done
           fi
 
       - name: Install cargo-audit
