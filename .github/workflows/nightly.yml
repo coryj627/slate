@@ -39,7 +39,12 @@ concurrency:
 jobs:
   full-census:
     name: full-tier censuses (400 seeds)
-    runs-on: namespace-profile-arm64-fast
+    # Cache trust: the cron runs the default branch and shares
+    # rust.yml's trusted slate-arm64 lineage; a manual dispatch can
+    # target any ref, so it routes to the -pr lineage (see rust.yml
+    # header; the trusted volume carries a dashboard branch
+    # allow-list).
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.event_name != 'schedule' && '-pr' || '' }}
     # A hung census must not burn the runner all night; per-PR runs finish
     # in ~4 min, full tier is expected in the 15-30 min band.
     timeout-minutes: 60

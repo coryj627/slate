@@ -23,6 +23,17 @@
 # target/debug check artifacts, test → target/ci, bench →
 # target/release); the structural fix, per-lane cache volumes, is a
 # deferred dashboard experiment.
+#
+# Cache-trust posture (windows.yml adversarial rounds 2–3, applied
+# repo-wide): this repository is PUBLIC, and a fork PR controls both
+# the build code and this YAML — so the volume lineages are
+# EVENT-CONDITIONAL (main pushes commit the trusted slate-arm64
+# lineage; PRs read+commit slate-arm64-pr), and the trusted lineage
+# must additionally carry Namespace's per-volume branch allow-list
+# ("main") in the dashboard, because in-workflow routing cannot bind
+# PR-controlled YAML. audit.yml and nightly.yml share these lineages
+# (they share this profile's volume family); windows.yml documents the
+# full reasoning. The first run per new tag starts cold once.
 
 name: Rust
 
@@ -59,7 +70,7 @@ jobs:
     name: fmt / clippy
     # Namespace Linux runner profile (dashboard-configured; re-pinned to
     # genuine ARM64 by the owner on 2026-07-18 — the name is truthful now).
-    runs-on: namespace-profile-arm64-fast
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.event_name != 'push' && '-pr' || '' }}
     permissions:
       contents: read
     steps:
@@ -97,7 +108,7 @@ jobs:
 
   test:
     name: test (nextest, ci profile)
-    runs-on: namespace-profile-arm64-fast
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.event_name != 'push' && '-pr' || '' }}
     permissions:
       contents: read
     env:
@@ -188,7 +199,7 @@ jobs:
 
   bench-compile:
     name: bench-compile
-    runs-on: namespace-profile-arm64-fast
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.event_name != 'push' && '-pr' || '' }}
     permissions:
       contents: read
     steps:

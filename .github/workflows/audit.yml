@@ -50,7 +50,11 @@ jobs:
     # Namespace Linux ARM64 runner (arm64-fast — high capacity + NVMe cache).
     # cargo-audit is a Rust tool, so this needs a profile with the Rust
     # toolchain preinstalled; arm64-fast ships cargo, x64-fast does not.
-    runs-on: namespace-profile-arm64-fast
+    # Cache trust: push AND schedule runs are trusted (scheduled runs
+    # execute the default branch) and share rust.yml's slate-arm64
+    # lineage; PRs get the -pr lineage (see rust.yml header; the
+    # trusted volume carries a dashboard branch allow-list).
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.event_name != 'push' && github.event_name != 'schedule' && '-pr' || '' }}
     permissions:
       contents: read
     steps:
