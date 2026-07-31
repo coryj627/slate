@@ -88,7 +88,18 @@ jobs:
         # symlinks/junctions on mac/Windows and du reported link nodes,
         # 0B even fully warm; NSC_CACHE_PATH holds the real content for
         # every cache mode).
-        run: du -sh "${NSC_CACHE_PATH:?cache volume root missing}"/* 2>/dev/null || echo "cache volume empty (cold mount)"
+        run: |
+          shopt -s nullglob dotglob
+          entries=("${NSC_CACHE_PATH:?cache volume root missing}"/*)
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "cache volume empty (cold mount)"
+          else
+            # Emptiness is decided by ENUMERATION, never by du's exit
+            # status (adversarial round 5: one unreadable root child
+            # made du exit nonzero and the fallback stamped the cold
+            # sentinel under 9GB of warm cache).
+            du -sh "${entries[@]}" || echo "::warning::du failed on some entries - measurement incomplete, NOT cold"
+          fi
 
       - name: Build slate-uniffi + generate Swift bindings + swift build
         # scripts/build-mac-app.sh runs:
@@ -125,4 +136,11 @@ jobs:
         # configured size - the windows.yml/rust.yml doctrine; this
         # lane previously had no report at all).
         if: ${{ always() }}
-        run: du -sh "$NSC_CACHE_PATH"/* 2>/dev/null || true
+        run: |
+          shopt -s nullglob dotglob
+          entries=("$NSC_CACHE_PATH"/*)
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "cache volume empty"
+          else
+            du -sh "${entries[@]}" || true
+          fi

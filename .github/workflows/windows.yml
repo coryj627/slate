@@ -74,9 +74,13 @@
 # bootstrap runbook (adversarial round 2 on #1068):
 #   1. FREEZE — disable Actions for the ENTIRE repository
 #      (gh api -X PUT repos/OWNER/REPO/actions/permissions
-#      -F enabled=false), THEN drain every non-terminal run — queued,
-#      in_progress, waiting, action_required — and keep Actions
-#      disabled through steps 2—3. Per-workflow disable is NOT enough
+#      -F enabled=false), THEN drain by QUERY, not by a hand-written
+#      state list (adversarial round 5: "requested" and "pending" were
+#      missing and action_required is a conclusion, not a status):
+#      page through repos/OWNER/REPO/actions/runs and cancel or await
+#      every run whose status is not "completed"; proceed only when
+#      that count is zero and Actions is still disabled, and keep
+#      Actions disabled through steps 2—3. Per-workflow disable is NOT enough
 #      (adversarial round 4): completed runs stay re-runnable for 30
 #      days with their original main ref, so an old run re-run during
 #      the critical section would mount pre-reset and promote its
