@@ -179,12 +179,24 @@ jobs:
             exit 1
           }
           try {
-            # Fail CLOSED (adversarial round 7): SilentlyContinue let a
-            # failed root enumeration print the cold sentinel and an
+            # Fail CLOSED (adversarial rounds 7-8): SilentlyContinue let
+            # a failed root enumeration print the cold sentinel and an
             # unreadable child render as 0.00 GiB (System Volume
-            # Information, observed live) - a mount or access failure
-            # must never masquerade as a cold or zero attestation.
-            $children = @(Get-ChildItem $root -Force -ErrorAction Stop)
+            # Information, observed live); Get-ChildItem on a FILE path
+            # succeeds and would attest a plausible 0.00 GiB, so the
+            # root must resolve as a DIRECTORY first - a mount or access
+            # failure must never masquerade as a cold attestation.
+            $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+          } catch {
+            Write-Host "::error::cannot resolve cache volume root ${root}: $_"
+            exit 1
+          }
+          if (-not $rootItem.PSIsContainer) {
+            Write-Host "::error::cache volume root $root is not a directory - attestation impossible"
+            exit 1
+          }
+          try {
+            $children = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
           } catch {
             Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
             exit 1
@@ -194,7 +206,7 @@ jobs:
           if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
           foreach ($child in $children) {
             try {
-              $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction Stop |
+              $bytes = (Get-ChildItem -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop |
                 Measure-Object Length -Sum).Sum
               '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
             } catch {
@@ -242,12 +254,24 @@ jobs:
             exit 1
           }
           try {
-            # Fail CLOSED (adversarial round 7): SilentlyContinue let a
-            # failed root enumeration print the cold sentinel and an
+            # Fail CLOSED (adversarial rounds 7-8): SilentlyContinue let
+            # a failed root enumeration print the cold sentinel and an
             # unreadable child render as 0.00 GiB (System Volume
-            # Information, observed live) - a mount or access failure
-            # must never masquerade as a cold or zero attestation.
-            $children = @(Get-ChildItem $root -Force -ErrorAction Stop)
+            # Information, observed live); Get-ChildItem on a FILE path
+            # succeeds and would attest a plausible 0.00 GiB, so the
+            # root must resolve as a DIRECTORY first - a mount or access
+            # failure must never masquerade as a cold attestation.
+            $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+          } catch {
+            Write-Host "::error::cannot resolve cache volume root ${root}: $_"
+            exit 1
+          }
+          if (-not $rootItem.PSIsContainer) {
+            Write-Host "::error::cache volume root $root is not a directory - attestation impossible"
+            exit 1
+          }
+          try {
+            $children = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
           } catch {
             Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
             exit 1
@@ -257,7 +281,7 @@ jobs:
           if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
           foreach ($child in $children) {
             try {
-              $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction Stop |
+              $bytes = (Get-ChildItem -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop |
                 Measure-Object Length -Sum).Sum
               '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
             } catch {
@@ -310,12 +334,24 @@ jobs:
             exit 1
           }
           try {
-            # Fail CLOSED (adversarial round 7): SilentlyContinue let a
-            # failed root enumeration print the cold sentinel and an
+            # Fail CLOSED (adversarial rounds 7-8): SilentlyContinue let
+            # a failed root enumeration print the cold sentinel and an
             # unreadable child render as 0.00 GiB (System Volume
-            # Information, observed live) - a mount or access failure
-            # must never masquerade as a cold or zero attestation.
-            $children = @(Get-ChildItem $root -Force -ErrorAction Stop)
+            # Information, observed live); Get-ChildItem on a FILE path
+            # succeeds and would attest a plausible 0.00 GiB, so the
+            # root must resolve as a DIRECTORY first - a mount or access
+            # failure must never masquerade as a cold attestation.
+            $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+          } catch {
+            Write-Host "::error::cannot resolve cache volume root ${root}: $_"
+            exit 1
+          }
+          if (-not $rootItem.PSIsContainer) {
+            Write-Host "::error::cache volume root $root is not a directory - attestation impossible"
+            exit 1
+          }
+          try {
+            $children = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
           } catch {
             Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
             exit 1
@@ -325,7 +361,7 @@ jobs:
           if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
           foreach ($child in $children) {
             try {
-              $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction Stop |
+              $bytes = (Get-ChildItem -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop |
                 Measure-Object Length -Sum).Sum
               '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
             } catch {
@@ -395,12 +431,24 @@ jobs:
             exit 1
           }
           try {
-            # Fail CLOSED (adversarial round 7): SilentlyContinue let a
-            # failed root enumeration print the cold sentinel and an
+            # Fail CLOSED (adversarial rounds 7-8): SilentlyContinue let
+            # a failed root enumeration print the cold sentinel and an
             # unreadable child render as 0.00 GiB (System Volume
-            # Information, observed live) - a mount or access failure
-            # must never masquerade as a cold or zero attestation.
-            $children = @(Get-ChildItem $root -Force -ErrorAction Stop)
+            # Information, observed live); Get-ChildItem on a FILE path
+            # succeeds and would attest a plausible 0.00 GiB, so the
+            # root must resolve as a DIRECTORY first - a mount or access
+            # failure must never masquerade as a cold attestation.
+            $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+          } catch {
+            Write-Host "::error::cannot resolve cache volume root ${root}: $_"
+            exit 1
+          }
+          if (-not $rootItem.PSIsContainer) {
+            Write-Host "::error::cache volume root $root is not a directory - attestation impossible"
+            exit 1
+          }
+          try {
+            $children = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
           } catch {
             Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
             exit 1
@@ -410,7 +458,7 @@ jobs:
           if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
           foreach ($child in $children) {
             try {
-              $bytes = (Get-ChildItem $child.FullName -Recurse -Force -ErrorAction Stop |
+              $bytes = (Get-ChildItem -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop |
                 Measure-Object Length -Sum).Sum
               '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
             } catch {
