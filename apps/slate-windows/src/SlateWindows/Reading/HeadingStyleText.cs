@@ -270,6 +270,21 @@ internal sealed class HeadingStyleTextRange : ITextRangeProvider
             // (adversarial round 1): without this branch, "find
             // StyleName Quote" answered nothing while GetAttributeValue
             // advertised the value.
+            //
+            // A DEGENERATE range is empty by UIA definition and must
+            // answer null (adversarial round 3): the paragraph walk
+            // deliberately yields the caret's paragraph so
+            // GetAttributeValue works at a caret, but a search over
+            // empty content has nothing to find — clamping would
+            // otherwise return the caret itself as a zero-length
+            // "match" an AT can rediscover forever.
+            if (_inner.CompareEndpoints(
+                TextPatternRangeEndpoint.Start,
+                _inner,
+                TextPatternRangeEndpoint.End) == 0)
+            {
+                return null;
+            }
             ITextRangeProvider? last = null;
             foreach ((ITextRangeProvider paragraphRange, Paragraph paragraph)
                 in ParagraphRanges())

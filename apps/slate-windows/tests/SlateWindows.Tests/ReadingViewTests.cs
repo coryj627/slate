@@ -701,6 +701,29 @@ public sealed class ReadingViewTests
                 HeadingStyleTextProvider.StyleNameAttribute,
                 "Caption",
                 false));
+
+            // Degenerate range = empty by UIA definition (adversarial
+            // round 3): a caret INSIDE the quote still answers
+            // GetAttributeValue, but FindAttribute must return null in
+            // both directions — not a zero-length self-match.
+            Paragraph quoteParagraph = surface.Document.Blocks
+                .OfType<Paragraph>()
+                .Single(ReadingSemantics.IsQuote);
+            surface.Selection.Select(
+                quoteParagraph.ContentStart, quoteParagraph.ContentStart);
+            var caret = provider!.GetSelection()[0];
+            Assert.Equal(
+                HeadingStyleTextProvider.QuoteStyleName,
+                caret.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+            Assert.Null(caret.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName,
+                false));
+            Assert.Null(caret.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote,
+                true));
         });
     }
 
