@@ -539,6 +539,194 @@ public sealed class ReadingViewTests
         });
     }
 
+    /// <summary>Synthetic style attributes are range-aware
+    /// (adversarial round 1): a selection spanning quote and plain
+    /// paragraphs answers MixedAttributeValue in either document
+    /// order — never the start paragraph's value alone — and a
+    /// uniform all-quote span answers the single value.</summary>
+    [Fact]
+    public void QuoteStyleAttributesReportMixedAcrossSpanningRanges()
+    {
+        RunSta(() =>
+        {
+            foreach (string source in new[]
+            {
+                "plain paragraph\n\n> a quoted line\n",
+                "> a quoted line\n\nplain paragraph\n",
+            })
+            {
+                FlowDocument built = BuildSource(source);
+                var surface = new ReadingSurface();
+                var peer = System.Windows.Automation.Peers
+                    .UIElementAutomationPeer.CreatePeerForElement(surface);
+                surface.ApplyBuiltDocument(built);
+                var provider = peer!.GetPattern(
+                    System.Windows.Automation.Peers.PatternInterface.Text)
+                    as System.Windows.Automation.Provider.ITextProvider;
+
+                surface.Selection.Select(
+                    surface.Document.ContentStart, surface.Document.ContentEnd);
+                var range = provider!.GetSelection()[0];
+                Assert.Same(
+                    System.Windows.Automation.TextPattern.MixedAttributeValue,
+                    range.GetAttributeValue(
+                        HeadingStyleTextProvider.StyleIdAttribute));
+                Assert.Same(
+                    System.Windows.Automation.TextPattern.MixedAttributeValue,
+                    range.GetAttributeValue(
+                        HeadingStyleTextProvider.StyleNameAttribute));
+            }
+
+            FlowDocument uniform = BuildSource(
+                "> first quote\n\n> second quote\n");
+            var uniformSurface = new ReadingSurface();
+            var uniformPeer = System.Windows.Automation.Peers
+                .UIElementAutomationPeer.CreatePeerForElement(uniformSurface);
+            uniformSurface.ApplyBuiltDocument(uniform);
+            var uniformProvider = uniformPeer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            uniformSurface.Selection.Select(
+                uniformSurface.Document.ContentStart,
+                uniformSurface.Document.ContentEnd);
+            var uniformRange = uniformProvider!.GetSelection()[0];
+            Assert.Equal(
+                HeadingStyleTextProvider.QuoteStyleName,
+                uniformRange.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+            Assert.Equal(
+                HeadingStyleTextProvider.StyleIdQuote,
+                uniformRange.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleIdAttribute));
+        });
+    }
+
+    /// <summary>The paragraph walk has NO count ceiling (adversarial
+    /// round 2: a 10k cap silently truncated documents a 64 KiB embed
+    /// preview can legally exceed, hiding later quotes/headings from
+    /// both GetAttributeValue and FindAttribute). 10,050 plain
+    /// paragraphs precede the only quote; every synthetic answer must
+    /// still see it.</summary>
+    [Fact]
+    public void SyntheticAttributeWalkSurvivesHugeDocuments()
+    {
+        RunSta(() =>
+        {
+            var source = new System.Text.StringBuilder();
+            for (int i = 0; i < 10_050; i++)
+            {
+                source.Append('p').Append(i).Append("\n\n");
+            }
+            source.Append("> a quoted line\n");
+            FlowDocument built = BuildSource(source.ToString());
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers
+                .UIElementAutomationPeer.CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(built);
+            var provider = peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            var whole = provider!.DocumentRange;
+
+            Assert.Same(
+                System.Windows.Automation.TextPattern.MixedAttributeValue,
+                whole.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+
+            var forward = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName,
+                false);
+            Assert.NotNull(forward);
+            Assert.Contains(
+                "a quoted line", forward!.GetText(-1), StringComparison.Ordinal);
+
+            var backward = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote,
+                true);
+            Assert.NotNull(backward);
+            Assert.Contains(
+                "a quoted line", backward!.GetText(-1), StringComparison.Ordinal);
+        });
+    }
+
+    /// <summary>FindAttribute resolves synthetic styles (adversarial
+    /// round 1): WPF's own search cannot see the quote marker, so the
+    /// decorator answers — both directions, headings too, and no
+    /// false positives for values nothing carries.</summary>
+    [Fact]
+    public void FindAttributeLocatesSyntheticQuoteStyles()
+    {
+        RunSta(() =>
+        {
+            FlowDocument built = BuildSource(
+                "# Heading one\n\nplain paragraph\n\n> a quoted line\n");
+            var surface = new ReadingSurface();
+            var peer = System.Windows.Automation.Peers
+                .UIElementAutomationPeer.CreatePeerForElement(surface);
+            surface.ApplyBuiltDocument(built);
+            var provider = peer!.GetPattern(
+                System.Windows.Automation.Peers.PatternInterface.Text)
+                as System.Windows.Automation.Provider.ITextProvider;
+            var whole = provider!.DocumentRange;
+
+            var quote = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName,
+                false);
+            Assert.NotNull(quote);
+            Assert.Contains(
+                "a quoted line", quote!.GetText(-1), StringComparison.Ordinal);
+
+            var backwardQuote = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote,
+                true);
+            Assert.NotNull(backwardQuote);
+            Assert.Contains(
+                "a quoted line",
+                backwardQuote!.GetText(-1),
+                StringComparison.Ordinal);
+
+            var heading = whole.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdHeading1,
+                false);
+            Assert.NotNull(heading);
+            Assert.Contains(
+                "Heading one", heading!.GetText(-1), StringComparison.Ordinal);
+
+            Assert.Null(whole.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                "Caption",
+                false));
+
+            // Degenerate range = empty by UIA definition (adversarial
+            // round 3): a caret INSIDE the quote still answers
+            // GetAttributeValue, but FindAttribute must return null in
+            // both directions — not a zero-length self-match.
+            Paragraph quoteParagraph = surface.Document.Blocks
+                .OfType<Paragraph>()
+                .Single(ReadingSemantics.IsQuote);
+            surface.Selection.Select(
+                quoteParagraph.ContentStart, quoteParagraph.ContentStart);
+            var caret = provider!.GetSelection()[0];
+            Assert.Equal(
+                HeadingStyleTextProvider.QuoteStyleName,
+                caret.GetAttributeValue(
+                    HeadingStyleTextProvider.StyleNameAttribute));
+            Assert.Null(caret.FindAttribute(
+                HeadingStyleTextProvider.StyleNameAttribute,
+                HeadingStyleTextProvider.QuoteStyleName,
+                false));
+            Assert.Null(caret.FindAttribute(
+                HeadingStyleTextProvider.StyleIdAttribute,
+                HeadingStyleTextProvider.StyleIdQuote,
+                true));
+        });
+    }
+
     /// <summary>The Copy affordance announces as a BUTTON: the
     /// CodeCopyHyperlink peer overrides only the control type; Invoke
     /// and the in-range name stay HyperlinkAutomationPeer's (field,
