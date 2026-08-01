@@ -784,22 +784,27 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             grid.editRequest?.wrappedValue = nil
             grid.onCancelEdit?()
         }
+        // The cell selection carries its own row ID exactly like the
+        // edit request — validated in EVERY configuration (round 14:
+        // a surviving native selection took the successful branch and
+        // left a cell binding anchored to a removed row). Each owner
+        // is written at most once.
+        if let position = grid.cellSelection?.wrappedValue,
+            displayIndex(forRowID: position.rowID) == nil
+        {
+            grid.cellSelection?.wrappedValue = nil
+        }
         if grid.selection != nil {
             // A BOUND identity whose row no longer resolves must clear
             // the OWNER's value too (round 13): the sync helper only
             // deselects the table, and its guard suppresses the
             // owner's changed handler — Canvas's shared selection
             // would keep a filtered-out card targetable by the global
-            // Delete command. Each binding is written at most once.
+            // Delete command.
             if let wanted = grid.selection?.wrappedValue,
                 displayIndex(forRowID: wanted) == nil
             {
                 grid.selection?.wrappedValue = nil
-            }
-            if let position = grid.cellSelection?.wrappedValue,
-                displayIndex(forRowID: position.rowID) == nil
-            {
-                grid.cellSelection?.wrappedValue = nil
             }
             syncSelectionFromBinding()
             return
@@ -810,25 +815,14 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
                 table.selectRowIndexes([index], byExtendingSelection: false)
                 table.scrollRowToVisible(index)
             }
-        } else {
+        } else if table.selectedRow != -1 {
             // The captured identity is GONE (removed row, or a group
             // heading was selected): the index-based selection would
             // silently retarget whatever row now occupies the old
             // index, and a destructive action would take it
-            // (round 10). Deselect instead — and clear a
-            // cell-selection binding EXPLICITLY (round 11): the sync
-            // guard skips tableViewSelectionDidChange's normal
-            // cleanup, which would otherwise leave cell navigation
-            // anchored to an identity absent from the display.
-            if let position = grid.cellSelection?.wrappedValue,
-                displayIndex(forRowID: position.rowID) == nil
-            {
-                grid.cellSelection?.wrappedValue = nil
-            }
-            if table.selectedRow != -1 {
-                mirrorTableSelectionFromBinding {
-                    table.deselectAll(nil)
-                }
+            // (round 10). Deselect instead.
+            mirrorTableSelectionFromBinding {
+                table.deselectAll(nil)
             }
         }
     }

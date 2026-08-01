@@ -456,6 +456,44 @@ final class AccessibleDataGridTests: XCTestCase {
             "the cell selection must not retain a hidden target")
     }
 
+    /// Round 14: the cell selection is validated INDEPENDENTLY of row
+    /// selection — a surviving native selection must not carry a cell
+    /// binding anchored to a DIFFERENT, removed row past the
+    /// reconciliation.
+    @MainActor
+    func testSurvivingNativeSelectionStillClearsARemovedCellSelection() {
+        var position: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 1, columnIndex: 1)  // Ada's Role cell
+        var cellWrites = 0
+        let cellBinding = Binding<AccessibleDataGrid<Row>.CellPosition?>(
+            get: { position },
+            set: {
+                cellWrites += 1
+                position = $0
+            })
+        let grid = makeGrid(rows: Self.people, cellSelection: cellBinding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        table.selectRowIndexes([0], byExtendingSelection: false)  // Charlie
+
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeGrid(rows: remaining, cellSelection: cellBinding))
+
+        XCTAssertEqual(
+            table.selectedRow, 0,
+            "the surviving native selection stays on Charlie")
+        XCTAssertNil(
+            position,
+            "the cell binding must not keep referencing the removed row")
+        XCTAssertEqual(cellWrites, 1, "the cell owner is written exactly once")
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?
