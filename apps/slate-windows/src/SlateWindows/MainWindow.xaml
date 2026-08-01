@@ -861,7 +861,17 @@
                                      DisplayMemberPath="Title"
                                      VirtualizingStackPanel.IsVirtualizing="False"
                                      AutomationProperties.AutomationId="RightPaneLeaves"
-                                     AutomationProperties.Name="Right pane panels" />
+                                     AutomationProperties.Name="Right pane panels">
+                                <!-- Explicit names: content-derived ListItem names
+                                     are not composed on all sessions (the Quick
+                                     Open row precedent), and a rail entry an AT
+                                     cannot name is unusable. -->
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                            </ListBox>
                         </Grid>
                     </local:AutomationLandmarkBorder>
                 </Grid>
