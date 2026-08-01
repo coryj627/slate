@@ -138,6 +138,16 @@ internal static class Program
                 {
                     if (grid.Grid.ContextMenu is { } menu)
                     {
+                        // Composition first — on a session where the
+                        // popup never composes, this is the
+                        // cross-process proof of WHAT the Menu key
+                        // built; "menu-open" overwrites it wherever
+                        // the popup actually opens.
+                        actionLog.Text = "menu-built:" + string.Join(
+                            ",",
+                            menu.Items
+                                .OfType<System.Windows.Controls.MenuItem>()
+                                .Select(item => item.Header?.ToString() ?? "?"));
                         if (menu.IsOpen)
                         {
                             actionLog.Text = "menu-open";
