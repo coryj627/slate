@@ -490,8 +490,12 @@ internal sealed class ReadingSurface : RichTextBox
         }
         try
         {
+            // A SEPARATE file: the app holds slate-windows.log open
+            // for the stderr redirect, and a second writer's append
+            // dies on a sharing violation — measured 2026-08-01 as a
+            // silently empty diagnostic channel.
             System.IO.File.AppendAllText(
-                System.IO.Path.Combine(directory, "slate-windows.log"),
+                System.IO.Path.Combine(directory, "slate-census-diag.log"),
                 $"{DateTime.Now:HH:mm:ss.fff} census-diag {message}\r\n");
         }
         catch (System.IO.IOException)

@@ -1487,7 +1487,15 @@ public sealed class ShellAccessibilityTests
                     : "<log dir absent>";
                 string log = ReadSharedLog(diagnosticLogPath);
                 string logTail = log.Length <= 2000 ? log : log[^2000..];
-                logDiagnostics = $"dir: {listing}\napp log tail: {logTail}";
+                // The peer-churn diagnostics ride their OWN file — the
+                // app holds the main log open for the stderr redirect,
+                // so a second writer dies on a sharing violation.
+                string diag = directory is null
+                    ? ""
+                    : ReadSharedLog(Path.Combine(directory, "slate-census-diag.log"));
+                string diagTail = diag.Length <= 2500 ? diag : diag[^2500..];
+                logDiagnostics =
+                    $"dir: {listing}\napp log tail: {logTail}\ncensus diag: {diagTail}";
             }
             Assert.Fail(
                 $"no {description} appeared under ReadingSurface.\n"
