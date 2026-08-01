@@ -1110,8 +1110,12 @@ public sealed class ShellAccessibilityTests
             var text = surface.Patterns.Text.Pattern;
             var document = text.DocumentRange;
 
-            // The math element renders last among the async artifacts;
-            // waiting for it settles the projection before the census.
+            // Async artifacts (math, then the slower mermaid render)
+            // re-project the document as they complete, KILLING every
+            // previously-snapshotted UIA element - the census must not
+            // race them (observed live: a CI runner finished the
+            // diagram between the math wait and the snapshot, and
+            // eight of nine kinds read "absent" off dead elements).
             _ = WaitForSurfaceDescendant(
                 surface,
                 element => string.Equals(
@@ -1120,6 +1124,14 @@ public sealed class ShellAccessibilityTests
                     StringComparison.Ordinal),
                 "math element",
                 TimeSpan.FromSeconds(10));
+            _ = WaitForSurfaceDescendant(
+                surface,
+                element => string.Equals(
+                    element.Properties.LocalizedControlType.ValueOrDefault,
+                    "diagram",
+                    StringComparison.Ordinal),
+                "diagram element",
+                TimeSpan.FromSeconds(20));
 
             // POSITIVE CENSUS - every custom peer kind, object-tree
             // structural peers included. Each entry: kind, matcher,
@@ -1158,7 +1170,25 @@ public sealed class ShellAccessibilityTests
                     false, "Jump to source"),
             };
 
-            AutomationElement[] descendants = surface.FindAllDescendants();
+            // One CONSISTENT snapshot holding every census kind -
+            // retried because artifact completions between snapshots
+            // invalidate elements (the CI race above).
+            AutomationElement[] descendants = Array.Empty<AutomationElement>();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        descendants = surface.FindAllDescendants();
+                        return census.All(entry =>
+                            descendants.Any(element => entry.Match(element)));
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "the census kinds never appeared together in one stable snapshot; "
+                    + "present: " + string.Join(
+                        ", ",
+                        census.Where(entry =>
+                            descendants.Any(element => entry.Match(element)))
+                            .Select(entry => entry.Kind)));
             var failures = new List<string>();
             var resolved = new List<(string Kind, FlaUI.Core.ITextRange Range)>();
             foreach ((string kind, Func<AutomationElement, bool> match, bool embedded, string? rangeText) in census)
