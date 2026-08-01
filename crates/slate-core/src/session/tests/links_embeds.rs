@@ -482,6 +482,36 @@ fn note_outline_bounds_headings_and_reports_the_total() {
 }
 
 #[test]
+fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
+    // W4-2 round 12: the cached snippet stores the complete authored
+    // span, so a megabyte alias made every row carrying it megabytes
+    // big — 200 such backlink rows crossing FFI was a multi-GB
+    // allocation. The ceiling applies on READ, covering rows cached
+    // before the cap existed.
+    let alias = "A".repeat(1024 * 1024);
+    let body = format!("intro [[hub|{alias}]] outro\n");
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/src.md", body.as_bytes()).unwrap();
+        p.write_file("notes/hub.md", b"# Hub\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let ceiling = crate::links_db::MAX_LINK_SNIPPET_BYTES + '…'.len_utf8();
+
+    let panels = session
+        .note_link_panels("notes/hub.md", Paging::first(50), 8, 4)
+        .unwrap();
+    assert_eq!(panels.backlinks.items.len(), 1);
+    assert!(panels.backlinks.items[0].snippet.len() <= ceiling);
+
+    let source = session
+        .note_link_panels("notes/src.md", Paging::first(50), 8, 4)
+        .unwrap();
+    assert_eq!(source.outgoing_links.len(), 1);
+    assert!(source.outgoing_links[0].snippet.len() <= ceiling);
+}
+
+#[test]
 fn pooled_preview_clamps_image_payloads_to_the_callers_pool() {
     // W4-2 round 11: the caller's remaining note-wide pool bounds
     // what may cross FFI. Within the pool the payload arrives;

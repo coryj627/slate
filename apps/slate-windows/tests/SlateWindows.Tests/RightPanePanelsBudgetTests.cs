@@ -161,10 +161,16 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
     [Fact]
     public void ImageBudgetBoundsRetainedBytesPostResolution()
     {
+        var announced = new List<A11yEvent>();
+        var navigations = new List<string>();
         var panels = new RightPanePanelsViewModel(
             _session,
-            _ => { },
-            (_, _) => true,
+            announced.Add,
+            (path, _) =>
+            {
+                navigations.Add(path);
+                return true;
+            },
             _ => true,
             (_, _) => { });
         panels.NoteChanged("budget.md");
@@ -181,13 +187,19 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
         Assert.IsType<EmbedResolution.Image>(panels.Embeds[1].Resolution);
 
         // The third would cross the note-wide pool: refused IN CORE
-        // (round 11 — the payload never crosses FFI), surfacing as a
-        // loud unresolved card with truncation marked.
+        // (round 11 — the payload never crosses FFI), surfacing as
+        // the loud budget card that keeps Jump alive (round 12).
         EmbedRowViewModel degraded = panels.Embeds[2];
-        Assert.IsType<EmbedResolution.Unresolved>(degraded.Resolution);
+        Assert.Equal(
+            EmbedRowViewModel.OverBudgetMessage, degraded.Node.Title);
         Assert.True(degraded.Node.IsWarning);
-        Assert.True(degraded.Truncated);
         Assert.Null(degraded.Node.Image);
+        Assert.Equal("big3.png", degraded.Node.SourcePath);
+
+        // Jump on the pooled-out row still navigates and announces.
+        panels.OpenEmbedSource(degraded.Node.SourcePath!);
+        Assert.Equal("big3.png", Assert.Single(navigations));
+        Assert.Single(announced.OfType<A11yEvent.InternalNavigated>());
 
         // Retained encoded bytes across all rows stay inside the cap.
         long retained = panels.Embeds.Sum(

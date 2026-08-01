@@ -540,6 +540,20 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                             "The embed could not be resolved."));
                 }
 
+                // A pool-refused image comes back Unresolved with
+                // truncation marked (round 11) — rebuild the loud
+                // budget card so Jump to the KNOWN target survives
+                // the refusal (round 12: the generic unresolved node
+                // has no source path).
+                if (truncated
+                    && resolution is EmbedResolution.Unresolved
+                    && link.TargetPath is not null)
+                {
+                    cache[key] = null;
+                    rows.Add(EmbedRowViewModel.OverBudget(link));
+                    continue;
+                }
+
                 // Post-resolution accounting: a payload that would
                 // push the cumulative image budget past the cap is
                 // DROPPED — the bound is on retained bytes, so no

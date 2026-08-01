@@ -291,6 +291,28 @@ pub(crate) fn outgoing_links_for(
     Ok(out)
 }
 
+/// Snippet byte ceiling at the READ boundary (W4-2 round 12): the
+/// cached `links.snippet` stores the complete authored span, so a
+/// `[[hub|<megabytes of alias>]]` source made every row that carries
+/// it megabytes big — 200 backlink rows of that crossing FFI is a
+/// multi-GB allocation. Capping on read covers already-cached rows
+/// without a migration; the ceiling is far above any legitimate
+/// one-line context.
+pub(crate) const MAX_LINK_SNIPPET_BYTES: usize = 4096;
+
+pub(crate) fn bound_snippet(mut snippet: String) -> String {
+    if snippet.len() <= MAX_LINK_SNIPPET_BYTES {
+        return snippet;
+    }
+    let mut end = MAX_LINK_SNIPPET_BYTES;
+    while end > 0 && !snippet.is_char_boundary(end) {
+        end -= 1;
+    }
+    snippet.truncate(end);
+    snippet.push('…');
+    snippet
+}
+
 fn outgoing_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutgoingLink> {
     Ok(OutgoingLink {
         target_path: row.get::<_, Option<String>>(0)?,
@@ -304,7 +326,7 @@ fn outgoing_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutgoingL
         // keeps consumers from re-implementing the "internal +
         // null target" check at every call site.
         is_unresolved: row.get::<_, Option<String>>(0)?.is_none() && row.get::<_, i64>(5)? == 0,
-        snippet: row.get::<_, String>(6)?,
+        snippet: bound_snippet(row.get::<_, String>(6)?),
         ordinal: row.get::<_, i64>(7)? as u32,
         span_start: row.get::<_, i64>(8)? as u32,
         span_end: row.get::<_, i64>(9)? as u32,
@@ -413,7 +435,7 @@ pub(crate) fn backlinks_for(
             |row| {
                 Ok(Backlink {
                     source_path: row.get::<_, String>(0)?,
-                    snippet: row.get::<_, String>(1)?,
+                    snippet: bound_snippet(row.get::<_, String>(1)?),
                     ordinal: row.get::<_, i64>(2)? as u32,
                     kind: row.get::<_, String>(3)?,
                     is_embed: row.get::<_, i64>(4)? != 0,
