@@ -291,6 +291,14 @@ internal sealed class AccessibleDataGrid : UserControl
             return null;
         }
         _activeSort = (columnIndex, ascending);
+        // The reader's position survives the sort: re-populating
+        // destroys the focused cell's container, and without a restore
+        // keyboard focus falls to the window — the NEXT sort chord
+        // then routes past this control entirely (measured 2026-08-01:
+        // chord one announced ascending, chord two vanished).
+        object? currentItem = _grid.CurrentCell.Item;
+        DataGridColumn? currentColumn = _grid.CurrentCell.Column;
+        bool hadFocus = _grid.IsKeyboardFocusWithin;
         var sorted = _items
             .OrderBy(row => row, new DirectionalComparer(comparer, ascending))
             .ToList();
@@ -316,6 +324,20 @@ internal sealed class AccessibleDataGrid : UserControl
         if (_grid.IsLoaded)
         {
             _grid.UpdateLayout();
+        }
+        if (currentItem is not null
+            && currentItem != DependencyProperty.UnsetValue
+            && _items.Contains(currentItem))
+        {
+            _lastAnnouncedRow = currentItem;
+            _grid.CurrentCell = new DataGridCellInfo(
+                currentItem, currentColumn ?? _grid.Columns[columnIndex]);
+            _grid.SelectedCells.Clear();
+            _grid.SelectedCells.Add(_grid.CurrentCell);
+            if (hadFocus)
+            {
+                _ = _grid.Focus();
+            }
         }
         var @event = new A11yEvent.GridSorted(_columns[columnIndex].Header, ascending);
         Announce(@event);
