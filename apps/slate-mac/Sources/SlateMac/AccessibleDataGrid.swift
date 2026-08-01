@@ -771,6 +771,19 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     /// 7–9: each path that skipped this either targeted the wrong row
     /// or deselected).
     private func restoreSelectionAfterDisplayMutation(nativeSelectedID: Row.ID?) {
+        // An in-flight EDIT whose row no longer resolves is stale in
+        // EVERY binding configuration (round 12): left in place, the
+        // identity reappearing later (refresh, filter, undo) would
+        // re-render and focus the stale draft, allowing an unintended
+        // commit. Clearing FIRES onCancelEdit — the system is
+        // canceling the edit, and the owner must reset its draft
+        // state.
+        if let editRequest = grid.editRequest?.wrappedValue,
+            displayIndex(forRowID: editRequest.rowID) == nil
+        {
+            grid.editRequest?.wrappedValue = nil
+            grid.onCancelEdit?()
+        }
         if grid.selection != nil {
             syncSelectionFromBinding()
             return

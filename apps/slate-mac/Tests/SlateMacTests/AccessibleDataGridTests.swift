@@ -374,6 +374,45 @@ final class AccessibleDataGridTests: XCTestCase {
             "the cell-selection binding must not keep referencing the removed row")
     }
 
+    /// Round 12: an in-flight edit request carries its own row ID —
+    /// removal must clear it (firing onCancelEdit so the owner resets
+    /// its draft), or the identity reappearing later would re-render
+    /// and focus the stale edit, allowing an unintended commit.
+    @MainActor
+    func testReloadClearsAnEditRequestWhoseRowWasRemoved() {
+        var editRequest: AccessibleDataGrid<Row>.EditRequest? =
+            .init(rowID: 1, columnIndex: 1, text: "draft")  // Ada's Role
+        var cancels = 0
+        func makeEditGrid(rows: [Row]) -> AccessibleDataGrid<Row> {
+            AccessibleDataGrid<Row>(
+                columns: [.init("Name") { $0.a }, .init("Role") { $0.b }],
+                rows: rows,
+                summary: "",
+                accessibilityLabel: "People",
+                editRequest: Binding(
+                    get: { editRequest },
+                    set: { editRequest = $0 }),
+                onCancelEdit: { cancels += 1 })
+        }
+        let coordinator = GridCoordinator(grid: makeEditGrid(rows: Self.people))
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: makeEditGrid(rows: Self.people))
+        XCTAssertNotNil(editRequest, "the draft survives while its row exists")
+
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeEditGrid(rows: remaining))
+
+        XCTAssertNil(
+            editRequest,
+            "a draft for a removed row must be cleared, never re-focusable")
+        XCTAssertEqual(cancels, 1, "the owner is told its edit was canceled")
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?
