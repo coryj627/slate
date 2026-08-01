@@ -255,23 +255,44 @@ public sealed class GridConformanceTests
                 window, "GridActionLog", TimeSpan.FromSeconds(5));
             EnsureForeground(window);
             Keyboard.Type(VirtualKeyShort.F2);
+            // Find the table window by PROCESS, matching id or
+            // title: the gate runner has answered a desktop-wide
+            // AutomationId query empty while the host had verifiably
+            // shown the window ("table-shown:True"), so the search is
+            // scoped to the host's own top-level windows.
             AutomationElement? tableWindow = null;
             bool windowAppeared = SpinWait.SpinUntil(
                 () =>
                 {
-                    tableWindow = automation.GetDesktop().FindFirstChild(
-                        cf => cf.ByAutomationId("ReadingTableGridWindow"));
+                    tableWindow = automation.GetDesktop()
+                        .FindAllChildren(cf => cf.ByProcessId(process.Id))
+                        .FirstOrDefault(candidate =>
+                            candidate.Properties.AutomationId.ValueOrDefault
+                                == "ReadingTableGridWindow"
+                            || candidate.Properties.Name.ValueOrDefault == "Table");
                     return tableWindow is not null;
                 },
                 TimeSpan.FromSeconds(15));
             // The host's F2 handler mirrors its outcome into the log:
-            // "table-shown:True" (window lost?), "table-error:…" (the
-            // FFI or window path threw), or anything else (F2 never
-            // arrived).
-            Assert.True(
-                windowAppeared,
-                "the table window never appeared; host log: "
-                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+            // "table-shown:True" (window created but not found - the
+            // census below says what the process exposes),
+            // "table-error:…" (the FFI or window path threw), or
+            // anything else (F2 never arrived).
+            if (!windowAppeared)
+            {
+                string windows = string.Join(
+                    " | ",
+                    automation.GetDesktop()
+                        .FindAllChildren(cf => cf.ByProcessId(process.Id))
+                        .Select(candidate =>
+                            (candidate.Properties.AutomationId.ValueOrDefault ?? "?")
+                            + ":"
+                            + (candidate.Properties.Name.ValueOrDefault ?? "")));
+                Assert.Fail(
+                    "the table window never appeared; host log: "
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>")
+                    + "; process windows: " + windows);
+            }
 
             // Initial keyboard focus is the first CELL, by label.
             Assert.True(
@@ -284,8 +305,10 @@ public sealed class GridConformanceTests
             Keyboard.Type(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => automation.GetDesktop().FindFirstChild(
-                        cf => cf.ByAutomationId("ReadingTableGridWindow")) is null,
+                    () => automation.GetDesktop()
+                        .FindAllChildren(cf => cf.ByProcessId(process.Id))
+                        .All(candidate =>
+                            candidate.Properties.Name.ValueOrDefault != "Table"),
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the table window");
             // Focus RESTORATION, not just closure (adversarial round

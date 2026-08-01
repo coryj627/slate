@@ -308,6 +308,15 @@ internal sealed class AccessibleDataGrid : UserControl
                         : System.ComponentModel.ListSortDirection.Descending)
                     : null;
         }
+        // Publish the reordered tree NOW: the UIA bridge pushes
+        // structure updates at the end of a layout pass, and a starved
+        // session defers layout indefinitely — an AT (and the gate)
+        // would keep reading the pre-sort rows (measured 2026-08-01:
+        // GridSorted announced, row 0 stale for the full wait).
+        if (_grid.IsLoaded)
+        {
+            _grid.UpdateLayout();
+        }
         var @event = new A11yEvent.GridSorted(_columns[columnIndex].Header, ascending);
         Announce(@event);
         return SlateUniffiMethods.A11yRender(@event).Text;
