@@ -1136,7 +1136,8 @@ public sealed class ShellAccessibilityTests
                 // (observed >20s on windows-latest); SpinUntil returns
                 // the moment the element exists, so the timeout only
                 // bounds the failure case.
-                TimeSpan.FromSeconds(90));
+                TimeSpan.FromSeconds(90),
+                Path.Combine(logDirectory, "slate-windows.log"));
 
             // POSITIVE CENSUS - every custom peer kind, object-tree
             // structural peers included. Each entry: kind, matcher,
@@ -1403,18 +1404,46 @@ public sealed class ShellAccessibilityTests
         AutomationElement surface,
         Func<AutomationElement, bool> match,
         string description,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        string? diagnosticLogPath = null)
     {
         AutomationElement? found = null;
-        Assert.True(
-            SpinWait.SpinUntil(
-                () =>
+        AutomationElement[] last = Array.Empty<AutomationElement>();
+        bool appeared = SpinWait.SpinUntil(
+            () =>
+            {
+                last = surface.FindAllDescendants();
+                found = last.FirstOrDefault(match);
+                return found is not null;
+            },
+            timeout);
+        if (!appeared)
+        {
+            // Diagnostic failure (CI-only repro): what DID the surface
+            // hold, and what does the app log say about the artifact
+            // pipeline? Guessing at timeouts stops here.
+            string census = string.Join(
+                " | ",
+                last.Take(40).Select(element =>
                 {
-                    found = surface.FindAllDescendants().FirstOrDefault(match);
-                    return found is not null;
-                },
-                timeout),
-            $"no {description} appeared under ReadingSurface");
+                    string kind =
+                        element.Properties.LocalizedControlType.ValueOrDefault ?? "?";
+                    string name = element.Properties.Name.ValueOrDefault ?? "";
+                    if (name.Length > 30)
+                    {
+                        name = name[..30] + "...";
+                    }
+                    return $"{kind}:{name}";
+                }));
+            string log = diagnosticLogPath is null
+                ? "<no log requested>"
+                : ReadSharedLog(diagnosticLogPath);
+            string logTail = log.Length <= 2000 ? log : log[^2000..];
+            Assert.Fail(
+                $"no {description} appeared under ReadingSurface.\n"
+                + $"descendants ({last.Length}): {census}\n"
+                + $"app log tail: {logTail}");
+        }
         return found!;
     }
 
