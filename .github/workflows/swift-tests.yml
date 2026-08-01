@@ -53,7 +53,7 @@ jobs:
     # reasoning; the trusted volume carries a dashboard branch
     # allow-list). First run per new tag is cold once - a full
     # Xcode/SwiftPM rebuild here.
-    runs-on: namespace-profile-mac-actions;overrides.cache-tag=slate-mac${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
+    runs-on: namespace-profile-mac-actions${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-mac
     permissions:
       contents: read
     steps:
