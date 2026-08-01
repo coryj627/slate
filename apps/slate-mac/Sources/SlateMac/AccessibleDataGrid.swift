@@ -773,13 +773,22 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     private func restoreSelectionAfterDisplayMutation(nativeSelectedID: Row.ID?) {
         if grid.selection != nil {
             syncSelectionFromBinding()
-        } else if let nativeSelectedID,
-            let index = displayIndex(forRowID: nativeSelectedID),
-            let table
-        {
+            return
+        }
+        guard let table else { return }
+        if let nativeSelectedID, let index = displayIndex(forRowID: nativeSelectedID) {
             mirrorTableSelectionFromBinding {
                 table.selectRowIndexes([index], byExtendingSelection: false)
                 table.scrollRowToVisible(index)
+            }
+        } else if table.selectedRow != -1 {
+            // The captured identity is GONE (removed row, or a group
+            // heading was selected): the index-based selection would
+            // silently retarget whatever row now occupies the old
+            // index, and a destructive action would take it
+            // (round 10). Deselect instead.
+            mirrorTableSelectionFromBinding {
+                table.deselectAll(nil)
             }
         }
     }

@@ -317,6 +317,31 @@ final class AccessibleDataGridTests: XCTestCase {
             "the lifecycle reload must not deselect the unbound grid")
     }
 
+    /// Round 10: when the natively selected row is REMOVED by a
+    /// reload, its old numeric index may still be valid — index-based
+    /// selection would silently retarget whatever row now occupies it,
+    /// and a destructive action would take that row. Removal must
+    /// deselect.
+    @MainActor
+    func testUnboundReloadDeselectsWhenTheSelectedRowIsRemoved() {
+        let grid = makeGrid(rows: Self.people)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        table.selectRowIndexes([1], byExtendingSelection: false)  // Ada
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeGrid(rows: remaining))
+        XCTAssertEqual(
+            table.selectedRow, -1,
+            "a removed selected row must deselect, never retarget the old index")
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?
