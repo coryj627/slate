@@ -1123,7 +1123,7 @@ public sealed class ShellAccessibilityTests
                     "math",
                     StringComparison.Ordinal),
                 "math element",
-                TimeSpan.FromSeconds(10));
+                TimeSpan.FromSeconds(30));
             _ = WaitForSurfaceDescendant(
                 surface,
                 element => string.Equals(
@@ -1131,7 +1131,12 @@ public sealed class ShellAccessibilityTests
                     "diagram",
                     StringComparison.Ordinal),
                 "diagram element",
-                TimeSpan.FromSeconds(20));
+                // Generous by design: the FIRST mermaid render pays
+                // fontdb's full system-font scan on a cold runner
+                // (observed >20s on windows-latest); SpinUntil returns
+                // the moment the element exists, so the timeout only
+                // bounds the failure case.
+                TimeSpan.FromSeconds(90));
 
             // POSITIVE CENSUS - every custom peer kind, object-tree
             // structural peers included. Each entry: kind, matcher,
