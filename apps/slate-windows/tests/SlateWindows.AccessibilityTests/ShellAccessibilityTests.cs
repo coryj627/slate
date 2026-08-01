@@ -1455,14 +1455,46 @@ public sealed class ShellAccessibilityTests
                     }
                     return $"{kind}:{name}";
                 }));
-            string log = diagnosticLogPath is null
-                ? "<no log requested>"
-                : ReadSharedLog(diagnosticLogPath);
-            string logTail = log.Length <= 2000 ? log : log[^2000..];
+            // How many surfaces exist, and what does the probed one's
+            // TEXT PATTERN carry? The range text separates "projection
+            // never completed" (placeholder text) from "content merged
+            // but peers stale" (full note text, missing elements).
+            AutomationElement[] surfaces = window.FindAllDescendants(
+                cf => cf.ByAutomationId("ReadingSurface"));
+            string rangeText = "<no surface>";
+            if (surfaces.Length > 0)
+            {
+                try
+                {
+                    rangeText = surfaces[0].Patterns.Text.PatternOrDefault
+                        ?.DocumentRange.GetText(1200)
+                        ?? "<no text pattern>";
+                }
+                catch (Exception exception)
+                {
+                    rangeText = $"<text pattern threw: {exception.GetType().Name}>";
+                }
+            }
+            string logDiagnostics = "<no log requested>";
+            if (diagnosticLogPath is not null)
+            {
+                string? directory = Path.GetDirectoryName(diagnosticLogPath);
+                string listing = directory is not null && Directory.Exists(directory)
+                    ? string.Join(
+                        ", ",
+                        Directory.EnumerateFiles(directory).Select(file =>
+                            $"{Path.GetFileName(file)}({new FileInfo(file).Length}b)"))
+                    : "<log dir absent>";
+                string log = ReadSharedLog(diagnosticLogPath);
+                string logTail = log.Length <= 2000 ? log : log[^2000..];
+                logDiagnostics = $"dir: {listing}\napp log tail: {logTail}";
+            }
             Assert.Fail(
                 $"no {description} appeared under ReadingSurface.\n"
+                + $"surfaces: {surfaces.Length}\n"
                 + $"descendants ({last.Length}): {census}\n"
-                + $"app log tail: {logTail}");
+                + $"range text: {rangeText.Replace("\r", "\\r").Replace("\n", "\\n")}\n"
+                + logDiagnostics);
         }
         return found!;
     }
