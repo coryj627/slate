@@ -336,6 +336,7 @@ internal sealed class ReadingSurface : RichTextBox
         }
         _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
         _navigator?.SetLandmarks(_landmarks);
+        InvalidateAutomationChildren();
     }
 
     private FlowDocument? _lastMerged;
@@ -401,6 +402,7 @@ internal sealed class ReadingSurface : RichTextBox
         }
         _landmarks = ReadingDocumentBuilder.CollectLandmarks(Document);
         _navigator?.SetLandmarks(_landmarks);
+        InvalidateAutomationChildren();
 
         if (caretOffset > 0)
         {
@@ -434,6 +436,25 @@ internal sealed class ReadingSurface : RichTextBox
     internal static bool ClaimsFocusAfterApply(
         bool isVisible, bool isKeyboardFocusWithin, int blockCount) =>
         isVisible && !isKeyboardFocusWithin && blockCount > 0;
+
+    /// <summary>
+    /// Bring the surface peer's child list current after a content
+    /// merge. WPF refreshes peer children on render-driven automation
+    /// ticks; on a sparsely-composited session those ticks stall and a
+    /// UIA client keeps reading a child list frozen at an earlier
+    /// document state (measured on CI, 2026-08-01: the range text
+    /// carried the complete note while the child list held two
+    /// elements for the full 90-second wait). No-op unless a UIA
+    /// client is attached — that is when a peer exists.
+    /// </summary>
+    private void InvalidateAutomationChildren()
+    {
+        if (UIElementAutomationPeer.FromElement(this) is { } peer)
+        {
+            peer.ResetChildrenCache();
+            peer.InvalidatePeer();
+        }
+    }
 
     /// <summary>
     /// Activate the link the CARET is inside. A caret position is not
