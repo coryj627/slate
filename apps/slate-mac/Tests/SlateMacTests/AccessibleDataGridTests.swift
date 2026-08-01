@@ -223,6 +223,40 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertEqual(consumed, ["Ada", "Bea", "Charlie"])
     }
 
+    /// Round 7: NSTableView selection is INDEX-based while the binding
+    /// holds the row ID — a sort that reorders rows must re-derive the
+    /// selected index from identity, or activation and destructive row
+    /// actions target a DIFFERENT row (the Canvas shape: selection
+    /// binding, no sortState, Delete among the actions).
+    @MainActor
+    func testSortWithLiveTableKeepsSelectionOnTheSameRowIdentity() {
+        var selected: Int? = 0  // Charlie — display index 0 pre-sort.
+        let binding = Binding<Int?>(
+            get: { selected },
+            set: { selected = $0 })
+        let grid = makeGrid(rows: Self.people, selection: binding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        XCTAssertEqual(table.selectedRow, 0, "Charlie selected pre-sort")
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+
+        // Ascending renders Ada, Bea, Charlie — the selected IDENTITY
+        // is unchanged and the table's index must follow it.
+        XCTAssertEqual(selected, 0, "the binding identity is unchanged")
+        XCTAssertEqual(
+            table.selectedRow, 2,
+            "the table selection follows the row identity, not the old index")
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?

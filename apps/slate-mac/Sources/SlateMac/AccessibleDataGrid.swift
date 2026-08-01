@@ -572,8 +572,13 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         syncSortDescriptorsToTable()
         syncHeaderAccessibilityToTable()
         table?.reloadData()
-        let event = A11yEvent.gridSorted(
-            column: grid.columns[columnIndex].header, ascending: ascending)
+        // NSTableView selection is INDEX-based while the binding holds
+        // the row ID: after a reorder the old index points at a
+        // DIFFERENT row, and activation or a destructive action would
+        // target it (round 7 — the Canvas shape: selection binding, no
+        // sortState, Delete among the row actions). Re-derive the
+        // index from identity, exactly as reload(grid:) does.
+        syncSelectionFromBinding()
         grid.announce(event)
         return a11yRender(event: event).text
     }
