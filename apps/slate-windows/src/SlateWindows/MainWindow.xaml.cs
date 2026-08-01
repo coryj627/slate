@@ -713,6 +713,28 @@ public partial class MainWindow : Window
         }
     }
 
+    private void PanelBacklinks_ContextMenuOpening(
+        object sender, ContextMenuEventArgs e) =>
+        PanelList_ContextMenuOpening(PanelBacklinksList, e);
+
+    private void PanelOutgoingLinks_ContextMenuOpening(
+        object sender, ContextMenuEventArgs e) =>
+        PanelList_ContextMenuOpening(PanelOutgoingLinksList, e);
+
+    private static void PanelList_ContextMenuOpening(
+        ListBox list, ContextMenuEventArgs e)
+    {
+        // Pointer-invoked menus act on the CLICKED row; keyboard
+        // requests (cursor coordinates -1) keep the selection but
+        // refuse to open over nothing (adversarial round 2).
+        bool pointerRequest = e.CursorLeft >= 0 || e.CursorTop >= 0;
+        if (!PanelRowTargeting.TargetRowAt(
+            list, e.OriginalSource, pointerRequest))
+        {
+            e.Handled = true;
+        }
+    }
+
     private void PanelBacklinksOpen_Click(object sender, RoutedEventArgs e) =>
         OpenSelectedBacklink(WorkspaceOpenTarget.CurrentTab);
 

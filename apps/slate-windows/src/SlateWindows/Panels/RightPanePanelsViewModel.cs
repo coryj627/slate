@@ -29,15 +29,26 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     /// <summary>Mac parity: backlinks page bound (limit 200).</summary>
     private const uint BacklinksLimit = 200;
 
-    /// <summary>Note-wide embed budgets (adversarial round 1): the
+    /// <summary>Note-wide embed budgets (adversarial rounds 1-2): the
     /// core budgets bound each SINGLE preview, so a note with
     /// hundreds of embed links — or a handful of huge images — still
-    /// multiplied that bound without limit. Distinct targets beyond
-    /// the cap, and any new target once the cumulative image budget
-    /// is spent, degrade to warning rows that keep Jump working.
-    /// The image figure matches the W3-5 reading-card host budget.</summary>
+    /// multiplied that bound without limit. Resolution slots are
+    /// charged per occurrence KEY (raw target + display text, since
+    /// display text is per-occurrence image alt), so alt-text
+    /// variation cannot multiply core calls past the cap either.
+    /// A resolution whose image payload would push the cumulative
+    /// budget past the cap is dropped, not retained (round 2: the
+    /// pre-check let the final target blow through it). Duplicate
+    /// occurrences share one resolution AND one built card — the
+    /// round-2 hole was per-row re-decode of the same image. Rows
+    /// themselves cap at MaxEmbedRows (the embeds ItemsControl is
+    /// not virtualized); the tail degrades to one summary warning.
+    /// Degradation is always a loud warning card, never a silent
+    /// drop, and Jump survives wherever the target is known. The
+    /// image figure matches the W3-5 reading-card host budget.</summary>
     internal const int MaxResolvedEmbedTargets = 128;
     internal const long MaxEmbedImageBytes = 16L * 1024 * 1024;
+    internal const int MaxEmbedRows = 256;
 
     private readonly VaultSession _session;
     private readonly Action<A11yEvent> _announce;
@@ -49,6 +60,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private string? _notePath;
     private string? _announcedOutlinePath;
     private int _loadGeneration;
+    private int _outlineRequestId;
     private bool _isLoadingLinks;
     private bool _isLoadingOutline;
     private bool _isResolvingEmbeds;
@@ -68,6 +80,10 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         _scrollToAnchor = scrollToAnchor;
         _uiContext = SynchronizationContext.Current;
     }
+
+    internal int LoadGenerationForTests => _loadGeneration;
+
+    internal int OutlineRequestIdForTests => _outlineRequestId;
 
     public ObservableCollection<BacklinkRowViewModel> Backlinks { get; } = [];
 
@@ -285,16 +301,21 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         }
         _ = Task.Run(() =>
         {
-            // One core call per DISTINCT raw target: the same
-            // [[target]] embedded five times renders five rows off
-            // one shared resolution.
-            var resolved = new Dictionary<
-                string, (EmbedResolution Resolution, bool Truncated)>(
-                StringComparer.Ordinal);
+            // One core call AND one built card per occurrence key
+            // (raw target + per-occurrence alt): the same [[target]]
+            // embedded five times renders five rows off one shared
+            // resolution and one shared card — no duplicate image
+            // decodes. A null cache entry marks a budget-degraded
+            // key so its duplicates degrade without re-resolving.
+            var cache = new Dictionary<
+                (string Target, string? Alt), EmbedRowViewModel.Shared?>();
             long imageBytes = 0;
-            var rows = new List<EmbedRowViewModel>(embedLinks.Length);
-            foreach (OutgoingLink link in embedLinks)
+            var rows = new List<EmbedRowViewModel>(
+                Math.Min(embedLinks.Length, MaxEmbedRows + 1));
+            for (int index = 0; index < embedLinks.Length; index++)
             {
+                OutgoingLink link = embedLinks[index];
+
                 // Mid-loop staleness check: a note switch during a
                 // large batch must abandon, not keep resolving into
                 // a publish that will be discarded anyway.
@@ -303,16 +324,30 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                     return;
                 }
 
-                if (resolved.TryGetValue(link.TargetRaw, out var hit))
+                // The materialization cap: every row becomes a full
+                // card visual in a non-virtualized ItemsControl, so
+                // even cheap cache hits are bounded — the tail is
+                // one loud summary, never a silent drop.
+                if (rows.Count >= MaxEmbedRows)
                 {
-                    rows.Add(new EmbedRowViewModel(
-                        link, hit.Resolution, hit.Truncated));
+                    rows.Add(EmbedRowViewModel.RowLimit(
+                        link, embedLinks.Length - index));
+                    break;
+                }
+
+                (string TargetRaw, string? DisplayText) key =
+                    (link.TargetRaw, link.DisplayText);
+                if (cache.TryGetValue(key, out EmbedRowViewModel.Shared? hit))
+                {
+                    rows.Add(hit is null
+                        ? EmbedRowViewModel.OverBudget(link)
+                        : EmbedRowViewModel.FromShared(link, hit));
                     continue;
                 }
 
-                if (resolved.Count >= MaxResolvedEmbedTargets
-                    || imageBytes >= MaxEmbedImageBytes)
+                if (cache.Count >= MaxResolvedEmbedTargets)
                 {
+                    cache[key] = null;
                     rows.Add(EmbedRowViewModel.OverBudget(link));
                     continue;
                 }
@@ -335,9 +370,27 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                         new EmbedUnresolvedReason.ReadError(
                             "The embed could not be resolved."));
                 }
-                imageBytes += CountImageBytes(resolution);
-                resolved[link.TargetRaw] = (resolution, truncated);
-                rows.Add(new EmbedRowViewModel(link, resolution, truncated));
+
+                // Post-resolution accounting: a payload that would
+                // push the cumulative image budget past the cap is
+                // DROPPED — the bound is on retained bytes, so no
+                // single target may overshoot it.
+                long cost = CountImageBytes(resolution);
+                if (cost > 0 && imageBytes + cost > MaxEmbedImageBytes)
+                {
+                    cache[key] = null;
+                    rows.Add(EmbedRowViewModel.OverBudget(link));
+                    continue;
+                }
+
+                imageBytes += cost;
+                var shared = new EmbedRowViewModel.Shared(
+                    resolution,
+                    truncated,
+                    EditorInteractionCoordinator.BuildEmbedPreviewNode(
+                        resolution));
+                cache[key] = shared;
+                rows.Add(EmbedRowViewModel.FromShared(link, shared));
             }
             Post(() =>
             {
@@ -371,6 +424,11 @@ internal sealed class RightPanePanelsViewModel : BindableBase
 
     private void LoadOutline(string path, int generation, bool announceCount)
     {
+        // Save-refreshes reuse the note generation, so ordering among
+        // outline requests needs its own token: without it, an older
+        // in-flight read completing LAST would overwrite the newest
+        // save's headings (adversarial round 2).
+        int requestId = ++_outlineRequestId;
         IsLoadingOutline = true;
         _ = Task.Run(() =>
         {
@@ -384,32 +442,42 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             catch (VaultException)
             {
             }
-            Post(() =>
-            {
-                if (generation != _loadGeneration)
-                {
-                    return;
-                }
-                IsLoadingOutline = false;
-                Outline.Clear();
-                foreach (Heading heading in headings ?? [])
-                {
-                    Outline.Add(new OutlineRowViewModel(heading));
-                }
-                // Once per file, never for empty outlines, never again
-                // on save-refresh (mac announcedFilePath guard — the
-                // guard lives in the VIEW MODEL so template
-                // re-instantiation on leaf switches cannot re-announce).
-                if (announceCount
-                    && Outline.Count > 0
-                    && !string.Equals(
-                        _announcedOutlinePath, path, StringComparison.Ordinal))
-                {
-                    _announcedOutlinePath = path;
-                    _announce(new A11yEvent.OutlineCount((uint)Outline.Count));
-                }
-            });
+            Post(() => PublishOutline(
+                path, generation, requestId, headings, announceCount));
         });
+    }
+
+    /// <summary>Internal so the stale-publish guard is testable with
+    /// deterministic ordering (real completion races are timing).</summary>
+    internal void PublishOutline(
+        string path,
+        int generation,
+        int requestId,
+        Heading[]? headings,
+        bool announceCount)
+    {
+        if (generation != _loadGeneration || requestId != _outlineRequestId)
+        {
+            return;
+        }
+        IsLoadingOutline = false;
+        Outline.Clear();
+        foreach (Heading heading in headings ?? [])
+        {
+            Outline.Add(new OutlineRowViewModel(heading));
+        }
+        // Once per file, never for empty outlines, never again
+        // on save-refresh (mac announcedFilePath guard — the
+        // guard lives in the VIEW MODEL so template
+        // re-instantiation on leaf switches cannot re-announce).
+        if (announceCount
+            && Outline.Count > 0
+            && !string.Equals(
+                _announcedOutlinePath, path, StringComparison.Ordinal))
+        {
+            _announcedOutlinePath = path;
+            _announce(new A11yEvent.OutlineCount((uint)Outline.Count));
+        }
     }
 
     // ---- Activation (mac AppState.openBacklink / openLink twins) ----
@@ -610,6 +678,14 @@ internal sealed class EmbedRowViewModel
     internal const string OverBudgetMessage =
         "Embed limit reached for this note. Open source to view this content.";
 
+    /// <summary>One resolution + one built card, shared across every
+    /// duplicate occurrence of the same (target, alt) key — the
+    /// round-2 hole was a fresh card (and image decode) per row.</summary>
+    internal sealed record Shared(
+        EmbedResolution Resolution,
+        bool Truncated,
+        EditorEmbedPreviewNode Node);
+
     public EmbedRowViewModel(
         OutgoingLink link, EmbedResolution resolution, bool truncated)
         : this(
@@ -632,6 +708,10 @@ internal sealed class EmbedRowViewModel
         Node = node;
     }
 
+    public static EmbedRowViewModel FromShared(
+        OutgoingLink link, Shared shared) => new(
+        link, shared.Resolution, shared.Truncated, shared.Node);
+
     /// <summary>The note-wide budget refused to resolve this target:
     /// a warning card that never silently drops the row, and keeps
     /// Jump to source alive when the target is known.</summary>
@@ -648,6 +728,29 @@ internal sealed class EmbedRowViewModel
             IsDisclosure: false,
             InitiallyExpanded: false,
             IsWarning: true));
+
+    /// <summary>The materialized-row cap: one summary warning covers
+    /// the whole hidden tail (no Jump — it stands for many targets).</summary>
+    public static EmbedRowViewModel RowLimit(
+        OutgoingLink link, int hiddenCount)
+    {
+        string message =
+            $"Embed limit reached for this note. {hiddenCount} more "
+            + $"embed{(hiddenCount == 1 ? " is" : "s are")} not shown.";
+        return new EmbedRowViewModel(
+            link,
+            new EmbedResolution.Unresolved(
+                new EmbedUnresolvedReason.ReadError(message)),
+            truncated: false,
+            new EditorEmbedPreviewNode(
+                message,
+                [],
+                null,
+                null,
+                IsDisclosure: false,
+                InitiallyExpanded: false,
+                IsWarning: true));
+    }
 
     public OutgoingLink Link { get; }
 

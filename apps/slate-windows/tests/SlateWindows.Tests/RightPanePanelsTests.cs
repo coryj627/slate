@@ -47,6 +47,23 @@ public sealed class RightPanePanelsTests : IDisposable
             $"![[e{RightPanePanelsViewModel.MaxResolvedEmbedTargets + 1}]]\n");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "many.md"), many.ToString());
+        // Per-occurrence alt text: the same image twice with
+        // different alts must resolve per occurrence, never share.
+        File.WriteAllBytes(
+            Path.Combine(_fixture.Root, "photo.png"), new byte[16]);
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "alts.md"),
+            "![Front](photo.png)\n\n![Back](photo.png)\n");
+        // The materialized-row cap: one target repeated far past
+        // MaxEmbedRows (all cache hits — the cap is on rows, not
+        // resolutions).
+        var repeats = new System.Text.StringBuilder("# Rowcap\n\n");
+        for (int i = 0; i < RightPanePanelsViewModel.MaxEmbedRows + 44; i++)
+        {
+            repeats.Append("![[e1]]\n");
+        }
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "rowcap.md"), repeats.ToString());
         _session = VaultSession.OpenFilesystem(_fixture.Root);
         using var cancel = new CancelToken();
         _session.ScanInitial(cancel);
@@ -424,12 +441,14 @@ public sealed class RightPanePanelsTests : IDisposable
             panels.Embeds[cap - 1].Node.Title);
 
         // The repeat past the cap is a dedupe CACHE HIT sharing the
-        // first row's resolution — never a budget casualty, never a
-        // second core call.
+        // first row's resolution AND its built card (round 2: a fresh
+        // card per occurrence re-decoded the same image) — never a
+        // budget casualty, never a second core call.
         Assert.NotEqual(
             EmbedRowViewModel.OverBudgetMessage, panels.Embeds[cap].Node.Title);
         Assert.Same(
             panels.Embeds[0].Resolution, panels.Embeds[cap].Resolution);
+        Assert.Same(panels.Embeds[0].Node, panels.Embeds[cap].Node);
 
         // The next DISTINCT target degrades loudly, not silently.
         Assert.Equal(
@@ -481,6 +500,95 @@ public sealed class RightPanePanelsTests : IDisposable
             0,
             RightPanePanelsViewModel.CountImageBytes(
                 new EmbedResolution.Block("b.md", "id", "text")));
+    }
+
+    [Fact]
+    public void DuplicateAltTextsResolvePerOccurrence()
+    {
+        var panels = LoadHost([], path: "alts.md");
+
+        // Same image, two alts: the cache is keyed per occurrence
+        // (round 2: keying by raw target alone reused the FIRST
+        // occurrence's alt for every later one).
+        Assert.Equal(2, panels.Embeds.Count);
+        var front = Assert.IsType<EmbedResolution.Image>(
+            panels.Embeds[0].Resolution);
+        var back = Assert.IsType<EmbedResolution.Image>(
+            panels.Embeds[1].Resolution);
+        Assert.Equal("Front", front.Alt);
+        Assert.Equal("Back", back.Alt);
+        Assert.NotSame(panels.Embeds[0].Node, panels.Embeds[1].Node);
+    }
+
+    [Fact]
+    public void RowCapSummarizesTheTailLoudly()
+    {
+        int cap = RightPanePanelsViewModel.MaxEmbedRows;
+        var panels = LoadHost([], path: "rowcap.md");
+
+        // cap rendered rows + ONE summary row covering the tail.
+        Assert.Equal(cap + 1, panels.Embeds.Count);
+        Assert.Same(panels.Embeds[0].Node, panels.Embeds[cap - 1].Node);
+        EmbedRowViewModel summary = panels.Embeds[cap];
+        Assert.True(summary.Node.IsWarning);
+        Assert.Equal(
+            "Embed limit reached for this note. 44 more embeds are "
+                + "not shown.",
+            summary.Node.Title);
+        Assert.Null(summary.Node.SourcePath);
+    }
+
+    [Fact]
+    public void StaleOutlinePublishesAreDiscarded()
+    {
+        var panels = LoadHost([]);
+        Assert.Equal(2, panels.Outline.Count);
+        OutlineRowViewModel first = panels.Outline[0];
+
+        // A slower request from BEFORE the newest one completing
+        // late must not overwrite (round 2: save-refreshes reuse the
+        // note generation, so ordering needs its own token).
+        var stale = new Heading(
+            Level: 1, Text: "Stale", Ordinal: 0,
+            AnchorId: "stale", ByteOffset: 0);
+        panels.PublishOutline(
+            "host.md",
+            panels.LoadGenerationForTests,
+            panels.OutlineRequestIdForTests - 1,
+            [stale],
+            announceCount: false);
+        Assert.Equal(2, panels.Outline.Count);
+        Assert.Same(first, panels.Outline[0]);
+
+        // The CURRENT request id still publishes.
+        panels.PublishOutline(
+            "host.md",
+            panels.LoadGenerationForTests,
+            panels.OutlineRequestIdForTests,
+            [stale],
+            announceCount: false);
+        OutlineRowViewModel row = Assert.Single(panels.Outline);
+        Assert.Equal("Stale", row.Text);
+    }
+
+    [Fact]
+    public void ActiveNoteRenameRebindsThePanels()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("host.md");
+        Assert.Equal("host.md", workspace.Panels.NotePath);
+
+        // The rename funnel changes the active tab's Path IN PLACE —
+        // the panels must follow it, or every save on the new path
+        // is ignored until a tab switch (round 2).
+        workspace.RetargetPath("host.md", "renamed.md");
+        Assert.Equal("renamed.md", workspace.Panels.NotePath);
     }
 
     [Fact]

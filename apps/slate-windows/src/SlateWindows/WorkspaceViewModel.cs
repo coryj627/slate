@@ -1271,6 +1271,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         }
 
         Persist();
+        // A rename that touched the ACTIVE tab changed its Path in
+        // place — without a re-derive the panels stay bound to the
+        // old path and ignore every save on the new one (adversarial
+        // round 2).
+        SyncPanels();
     }
 
     public void InvalidatePath(string path)

@@ -649,6 +649,7 @@
                                          ItemContainerStyle="{StaticResource PanelRowContainer}"
                                          MouseDoubleClick="PanelBacklinks_MouseDoubleClick"
                                          PreviewKeyDown="PanelBacklinks_PreviewKeyDown"
+                                         ContextMenuOpening="PanelBacklinks_ContextMenuOpening"
                                          AutomationProperties.AutomationId="PanelBacklinksList"
                                          AutomationProperties.Name="Backlinks">
                                     <ListBox.ContextMenu>
@@ -694,6 +695,7 @@
                                          ItemContainerStyle="{StaticResource PanelRowContainer}"
                                          MouseDoubleClick="PanelOutgoingLinks_MouseDoubleClick"
                                          PreviewKeyDown="PanelOutgoingLinks_PreviewKeyDown"
+                                         ContextMenuOpening="PanelOutgoingLinks_ContextMenuOpening"
                                          AutomationProperties.AutomationId="PanelOutgoingLinksList"
                                          AutomationProperties.Name="Outgoing links">
                                     <ListBox.ContextMenu>
