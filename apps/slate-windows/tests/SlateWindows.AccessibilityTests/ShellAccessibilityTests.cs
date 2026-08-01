@@ -1003,6 +1003,280 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W-E7 gate spike (task: RangeFromChild over custom peers): the
+    /// planned NVDA browse-mode add-on positions its virtual cursor by
+    /// calling ITextProvider::RangeFromChild for document descendants,
+    /// and NVDA treats a failing element as OUTSIDE the document
+    /// (UIABrowseModeDocument.__contains__ swallows the failure and
+    /// refuses to route focus through browse mode). WPF resolves the
+    /// call in three tiers (TextAdaptor.RangeFromChild): TextElement
+    /// peers by ElementStart/End; UIElements whose LOGICAL PARENT is
+    /// the Inline/BlockUIContainer -- exactly one hop, which is why
+    /// every custom reading element must stay the container's DIRECT
+    /// child; and a linear adjacency scan. Anything else throws
+    /// "Element is not within the document range".
+    ///
+    /// This test is the cross-process proof over the REAL app: every
+    /// probe below maps a live element back into the text range the
+    /// way NVDA will, and the closing sweep asserts the UIA contract
+    /// NVDA's renderer leans on -- every child the text pattern
+    /// exposes via GetChildren must itself resolve.
+    /// </summary>
+    [Fact]
+    public void ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-rangefromchild-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Range Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "target.md"),
+            "# Target\n\nEmbedded body.\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "note.md"),
+            "# Range note\n\nBody with a [[target]] link.\n\n"
+                + "- [ ] open task\n\n"
+                + "$$x^2 + 1$$\n\n"
+                + "```rust\nfn f() {}\n```\n\n"
+                + "```mermaid\nflowchart LR\nA --> B\n```\n\n"
+                + "![[target]]\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-rangefromchild-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                // Session-0 fallback, as the shell gate: the UIA half
+                // needs a desktop; here the process must still survive
+                // startup.
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the RangeFromChild startup smoke. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement noteItem = filesTree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .FirstOrDefault(item =>
+                    item.Name.StartsWith("note", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("The note TreeItem is absent.");
+            noteItem.Patterns.SelectionItem.Pattern.Select();
+            WaitForEditor(
+                window, automation, "note.md editor", TimeSpan.FromSeconds(10));
+
+            AutomationElement toggleReading = WaitForMenuItem(
+                window,
+                "EditorMenu",
+                "EditorToggleReadingModeMenuItem",
+                TimeSpan.FromSeconds(10));
+            toggleReading.Patterns.Invoke.Pattern.Invoke();
+
+            AutomationElement surface = WaitForElement(
+                window, "ReadingSurface", TimeSpan.FromSeconds(10));
+            var text = surface.Patterns.Text.Pattern;
+            var document = text.DocumentRange;
+
+            // Named probes, one per hosting shape. The math and diagram
+            // elements are the W-E7 keystones (custom
+            // FrameworkElementAutomationPeer subclasses in
+            // InlineUIContainers); the task checkbox is the native
+            // control contrast; the Copy affordance and the embed Jump
+            // link are TextElement peers (the tier expected to resolve
+            // even before this spike).
+            var probes = new List<(string Kind, AutomationElement Element)>();
+
+            AutomationElement math = WaitForSurfaceDescendant(
+                surface,
+                cf => cf.ByLocalizedControlType("math"),
+                "math element",
+                TimeSpan.FromSeconds(10));
+            probes.Add(("math", math));
+
+            AutomationElement diagram = WaitForSurfaceDescendant(
+                surface,
+                cf => cf.ByLocalizedControlType("diagram"),
+                "diagram element",
+                TimeSpan.FromSeconds(10));
+            probes.Add(("diagram", diagram));
+
+            AutomationElement task = WaitForSurfaceDescendant(
+                surface,
+                cf => cf.ByControlType(ControlType.CheckBox),
+                "task checkbox",
+                TimeSpan.FromSeconds(10));
+            probes.Add(("task-checkbox", task));
+
+            AutomationElement copy = WaitForSurfaceDescendant(
+                surface,
+                cf => cf.ByName("Copy code"),
+                "copy-code affordance",
+                TimeSpan.FromSeconds(10));
+            probes.Add(("copy-code", copy));
+
+            AutomationElement jump = WaitForSurfaceDescendant(
+                surface,
+                cf => cf.ByAutomationId("ReadingBlockEmbed"),
+                "embed jump link",
+                TimeSpan.FromSeconds(10));
+            probes.Add(("embed-jump", jump));
+
+            var failures = new List<string>();
+            foreach ((string kind, AutomationElement element) in probes)
+            {
+                string? failure = ProbeRangeFromChild(text, document, kind, element);
+                if (failure is not null)
+                {
+                    failures.Add(failure);
+                }
+            }
+
+            // The NVDA renderer contract: every child the text pattern
+            // itself exposes must resolve back into the range. (WPF's
+            // GetChildrenCore can surface nested descendants whose
+            // RangeFromChild throws -- the latent hazard this sweep
+            // guards. Peer-suppressed elements, like embed images,
+            // never appear here and are exempt by construction.)
+            FlaUI.Core.ITextRange[] childSweepSource = new[] { document };
+            foreach (var range in childSweepSource)
+            {
+                foreach (AutomationElement child in range.GetChildren())
+                {
+                    string kind =
+                        $"sweep:{child.Properties.LocalizedControlType.ValueOrDefault ?? "?"}"
+                        + $":{child.Properties.Name.ValueOrDefault ?? ""}";
+                    string? failure = ProbeRangeFromChild(text, document, kind, child);
+                    if (failure is not null)
+                    {
+                        failures.Add(failure);
+                    }
+                }
+            }
+
+            Assert.True(
+                failures.Count == 0,
+                "RangeFromChild failed for:\n" + string.Join("\n", failures));
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    /// <summary>
+    /// One RangeFromChild probe: the call must succeed, and the range
+    /// must be sane -- endpoints ordered and inside the document. The
+    /// range TEXT is deliberately unasserted: WPF blanks embedded
+    /// objects in the text stream (G23), and that is fine for the
+    /// add-on, which needs the POSITION, not the text.
+    /// </summary>
+    private static string? ProbeRangeFromChild(
+        FlaUI.Core.Patterns.ITextPattern text,
+        FlaUI.Core.ITextRange document,
+        string kind,
+        AutomationElement element)
+    {
+        try
+        {
+            FlaUI.Core.ITextRange range = text.RangeFromChild(element);
+            if (range is null)
+            {
+                return $"{kind}: returned null";
+            }
+            if (range.CompareEndpoints(
+                    TextPatternRangeEndpoint.Start,
+                    range,
+                    TextPatternRangeEndpoint.End) > 0)
+            {
+                return $"{kind}: endpoints out of order";
+            }
+            if (range.CompareEndpoints(
+                    TextPatternRangeEndpoint.Start,
+                    document,
+                    TextPatternRangeEndpoint.Start) < 0
+                || range.CompareEndpoints(
+                    TextPatternRangeEndpoint.End,
+                    document,
+                    TextPatternRangeEndpoint.End) > 0)
+            {
+                return $"{kind}: range escapes the document";
+            }
+            if (range.GetEnclosingElement() is null)
+            {
+                return $"{kind}: GetEnclosingElement returned null";
+            }
+            return null;
+        }
+        catch (Exception exception)
+        {
+            return $"{kind}: {exception.GetType().Name}: {exception.Message}"
+                + $" (hr=0x{exception.HResult:X8})";
+        }
+    }
+
+    private static AutomationElement WaitForSurfaceDescendant(
+        AutomationElement surface,
+        Func<FlaUI.Core.Conditions.ConditionFactory, FlaUI.Core.Conditions.ConditionBase> condition,
+        string description,
+        TimeSpan timeout)
+    {
+        AutomationElement? found = null;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    found = surface.FindFirstDescendant(condition);
+                    return found is not null;
+                },
+                timeout),
+            $"no {description} appeared under ReadingSurface");
+        return found!;
+    }
+
     private static void AssertEventuallyFocused(AutomationElement element, string message)
     {
         Assert.True(
