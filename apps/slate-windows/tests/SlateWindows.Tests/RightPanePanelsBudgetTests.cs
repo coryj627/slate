@@ -83,6 +83,13 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             Path.Combine(_fixture.Root, "huge.gif"), MakeLargeGif());
         File.WriteAllText(
             Path.Combine(_fixture.Root, "huge.md"), "![[huge.gif]]\n");
+        // PNG has NO native scaler in WIC (round 9): an oversized
+        // compressible PNG must be charged at source dimensions and
+        // refused, exactly like the GIF.
+        File.WriteAllBytes(
+            Path.Combine(_fixture.Root, "hugepng.png"), MakeLargePng());
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "hugepng.md"), "![[hugepng.png]]\n");
         _session = VaultSession.OpenFilesystem(_fixture.Root);
         using var cancel = new CancelToken();
         _session.ScanInitial(cancel);
@@ -116,7 +123,16 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
     /// <summary>A VALID solid-black 4200x4200 GIF (compresses to a
     /// few KB): decoding it would allocate ~70 MB — past the budget
     /// — because GIF cannot downsample natively.</summary>
-    private static byte[] MakeLargeGif()
+    private static byte[] MakeLargeGif() => EncodeLargeImage(
+        new System.Windows.Media.Imaging.GifBitmapEncoder());
+
+    /// <summary>The PNG twin (round 9): WIC has no native PNG
+    /// scaler either, so the same source-size charge applies.</summary>
+    private static byte[] MakeLargePng() => EncodeLargeImage(
+        new System.Windows.Media.Imaging.PngBitmapEncoder());
+
+    private static byte[] EncodeLargeImage(
+        System.Windows.Media.Imaging.BitmapEncoder encoder)
     {
         const int size = 4200;
         const int stride = size * 4;
@@ -129,7 +145,6 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             null,
             new byte[stride * size],
             stride);
-        var encoder = new System.Windows.Media.Imaging.GifBitmapEncoder();
         encoder.Frames.Add(
             System.Windows.Media.Imaging.BitmapFrame.Create(source));
         using var stream = new MemoryStream();
@@ -309,6 +324,35 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
         // GIF cannot downsample natively: the 4200x4200 source must
         // be refused from its HEADER (a scaled-size reservation
         // would admit ~5 MB, then decode ~70 MB).
+        EmbedRowViewModel row = Assert.Single(panels.Embeds);
+        Assert.Null(row.Node.Image);
+        Assert.True(row.Node.IsWarning);
+        Assert.Contains(
+            row.Node.Parts,
+            part => part.Text
+                == EditorInteractionCoordinator.ImageBudgetSpentMessage);
+    }
+
+    [Fact]
+    public void OversizedCompressiblePngIsRefusedFromTheHeader()
+    {
+        var panels = new RightPanePanelsViewModel(
+            _session,
+            _ => { },
+            (_, _) => true,
+            _ => true,
+            (_, _) => { });
+        panels.NoteChanged("hugepng.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => !panels.IsLoadingLinks && !panels.IsResolvingEmbeds,
+                TimeSpan.FromSeconds(30)),
+            "the huge-png note never finished resolving");
+
+        // PNG has no native WIC scaler: the 4200x4200 source must be
+        // charged at source size and refused before pixel decode (a
+        // scaled-size reservation would admit ~5 MB, then allocate
+        // ~70 MB).
         EmbedRowViewModel row = Assert.Single(panels.Embeds);
         Assert.Null(row.Node.Image);
         Assert.True(row.Node.IsWarning);

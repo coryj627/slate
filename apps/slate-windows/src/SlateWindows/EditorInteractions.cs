@@ -2852,10 +2852,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             if (reserveDecodedBytes is not null)
             {
                 // Reserve PEAK allocation from the HEADER, before any
-                // pixels exist. Only JPEG and PNG downsample natively
-                // at DecodePixelWidth/Height; every other codec (GIF,
-                // BMP, TIFF, ...) decodes the FULL source frame first
-                // and scales after, so a tiny compressed file with
+                // pixels exist. Only JPEG downsamples natively at
+                // DecodePixelWidth/Height (WIC's native-scaling
+                // transform — PNG has none, round 9); every other
+                // codec decodes the FULL source frame first and
+                // scales after, so a tiny compressed file with
                 // enormous declared dimensions must be charged at
                 // source size (round 6). Bytes-per-pixel comes from
                 // the source format — a fixed 4 undercounts 48/64-bpp
@@ -2864,7 +2865,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                     4, ((long)frame.Format.BitsPerPixel + 7) / 8);
                 long reservedWidth;
                 long reservedHeight;
-                if (decoder is JpegBitmapDecoder or PngBitmapDecoder)
+                if (decoder is JpegBitmapDecoder)
                 {
                     long longSide =
                         widthLimits ? frame.PixelWidth : frame.PixelHeight;
