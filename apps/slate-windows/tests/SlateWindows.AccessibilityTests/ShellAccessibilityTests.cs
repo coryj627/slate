@@ -1194,6 +1194,7 @@ public sealed class ShellAccessibilityTests
                         // for the full 90s diagram wait).
                         surface = window.FindFirstDescendant(
                             cf => cf.ByAutomationId("ReadingSurface")) ?? surface;
+                        ForceFullTextLayout(surface);
                         descendants = surface.FindAllDescendants();
                         return census.All(entry =>
                             descendants.Any(element => entry.Match(element)));
@@ -1414,6 +1415,42 @@ public sealed class ShellAccessibilityTests
     private static string Truncate(string value) =>
         value.Length <= 40 ? value : value[..40] + "...";
 
+    /// <summary>
+    /// RichTextBox text layout is VIEWPORT-virtualized: content below
+    /// the fold is never laid out — and its embedded elements never
+    /// get navigable peers — until something scrolls it into view
+    /// (measured 2026-08-01: the sibling walk ends cleanly at the
+    /// last viewport child regardless of wait budget or poll cadence).
+    /// Read the document the way a user does: scroll to the end, then
+    /// back, through the Text pattern.
+    /// </summary>
+    private static void ForceFullTextLayout(AutomationElement surface)
+    {
+        try
+        {
+            if (surface.Patterns.Text.PatternOrDefault is { } text)
+            {
+                var endRange = text.DocumentRange.Clone();
+                endRange.MoveEndpointByRange(
+                    TextPatternRangeEndpoint.Start,
+                    text.DocumentRange,
+                    TextPatternRangeEndpoint.End);
+                endRange.ScrollIntoView(alignToTop: false);
+                var startRange = text.DocumentRange.Clone();
+                startRange.MoveEndpointByRange(
+                    TextPatternRangeEndpoint.End,
+                    text.DocumentRange,
+                    TextPatternRangeEndpoint.Start);
+                startRange.ScrollIntoView(alignToTop: true);
+            }
+        }
+        catch (Exception)
+        {
+            // A re-projection can kill the range mid-scroll — the next
+            // poll retries against the fresh surface.
+        }
+    }
+
     /// <summary>One probe a second - the polls themselves must not
     /// starve the app's idle-priority background work (text layout)
     /// that produces the condition being awaited.</summary>
@@ -1464,6 +1501,7 @@ public sealed class ShellAccessibilityTests
                 {
                     return false;
                 }
+                ForceFullTextLayout(surface);
                 last = surface.FindAllDescendants();
                 found = last.FirstOrDefault(match);
                 return found is not null;
