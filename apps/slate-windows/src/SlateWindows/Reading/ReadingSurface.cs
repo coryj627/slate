@@ -451,8 +451,54 @@ internal sealed class ReadingSurface : RichTextBox
     {
         if (UIElementAutomationPeer.FromElement(this) is { } peer)
         {
+            // Marking the cache dirty is NOT enough: the rebuild waits
+            // for a render-driven automation tick, which a throttled
+            // session may never run (measured on CI, 2026-08-01 — the
+            // dirty flag alone left the stale two-element list live
+            // for the full 90-second wait). GetChildren() rebuilds the
+            // list synchronously; StructureChanged tells attached
+            // clients to drop what they hold.
             peer.ResetChildrenCache();
+            List<AutomationPeer>? rebuilt = peer.GetChildren();
+            peer.RaiseAutomationEvent(AutomationEvents.StructureChanged);
             peer.InvalidatePeer();
+            CensusDiag($"invalidate: children={rebuilt?.Count ?? -1}");
+        }
+        else
+        {
+            CensusDiag("invalidate: no peer");
+        }
+    }
+
+    /// <summary>
+    /// Census-run diagnostics (SLATE_CENSUS_INSTANCE_ID gates it, so
+    /// production writes nothing): the stale-children repro exists
+    /// only on CI, and the shared app log is the one channel the
+    /// failing gate reads back into its assertion message.
+    /// </summary>
+    internal static void CensusDiag(string message)
+    {
+        if (Environment.GetEnvironmentVariable("SLATE_CENSUS_INSTANCE_ID")
+            is not { Length: > 0 })
+        {
+            return;
+        }
+        if (Environment.GetEnvironmentVariable("SLATE_LOG_DIR")
+            is not { Length: > 0 } directory)
+        {
+            return;
+        }
+        try
+        {
+            System.IO.File.AppendAllText(
+                System.IO.Path.Combine(directory, "slate-windows.log"),
+                $"{DateTime.Now:HH:mm:ss.fff} census-diag {message}\r\n");
+        }
+        catch (System.IO.IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
         }
     }
 
@@ -636,14 +682,19 @@ internal sealed class ReadingSurfacePeer : RichTextBoxAutomationPeer
     protected override List<AutomationPeer> GetChildrenCore()
     {
         List<AutomationPeer> children = base.GetChildrenCore() ?? new List<AutomationPeer>();
+        int baseCount = children.Count;
         if (((RichTextBox)Owner).Document is not FlowDocument document)
         {
+            ReadingSurface.CensusDiag($"peer-children base={baseCount} no-flowdoc");
             return children;
         }
         foreach (Block block in document.Blocks)
         {
             AppendStructural(block, children);
         }
+        ReadingSurface.CensusDiag(
+            $"peer-children base={baseCount} total={children.Count} "
+            + $"blocks={document.Blocks.Count}");
         return children;
     }
 
