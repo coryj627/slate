@@ -773,7 +773,7 @@ public sealed class ShellAccessibilityTests
         }
     }
 
-    private static void AssertAxeClean(Process process, string surface)
+    internal static void AssertAxeClean(Process process, string surface)
     {
         var config = Config.Builder.ForProcessId(process.Id).Build();
         var output = ScannerFactory.CreateScanner(config).Scan(null);
@@ -1107,8 +1107,6 @@ public sealed class ShellAccessibilityTests
 
             AutomationElement surface = WaitForElement(
                 window, "ReadingSurface", TimeSpan.FromSeconds(10));
-            var text = surface.Patterns.Text.Pattern;
-            var document = text.DocumentRange;
 
             // Async artifacts (math, then the slower mermaid render)
             // re-project the document as they complete, KILLING every
@@ -1117,7 +1115,7 @@ public sealed class ShellAccessibilityTests
             // diagram between the math wait and the snapshot, and
             // eight of nine kinds read "absent" off dead elements).
             _ = WaitForSurfaceDescendant(
-                surface,
+                window,
                 element => string.Equals(
                     element.Properties.LocalizedControlType.ValueOrDefault,
                     "math",
@@ -1125,7 +1123,7 @@ public sealed class ShellAccessibilityTests
                 "math element",
                 TimeSpan.FromSeconds(30));
             _ = WaitForSurfaceDescendant(
-                surface,
+                window,
                 element => string.Equals(
                     element.Properties.LocalizedControlType.ValueOrDefault,
                     "diagram",
@@ -1184,6 +1182,13 @@ public sealed class ShellAccessibilityTests
                 SpinWait.SpinUntil(
                     () =>
                     {
+                        // Re-resolve EVERY spin: an artifact completion
+                        // replaces the surface control, and the dead
+                        // handle keeps answering with the old fragment
+                        // (measured on CI, 2026-08-01: two descendants
+                        // for the full 90s diagram wait).
+                        surface = window.FindFirstDescendant(
+                            cf => cf.ByAutomationId("ReadingSurface")) ?? surface;
                         descendants = surface.FindAllDescendants();
                         return census.All(entry =>
                             descendants.Any(element => entry.Match(element)));
@@ -1195,6 +1200,10 @@ public sealed class ShellAccessibilityTests
                         census.Where(entry =>
                             descendants.Any(element => entry.Match(element)))
                             .Select(entry => entry.Kind)));
+            // Bind the Text pattern off the surface the census just
+            // proved LIVE - the pre-wait handle may be a corpse.
+            var text = surface.Patterns.Text.Pattern;
+            var document = text.DocumentRange;
             var failures = new List<string>();
             var resolved = new List<(string Kind, FlaUI.Core.ITextRange Range)>();
             foreach ((string kind, Func<AutomationElement, bool> match, bool embedded, string? rangeText) in census)
@@ -1401,7 +1410,7 @@ public sealed class ShellAccessibilityTests
         value.Length <= 40 ? value : value[..40] + "...";
 
     private static AutomationElement WaitForSurfaceDescendant(
-        AutomationElement surface,
+        Window window,
         Func<AutomationElement, bool> match,
         string description,
         TimeSpan timeout,
@@ -1412,6 +1421,17 @@ public sealed class ShellAccessibilityTests
         bool appeared = SpinWait.SpinUntil(
             () =>
             {
+                // Artifact completions REPLACE the surface control
+                // (same AutomationId, new UIA element); a handle
+                // captured before the wait goes dead and answers with
+                // a stale two-element fragment until the timeout
+                // (measured on CI, 2026-08-01). Resolve fresh, always.
+                AutomationElement? surface = window.FindFirstDescendant(
+                    cf => cf.ByAutomationId("ReadingSurface"));
+                if (surface is null)
+                {
+                    return false;
+                }
                 last = surface.FindAllDescendants();
                 found = last.FirstOrDefault(match);
                 return found is not null;
