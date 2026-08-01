@@ -583,6 +583,9 @@ public sealed class RightPanePanelsTests : IDisposable
             "Outgoing links, 2000 entries", panels.OutgoingLinksHeader);
         Assert.Equal(
             RightPanePanelsViewModel.MaxEmbedRows + 1, panels.Embeds.Count);
+        // The header speaks the TRUE embed count, not the capped
+        // collection with its synthetic summary row (round 17).
+        Assert.Equal("Embeds, 2000 entries", panels.EmbedsHeader);
         EmbedRowViewModel summary = panels.Embeds[^1];
         Assert.True(summary.Node.IsWarning);
         Assert.Equal(

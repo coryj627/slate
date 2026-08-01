@@ -103,6 +103,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private int _totalOutgoingLinks;
     private int _totalOutlineHeadings;
     private int _totalBacklinks;
+    private int _totalEmbeds;
     private volatile bool _isShutDown;
     private readonly bool _synchronous;
 
@@ -257,7 +258,10 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             ? $"Showing {Outline.Count} of {_totalOutlineHeadings} headings."
             : null;
 
-    public string EmbedsHeader => Header("Embeds", Embeds.Count);
+    /// <summary>The TRUE embed count (round 17): the collection caps
+    /// at 256 cards plus one synthetic summary row, so counting it
+    /// would tell AT "257 entries" on a 2000-embed note.</summary>
+    public string EmbedsHeader => Header("Embeds", _totalEmbeds);
 
     private static string Header(string title, int count) =>
         $"{title}, {count} {(count == 1 ? "entry" : "entries")}";
@@ -326,6 +330,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         _totalOutgoingLinks = 0;
         _totalOutlineHeadings = 0;
         _totalBacklinks = 0;
+        _totalEmbeds = 0;
         RaiseHeaderChanges();
         if (path is null)
         {
@@ -436,6 +441,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     {
         if (embedLinks.Length == 0)
         {
+            _totalEmbeds = totalEmbeds;
             IsResolvingEmbeds = false;
             RaiseHeaderChanges();
             return;
@@ -581,6 +587,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 {
                     return;
                 }
+                _totalEmbeds = totalEmbeds;
                 foreach (EmbedRowViewModel row in rows)
                 {
                     Embeds.Add(row);
