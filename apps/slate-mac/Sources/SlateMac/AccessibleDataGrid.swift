@@ -564,6 +564,11 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         activeSort = sort
         grid.sortState?.wrappedValue = sort
         resortPreservingDescriptor()
+        // The table CONSUMES displayEntries, not displayRows — without
+        // this rebuild the announcement says sorted while the rendered
+        // and AX order stay stale for callers with no sortState
+        // binding (adversarial round 6).
+        rebuildDisplayEntries()
         syncSortDescriptorsToTable()
         syncHeaderAccessibilityToTable()
         table?.reloadData()

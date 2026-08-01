@@ -360,12 +360,28 @@ public sealed class AccessibleDataGridTests
             var cellB = Assert.IsType<DataGridCell>(
                 grid.Grid.Columns[0].GetCellContent(rowB)?.Parent);
 
-            grid.TargetRowActionsAt(cellB);
+            Assert.True(grid.TargetRowActionsAt(cellB));
             ContextMenu menu = grid.BuildRowActionsMenu()
                 ?? throw new Xunit.Sdk.XunitException("no menu built");
             var open = Assert.IsType<MenuItem>(menu.Items[0]);
             open.RaiseEvent(new System.Windows.RoutedEventArgs(MenuItem.ClickEvent));
             Assert.Same(People[1], executed);
+
+            // A ROW-HEADER origin walks up through DataGridRow, never
+            // a cell (round 6) — it must target that row too.
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
+            var rowC = (DataGridRow)grid.Grid.ItemContainerGenerator
+                .ContainerFromItem(People[2]);
+            Assert.True(grid.TargetRowActionsAt(rowC));
+            menu = grid.BuildRowActionsMenu()
+                ?? throw new Xunit.Sdk.XunitException("no menu built for row origin");
+            var openRow = Assert.IsType<MenuItem>(menu.Items[0]);
+            openRow.RaiseEvent(new System.Windows.RoutedEventArgs(MenuItem.ClickEvent));
+            Assert.Same(People[2], executed);
+
+            // Column headers, scrollbars, empty chrome: no row to act
+            // on — the pointer menu is refused.
+            Assert.False(grid.TargetRowActionsAt(grid.Grid));
         });
     }
 

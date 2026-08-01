@@ -186,6 +186,43 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertEqual(announced.count, 2)
     }
 
+    /// Round 6: the table CONSUMES `displayEntries`, and the sort
+    /// announcement must never outrun the rendered/AX order — for a
+    /// caller with NO sortState binding (CanvasTableView's shape), the
+    /// entries rebuild happens inside `applySort` or nowhere.
+    @MainActor
+    func testSortWithoutBindingReordersTheConsumedTableOrder() throws {
+        let grid = AccessibleDataGrid<Row>(
+            columns: [
+                .init("Name", cell: { $0.a }, sort: { $0.a < $1.a }),
+                .init("Role", cell: { $0.b }),
+            ],
+            rows: Self.people,
+            summary: "",
+            accessibilityLabel: "People",
+            groups: [.init(label: "All", rowStart: 0, rowCount: 3)])
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+
+        // Group heading first, then the rows in the ANNOUNCED order —
+        // read through the data-source path the table itself uses.
+        XCTAssertEqual(coordinator.numberOfRows(in: table), 4)
+        let consumed = (1..<4).compactMap { rowIndex in
+            (coordinator.tableView(
+                table, viewFor: table.tableColumns[0], row: rowIndex)
+                as? NSTableCellView)?.textField?.stringValue
+        }
+        XCTAssertEqual(consumed, ["Ada", "Bea", "Charlie"])
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?

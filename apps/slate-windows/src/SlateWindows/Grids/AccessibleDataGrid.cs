@@ -472,15 +472,21 @@ internal sealed class AccessibleDataGrid : UserControl
 
     private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        // A POINTER-invoked menu targets the CLICKED row (round 5):
+        // A POINTER-invoked menu targets the CLICKED row (rounds 5-6):
         // WPF moves currency only on the left-button path, so a
-        // right-click over row B would otherwise build a menu that
-        // executes — destructively, for real actions — against row A.
-        // The keyboard path (Menu / Shift+F10) has no originating
-        // cell and keeps the current cell.
-        if (e.OriginalSource is DependencyObject origin)
+        // right-click over row B — its cells OR its row header —
+        // would otherwise build a menu that executes, destructively
+        // for real actions, against row A. A pointer request that
+        // resolves to NO row (column headers, scrollbars, empty
+        // chrome) gets no menu at all. The keyboard path (Menu /
+        // Shift+F10, cursor coordinates -1) keeps the current cell.
+        bool pointerRequest = e.CursorLeft >= 0 || e.CursorTop >= 0;
+        if (pointerRequest
+            && (e.OriginalSource is not DependencyObject origin
+                || !TargetRowActionsAt(origin)))
         {
-            TargetRowActionsAt(origin);
+            e.Handled = true;
+            return;
         }
         // The persistent menu is MUTATED, never replaced: WPF decides
         // whether to open based on the menu that exists when the
@@ -504,29 +510,42 @@ internal sealed class AccessibleDataGrid : UserControl
         }
     }
 
-    /// <summary>Make the cell the context-menu request ORIGINATED from
+    /// <summary>Make the row the context-menu request ORIGINATED from
     /// current and focused — the row a pointer-invoked action must
-    /// execute against. No-op when the origin is not inside a cell
-    /// (keyboard requests route through the current cell).</summary>
-    internal void TargetRowActionsAt(DependencyObject origin)
+    /// execute against. Recognizes a cell OR the row itself (a row-
+    /// header click walks up through DataGridRow, never a cell —
+    /// round 6). False when the origin is inside neither: column
+    /// headers, scrollbars, empty chrome have no row to act on.</summary>
+    internal bool TargetRowActionsAt(DependencyObject origin)
     {
         DependencyObject? current = origin;
-        while (current is not null and not DataGridCell)
+        while (current is not null and not DataGridCell and not DataGridRow)
         {
             current = current is System.Windows.Media.Visual
                 or System.Windows.Media.Media3D.Visual3D
                     ? System.Windows.Media.VisualTreeHelper.GetParent(current)
                     : LogicalTreeHelper.GetParent(current);
         }
-        if (current is DataGridCell cell
-            && cell.DataContext is { } clickedRow
-            && clickedRow != CollectionView.NewItemPlaceholder
-            && cell.Column is { } column)
+        switch (current)
         {
-            _grid.CurrentCell = new DataGridCellInfo(clickedRow, column);
-            _grid.SelectedCells.Clear();
-            _grid.SelectedCells.Add(_grid.CurrentCell);
-            _ = cell.Focus();
+            case DataGridCell cell
+                when cell.DataContext is { } clickedRow
+                    && clickedRow != CollectionView.NewItemPlaceholder
+                    && cell.Column is { } column:
+                _grid.CurrentCell = new DataGridCellInfo(clickedRow, column);
+                _grid.SelectedCells.Clear();
+                _grid.SelectedCells.Add(_grid.CurrentCell);
+                _ = cell.Focus();
+                return true;
+            case DataGridRow rowElement
+                when rowElement.Item is { } clickedRow
+                    && clickedRow != CollectionView.NewItemPlaceholder
+                    && (_grid.CurrentCell.Column
+                        ?? _grid.Columns.FirstOrDefault()) is { } column:
+                _ = FocusCellElement(clickedRow, column);
+                return true;
+            default:
+                return false;
         }
     }
 
