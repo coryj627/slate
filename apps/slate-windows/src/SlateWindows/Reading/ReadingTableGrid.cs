@@ -22,12 +22,15 @@ namespace SlateWindows.Reading;
 /// </summary>
 internal static class ReadingTableGrid
 {
-    internal static bool Show(string source, Window? owner)
+    /// <summary>Null when core cannot derive cells (Enter falls
+    /// through); otherwise the shown window, so hosts can observe its
+    /// lifecycle.</summary>
+    internal static Window? Show(string source, Window? owner)
     {
         AccessibleDataGrid? grid = Build(source);
         if (grid is null)
         {
-            return false;
+            return null;
         }
         var window = new Window
         {
@@ -55,7 +58,7 @@ internal static class ReadingTableGrid
         // round 1: entry must announce headers + cell).
         window.Loaded += (_, _) => grid.FocusFirstCell();
         window.Show();
-        return true;
+        return window;
     }
 
     internal static AccessibleDataGrid? Build(string source)

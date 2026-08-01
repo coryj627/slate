@@ -32,7 +32,17 @@ internal static class Program
         AppContext.SetSwitch(
             "Switch.System.Windows.Appearance.DisableFluentThemeWindowBackdrop",
             true);
+        Action<string>? actionLogHolder = null;
         var app = new Application();
+        // A dispatcher exception would otherwise kill the host with no
+        // trace the suite can read: log it and keep the process alive
+        // so the failure message carries the evidence.
+        app.DispatcherUnhandledException += (_, e) =>
+        {
+            actionLogHolder?.Invoke(
+                $"dispatcher-error:{e.Exception.GetType().Name}:{e.Exception.Message}");
+            e.Handled = true;
+        };
         SlateWindows.ThemeManager.ValidateResourceDictionaries();
         using var theme = new SlateWindows.ThemeManager(
             app, SlateWindows.ThemeManager.ReadSystemTheme());
@@ -62,6 +72,7 @@ internal static class Program
         // text content, which is how the suite reads outcomes back
         // cross-process (an explicit Name masked the content).
         AutomationProperties.SetAutomationId(actionLog, "GridActionLog");
+        actionLogHolder = text => actionLog.Text = text;
 
         var grid = new AccessibleDataGrid();
         grid.Bind(
@@ -118,7 +129,7 @@ internal static class Program
         // the observable that separates "input never arrived" from
         // "the sort never fired" on a hosted runner.
         grid.Announce = @event =>
-            actionLog.Text = $"a11y:{@event.GetType().Name}";
+            actionLog.Text = $"a11y:{SlateUniffiMethods.A11yRender(@event).Text}";
 
         var layout = new DockPanel();
         DockPanel.SetDock(actionLog, Dock.Bottom);
@@ -143,10 +154,18 @@ internal static class Program
                 e.Handled = true;
                 try
                 {
-                    bool shown = SlateWindows.Reading.ReadingTableGrid.Show(
-                        "| Name | Status |\n| --- | --- |\n| alpha | Open |\n| beta | Done |\n",
-                        window);
-                    actionLog.Text = $"table-shown:{shown}";
+                    System.Windows.Window? tableWindow =
+                        SlateWindows.Reading.ReadingTableGrid.Show(
+                            "| Name | Status |\n| --- | --- |\n| alpha | Open |\n| beta | Done |\n",
+                            window);
+                    actionLog.Text = $"table-shown:{tableWindow is not null}";
+                    if (tableWindow is not null)
+                    {
+                        // The suite reads this if the window vanishes
+                        // between Show and its first desktop poll.
+                        tableWindow.Closed += (_, _) =>
+                            actionLog.Text = "table-closed";
+                    }
                 }
                 catch (Exception exception)
                 {

@@ -564,7 +564,7 @@ internal sealed class ReadingSurface : RichTextBox
     internal Func<string, bool>? TableGridOpener { get; set; }
 
     private bool OpenTableGridWindow(string source) =>
-        ReadingTableGrid.Show(source, Window.GetWindow(this));
+        ReadingTableGrid.Show(source, Window.GetWindow(this)) is not null;
 
     private static Table? AncestorTableOf(Paragraph paragraph)
     {
