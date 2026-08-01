@@ -790,6 +790,56 @@
     "text": "Embed."
   },
   {
+    "event": "GridSorted { column: \"Status\", ascending: true }",
+    "priority": "medium",
+    "text": "Sorted by Status, ascending"
+  },
+  {
+    "event": "GridSorted { column: \"Due\", ascending: false }",
+    "priority": "medium",
+    "text": "Sorted by Due, descending"
+  },
+  {
+    "event": "GridRowMoved { description: \"Ship the plan. Status: Open. Due: Friday\", focused_cell: \"Status: Open\" }",
+    "priority": "medium",
+    "text": "Ship the plan. Status: Open. Due: Friday"
+  },
+  {
+    "event": "GridRowMoved { description: \"Ship the plan\", focused_cell: \"Status: Open\" }",
+    "priority": "medium",
+    "text": "Ship the plan. Status: Open"
+  },
+  {
+    "event": "GridRowMoved { description: \"Done reviewing.\", focused_cell: \"Status: Open\" }",
+    "priority": "medium",
+    "text": "Done reviewing. Status: Open"
+  },
+  {
+    "event": "GridRowMoved { description: \"Substatus: Opening\", focused_cell: \"Status: Open\" }",
+    "priority": "medium",
+    "text": "Substatus: Opening. Status: Open"
+  },
+  {
+    "event": "GridRowMoved { description: \"Status: Open Questions remain\", focused_cell: \"Status: Open\" }",
+    "priority": "medium",
+    "text": "Status: Open Questions remain. Status: Open"
+  },
+  {
+    "event": "GridCellMoved { column: \"Status\", value: \"Open\" }",
+    "priority": "medium",
+    "text": "Status: Open"
+  },
+  {
+    "event": "GridGroup { label: \"Open\", row_count: 1, summary: None }",
+    "priority": "medium",
+    "text": "Group: Open, 1 row"
+  },
+  {
+    "event": "GridGroup { label: \"Done\", row_count: 12, summary: Some(\"Count: 12\") }",
+    "priority": "medium",
+    "text": "Group: Done, 12 rows. Summary: Count: 12"
+  },
+  {
     "event": "HostComposed { text: \"Composed by a host engine.\", priority: High }",
     "priority": "high",
     "text": "Composed by a host engine."

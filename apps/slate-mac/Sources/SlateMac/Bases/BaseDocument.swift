@@ -478,6 +478,15 @@ final class BaseDocument: ObservableObject {
         selectView(index: max(activeViewIndex - 1, 0), session: session)
     }
 
+    /// Execution-fault seam (round 17): forces the `baseExecute`
+    /// failure path so the sort-rollback contract is testable without
+    /// a corruptible fixture.
+    var executeFaultForTests: (() -> Error)?
+
+    /// Rollback-fault seam (round 19): fails the post-execution-failure
+    /// engine rollback so the detach posture is testable.
+    var rollbackFaultForTests: (() -> Error)?
+
     func executeActiveView(session: VaultSession, thisPath: String? = nil) {
         contentRefreshGeneration &+= 1
         // A batch-Trash unknown outcome deliberately detaches the handle while
@@ -491,6 +500,9 @@ final class BaseDocument: ObservableObject {
             return
         }
         do {
+            if let fault = executeFaultForTests?() {
+                throw fault
+            }
             let appliedFilter = quickFilterArgument
             let executed = try session.baseExecute(
                 handle: handle,
@@ -621,14 +633,58 @@ final class BaseDocument: ObservableObject {
         } else {
             columnID = nil
         }
+        // Captured for rollback (round 17): an execution failure AFTER
+        // admission must restore the ENGINE's transient sort too, or
+        // the next execute would resurrect an order no surface ever
+        // confirmed.
+        let previousSort = sortState
+        let previousColumnID = previousSort.flatMap { previous in
+            result.flatMap { snapshot in
+                snapshot.columns.indices.contains(previous.columnIndex)
+                    ? snapshot.columns[previous.columnIndex].id
+                    : nil
+            }
+        }
         do {
             try session.baseSetTransientSort(
                 handle: handle,
                 view: UInt32(activeViewIndex),
                 columnId: columnID,
                 ascending: newSort?.ascending ?? true)
-            sortState = newSort
             executeActiveView(session: session)
+            guard result != nil else {
+                // Sorting is TRANSACTIONAL (round 17): the rows never
+                // arrived, so publishing the new sortState would make
+                // the grid announce a sort that did not happen. The
+                // failed state stays visible — that is the honest
+                // display — but the sort identity and the engine both
+                // keep the previous order.
+                do {
+                    if let fault = rollbackFaultForTests?() {
+                        throw fault
+                    }
+                    try session.baseSetTransientSort(
+                        handle: handle,
+                        view: UInt32(activeViewIndex),
+                        columnId: previousColumnID,
+                        ascending: previousSort?.ascending ?? true)
+                } catch {
+                    // The engine may now hold the REJECTED sort while
+                    // the surface describes the previous one
+                    // (round 19). DETACH — the batch-Trash posture —
+                    // so no later execute can render rows that
+                    // contradict the published identity; reopening
+                    // restores a coherent pair. The native handle is
+                    // CLOSED first (round 22): dropping the reference
+                    // alone leaked the registry entry for the
+                    // session's lifetime.
+                    session.closeBase(handle: handle)
+                    self.handle = nil
+                    state = .failed(friendlyMessage(for: error))
+                }
+                return false
+            }
+            sortState = newSort
             return true
         } catch {
             result = nil

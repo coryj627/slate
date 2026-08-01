@@ -170,6 +170,15 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     var groups: [Group]
     var selection: Binding<Row.ID?>?
     var cellSelection: Binding<CellPosition?>?
+    /// OWNER CONTRACT for engine-backed grids (rounds 17–19): sort
+    /// acceptance must be published ATOMICALLY with the committed rows
+    /// — assign the accepted state only after the rows exist
+    /// (`BaseDocument.setTransientSort` is the reference: transactional
+    /// through execution, engine rolled back on failure). The deferred
+    /// external-sort announcement fires on the first reload whose
+    /// sortState matches the accepted request; an owner that published
+    /// state before rows would make that announcement narrate an order
+    /// the display has not adopted.
     var sortState: Binding<DataGridSortState?>?
     var cellNavigation: Bool
     /// When false, the binding owner supplies rows in authoritative sort order.
@@ -197,9 +206,12 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     var rowAccessibilityDescription: ((Row) -> String?)?
     var rowActions: [RowAction]
     var focusRequest: Int
-    /// Sort (and other grid-owned) announcements route here. Defaults
-    /// to the app-wide announcer; #363 injects the #518 coordinator.
-    var announce: (String) -> Void
+    /// Sort (and other grid-owned) announcements route here as
+    /// CANONICAL events (#969: the grid family's text and priority come
+    /// from core; trigger sites decide when, never what it says).
+    /// Defaults to the app-wide announcer; #363 injects the #518
+    /// coordinator, which renders the event into its status funnel.
+    var announce: (A11yEvent) -> Void
 
     init(
         columns: [Column],
@@ -222,9 +234,8 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         rowAccessibilityDescription: ((Row) -> String?)? = nil,
         rowActions: [RowAction] = [],
         focusRequest: Int = 0,
-        announce: @escaping (String) -> Void = {
-            // W0.5-3 residue: AccessibleDataGrid announce relay
-            postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium))
+        announce: @escaping (A11yEvent) -> Void = {
+            postAccessibilityAnnouncement($0)
         }
     ) {
         self.columns = columns
@@ -394,6 +405,12 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
 
     func reload(grid: AccessibleDataGrid<Row>) {
         self.grid = grid
+        // Captured BEFORE the display mutations below (round 9: a
+        // sortState write schedules this reload, and the
+        // binding-only sync deselected unbound grids right after
+        // applySort had restored them).
+        let nativeSelectedID: Row.ID? =
+            grid.selection == nil ? nativeSelectedRowID() : nil
         if let sortState = grid.sortState {
             activeSort = sortState.wrappedValue
         }
@@ -404,8 +421,18 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         syncSortDescriptorsToTable()
         syncHeaderAccessibilityToTable()
         table?.reloadData()
-        syncSelectionFromBinding()
+        restoreSelectionAfterDisplayMutation(nativeSelectedID: nativeSelectedID)
         syncEditRequestToTable()
+        if let pending = pendingExternalSortAnnouncement {
+            // The deferred external-sort announcement (round 18):
+            // THIS reload is where the owner's committed rows became
+            // the rendered/AX order. Announce only if the owner still
+            // stands behind the sort; a revert drops it silently.
+            pendingExternalSortAnnouncement = nil
+            if grid.sortState?.wrappedValue == pending.0 {
+                grid.announce(pending.1)
+            }
+        }
     }
 
     func focusIfRequested() {
@@ -513,6 +540,10 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     /// doesn't re-announce the sort.
     private var isSyncingSortDescriptors = false
 
+    /// The accepted-but-not-yet-rendered external sort (round 18):
+    /// announced by the reload that adopts the owner's committed rows.
+    private var pendingExternalSortAnnouncement: (DataGridSortState, A11yEvent)?
+
     private func syncSortDescriptorsToTable() {
         guard let table else { return }
         let wanted =
@@ -559,17 +590,57 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             grid.columns[columnIndex].sort != nil
         else { return nil }
         let sort = DataGridSortState(columnIndex: columnIndex, ascending: ascending)
+        if let sortState = grid.sortState {
+            sortState.wrappedValue = sort
+            // The OWNER is authoritative for engine-backed sorts
+            // (round 15): a rejecting setter — admission change,
+            // backend failure — leaves the read-back unchanged, and
+            // proceeding would flip the header and announce a sort
+            // that never happened (a degraded-dependency
+            // false-success). Keep the old state and say nothing;
+            // the owner's own error path narrates the failure. The
+            // HEADER-CLICK path already flipped NSTableView's own
+            // descriptor before the delegate ran (round 16) — pull
+            // the native indicator and its accessibility label back
+            // to the unchanged state; the sync guard keeps this from
+            // becoming a second owner write.
+            guard sortState.wrappedValue == sort else {
+                syncSortDescriptorsToTable()
+                syncHeaderAccessibilityToTable()
+                return nil
+            }
+        }
         activeSort = sort
-        grid.sortState?.wrappedValue = sort
+        // An UNBOUND grid keeps NSTableView's native selection — its
+        // identity is captured BEFORE the reorder (round 8: routing it
+        // through the binding sync deselected it, because an absent
+        // binding reads exactly like a nil one there).
+        let nativeSelectedID: Row.ID? =
+            grid.selection == nil ? nativeSelectedRowID() : nil
         resortPreservingDescriptor()
+        // The table CONSUMES displayEntries, not displayRows — without
+        // this rebuild the announcement says sorted while the rendered
+        // and AX order stay stale for callers with no sortState
+        // binding (adversarial round 6).
+        rebuildDisplayEntries()
         syncSortDescriptorsToTable()
         syncHeaderAccessibilityToTable()
         table?.reloadData()
-        let text =
-            "Sorted by \(grid.columns[columnIndex].header), "
-            + (ascending ? "ascending" : "descending")
-        grid.announce(text)
-        return text
+        restoreSelectionAfterDisplayMutation(nativeSelectedID: nativeSelectedID)
+        let event = A11yEvent.gridSorted(
+            column: grid.columns[columnIndex].header, ascending: ascending)
+        if grid.sortState != nil, !grid.sortsRowsLocally {
+            // Engine-backed grids announce on ADOPTION (round 18):
+            // this coordinator still renders the pre-write snapshot —
+            // the owner's committed rows arrive at the next
+            // reload(grid:) — and announcing now would narrate a sort
+            // the rendered/AX order has not adopted. One-shot, and
+            // dropped if the owner reverts before publishing.
+            pendingExternalSortAnnouncement = (sort, event)
+        } else {
+            grid.announce(event)
+        }
+        return a11yRender(event: event).text
     }
 
     nonisolated func tableView(
@@ -732,6 +803,79 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
                 return false
             }
             return true
+        }
+    }
+
+    /// The identity of the natively selected row (unbound grids) — nil
+    /// when nothing, or a group heading, is selected.
+    private func nativeSelectedRowID() -> Row.ID? {
+        guard let table, table.selectedRow >= 0,
+            displayEntries.indices.contains(table.selectedRow),
+            case .row(let row) = displayEntries[table.selectedRow]
+        else { return nil }
+        return row.id
+    }
+
+    /// Selection is INDEX-based in the table while identity lives in
+    /// the row ID: EVERY display mutation (sort, SwiftUI reload) must
+    /// re-derive the index — from the binding when one exists, from
+    /// the identity captured before the mutation when not (rounds
+    /// 7–9: each path that skipped this either targeted the wrong row
+    /// or deselected).
+    private func restoreSelectionAfterDisplayMutation(nativeSelectedID: Row.ID?) {
+        // An in-flight EDIT whose row no longer resolves is stale in
+        // EVERY binding configuration (round 12): left in place, the
+        // identity reappearing later (refresh, filter, undo) would
+        // re-render and focus the stale draft, allowing an unintended
+        // commit. Clearing FIRES onCancelEdit — the system is
+        // canceling the edit, and the owner must reset its draft
+        // state.
+        if let editRequest = grid.editRequest?.wrappedValue,
+            displayIndex(forRowID: editRequest.rowID) == nil
+        {
+            grid.editRequest?.wrappedValue = nil
+            grid.onCancelEdit?()
+        }
+        // The cell selection carries its own row ID exactly like the
+        // edit request — validated in EVERY configuration (round 14:
+        // a surviving native selection took the successful branch and
+        // left a cell binding anchored to a removed row). Each owner
+        // is written at most once.
+        if let position = grid.cellSelection?.wrappedValue,
+            displayIndex(forRowID: position.rowID) == nil
+        {
+            grid.cellSelection?.wrappedValue = nil
+        }
+        if grid.selection != nil {
+            // A BOUND identity whose row no longer resolves must clear
+            // the OWNER's value too (round 13): the sync helper only
+            // deselects the table, and its guard suppresses the
+            // owner's changed handler — Canvas's shared selection
+            // would keep a filtered-out card targetable by the global
+            // Delete command.
+            if let wanted = grid.selection?.wrappedValue,
+                displayIndex(forRowID: wanted) == nil
+            {
+                grid.selection?.wrappedValue = nil
+            }
+            syncSelectionFromBinding()
+            return
+        }
+        guard let table else { return }
+        if let nativeSelectedID, let index = displayIndex(forRowID: nativeSelectedID) {
+            mirrorTableSelectionFromBinding {
+                table.selectRowIndexes([index], byExtendingSelection: false)
+                table.scrollRowToVisible(index)
+            }
+        } else if table.selectedRow != -1 {
+            // The captured identity is GONE (removed row, or a group
+            // heading was selected): the index-based selection would
+            // silently retarget whatever row now occupies the old
+            // index, and a destructive action would take it
+            // (round 10). Deselect instead.
+            mirrorTableSelectionFromBinding {
+                table.deselectAll(nil)
+            }
         }
     }
 
@@ -982,10 +1126,10 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         case .up, .down, .pageUp, .pageDown:
             grid.announce(
                 movedToDifferentRow
-                    ? rowMoveAnnouncement(for: row, columnIndex: columnIndex)
-                    : cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+                    ? rowMoveEvent(for: row, columnIndex: columnIndex)
+                    : cellMoveEvent(for: row, columnIndex: columnIndex))
         default:
-            grid.announce(cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+            grid.announce(cellMoveEvent(for: row, columnIndex: columnIndex))
         }
     }
 
@@ -1009,7 +1153,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             return accessibilityLabel(for: group)
         case .row(let rowValue):
             guard !grid.columns.isEmpty else { return nil }
-            return rowMoveAnnouncement(for: rowValue, columnIndex: 0)
+            return a11yRender(event: rowMoveEvent(for: rowValue, columnIndex: 0)).text
         }
     }
 
@@ -1037,11 +1181,17 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     }
 
     private func accessibilityLabel(for group: AccessibleDataGrid<Row>.Group) -> String {
-        let rowText = "\(CountCopy.counted(group.rowCount, "row", "rows"))"
-        if let summary = group.summary, !summary.isEmpty {
-            return "Group: \(group.label), \(rowText). Summary: \(summary)"
-        }
-        return "Group: \(group.label), \(rowText)"
+        // The #969 grid family renders this grammar CORE-side — the
+        // label and the announcement must be the same string, so both
+        // come from the same render (adversarial round 2: the local
+        // composition could drift from the corpus without any test
+        // failing).
+        a11yRender(
+            event: .gridGroup(
+                label: group.label,
+                rowCount: UInt32(clamping: group.rowCount),
+                summary: group.summary.flatMap { $0.isEmpty ? nil : $0 })
+        ).text
     }
 
     private func cellAccessibilityLabel(for row: Row, columnIndex: Int) -> String {
@@ -1050,20 +1200,23 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         return "\(column.header): \(column.cell(row))"
     }
 
-    private func rowMoveAnnouncement(for row: Row, columnIndex: Int) -> String {
-        let focusedCell = cellAccessibilityLabel(for: row, columnIndex: columnIndex)
-        guard let rawDescription = grid.rowAccessibilityDescription?(row) else {
-            return focusedCell
+    /// The row-move event: core renders the description/focused-cell
+    /// dedup (#969 conversion — the old Swift composition moved to
+    /// `A11yEvent::GridRowMoved` verbatim, its case-fold rule now
+    /// case-only on both twins).
+    private func rowMoveEvent(for row: Row, columnIndex: Int) -> A11yEvent {
+        .gridRowMoved(
+            description: grid.rowAccessibilityDescription?(row) ?? "",
+            focusedCell: cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+    }
+
+    /// The cell-move event ("Header: value", rendered in core).
+    private func cellMoveEvent(for row: Row, columnIndex: Int) -> A11yEvent {
+        guard grid.columns.indices.contains(columnIndex) else {
+            return .gridCellMoved(column: "", value: "")
         }
-        let description = rawDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !description.isEmpty else { return focusedCell }
-        if description.range(
-            of: focusedCell,
-            options: [.caseInsensitive, .diacriticInsensitive]
-        ) != nil {
-            return description
-        }
-        return description + (description.hasSuffix(".") ? " " : ". ") + focusedCell
+        let column = grid.columns[columnIndex]
+        return .gridCellMoved(column: column.header, value: column.cell(row))
     }
 
     @objc func doubleClicked(_ sender: Any?) {

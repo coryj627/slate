@@ -622,7 +622,40 @@ internal sealed class ReadingSurface : RichTextBox
             embedModel.Activate(new uniffi.slate_uniffi.ReadingInlineRunKind.Embed(embedKey));
             return true;
         }
+        // Table at the caret (W4-1): Enter opens the table on the grid
+        // substrate — the in-range table stays for linear reading
+        // (G23), the grid view adds the §8.7 powers. Runs LAST: a link
+        // inside a table cell is still a link first.
+        if (CaretPosition?.Paragraph is { } tableParagraph
+            && AncestorTableOf(tableParagraph) is { } table
+            && ReadingSemantics.TableSourceOf(table) is { } tableSource)
+        {
+            return (TableGridOpener ?? OpenTableGridWindow)(tableSource);
+        }
         return false;
+    }
+
+    /// <summary>Test seam for the table→grid hop; production opens
+    /// the substrate window. Returns whether a grid actually opened —
+    /// a source core cannot re-derive cells from must not swallow
+    /// Enter.</summary>
+    internal Func<string, bool>? TableGridOpener { get; set; }
+
+    private bool OpenTableGridWindow(string source) =>
+        ReadingTableGrid.Show(source, Window.GetWindow(this)) is not null;
+
+    private static Table? AncestorTableOf(Paragraph paragraph)
+    {
+        DependencyObject? current = paragraph;
+        while (current is TextElement element)
+        {
+            if (current is Table table)
+            {
+                return table;
+            }
+            current = element.Parent;
+        }
+        return null;
     }
 
     /// <summary>

@@ -58,6 +58,11 @@ internal static class ReadingSemantics
             "ReadingEmbedJumpAnchor", typeof(string), typeof(ReadingSemantics),
             new PropertyMetadata(null));
 
+    private static readonly DependencyProperty TableSourceProperty =
+        DependencyProperty.RegisterAttached(
+            "ReadingTableSource", typeof(string), typeof(ReadingSemantics),
+            new PropertyMetadata(null));
+
     private static readonly DependencyProperty MarkerProperty =
         DependencyProperty.RegisterAttached(
             "ReadingMarker", typeof(Marker?), typeof(ReadingSemantics),
@@ -82,6 +87,21 @@ internal static class ReadingSemantics
 
     public static void MarkTable(System.Windows.Documents.Table table) =>
         table.SetValue(MarkerProperty, Marker.Table);
+
+    /// <summary>Table with a grid destination (W4-1): the marker
+    /// carries the block's SOURCE so Enter-at-caret can open the same
+    /// table on the substrate — core re-derives the cells there, the
+    /// host never re-parses. String-only (the W3-1 Tag-serialization
+    /// lesson). Degenerate tables take the source-less overload and
+    /// stay linear-only.</summary>
+    public static void MarkTable(System.Windows.Documents.Table table, string source)
+    {
+        table.SetValue(MarkerProperty, Marker.Table);
+        table.SetValue(TableSourceProperty, source);
+    }
+
+    public static string? TableSourceOf(System.Windows.Documents.Table table) =>
+        table.GetValue(TableSourceProperty) as string;
 
     public static void MarkEmbed(BlockUIContainer container) =>
         container.SetValue(MarkerProperty, Marker.Embed);

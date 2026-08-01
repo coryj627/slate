@@ -11,6 +11,7 @@
     <Project Path="tests/SlateWindows.Tests/SlateWindows.Tests.csproj" />
   </Folder>
   <Folder Name="/tools/">
+    <Project Path="tools/GridConformanceHost/GridConformanceHost.csproj" />
     <Project Path="tools/HostLogProbe/HostLogProbe.csproj" />
     <Project Path="tools/ParityHarness/ParityHarness.csproj" />
   </Folder>

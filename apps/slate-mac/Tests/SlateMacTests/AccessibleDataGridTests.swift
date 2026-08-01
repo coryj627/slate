@@ -135,6 +135,9 @@ final class AccessibleDataGridTests: XCTestCase {
         rowAccessibilityDescription: ((Row) -> String?)? = nil,
         announce: @escaping (String) -> Void = { _ in }
     ) -> AccessibleDataGrid<Row> {
+        // Tests assert the rendered strings; the grid now posts
+        // canonical events, so the helper renders through the same
+        // core path production speech takes.
         AccessibleDataGrid(
             columns: [
                 .init("Name", cell: { $0.a }, sort: { $0.a < $1.a }),
@@ -155,7 +158,7 @@ final class AccessibleDataGridTests: XCTestCase {
             onCommitEdit: onCommitEdit,
             onCancelEdit: onCancelEdit,
             rowAccessibilityDescription: rowAccessibilityDescription,
-            announce: announce)
+            announce: { announce(a11yRender(event: $0).text) })
     }
 
     private static let people = [
@@ -183,6 +186,321 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertEqual(announced.count, 2)
     }
 
+    /// Round 6: the table CONSUMES `displayEntries`, and the sort
+    /// announcement must never outrun the rendered/AX order — for a
+    /// caller with NO sortState binding (CanvasTableView's shape), the
+    /// entries rebuild happens inside `applySort` or nowhere.
+    @MainActor
+    func testSortWithoutBindingReordersTheConsumedTableOrder() throws {
+        let grid = AccessibleDataGrid<Row>(
+            columns: [
+                .init("Name", cell: { $0.a }, sort: { $0.a < $1.a }),
+                .init("Role", cell: { $0.b }),
+            ],
+            rows: Self.people,
+            summary: "",
+            accessibilityLabel: "People",
+            groups: [.init(label: "All", rowStart: 0, rowCount: 3)])
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+
+        // Group heading first, then the rows in the ANNOUNCED order —
+        // read through the data-source path the table itself uses.
+        XCTAssertEqual(coordinator.numberOfRows(in: table), 4)
+        let consumed = (1..<4).compactMap { rowIndex in
+            (coordinator.tableView(
+                table, viewFor: table.tableColumns[0], row: rowIndex)
+                as? NSTableCellView)?.textField?.stringValue
+        }
+        XCTAssertEqual(consumed, ["Ada", "Bea", "Charlie"])
+    }
+
+    /// Round 7: NSTableView selection is INDEX-based while the binding
+    /// holds the row ID — a sort that reorders rows must re-derive the
+    /// selected index from identity, or activation and destructive row
+    /// actions target a DIFFERENT row (the Canvas shape: selection
+    /// binding, no sortState, Delete among the actions).
+    @MainActor
+    func testSortWithLiveTableKeepsSelectionOnTheSameRowIdentity() {
+        var selected: Int? = 0  // Charlie — display index 0 pre-sort.
+        let binding = Binding<Int?>(
+            get: { selected },
+            set: { selected = $0 })
+        let grid = makeGrid(rows: Self.people, selection: binding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        XCTAssertEqual(table.selectedRow, 0, "Charlie selected pre-sort")
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+
+        // Ascending renders Ada, Bea, Charlie — the selected IDENTITY
+        // is unchanged and the table's index must follow it.
+        XCTAssertEqual(selected, 0, "the binding identity is unchanged")
+        XCTAssertEqual(
+            table.selectedRow, 2,
+            "the table selection follows the row identity, not the old index")
+    }
+
+    /// Round 8: a grid with NO selection binding keeps NSTableView's
+    /// native selection — the sort must carry that identity to its new
+    /// index, not deselect it (the round-7 sync read an absent binding
+    /// exactly like a nil one and cleared the table).
+    @MainActor
+    func testSortWithoutBindingKeepsNativeSelectionOnTheSameRow() {
+        let grid = makeGrid(rows: Self.people)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        table.selectRowIndexes([0], byExtendingSelection: false)
+        XCTAssertEqual(table.selectedRow, 0, "Charlie natively selected pre-sort")
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+        XCTAssertEqual(
+            table.selectedRow, 2,
+            "native selection follows Charlie to the new index, never deselects")
+    }
+
+    /// Round 9: a sortState write schedules a SwiftUI update, whose
+    /// reload(grid:) pass must preserve unbound native selection
+    /// exactly as the immediate sort path does — the binding-only
+    /// sync deselected it right after applySort had restored it.
+    @MainActor
+    func testLifecycleReloadKeepsNativeSelectionForSortStateBoundGrids() {
+        var sortState: DataGridSortState?
+        let binding = Binding<DataGridSortState?>(
+            get: { sortState },
+            set: { sortState = $0 })
+        let grid = makeGrid(rows: Self.people, sortState: binding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        table.selectRowIndexes([0], byExtendingSelection: false)  // Charlie
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+        XCTAssertEqual(table.selectedRow, 2, "sort carries the native selection")
+
+        // The SwiftUI update the sortState write scheduled.
+        coordinator.reload(grid: makeGrid(rows: Self.people, sortState: binding))
+        XCTAssertEqual(
+            table.selectedRow, 2,
+            "the lifecycle reload must not deselect the unbound grid")
+    }
+
+    /// Round 10: when the natively selected row is REMOVED by a
+    /// reload, its old numeric index may still be valid — index-based
+    /// selection would silently retarget whatever row now occupies it,
+    /// and a destructive action would take that row. Removal must
+    /// deselect.
+    @MainActor
+    func testUnboundReloadDeselectsWhenTheSelectedRowIsRemoved() {
+        let grid = makeGrid(rows: Self.people)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        table.selectRowIndexes([1], byExtendingSelection: false)  // Ada
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeGrid(rows: remaining))
+        XCTAssertEqual(
+            table.selectedRow, -1,
+            "a removed selected row must deselect, never retarget the old index")
+    }
+
+    /// Round 11: the removal deselect runs under the sync guard, which
+    /// skips the selection-changed handler's normal cellSelection
+    /// cleanup — the binding must be cleared explicitly, or cell
+    /// navigation stays anchored to an identity absent from the
+    /// display.
+    @MainActor
+    func testUnboundReloadClearsCellSelectionWhenItsRowIsRemoved() {
+        var position: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 1, columnIndex: 1)  // Ada's Role cell
+        let binding = Binding<AccessibleDataGrid<Row>.CellPosition?>(
+            get: { position },
+            set: { position = $0 })
+        let grid = makeGrid(rows: Self.people, cellSelection: binding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        table.selectRowIndexes([1], byExtendingSelection: false)  // Ada
+
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeGrid(rows: remaining, cellSelection: binding))
+
+        XCTAssertEqual(table.selectedRow, -1, "the removed row deselects")
+        XCTAssertNil(
+            position,
+            "the cell-selection binding must not keep referencing the removed row")
+    }
+
+    /// Round 12: an in-flight edit request carries its own row ID —
+    /// removal must clear it (firing onCancelEdit so the owner resets
+    /// its draft), or the identity reappearing later would re-render
+    /// and focus the stale edit, allowing an unintended commit.
+    @MainActor
+    func testReloadClearsAnEditRequestWhoseRowWasRemoved() {
+        var editRequest: AccessibleDataGrid<Row>.EditRequest? =
+            .init(rowID: 1, columnIndex: 1, text: "draft")  // Ada's Role
+        var cancels = 0
+        func makeEditGrid(rows: [Row]) -> AccessibleDataGrid<Row> {
+            AccessibleDataGrid<Row>(
+                columns: [.init("Name") { $0.a }, .init("Role") { $0.b }],
+                rows: rows,
+                summary: "",
+                accessibilityLabel: "People",
+                editRequest: Binding(
+                    get: { editRequest },
+                    set: { editRequest = $0 }),
+                onCancelEdit: { cancels += 1 })
+        }
+        let coordinator = GridCoordinator(grid: makeEditGrid(rows: Self.people))
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: makeEditGrid(rows: Self.people))
+        XCTAssertNotNil(editRequest, "the draft survives while its row exists")
+
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeEditGrid(rows: remaining))
+
+        XCTAssertNil(
+            editRequest,
+            "a draft for a removed row must be cleared, never re-focusable")
+        XCTAssertEqual(cancels, 1, "the owner is told its edit was canceled")
+    }
+
+    /// Round 13: a BOUND identity whose row is removed must clear the
+    /// OWNER's bindings too — the sync helper only deselects the table
+    /// under its guard, and a shared selection (the Canvas shape,
+    /// where the same binding feeds the global Delete command) would
+    /// keep a filtered-out card as a hidden destructive target.
+    @MainActor
+    func testBoundReloadClearsRowAndCellSelectionWhenTheirRowIsRemoved() {
+        var selected: Int? = 1  // Ada
+        var position: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 1, columnIndex: 1)
+        let selectionBinding = Binding<Int?>(
+            get: { selected }, set: { selected = $0 })
+        let cellBinding = Binding<AccessibleDataGrid<Row>.CellPosition?>(
+            get: { position }, set: { position = $0 })
+        let grid = makeGrid(
+            rows: Self.people,
+            selection: selectionBinding,
+            cellSelection: cellBinding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        XCTAssertEqual(table.selectedRow, 1, "Ada selected via the binding")
+
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeGrid(
+            rows: remaining,
+            selection: selectionBinding,
+            cellSelection: cellBinding))
+
+        XCTAssertEqual(table.selectedRow, -1, "the table deselects")
+        XCTAssertNil(
+            selected,
+            "the shared row selection must not retain a hidden destructive target")
+        XCTAssertNil(
+            position,
+            "the cell selection must not retain a hidden target")
+    }
+
+    /// Round 14: the cell selection is validated INDEPENDENTLY of row
+    /// selection — a surviving native selection must not carry a cell
+    /// binding anchored to a DIFFERENT, removed row past the
+    /// reconciliation.
+    @MainActor
+    func testSurvivingNativeSelectionStillClearsARemovedCellSelection() {
+        var position: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 1, columnIndex: 1)  // Ada's Role cell
+        var cellWrites = 0
+        let cellBinding = Binding<AccessibleDataGrid<Row>.CellPosition?>(
+            get: { position },
+            set: {
+                cellWrites += 1
+                position = $0
+            })
+        let grid = makeGrid(rows: Self.people, cellSelection: cellBinding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        table.selectRowIndexes([0], byExtendingSelection: false)  // Charlie
+        // Native selection tracking rewrote the cell binding to
+        // Charlie — the divergence is an OWNER-side write (external
+        // state change) pointing the cell at Ada afterward.
+        position = .init(rowID: 1, columnIndex: 1)
+        let writesBeforeReload = cellWrites
+
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeGrid(rows: remaining, cellSelection: cellBinding))
+
+        XCTAssertEqual(
+            table.selectedRow, 0,
+            "the surviving native selection stays on Charlie")
+        XCTAssertNil(
+            position,
+            "the cell binding must not keep referencing the removed row")
+        XCTAssertEqual(
+            cellWrites, writesBeforeReload + 1,
+            "the cell owner is written exactly once by the reconciliation")
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?
@@ -205,6 +523,137 @@ final class AccessibleDataGridTests: XCTestCase {
             engineOrder.map(\.a),
             "an engine-backed grid must wait for the externally reordered rows instead of "
                 + "re-sorting the stale result with a Swift display-value comparator")
+    }
+
+    /// Round 15: the owner is AUTHORITATIVE for engine-backed sorts —
+    /// a rejecting setter (admission change, backend failure) must
+    /// produce NO success announcement, no header flip, and an
+    /// unchanged order; the owner's own error path narrates.
+    @MainActor
+    func testRejectedExternalSortAnnouncesNothingAndKeepsOrder() {
+        var announced: [String] = []
+        var rejectedWrites = 0
+        let rejecting = Binding<DataGridSortState?>(
+            get: { nil },
+            set: { _ in rejectedWrites += 1 })  // the owner refuses
+        let grid = makeGrid(
+            rows: Self.people,
+            sortState: rejecting,
+            sortsRowsLocally: false,
+            announce: { announced.append($0) })
+        let coordinator = GridCoordinator(grid: grid)
+
+        XCTAssertNil(coordinator.applySort(column: 0, ascending: true))
+        XCTAssertEqual(rejectedWrites, 1, "the request reached the owner")
+        XCTAssertTrue(
+            announced.isEmpty,
+            "a rejected sort must not announce success")
+        XCTAssertEqual(
+            coordinator.displayRows.map(\.a),
+            Self.people.map(\.a),
+            "the order is unchanged")
+    }
+
+    /// Round 18: an engine-backed sort announces on ADOPTION — the
+    /// coordinator renders the pre-write snapshot until the owner's
+    /// committed rows arrive at the next reload, and the announcement
+    /// must fire with the rendered/AX order ALREADY sorted.
+    @MainActor
+    func testExternalSortAnnouncesOnlyAfterTheCommittedRowsRender() {
+        var sortState: DataGridSortState?
+        let binding = Binding<DataGridSortState?>(
+            get: { sortState },
+            set: { sortState = $0 })
+        var announced: [String] = []
+        var orderAtAnnounce: [String]?
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        var coordinator: GridCoordinator<Row>!
+        let announceHook: (String) -> Void = { text in
+            announced.append(text)
+            orderAtAnnounce = (0..<coordinator.numberOfRows(in: table))
+                .compactMap { rowIndex in
+                    (coordinator.tableView(
+                        table, viewFor: table.tableColumns[0], row: rowIndex)
+                        as? NSTableCellView)?.textField?.stringValue
+                }
+        }
+        func makeExternalGrid(rows: [Row]) -> AccessibleDataGrid<Row> {
+            makeGrid(
+                rows: rows,
+                sortState: binding,
+                sortsRowsLocally: false,
+                announce: announceHook)
+        }
+        coordinator = GridCoordinator(grid: makeExternalGrid(rows: Self.people))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: makeExternalGrid(rows: Self.people))
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+        XCTAssertTrue(
+            announced.isEmpty,
+            "no announcement before the committed rows render")
+
+        // The owner publishes the committed order; SwiftUI reloads.
+        let committed = [Self.people[1], Self.people[2], Self.people[0]]
+        coordinator.reload(grid: makeExternalGrid(rows: committed))
+
+        XCTAssertEqual(announced, ["Sorted by Name, ascending"])
+        XCTAssertEqual(
+            orderAtAnnounce,
+            ["Ada", "Bea", "Charlie"],
+            "the rendered/AX order is already sorted when the hook fires")
+    }
+
+    /// Round 16: NSTableView flips its own sortDescriptors BEFORE the
+    /// delegate runs — a rejected header click must pull the native
+    /// indicator back to the unchanged state, or the visual header
+    /// (and its accessibility label) shows a sort that never happened.
+    @MainActor
+    func testRejectedHeaderClickRestoresTheNativeSortIndicator() {
+        var announced: [String] = []
+        var rejectedWrites = 0
+        let rejecting = Binding<DataGridSortState?>(
+            get: { nil },
+            set: { _ in rejectedWrites += 1 })
+        let grid = makeGrid(
+            rows: Self.people,
+            sortState: rejecting,
+            sortsRowsLocally: false,
+            announce: { announced.append($0) })
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        // The header gesture: AppKit sets the descriptor, THEN tells
+        // the delegate. A programmatic set may dispatch the delegate
+        // itself — invoke manually only if it did not, so the
+        // single-write assertion stays exact under either behavior.
+        let old = table.sortDescriptors
+        table.sortDescriptors = [NSSortDescriptor(key: "0", ascending: true)]
+        if rejectedWrites == 0 {
+            coordinator.tableView(table, sortDescriptorsDidChange: old)
+        }
+
+        XCTAssertEqual(rejectedWrites, 1, "exactly one owner write")
+        XCTAssertTrue(announced.isEmpty, "no success announcement")
+        XCTAssertEqual(
+            coordinator.displayRows.map(\.a),
+            Self.people.map(\.a),
+            "the order is unchanged")
+        XCTAssertTrue(
+            table.sortDescriptors.isEmpty,
+            "the native indicator is pulled back to the unchanged state")
     }
 
     @MainActor

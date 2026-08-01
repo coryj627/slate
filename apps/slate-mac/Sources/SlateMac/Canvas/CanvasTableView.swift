@@ -88,8 +88,8 @@ struct CanvasTableView: View {
                     appState.canvasDeleteSelection()
                 },
             ],
-            announce: { [weak appState] text in
-                appState?.canvasAnnouncer.announce(.status(text))
+            announce: { [weak appState] event in
+                appState?.canvasAnnouncer.announce(.status(a11yRender(event: event).text))
             }
         )
     }
