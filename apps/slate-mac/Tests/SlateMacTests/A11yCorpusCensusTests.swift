@@ -218,6 +218,10 @@ final class A11yCorpusCensusTests: XCTestCase {
                 focusedCell: "Status: Open"),
             .gridRowMoved(description: "Ship the plan", focusedCell: "Status: Open"),
             .gridRowMoved(description: "Done reviewing.", focusedCell: "Status: Open"),
+            .gridRowMoved(description: "Substatus: Opening", focusedCell: "Status: Open"),
+            .gridRowMoved(
+                description: "Status: Open Questions remain",
+                focusedCell: "Status: Open"),
             .gridCellMoved(column: "Status", value: "Open"),
             .gridGroup(label: "Open", rowCount: 1, summary: nil),
             .gridGroup(label: "Done", rowCount: 12, summary: "Count: 12"),

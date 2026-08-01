@@ -40,19 +40,50 @@ public sealed class GridConformanceTests
             // template layout — a cold runner can expose the element
             // before its header row exists, so wait for content.
             AutomationElement[] headers = Array.Empty<AutomationElement>();
+            bool headersAppeared = SpinWait.SpinUntil(
+                () =>
+                {
+                    headers = grid.Patterns.Table.Pattern.ColumnHeaders.Value
+                        ?? Array.Empty<AutomationElement>();
+                    return headers.Length > 0;
+                },
+                TimeSpan.FromSeconds(10));
+            if (!headersAppeared)
+            {
+                // What DID the template produce? The census + screenshot
+                // separate "headers never templated" (the Fluent
+                // DataGrid upstream breakage class) from a peer-wiring
+                // gap with visible headers.
+                CaptureForDiagnostics(window, "grid-headers-missing");
+                string kinds = string.Join(
+                    ", ",
+                    grid.FindAllDescendants()
+                        .GroupBy(d => d.Properties.LocalizedControlType.ValueOrDefault ?? "?")
+                        .Select(group => $"{group.Key}×{group.Count()}")
+                        .OrderBy(s => s, StringComparer.Ordinal));
+                Assert.Fail("no column headers materialized. grid holds: " + kinds);
+            }
+            Assert.Equal(
+                new[] { "Name", "Status", "Notes" },
+                headers.Select(header => header.Name).ToArray());
+
+            // Row identity (§8.7 "headers on entry"): the Name column
+            // is the row-header column, so realized rows answer the
+            // Table pattern's RowHeaders with their key value.
+            AutomationElement[] rowHeaders = Array.Empty<AutomationElement>();
             Assert.True(
                 SpinWait.SpinUntil(
                     () =>
                     {
-                        headers = grid.Patterns.Table.Pattern.ColumnHeaders.Value
+                        rowHeaders = grid.Patterns.Table.Pattern.RowHeaders.Value
                             ?? Array.Empty<AutomationElement>();
-                        return headers.Length > 0;
+                        return rowHeaders.Length > 0;
                     },
                     TimeSpan.FromSeconds(10)),
-                "no column headers materialized");
-            Assert.Equal(
-                new[] { "Name", "Status", "Notes" },
-                headers.Select(header => header.Name).ToArray());
+                "no row headers materialized");
+            Assert.Contains(
+                rowHeaders,
+                header => header.Name == "Note 00000");
 
             // Cell labels carry the "Header: value" contract.
             var firstCell = grid.Patterns.Grid.Pattern.GetItem(0, 0);
@@ -63,8 +94,9 @@ public sealed class GridConformanceTests
 
             // Keyboard sort: focus a cell, Ctrl+Alt+S twice = the
             // second toggle flips to DESCENDING, reordering row 0.
-            firstCell.AsGridCell().Click();
-            Wait.UntilInputIsProcessed();
+            // UIA SetFocus, not a mouse click — the pointer path is
+            // position-fragile on a hosted runner.
+            FocusCell(firstCell);
             PressChord(VirtualKeyShort.KEY_S);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
             PressChord(VirtualKeyShort.KEY_S);
@@ -136,8 +168,32 @@ public sealed class GridConformanceTests
             var middle = grid.Patterns.Grid.Pattern.GetItem(5_000, 2);
             Assert.Equal("Notes: fixture row 5000", middle.Name);
 
-            grid.Patterns.Grid.Pattern.GetItem(0, 0).AsGridCell().Click();
-            Wait.UntilInputIsProcessed();
+            // The ItemContainerPattern path — the named crash class is
+            // THIS provider route, distinct from GridPattern.GetItem:
+            // enumerate containers in order without realizing the whole
+            // list, and realize a stretch through VirtualizedItem.
+            Assert.True(
+                grid.Patterns.ItemContainer.IsSupported,
+                "ItemContainerPattern missing");
+            var containers = grid.Patterns.ItemContainer.Pattern;
+            AutomationElement? cursor = null;
+            int walked = 0;
+            for (int i = 0; i < 40; i++)
+            {
+                cursor = containers.FindItemByProperty(cursor, null, null);
+                if (cursor is null)
+                {
+                    break;
+                }
+                walked++;
+                if (cursor.Patterns.VirtualizedItem.IsSupported)
+                {
+                    cursor.Patterns.VirtualizedItem.Pattern.Realize();
+                }
+            }
+            Assert.True(walked >= 30, $"ItemContainer walk stalled at {walked} items");
+
+            FocusCell(grid.Patterns.Grid.Pattern.GetItem(0, 0));
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.END);
             Assert.True(
                 SpinWait.SpinUntil(
@@ -151,6 +207,88 @@ public sealed class GridConformanceTests
 
             Assert.False(process.HasExited, "the host died under UIA load");
         });
+    }
+
+    /// <summary>W4-1 reading-table window (G28): F2 in the host opens
+    /// a markdown table on the substrate. Entry must land on the FIRST
+    /// CELL (headers + cell announced — round 1 found MoveFocus(First)
+    /// landing on the summary), and Escape must close back to the
+    /// host.</summary>
+    [Fact]
+    public void ReadingTableWindowFocusesFirstCellAndEscapeReturns()
+    {
+        RunHost(5, (automation, window, process) =>
+        {
+            _ = WaitForElement(window, "AccessibleDataGrid", TimeSpan.FromSeconds(10));
+            Keyboard.Press(VirtualKeyShort.F2);
+            AutomationElement tableWindow = WaitForDesktopElement(
+                automation, "ReadingTableGridWindow", TimeSpan.FromSeconds(10));
+
+            // Initial keyboard focus is the first CELL, by label.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.Name == "Name: alpha",
+                    TimeSpan.FromSeconds(10)),
+                $"first cell not focused; focus is on "
+                    + $"'{automation.FocusedElement()?.Name ?? "<none>"}'");
+
+            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.GetDesktop().FindFirstChild(
+                        cf => cf.ByAutomationId("ReadingTableGridWindow")) is null,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not close the table window");
+            Assert.False(process.HasExited, "the host died with the table window");
+        });
+    }
+
+    /// <summary>UIA SetFocus on a cell — deterministic on hosted
+    /// runners, where pointer-position clicks are fragile.</summary>
+    private static void FocusCell(AutomationElement cell)
+    {
+        cell.Focus();
+        Wait.UntilInputIsProcessed();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => cell.Properties.HasKeyboardFocus.ValueOrDefault,
+                TimeSpan.FromSeconds(5)),
+            $"cell '{cell.Name}' did not take keyboard focus");
+    }
+
+    private static void CaptureForDiagnostics(Window window, string name)
+    {
+        try
+        {
+            string root = Environment.GetEnvironmentVariable("RUNNER_TEMP")
+                ?? Path.GetTempPath();
+            string path = Path.Combine(
+                root, "slate-accessibility-results", $"{name}.png");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            FlaUI.Core.Capturing.Capture.Element(window).ToFile(path);
+        }
+        catch (Exception)
+        {
+            // Diagnostics only — a capture failure must not mask the
+            // assertion that requested it.
+        }
+    }
+
+    private static AutomationElement WaitForDesktopElement(
+        UIA3Automation automation, string automationId, TimeSpan timeout)
+    {
+        AutomationElement? found = null;
+        Assert.True(
+            SpinWait.SpinUntil(
+                () =>
+                {
+                    found = automation.GetDesktop().FindFirstChild(
+                        cf => cf.ByAutomationId(automationId));
+                    return found is not null;
+                },
+                timeout),
+            $"no desktop element with AutomationId {automationId} appeared");
+        return found!;
     }
 
     private static void RunHost(

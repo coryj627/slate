@@ -288,6 +288,41 @@ public sealed class AccessibleDataGridTests
     }
 
     [Fact]
+    public void RowHeaderColumnDrivesVisibilityAndFirstCellFocusTargetsTheGrid()
+    {
+        RunSta(() =>
+        {
+            var grid = MakeGrid(new List<A11yEvent>());
+            // No row-header column bound: column headers only.
+            Assert.Equal(DataGridHeadersVisibility.Column, grid.Grid.HeadersVisibility);
+
+            grid.Bind(
+                new[]
+                {
+                    new AccessibleGridColumn
+                    {
+                        Header = "Name",
+                        Cell = row => ((Person)row).Name,
+                        IsRowHeader = true,
+                    },
+                },
+                People,
+                "3 rows, 1 column.",
+                "People, data grid");
+            Assert.Equal(DataGridHeadersVisibility.All, grid.Grid.HeadersVisibility);
+
+            // Entry lands on the FIRST CELL (round 1: MoveFocus(First)
+            // reached the summary), and the summary follows the grid
+            // in tab order.
+            _ = grid.FocusFirstCell();
+            Assert.Equal(People[0], grid.Grid.CurrentCell.Item);
+            Assert.Same(grid.Grid.Columns[0], grid.Grid.CurrentCell.Column);
+            Assert.Equal(0, grid.Grid.TabIndex);
+            Assert.Equal(1, KeyboardNavigation.GetTabIndex(grid.SummaryRegion));
+        });
+    }
+
+    [Fact]
     public void FilterHookGatesCtrlFOnASubscriber()
     {
         RunSta(() =>

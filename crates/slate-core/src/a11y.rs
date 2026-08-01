@@ -892,10 +892,7 @@ impl A11yEvent {
                 let description = description.trim();
                 if description.is_empty() {
                     focused_cell.clone()
-                } else if description
-                    .to_lowercase()
-                    .contains(&focused_cell.to_lowercase())
-                {
+                } else if contains_field(description, focused_cell) {
                     description.to_owned()
                 } else if description.ends_with('.') {
                     format!("{description} {focused_cell}")
@@ -926,6 +923,28 @@ impl A11yEvent {
 /// en-US count noun (this vocabulary is V1 English; #264 owns l10n).
 /// Delegates so the singular-at-exactly-one rule has one definition;
 /// the count is interpolated by the caller and stays ungrouped here.
+/// True when `haystack` already speaks `field` as a COMPLETE row
+/// field — case-folded, bounded on each side by the start/end of the
+/// description or a field separator (`.`/`,`/`;`, one optional space
+/// before). A plain substring hit is NOT dedup: "Status: Open" must
+/// not vanish into "Substatus: Opening" (mid-word) or "Status: Open
+/// Questions remain" (the row's actual value keeps going) — both
+/// adversarial round-1 findings.
+fn contains_field(haystack: &str, field: &str) -> bool {
+    let haystack = haystack.to_lowercase();
+    let field = field.to_lowercase();
+    if field.is_empty() {
+        return true;
+    }
+    haystack.match_indices(&field).any(|(begin, matched)| {
+        let end = begin + matched.len();
+        let before = haystack[..begin].trim_end();
+        let after = &haystack[end..];
+        (before.is_empty() || before.ends_with(['.', ',', ';']))
+            && (after.is_empty() || after.starts_with(['.', ',', ';']))
+    })
+}
+
 fn plural<'a>(count: u32, one: &'a str, many: &'a str) -> &'a str {
     crate::sidebar_filter::noun(count as u64, one, many)
 }
@@ -1380,6 +1399,20 @@ pub fn corpus() -> Vec<A11yEvent> {
             description: "Done reviewing.".into(),
             focused_cell: "Status: Open".into(),
         },
+        GridRowMoved {
+            // Substring near-collision (adversarial round 1): the
+            // description does NOT speak the focused field — the hit
+            // is inside longer words — so both are spoken.
+            description: "Substatus: Opening".into(),
+            focused_cell: "Status: Open".into(),
+        },
+        GridRowMoved {
+            // Value continuation (adversarial round 1): the field
+            // appears but the row's actual value keeps going, so the
+            // focused cell is NOT already conveyed — both spoken.
+            description: "Status: Open Questions remain".into(),
+            focused_cell: "Status: Open".into(),
+        },
         GridCellMoved {
             column: "Status".into(),
             value: "Open".into(),
@@ -1649,6 +1682,8 @@ mod tests {
             (Medium, "Ship the plan. Status: Open. Due: Friday"),
             (Medium, "Ship the plan. Status: Open"),
             (Medium, "Done reviewing. Status: Open"),
+            (Medium, "Substatus: Opening. Status: Open"),
+            (Medium, "Status: Open Questions remain. Status: Open"),
             (Medium, "Status: Open"),
             (Medium, "Group: Open, 1 row"),
             (Medium, "Group: Done, 12 rows. Summary: Count: 12"),

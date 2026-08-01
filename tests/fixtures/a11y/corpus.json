@@ -815,6 +815,16 @@
     "text": "Done reviewing. Status: Open"
   },
   {
+    "event": "GridRowMoved { description: \"Substatus: Opening\", focused_cell: \"Status: Open\" }",
+    "priority": "medium",
+    "text": "Substatus: Opening. Status: Open"
+  },
+  {
+    "event": "GridRowMoved { description: \"Status: Open Questions remain\", focused_cell: \"Status: Open\" }",
+    "priority": "medium",
+    "text": "Status: Open Questions remain. Status: Open"
+  },
+  {
     "event": "GridCellMoved { column: \"Status\", value: \"Open\" }",
     "priority": "medium",
     "text": "Status: Open"

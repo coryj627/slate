@@ -50,8 +50,10 @@ internal static class ReadingTableGrid
                 window.Close();
             }
         };
-        window.Loaded += (_, _) => window.MoveFocus(
-            new TraversalRequest(FocusNavigationDirection.First));
+        // First CELL, explicitly — MoveFocus(First) lands on the
+        // summary, which precedes the grid in tree order (adversarial
+        // round 1: entry must announce headers + cell).
+        window.Loaded += (_, _) => grid.FocusFirstCell();
         window.Show();
         return true;
     }
@@ -101,6 +103,9 @@ internal static class ReadingTableGrid
                 // order deterministic across cultures.
                 Sort = Comparer<object>.Create((x, y) =>
                     string.CompareOrdinal(CellText(x, index), CellText(y, index))),
+                // A markdown table's first column is its natural key —
+                // the row identity the UIA Table pattern serves.
+                IsRowHeader = index == 0,
             });
         }
         string summary = string.Create(

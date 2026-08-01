@@ -71,6 +71,7 @@ internal static class Program
                     Cell = row => ((FixtureRow)row).Name,
                     Sort = Comparer<object>.Create((x, y) =>
                         string.CompareOrdinal(((FixtureRow)x).Name, ((FixtureRow)y).Name)),
+                    IsRowHeader = true,
                 },
                 new AccessibleGridColumn
                 {
@@ -125,6 +126,19 @@ internal static class Program
             Content = layout,
         };
         AutomationProperties.SetAutomationId(window, "Slate.GridConformanceHost");
+        // F2 opens a markdown table on the substrate — the reading-
+        // table window's conformance hook (G28): the suite pins
+        // first-cell initial focus and Escape-returns.
+        window.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key == System.Windows.Input.Key.F2)
+            {
+                e.Handled = true;
+                _ = SlateWindows.Reading.ReadingTableGrid.Show(
+                    "| Name | Status |\n| --- | --- |\n| alpha | Open |\n| beta | Done |\n",
+                    window);
+            }
+        };
 
         app.Run(window);
     }

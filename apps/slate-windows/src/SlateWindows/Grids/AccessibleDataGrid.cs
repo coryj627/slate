@@ -49,6 +49,7 @@ internal sealed class AccessibleDataGrid : UserControl
         Array.Empty<AccessibleGridRowAction>();
     private Func<object, string?>? _rowAudioDescription;
     private Func<ExportFormat, string>? _exportProducer;
+    private AccessibleGridColumn? _rowHeaderColumn;
     private object? _lastAnnouncedRow;
     private (int ColumnIndex, bool Ascending)? _activeSort;
     private string _typeAheadBuffer = string.Empty;
@@ -119,13 +120,19 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.Sorting += OnHeaderSorting;
         _grid.PreviewTextInput += OnTypeAhead;
         _grid.ContextMenuOpening += OnContextMenuOpening;
+        _grid.LoadingRow += OnLoadingRow;
         AutomationProperties.SetAutomationId(_grid, "AccessibleDataGrid");
+        // The grid precedes the summary in tab order — MoveFocus(First)
+        // and plain Tab must land on cells, never on the summary that
+        // happens to sit earlier in the tree (adversarial round 1).
+        _grid.TabIndex = 0;
 
         _summary = new TextBlock
         {
             Focusable = true,
             Margin = new Thickness(8, 4, 8, 4),
         };
+        KeyboardNavigation.SetTabIndex(_summary, 1);
         _summary.SetResourceReference(TextBlock.ForegroundProperty, "Slate.SecondaryTextBrush");
         AutomationProperties.SetAutomationId(_summary, "AccessibleDataGridSummary");
 
@@ -160,6 +167,37 @@ internal sealed class AccessibleDataGrid : UserControl
 
     /// <summary>The wrapped grid, for tests and conformance probes.</summary>
     internal DataGrid Grid => _grid;
+
+    /// <summary>Realized rows carry the row-header column's value as
+    /// their native DataGrid row header — the UIA Table pattern's row
+    /// identity. LoadingRow covers virtualization: it fires per
+    /// realization, so headers exist exactly where rows do.</summary>
+    private void OnLoadingRow(object? sender, DataGridRowEventArgs e)
+    {
+        if (_rowHeaderColumn is { } primary)
+        {
+            e.Row.Header = primary.Cell(e.Row.Item);
+        }
+    }
+
+    /// <summary>
+    /// Put keyboard focus on the FIRST CELL — the §8.7 entry point.
+    /// Window openers call this on load so entry announces headers +
+    /// cell, never the summary that precedes the grid in the tree
+    /// (adversarial round 1).
+    /// </summary>
+    public bool FocusFirstCell()
+    {
+        if (_items.Count == 0 || _grid.Columns.Count == 0)
+        {
+            return _grid.Focus();
+        }
+        _grid.ScrollIntoView(_items[0], _grid.Columns[0]);
+        _grid.CurrentCell = new DataGridCellInfo(_items[0], _grid.Columns[0]);
+        _grid.SelectedCells.Clear();
+        _grid.SelectedCells.Add(_grid.CurrentCell);
+        return _grid.Focus();
+    }
 
     /// <summary>The separately-focusable summary region.</summary>
     internal TextBlock SummaryRegion => _summary;
@@ -204,6 +242,16 @@ internal sealed class AccessibleDataGrid : UserControl
             };
             _grid.Columns.Add(gridColumn);
         }
+
+        // Native row identity (§8.7 "headers on entry", adversarial
+        // round 1): the row-header column — the core ColumnRole
+        // Primary twin — feeds real DataGrid row headers, so the UIA
+        // Table pattern associates every row with its identity and AT
+        // entering any cell hears which row it is on.
+        _rowHeaderColumn = columns.FirstOrDefault(column => column.IsRowHeader);
+        _grid.HeadersVisibility = _rowHeaderColumn is null
+            ? DataGridHeadersVisibility.Column
+            : DataGridHeadersVisibility.All;
 
         _items.Clear();
         foreach (object row in rows)
@@ -468,6 +516,12 @@ internal sealed class AccessibleGridColumn
     public IComparer<object>? Sort { get; init; }
 
     public Func<object, string?>? AccessibilityHint { get; init; }
+
+    /// <summary>The core <c>ColumnRole::Primary</c> twin: this column's
+    /// value becomes each row's native DataGrid row header — the UIA
+    /// Table pattern's row identity (§8.7 "headers on entry"). At most
+    /// one column should carry it; the first marked one wins.</summary>
+    public bool IsRowHeader { get; init; }
 }
 
 /// <summary>A named row-level action (the mac RowAction twin): context
