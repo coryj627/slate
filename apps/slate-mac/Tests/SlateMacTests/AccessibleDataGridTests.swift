@@ -481,6 +481,11 @@ final class AccessibleDataGridTests: XCTestCase {
         coordinator.table = table
         coordinator.reload(grid: grid)
         table.selectRowIndexes([0], byExtendingSelection: false)  // Charlie
+        // Native selection tracking rewrote the cell binding to
+        // Charlie — the divergence is an OWNER-side write (external
+        // state change) pointing the cell at Ada afterward.
+        position = .init(rowID: 1, columnIndex: 1)
+        let writesBeforeReload = cellWrites
 
         let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
         coordinator.reload(grid: makeGrid(rows: remaining, cellSelection: cellBinding))
@@ -491,7 +496,9 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertNil(
             position,
             "the cell binding must not keep referencing the removed row")
-        XCTAssertEqual(cellWrites, 1, "the cell owner is written exactly once")
+        XCTAssertEqual(
+            cellWrites, writesBeforeReload + 1,
+            "the cell owner is written exactly once by the reconciliation")
     }
 
     @MainActor
