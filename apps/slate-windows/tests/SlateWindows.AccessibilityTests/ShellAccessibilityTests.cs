@@ -1184,7 +1184,7 @@ public sealed class ShellAccessibilityTests
             // invalidate elements (the CI race above).
             AutomationElement[] descendants = Array.Empty<AutomationElement>();
             Assert.True(
-                SpinWait.SpinUntil(
+                PollGently(
                     () =>
                     {
                         // Re-resolve EVERY spin: an artifact completion
@@ -1414,6 +1414,26 @@ public sealed class ShellAccessibilityTests
     private static string Truncate(string value) =>
         value.Length <= 40 ? value : value[..40] + "...";
 
+    /// <summary>One probe a second - the polls themselves must not
+    /// starve the app's idle-priority background work (text layout)
+    /// that produces the condition being awaited.</summary>
+    private static bool PollGently(Func<bool> condition, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            if (condition())
+            {
+                return true;
+            }
+            if (DateTime.UtcNow >= deadline)
+            {
+                return false;
+            }
+            Thread.Sleep(1000);
+        }
+    }
+
     private static AutomationElement WaitForSurfaceDescendant(
         Window window,
         Func<AutomationElement, bool> match,
@@ -1423,7 +1443,14 @@ public sealed class ShellAccessibilityTests
     {
         AutomationElement? found = null;
         AutomationElement[] last = Array.Empty<AutomationElement>();
-        bool appeared = SpinWait.SpinUntil(
+        // GENTLE polling, deliberately: RichTextBox lays out text in
+        // BACKGROUND idle time, and a tight UIA poll marshals into the
+        // UI thread continuously - starving the exact idle work that
+        // realizes embedded elements past the viewport (measured
+        // 2026-08-01: five minutes of tight polling, tree frozen at
+        // the first viewport's children). One probe a second leaves
+        // the app idle ~95% of the wait.
+        bool appeared = PollGently(
             () =>
             {
                 // Artifact completions REPLACE the surface control
