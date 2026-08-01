@@ -1042,10 +1042,17 @@ final class BaseEmbedDocument: ObservableObject {
     func setTransientSort(_ newSort: DataGridSortState?, session: VaultSession) {
         guard sharedHandle.handle != nil else { return }
         guard let result else { return }
+        let previousSelection = sortSelection
         sortSelection = newSort.flatMap {
             BaseGridSortSelection(sortState: $0, result: result)
         }
         executeActiveView(session: session)
+        if self.result == nil {
+            // Transactional like the full document (round 17): the
+            // rows never arrived, so the published sort identity keeps
+            // the previous order and the grid announces nothing.
+            sortSelection = previousSelection
+        }
     }
 
     @discardableResult

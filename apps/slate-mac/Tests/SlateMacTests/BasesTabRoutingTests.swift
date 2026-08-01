@@ -1109,6 +1109,32 @@ final class BasesTabRoutingTests: XCTestCase {
             "Notes/Aardvark.md", "Notes/Alpha.md", "Notes/Beta.md", "Notes/Null.md",
         ])
 
+        // Round 17: execution failure AFTER admission is TRANSACTIONAL
+        // — the published sort identity and the engine's transient
+        // sort both keep the previous order, so the grid announces
+        // nothing and a later successful execute cannot resurrect the
+        // unconfirmed sort.
+        doc.setTransientSort(
+            DataGridSortState(columnIndex: 1, ascending: true), session: session)
+        XCTAssertEqual(
+            doc.sortState, DataGridSortState(columnIndex: 1, ascending: true))
+        struct ExecuteFault: Error {}
+        doc.executeFaultForTests = { ExecuteFault() }
+        XCTAssertFalse(
+            doc.setTransientSort(
+                DataGridSortState(columnIndex: 2, ascending: false),
+                session: session),
+            "an execution failure must report rejection")
+        XCTAssertEqual(
+            doc.sortState,
+            DataGridSortState(columnIndex: 1, ascending: true),
+            "the sort identity keeps the CONFIRMED order")
+        doc.executeFaultForTests = nil
+        doc.executeActiveView(session: session)
+        XCTAssertEqual(
+            doc.result?.rows.map(\.filePath), numericPaths,
+            "recovery re-executes the confirmed sort, never the rejected one")
+
         let staleHandle = try XCTUnwrap(doc.handle)
         doc.close(session: session)
         XCTAssertThrowsError(
