@@ -579,6 +579,8 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         // sortState, Delete among the row actions). Re-derive the
         // index from identity, exactly as reload(grid:) does.
         syncSelectionFromBinding()
+        let event = A11yEvent.gridSorted(
+            column: grid.columns[columnIndex].header, ascending: ascending)
         grid.announce(event)
         return a11yRender(event: event).text
     }
