@@ -1386,8 +1386,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 IsDisclosure: true,
                 InitiallyExpanded: depth == 0,
                 IsWarning: false),
+            // The heading is authored text and reaches the Expander
+            // header + UIA name — display-bounded (round 16); the
+            // resolution already happened, so nothing exact is lost.
             EmbedResolution.Section section => new EditorEmbedPreviewNode(
-                $"Embedded section: {section.Heading} from {section.TargetPath}",
+                $"Embedded section: {BoundDisplayText(section.Heading)} "
+                    + $"from {section.TargetPath}",
                 BuildEmbedParts(
                     section.Text, section.Nested, depth + 1, reserveDecodedBytes),
                 null,
@@ -2935,9 +2939,12 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     }
     private static string ImageTitle(string targetPath, string? alt)
     {
+        // Nested alts are parsed at resolve time — they never pass
+        // the links_db display bound, so the title bounds them here
+        // (round 16).
         string trimmed = alt?.Trim() ?? string.Empty;
         string descriptor = trimmed.Length > 0
-            ? trimmed
+            ? BoundDisplayText(trimmed)
             : Path.GetFileName(targetPath);
         return $"Embedded image: {descriptor}";
     }

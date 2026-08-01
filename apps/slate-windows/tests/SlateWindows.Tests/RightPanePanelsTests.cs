@@ -61,6 +61,16 @@ public sealed class RightPanePanelsTests : IDisposable
         }
         File.WriteAllText(
             Path.Combine(_fixture.Root, "embdense.md"), embDense.ToString());
+        // A megabyte heading that RESOLVES (round 16): the section
+        // card must bound its title while the anchored resolution
+        // stays exact.
+        string longHeading = new('h', 1024 * 1024);
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "longhead.md"),
+            $"# {longHeading}\n\nSection body.\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "bigsec.md"),
+            $"![[longhead#{longHeading}]]\n");
         // Backlink density (round 11): the page request is bounded
         // at 200 — the header and notice must carry the true total.
         File.WriteAllText(
@@ -580,6 +590,20 @@ public sealed class RightPanePanelsTests : IDisposable
                 + $"{2000 - RightPanePanelsViewModel.MaxEmbedRows} more "
                 + "embeds are not shown.",
             summary.Node.Title);
+    }
+
+    [Fact]
+    public void SectionEmbedCardsBoundTheirTitlesWhileResolvingExactly()
+    {
+        var panels = LoadHost([], path: "bigsec.md");
+
+        // The megabyte heading RESOLVED (exact anchor through the
+        // whole pipeline) — and the card's title, which becomes the
+        // Expander header and UIA name, stays display-bounded.
+        EmbedRowViewModel row = Assert.Single(panels.Embeds);
+        Assert.IsType<EmbedResolution.Section>(row.Resolution);
+        Assert.StartsWith("Embedded section: ", row.Node.Title);
+        Assert.True(row.Node.Title.Length <= 4200);
     }
 
     [Fact]
