@@ -563,6 +563,12 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         let sort = DataGridSortState(columnIndex: columnIndex, ascending: ascending)
         activeSort = sort
         grid.sortState?.wrappedValue = sort
+        // An UNBOUND grid keeps NSTableView's native selection — its
+        // identity is captured BEFORE the reorder (round 8: routing it
+        // through the binding sync deselected it, because an absent
+        // binding reads exactly like a nil one there).
+        let nativeSelectedID: Row.ID? =
+            grid.selection == nil ? nativeSelectedRowID() : nil
         resortPreservingDescriptor()
         // The table CONSUMES displayEntries, not displayRows — without
         // this rebuild the announcement says sorted while the rendered
@@ -572,13 +578,24 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         syncSortDescriptorsToTable()
         syncHeaderAccessibilityToTable()
         table?.reloadData()
-        // NSTableView selection is INDEX-based while the binding holds
+        // NSTableView selection is INDEX-based while identity lives in
         // the row ID: after a reorder the old index points at a
         // DIFFERENT row, and activation or a destructive action would
         // target it (round 7 — the Canvas shape: selection binding, no
-        // sortState, Delete among the row actions). Re-derive the
-        // index from identity, exactly as reload(grid:) does.
-        syncSelectionFromBinding()
+        // sortState, Delete among the row actions). Bound grids
+        // re-derive from the binding exactly as reload(grid:) does;
+        // unbound grids restore the captured native identity.
+        if grid.selection != nil {
+            syncSelectionFromBinding()
+        } else if let nativeSelectedID,
+            let index = displayIndex(forRowID: nativeSelectedID),
+            let table
+        {
+            mirrorTableSelectionFromBinding {
+                table.selectRowIndexes([index], byExtendingSelection: false)
+                table.scrollRowToVisible(index)
+            }
+        }
         let event = A11yEvent.gridSorted(
             column: grid.columns[columnIndex].header, ascending: ascending)
         grid.announce(event)
@@ -746,6 +763,16 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             }
             return true
         }
+    }
+
+    /// The identity of the natively selected row (unbound grids) — nil
+    /// when nothing, or a group heading, is selected.
+    private func nativeSelectedRowID() -> Row.ID? {
+        guard let table, table.selectedRow >= 0,
+            displayEntries.indices.contains(table.selectedRow),
+            case .row(let row) = displayEntries[table.selectedRow]
+        else { return nil }
+        return row.id
     }
 
     private func syncSelectionFromBinding() {

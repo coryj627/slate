@@ -257,6 +257,33 @@ final class AccessibleDataGridTests: XCTestCase {
             "the table selection follows the row identity, not the old index")
     }
 
+    /// Round 8: a grid with NO selection binding keeps NSTableView's
+    /// native selection — the sort must carry that identity to its new
+    /// index, not deselect it (the round-7 sync read an absent binding
+    /// exactly like a nil one and cleared the table).
+    @MainActor
+    func testSortWithoutBindingKeepsNativeSelectionOnTheSameRow() {
+        let grid = makeGrid(rows: Self.people)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        table.selectRowIndexes([0], byExtendingSelection: false)
+        XCTAssertEqual(table.selectedRow, 0, "Charlie natively selected pre-sort")
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+        XCTAssertEqual(
+            table.selectedRow, 2,
+            "native selection follows Charlie to the new index, never deselects")
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?
