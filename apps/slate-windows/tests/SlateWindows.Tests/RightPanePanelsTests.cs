@@ -583,6 +583,29 @@ public sealed class RightPanePanelsTests : IDisposable
     }
 
     [Fact]
+    public void OutlineRowsBoundDisplayWhileAnchorsStayExact()
+    {
+        // Round 15: the outline's rendered text and UIA name clip at
+        // the display ceiling, while the anchor — what activation
+        // resolves by — stays verbatim.
+        string giant = new('h', 1024 * 1024);
+        var anchors = new List<AnchorRequest>();
+        var panels = MakePanels([], anchors: anchors);
+        var row = new OutlineRowViewModel(new Heading(
+            Level: 2, Text: giant, Ordinal: 0,
+            AnchorId: giant, ByteOffset: 0));
+
+        Assert.True(row.Text.Length <= 4097);
+        Assert.True(row.AutomationName.Length <= 4200);
+        Assert.Equal(giant, row.AnchorId);
+
+        panels.OpenHeading(row);
+        AnchorRequest request = Assert.Single(anchors);
+        Assert.Equal(giant, request.Anchor.Text);
+        Assert.True(request.ResolvedText!.Length <= 4097);
+    }
+
+    [Fact]
     public void DisplayStringsAreBoundedWhileActivationDataStaysExact()
     {
         // Round 14: a megabyte target must not become a megabyte UIA

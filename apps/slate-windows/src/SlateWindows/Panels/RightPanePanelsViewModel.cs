@@ -956,8 +956,13 @@ internal sealed class OutlineRowViewModel
 {
     public OutlineRowViewModel(Heading heading)
     {
+        // The exact-data/bounded-display split (round 15): AnchorId
+        // stays verbatim — activation resolves by it — while Text is
+        // what the row RENDERS and the landing announcement speaks,
+        // so a megabyte heading cannot become a megabyte TextBlock
+        // or UIA name.
         Level = heading.Level;
-        Text = heading.Text;
+        Text = EditorInteractionCoordinator.BoundDisplayText(heading.Text);
         AnchorId = heading.AnchorId;
     }
 
