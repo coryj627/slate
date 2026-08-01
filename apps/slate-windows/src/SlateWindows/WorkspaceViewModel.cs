@@ -1311,6 +1311,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void Dispose()
     {
+        // Panels first: their workers hold the shared session, which
+        // the vault lifecycle disposes right after this workspace —
+        // invalidate every in-flight load before that happens.
+        Panels.Shutdown();
         Persist();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {

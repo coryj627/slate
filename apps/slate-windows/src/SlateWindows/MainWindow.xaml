@@ -699,10 +699,14 @@
                                          AutomationProperties.AutomationId="PanelOutgoingLinksList"
                                          AutomationProperties.Name="Outgoing links">
                                     <ListBox.ContextMenu>
+                                        <!-- Items are gated per row state in ContextMenuOpening:
+                                             internal rows get the tab/split set, external rows the
+                                             browser action, unresolved rows no menu at all. -->
                                         <ContextMenu>
-                                            <MenuItem Header="Open" Click="PanelOutgoingLinksOpen_Click" />
-                                            <MenuItem Header="Open in New Tab" Click="PanelOutgoingLinksOpenNewTab_Click" />
-                                            <MenuItem Header="Open in Split" Click="PanelOutgoingLinksOpenSplit_Click" />
+                                            <MenuItem Header="Open" Tag="internal" Click="PanelOutgoingLinksOpen_Click" />
+                                            <MenuItem Header="Open in New Tab" Tag="internal" Click="PanelOutgoingLinksOpenNewTab_Click" />
+                                            <MenuItem Header="Open in Split" Tag="internal" Click="PanelOutgoingLinksOpenSplit_Click" />
+                                            <MenuItem Header="Open in Browser" Tag="external" Click="PanelOutgoingLinksOpenBrowser_Click" />
                                         </ContextMenu>
                                     </ListBox.ContextMenu>
                                     <ListBox.ItemTemplate>

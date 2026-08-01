@@ -718,8 +718,24 @@ public partial class MainWindow : Window
         PanelList_ContextMenuOpening(PanelBacklinksList, e);
 
     private void PanelOutgoingLinks_ContextMenuOpening(
-        object sender, ContextMenuEventArgs e) =>
+        object sender, ContextMenuEventArgs e)
+    {
         PanelList_ContextMenuOpening(PanelOutgoingLinksList, e);
+        if (e.Handled)
+        {
+            return;
+        }
+        // Row targeted — now gate the items to what this row can
+        // actually honor (round 3: external rows advertised tab and
+        // split actions that launch the browser regardless).
+        if (PanelOutgoingLinksList.SelectedItem
+                is not OutgoingLinkRowViewModel row
+            || !PanelRowTargeting.ComposeOutgoingMenu(
+                PanelOutgoingLinksList.ContextMenu, row))
+        {
+            e.Handled = true;
+        }
+    }
 
     private static void PanelList_ContextMenuOpening(
         ListBox list, ContextMenuEventArgs e)
@@ -779,6 +795,9 @@ public partial class MainWindow : Window
 
     private void PanelOutgoingLinksOpenSplit_Click(object sender, RoutedEventArgs e) =>
         OpenSelectedOutgoingLink(WorkspaceOpenTarget.SplitRight);
+
+    private void PanelOutgoingLinksOpenBrowser_Click(object sender, RoutedEventArgs e) =>
+        OpenSelectedOutgoingLink(WorkspaceOpenTarget.CurrentTab);
 
     private void OpenSelectedOutgoingLink(WorkspaceOpenTarget target)
     {

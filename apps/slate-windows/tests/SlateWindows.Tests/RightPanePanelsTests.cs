@@ -572,6 +572,111 @@ public sealed class RightPanePanelsTests : IDisposable
     }
 
     [Fact]
+    public void OutlineNotificationsAlwaysReadFinalState()
+    {
+        var panels = LoadHost([]);
+        var observed = new List<string?>();
+        panels.PropertyChanged += (_, e) =>
+        {
+            if (e.PropertyName == nameof(panels.OutlineEmptyMessage))
+            {
+                observed.Add(panels.OutlineEmptyMessage);
+            }
+        };
+
+        // Populated → empty refresh: every notification must already
+        // see the mutated collection (round 3: the loading flag was
+        // notified first, freezing the previous state's sentence).
+        panels.PublishOutline(
+            "host.md",
+            panels.LoadGenerationForTests,
+            panels.OutlineRequestIdForTests,
+            [],
+            announceCount: false);
+        Assert.NotEmpty(observed);
+        Assert.All(
+            observed,
+            value => Assert.Equal("This note has no headings.", value));
+
+        // Empty → populated refresh: the message must clear.
+        observed.Clear();
+        var heading = new Heading(
+            Level: 1, Text: "Back", Ordinal: 0,
+            AnchorId: "back", ByteOffset: 0);
+        panels.PublishOutline(
+            "host.md",
+            panels.LoadGenerationForTests,
+            panels.OutlineRequestIdForTests,
+            [heading],
+            announceCount: false);
+        Assert.NotEmpty(observed);
+        Assert.All(observed, Assert.Null);
+    }
+
+    [Fact]
+    public async Task CoreReadFailuresNeverMasqueradeAsEmptyNotes()
+    {
+        using var fixture = FixtureVault.Create(0, "right-pane-failure");
+        File.WriteAllText(Path.Combine(fixture.Root, "note.md"), "# N\n");
+        var session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var panels = new RightPanePanelsViewModel(
+            session, _ => { }, (_, _) => true, _ => true, (_, _) => { });
+        session.Dispose();
+
+        // Every core call now fails: the leaves must SAY so — a read
+        // fault rendered as "no links here yet" is a lie (round 3).
+        panels.NoteChanged("note.md");
+        await panels.DrainForTests();
+
+        Assert.StartsWith(
+            "Could not load links: ", panels.BacklinksEmptyMessage);
+        Assert.StartsWith(
+            "Could not load links: ", panels.OutgoingLinksEmptyMessage);
+        Assert.StartsWith(
+            "Could not resolve embeds: ", panels.EmbedsEmptyMessage);
+        Assert.StartsWith(
+            "Could not load outline: ", panels.OutlineEmptyMessage);
+        Assert.False(panels.IsLoadingLinks);
+        Assert.False(panels.IsLoadingOutline);
+        Assert.False(panels.IsResolvingEmbeds);
+    }
+
+    [Fact]
+    public async Task ShutdownDuringResolutionNeverFaultsAndRefusesNewWork()
+    {
+        using var fixture = FixtureVault.Create(0, "right-pane-shutdown");
+        var body = new System.Text.StringBuilder("# S\n\n");
+        for (int i = 0; i < 60; i++)
+        {
+            body.Append($"![[m{i}]]\n");
+        }
+        File.WriteAllText(
+            Path.Combine(fixture.Root, "s.md"), body.ToString());
+        var session = VaultSession.OpenFilesystem(fixture.Root);
+        using (var cancel = new CancelToken())
+        {
+            session.ScanInitial(cancel);
+        }
+        var panels = new RightPanePanelsViewModel(
+            session, _ => { }, (_, _) => true, _ => true, (_, _) => { });
+
+        // Close the vault mid-batch: workers must degrade through
+        // their catches — a drain that faults fails this test.
+        panels.NoteChanged("s.md");
+        panels.Shutdown();
+        session.Dispose();
+        await panels.DrainForTests();
+
+        // Post-shutdown the panels refuse new work.
+        panels.NoteChanged("other.md");
+        Assert.Equal("s.md", panels.NotePath);
+    }
+
+    [Fact]
     public void ActiveNoteRenameRebindsThePanels()
     {
         var announced = new List<A11yEvent>();

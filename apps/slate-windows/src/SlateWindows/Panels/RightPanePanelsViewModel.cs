@@ -57,6 +57,9 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private readonly Action<LinkAnchor, string?> _scrollToAnchor;
     private readonly SynchronizationContext? _uiContext;
 
+    private readonly object _workLock = new();
+    private readonly HashSet<Task> _pendingWork = [];
+
     private string? _notePath;
     private string? _announcedOutlinePath;
     private int _loadGeneration;
@@ -64,7 +67,10 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private bool _isLoadingLinks;
     private bool _isLoadingOutline;
     private bool _isResolvingEmbeds;
+    private string? _linksLoadError;
+    private string? _outlineLoadError;
     private string? _embedsLoadError;
+    private volatile bool _isShutDown;
 
     public RightPanePanelsViewModel(
         VaultSession session,
@@ -143,12 +149,45 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         }
     }
 
+    /// <summary>A core read failure loading the bundle: a database or
+    /// filesystem fault must never masquerade as a legitimately empty
+    /// note (adversarial round 3).</summary>
+    public string? LinksLoadError
+    {
+        get => _linksLoadError;
+        private set
+        {
+            if (SetField(ref _linksLoadError, value))
+            {
+                RaiseHeaderChanges();
+            }
+        }
+    }
+
+    public string? OutlineLoadError
+    {
+        get => _outlineLoadError;
+        private set
+        {
+            if (SetField(ref _outlineLoadError, value))
+            {
+                RaiseHeaderChanges();
+            }
+        }
+    }
+
     /// <summary>Whole-batch embed failure only — per-embed failures
     /// synthesize unresolved rows instead (mac audit #202).</summary>
     public string? EmbedsLoadError
     {
         get => _embedsLoadError;
-        private set => SetField(ref _embedsLoadError, value);
+        private set
+        {
+            if (SetField(ref _embedsLoadError, value))
+            {
+                RaiseHeaderChanges();
+            }
+        }
     }
 
     // ---- Header labels (mac LeafSection strings, verbatim) ----
@@ -168,18 +207,24 @@ internal sealed class RightPanePanelsViewModel : BindableBase
 
     public string? BacklinksEmptyMessage =>
         NotePath is null ? "Select a note to see its backlinks."
+        : LinksLoadError is { Length: > 0 } error
+            ? $"Could not load links: {error}"
         : IsLoadingLinks ? "Loading backlinks…"
         : Backlinks.Count == 0 ? "No notes link here yet."
         : null;
 
     public string? OutgoingLinksEmptyMessage =>
         NotePath is null ? "Select a note to see its outgoing links."
+        : LinksLoadError is { Length: > 0 } error
+            ? $"Could not load links: {error}"
         : IsLoadingLinks ? "Loading outgoing links…"
         : OutgoingLinks.Count == 0 ? "This note has no outgoing links."
         : null;
 
     public string? OutlineEmptyMessage =>
         NotePath is null ? "Select a note to see its outline."
+        : OutlineLoadError is { Length: > 0 } error
+            ? $"Could not load outline: {error}"
         : IsLoadingOutline ? "Loading outline…"
         : Outline.Count == 0 ? "This note has no headings."
         : null;
@@ -201,7 +246,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     /// </summary>
     public void NoteChanged(string? path)
     {
-        if (string.Equals(path, _notePath, StringComparison.Ordinal))
+        if (_isShutDown
+            || string.Equals(path, _notePath, StringComparison.Ordinal))
         {
             return;
         }
@@ -213,6 +259,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         OutgoingLinks.Clear();
         Outline.Clear();
         Embeds.Clear();
+        LinksLoadError = null;
+        OutlineLoadError = null;
         EmbedsLoadError = null;
         RaiseHeaderChanges();
         if (path is null)
@@ -242,16 +290,24 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     {
         IsLoadingLinks = true;
         IsResolvingEmbeds = true;
-        _ = Task.Run(() =>
+        TrackWork(Task.Run(() =>
         {
             NoteLoadBundle? bundle = null;
+            string? failure = null;
             try
             {
                 bundle = _session.NoteLoadBundle(
                     path, new Paging(null, BacklinksLimit));
             }
-            catch (VaultException)
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
             {
+                // Broadened past VaultException (round 3): a session
+                // torn down mid-flight throws the binding's disposal
+                // guard, and an uncaught worker fault is unobserved.
+                failure = exception.Message;
             }
             Post(() =>
             {
@@ -259,13 +315,20 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 {
                     return;
                 }
-                IsLoadingLinks = false;
                 if (bundle is null)
                 {
+                    // A read fault is NOT an empty note (round 3):
+                    // publish it so the leaves say so instead of
+                    // "no links here yet".
+                    LinksLoadError = failure ?? "The note could not be read.";
+                    EmbedsLoadError = LinksLoadError;
+                    IsLoadingLinks = false;
                     IsResolvingEmbeds = false;
                     RaiseHeaderChanges();
                     return;
                 }
+                // Mutations before the loading-flag flip (round 3):
+                // every binding notification must read final state.
                 foreach (Backlink backlink in bundle.Backlinks.Items)
                 {
                     Backlinks.Add(new BacklinkRowViewModel(backlink));
@@ -274,13 +337,14 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 {
                     OutgoingLinks.Add(new OutgoingLinkRowViewModel(link));
                 }
+                IsLoadingLinks = false;
                 RaiseHeaderChanges();
                 ResolveEmbeds(
                     path,
                     generation,
                     bundle.OutgoingLinks.Where(link => link.IsEmbed).ToArray());
             });
-        });
+        }));
     }
 
     /// <summary>
@@ -299,7 +363,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             RaiseHeaderChanges();
             return;
         }
-        _ = Task.Run(() =>
+        TrackWork(Task.Run(() =>
         {
             // One core call AND one built card per occurrence key
             // (raw target + per-occurrence alt): the same [[target]]
@@ -361,11 +425,16 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                     resolution = preview.Resolution;
                     truncated = preview.Truncated;
                 }
-                catch (VaultException)
+                catch (Exception exception) when (
+                    exception is not OutOfMemoryException
+                        and not StackOverflowException
+                        and not AccessViolationException)
                 {
                     // Per-embed failure synthesizes an unresolved row —
                     // the batch never discards partial success (mac
-                    // audit #202).
+                    // audit #202). Broadened past VaultException so a
+                    // session torn down mid-batch degrades instead of
+                    // faulting the worker (round 3).
                     resolution = new EmbedResolution.Unresolved(
                         new EmbedUnresolvedReason.ReadError(
                             "The embed could not be resolved."));
@@ -398,14 +467,14 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 {
                     return;
                 }
-                IsResolvingEmbeds = false;
                 foreach (EmbedRowViewModel row in rows)
                 {
                     Embeds.Add(row);
                 }
+                IsResolvingEmbeds = false;
                 RaiseHeaderChanges();
             });
-        });
+        }));
     }
 
     /// <summary>Every image payload anywhere in the resolved tree —
@@ -430,21 +499,26 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         // save's headings (adversarial round 2).
         int requestId = ++_outlineRequestId;
         IsLoadingOutline = true;
-        _ = Task.Run(() =>
+        TrackWork(Task.Run(() =>
         {
             Heading[]? headings = null;
+            string? failure = null;
             try
             {
                 // Null for a path the scanner has not indexed (a file
                 // created moments ago): an empty outline, not a fault.
                 headings = _session.GetFileMetadata(path)?.Headings;
             }
-            catch (VaultException)
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
             {
+                failure = exception.Message;
             }
             Post(() => PublishOutline(
-                path, generation, requestId, headings, announceCount));
-        });
+                path, generation, requestId, headings, announceCount, failure));
+        }));
     }
 
     /// <summary>Internal so the stale-publish guard is testable with
@@ -454,18 +528,34 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         int generation,
         int requestId,
         Heading[]? headings,
-        bool announceCount)
+        bool announceCount,
+        string? failure = null)
     {
         if (generation != _loadGeneration || requestId != _outlineRequestId)
         {
             return;
         }
-        IsLoadingOutline = false;
+        if (failure is not null)
+        {
+            // A read fault keeps the last-known outline rather than
+            // masquerading as a note with no headings (round 3).
+            OutlineLoadError = failure;
+            IsLoadingOutline = false;
+            RaiseHeaderChanges();
+            return;
+        }
+        // Mutations FIRST: the loading-flag setter notifies the
+        // empty-message binding, and WPF re-reads it synchronously —
+        // notifying before the rows land froze the previous state's
+        // sentence on screen (adversarial round 3).
         Outline.Clear();
         foreach (Heading heading in headings ?? [])
         {
             Outline.Add(new OutlineRowViewModel(heading));
         }
+        OutlineLoadError = null;
+        IsLoadingOutline = false;
+        RaiseHeaderChanges();
         // Once per file, never for empty outlines, never again
         // on save-refresh (mac announcedFilePath guard — the
         // guard lives in the VIEW MODEL so template
@@ -565,6 +655,47 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         OnPropertyChanged(nameof(OutgoingLinksEmptyMessage));
         OnPropertyChanged(nameof(OutlineEmptyMessage));
         OnPropertyChanged(nameof(EmbedsEmptyMessage));
+    }
+
+    /// <summary>Workspace teardown: invalidate every in-flight load
+    /// so nothing publishes into a dying UI, and refuse new work. The
+    /// broadened worker catches make any still-running core call
+    /// against a subsequently disposed session degrade instead of
+    /// faulting (adversarial round 3).</summary>
+    internal void Shutdown()
+    {
+        _isShutDown = true;
+        _ = Interlocked.Increment(ref _loadGeneration);
+    }
+
+    /// <summary>Every worker is tracked so tests (and shutdown
+    /// diagnostics) can drain deterministically; bodies catch their
+    /// own failures, so tracked tasks never fault.</summary>
+    private void TrackWork(Task work)
+    {
+        lock (_workLock)
+        {
+            _ = _pendingWork.Add(work);
+        }
+        _ = work.ContinueWith(
+            completed =>
+            {
+                lock (_workLock)
+                {
+                    _ = _pendingWork.Remove(completed);
+                }
+            },
+            TaskScheduler.Default);
+    }
+
+    internal Task DrainForTests()
+    {
+        Task[] snapshot;
+        lock (_workLock)
+        {
+            snapshot = [.. _pendingWork];
+        }
+        return Task.WhenAll(snapshot);
     }
 
     private void Post(Action action)

@@ -72,6 +72,53 @@ public sealed class PanelRowTargetingTests
         });
     }
 
+    [Fact]
+    public void ComposeOutgoingMenuGatesItemsByRowState()
+    {
+        RunSta(() =>
+        {
+            var open = new MenuItem { Tag = "internal" };
+            var newTab = new MenuItem { Tag = "internal" };
+            var split = new MenuItem { Tag = "internal" };
+            var browser = new MenuItem { Tag = "external" };
+            var menu = new ContextMenu();
+            _ = menu.Items.Add(open);
+            _ = menu.Items.Add(newTab);
+            _ = menu.Items.Add(split);
+            _ = menu.Items.Add(browser);
+
+            // Internal rows: the tab/split set, no browser action.
+            Assert.True(PanelRowTargeting.ComposeOutgoingMenu(
+                menu, Row(external: false, unresolved: false)));
+            Assert.Equal(Visibility.Visible, open.Visibility);
+            Assert.Equal(Visibility.Visible, newTab.Visibility);
+            Assert.Equal(Visibility.Visible, split.Visibility);
+            Assert.Equal(Visibility.Collapsed, browser.Visibility);
+
+            // External rows: ONLY the browser action — "Open in New
+            // Tab" launching the browser cannot honor its label.
+            Assert.True(PanelRowTargeting.ComposeOutgoingMenu(
+                menu, Row(external: true, unresolved: false)));
+            Assert.Equal(Visibility.Collapsed, open.Visibility);
+            Assert.Equal(Visibility.Collapsed, newTab.Visibility);
+            Assert.Equal(Visibility.Collapsed, split.Visibility);
+            Assert.Equal(Visibility.Visible, browser.Visibility);
+
+            // Unresolved rows: no menu — every item could only fail.
+            Assert.False(PanelRowTargeting.ComposeOutgoingMenu(
+                menu, Row(external: false, unresolved: true)));
+        });
+    }
+
+    private static OutgoingLinkRowViewModel Row(
+        bool external, bool unresolved) => new(
+        new uniffi.slate_uniffi.OutgoingLink(
+            TargetPath: external || unresolved ? null : "t.md",
+            TargetRaw: "t", TargetAnchor: null, Kind: "wiki",
+            IsEmbed: false, IsExternal: external, IsUnresolved: unresolved,
+            Snippet: "", Ordinal: 0, SpanStart: 0, SpanEnd: 0,
+            DisplayText: null));
+
     private static (ListBox List, ListBoxItem A, ListBoxItem B)
         MakeRealizedList()
     {

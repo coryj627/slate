@@ -48,4 +48,32 @@ internal static class PanelRowTargeting
         _ = item.Focus();
         return true;
     }
+
+    /// <summary>Compose the outgoing-links menu for the targeted row
+    /// (adversarial round 3): every action shown must be able to
+    /// honor its label. Internal rows get the tab/split set, external
+    /// rows only the browser action (a "New Tab" that launches the
+    /// browser is a lie), and unresolved rows get NO menu — the only
+    /// thing every item could do is announce failure. Items are
+    /// matched by Tag ("internal"/"external") so the XAML stays the
+    /// single source of the labels.</summary>
+    internal static bool ComposeOutgoingMenu(
+        ContextMenu? menu, OutgoingLinkRowViewModel row)
+    {
+        if (menu is null || row.IsUnresolved)
+        {
+            return false;
+        }
+
+        bool external = row.Link.IsExternal;
+        foreach (MenuItem item in menu.Items.OfType<MenuItem>())
+        {
+            bool forExternal = string.Equals(
+                item.Tag as string, "external", StringComparison.Ordinal);
+            item.Visibility = forExternal == external
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+        }
+        return true;
+    }
 }
