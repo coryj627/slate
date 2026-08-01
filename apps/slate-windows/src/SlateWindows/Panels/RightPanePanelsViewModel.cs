@@ -903,10 +903,14 @@ internal sealed class OutgoingLinkRowViewModel
 {
     public OutgoingLinkRowViewModel(OutgoingLink link)
     {
+        // Display strings are BOUNDED; Link keeps the exact record
+        // for activation and resolution (round 14: a truncated URL
+        // opens a different address, so exactness lives on the data
+        // and the ceiling lives on the rendering).
         Link = link;
         DisplayTarget = link.TargetPath is { Length: > 0 } path
             ? System.IO.Path.GetFileName(path)
-            : link.TargetRaw;
+            : EditorInteractionCoordinator.BoundDisplayText(link.TargetRaw);
     }
 
     public OutgoingLink Link { get; }
@@ -927,10 +931,15 @@ internal sealed class OutgoingLinkRowViewModel
         : Link.IsEmbed ? "Embed"
         : null;
 
-    /// <summary>Mac per-state labels, verbatim.</summary>
+    /// <summary>Mac per-state labels, verbatim — over display-bounded
+    /// targets (round 14).</summary>
     public string AutomationName =>
-        Link.IsExternal ? $"External link: {Link.TargetRaw}"
-        : Link.IsUnresolved ? $"Unresolved link: {Link.TargetRaw}"
+        Link.IsExternal
+            ? "External link: "
+                + EditorInteractionCoordinator.BoundDisplayText(Link.TargetRaw)
+        : Link.IsUnresolved
+            ? "Unresolved link: "
+                + EditorInteractionCoordinator.BoundDisplayText(Link.TargetRaw)
         : $"Link to {DisplayTarget}";
 
     /// <summary>Mac per-state hints, verbatim.</summary>

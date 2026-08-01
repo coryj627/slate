@@ -483,18 +483,28 @@ fn note_outline_bounds_headings_and_reports_the_total() {
 
 #[test]
 fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
-    // W4-2 round 12: the cached snippet stores the complete authored
-    // span, so a megabyte alias made every row carrying it megabytes
-    // big — 200 such backlink rows crossing FFI was a multi-GB
-    // allocation. The ceiling applies on READ, covering rows cached
-    // before the cap existed.
+    // W4-2 rounds 12-14: PRESENTATION strings (snippet, display
+    // text) are bounded at the read boundary — a megabyte alias made
+    // every row carrying it megabytes big. ACTIVATION strings
+    // (target_raw, anchor text) stay EXACT: a truncated URL could
+    // open a DIFFERENT address, and a truncated anchor stops a
+    // legitimately long heading from resolving. Their aggregate is
+    // still note-size bounded (every span is a distinct substring of
+    // one indexed note).
     let alias = "A".repeat(1024 * 1024);
-    let giant_target = "T".repeat(1024 * 1024);
-    let body =
-        format!("intro [[hub|{alias}]] outro\n\n![[hub|{alias}]]\n\n[[{giant_target}#{alias}]]\n");
+    let long_url = format!("https://example.com/{}", "p".repeat(8 * 1024));
+    let long_heading = "H".repeat(5000);
+    let body = format!(
+        "intro [[hub|{alias}]] outro\n\n![[hub|{alias}]]\n\n[{alias}]({long_url})\n\n![[big#{long_heading}]]\n"
+    );
     let (_tmp, session) = make_vault(|p| {
         p.write_file("notes/src.md", body.as_bytes()).unwrap();
         p.write_file("notes/hub.md", b"# Hub\n").unwrap();
+        p.write_file(
+            "notes/big.md",
+            format!("# {long_heading}\n\nSection body.\n").as_bytes(),
+        )
+        .unwrap();
     });
     session.scan_initial(&CancelToken::new()).unwrap();
 
@@ -508,33 +518,51 @@ fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
         assert!(backlink.snippet.len() <= ceiling);
     }
 
-    // EVERY authored string field is bounded — display_text (the
-    // alias, which becomes image alt and UI titles), target_raw,
-    // anchor text, and snippet — across outgoing AND embed arrays
-    // (round 13: the first fix bounded only snippet).
     let source = session
         .note_link_panels("notes/src.md", Paging::first(50), 8, 4)
         .unwrap();
-    assert_eq!(source.outgoing_links.len(), 3);
-    assert_eq!(source.embed_links.len(), 1);
+    assert_eq!(source.outgoing_links.len(), 4);
+    assert_eq!(source.embed_links.len(), 2);
     for link in source
         .outgoing_links
         .iter()
         .chain(source.embed_links.iter())
     {
         assert!(link.snippet.len() <= ceiling);
-        assert!(link.target_raw.len() <= ceiling);
         assert!(
             link.display_text
                 .as_ref()
                 .is_none_or(|d| d.len() <= ceiling)
         );
-        assert!(
-            link.target_anchor
-                .as_ref()
-                .is_none_or(|(_, text)| text.len() <= ceiling)
-        );
     }
+
+    // The long external URL survives verbatim — truncating it would
+    // navigate somewhere the author never wrote.
+    let external = source
+        .outgoing_links
+        .iter()
+        .find(|link| link.is_external)
+        .expect("external link present");
+    assert_eq!(external.target_raw, long_url);
+
+    // The long heading anchor arrives exact AND still resolves its
+    // section through the DTO's own fields.
+    let anchored = source
+        .embed_links
+        .iter()
+        .find(|link| link.target_anchor.is_some())
+        .expect("anchored embed present");
+    let (kind, text) = anchored.target_anchor.as_ref().unwrap();
+    assert_eq!(kind, "heading");
+    assert_eq!(text, &long_heading);
+    let composed = format!("{}#{}", anchored.target_raw, text);
+    let resolved = session
+        .resolve_embed_preview_pooled("notes/src.md", &composed, None, u64::MAX)
+        .unwrap();
+    assert!(
+        matches!(resolved.resolution, crate::EmbedResolution::Section { .. }),
+        "long heading anchor must still resolve"
+    );
 }
 
 #[test]

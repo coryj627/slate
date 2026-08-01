@@ -2590,18 +2590,37 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         return keys.Length == 0 ? reference.Raw : $"Citation: {keys}";
     }
 
+    /// <summary>Display ceiling for AUTHORED strings that reach UI
+    /// text and automation names (W4-2 round 14): activation data
+    /// stays exact on the records; only what is rendered is bounded,
+    /// so a megabyte link target cannot become a megabyte UIA name.</summary>
+    internal static string BoundDisplayText(string value)
+    {
+        const int maxChars = 4096;
+        if (value.Length <= maxChars)
+        {
+            return value;
+        }
+        int end = maxChars;
+        if (char.IsHighSurrogate(value[end - 1]))
+        {
+            end--;
+        }
+        return string.Concat(value.AsSpan(0, end), "…");
+    }
+
     private static string Describe(EmbedUnresolvedReason reason) => reason switch
     {
         EmbedUnresolvedReason.TargetNotFound target =>
-            $"Target not found: {target.Target}",
+            $"Target not found: {BoundDisplayText(target.Target)}",
         EmbedUnresolvedReason.HeadingNotFound heading =>
-            $"Heading not found: {heading.Heading} in {heading.TargetPath}",
+            $"Heading not found: {BoundDisplayText(heading.Heading)} in {heading.TargetPath}",
         EmbedUnresolvedReason.BlockNotFound block =>
-            $"Block not found: {block.BlockId} in {block.TargetPath}",
+            $"Block not found: {BoundDisplayText(block.BlockId)} in {block.TargetPath}",
         EmbedUnresolvedReason.DepthLimitReached =>
             "Nested embed depth limit reached.",
         EmbedUnresolvedReason.ReadError read =>
-            $"Could not read embed: {read.Message}",
+            $"Could not read embed: {BoundDisplayText(read.Message)}",
         _ => "The embed could not be resolved.",
     };
 

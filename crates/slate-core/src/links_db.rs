@@ -314,17 +314,21 @@ pub(crate) fn bound_snippet(mut snippet: String) -> String {
 }
 
 fn outgoing_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutgoingLink> {
-    // EVERY authored string is bounded, not just the snippet (W4-2
-    // round 13): display_text (the alias — it becomes image alt and
-    // UI titles), target_raw, and anchor text all carry attacker-
-    // sized content verbatim otherwise. The ceiling cannot break
-    // resolution — real file names are bounded far below it, so
-    // only unresolvable adversarial targets are ever clipped.
+    // PRESENTATION strings are bounded; ACTIVATION strings stay
+    // exact (W4-2 rounds 12-14). snippet and display_text are pure
+    // display — bounding them is safe. target_raw and anchor text
+    // are behaviorally significant: a truncated URL could open a
+    // DIFFERENT address, and a truncated heading anchor stops a
+    // legitimately long heading from resolving — so they cross
+    // verbatim. That stays bounded in aggregate: every span is a
+    // distinct substring of ONE note (≤ the indexed-file ceiling),
+    // so the row-capped panel arrays can never exceed one note's
+    // size in exact-field bytes; hosts bound their DISPLAY of these
+    // fields instead.
     Ok(OutgoingLink {
         target_path: row.get::<_, Option<String>>(0)?,
-        target_raw: bound_snippet(row.get::<_, String>(1)?),
-        target_anchor: deserialize_anchor_pair(row.get::<_, Option<String>>(2)?.as_deref())
-            .map(|(kind, text)| (kind, bound_snippet(text))),
+        target_raw: row.get::<_, String>(1)?,
+        target_anchor: deserialize_anchor_pair(row.get::<_, Option<String>>(2)?.as_deref()),
         kind: row.get::<_, String>(3)?,
         is_embed: row.get::<_, i64>(4)? != 0,
         is_external: row.get::<_, i64>(5)? != 0,

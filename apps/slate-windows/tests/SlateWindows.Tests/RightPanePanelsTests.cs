@@ -583,6 +583,26 @@ public sealed class RightPanePanelsTests : IDisposable
     }
 
     [Fact]
+    public void DisplayStringsAreBoundedWhileActivationDataStaysExact()
+    {
+        // Round 14: a megabyte target must not become a megabyte UIA
+        // name — but truncating the DATA would activate a different
+        // URL, so the record keeps it verbatim.
+        string giant = new('a', 1024 * 1024);
+        var row = new OutgoingLinkRowViewModel(
+            new OutgoingLink(
+                TargetPath: null, TargetRaw: $"https://x.example/{giant}",
+                TargetAnchor: null, Kind: "markdown", IsEmbed: false,
+                IsExternal: true, IsUnresolved: false, Snippet: "",
+                Ordinal: 0, SpanStart: 0, SpanEnd: 0, DisplayText: null));
+
+        Assert.True(row.DisplayTarget.Length <= 4097);
+        Assert.True(row.AutomationName.Length <= 4200);
+        Assert.EndsWith("…", row.DisplayTarget);
+        Assert.Equal(1024 * 1024 + 18, row.Link.TargetRaw.Length);
+    }
+
+    [Fact]
     public void AnchoredEmbedsResolveTheirSectionsNotTheWholeNote()
     {
         var panels = LoadHost([], path: "anchored.md");
