@@ -736,6 +736,47 @@ final class BaseEmbedTests: XCTestCase {
         }
     }
 
+    /// Round 21: shared-handle reload restoration also conforms to the
+    /// atomic-publication contract — the restored identity publishes
+    /// only after its sorted rows, never against the unsorted
+    /// intermediate execute.
+    func testSharedHandleReloadRestoresTheSortAfterItsRows() async throws {
+        let state = try await makeAppState()
+        let session = try XCTUnwrap(state.currentSession)
+        let request = try XCTUnwrap(
+            BaseEmbedRequest.wikilinkTarget("Queries/Reading.base"))
+        let document = BaseEmbedDocument(
+            request: request,
+            thisPath: "Notes/Host.md",
+            sharedHandle: state.baseEmbedHandle(
+                for: request, thisPath: "Notes/Host.md"))
+        document.load(session: session)
+        document.setTransientSort(
+            DataGridSortState(columnIndex: 0, ascending: false), session: session)
+        let sorted = try XCTUnwrap(document.result?.rows.map(\.filePath))
+
+        var violations: [String] = []
+        let cancellable = document.$sortSelection
+            .dropFirst()
+            .sink { [weak document] newSort in
+                if newSort != nil,
+                    document?.result?.rows.map(\.filePath) != sorted
+                {
+                    violations.append("sort published against unsorted rows")
+                }
+            }
+        defer { cancellable.cancel() }
+
+        document.refreshAfterSharedHandleReload(session: session)
+
+        XCTAssertTrue(violations.isEmpty, violations.joined(separator: "; "))
+        XCTAssertEqual(
+            document.sortState,
+            DataGridSortState(columnIndex: 0, ascending: false),
+            "the sort survives the reload")
+        XCTAssertEqual(document.result?.rows.map(\.filePath), sorted)
+    }
+
     func testMountedLazyPlaceholderKeepsRegistryLeaseUntilUnmounted() async throws {
         let state = try await makeAppState()
         let request = try XCTUnwrap(

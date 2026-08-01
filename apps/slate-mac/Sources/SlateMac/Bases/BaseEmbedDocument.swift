@@ -1008,15 +1008,24 @@ final class BaseEmbedDocument: ObservableObject {
         }
 
         // Establish the reopened view first, then remap transient sort by its
-        // stable column id before executing the sorted result.
+        // stable column id before executing the sorted result. The restored
+        // identity travels STAGED (round 21: assigning the @Published
+        // selection before the sorted execute let observers see the restored
+        // sort against unsorted rows) — rows publish first, identity after.
         sortSelection = nil
         executeActiveView(session: session)
         if let previousSortSelection,
             let result,
             previousSortSelection.sortState(in: result) != nil
         {
-            sortSelection = previousSortSelection
+            stagedSortSelection = .some(previousSortSelection)
             executeActiveView(session: session)
+            stagedSortSelection = nil
+            if let executed = self.result,
+                previousSortSelection.sortState(in: executed) != nil
+            {
+                sortSelection = previousSortSelection
+            }
         }
     }
 
