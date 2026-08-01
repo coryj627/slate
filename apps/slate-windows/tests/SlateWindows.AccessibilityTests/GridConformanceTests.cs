@@ -99,16 +99,22 @@ public sealed class GridConformanceTests
             // a window foreground on the gate runner.
             EnsureForeground(window);
             FocusCell(firstCell);
+            AutomationElement actionLog = WaitForElement(
+                window, "GridActionLog", TimeSpan.FromSeconds(5));
             PressChord(VirtualKeyShort.KEY_S);
-            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
             PressChord(VirtualKeyShort.KEY_S);
-            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
+            Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(500));
             Assert.True(
                 SpinWait.SpinUntil(
                     () => grid.Patterns.Grid.Pattern.GetItem(0, 0).Name
                         == "Name: Note 00199",
                     TimeSpan.FromSeconds(5)),
-                "descending sort did not reorder row 0");
+                // The host mirrors grid events into the log: "a11y:
+                // GridSorted" proves the chord fired and the reorder
+                // stalled; anything else means input never arrived.
+                "descending sort did not reorder row 0; host log: "
+                    + (actionLog.AsLabel().Text ?? "<empty>"));
 
             // Type-ahead: prefix matching on the FIRST column.
             Keyboard.Type("note 00042");
@@ -122,7 +128,7 @@ public sealed class GridConformanceTests
 
             // Row actions: the Menu key opens the actions menu; the
             // disabled action stays listed WITH its reason.
-            Keyboard.Press(VirtualKeyShort.APPS);
+            Keyboard.Type(VirtualKeyShort.APPS);
             AutomationElement open = WaitForNamedDescendant(
                 automation, "Open", TimeSpan.FromSeconds(5));
             AutomationElement edit = WaitForNamedDescendant(
@@ -226,10 +232,27 @@ public sealed class GridConformanceTests
         RunHost(5, (automation, window, process) =>
         {
             _ = WaitForElement(window, "AccessibleDataGrid", TimeSpan.FromSeconds(10));
+            AutomationElement actionLog = WaitForElement(
+                window, "GridActionLog", TimeSpan.FromSeconds(5));
             EnsureForeground(window);
-            Keyboard.Press(VirtualKeyShort.F2);
-            AutomationElement tableWindow = WaitForDesktopElement(
-                automation, "ReadingTableGridWindow", TimeSpan.FromSeconds(10));
+            Keyboard.Type(VirtualKeyShort.F2);
+            AutomationElement? tableWindow = null;
+            bool windowAppeared = SpinWait.SpinUntil(
+                () =>
+                {
+                    tableWindow = automation.GetDesktop().FindFirstChild(
+                        cf => cf.ByAutomationId("ReadingTableGridWindow"));
+                    return tableWindow is not null;
+                },
+                TimeSpan.FromSeconds(15));
+            // The host's F2 handler mirrors its outcome into the log:
+            // "table-shown:True" (window lost?), "table-error:…" (the
+            // FFI or window path threw), or anything else (F2 never
+            // arrived).
+            Assert.True(
+                windowAppeared,
+                "the table window never appeared; host log: "
+                    + (actionLog.AsLabel().Text ?? "<empty>"));
 
             // Initial keyboard focus is the first CELL, by label.
             Assert.True(
@@ -239,7 +262,7 @@ public sealed class GridConformanceTests
                 $"first cell not focused; focus is on "
                     + $"'{automation.FocusedElement()?.Name ?? "<none>"}'");
 
-            Keyboard.Press(VirtualKeyShort.ESCAPE);
+            Keyboard.Type(VirtualKeyShort.ESCAPE);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => automation.GetDesktop().FindFirstChild(
@@ -437,6 +460,16 @@ public sealed class GridConformanceTests
 
     private static void PressChord(VirtualKeyShort key)
     {
-        Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.ALT, key);
+        // Explicit press/release ordering with settle time between
+        // steps — TypeSimultaneously's burst can land the letter
+        // before the modifiers register on a loaded runner.
+        Keyboard.Press(VirtualKeyShort.CONTROL);
+        Keyboard.Press(VirtualKeyShort.ALT);
+        Wait.UntilInputIsProcessed();
+        Keyboard.Type(key);
+        Wait.UntilInputIsProcessed();
+        Keyboard.Release(VirtualKeyShort.ALT);
+        Keyboard.Release(VirtualKeyShort.CONTROL);
+        Wait.UntilInputIsProcessed();
     }
 }

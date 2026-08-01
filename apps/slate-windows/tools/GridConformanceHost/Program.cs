@@ -112,6 +112,11 @@ internal static class Program
                 : $"|Name|Status|Notes|\n|fixture|{rowCount}|rows|");
         grid.ExportProduced += (format, text) =>
             actionLog.Text = $"exported:{format}:{text.Length}";
+        // The suite reads grid events cross-process through the log —
+        // the observable that separates "input never arrived" from
+        // "the sort never fired" on a hosted runner.
+        grid.Announce = @event =>
+            actionLog.Text = $"a11y:{@event.GetType().Name}";
 
         var layout = new DockPanel();
         DockPanel.SetDock(actionLog, Dock.Bottom);
@@ -134,9 +139,21 @@ internal static class Program
             if (e.Key == System.Windows.Input.Key.F2)
             {
                 e.Handled = true;
-                _ = SlateWindows.Reading.ReadingTableGrid.Show(
-                    "| Name | Status |\n| --- | --- |\n| alpha | Open |\n| beta | Done |\n",
-                    window);
+                try
+                {
+                    bool shown = SlateWindows.Reading.ReadingTableGrid.Show(
+                        "| Name | Status |\n| --- | --- |\n| alpha | Open |\n| beta | Done |\n",
+                        window);
+                    actionLog.Text = $"table-shown:{shown}";
+                }
+                catch (Exception exception)
+                {
+                    // The suite reads this on a missing-window timeout
+                    // — an exception here must be diagnosable, never a
+                    // silent absence.
+                    actionLog.Text =
+                        $"table-error:{exception.GetType().Name}:{exception.Message}";
+                }
             }
         };
 
