@@ -114,7 +114,7 @@ public sealed class GridConformanceTests
                 // GridSorted" proves the chord fired and the reorder
                 // stalled; anything else means input never arrived.
                 "descending sort did not reorder row 0; host log: "
-                    + (actionLog.AsLabel().Text ?? "<empty>"));
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
 
             // Type-ahead: prefix matching on the FIRST column.
             Keyboard.Type("note 00042");
@@ -142,10 +142,11 @@ public sealed class GridConformanceTests
                 window, "GridActionLog", TimeSpan.FromSeconds(5));
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => (log.Properties.Name.ValueOrDefault ?? "") == "Action log"
-                        && (log.AsLabel().Text ?? "").StartsWith("opened:", StringComparison.Ordinal),
+                    () => (log.Properties.Name.ValueOrDefault ?? "")
+                        .StartsWith("opened:", StringComparison.Ordinal),
                     TimeSpan.FromSeconds(5)),
-                "the Open row action did not execute");
+                "the Open row action did not execute; host log: "
+                    + (log.Properties.Name.ValueOrDefault ?? "<empty>"));
 
             // The summary region: separately addressable and named.
             AutomationElement summary = WaitForElement(
@@ -270,7 +271,7 @@ public sealed class GridConformanceTests
             Assert.True(
                 windowAppeared,
                 "the table window never appeared; host log: "
-                    + (actionLog.AsLabel().Text ?? "<empty>"));
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
 
             // Initial keyboard focus is the first CELL, by label.
             Assert.True(
@@ -321,8 +322,13 @@ public sealed class GridConformanceTests
             {
                 return;
             }
-            Keyboard.Press(VirtualKeyShort.ALT);
-            Keyboard.Release(VirtualKeyShort.ALT);
+            // A CONTROL tap, deliberately not Alt: any synthesized key
+            // grants the calling process the recent-input credential
+            // SetForegroundWindow requires, but a bare Alt tap drops
+            // the target window into system-menu mode — the NEXT key
+            // (a chord letter, F2) gets eaten by menu navigation.
+            Keyboard.Press(VirtualKeyShort.CONTROL);
+            Keyboard.Release(VirtualKeyShort.CONTROL);
             window.Focus();
             Wait.UntilInputIsProcessed();
             if (SpinWait.SpinUntil(

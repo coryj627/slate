@@ -58,8 +58,10 @@ internal static class Program
             Focusable = false,
             Margin = new Thickness(8, 2, 8, 2),
         };
+        // No explicit automation Name: the TextBlock peer's Name IS the
+        // text content, which is how the suite reads outcomes back
+        // cross-process (an explicit Name masked the content).
         AutomationProperties.SetAutomationId(actionLog, "GridActionLog");
-        AutomationProperties.SetName(actionLog, "Action log");
 
         var grid = new AccessibleDataGrid();
         grid.Bind(
