@@ -334,6 +334,43 @@ public sealed class GridConformanceTests
         });
     }
 
+    /// <summary>Round 22: the host must DIE on a dispatcher fault —
+    /// swallowing would keep it alive through the exact crash class
+    /// the virtualization probe gates, turning that gate green on the
+    /// failure it exists to catch. This fact gates the die-on-fault
+    /// contract itself.</summary>
+    [Fact]
+    public void InjectedDispatcherFaultKillsTheHost()
+    {
+        if (!Environment.UserInteractive)
+        {
+            // No desktop, no window Loaded, no injection point — the
+            // contract is gated where the suite actually runs.
+            return;
+        }
+        var startInfo = new ProcessStartInfo(HostExe())
+        {
+            UseShellExecute = false,
+        };
+        startInfo.ArgumentList.Add("--inject-dispatcher-fault");
+        using Process process = Process.Start(startInfo)
+            ?? throw new Xunit.Sdk.XunitException("GridConformanceHost did not start.");
+        try
+        {
+            Assert.True(
+                process.WaitForExit(30_000),
+                "the host survived an injected dispatcher fault");
+            Assert.Equal(70, process.ExitCode);
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+    }
+
     [System.Runtime.InteropServices.DllImport("user32.dll")]
     private static extern IntPtr GetForegroundWindow();
 

@@ -674,7 +674,11 @@ final class BaseDocument: ObservableObject {
                     // (round 19). DETACH — the batch-Trash posture —
                     // so no later execute can render rows that
                     // contradict the published identity; reopening
-                    // restores a coherent pair.
+                    // restores a coherent pair. The native handle is
+                    // CLOSED first (round 22): dropping the reference
+                    // alone leaked the registry entry for the
+                    // session's lifetime.
+                    session.closeBase(handle: handle)
                     self.handle = nil
                     state = .failed(friendlyMessage(for: error))
                 }

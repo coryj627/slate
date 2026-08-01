@@ -1049,6 +1049,7 @@ final class BasesTabRoutingTests: XCTestCase {
         let doc = state.baseDocument(for: "Queries/Reading.base")
         let session = try XCTUnwrap(state.currentSession)
         XCTAssertNotNil(doc.result)
+        let orphaned = try XCTUnwrap(doc.handle)
 
         struct Fault: Error {}
         doc.executeFaultForTests = { Fault() }
@@ -1059,6 +1060,9 @@ final class BasesTabRoutingTests: XCTestCase {
                 session: session))
         XCTAssertNil(doc.handle, "a failed rollback detaches the handle")
         XCTAssertNil(doc.sortState, "the published identity keeps the previous order")
+        XCTAssertThrowsError(
+            try session.baseViews(handle: orphaned),
+            "the detached handle must be CLOSED, not leaked in the registry")
 
         doc.executeFaultForTests = nil
         doc.rollbackFaultForTests = nil

@@ -34,14 +34,18 @@ internal static class Program
             true);
         Action<string>? actionLogHolder = null;
         var app = new Application();
-        // A dispatcher exception would otherwise kill the host with no
-        // trace the suite can read: log it and keep the process alive
-        // so the failure message carries the evidence.
+        // A dispatcher exception DIES, deterministically (round 22):
+        // swallowing it would keep the host alive through the exact
+        // UIA/virtualization crash class the probe gates, turning the
+        // gate green on the failure it exists to catch. The log line
+        // is best-effort evidence; the distinct exit code is the
+        // signal (Environment.Exit avoids the WER dialog that an
+        // unhandled rethrow can hang a runner on).
         app.DispatcherUnhandledException += (_, e) =>
         {
             actionLogHolder?.Invoke(
                 $"dispatcher-error:{e.Exception.GetType().Name}:{e.Exception.Message}");
-            e.Handled = true;
+            Environment.Exit(70);
         };
         SlateWindows.ThemeManager.ValidateResourceDictionaries();
         using var theme = new SlateWindows.ThemeManager(
@@ -156,6 +160,16 @@ internal static class Program
             Content = layout,
         };
         AutomationProperties.SetAutomationId(window, "Slate.GridConformanceHost");
+        // Round 22: the suite proves an injected dispatcher fault
+        // KILLS the host — the die-on-fault contract above is itself
+        // gated, not assumed.
+        if (args.Contains("--inject-dispatcher-fault"))
+        {
+            window.Loaded += (_, _) =>
+                _ = window.Dispatcher.BeginInvoke(
+                    new Action(() => throw new InvalidOperationException(
+                        "injected dispatcher fault")));
+        }
         // F2 opens a markdown table on the substrate — the reading-
         // table window's conformance hook (G28): the suite pins
         // first-cell initial focus and Escape-returns.
