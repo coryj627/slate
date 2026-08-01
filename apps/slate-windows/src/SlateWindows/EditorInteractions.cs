@@ -1277,15 +1277,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         EditorEmbedPreviewNode root = BuildEmbedNode(
             resolution,
             depth: 0,
-            cost =>
-            {
-                if (spent + cost > MaxDecodedImageBytesPerCard)
-                {
-                    return false;
-                }
-                spent += cost;
-                return true;
-            });
+            cost => TryReserveDecodedBytes(
+                ref spent, cost, MaxDecodedImageBytesPerCard));
         string body = string.Empty;
         if (truncated)
         {
@@ -1315,6 +1308,42 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     /// so the decoder reserves each image's bounded cost from its
     /// header and elides the image when the budget is spent.</summary>
     internal const long MaxDecodedImageBytesPerCard = 64L * 1024 * 1024;
+
+    /// <summary>Saturating cost of a decode: header dimensions are
+    /// attacker-controlled Int32s, so the product can overflow long
+    /// (round 7) — an overflowed or non-positive cost saturates to
+    /// long.MaxValue so every reservation refuses it.</summary>
+    internal static long SaturatingDecodeCost(
+        long width, long height, long bytesPerPixel)
+    {
+        if (width <= 0 || height <= 0 || bytesPerPixel <= 0)
+        {
+            return long.MaxValue;
+        }
+        try
+        {
+            return checked(width * height * bytesPerPixel);
+        }
+        catch (OverflowException)
+        {
+            return long.MaxValue;
+        }
+    }
+
+    /// <summary>The one reservation predicate both the panel batch
+    /// and the popover card use: subtraction-compared so the
+    /// accumulator can never be poisoned by overflow, and refusal
+    /// leaves it untouched (round 7).</summary>
+    internal static bool TryReserveDecodedBytes(
+        ref long spent, long cost, long limit)
+    {
+        if (cost <= 0 || cost > limit - spent)
+        {
+            return false;
+        }
+        spent += cost;
+        return true;
+    }
 
     /// <summary>W4-2: the embeds LEAF renders the same card tree the
     /// Ctrl+E popover builds — one composition for the embed name
@@ -2673,7 +2702,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             // Reserve the rasterization cost BEFORE allocating; the
             // inner raster decode reuses this reservation.
             if (reserveDecodedBytes is not null
-                && !reserveDecodedBytes((long)width * height * 4))
+                && !reserveDecodedBytes(SaturatingDecodeCost(width, height, 4)))
             {
                 budgetSpent = true;
                 return null;
@@ -2852,8 +2881,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                     reservedWidth = frame.PixelWidth;
                     reservedHeight = frame.PixelHeight;
                 }
-                if (!reserveDecodedBytes(
-                    reservedWidth * reservedHeight * bytesPerPixel))
+                if (!reserveDecodedBytes(SaturatingDecodeCost(
+                    reservedWidth, reservedHeight, bytesPerPixel)))
                 {
                     budgetSpent = true;
                     return null;

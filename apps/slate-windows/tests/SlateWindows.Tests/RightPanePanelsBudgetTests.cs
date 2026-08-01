@@ -318,6 +318,46 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
                 == EditorInteractionCoordinator.ImageBudgetSpentMessage);
     }
 
+    [Fact]
+    public void ReservationArithmeticCannotBePoisoned()
+    {
+        // Attacker-controlled header dimensions can overflow long:
+        // the cost saturates and every reservation refuses it,
+        // leaving the accumulator clean for later valid images
+        // (round 7).
+        Assert.Equal(
+            long.MaxValue,
+            EditorInteractionCoordinator.SaturatingDecodeCost(
+                int.MaxValue, int.MaxValue, 8));
+        Assert.Equal(
+            long.MaxValue,
+            EditorInteractionCoordinator.SaturatingDecodeCost(0, 100, 4));
+        Assert.Equal(
+            long.MaxValue,
+            EditorInteractionCoordinator.SaturatingDecodeCost(-5, 100, 4));
+        Assert.Equal(
+            1120L * 1120 * 4,
+            EditorInteractionCoordinator.SaturatingDecodeCost(1120, 1120, 4));
+
+        long limit = 100;
+        long spent = 0;
+        // The poisoned cost is refused and leaves spent untouched...
+        Assert.False(EditorInteractionCoordinator.TryReserveDecodedBytes(
+            ref spent, long.MaxValue, limit));
+        Assert.Equal(0, spent);
+        Assert.False(EditorInteractionCoordinator.TryReserveDecodedBytes(
+            ref spent, -50, limit));
+        Assert.Equal(0, spent);
+        // ...so later valid reservations still account correctly.
+        Assert.True(EditorInteractionCoordinator.TryReserveDecodedBytes(
+            ref spent, 60, limit));
+        Assert.True(EditorInteractionCoordinator.TryReserveDecodedBytes(
+            ref spent, 40, limit));
+        Assert.False(EditorInteractionCoordinator.TryReserveDecodedBytes(
+            ref spent, 1, limit));
+        Assert.Equal(100, spent);
+    }
+
     private static (int Decoded, int Elided) CountImages(
         SlateWindows.EditorEmbedPreviewNode node)
     {

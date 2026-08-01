@@ -50,6 +50,15 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     internal const long MaxEmbedImageBytes = 16L * 1024 * 1024;
     internal const int MaxEmbedRows = 256;
 
+    /// <summary>Round 7: core returns outgoing links UNPAGED, and the
+    /// publish ran one row VM + one collection notification per link
+    /// on the UI thread — a link-dense note produced tens of
+    /// thousands of dispatcher mutations before any cap applied.
+    /// Display caps here with an explicit notice; the header keeps
+    /// the TRUE total, and embeds still derive from the full set
+    /// (their own budgets bound that work).</summary>
+    internal const int MaxOutgoingRows = 512;
+
     /// <summary>Rounds 4-5: encoded size says nothing about pixel
     /// allocation — a few-KB PNG decodes to ~5 MB at the 1120px
     /// decode bound, so 128 tiny images could pass the encoded
@@ -83,6 +92,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private string? _linksLoadError;
     private string? _outlineLoadError;
     private string? _embedsLoadError;
+    private int _totalOutgoingLinks;
     private volatile bool _isShutDown;
     private readonly bool _synchronous;
 
@@ -210,7 +220,18 @@ internal sealed class RightPanePanelsViewModel : BindableBase
 
     public string BacklinksHeader => Header("Backlinks", Backlinks.Count);
 
-    public string OutgoingLinksHeader => Header("Outgoing links", OutgoingLinks.Count);
+    /// <summary>The TRUE link count — the list itself caps display
+    /// at MaxOutgoingRows.</summary>
+    public string OutgoingLinksHeader => Header(
+        "Outgoing links", Math.Max(_totalOutgoingLinks, OutgoingLinks.Count));
+
+    /// <summary>Non-null when the outgoing list was display-capped:
+    /// the truncation is spoken, never silent.</summary>
+    public string? OutgoingLinksTruncationNotice =>
+        _totalOutgoingLinks > OutgoingLinks.Count && OutgoingLinks.Count > 0
+            ? $"Showing {OutgoingLinks.Count} of {_totalOutgoingLinks} "
+                + "outgoing links."
+            : null;
 
     public string EmbedsHeader => Header("Embeds", Embeds.Count);
 
@@ -278,6 +299,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         LinksLoadError = null;
         OutlineLoadError = null;
         EmbedsLoadError = null;
+        _totalOutgoingLinks = 0;
         RaiseHeaderChanges();
         if (path is null)
         {
@@ -349,7 +371,12 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 {
                     Backlinks.Add(new BacklinkRowViewModel(backlink));
                 }
-                foreach (OutgoingLink link in bundle.OutgoingLinks)
+                // Display-capped (round 7): each Add is a UI-thread
+                // collection notification, so a link-dense note must
+                // not publish unbounded rows.
+                _totalOutgoingLinks = bundle.OutgoingLinks.Length;
+                foreach (OutgoingLink link in
+                    bundle.OutgoingLinks.Take(MaxOutgoingRows))
                 {
                     OutgoingLinks.Add(new OutgoingLinkRowViewModel(link));
                 }
@@ -393,15 +420,9 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             long decodedBytes = 0;
             // The note-wide decoded budget, reserved image-by-image
             // INSIDE the decode (single worker thread — no locking).
-            bool ReserveDecoded(long cost)
-            {
-                if (decodedBytes + cost > MaxEmbedDecodedImageBytes)
-                {
-                    return false;
-                }
-                decodedBytes += cost;
-                return true;
-            }
+            bool ReserveDecoded(long cost) =>
+                EditorInteractionCoordinator.TryReserveDecodedBytes(
+                    ref decodedBytes, cost, MaxEmbedDecodedImageBytes);
             var rows = new List<EmbedRowViewModel>(
                 Math.Min(embedLinks.Length, MaxEmbedRows + 1));
             for (int index = 0; index < embedLinks.Length; index++)
@@ -709,6 +730,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         OnPropertyChanged(nameof(OutgoingLinksEmptyMessage));
         OnPropertyChanged(nameof(OutlineEmptyMessage));
         OnPropertyChanged(nameof(EmbedsEmptyMessage));
+        OnPropertyChanged(nameof(OutgoingLinksTruncationNotice));
     }
 
     /// <summary>Workspace teardown: invalidate every in-flight load

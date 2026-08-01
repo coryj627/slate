@@ -689,6 +689,9 @@
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.OutgoingLinksEmptyMessage}" />
+                                <TextBlock DockPanel.Dock="Bottom"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.OutgoingLinksTruncationNotice}" />
                                 <ListBox x:Name="PanelOutgoingLinksList"
                                          Style="{StaticResource PanelListBox}"
                                          ItemsSource="{Binding Panels.OutgoingLinks}"

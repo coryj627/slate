@@ -32,6 +32,17 @@ public sealed class RightPanePanelsTests : IDisposable
         File.WriteAllText(
             Path.Combine(_fixture.Root, "anchored.md"),
             "![[target#Alpha]]\n\n![[target#Beta]]\n\n![[target^b1]]\n");
+        // A link-dense note (round 7): outgoing display caps with a
+        // loud notice; the embed BEYOND the display cap must still
+        // reach the embeds leaf.
+        var dense = new System.Text.StringBuilder("# Dense\n\n");
+        for (int i = 1; i <= 600; i++)
+        {
+            dense.Append($"[[d{i}]]\n");
+        }
+        dense.Append("![[target]]\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "dense.md"), dense.ToString());
         File.WriteAllText(
             Path.Combine(_fixture.Root, "bare.md"), "Plain text.\n");
         File.WriteAllText(
@@ -460,6 +471,26 @@ public sealed class RightPanePanelsTests : IDisposable
             EmbedRowViewModel.OverBudgetMessage,
             panels.Embeds[cap + 1].Node.Title);
         Assert.True(panels.Embeds[cap + 1].Node.IsWarning);
+    }
+
+    [Fact]
+    public void LinkDenseNotesCapDisplayedRowsLoudly()
+    {
+        var panels = LoadHost([], path: "dense.md");
+
+        // 601 links, display capped: the header keeps the TRUE
+        // count, the notice says what is hidden, and the embed
+        // beyond the cap still reaches its leaf.
+        Assert.Equal(
+            RightPanePanelsViewModel.MaxOutgoingRows,
+            panels.OutgoingLinks.Count);
+        Assert.Equal("Outgoing links, 601 entries", panels.OutgoingLinksHeader);
+        Assert.Equal(
+            $"Showing {RightPanePanelsViewModel.MaxOutgoingRows} of 601 "
+                + "outgoing links.",
+            panels.OutgoingLinksTruncationNotice);
+        EmbedRowViewModel embed = Assert.Single(panels.Embeds);
+        Assert.Equal("Embedded note: target.md", embed.Node.Title);
     }
 
     [Fact]
