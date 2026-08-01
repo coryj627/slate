@@ -1004,24 +1004,30 @@ public sealed class ShellAccessibilityTests
     }
 
     /// <summary>
-    /// W-E7 gate spike (task: RangeFromChild over custom peers): the
-    /// planned NVDA browse-mode add-on positions its virtual cursor by
-    /// calling ITextProvider::RangeFromChild for document descendants,
-    /// and NVDA treats a failing element as OUTSIDE the document
-    /// (UIABrowseModeDocument.__contains__ swallows the failure and
-    /// refuses to route focus through browse mode). WPF resolves the
-    /// call in three tiers (TextAdaptor.RangeFromChild): TextElement
-    /// peers by ElementStart/End; UIElements whose LOGICAL PARENT is
-    /// the Inline/BlockUIContainer -- exactly one hop, which is why
-    /// every custom reading element must stay the container's DIRECT
-    /// child; and a linear adjacency scan. Anything else throws
-    /// "Element is not within the document range".
+    /// W-E7 gate spike (task: RangeFromChild over custom peers),
+    /// HARDENED per the #1072 adversarial round: the add-on positions
+    /// browse mode via ITextProvider::RangeFromChild, NVDA treats a
+    /// failing element as OUTSIDE the document
+    /// (UIABrowseModeDocument.__contains__), and its renderer walks
+    /// child ranges RECURSIVELY. WPF resolves in three tiers
+    /// (TextAdaptor.RangeFromChild) and the custom elements ride the
+    /// one-logical-hop UIContainer tier, so every interactive
+    /// UIElement in the reading document must stay its container's
+    /// DIRECT child.
     ///
-    /// This test is the cross-process proof over the REAL app: every
-    /// probe below maps a live element back into the text range the
-    /// way NVDA will, and the closing sweep asserts the UIA contract
-    /// NVDA's renderer leans on -- every child the text pattern
-    /// exposes via GetChildren must itself resolve.
+    /// Proof shape (round-1 findings addressed):
+    ///  - a POSITIVE CENSUS: every custom peer kind must be found and
+    ///    must resolve - including the object-tree structural peers
+    ///    (heading, code block, list, list item) that GetChildrenCore
+    ///    serves outside the text-range child list;
+    ///  - IDENTITY, not just sanity: embedded elements assert NVDA's
+    ///    own round-trip (the child range's GetChildren yields the
+    ///    probed element); TextElement peers assert their range TEXT
+    ///    carries the element's own content;
+    ///  - DOCUMENT ORDER: probe ranges are strictly ordered as
+    ///    authored, so no two probes can share one bogus range;
+    ///  - a RECURSIVE range walk (visited-guarded) over everything
+    ///    the text pattern exposes, every level resolving.
     /// </summary>
     [Fact]
     public void ReadingTextPattern_RangeFromChildResolvesEveryCustomPeer()
@@ -1038,6 +1044,7 @@ public sealed class ShellAccessibilityTests
         File.WriteAllText(
             Path.Combine(vaultRoot, "note.md"),
             "# Range note\n\nBody with a [[target]] link.\n\n"
+                + "- alpha bullet\n- beta bullet\n\n"
                 + "- [ ] open task\n\n"
                 + "$$x^2 + 1$$\n\n"
                 + "```rust\nfn f() {}\n```\n\n"
@@ -1100,88 +1107,161 @@ public sealed class ShellAccessibilityTests
 
             AutomationElement surface = WaitForElement(
                 window, "ReadingSurface", TimeSpan.FromSeconds(10));
+
+            // Async artifacts (math, then the slower mermaid render)
+            // re-project the document as they complete, KILLING every
+            // previously-snapshotted UIA element - the census must not
+            // race them (observed live: a CI runner finished the
+            // diagram between the math wait and the snapshot, and
+            // eight of nine kinds read "absent" off dead elements).
+            _ = WaitForSurfaceDescendant(
+                window,
+                element => string.Equals(
+                    element.Properties.LocalizedControlType.ValueOrDefault,
+                    "math",
+                    StringComparison.Ordinal),
+                "math element",
+                TimeSpan.FromSeconds(30));
+            _ = WaitForSurfaceDescendant(
+                window,
+                element => string.Equals(
+                    element.Properties.LocalizedControlType.ValueOrDefault,
+                    "diagram",
+                    StringComparison.Ordinal),
+                "diagram element",
+                // Generous by design: the FIRST mermaid render pays
+                // fontdb's full system-font scan on a cold runner, and
+                // the census-diag run (2026-08-01) proved 90 s is not
+                // enough on the 2-vCPU gate runner — the peer tree held
+                // 9 fresh children with NO diagram merge for the whole
+                // window, while the render starved the UI thread hard
+                // enough that concurrent UIA walks came back truncated
+                // (2 of 9 children). SpinUntil returns the moment the
+                // element exists, so the timeout only bounds the
+                // failure case.
+                TimeSpan.FromSeconds(300),
+                Path.Combine(logDirectory, "slate-windows.log"));
+
+            // POSITIVE CENSUS - every custom peer kind, object-tree
+            // structural peers included. Each entry: kind, matcher,
+            // embedded? (identity via NVDA round-trip) and, for
+            // TextElement peers, the text their range must carry.
+            var census = new (string Kind, Func<AutomationElement, bool> Match, bool Embedded, string? RangeText)[]
+            {
+                ("heading",
+                    e => e.Properties.ControlType.ValueOrDefault == ControlType.Text
+                        && string.Equals(e.Properties.Name.ValueOrDefault, "Range note", StringComparison.Ordinal),
+                    false, "Range note"),
+                ("list",
+                    e => e.Properties.ControlType.ValueOrDefault == ControlType.List,
+                    false, "alpha bullet"),
+                ("list-item",
+                    e => e.Properties.ControlType.ValueOrDefault == ControlType.ListItem
+                        && (e.Properties.Name.ValueOrDefault ?? "").Contains("alpha", StringComparison.OrdinalIgnoreCase),
+                    false, "alpha bullet"),
+                ("code-block",
+                    e => (e.Properties.Name.ValueOrDefault ?? "").StartsWith("Code block,", StringComparison.Ordinal),
+                    false, "fn f()"),
+                ("task-checkbox",
+                    e => e.Properties.ControlType.ValueOrDefault == ControlType.CheckBox,
+                    true, null),
+                ("math",
+                    e => string.Equals(e.Properties.LocalizedControlType.ValueOrDefault, "math", StringComparison.Ordinal),
+                    true, null),
+                ("copy-code",
+                    e => string.Equals(e.Properties.Name.ValueOrDefault, "Copy code", StringComparison.Ordinal),
+                    false, "Copy code"),
+                ("diagram",
+                    e => string.Equals(e.Properties.LocalizedControlType.ValueOrDefault, "diagram", StringComparison.Ordinal),
+                    true, null),
+                ("embed-jump",
+                    e => string.Equals(e.Properties.AutomationId.ValueOrDefault, "ReadingBlockEmbed", StringComparison.Ordinal),
+                    false, "Jump to source"),
+            };
+
+            // One CONSISTENT snapshot holding every census kind -
+            // retried because artifact completions between snapshots
+            // invalidate elements (the CI race above).
+            AutomationElement[] descendants = Array.Empty<AutomationElement>();
+            Assert.True(
+                PollGently(
+                    () =>
+                    {
+                        // Re-resolve EVERY spin: an artifact completion
+                        // replaces the surface control, and the dead
+                        // handle keeps answering with the old fragment
+                        // (measured on CI, 2026-08-01: two descendants
+                        // for the full 90s diagram wait).
+                        surface = window.FindFirstDescendant(
+                            cf => cf.ByAutomationId("ReadingSurface")) ?? surface;
+                        ForceFullTextLayout(surface);
+                        descendants = surface.FindAllDescendants();
+                        return census.All(entry =>
+                            descendants.Any(element => entry.Match(element)));
+                    },
+                    TimeSpan.FromSeconds(15)),
+                "the census kinds never appeared together in one stable snapshot; "
+                    + "present: " + string.Join(
+                        ", ",
+                        census.Where(entry =>
+                            descendants.Any(element => entry.Match(element)))
+                            .Select(entry => entry.Kind)));
+            // Bind the Text pattern off the surface the census just
+            // proved LIVE - the pre-wait handle may be a corpse.
             var text = surface.Patterns.Text.Pattern;
             var document = text.DocumentRange;
-
-            // Named probes, one per hosting shape. The math and diagram
-            // elements are the W-E7 keystones (custom
-            // FrameworkElementAutomationPeer subclasses in
-            // InlineUIContainers); the task checkbox is the native
-            // control contrast; the Copy affordance and the embed Jump
-            // link are TextElement peers (the tier expected to resolve
-            // even before this spike).
-            var probes = new List<(string Kind, AutomationElement Element)>();
-
-            AutomationElement math = WaitForSurfaceDescendant(
-                surface,
-                cf => cf.ByLocalizedControlType("math"),
-                "math element",
-                TimeSpan.FromSeconds(10));
-            probes.Add(("math", math));
-
-            AutomationElement diagram = WaitForSurfaceDescendant(
-                surface,
-                cf => cf.ByLocalizedControlType("diagram"),
-                "diagram element",
-                TimeSpan.FromSeconds(10));
-            probes.Add(("diagram", diagram));
-
-            AutomationElement task = WaitForSurfaceDescendant(
-                surface,
-                cf => cf.ByControlType(ControlType.CheckBox),
-                "task checkbox",
-                TimeSpan.FromSeconds(10));
-            probes.Add(("task-checkbox", task));
-
-            AutomationElement copy = WaitForSurfaceDescendant(
-                surface,
-                cf => cf.ByName("Copy code"),
-                "copy-code affordance",
-                TimeSpan.FromSeconds(10));
-            probes.Add(("copy-code", copy));
-
-            AutomationElement jump = WaitForSurfaceDescendant(
-                surface,
-                cf => cf.ByAutomationId("ReadingBlockEmbed"),
-                "embed jump link",
-                TimeSpan.FromSeconds(10));
-            probes.Add(("embed-jump", jump));
-
             var failures = new List<string>();
-            foreach ((string kind, AutomationElement element) in probes)
+            var resolved = new List<(string Kind, FlaUI.Core.ITextRange Range)>();
+            foreach ((string kind, Func<AutomationElement, bool> match, bool embedded, string? rangeText) in census)
             {
-                string? failure = ProbeRangeFromChild(text, document, kind, element);
+                AutomationElement? element = descendants.FirstOrDefault(match);
+                if (element is null)
+                {
+                    failures.Add($"{kind}: element absent from the census");
+                    continue;
+                }
+                string? failure = ProbeRangeFromChild(
+                    text, document, kind, element, embedded, rangeText, out var range);
                 if (failure is not null)
                 {
                     failures.Add(failure);
                 }
-            }
-
-            // The NVDA renderer contract: every child the text pattern
-            // itself exposes must resolve back into the range. (WPF's
-            // GetChildrenCore can surface nested descendants whose
-            // RangeFromChild throws -- the latent hazard this sweep
-            // guards. Peer-suppressed elements, like embed images,
-            // never appear here and are exempt by construction.)
-            FlaUI.Core.ITextRange[] childSweepSource = new[] { document };
-            foreach (var range in childSweepSource)
-            {
-                foreach (AutomationElement child in range.GetChildren())
+                else if (range is not null)
                 {
-                    string kind =
-                        $"sweep:{child.Properties.LocalizedControlType.ValueOrDefault ?? "?"}"
-                        + $":{child.Properties.Name.ValueOrDefault ?? ""}";
-                    string? failure = ProbeRangeFromChild(text, document, kind, child);
-                    if (failure is not null)
-                    {
-                        failures.Add(failure);
-                    }
+                    resolved.Add((kind, range));
                 }
             }
 
+            // DOCUMENT ORDER: the census is authored top-to-bottom, so
+            // successive resolved ranges must start strictly later -
+            // two probes answered by one bogus range cannot pass.
+            // (Embedded elements and their own containers - list vs
+            // its first item, code block vs its Copy link - may share
+            // a start, so strict ordering is asserted between
+            // DISTINCT block-level kinds only.)
+            var orderKinds = new[] { "heading", "list", "task-checkbox", "math", "diagram", "embed-jump" };
+            var ordered = resolved.Where(r => orderKinds.Contains(r.Kind)).ToList();
+            for (int i = 1; i < ordered.Count; i++)
+            {
+                if (ordered[i].Range.CompareEndpoints(
+                        TextPatternRangeEndpoint.Start,
+                        ordered[i - 1].Range,
+                        TextPatternRangeEndpoint.Start) <= 0)
+                {
+                    failures.Add(
+                        $"order: {ordered[i].Kind} does not start after {ordered[i - 1].Kind}");
+                }
+            }
+
+            // RECURSIVE range walk - the renderer path. Every child at
+            // every level must resolve; the visited set and the
+            // embedded round-trip guard terminate the walk.
+            var visited = new HashSet<string>();
+            WalkRanges(text, document, document, depth: 0, visited, failures);
+
             Assert.True(
                 failures.Count == 0,
-                "RangeFromChild failed for:\n" + string.Join("\n", failures));
+                "RangeFromChild hardened probe failed:\n" + string.Join("\n", failures));
         }
         finally
         {
@@ -1208,21 +1288,25 @@ public sealed class ShellAccessibilityTests
     }
 
     /// <summary>
-    /// One RangeFromChild probe: the call must succeed, and the range
-    /// must be sane -- endpoints ordered and inside the document. The
-    /// range TEXT is deliberately unasserted: WPF blanks embedded
-    /// objects in the text stream (G23), and that is fine for the
-    /// add-on, which needs the POSITION, not the text.
+    /// One RangeFromChild probe with IDENTITY, not just sanity:
+    /// embedded elements must round-trip through the child range's
+    /// GetChildren (NVDA's own embedded-object detection); TextElement
+    /// peers must carry their own content in the range text. All
+    /// ranges must be ordered and inside the document.
     /// </summary>
     private static string? ProbeRangeFromChild(
         FlaUI.Core.Patterns.ITextPattern text,
         FlaUI.Core.ITextRange document,
         string kind,
-        AutomationElement element)
+        AutomationElement element,
+        bool embedded,
+        string? expectedRangeText,
+        out FlaUI.Core.ITextRange? range)
     {
+        range = null;
         try
         {
-            FlaUI.Core.ITextRange range = text.RangeFromChild(element);
+            range = text.RangeFromChild(element);
             if (range is null)
             {
                 return $"{kind}: returned null";
@@ -1245,9 +1329,25 @@ public sealed class ShellAccessibilityTests
             {
                 return $"{kind}: range escapes the document";
             }
-            if (range.GetEnclosingElement() is null)
+            if (embedded)
             {
-                return $"{kind}: GetEnclosingElement returned null";
+                AutomationElement[] children = range.GetChildren();
+                bool roundTrips = children.Any(child =>
+                    child.Equals(element));
+                if (!roundTrips)
+                {
+                    return $"{kind}: child range does not round-trip to the element "
+                        + $"(GetChildren yielded {children.Length})";
+                }
+            }
+            else if (expectedRangeText is not null)
+            {
+                string rangeText = range.GetText(-1) ?? string.Empty;
+                if (!rangeText.Contains(expectedRangeText, StringComparison.Ordinal))
+                {
+                    return $"{kind}: range text {Truncate(rangeText)} lacks "
+                        + $"\"{expectedRangeText}\"";
+                }
             }
             return null;
         }
@@ -1258,22 +1358,254 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// The NVDA renderer path: recursively resolve every child the
+    /// text pattern exposes at every level. The embedded round-trip
+    /// (single child equal to the element recursed from) terminates
+    /// embedded-object branches exactly as NVDA's own detection does;
+    /// the visited set guards against any other cycle.
+    /// </summary>
+    private static void WalkRanges(
+        FlaUI.Core.Patterns.ITextPattern text,
+        FlaUI.Core.ITextRange document,
+        FlaUI.Core.ITextRange range,
+        int depth,
+        HashSet<string> visited,
+        List<string> failures)
+    {
+        if (depth > 8)
+        {
+            failures.Add("walk: depth exceeded 8 - unexpected nesting or a cycle");
+            return;
+        }
+        foreach (AutomationElement child in range.GetChildren())
+        {
+            string id = string.Join(
+                ".",
+                (child.Properties.RuntimeId.ValueOrDefault ?? Array.Empty<int>()));
+            if (id.Length > 0 && !visited.Add($"{depth}:{id}"))
+            {
+                continue;
+            }
+            string kind =
+                $"walk[{depth}]:{child.Properties.LocalizedControlType.ValueOrDefault ?? "?"}"
+                + $":{Truncate(child.Properties.Name.ValueOrDefault ?? "")}";
+            string? failure = ProbeRangeFromChild(
+                text, document, kind, child, embedded: false, expectedRangeText: null,
+                out FlaUI.Core.ITextRange? childRange);
+            if (failure is not null)
+            {
+                failures.Add(failure);
+                continue;
+            }
+            if (childRange is null)
+            {
+                continue;
+            }
+            AutomationElement[] grandChildren = childRange.GetChildren();
+            bool embeddedLeaf = grandChildren.Length == 1
+                && grandChildren[0].Equals(child);
+            if (!embeddedLeaf)
+            {
+                WalkRanges(text, document, childRange, depth + 1, visited, failures);
+            }
+        }
+    }
+
+    private static string Truncate(string value) =>
+        value.Length <= 40 ? value : value[..40] + "...";
+
+    /// <summary>
+    /// RichTextBox text layout is VIEWPORT-virtualized: content below
+    /// the fold is never laid out — and its embedded elements never
+    /// get navigable peers — until something scrolls it into view
+    /// (measured 2026-08-01: the sibling walk ends cleanly at the
+    /// last viewport child regardless of wait budget or poll cadence).
+    /// Read the document the way a user does: scroll to the end, then
+    /// back, through the Text pattern.
+    /// </summary>
+    private static void ForceFullTextLayout(AutomationElement surface)
+    {
+        try
+        {
+            if (surface.Patterns.Text.PatternOrDefault is { } text)
+            {
+                var endRange = text.DocumentRange.Clone();
+                endRange.MoveEndpointByRange(
+                    TextPatternRangeEndpoint.Start,
+                    text.DocumentRange,
+                    TextPatternRangeEndpoint.End);
+                endRange.ScrollIntoView(alignToTop: false);
+                var startRange = text.DocumentRange.Clone();
+                startRange.MoveEndpointByRange(
+                    TextPatternRangeEndpoint.End,
+                    text.DocumentRange,
+                    TextPatternRangeEndpoint.Start);
+                startRange.ScrollIntoView(alignToTop: true);
+            }
+        }
+        catch (Exception)
+        {
+            // A re-projection can kill the range mid-scroll — the next
+            // poll retries against the fresh surface.
+        }
+    }
+
+    /// <summary>One probe a second - the polls themselves must not
+    /// starve the app's idle-priority background work (text layout)
+    /// that produces the condition being awaited.</summary>
+    private static bool PollGently(Func<bool> condition, TimeSpan timeout)
+    {
+        DateTime deadline = DateTime.UtcNow + timeout;
+        while (true)
+        {
+            if (condition())
+            {
+                return true;
+            }
+            if (DateTime.UtcNow >= deadline)
+            {
+                return false;
+            }
+            Thread.Sleep(1000);
+        }
+    }
+
     private static AutomationElement WaitForSurfaceDescendant(
-        AutomationElement surface,
-        Func<FlaUI.Core.Conditions.ConditionFactory, FlaUI.Core.Conditions.ConditionBase> condition,
+        Window window,
+        Func<AutomationElement, bool> match,
         string description,
-        TimeSpan timeout)
+        TimeSpan timeout,
+        string? diagnosticLogPath = null)
     {
         AutomationElement? found = null;
-        Assert.True(
-            SpinWait.SpinUntil(
-                () =>
+        AutomationElement[] last = Array.Empty<AutomationElement>();
+        // GENTLE polling, deliberately: RichTextBox lays out text in
+        // BACKGROUND idle time, and a tight UIA poll marshals into the
+        // UI thread continuously - starving the exact idle work that
+        // realizes embedded elements past the viewport (measured
+        // 2026-08-01: five minutes of tight polling, tree frozen at
+        // the first viewport's children). One probe a second leaves
+        // the app idle ~95% of the wait.
+        bool appeared = PollGently(
+            () =>
+            {
+                // Artifact completions REPLACE the surface control
+                // (same AutomationId, new UIA element); a handle
+                // captured before the wait goes dead and answers with
+                // a stale two-element fragment until the timeout
+                // (measured on CI, 2026-08-01). Resolve fresh, always.
+                AutomationElement? surface = window.FindFirstDescendant(
+                    cf => cf.ByAutomationId("ReadingSurface"));
+                if (surface is null)
                 {
-                    found = surface.FindFirstDescendant(condition);
-                    return found is not null;
-                },
-                timeout),
-            $"no {description} appeared under ReadingSurface");
+                    return false;
+                }
+                ForceFullTextLayout(surface);
+                last = surface.FindAllDescendants();
+                found = last.FirstOrDefault(match);
+                return found is not null;
+            },
+            timeout);
+        if (!appeared)
+        {
+            // Diagnostic failure (CI-only repro): what DID the surface
+            // hold, and what does the app log say about the artifact
+            // pipeline? Guessing at timeouts stops here.
+            string census = string.Join(
+                " | ",
+                last.Take(40).Select(element =>
+                {
+                    string kind =
+                        element.Properties.LocalizedControlType.ValueOrDefault ?? "?";
+                    string name = element.Properties.Name.ValueOrDefault ?? "";
+                    if (name.Length > 30)
+                    {
+                        name = name[..30] + "...";
+                    }
+                    return $"{kind}:{name}";
+                }));
+            // How many surfaces exist, and what does the probed one's
+            // TEXT PATTERN carry? The range text separates "projection
+            // never completed" (placeholder text) from "content merged
+            // but peers stale" (full note text, missing elements).
+            AutomationElement[] surfaces = window.FindAllDescendants(
+                cf => cf.ByAutomationId("ReadingSurface"));
+            // Manual sibling walk with the raw view walker: the diag
+            // channel proved the peer holds 9 fresh children while
+            // FindAll returns 2 — so navigation DIES on a specific
+            // sibling. Name it, step by step, exception included.
+            string walkTrace = "<no surface>";
+            if (surfaces.Length > 0)
+            {
+                var steps = new List<string>();
+                try
+                {
+                    var walker = surfaces[0].Automation.TreeWalkerFactory
+                        .GetRawViewWalker();
+                    AutomationElement? step = walker.GetFirstChild(surfaces[0]);
+                    int guard = 0;
+                    while (step is not null && guard++ < 20)
+                    {
+                        steps.Add(
+                            (step.Properties.LocalizedControlType.ValueOrDefault ?? "?")
+                            + ":"
+                            + (step.Properties.Name.ValueOrDefault ?? ""));
+                        step = walker.GetNextSibling(step);
+                    }
+                    steps.Add("<walk ended>");
+                }
+                catch (Exception exception)
+                {
+                    steps.Add($"<walk threw: {exception.GetType().Name}: "
+                        + $"{exception.Message}>");
+                }
+                walkTrace = string.Join(" | ", steps);
+            }
+            string rangeText = "<no surface>";
+            if (surfaces.Length > 0)
+            {
+                try
+                {
+                    rangeText = surfaces[0].Patterns.Text.PatternOrDefault
+                        ?.DocumentRange.GetText(1200)
+                        ?? "<no text pattern>";
+                }
+                catch (Exception exception)
+                {
+                    rangeText = $"<text pattern threw: {exception.GetType().Name}>";
+                }
+            }
+            string logDiagnostics = "<no log requested>";
+            if (diagnosticLogPath is not null)
+            {
+                string? directory = Path.GetDirectoryName(diagnosticLogPath);
+                string listing = directory is not null && Directory.Exists(directory)
+                    ? string.Join(
+                        ", ",
+                        Directory.EnumerateFiles(directory).Select(file =>
+                            $"{Path.GetFileName(file)}({new FileInfo(file).Length}b)"))
+                    : "<log dir absent>";
+                string log = ReadSharedLog(diagnosticLogPath);
+                string logTail = log.Length <= 2000 ? log : log[^2000..];
+                // The peer-churn diagnostics ride their OWN file — the
+                // app holds the main log open for the stderr redirect,
+                // so a second writer dies on a sharing violation.
+                string diag = directory is null
+                    ? ""
+                    : ReadSharedLog(Path.Combine(directory, "slate-census-diag.log"));
+                string diagTail = diag.Length <= 2500 ? diag : diag[^2500..];
+                logDiagnostics =
+                    $"dir: {listing}\napp log tail: {logTail}\ncensus diag: {diagTail}";
+            }
+            Assert.Fail(
+                $"no {description} appeared under ReadingSurface.\n"
+                + $"surfaces: {surfaces.Length}\n"
+                + $"descendants ({last.Length}): {census}\n"
+                + $"sibling walk: {walkTrace}\n"
+                + $"range text: {rangeText.Replace("\r", "\\r").Replace("\n", "\\n")}\n"
+                + logDiagnostics);
+        }
         return found!;
     }
 

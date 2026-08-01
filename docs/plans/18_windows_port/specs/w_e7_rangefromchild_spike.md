@@ -84,19 +84,45 @@ and are exempt by construction.
 the real `SlateWindows.exe` over a vault exercising every hosting
 shape, enters reading mode, and probes:
 
-| Probe | Hosting shape | Result |
-|---|---|---|
-| math element | custom FEAP in `InlineUIContainer` (tier 2) | resolves |
-| diagram element | custom FEAP in `InlineUIContainer` (tier 2) | resolves |
-| task checkbox | native control in `InlineUIContainer` (tier 2) | resolves |
-| Copy code | `CodeCopyHyperlink` TextElement peer (tier 1) | resolves |
-| embed Jump link | Hyperlink TextElement peer (tier 1) | resolves |
-| **sweep**: every `DocumentRange.GetChildren()` child | all of the above | resolves |
+Hardened per the #1072 adversarial round (identity + recursion, not
+just call success):
 
-Each probe also asserts range sanity: endpoints ordered, contained
-within the document range, `GetEnclosingElement` non-null. Range TEXT
-is deliberately unasserted — WPF blanks embedded objects in the text
-stream (G23), and the add-on needs the POSITION, not the text.
+| Probe | Hosting shape | Identity assertion | Result |
+|---|---|---|---|
+| heading | `ReadingHeadingPeer` (object-tree structural, TextElement owner) | range text carries the heading | resolves |
+| list / list item | `ReadingListPeer` / `ReadingListItemPeer` (structural) | range text carries the bullet | resolves |
+| code block | `ReadingCodeBlockPeer` (structural) | range text carries the interior | resolves |
+| math element | custom FEAP in `InlineUIContainer` (tier 2) | **NVDA round-trip**: child range's `GetChildren` yields the element | resolves |
+| diagram element | custom FEAP in `InlineUIContainer` (tier 2) | NVDA round-trip | resolves |
+| task checkbox | native control in `InlineUIContainer` (tier 2) | NVDA round-trip | resolves |
+| Copy code | `CodeCopyHyperlink` TextElement peer (tier 1) | range text = "Copy code" | resolves |
+| embed Jump link | Hyperlink TextElement peer (tier 1) | range text carries "Jump to source" | resolves |
+| **document order** | the block-level probes above | strictly increasing range starts — one bogus range cannot answer two probes | holds |
+| **recursive walk** | every child at every level of the text pattern | resolves, with NVDA's embedded-object detection terminating branches | clean |
+
+The structural peers (heading/code/list/list-item) are served by
+`ReadingSurfacePeer.GetChildrenCore` on the OBJECT tree — they are not
+text-range children, which is precisely why the census probes them
+explicitly: NVDA's `__contains__` interrogates arbitrary descendants,
+not just range children. Embedded elements' range TEXT stays blank
+(G23) — identity rides the round-trip, which is NVDA's own detection
+mechanism.
+
+**Viewport constraint (measured 2026-08-01, seven diagnostic CI
+rounds):** RichTextBox text layout is VIEWPORT-VIRTUALIZED — content
+below the fold is never laid out, and its embedded elements have **no
+navigable UIA peers** (a raw-view sibling walk ends cleanly at the
+last viewport child), until something scrolls it into view. The app's
+peer list is complete the whole time (`GetChildrenCore` serves every
+child from the text container); it is the client-visible projection
+that stops at the fold. The census therefore reads the document the
+way a user does — a Text-pattern `ScrollIntoView` sweep end-to-end
+before each probe — and this is a REAL constraint for the W-E7
+appModule: object-nav over a reading document only reaches what has
+been laid out, exactly as say-all and caret traversal lay it out in
+passing. Not a defect to fix host-side: forcing full-document layout
+on merge would defeat the W3-1 chunked-streaming budget that keeps
+6.9 MB notes responsive.
 
 ## Contingency (recorded, not needed today)
 
