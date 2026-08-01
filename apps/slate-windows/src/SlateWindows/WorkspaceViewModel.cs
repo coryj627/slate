@@ -1414,9 +1414,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// <summary>The review's tab-route seam (W4-3): a file with an
     /// open tab must toggle through THAT tab's guarded path so the
     /// buffer re-baselines — a direct session write would leave the
-    /// open editor stale. Returns false when no tab holds the file
-    /// (the review then toggles the session directly).</summary>
-    private bool TryToggleTaskInOpenTab(string path, TaskItem task)
+    /// open editor stale. The result distinguishes refusals from
+    /// started toggles (adversarial round 1: a lossy bool armed
+    /// refresh state for refusals), and the row's snapshot hash is
+    /// verified against the tab's SAVED content first — a stale
+    /// ordinal against newer content could toggle a different task.</summary>
+    private SlateWindows.Panels.ReviewToggleRoute TryToggleTaskInOpenTab(
+        string path, TaskItem task, string expectedContentHash)
     {
         WorkspaceTabViewModel? tab = Groups
             .SelectMany(group => group.Tabs)
@@ -1424,16 +1428,24 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 && string.Equals(candidate.Path, path, StringComparison.Ordinal));
         if (tab is null)
         {
-            return false;
+            return SlateWindows.Panels.ReviewToggleRoute.NoOpenTab;
         }
         if (tab.IsDirty)
         {
             _announce(new A11yEvent.TaskToggleUnsaved(
                 System.IO.Path.GetFileName(tab.Path)));
-            return true;
+            return SlateWindows.Panels.ReviewToggleRoute.RefusedDirty;
         }
-        _ = tab.ToggleTask(task, _announce);
-        return true;
+        if (!string.Equals(
+            tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        {
+            _announce(new A11yEvent.TaskToggleConflict(
+                System.IO.Path.GetFileName(tab.Path)));
+            return SlateWindows.Panels.ReviewToggleRoute.RefusedStale;
+        }
+        return tab.ToggleTask(task, _announce)
+            ? SlateWindows.Panels.ReviewToggleRoute.Started
+            : SlateWindows.Panels.ReviewToggleRoute.RefusedDirty;
     }
 
     /// <summary>The panels' task-toggle seam (W4-3): the guarded tab

@@ -57,7 +57,7 @@ public sealed class TasksReviewTests : IDisposable
         List<string>? opens = null,
         bool openSucceeds = true,
         string? activePath = null,
-        Func<string, TaskItem, bool>? toggleViaTab = null,
+        Func<string, TaskItem, string, ReviewToggleRoute>? toggleViaTab = null,
         List<TaskItem>? scrolls = null)
     {
         return new TasksReviewViewModel(
@@ -70,7 +70,7 @@ public sealed class TasksReviewTests : IDisposable
             },
             () => activePath,
             task => scrolls?.Add(task),
-            toggleViaTab ?? ((_, _) => false),
+            toggleViaTab ?? ((_, _, _) => ReviewToggleRoute.NoOpenTab),
             () => Clock,
             synchronousForTests: true);
     }
@@ -188,7 +188,8 @@ public sealed class TasksReviewTests : IDisposable
     [Fact]
     public void TabRoutedTogglesRefreshOnlyOnTheirOwnNoteRefresh()
     {
-        var review = MakeReview(toggleViaTab: (_, _) => true);
+        var review = MakeReview(
+            toggleViaTab: (_, _, _) => ReviewToggleRoute.Started);
         review.EnsureLoaded();
         int before = review.LoadRequestIdForTests;
 
@@ -196,15 +197,116 @@ public sealed class TasksReviewTests : IDisposable
         review.NoteRefreshed("a.md");
         Assert.Equal(before, review.LoadRequestIdForTests);
 
-        // ...but a tab-routed toggle marks its refresh pending, and
-        // the note's whole-document refresh lands it.
+        // ...but a STARTED tab-routed toggle marks its own path
+        // pending, and that note's whole-document refresh lands it.
         review.ToggleTask(review.Rows[0]);
+        review.NoteRefreshed("some-other.md");
+        Assert.Equal(before, review.LoadRequestIdForTests);
         review.NoteRefreshed(review.Rows[0].Path);
         Assert.Equal(before + 1, review.LoadRequestIdForTests);
 
         // One refresh per pending toggle, not a standing subscription.
         review.NoteRefreshed(review.Rows[0].Path);
         Assert.Equal(before + 1, review.LoadRequestIdForTests);
+    }
+
+    [Fact]
+    public void RefusalsNeverArmTheRefreshFlag()
+    {
+        // Round 1: a lossy bool armed the pending refresh for DIRTY
+        // refusals, letting any later refresh reset paging.
+        var review = MakeReview(
+            toggleViaTab: (_, _, _) => ReviewToggleRoute.RefusedDirty);
+        review.EnsureLoaded();
+        int before = review.LoadRequestIdForTests;
+
+        review.ToggleTask(review.Rows[0]);
+        review.NoteRefreshed(review.Rows[0].Path);
+        Assert.Equal(before, review.LoadRequestIdForTests);
+    }
+
+    [Fact]
+    public void StaleTabRefusalsReloadTheSnapshot()
+    {
+        var review = MakeReview(
+            toggleViaTab: (_, _, _) => ReviewToggleRoute.RefusedStale);
+        review.EnsureLoaded();
+        int before = review.LoadRequestIdForTests;
+
+        review.ToggleTask(review.Rows[0]);
+        Assert.Equal(before + 1, review.LoadRequestIdForTests);
+    }
+
+    [Fact]
+    public void StaleSnapshotTogglesConflictInsteadOfMutatingTheWrongTask()
+    {
+        var announced = new List<A11yEvent>();
+        var review = MakeReview(announced);
+        review.EnsureLoaded();
+        review.ApplyFilter(TaskReviewFilter.Overdue);
+        ReviewTaskRowViewModel row = Assert.Single(review.Rows);
+
+        // The file changes AFTER the snapshot: a task is inserted
+        // BEFORE the clicked one, so the row's ordinal now names a
+        // different task. The toggle must refuse — the round-1
+        // failure completed whichever task inherited the ordinal.
+        _ = _session.SaveText(
+            "a.md",
+            "- [ ] brand new first 📅 2026-03-01\n".Replace("\\n", "\n")
+                + File.ReadAllText(Path.Combine(_fixture.Root, "a.md")),
+            null);
+
+        review.ToggleTask(row);
+
+        _ = Assert.Single(announced.OfType<A11yEvent.TaskToggleConflict>());
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text == "Task completed.");
+        // Nothing beyond the pre-existing done task was completed.
+        string content = File.ReadAllText(Path.Combine(_fixture.Root, "a.md"));
+        Assert.DoesNotContain(
+            "- [x]", content.Replace("- [x] finished", ""));
+        // The refusal reloaded the snapshot: both overdue tasks show.
+        Assert.Equal(2, review.Rows.Count);
+    }
+
+    [Fact]
+    public void LoadMoreReloadsWhenTheIndexMovedUnderTheCursor()
+    {
+        var review = MakeReview();
+        review.EnsureLoaded();
+        Assert.True(review.HasMore);
+        int before = review.LoadRequestIdForTests;
+
+        // A vault mutation between pages: the cursor belongs to a
+        // dead snapshot — appending against the live index can
+        // duplicate moved rows and skip others (round 1).
+        _ = _session.SaveText("b.md", "- [ ] from b, edited\n".Replace("\\n", "\n"), null);
+
+        review.LoadMore();
+        Assert.Equal(before + 1, review.LoadRequestIdForTests);
+        Assert.Equal(200, review.Rows.Count);
+        Assert.False(review.IsLoadingMore);
+    }
+
+    [Fact]
+    public void SupersededLoadMoreCannotWedgeThePagingButton()
+    {
+        var review = MakeReview();
+        review.EnsureLoaded();
+
+        // A stale load-more completion (its token was invalidated by
+        // a fresh first page) must neither append nor flip the flag
+        // (round 1: the button stayed "Loading more tasks…" forever).
+        int rows = review.Rows.Count;
+        review.PublishLoadMore(
+            token: -1,
+            new TaskWithLocationPage([], null, 0),
+            failure: null,
+            drifted: false);
+        Assert.Equal(rows, review.Rows.Count);
+        Assert.False(review.IsLoadingMore);
+        Assert.Equal("Load more tasks", review.LoadMoreLabel);
     }
 
     [Fact]

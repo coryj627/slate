@@ -118,15 +118,43 @@ fn note_tasks_bounds_rows_in_sql_and_reports_true_totals() {
     assert_eq!(page.tasks.len(), 12);
     assert_eq!(page.total, 30);
     assert_eq!(page.open_total, 20);
-    // Document order survives the bound.
-    assert_eq!(page.tasks[0].text, "task 0");
-    assert_eq!(page.tasks[11].text, "task 11");
+    // OPEN first (the display budget goes to actionable rows), each
+    // group in document order: the first open task is "task 1"
+    // (task 0 is completed).
+    assert!(page.tasks.iter().all(|t| !t.completed));
+    assert_eq!(page.tasks[0].text, "task 1");
+    assert_eq!(page.tasks[1].text, "task 2");
 
     // Unknown paths are an empty page, not an error.
     let missing = session.note_tasks("notes/none.md", 12).unwrap();
     assert!(missing.tasks.is_empty());
     assert_eq!(missing.total, 0);
     assert_eq!(missing.open_total, 0);
+}
+
+#[test]
+fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
+    // Adversarial round 1: a note whose first N tasks are completed
+    // must not spend the entire bounded budget on finished work.
+    let mut body = String::new();
+    for i in 0..40 {
+        body.push_str(&format!("- [x] done {i}\n"));
+    }
+    body.push_str("- [ ] the actionable one\n");
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/buried.md", body.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let page = session.note_tasks("notes/buried.md", 10).unwrap();
+    assert_eq!(page.tasks.len(), 10);
+    assert_eq!(page.open_total, 1);
+    // The lone open task leads; the remaining budget fills with done
+    // rows in document order.
+    assert_eq!(page.tasks[0].text, "the actionable one");
+    assert!(!page.tasks[0].completed);
+    assert!(page.tasks[1..].iter().all(|t| t.completed));
+    assert_eq!(page.tasks[1].text, "done 0");
 }
 
 #[test]

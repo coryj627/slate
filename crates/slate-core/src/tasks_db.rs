@@ -21,6 +21,12 @@ pub struct TaskWithLocation {
     pub task: TaskItem,
     pub path: String,
     pub file_name: String,
+    /// The file's content hash AT SNAPSHOT time (W4-3 adversarial
+    /// round 1): task ordinals are only stable for a given source
+    /// text, so a toggle from a review row must verify the file has
+    /// not changed since the row was read — a stale ordinal would
+    /// silently toggle a DIFFERENT task.
+    pub content_hash: String,
 }
 
 /// Filter shape for `tasks_in_vault`. `None` fields mean "no
@@ -108,6 +114,13 @@ pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskIt
 /// materializes an unbounded `Vec` before a UI display cap can
 /// apply, and the true totals ride alongside so the header can say
 /// "N open of M tasks" past the cap.
+///
+/// OPEN tasks first (adversarial round 1): the panel displays Open
+/// then Done, so a document-order LIMIT would let a note whose first
+/// N tasks are completed spend the entire display budget on finished
+/// work and hide every actionable row. Each group reads in document
+/// order via its own PK-ordered scan — no temp sort on adversarial
+/// task counts.
 pub(crate) fn note_tasks_bounded(
     conn: &Connection,
     path: &str,
@@ -127,14 +140,20 @@ pub(crate) fn note_tasks_bounded(
         "SELECT ordinal, text, status_char, completed,
                 due_ms, scheduled_ms, priority, recurrence, line, byte_offset,
                 checkbox_start_byte, checkbox_end_byte
-         FROM tasks WHERE file_id = ?1
+         FROM tasks WHERE file_id = ?1 AND completed = ?2
          ORDER BY ordinal ASC
-         LIMIT ?2",
+         LIMIT ?3",
     )?;
-    let rows = stmt.query_map(params![file_id, limit], row_to_task)?;
     let mut out = Vec::new();
-    for r in rows {
-        out.push(r?);
+    for completed in [0i64, 1] {
+        let remaining = limit.saturating_sub(out.len() as u32);
+        if remaining == 0 {
+            break;
+        }
+        let rows = stmt.query_map(params![file_id, completed, remaining], row_to_task)?;
+        for r in rows {
+            out.push(r?);
+        }
     }
     let (total, open_total): (i64, i64) = conn.query_row(
         "SELECT COUNT(*), COUNT(*) FILTER (WHERE completed = 0)
@@ -252,7 +271,7 @@ pub(crate) fn tasks_in_vault(
     const DUE_NULL_SENTINEL: i64 = i64::MAX;
     const PRIORITY_NULL_SENTINEL: i64 = i32::MIN as i64;
     let sql = format!(
-        "SELECT f.path, f.name,
+        "SELECT f.path, f.name, f.content_hash,
                 t.ordinal, t.text, t.status_char, t.completed,
                 t.due_ms, t.scheduled_ms, t.priority, t.recurrence,
                 t.line, t.byte_offset, t.checkbox_start_byte, t.checkbox_end_byte,
@@ -307,26 +326,28 @@ pub(crate) fn tasks_in_vault(
         .query_map(rusqlite::params_from_iter(bound_refs.iter()), |row| {
             let path: String = row.get(0)?;
             let name: String = row.get(1)?;
+            let content_hash: String = row.get(2)?;
             let item = TaskItem {
-                ordinal: row.get::<_, i64>(2)? as u32,
-                text: row.get(3)?,
-                status_char: row.get::<_, String>(4)?.chars().next().unwrap_or(' '),
-                completed: row.get::<_, i64>(5)? != 0,
-                due_ms: row.get(6)?,
-                scheduled_ms: row.get(7)?,
-                priority: row.get::<_, Option<i64>>(8)?.map(|p| p as i32),
-                recurrence: row.get(9)?,
-                line: row.get::<_, i64>(10)? as u32,
-                byte_offset: row.get::<_, i64>(11)? as u32,
-                checkbox_start_byte: row.get::<_, i64>(12)? as u32,
-                checkbox_end_byte: row.get::<_, i64>(13)? as u32,
+                ordinal: row.get::<_, i64>(3)? as u32,
+                text: row.get(4)?,
+                status_char: row.get::<_, String>(5)?.chars().next().unwrap_or(' '),
+                completed: row.get::<_, i64>(6)? != 0,
+                due_ms: row.get(7)?,
+                scheduled_ms: row.get(8)?,
+                priority: row.get::<_, Option<i64>>(9)?.map(|p| p as i32),
+                recurrence: row.get(10)?,
+                line: row.get::<_, i64>(11)? as u32,
+                byte_offset: row.get::<_, i64>(12)? as u32,
+                checkbox_start_byte: row.get::<_, i64>(13)? as u32,
+                checkbox_end_byte: row.get::<_, i64>(14)? as u32,
             };
-            let count: i64 = row.get(14)?;
+            let count: i64 = row.get(15)?;
             total_filtered = count as u64;
             Ok(TaskWithLocation {
                 task: item,
                 path,
                 file_name: name,
+                content_hash,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;

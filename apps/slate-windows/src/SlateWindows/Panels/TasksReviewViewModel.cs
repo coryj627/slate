@@ -18,6 +18,30 @@ internal enum TaskReviewFilter
     ThisWeek,
 }
 
+/// <summary>What the workspace did with a review toggle request
+/// (adversarial round 1): the states are NOT collapsible — only a
+/// STARTED toggle may arm a pending refresh, only a STALE refusal
+/// should reload the snapshot, and a dirty refusal changes nothing.</summary>
+internal enum ReviewToggleRoute
+{
+    /// <summary>No open tab holds the file — the review toggles the
+    /// session directly.</summary>
+    NoOpenTab,
+
+    /// <summary>An open tab holds unsaved changes; the refusal was
+    /// announced. Nothing changed.</summary>
+    RefusedDirty,
+
+    /// <summary>The row's snapshot no longer matches the open tab's
+    /// saved content; the conflict was announced. The snapshot needs
+    /// a reload.</summary>
+    RefusedStale,
+
+    /// <summary>The tab's guarded toggle started; its completion
+    /// arrives as a whole-document refresh.</summary>
+    Started,
+}
+
 /// <summary>
 /// W4-3 (#735): the vault-wide Tasks Review leaf — the mac
 /// TasksReviewPanel flow, ported. An explicit SNAPSHOT: it loads on
@@ -39,7 +63,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private readonly Func<string, WorkspaceOpenTarget, bool> _openInternal;
     private readonly Func<string?> _activeNotePath;
     private readonly Action<TaskItem> _scrollToTask;
-    private readonly Func<string, TaskItem, bool> _toggleViaOpenTab;
+    private readonly Func<string, TaskItem, string, ReviewToggleRoute> _toggleViaOpenTab;
     private readonly Func<DateTimeOffset> _clock;
 
     private TaskReviewFilter _activeFilter = TaskReviewFilter.All;
@@ -49,7 +73,10 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private bool _isLoadingMore;
     private string? _loadError;
     private int _loadRequestId;
-    private bool _pendingTabToggleRefresh;
+    private int _loadMoreToken;
+    private ulong _snapshotGeneration;
+    private readonly HashSet<string> _pendingToggleRefreshPaths =
+        new(StringComparer.Ordinal);
 
     public TasksReviewViewModel(
         VaultSession session,
@@ -57,7 +84,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         Func<string, WorkspaceOpenTarget, bool> openInternal,
         Func<string?> activeNotePath,
         Action<TaskItem> scrollToTask,
-        Func<string, TaskItem, bool> toggleViaOpenTab,
+        Func<string, TaskItem, string, ReviewToggleRoute> toggleViaOpenTab,
         Func<DateTimeOffset>? clock = null,
         bool synchronousForTests = false)
         : base(synchronousForTests)
@@ -190,6 +217,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private void LoadFirstPage()
     {
         int requestId = ++_loadRequestId;
+        // Starting a fresh page invalidates any in-flight load-more
+        // (adversarial round 1): its stale completion must neither
+        // append nor leave the button stuck on "Loading more tasks…".
+        _ = ++_loadMoreToken;
+        _isLoadingMore = false;
         TaskReviewFilter filter = ActiveFilter;
         _isLoading = true;
         _loadError = null;
@@ -198,8 +230,13 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         {
             TaskWithLocationPage? page = null;
             string? failure = null;
+            ulong generation = 0;
             try
             {
+                // Captured BEFORE the query: a bump in between makes
+                // the next load-more reload instead of appending —
+                // the safe direction.
+                generation = _session.InteractionGeneration();
                 page = _session.TasksInVault(
                     ToTaskFilter(filter), new Paging(null, PageSize));
             }
@@ -210,14 +247,17 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             {
                 failure = exception.Message;
             }
-            Post(() => PublishFirstPage(requestId, page, failure));
+            Post(() => PublishFirstPage(requestId, page, failure, generation));
         });
     }
 
     /// <summary>Internal so stale-ordering is testable
     /// deterministically (the PublishOutline pattern).</summary>
     internal void PublishFirstPage(
-        int requestId, TaskWithLocationPage? page, string? failure)
+        int requestId,
+        TaskWithLocationPage? page,
+        string? failure,
+        ulong generation = 0)
     {
         if (requestId != _loadRequestId)
         {
@@ -233,6 +273,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             RaiseStateChanges();
             return;
         }
+        _snapshotGeneration = generation;
         Rows.Clear();
         foreach (TaskWithLocation row in page.Items)
         {
@@ -246,26 +287,38 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     }
 
     /// <summary>Load more appends via the opaque cursor; a failed
-    /// load-more keeps existing rows (mac parity). Re-entrancy
-    /// guarded.</summary>
+    /// load-more keeps existing rows (mac parity). The cursor is only
+    /// honored against the SNAPSHOT it came from: an index-generation
+    /// drift (any vault mutation since the first page) reloads
+    /// instead of appending — a live cursor over a mutated index can
+    /// duplicate moved rows and skip others (adversarial round 1).</summary>
     public void LoadMore()
     {
-        if (_nextCursor is not { } cursor || _isLoadingMore)
+        if (_nextCursor is not { } cursor || _isLoadingMore || _isLoading)
         {
             return;
         }
-        int requestId = _loadRequestId;
+        int token = ++_loadMoreToken;
         TaskReviewFilter filter = ActiveFilter;
+        ulong snapshotGeneration = _snapshotGeneration;
         _isLoadingMore = true;
         RaiseStateChanges();
         StartWork(() =>
         {
             TaskWithLocationPage? page = null;
             string? failure = null;
+            bool drifted = false;
             try
             {
-                page = _session.TasksInVault(
-                    ToTaskFilter(filter), new Paging(cursor, PageSize));
+                if (_session.InteractionGeneration() != snapshotGeneration)
+                {
+                    drifted = true;
+                }
+                else
+                {
+                    page = _session.TasksInVault(
+                        ToTaskFilter(filter), new Paging(cursor, PageSize));
+                }
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -274,55 +327,84 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             {
                 failure = exception.Message;
             }
-            Post(() =>
-            {
-                if (requestId != _loadRequestId)
-                {
-                    return;
-                }
-                _isLoadingMore = false;
-                if (failure is not null || page is null)
-                {
-                    _loadError = failure ?? "The vault could not be read.";
-                    RaiseStateChanges();
-                    return;
-                }
-                foreach (TaskWithLocation row in page.Items)
-                {
-                    Rows.Add(new ReviewTaskRowViewModel(row));
-                }
-                _nextCursor = page.NextCursor;
-                _totalFiltered = checked((long)page.TotalFiltered);
-                RaiseStateChanges();
-            });
+            Post(() => PublishLoadMore(token, page, failure, drifted));
         });
     }
 
-    /// <summary>Row toggle (mac toggleVaultTask): a file with an open
-    /// tab routes through that tab's guarded ToggleTask (dirty
-    /// refusal, conflict detection, canonical announcements — the
-    /// refresh arrives via <see cref="NoteRefreshed"/>). A file with
-    /// NO open tab toggles the session directly with no expected
-    /// hash — explicit user intent overrides conflict detection, the
-    /// mac review posture — then re-queries page one.</summary>
+    /// <summary>Internal so token staleness and drift are testable
+    /// deterministically.</summary>
+    internal void PublishLoadMore(
+        int token, TaskWithLocationPage? page, string? failure, bool drifted)
+    {
+        if (token != _loadMoreToken)
+        {
+            // Superseded by a fresh first page, which already cleared
+            // the loading flag — nothing to do.
+            return;
+        }
+        _isLoadingMore = false;
+        if (drifted)
+        {
+            // The snapshot moved under the cursor: reload page one
+            // rather than appending against a different index.
+            LoadFirstPage();
+            return;
+        }
+        if (failure is not null || page is null)
+        {
+            _loadError = failure ?? "The vault could not be read.";
+            RaiseStateChanges();
+            return;
+        }
+        foreach (TaskWithLocation row in page.Items)
+        {
+            Rows.Add(new ReviewTaskRowViewModel(row));
+        }
+        _nextCursor = page.NextCursor;
+        _totalFiltered = checked((long)page.TotalFiltered);
+        RaiseStateChanges();
+    }
+
+    /// <summary>Row toggle: a file with an open tab routes through
+    /// that tab's guarded ToggleTask; a file with NO open tab toggles
+    /// the session directly — WITH the row's snapshot hash as the
+    /// expected hash (adversarial round 1, a deliberate divergence
+    /// from the mac review's nil hash): task ordinals are only stable
+    /// for a given source text, so a hash mismatch means the clicked
+    /// row could name a DIFFERENT task now. Conflicts refuse loudly
+    /// and reload the snapshot.</summary>
     public void ToggleTask(ReviewTaskRowViewModel row)
     {
-        if (_toggleViaOpenTab(row.Path, row.Task))
+        switch (_toggleViaOpenTab(row.Path, row.Task, row.ContentHash))
         {
-            _pendingTabToggleRefresh = true;
-            return;
+            case ReviewToggleRoute.Started:
+                _ = _pendingToggleRefreshPaths.Add(row.Path);
+                return;
+            case ReviewToggleRoute.RefusedStale:
+                // The conflict was announced; the snapshot is stale.
+                LoadFirstPage();
+                return;
+            case ReviewToggleRoute.RefusedDirty:
+                return;
         }
 
         string path = row.Path;
+        string fileName = row.FileName;
         TaskItem task = row.Task;
+        string expectedHash = row.ContentHash;
         string nextStatus = task.Completed ? " " : "x";
         StartWork(() =>
         {
+            bool conflict = false;
             string? failure = null;
             try
             {
                 _ = _session.ToggleTaskStatus(
-                    path, task.Ordinal, nextStatus, null);
+                    path, task.Ordinal, nextStatus, expectedHash);
+            }
+            catch (VaultException.WriteConflict)
+            {
+                conflict = true;
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -335,6 +417,15 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             {
                 if (IsShutDown)
                 {
+                    return;
+                }
+                if (conflict)
+                {
+                    // The file changed since the snapshot: refusing is
+                    // the point — the stale ordinal could have toggled
+                    // a different task. Reload so the rows are true.
+                    _announce(new A11yEvent.TaskToggleConflict(fileName));
+                    LoadFirstPage();
                     return;
                 }
                 if (failure is not null)
@@ -357,18 +448,16 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
 
     /// <summary>A whole-document refresh landed for <paramref
     /// name="path"/> (the task-toggle publish): re-query page one
-    /// ONLY when this review initiated a tab-routed toggle — the
-    /// snapshot must not chase unrelated saves (mac removed exactly
-    /// that auto-refresh).</summary>
+    /// ONLY when this review started a tab-routed toggle for that
+    /// same path — the snapshot must not chase unrelated saves (mac
+    /// removed exactly that auto-refresh), and refusals never arm
+    /// the flag (adversarial round 1).</summary>
     public void NoteRefreshed(string path)
     {
-        if (!_pendingTabToggleRefresh
-            || !Rows.Any(row => string.Equals(
-                row.Path, path, StringComparison.Ordinal)))
+        if (!_pendingToggleRefreshPaths.Remove(path))
         {
             return;
         }
-        _pendingTabToggleRefresh = false;
         LoadFirstPage();
     }
 
@@ -440,6 +529,7 @@ internal sealed class ReviewTaskRowViewModel
         Task = row.Task;
         Path = row.Path;
         FileName = row.FileName;
+        ContentHash = row.ContentHash;
         DisplayText = EditorInteractionCoordinator.BoundDisplayText(
             row.Task.Text);
         MetadataCaption = string.Join(
@@ -453,6 +543,10 @@ internal sealed class ReviewTaskRowViewModel
     public string Path { get; }
 
     public string FileName { get; }
+
+    /// <summary>The file's hash at snapshot time — the toggle's
+    /// identity check (round 1).</summary>
+    public string ContentHash { get; }
 
     public string DisplayText { get; }
 

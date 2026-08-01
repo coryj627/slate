@@ -289,6 +289,36 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void StaleTabsRefuseReviewTogglesWithAConflict()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+
+        // Disk moves under the OPEN tab (an external edit through the
+        // session): the review snapshot carries the NEW hash, the tab
+        // still holds the old baseline — toggling through that tab
+        // would splice against the wrong bytes (round 1).
+        _ = _session.SaveText(
+            "todo.md", "- [ ] rewritten 📅 2026-01-01\n", null);
+        workspace.TasksReview.ForceReload();
+        ReviewTaskRowViewModel row = workspace.TasksReview.Rows.First(
+            r => r.Path == "todo.md");
+
+        workspace.TasksReview.ToggleTask(row);
+
+        _ = Assert.Single(announced.OfType<A11yEvent.TaskToggleConflict>());
+        Assert.Contains(
+            "- [ ] rewritten",
+            File.ReadAllText(Path.Combine(_fixture.Root, "todo.md")));
+    }
+
+    [Fact]
     public void DisplayBoundsWhileTaskDataStaysExact()
     {
         string giant = new('t', 1024 * 1024);

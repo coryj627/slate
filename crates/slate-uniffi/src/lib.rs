@@ -4455,6 +4455,10 @@ pub struct TaskWithLocation {
     pub task: TaskItem,
     pub path: String,
     pub file_name: String,
+    /// Snapshot content hash (W4-3): a review toggle passes this as
+    /// the expected hash so a stale ordinal can never silently
+    /// toggle a different task.
+    pub content_hash: String,
 }
 
 impl From<core::TaskWithLocation> for TaskWithLocation {
@@ -4463,6 +4467,7 @@ impl From<core::TaskWithLocation> for TaskWithLocation {
             task: t.task.into(),
             path: t.path,
             file_name: t.file_name,
+            content_hash: t.content_hash,
         }
     }
 }
