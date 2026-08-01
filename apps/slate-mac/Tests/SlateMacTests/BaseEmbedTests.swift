@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+import Combine
 import XCTest
 
 @testable import SlateMac
@@ -694,6 +695,45 @@ final class BaseEmbedTests: XCTestCase {
         XCTAssertNil(first.handle)
         XCTAssertNil(duplicate.handle)
         XCTAssertTrue(state.baseEmbedHandles.isEmpty)
+    }
+
+    /// Round 20: the embed owner conforms to the atomic-publication
+    /// contract — at every emission of the PUBLISHED sort, the rows
+    /// are already in the announced order; an accepted sort is never
+    /// visible with the previous order.
+    func testEmbedSortPublishesIdentityOnlyAfterItsRows() async throws {
+        let state = try await makeAppState()
+        let session = try XCTUnwrap(state.currentSession)
+        let request = try XCTUnwrap(
+            BaseEmbedRequest.wikilinkTarget("Queries/Reading.base"))
+        let document = BaseEmbedDocument(
+            request: request,
+            thisPath: "Notes/Host.md",
+            sharedHandle: state.baseEmbedHandle(
+                for: request, thisPath: "Notes/Host.md"))
+        document.load(session: session)
+        let unsorted = try XCTUnwrap(document.result?.rows.map(\.filePath))
+
+        var observed: [(String?, [String]?)] = []
+        let cancellable = document.$sortSelection
+            .dropFirst()
+            .sink { [weak document] newSort in
+                observed.append(
+                    (newSort?.columnID, document?.result?.rows.map(\.filePath)))
+            }
+        defer { cancellable.cancel() }
+
+        document.setTransientSort(
+            DataGridSortState(columnIndex: 0, ascending: false), session: session)
+        let sorted = try XCTUnwrap(document.result?.rows.map(\.filePath))
+        XCTAssertNotEqual(sorted, unsorted, "the fixture must actually reorder")
+        XCTAssertEqual(
+            observed.compactMap(\.0).count, 1, "the identity publishes once")
+        for (publishedSort, rowsAtPublication) in observed where publishedSort != nil {
+            XCTAssertEqual(
+                rowsAtPublication, sorted,
+                "an accepted sort must never be visible with the previous order")
+        }
     }
 
     func testMountedLazyPlaceholderKeepsRegistryLeaseUntilUnmounted() async throws {
