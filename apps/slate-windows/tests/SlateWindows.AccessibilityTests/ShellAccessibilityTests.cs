@@ -1466,6 +1466,37 @@ public sealed class ShellAccessibilityTests
             // but peers stale" (full note text, missing elements).
             AutomationElement[] surfaces = window.FindAllDescendants(
                 cf => cf.ByAutomationId("ReadingSurface"));
+            // Manual sibling walk with the raw view walker: the diag
+            // channel proved the peer holds 9 fresh children while
+            // FindAll returns 2 — so navigation DIES on a specific
+            // sibling. Name it, step by step, exception included.
+            string walkTrace = "<no surface>";
+            if (surfaces.Length > 0)
+            {
+                var steps = new List<string>();
+                try
+                {
+                    var walker = surfaces[0].Automation.TreeWalkerFactory
+                        .GetRawViewWalker();
+                    AutomationElement? step = walker.GetFirstChild(surfaces[0]);
+                    int guard = 0;
+                    while (step is not null && guard++ < 20)
+                    {
+                        steps.Add(
+                            (step.Properties.LocalizedControlType.ValueOrDefault ?? "?")
+                            + ":"
+                            + (step.Properties.Name.ValueOrDefault ?? ""));
+                        step = walker.GetNextSibling(step);
+                    }
+                    steps.Add("<walk ended>");
+                }
+                catch (Exception exception)
+                {
+                    steps.Add($"<walk threw: {exception.GetType().Name}: "
+                        + $"{exception.Message}>");
+                }
+                walkTrace = string.Join(" | ", steps);
+            }
             string rangeText = "<no surface>";
             if (surfaces.Length > 0)
             {
@@ -1506,6 +1537,7 @@ public sealed class ShellAccessibilityTests
                 $"no {description} appeared under ReadingSurface.\n"
                 + $"surfaces: {surfaces.Length}\n"
                 + $"descendants ({last.Length}): {census}\n"
+                + $"sibling walk: {walkTrace}\n"
                 + $"range text: {rangeText.Replace("\r", "\\r").Replace("\n", "\\n")}\n"
                 + logDiagnostics);
         }
