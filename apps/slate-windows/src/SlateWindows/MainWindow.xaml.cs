@@ -696,7 +696,12 @@ public partial class MainWindow : Window
 
     private void PanelBacklinks_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (PanelBacklinksList.SelectedItem is BacklinkRowViewModel row)
+        // Activate the CLICKED row only — a double-click on empty
+        // chrome must not open whatever happened to be selected
+        // (adversarial round 8; same contract as the context menus).
+        if (PanelRowTargeting.TargetRowAt(
+                PanelBacklinksList, e.OriginalSource, pointerRequest: true)
+            && PanelBacklinksList.SelectedItem is BacklinkRowViewModel row)
         {
             PanelsViewModel?.OpenBacklink(row, PanelModifierTarget());
             e.Handled = true;
@@ -770,7 +775,9 @@ public partial class MainWindow : Window
 
     private void PanelOutgoingLinks_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (PanelOutgoingLinksList.SelectedItem is OutgoingLinkRowViewModel row)
+        if (PanelRowTargeting.TargetRowAt(
+                PanelOutgoingLinksList, e.OriginalSource, pointerRequest: true)
+            && PanelOutgoingLinksList.SelectedItem is OutgoingLinkRowViewModel row)
         {
             PanelsViewModel?.OpenOutgoingLink(row, PanelModifierTarget());
             e.Handled = true;
@@ -809,7 +816,9 @@ public partial class MainWindow : Window
 
     private void PanelOutline_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        if (PanelOutlineList.SelectedItem is OutlineRowViewModel row)
+        if (PanelRowTargeting.TargetRowAt(
+                PanelOutlineList, e.OriginalSource, pointerRequest: true)
+            && PanelOutlineList.SelectedItem is OutlineRowViewModel row)
         {
             PanelsViewModel?.OpenHeading(row);
             e.Handled = true;

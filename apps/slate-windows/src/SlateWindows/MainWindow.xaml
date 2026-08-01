@@ -770,6 +770,9 @@
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.OutlineEmptyMessage}" />
+                                <TextBlock DockPanel.Dock="Bottom"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.OutlineTruncationNotice}" />
                                 <ListBox x:Name="PanelOutlineList"
                                          Style="{StaticResource PanelListBox}"
                                          ItemsSource="{Binding Panels.Outline}"

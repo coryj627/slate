@@ -43,6 +43,24 @@ public sealed class RightPanePanelsTests : IDisposable
         dense.Append("![[target]]\n");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "dense.md"), dense.ToString());
+        // Outline fan-out (round 8): heading extraction is
+        // count-unbounded in core.
+        var heads = new System.Text.StringBuilder();
+        for (int i = 1; i <= 1200; i++)
+        {
+            heads.Append($"# Heading {i}\n\n");
+        }
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "headings.md"), heads.ToString());
+        // All-embed density (round 8): the candidate array and the
+        // dispatcher publish must both stay bounded.
+        var embDense = new System.Text.StringBuilder("# EmbDense\n\n");
+        for (int i = 1; i <= 2000; i++)
+        {
+            embDense.Append($"![[e{i}]]\n");
+        }
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "embdense.md"), embDense.ToString());
         File.WriteAllText(
             Path.Combine(_fixture.Root, "bare.md"), "Plain text.\n");
         File.WriteAllText(
@@ -491,6 +509,54 @@ public sealed class RightPanePanelsTests : IDisposable
             panels.OutgoingLinksTruncationNotice);
         EmbedRowViewModel embed = Assert.Single(panels.Embeds);
         Assert.Equal("Embedded note: target.md", embed.Node.Title);
+    }
+
+    [Fact]
+    public void HeadingDenseNotesCapTheOutlineLoudly()
+    {
+        var announced = new List<A11yEvent>();
+        var panels = LoadHost(announced, path: "headings.md");
+
+        Assert.Equal(
+            RightPanePanelsViewModel.MaxOutlineRows, panels.Outline.Count);
+        Assert.Equal(
+            $"Showing {RightPanePanelsViewModel.MaxOutlineRows} of 1200 "
+                + "headings.",
+            panels.OutlineTruncationNotice);
+        // The announcement speaks the TRUE total, not the display cap.
+        var count = Assert.Single(announced.OfType<A11yEvent.OutlineCount>());
+        Assert.Equal(1200u, count.Count);
+
+        // The save-refresh path publishes through the same cap.
+        panels.NoteSaved("headings.md");
+        WaitFor(() => !panels.IsLoadingOutline, "the save refresh never settled");
+        Assert.Equal(
+            RightPanePanelsViewModel.MaxOutlineRows, panels.Outline.Count);
+        Assert.NotNull(panels.OutlineTruncationNotice);
+    }
+
+    [Fact]
+    public void AllEmbedDenseNotesBoundEveryPublication()
+    {
+        var panels = LoadHost([], path: "embdense.md");
+
+        // 2000 embed links: outgoing display caps, and the embeds
+        // leaf holds cap + one summary row whose tail count comes
+        // from the TRUE total (the candidate array is itself capped).
+        Assert.Equal(
+            RightPanePanelsViewModel.MaxOutgoingRows,
+            panels.OutgoingLinks.Count);
+        Assert.Equal(
+            "Outgoing links, 2000 entries", panels.OutgoingLinksHeader);
+        Assert.Equal(
+            RightPanePanelsViewModel.MaxEmbedRows + 1, panels.Embeds.Count);
+        EmbedRowViewModel summary = panels.Embeds[^1];
+        Assert.True(summary.Node.IsWarning);
+        Assert.Equal(
+            $"Embed limit reached for this note. "
+                + $"{2000 - RightPanePanelsViewModel.MaxEmbedRows} more "
+                + "embeds are not shown.",
+            summary.Node.Title);
     }
 
     [Fact]

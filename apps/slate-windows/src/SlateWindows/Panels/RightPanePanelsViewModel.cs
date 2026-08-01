@@ -59,6 +59,14 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     /// (their own budgets bound that work).</summary>
     internal const int MaxOutgoingRows = 512;
 
+    /// <summary>Round 8: heading extraction is count-unbounded in
+    /// core, so the outline needed the same display cap — a
+    /// generated note with tens of thousands of headings produced
+    /// the outgoing-list fan-out all over again (including on every
+    /// save-refresh). The OutlineCount announcement keeps the TRUE
+    /// total.</summary>
+    internal const int MaxOutlineRows = 512;
+
     /// <summary>Rounds 4-5: encoded size says nothing about pixel
     /// allocation — a few-KB PNG decodes to ~5 MB at the 1120px
     /// decode bound, so 128 tiny images could pass the encoded
@@ -93,6 +101,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private string? _outlineLoadError;
     private string? _embedsLoadError;
     private int _totalOutgoingLinks;
+    private int _totalOutlineHeadings;
     private volatile bool _isShutDown;
     private readonly bool _synchronous;
 
@@ -233,6 +242,11 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 + "outgoing links."
             : null;
 
+    public string? OutlineTruncationNotice =>
+        _totalOutlineHeadings > Outline.Count && Outline.Count > 0
+            ? $"Showing {Outline.Count} of {_totalOutlineHeadings} headings."
+            : null;
+
     public string EmbedsHeader => Header("Embeds", Embeds.Count);
 
     private static string Header(string title, int count) =>
@@ -300,6 +314,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         OutlineLoadError = null;
         EmbedsLoadError = null;
         _totalOutgoingLinks = 0;
+        _totalOutlineHeadings = 0;
         RaiseHeaderChanges();
         if (path is null)
         {
@@ -347,6 +362,21 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 // guard, and an uncaught worker fault is unobserved.
                 failure = exception.Message;
             }
+            // Embed candidates are derived OFF-THREAD (round 8): the
+            // resolve loop consumes at most MaxEmbedRows + 1 items,
+            // so the retained candidate array is capped too — the
+            // true total rides along for the tail summary.
+            int totalEmbeds = 0;
+            OutgoingLink[] embedLinks = [];
+            if (bundle is not null)
+            {
+                totalEmbeds = bundle.OutgoingLinks.Count(
+                    link => link.IsEmbed);
+                embedLinks = bundle.OutgoingLinks
+                    .Where(link => link.IsEmbed)
+                    .Take(MaxEmbedRows + 1)
+                    .ToArray();
+            }
             Post(() =>
             {
                 if (generation != _loadGeneration)
@@ -382,10 +412,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 }
                 IsLoadingLinks = false;
                 RaiseHeaderChanges();
-                ResolveEmbeds(
-                    path,
-                    generation,
-                    bundle.OutgoingLinks.Where(link => link.IsEmbed).ToArray());
+                ResolveEmbeds(path, generation, embedLinks, totalEmbeds);
             });
         });
     }
@@ -398,7 +425,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     /// preview budgets, degrading over-budget content with an explicit
     /// truncation notice rather than silently.
     /// </summary>
-    private void ResolveEmbeds(string path, int generation, OutgoingLink[] embedLinks)
+    private void ResolveEmbeds(
+        string path, int generation, OutgoingLink[] embedLinks, int totalEmbeds)
     {
         if (embedLinks.Length == 0)
         {
@@ -443,8 +471,10 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 // one loud summary, never a silent drop.
                 if (rows.Count >= MaxEmbedRows)
                 {
+                    // The candidate array is itself capped (round 8),
+                    // so the tail size comes from the TRUE total.
                     rows.Add(EmbedRowViewModel.RowLimit(
-                        link, embedLinks.Length - index));
+                        link, totalEmbeds - index));
                     break;
                 }
 
@@ -622,9 +652,15 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         // Mutations FIRST: the loading-flag setter notifies the
         // empty-message binding, and WPF re-reads it synchronously —
         // notifying before the rows land froze the previous state's
-        // sentence on screen (adversarial round 3).
+        // sentence on screen (adversarial round 3). Display-capped
+        // (round 8): heading extraction is count-unbounded in core,
+        // so every publish — including save-refreshes — bounds its
+        // dispatcher fan-out; the notice and announcement carry the
+        // TRUE total.
+        _totalOutlineHeadings = headings?.Length ?? 0;
         Outline.Clear();
-        foreach (Heading heading in headings ?? [])
+        foreach (Heading heading in
+            (headings ?? []).Take(MaxOutlineRows))
         {
             Outline.Add(new OutlineRowViewModel(heading));
         }
@@ -641,7 +677,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 _announcedOutlinePath, path, StringComparison.Ordinal))
         {
             _announcedOutlinePath = path;
-            _announce(new A11yEvent.OutlineCount((uint)Outline.Count));
+            _announce(new A11yEvent.OutlineCount(
+                (uint)_totalOutlineHeadings));
         }
     }
 
@@ -731,6 +768,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         OnPropertyChanged(nameof(OutlineEmptyMessage));
         OnPropertyChanged(nameof(EmbedsEmptyMessage));
         OnPropertyChanged(nameof(OutgoingLinksTruncationNotice));
+        OnPropertyChanged(nameof(OutlineTruncationNotice));
     }
 
     /// <summary>Workspace teardown: invalidate every in-flight load
