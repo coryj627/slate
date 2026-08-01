@@ -449,6 +449,13 @@ internal sealed class ReadingSurface : RichTextBox
     /// </summary>
     private void InvalidateAutomationChildren()
     {
+        // The UIA bridge publishes structure updates at the END OF A
+        // LAYOUT PASS — and a starved session defers layout
+        // indefinitely, so clients keep walking the pre-merge view
+        // while the peer's own children list is current (measured
+        // 2026-08-01: a clean two-element sibling walk against a
+        // nine-child cache). Run the pass NOW, synchronously.
+        UpdateLayout();
         if (UIElementAutomationPeer.FromElement(this) is { } peer)
         {
             // Marking the cache dirty is NOT enough: the rebuild waits
