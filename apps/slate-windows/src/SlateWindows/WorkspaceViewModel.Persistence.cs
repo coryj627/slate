@@ -154,6 +154,13 @@ internal sealed partial class WorkspaceViewModel
                 _persistencePending = false;
                 PersistCore();
             }
+            if (_persistenceBatchDepth == 0)
+            {
+                // Mutations can replace the active tab's item in place
+                // (current-tab navigation) — re-derive the panels'
+                // note once per outermost mutation.
+                SyncPanels();
+            }
         }
     }
 

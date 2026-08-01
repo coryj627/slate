@@ -1,0 +1,555 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Collections.ObjectModel;
+using System.ComponentModel;
+using uniffi.slate_uniffi;
+
+namespace SlateWindows.Panels;
+
+/// <summary>
+/// W4-2 (#734): the data model behind the four link-and-structure
+/// leaves — backlinks, outgoing links, outline, embeds.
+///
+/// The mac leaf-context matrix, ported: collections rebind on active-
+/// tab changes (including in-place path replacement on current-tab
+/// navigation) and empty out when no markdown note is active. The
+/// collections live HERE, keyed on the note — the WPF leaf templates
+/// may be re-instantiated on every leaf switch, so retention (mac's
+/// mounted-ZStack rationale: no refetch, no re-announcement) is a
+/// view-model property, never a view lifetime one.
+///
+/// Refresh policy is mac-verbatim: links, backlinks, and embeds load
+/// once per note selection (one <c>NoteLoadBundle</c> lock); the
+/// OUTLINE also refreshes after a save (headings move under edits;
+/// link rows deliberately do not chase the buffer).
+/// </summary>
+internal sealed class RightPanePanelsViewModel : BindableBase
+{
+    /// <summary>Mac parity: backlinks page bound (limit 200).</summary>
+    private const uint BacklinksLimit = 200;
+
+    private readonly VaultSession _session;
+    private readonly Action<A11yEvent> _announce;
+    private readonly Action<string, WorkspaceOpenTarget> _openInternal;
+    private readonly Func<string, bool> _openExternal;
+    private readonly Action<LinkAnchor> _scrollToAnchor;
+    private readonly SynchronizationContext? _uiContext;
+
+    private string? _notePath;
+    private string? _announcedOutlinePath;
+    private int _loadGeneration;
+    private bool _isLoadingLinks;
+    private bool _isLoadingOutline;
+    private bool _isResolvingEmbeds;
+    private string? _embedsLoadError;
+
+    public RightPanePanelsViewModel(
+        VaultSession session,
+        Action<A11yEvent> announce,
+        Action<string, WorkspaceOpenTarget> openInternal,
+        Func<string, bool> openExternal,
+        Action<LinkAnchor> scrollToAnchor)
+    {
+        _session = session;
+        _announce = announce;
+        _openInternal = openInternal;
+        _openExternal = openExternal;
+        _scrollToAnchor = scrollToAnchor;
+        _uiContext = SynchronizationContext.Current;
+    }
+
+    public ObservableCollection<BacklinkRowViewModel> Backlinks { get; } = [];
+
+    public ObservableCollection<OutgoingLinkRowViewModel> OutgoingLinks { get; } = [];
+
+    public ObservableCollection<OutlineRowViewModel> Outline { get; } = [];
+
+    public ObservableCollection<EmbedRowViewModel> Embeds { get; } = [];
+
+    /// <summary>Null when no markdown note is active — the leaves show
+    /// their "Select a note …" empty states.</summary>
+    public string? NotePath
+    {
+        get => _notePath;
+        private set
+        {
+            if (SetField(ref _notePath, value))
+            {
+                RaiseHeaderChanges();
+            }
+        }
+    }
+
+    public bool IsLoadingLinks
+    {
+        get => _isLoadingLinks;
+        private set
+        {
+            if (SetField(ref _isLoadingLinks, value))
+            {
+                RaiseHeaderChanges();
+            }
+        }
+    }
+
+    public bool IsLoadingOutline
+    {
+        get => _isLoadingOutline;
+        private set
+        {
+            if (SetField(ref _isLoadingOutline, value))
+            {
+                RaiseHeaderChanges();
+            }
+        }
+    }
+
+    public bool IsResolvingEmbeds
+    {
+        get => _isResolvingEmbeds;
+        private set
+        {
+            if (SetField(ref _isResolvingEmbeds, value))
+            {
+                RaiseHeaderChanges();
+            }
+        }
+    }
+
+    /// <summary>Whole-batch embed failure only — per-embed failures
+    /// synthesize unresolved rows instead (mac audit #202).</summary>
+    public string? EmbedsLoadError
+    {
+        get => _embedsLoadError;
+        private set => SetField(ref _embedsLoadError, value);
+    }
+
+    // ---- Header labels (mac LeafSection strings, verbatim) ----
+
+    public string BacklinksHeader => Header("Backlinks", Backlinks.Count);
+
+    public string OutgoingLinksHeader => Header("Outgoing links", OutgoingLinks.Count);
+
+    public string EmbedsHeader => Header("Embeds", Embeds.Count);
+
+    private static string Header(string title, int count) =>
+        $"{title}, {count} {(count == 1 ? "entry" : "entries")}";
+
+    // ---- Empty/loading states (mac LeafEmptyState sentences,
+    // verbatim — LeafPortTests pins them there; ours pin here). Null
+    // means the list has content and the message row collapses. ----
+
+    public string? BacklinksEmptyMessage =>
+        NotePath is null ? "Select a note to see its backlinks."
+        : IsLoadingLinks ? "Loading backlinks…"
+        : Backlinks.Count == 0 ? "No notes link here yet."
+        : null;
+
+    public string? OutgoingLinksEmptyMessage =>
+        NotePath is null ? "Select a note to see its outgoing links."
+        : IsLoadingLinks ? "Loading outgoing links…"
+        : OutgoingLinks.Count == 0 ? "This note has no outgoing links."
+        : null;
+
+    public string? OutlineEmptyMessage =>
+        NotePath is null ? "Select a note to see its outline."
+        : IsLoadingOutline ? "Loading outline…"
+        : Outline.Count == 0 ? "This note has no headings."
+        : null;
+
+    public string? EmbedsEmptyMessage =>
+        NotePath is null ? "Select a note to see its embeds."
+        : EmbedsLoadError is { Length: > 0 } error
+            ? $"Could not resolve embeds: {error}"
+        : IsResolvingEmbeds ? "Resolving embeds…"
+        : Embeds.Count == 0 ? "This note has no embeds."
+        : null;
+
+    /// <summary>
+    /// The active markdown note changed (or went away). Mac's
+    /// fireCollectionLoads: one bundle lock for links + backlinks,
+    /// then the embeds resolution chain, plus the outline read.
+    /// Passing the SAME path again is a no-op (leaf switches and tab
+    /// re-activations must not refetch — the retention contract).
+    /// </summary>
+    public void NoteChanged(string? path)
+    {
+        if (string.Equals(path, _notePath, StringComparison.Ordinal))
+        {
+            return;
+        }
+        NotePath = path;
+        int generation = ++_loadGeneration;
+        Backlinks.Clear();
+        OutgoingLinks.Clear();
+        Outline.Clear();
+        Embeds.Clear();
+        EmbedsLoadError = null;
+        RaiseHeaderChanges();
+        if (path is null)
+        {
+            IsLoadingLinks = false;
+            IsLoadingOutline = false;
+            IsResolvingEmbeds = false;
+            return;
+        }
+        LoadLinks(path, generation);
+        LoadOutline(path, generation, announceCount: true);
+    }
+
+    /// <summary>The active note was saved: the OUTLINE re-reads
+    /// (headings move under edits); link rows deliberately stay
+    /// (mac parity — they refresh on the next selection).</summary>
+    public void NoteSaved(string path)
+    {
+        if (!string.Equals(path, _notePath, StringComparison.Ordinal))
+        {
+            return;
+        }
+        LoadOutline(path, _loadGeneration, announceCount: false);
+    }
+
+    private void LoadLinks(string path, int generation)
+    {
+        IsLoadingLinks = true;
+        IsResolvingEmbeds = true;
+        _ = Task.Run(() =>
+        {
+            NoteLoadBundle? bundle = null;
+            try
+            {
+                bundle = _session.NoteLoadBundle(
+                    path, new Paging(null, BacklinksLimit));
+            }
+            catch (VaultException)
+            {
+            }
+            Post(() =>
+            {
+                if (generation != _loadGeneration)
+                {
+                    return;
+                }
+                IsLoadingLinks = false;
+                if (bundle is null)
+                {
+                    IsResolvingEmbeds = false;
+                    RaiseHeaderChanges();
+                    return;
+                }
+                foreach (Backlink backlink in bundle.Backlinks.Items)
+                {
+                    Backlinks.Add(new BacklinkRowViewModel(backlink));
+                }
+                foreach (OutgoingLink link in bundle.OutgoingLinks)
+                {
+                    OutgoingLinks.Add(new OutgoingLinkRowViewModel(link));
+                }
+                RaiseHeaderChanges();
+                ResolveEmbeds(
+                    path,
+                    generation,
+                    bundle.OutgoingLinks.Where(link => link.IsEmbed).ToArray());
+            });
+        });
+    }
+
+    /// <summary>
+    /// The embeds leaf is the outgoing list filtered to embeds (mac
+    /// parity — no dedicated core API), each resolved through the
+    /// BOUNDED preview path. G24's posture extends to this panel: mac
+    /// resolves panel embeds unbounded; Windows keeps the core-owned
+    /// preview budgets, degrading over-budget content with an explicit
+    /// truncation notice rather than silently.
+    /// </summary>
+    private void ResolveEmbeds(string path, int generation, OutgoingLink[] embedLinks)
+    {
+        if (embedLinks.Length == 0)
+        {
+            IsResolvingEmbeds = false;
+            RaiseHeaderChanges();
+            return;
+        }
+        _ = Task.Run(() =>
+        {
+            var rows = new List<EmbedRowViewModel>(embedLinks.Length);
+            foreach (OutgoingLink link in embedLinks)
+            {
+                EmbedResolution resolution;
+                bool truncated = false;
+                try
+                {
+                    EmbedPreviewResolution preview = _session.ResolveEmbedPreview(
+                        path, link.TargetRaw, link.DisplayText);
+                    resolution = preview.Resolution;
+                    truncated = preview.Truncated;
+                }
+                catch (VaultException)
+                {
+                    // Per-embed failure synthesizes an unresolved row —
+                    // the batch never discards partial success (mac
+                    // audit #202).
+                    resolution = new EmbedResolution.Unresolved(
+                        new EmbedUnresolvedReason.ReadError(
+                            "The embed could not be resolved."));
+                }
+                rows.Add(new EmbedRowViewModel(link, resolution, truncated));
+            }
+            Post(() =>
+            {
+                if (generation != _loadGeneration)
+                {
+                    return;
+                }
+                IsResolvingEmbeds = false;
+                foreach (EmbedRowViewModel row in rows)
+                {
+                    Embeds.Add(row);
+                }
+                RaiseHeaderChanges();
+            });
+        });
+    }
+
+    private void LoadOutline(string path, int generation, bool announceCount)
+    {
+        IsLoadingOutline = true;
+        _ = Task.Run(() =>
+        {
+            Heading[]? headings = null;
+            try
+            {
+                headings = _session.GetFileMetadata(path).Headings;
+            }
+            catch (VaultException)
+            {
+            }
+            Post(() =>
+            {
+                if (generation != _loadGeneration)
+                {
+                    return;
+                }
+                IsLoadingOutline = false;
+                Outline.Clear();
+                foreach (Heading heading in headings ?? [])
+                {
+                    Outline.Add(new OutlineRowViewModel(heading));
+                }
+                // Once per file, never for empty outlines, never again
+                // on save-refresh (mac announcedFilePath guard — the
+                // guard lives in the VIEW MODEL so template
+                // re-instantiation on leaf switches cannot re-announce).
+                if (announceCount
+                    && Outline.Count > 0
+                    && !string.Equals(
+                        _announcedOutlinePath, path, StringComparison.Ordinal))
+                {
+                    _announcedOutlinePath = path;
+                    _announce(new A11yEvent.OutlineCount((uint)Outline.Count));
+                }
+            });
+        });
+    }
+
+    // ---- Activation (mac AppState.openBacklink / openLink twins) ----
+
+    public void OpenBacklink(
+        BacklinkRowViewModel row,
+        WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab)
+    {
+        _openInternal(row.SourcePath, target);
+        _announce(new A11yEvent.InternalNavigated(
+            "Opened backlink to", row.FileName));
+    }
+
+    public void OpenOutgoingLink(
+        OutgoingLinkRowViewModel row,
+        WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab)
+    {
+        OutgoingLink link = row.Link;
+        if (link.IsExternal)
+        {
+            OpenExternal(link.TargetRaw);
+            return;
+        }
+        if (link.IsUnresolved || link.TargetPath is not { Length: > 0 } targetPath)
+        {
+            // Defensive branch included (mac parity): a non-external
+            // link without a resolved path is treated as unresolved.
+            _announce(new A11yEvent.LinkUnresolved(link.TargetRaw));
+            return;
+        }
+        _openInternal(targetPath, target);
+        _announce(new A11yEvent.InternalNavigated(
+            "Opened", System.IO.Path.GetFileName(targetPath)));
+    }
+
+    public void OpenEmbedSource(string targetPath)
+    {
+        _openInternal(targetPath, WorkspaceOpenTarget.CurrentTab);
+        _announce(new A11yEvent.InternalNavigated(
+            "Opened embed source", System.IO.Path.GetFileName(targetPath)));
+    }
+
+    /// <summary>Outline activation scrolls the CURRENT note to the
+    /// heading (the editor anchor path announces ScrolledToHeading on
+    /// an actual landing — mac #431 parity).</summary>
+    public void OpenHeading(OutlineRowViewModel row) =>
+        _scrollToAnchor(new LinkAnchor("heading", row.Text));
+
+    private void OpenExternal(string target)
+    {
+        // The mac allowlist, verbatim: anything else — file:,
+        // javascript:, custom schemes — is refused loudly.
+        bool allowed = Uri.TryCreate(target, UriKind.Absolute, out Uri? uri)
+            && uri.Scheme is "http" or "https" or "mailto";
+        if (!allowed)
+        {
+            _announce(new A11yEvent.ExternalLinkUnsupported(target));
+            return;
+        }
+        _announce(_openExternal(target)
+            ? new A11yEvent.ExternalLinkOpened()
+            : new A11yEvent.ExternalLinkFailed(target));
+    }
+
+    private void RaiseHeaderChanges()
+    {
+        OnPropertyChanged(nameof(BacklinksHeader));
+        OnPropertyChanged(nameof(OutgoingLinksHeader));
+        OnPropertyChanged(nameof(EmbedsHeader));
+        OnPropertyChanged(nameof(BacklinksEmptyMessage));
+        OnPropertyChanged(nameof(OutgoingLinksEmptyMessage));
+        OnPropertyChanged(nameof(OutlineEmptyMessage));
+        OnPropertyChanged(nameof(EmbedsEmptyMessage));
+    }
+
+    private void Post(Action action)
+    {
+        if (_uiContext is null)
+        {
+            action();
+        }
+        else
+        {
+            _uiContext.Post(_ => action(), null);
+        }
+    }
+}
+
+/// <summary>One backlink row — always resolved by construction (the
+/// core query joins on resolved targets).</summary>
+internal sealed class BacklinkRowViewModel
+{
+    public BacklinkRowViewModel(Backlink backlink)
+    {
+        SourcePath = backlink.SourcePath;
+        FileName = System.IO.Path.GetFileName(backlink.SourcePath);
+        Snippet = backlink.Snippet;
+    }
+
+    public string SourcePath { get; }
+
+    public string FileName { get; }
+
+    public string Snippet { get; }
+
+    /// <summary>Mac label, verbatim.</summary>
+    public string AutomationName => $"Backlink from {FileName}, context: {Snippet}";
+
+    public string AutomationHelpText => "Opens the source note.";
+}
+
+/// <summary>One outgoing-link row with the three-state contract:
+/// resolved internal, unresolved internal, external.</summary>
+internal sealed class OutgoingLinkRowViewModel
+{
+    public OutgoingLinkRowViewModel(OutgoingLink link)
+    {
+        Link = link;
+        DisplayTarget = link.TargetPath is { Length: > 0 } path
+            ? System.IO.Path.GetFileName(path)
+            : link.TargetRaw;
+    }
+
+    public OutgoingLink Link { get; }
+
+    public string DisplayTarget { get; }
+
+    public string Snippet => Link.Snippet;
+
+    public bool HasSnippet => Link.Snippet.Length > 0;
+
+    public bool IsUnresolved => Link.IsUnresolved;
+
+    /// <summary>The state badge chip text; the role is folded into the
+    /// row label, so the chip itself stays out of the UIA name.</summary>
+    public string? Badge =>
+        Link.IsExternal ? "External"
+        : Link.IsUnresolved ? "Unresolved"
+        : Link.IsEmbed ? "Embed"
+        : null;
+
+    /// <summary>Mac per-state labels, verbatim.</summary>
+    public string AutomationName =>
+        Link.IsExternal ? $"External link: {Link.TargetRaw}"
+        : Link.IsUnresolved ? $"Unresolved link: {Link.TargetRaw}"
+        : $"Link to {DisplayTarget}";
+
+    /// <summary>Mac per-state hints, verbatim.</summary>
+    public string AutomationHelpText =>
+        Link.IsExternal ? "Opens in the default browser."
+        : Link.IsUnresolved ? "Cannot open. Target file is not in the vault."
+        : "Opens the linked note.";
+}
+
+/// <summary>One flat outline row (mac's OutlineSidebar list is flat —
+/// heading NAVIGATION belongs to W3-1's chords, this leaf is the
+/// nav-utility feature).</summary>
+internal sealed class OutlineRowViewModel
+{
+    public OutlineRowViewModel(Heading heading)
+    {
+        Level = heading.Level;
+        Text = heading.Text;
+        AnchorId = heading.AnchorId;
+    }
+
+    public byte Level { get; }
+
+    public string Text { get; }
+
+    public string AnchorId { get; }
+
+    /// <summary>Indentation carries the level visually; the label
+    /// carries it for AT (mac verbatim).</summary>
+    public double Indent => (Level - 1) * 14.0;
+
+    public string AutomationName => $"Level {Level} heading: {Text}";
+}
+
+/// <summary>One embeds-leaf row: the resolved card tree (the shared
+/// EditorEmbedPreviewNode renderer) for one embed link.</summary>
+internal sealed class EmbedRowViewModel
+{
+    public EmbedRowViewModel(
+        OutgoingLink link, EmbedResolution resolution, bool truncated)
+    {
+        Link = link;
+        Resolution = resolution;
+        Truncated = truncated;
+        Node = EditorInteractionCoordinator.BuildEmbedPreviewNode(resolution);
+    }
+
+    public OutgoingLink Link { get; }
+
+    public EmbedResolution Resolution { get; }
+
+    /// <summary>Core preview budgets clipped the content (G24: the
+    /// bound is explicit, never silent).</summary>
+    public bool Truncated { get; }
+
+    public EditorEmbedPreviewNode Node { get; }
+}

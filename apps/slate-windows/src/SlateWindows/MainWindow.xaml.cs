@@ -9,6 +9,7 @@ using System.Windows.Media;
 using System.Windows.Threading;
 using ICSharpCode.AvalonEdit;
 using Microsoft.Win32;
+using SlateWindows.Panels;
 using uniffi.slate_uniffi;
 
 namespace SlateWindows;
@@ -678,6 +679,119 @@ public partial class MainWindow : Window
     {
         _viewModel.QuickSwitcher?.OpenSelected(WorkspaceOpenTarget.CurrentTab);
         e.Handled = true;
+    }
+
+    // ---- W4-2 link/structure leaf activation (#734). Double-click or
+    // Enter opens; the Ctrl variant opens a new tab (mac's Cmd-click,
+    // spelled as the Quick Open convention); the context menu adds the
+    // split target (mac #457). Outline activation scrolls the current
+    // note, so it has no open-target variants.
+
+    private RightPanePanelsViewModel? PanelsViewModel => _viewModel.Workspace?.Panels;
+
+    private static WorkspaceOpenTarget PanelModifierTarget() =>
+        (Keyboard.Modifiers & ModifierKeys.Control) != 0
+            ? WorkspaceOpenTarget.NewTab
+            : WorkspaceOpenTarget.CurrentTab;
+
+    private void PanelBacklinks_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (PanelBacklinksList.SelectedItem is BacklinkRowViewModel row)
+        {
+            PanelsViewModel?.OpenBacklink(row, PanelModifierTarget());
+            e.Handled = true;
+        }
+    }
+
+    private void PanelBacklinks_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter
+            && PanelBacklinksList.SelectedItem is BacklinkRowViewModel row)
+        {
+            PanelsViewModel?.OpenBacklink(row, PanelModifierTarget());
+            e.Handled = true;
+        }
+    }
+
+    private void PanelBacklinksOpen_Click(object sender, RoutedEventArgs e) =>
+        OpenSelectedBacklink(WorkspaceOpenTarget.CurrentTab);
+
+    private void PanelBacklinksOpenNewTab_Click(object sender, RoutedEventArgs e) =>
+        OpenSelectedBacklink(WorkspaceOpenTarget.NewTab);
+
+    private void PanelBacklinksOpenSplit_Click(object sender, RoutedEventArgs e) =>
+        OpenSelectedBacklink(WorkspaceOpenTarget.SplitRight);
+
+    private void OpenSelectedBacklink(WorkspaceOpenTarget target)
+    {
+        if (PanelBacklinksList.SelectedItem is BacklinkRowViewModel row)
+        {
+            PanelsViewModel?.OpenBacklink(row, target);
+        }
+    }
+
+    private void PanelOutgoingLinks_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (PanelOutgoingLinksList.SelectedItem is OutgoingLinkRowViewModel row)
+        {
+            PanelsViewModel?.OpenOutgoingLink(row, PanelModifierTarget());
+            e.Handled = true;
+        }
+    }
+
+    private void PanelOutgoingLinks_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter
+            && PanelOutgoingLinksList.SelectedItem is OutgoingLinkRowViewModel row)
+        {
+            PanelsViewModel?.OpenOutgoingLink(row, PanelModifierTarget());
+            e.Handled = true;
+        }
+    }
+
+    private void PanelOutgoingLinksOpen_Click(object sender, RoutedEventArgs e) =>
+        OpenSelectedOutgoingLink(WorkspaceOpenTarget.CurrentTab);
+
+    private void PanelOutgoingLinksOpenNewTab_Click(object sender, RoutedEventArgs e) =>
+        OpenSelectedOutgoingLink(WorkspaceOpenTarget.NewTab);
+
+    private void PanelOutgoingLinksOpenSplit_Click(object sender, RoutedEventArgs e) =>
+        OpenSelectedOutgoingLink(WorkspaceOpenTarget.SplitRight);
+
+    private void OpenSelectedOutgoingLink(WorkspaceOpenTarget target)
+    {
+        if (PanelOutgoingLinksList.SelectedItem is OutgoingLinkRowViewModel row)
+        {
+            PanelsViewModel?.OpenOutgoingLink(row, target);
+        }
+    }
+
+    private void PanelOutline_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (PanelOutlineList.SelectedItem is OutlineRowViewModel row)
+        {
+            PanelsViewModel?.OpenHeading(row);
+            e.Handled = true;
+        }
+    }
+
+    private void PanelOutline_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter
+            && PanelOutlineList.SelectedItem is OutlineRowViewModel row)
+        {
+            PanelsViewModel?.OpenHeading(row);
+            e.Handled = true;
+        }
+    }
+
+    private void PanelEmbedView_Loaded(object sender, RoutedEventArgs e)
+    {
+        // The shared card renderer's Jump seam for hosts without an
+        // editor coordinator: route to the panel navigation (which
+        // announces "Opened embed source" — the mac verb).
+        ((EditorEmbedPreviewView)sender).JumpToSource =
+            path => PanelsViewModel?.OpenEmbedSource(path);
     }
 
     private void WorkspaceContent_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)

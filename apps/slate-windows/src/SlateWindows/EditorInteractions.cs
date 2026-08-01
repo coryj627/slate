@@ -1293,6 +1293,13 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             root);
     }
 
+    /// <summary>W4-2: the embeds LEAF renders the same card tree the
+    /// Ctrl+E popover builds — one composition for the embed name
+    /// shapes, nested splicing, image decode, and unresolved
+    /// descriptions.</summary>
+    internal static EditorEmbedPreviewNode BuildEmbedPreviewNode(
+        EmbedResolution resolution) => BuildEmbedNode(resolution, depth: 0);
+
     private static EditorEmbedPreviewNode BuildEmbedNode(
         EmbedResolution resolution,
         int depth)

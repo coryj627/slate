@@ -1700,6 +1700,205 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>
+    /// W4-2 (#734): the four link/structure leaves over the live app.
+    /// Each leaf body appears with its mac-labeled rows when its rail
+    /// entry is selected, and a backlink activation navigates the
+    /// workspace to the source note.
+    /// </summary>
+    [Fact]
+    public void RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-panels-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Panels Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "host.md"),
+            "# Alpha\n\n## Beta\n\nSee [[target]] and [[missing]] and "
+                + "[link](https://example.com) here.\n\n![[target]]\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "target.md"),
+            "# Target\n\nBody. Links back to [[host]].\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-panels-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                // Session-0 fallback, as the shell gate.
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the panels startup smoke. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement hostItem = filesTree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .FirstOrDefault(item =>
+                    item.Name.StartsWith("host", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("The host TreeItem is absent.");
+            hostItem.Patterns.SelectionItem.Pattern.Select();
+            WaitForEditor(
+                window, automation, "host.md editor", TimeSpan.FromSeconds(10));
+
+            AutomationElement leaves = WaitForElement(
+                window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
+            void SelectLeaf(string title)
+            {
+                AutomationElement entry = leaves
+                    .FindAllDescendants(
+                        automation.ConditionFactory.ByControlType(ControlType.ListItem))
+                    .FirstOrDefault(item => item.Name == title)
+                    ?? throw new Xunit.Sdk.XunitException(
+                        $"No rail entry named {title}.");
+                entry.Patterns.SelectionItem.Pattern.Select();
+            }
+            AutomationElement WaitForRow(
+                AutomationElement list, Func<string, bool> match, string description)
+            {
+                AutomationElement? found = null;
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            found = list
+                                .FindAllDescendants(
+                                    automation.ConditionFactory.ByControlType(
+                                        ControlType.ListItem))
+                                .FirstOrDefault(item =>
+                                    match(item.Properties.Name.ValueOrDefault ?? ""));
+                            return found is not null;
+                        },
+                        TimeSpan.FromSeconds(15)),
+                    $"no row matching {description} appeared");
+                return found!;
+            }
+
+            // Outline: flat rows with the level-labeled names.
+            SelectLeaf("Outline");
+            AutomationElement outline = WaitForElement(
+                window, "PanelOutlineList", TimeSpan.FromSeconds(10));
+            _ = WaitForRow(
+                outline,
+                name => name == "Level 1 heading: Alpha",
+                "the level-1 heading");
+            _ = WaitForRow(
+                outline,
+                name => name == "Level 2 heading: Beta",
+                "the level-2 heading");
+
+            // Outgoing links: the three-state contract in one list.
+            SelectLeaf("Outgoing links");
+            AutomationElement outgoing = WaitForElement(
+                window, "PanelOutgoingLinksList", TimeSpan.FromSeconds(10));
+            _ = WaitForRow(
+                outgoing, name => name == "Link to target.md", "the resolved link");
+            AutomationElement unresolvedRow = WaitForRow(
+                outgoing,
+                name => name == "Unresolved link: missing",
+                "the unresolved link");
+            Assert.Equal(
+                "Cannot open. Target file is not in the vault.",
+                unresolvedRow.Properties.HelpText.ValueOrDefault);
+            _ = WaitForRow(
+                outgoing,
+                name => name == "External link: https://example.com",
+                "the external link");
+
+            // Embeds: the resolved card with the verbatim name shape
+            // and its Jump affordance.
+            SelectLeaf("Embeds");
+            _ = WaitForElement(
+                window, "PanelEmbedsList", TimeSpan.FromSeconds(10));
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByName(
+                            "Embedded note: target.md")) is not null,
+                    TimeSpan.FromSeconds(20)),
+                "the embed card never resolved");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByName(
+                            "Jump to source: target.md")) is not null,
+                    TimeSpan.FromSeconds(10)),
+                "the embed Jump affordance is absent");
+
+            // Backlinks: the composed row label, then a real
+            // activation — Enter on the focused row navigates the
+            // workspace to the source note.
+            SelectLeaf("Backlinks");
+            AutomationElement backlinks = WaitForElement(
+                window, "PanelBacklinksList", TimeSpan.FromSeconds(10));
+            AutomationElement backlinkRow = WaitForRow(
+                backlinks,
+                name => name.StartsWith(
+                    "Backlink from target.md, context: ",
+                    StringComparison.Ordinal),
+                "the backlink row");
+            Assert.Equal(
+                "Opens the source note.",
+                backlinkRow.Properties.HelpText.ValueOrDefault);
+            backlinkRow.Patterns.SelectionItem.Pattern.Select();
+            backlinkRow.Focus();
+            Keyboard.Type(VirtualKeyShort.RETURN);
+            WaitForEditor(
+                window, automation, "target.md editor", TimeSpan.FromSeconds(10));
+
+            AssertAxeClean(process, "right-pane-panels");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,

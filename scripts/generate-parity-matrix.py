@@ -148,6 +148,28 @@ LEAF_ISSUE = {
     "syncDiagnostics": "#740 (W4-8)",
 }
 
+# Leaves whose WINDOWS body + activation shipped: leaf -> delivery
+# evidence (date, surface, tests). A leaf absent here renders
+# "pending"; an entry here must name checkable evidence.
+LEAF_DELIVERED = {
+    "outline": (
+        "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
+        "MainWindow leaf body; `RightPanePanelsTests` + FlaUI "
+        "`RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+    "backlinks": (
+        "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
+        "MainWindow leaf body; `RightPanePanelsTests` + FlaUI "
+        "`RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+    "outgoingLinks": (
+        "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
+        "MainWindow leaf body; `RightPanePanelsTests` + FlaUI "
+        "`RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+    "embeds": (
+        "implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + "
+        "shared `EditorEmbedPreviewView` cards; `RightPanePanelsTests` "
+        "+ FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates`"),
+}
+
 # Milestones unshipped at the 2026-07-19 snapshot: their rows drop out
 # with one-line notes (program §moving-target item 3).
 DROPPED = [
@@ -637,7 +659,8 @@ def main() -> int:
     a("| leaf | consuming W issue | status |")
     a("|---|---|---|")
     for leaf, issue in leaf_rows:
-        a(f"| `{leaf}` | {issue} | pending |")
+        status = LEAF_DELIVERED.get(leaf, "pending")
+        a(f"| `{leaf}` | {issue} | {status} |")
     a("")
     a("## Workspace persisted tab-content kinds (`enum EditorItem`)")
     a("")

@@ -46,6 +46,7 @@ internal sealed partial class WorkspaceViewModel
             _activeGroup = value;
             OnPropertyChanged();
             RaiseCommandStates();
+            SyncPanels();
         }
     }
 
