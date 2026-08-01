@@ -52,7 +52,7 @@ jobs:
     # trusted slate-arm64 lineage; a dispatch on any other ref routes
     # to -pr (see rust.yml header; the trusted volume carries a
     # dashboard branch allow-list).
-    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
+    runs-on: namespace-profile-arm64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-arm64
     # A hung census must not burn the runner all night; per-PR runs finish
     # in ~4 min, full tier is expected in the 15-30 min band.
     timeout-minutes: 60

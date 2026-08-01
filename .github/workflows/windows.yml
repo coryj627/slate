@@ -51,22 +51,25 @@
 # its dashboard-configured size — each lane ends with a footprint report;
 # watch the trend and grow the volume before the cliff.
 #
-# Cache-trust posture (adversarial rounds 1–2 — round 2 corrected the
-# round-1 premise: this repository is PUBLIC, so fork PRs are possible
-# even with workflow-approval gates): the cache tags are
-# REF-CONDITIONAL (adversarial follow-up on #1068: the event-based
-# rule sent a maintainer's MAIN workflow_dispatch to the fork-writable
-# -pr lineage — restoring untrusted artifacts in a trusted context).
-# Runs on refs/heads/main — pushes and main dispatches — commit the
-# trusted lineages (slate-windows-rust / slate-windows-app); every
-# other ref reads and commits the parallel *-pr lineages.
+# Cache-trust posture (adversarial rounds 1–2 on #1068; this
+# repository is PUBLIC, so fork PRs are possible even with
+# workflow-approval gates): the runner PROFILE is REF-CONDITIONAL.
+# Runs on refs/heads/main — pushes and main dispatches — use the
+# protected profile (winx64-fast, dashboard branch allow-list "main");
+# every other ref uses the unprotected -pr twin profile
+# (winx64-fast-pr). Namespace enforces cache-update protection
+# PER-PROFILE (dashboard-confirmed 2026-07-31, superseding the
+# per-tag-allow-list design — the allow-list field binds every volume
+# under a profile), so trusted and PR traffic must ride separate
+# profiles; the cache TAGS (slate-windows-rust / slate-windows-app)
+# remain for per-lane lineage separation within each profile.
 # PR-controlled build code can therefore never write state a main
 # build consumes, while the 7–9 adversarial-review rounds per PR still
 # inherit each other's warm state inside the PR lineage (the blast
 # radius of a poisoned PR volume is other PR builds, never main
 # artifacts — the same bound GitHub's own cache scoping draws).
 # rust.yml, swift-tests.yml, audit.yml, and nightly.yml carry the
-# same ref-conditional tags (#1068).
+# same ref-conditional profiles (#1068).
 #
 # The dashboard allow-list is MANDATORY enforcement, not optional
 # hardening: in-workflow routing cannot bind PR-controlled YAML, and
@@ -85,12 +88,15 @@
 #      days with their original main ref, so an old run re-run during
 #      the critical section would mount pre-reset and promote its
 #      fork on clean exit. The repo-level disable fences re-runs too;
-#   2. apply the per-volume branch allow-list ("main") to all four
-#      trusted volumes: slate-windows-rust, slate-windows-app,
-#      slate-arm64, slate-mac (dashboard — cache volume
-#      configuration — Show Advanced features);
-#   3. RESET each trusted volume, discarding any generation seeded
-#      before protection;
+#   2. in the dashboard, set the PROFILE branch allow-list ("main",
+#      Show Advanced features) on the trusted profiles — winx64-fast,
+#      arm64-fast, mac-actions — and ensure the unprotected -pr twin
+#      profiles (winx64-fast-pr, arm64-fast-pr, mac-actions-pr) exist
+#      with the same platform/shape/cache size;
+#   3. RELEASE (reset) each trusted volume under the protected
+#      profiles — slate-windows-rust, slate-windows-app, slate-arm64,
+#      slate-mac — discarding any generation seeded before
+#      protection;
 #   4. RE-ENABLE Actions (enabled=true) and VERIFY on the next main
 #      run that
 #      every trusted lane's "Cache mount state (pre-build)" step reads
@@ -132,7 +138,7 @@ permissions:
 jobs:
   rust-tests:
     name: rust tests (windows x64)
-    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-rust${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
+    runs-on: namespace-profile-winx64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-windows-rust
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -291,7 +297,7 @@ jobs:
 
   windows:
     name: app build + test (windows x64)
-    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-app${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
+    runs-on: namespace-profile-winx64-fast${{ github.ref != 'refs/heads/main' && '-pr' || '' }};overrides.cache-tag=slate-windows-app
     timeout-minutes: 60
     steps:
       - name: Checkout
