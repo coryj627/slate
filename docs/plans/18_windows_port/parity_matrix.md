@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-07-30 at `5cda22c` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-01 at `226f07c` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -219,11 +219,11 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 
 | leaf | consuming W issue | status |
 |---|---|---|
-| `outline` | #734 (W4-2) | pending |
-| `backlinks` | #734 (W4-2) | pending |
-| `outgoingLinks` | #734 (W4-2) | pending |
+| `outline` | #734 (W4-2) | implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + MainWindow leaf body; `RightPanePanelsTests` + FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates` |
+| `backlinks` | #734 (W4-2) | implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + MainWindow leaf body; `RightPanePanelsTests` + FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates` |
+| `outgoingLinks` | #734 (W4-2) | implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + MainWindow leaf body; `RightPanePanelsTests` + FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates` |
 | `connections` | #746 (W6-2) | pending |
-| `embeds` | #734 (W4-2) | pending |
+| `embeds` | #734 (W4-2) | implemented 2026-08-01 (#734): `RightPanePanelsViewModel` + shared `EditorEmbedPreviewView` cards; `RightPanePanelsTests` + FlaUI `RightPanePanels_LeafBodiesCarryRowsAndBacklinkNavigates` |
 | `math` | #729 (W3-2) | pending |
 | `code` | #731 (W3-4) | pending |
 | `diagrams` | #730 (W3-3) | pending |

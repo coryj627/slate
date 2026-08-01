@@ -588,12 +588,278 @@
                             BorderThickness="1,0,0,0"
                             DataContext="{Binding Workspace}"
                             Visibility="{Binding IsRightPaneVisible, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <local:AutomationLandmarkBorder.Resources>
+                            <!-- Empty/loading sentence: collapses when the bound
+                                 message is null (the list has content). -->
+                            <Style x:Key="PanelEmptyMessage" TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{DynamicResource Slate.SecondaryTextBrush}" />
+                                <Setter Property="TextWrapping" Value="Wrap" />
+                                <Setter Property="Margin" Value="0,8,0,8" />
+                                <Style.Triggers>
+                                    <Trigger Property="Text" Value="">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                            <Style x:Key="PanelHeading" TargetType="TextBlock">
+                                <Setter Property="FontSize" Value="16" />
+                                <Setter Property="FontWeight" Value="SemiBold" />
+                                <Setter Property="AutomationProperties.HeadingLevel" Value="Level2" />
+                            </Style>
+                            <!-- Rows carry the composed mac label + per-state hint. -->
+                            <Style x:Key="PanelRowContainer" TargetType="ListBoxItem">
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                <Setter Property="AutomationProperties.HelpText" Value="{Binding AutomationHelpText}" />
+                            </Style>
+                            <Style x:Key="PanelListBox" TargetType="ListBox">
+                                <Setter Property="Background" Value="Transparent" />
+                                <Setter Property="BorderThickness" Value="0" />
+                                <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+                            </Style>
+                        </local:AutomationLandmarkBorder.Resources>
                         <Grid>
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="92" />
                             </Grid.ColumnDefinitions>
+                            <!-- W4-2 (#734): the four link/structure leaves. The
+                                 inactive bodies collapse (out of the UIA tree - the
+                                 mac accessibilityHidden gating); collections live on
+                                 Workspace.Panels, so switching never refetches. -->
+                            <DockPanel Grid.Column="0" Margin="12">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="backlinks">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelHeading}"
+                                           Text="{Binding Panels.BacklinksHeader}" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.BacklinksEmptyMessage}" />
+                                <TextBlock DockPanel.Dock="Bottom"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.BacklinksTruncationNotice}" />
+                                <ListBox x:Name="PanelBacklinksList"
+                                         Style="{StaticResource PanelListBox}"
+                                         ItemsSource="{Binding Panels.Backlinks}"
+                                         ItemContainerStyle="{StaticResource PanelRowContainer}"
+                                         MouseDoubleClick="PanelBacklinks_MouseDoubleClick"
+                                         PreviewKeyDown="PanelBacklinks_PreviewKeyDown"
+                                         ContextMenuOpening="PanelBacklinks_ContextMenuOpening"
+                                         AutomationProperties.AutomationId="PanelBacklinksList"
+                                         AutomationProperties.Name="Backlinks">
+                                    <ListBox.ContextMenu>
+                                        <ContextMenu>
+                                            <MenuItem Header="Open" Click="PanelBacklinksOpen_Click" />
+                                            <MenuItem Header="Open in New Tab" Click="PanelBacklinksOpenNewTab_Click" />
+                                            <MenuItem Header="Open in Split" Click="PanelBacklinksOpenSplit_Click" />
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="0,2">
+                                                <local:AutomationPresentationTextBlock Text="{Binding FileName}"
+                                                                                       FontWeight="SemiBold" />
+                                                <local:AutomationPresentationTextBlock Text="{Binding Snippet}"
+                                                                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                                                       TextWrapping="Wrap" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                            <DockPanel Grid.Column="0" Margin="12">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="outgoingLinks">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelHeading}"
+                                           Text="{Binding Panels.OutgoingLinksHeader}" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.OutgoingLinksEmptyMessage}" />
+                                <TextBlock DockPanel.Dock="Bottom"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.OutgoingLinksTruncationNotice}" />
+                                <ListBox x:Name="PanelOutgoingLinksList"
+                                         Style="{StaticResource PanelListBox}"
+                                         ItemsSource="{Binding Panels.OutgoingLinks}"
+                                         ItemContainerStyle="{StaticResource PanelRowContainer}"
+                                         MouseDoubleClick="PanelOutgoingLinks_MouseDoubleClick"
+                                         PreviewKeyDown="PanelOutgoingLinks_PreviewKeyDown"
+                                         ContextMenuOpening="PanelOutgoingLinks_ContextMenuOpening"
+                                         AutomationProperties.AutomationId="PanelOutgoingLinksList"
+                                         AutomationProperties.Name="Outgoing links">
+                                    <ListBox.ContextMenu>
+                                        <!-- Items are gated per row state in ContextMenuOpening:
+                                             internal rows get the tab/split set, external rows the
+                                             browser action, unresolved rows no menu at all. -->
+                                        <ContextMenu>
+                                            <MenuItem Header="Open" Tag="internal" Click="PanelOutgoingLinksOpen_Click" />
+                                            <MenuItem Header="Open in New Tab" Tag="internal" Click="PanelOutgoingLinksOpenNewTab_Click" />
+                                            <MenuItem Header="Open in Split" Tag="internal" Click="PanelOutgoingLinksOpenSplit_Click" />
+                                            <MenuItem Header="Open in Browser" Tag="external" Click="PanelOutgoingLinksOpenBrowser_Click" />
+                                        </ContextMenu>
+                                    </ListBox.ContextMenu>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="0,2">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <local:AutomationPresentationTextBlock x:Name="TargetText"
+                                                                                           Text="{Binding DisplayTarget}"
+                                                                                           FontWeight="SemiBold" />
+                                                    <!-- The state chip: the role is folded into the row
+                                                         label, so the chip stays out of the UIA name. -->
+                                                    <Border x:Name="BadgeChip"
+                                                            Margin="6,0,0,0"
+                                                            Padding="6,1"
+                                                            CornerRadius="4"
+                                                            BorderThickness="0.5"
+                                                            BorderBrush="{DynamicResource Slate.BorderBrush}">
+                                                        <local:AutomationPresentationTextBlock Text="{Binding Badge}"
+                                                                                               FontSize="11"
+                                                                                               Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                                    </Border>
+                                                </StackPanel>
+                                                <local:AutomationPresentationTextBlock x:Name="SnippetText"
+                                                                                       Text="{Binding Snippet}"
+                                                                                       Foreground="{DynamicResource Slate.SecondaryTextBrush}"
+                                                                                       TextWrapping="Wrap" />
+                                            </StackPanel>
+                                            <DataTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding IsUnresolved}" Value="True">
+                                                    <Setter TargetName="TargetText" Property="TextDecorations" Value="Strikethrough" />
+                                                    <Setter TargetName="TargetText" Property="Foreground" Value="{DynamicResource Slate.WarningBrush}" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding Badge}" Value="{x:Null}">
+                                                    <Setter TargetName="BadgeChip" Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding HasSnippet}" Value="False">
+                                                    <Setter TargetName="SnippetText" Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                            </DataTemplate.Triggers>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                            <DockPanel Grid.Column="0" Margin="12">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="outline">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelHeading}"
+                                           Text="Outline" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.OutlineEmptyMessage}" />
+                                <TextBlock DockPanel.Dock="Bottom"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.OutlineTruncationNotice}" />
+                                <ListBox x:Name="PanelOutlineList"
+                                         Style="{StaticResource PanelListBox}"
+                                         ItemsSource="{Binding Panels.Outline}"
+                                         MouseDoubleClick="PanelOutline_MouseDoubleClick"
+                                         PreviewKeyDown="PanelOutline_PreviewKeyDown"
+                                         AutomationProperties.AutomationId="PanelOutlineList"
+                                         AutomationProperties.Name="Outline">
+                                    <ListBox.ItemContainerStyle>
+                                        <Style TargetType="ListBoxItem">
+                                            <Setter Property="AutomationProperties.Name" Value="{Binding AutomationName}" />
+                                        </Style>
+                                    </ListBox.ItemContainerStyle>
+                                    <ListBox.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Orientation="Horizontal" Margin="0,2">
+                                                <Border Width="{Binding Indent}" />
+                                                <local:AutomationPresentationTextBlock Text="{Binding Text}" />
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ListBox.ItemTemplate>
+                                </ListBox>
+                            </DockPanel>
+                            <DockPanel Grid.Column="0" Margin="12">
+                                <DockPanel.Style>
+                                    <Style TargetType="DockPanel">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="embeds">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </DockPanel.Style>
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelHeading}"
+                                           Text="{Binding Panels.EmbedsHeader}" />
+                                <TextBlock DockPanel.Dock="Top"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.EmbedsEmptyMessage}" />
+                                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                              HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding Panels.Embeds}"
+                                                  AutomationProperties.AutomationId="PanelEmbedsList"
+                                                  AutomationProperties.Name="Embeds">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel Margin="0,4">
+                                                    <!-- G24: the core preview budgets bound the panel's
+                                                         resolution; the clip is explicit, never silent. -->
+                                                    <TextBlock x:Name="TruncationNotice"
+                                                               Text="Preview truncated."
+                                                               Foreground="{DynamicResource Slate.SecondaryTextBrush}" />
+                                                    <local:EditorEmbedPreviewView Root="{Binding Node}"
+                                                                                  Loaded="PanelEmbedView_Loaded" />
+                                                </StackPanel>
+                                                <DataTemplate.Triggers>
+                                                    <DataTrigger Binding="{Binding Truncated}" Value="False">
+                                                        <Setter TargetName="TruncationNotice" Property="Visibility" Value="Collapsed" />
+                                                    </DataTrigger>
+                                                </DataTemplate.Triggers>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </DockPanel>
                             <StackPanel Grid.Column="0" Margin="12">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="backlinks">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="outgoingLinks">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="outline">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding ActiveLeaf.Id}" Value="embeds">
+                                                <Setter Property="Visibility" Value="Collapsed" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
                                 <TextBlock Text="{Binding ActiveLeaf.Title}"
                                            FontSize="16"
                                            FontWeight="SemiBold"
@@ -610,7 +876,17 @@
                                      DisplayMemberPath="Title"
                                      VirtualizingStackPanel.IsVirtualizing="False"
                                      AutomationProperties.AutomationId="RightPaneLeaves"
-                                     AutomationProperties.Name="Right pane panels" />
+                                     AutomationProperties.Name="Right pane panels">
+                                <!-- Explicit names: content-derived ListItem names
+                                     are not composed on all sessions (the Quick
+                                     Open row precedent), and a rail entry an AT
+                                     cannot name is unusable. -->
+                                <ListBox.ItemContainerStyle>
+                                    <Style TargetType="ListBoxItem">
+                                        <Setter Property="AutomationProperties.Name" Value="{Binding Title}" />
+                                    </Style>
+                                </ListBox.ItemContainerStyle>
+                            </ListBox>
                         </Grid>
                     </local:AutomationLandmarkBorder>
                 </Grid>

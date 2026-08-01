@@ -425,6 +425,190 @@ fn note_load_bundle_returns_backlinks_outgoing_and_properties_in_one_call() {
 }
 
 #[test]
+fn note_link_panels_bounds_every_collection_in_sql() {
+    // W4-2 round 10: a link-dense note must never materialize an
+    // unbounded Vec before the UI's display caps can apply. Limits
+    // live in the SQL; true totals ride alongside. The embed
+    // candidates are bounded SEPARATELY so embeds past the display
+    // cap stay discoverable.
+    let mut body = String::from("# Dense\n\n");
+    for i in 0..40 {
+        body.push_str(&format!("[[d{i}]]\n"));
+    }
+    for i in 0..10 {
+        body.push_str(&format!("![[e{i}]]\n"));
+    }
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/dense.md", body.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let panels = session
+        .note_link_panels("notes/dense.md", Paging::first(50), 8, 4)
+        .unwrap();
+
+    assert_eq!(panels.outgoing_links.len(), 8);
+    assert_eq!(panels.outgoing_total, 50);
+    assert_eq!(panels.embed_links.len(), 4);
+    assert_eq!(panels.embed_total, 10);
+    assert!(panels.embed_links.iter().all(|link| link.is_embed));
+    // Document order survives the bound: the first embed is e0 even
+    // though every plain link precedes it.
+    assert_eq!(panels.embed_links[0].target_raw, "e0");
+    assert_eq!(panels.outgoing_links[0].target_raw, "d0");
+}
+
+#[test]
+fn note_outline_bounds_headings_and_reports_the_total() {
+    let mut body = String::new();
+    for i in 0..30 {
+        body.push_str(&format!("# H{i}\n\n"));
+    }
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/heads.md", body.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let page = session.note_outline("notes/heads.md", 12).unwrap();
+    assert_eq!(page.headings.len(), 12);
+    assert_eq!(page.total, 30);
+    assert_eq!(page.headings[0].text, "H0");
+
+    // Unknown paths are an empty page, not an error (the panel shows
+    // its empty state).
+    let missing = session.note_outline("notes/none.md", 12).unwrap();
+    assert!(missing.headings.is_empty());
+    assert_eq!(missing.total, 0);
+}
+
+#[test]
+fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
+    // W4-2 rounds 12-14: PRESENTATION strings (snippet, display
+    // text) are bounded at the read boundary — a megabyte alias made
+    // every row carrying it megabytes big. ACTIVATION strings
+    // (target_raw, anchor text) stay EXACT: a truncated URL could
+    // open a DIFFERENT address, and a truncated anchor stops a
+    // legitimately long heading from resolving. Their aggregate is
+    // still note-size bounded (every span is a distinct substring of
+    // one indexed note).
+    let alias = "A".repeat(1024 * 1024);
+    let long_url = format!("https://example.com/{}", "p".repeat(8 * 1024));
+    let long_heading = "H".repeat(5000);
+    let body = format!(
+        "intro [[hub|{alias}]] outro\n\n![[hub|{alias}]]\n\n[{alias}]({long_url})\n\n![[big#{long_heading}]]\n"
+    );
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/src.md", body.as_bytes()).unwrap();
+        p.write_file("notes/hub.md", b"# Hub\n").unwrap();
+        p.write_file(
+            "notes/big.md",
+            format!("# {long_heading}\n\nSection body.\n").as_bytes(),
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let ceiling = crate::links_db::MAX_LINK_SNIPPET_BYTES + '…'.len_utf8();
+
+    let panels = session
+        .note_link_panels("notes/hub.md", Paging::first(50), 8, 4)
+        .unwrap();
+    assert_eq!(panels.backlinks.items.len(), 2);
+    for backlink in &panels.backlinks.items {
+        assert!(backlink.snippet.len() <= ceiling);
+    }
+
+    let source = session
+        .note_link_panels("notes/src.md", Paging::first(50), 8, 4)
+        .unwrap();
+    assert_eq!(source.outgoing_links.len(), 4);
+    assert_eq!(source.embed_links.len(), 2);
+    for link in source
+        .outgoing_links
+        .iter()
+        .chain(source.embed_links.iter())
+    {
+        assert!(link.snippet.len() <= ceiling);
+        assert!(
+            link.display_text
+                .as_ref()
+                .is_none_or(|d| d.len() <= ceiling)
+        );
+    }
+
+    // The long external URL survives verbatim — truncating it would
+    // navigate somewhere the author never wrote.
+    let external = source
+        .outgoing_links
+        .iter()
+        .find(|link| link.is_external)
+        .expect("external link present");
+    assert_eq!(external.target_raw, long_url);
+
+    // The long heading anchor arrives exact AND still resolves its
+    // section through the DTO's own fields.
+    let anchored = source
+        .embed_links
+        .iter()
+        .find(|link| link.target_anchor.is_some())
+        .expect("anchored embed present");
+    let (kind, text) = anchored.target_anchor.as_ref().unwrap();
+    assert_eq!(kind, "heading");
+    assert_eq!(text, &long_heading);
+    let composed = format!("{}#{}", anchored.target_raw, text);
+    let resolved = session
+        .resolve_embed_preview_pooled("notes/src.md", &composed, None, u64::MAX)
+        .unwrap();
+    assert!(
+        matches!(resolved.resolution, crate::EmbedResolution::Section { .. }),
+        "long heading anchor must still resolve"
+    );
+}
+
+#[test]
+fn pooled_preview_clamps_image_payloads_to_the_callers_pool() {
+    // W4-2 round 11: the caller's remaining note-wide pool bounds
+    // what may cross FFI. Within the pool the payload arrives;
+    // past it the image degrades core-side and truncation is
+    // marked — the bytes are never marshalled.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/host.md", b"![[pic.png]]\n").unwrap();
+        p.write_file("notes/pic.png", &[0u8; 8]).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let within = session
+        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, 1024)
+        .unwrap();
+    let crate::EmbedResolution::Image { bytes, .. } = &within.resolution else {
+        panic!("expected Image, got {:?}", within.resolution);
+    };
+    assert_eq!(bytes.len(), 8);
+    assert!(!within.truncated);
+
+    let over = session
+        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, 4)
+        .unwrap();
+    assert!(matches!(
+        over.resolution,
+        crate::EmbedResolution::Unresolved {
+            reason: crate::EmbedUnresolvedReason::ReadError { .. }
+        }
+    ));
+    assert!(over.truncated);
+
+    // The pool can only LOWER the per-key allowance, never raise it:
+    // a huge pool still leaves the preview budget in charge.
+    let huge_pool = session
+        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, u64::MAX)
+        .unwrap();
+    assert!(matches!(
+        huge_pool.resolution,
+        crate::EmbedResolution::Image { .. }
+    ));
+}
+
+#[test]
 fn note_load_bundle_returns_empty_arrays_for_unknown_path() {
     // The previous shape's three separate calls each independently
     // tolerated unknown paths (empty backlinks page, empty outgoing

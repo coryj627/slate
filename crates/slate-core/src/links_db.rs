@@ -283,31 +283,127 @@ pub(crate) fn outgoing_links_for(
          WHERE files.path = ?1
          ORDER BY links.ordinal ASC",
     )?;
-    let rows = stmt.query_map(params![source_path], |row| {
-        Ok(OutgoingLink {
-            target_path: row.get::<_, Option<String>>(0)?,
-            target_raw: row.get::<_, String>(1)?,
-            target_anchor: deserialize_anchor_pair(row.get::<_, Option<String>>(2)?.as_deref()),
-            kind: row.get::<_, String>(3)?,
-            is_embed: row.get::<_, i64>(4)? != 0,
-            is_external: row.get::<_, i64>(5)? != 0,
-            // Unresolved when the link is internal (not external) AND the
-            // resolver couldn't pick a target. The fast-to-derive flag
-            // keeps consumers from re-implementing the "internal +
-            // null target" check at every call site.
-            is_unresolved: row.get::<_, Option<String>>(0)?.is_none() && row.get::<_, i64>(5)? == 0,
-            snippet: row.get::<_, String>(6)?,
-            ordinal: row.get::<_, i64>(7)? as u32,
-            span_start: row.get::<_, i64>(8)? as u32,
-            span_end: row.get::<_, i64>(9)? as u32,
-            display_text: row.get::<_, Option<String>>(10)?,
-        })
-    })?;
+    let rows = stmt.query_map(params![source_path], outgoing_link_from_row)?;
     let mut out = Vec::new();
     for r in rows {
         out.push(r?);
     }
     Ok(out)
+}
+
+/// Snippet byte ceiling at the READ boundary (W4-2 round 12): the
+/// cached `links.snippet` stores the complete authored span, so a
+/// `[[hub|<megabytes of alias>]]` source made every row that carries
+/// it megabytes big — 200 backlink rows of that crossing FFI is a
+/// multi-GB allocation. Capping on read covers already-cached rows
+/// without a migration; the ceiling is far above any legitimate
+/// one-line context.
+pub(crate) const MAX_LINK_SNIPPET_BYTES: usize = 4096;
+
+pub(crate) fn bound_snippet(mut snippet: String) -> String {
+    if snippet.len() <= MAX_LINK_SNIPPET_BYTES {
+        return snippet;
+    }
+    let mut end = MAX_LINK_SNIPPET_BYTES;
+    while end > 0 && !snippet.is_char_boundary(end) {
+        end -= 1;
+    }
+    snippet.truncate(end);
+    snippet.push('…');
+    snippet
+}
+
+fn outgoing_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutgoingLink> {
+    // PRESENTATION strings are bounded; ACTIVATION strings stay
+    // exact (W4-2 rounds 12-14). snippet and display_text are pure
+    // display — bounding them is safe. target_raw and anchor text
+    // are behaviorally significant: a truncated URL could open a
+    // DIFFERENT address, and a truncated heading anchor stops a
+    // legitimately long heading from resolving — so they cross
+    // verbatim. That stays bounded in aggregate: every span is a
+    // distinct substring of ONE note (≤ the indexed-file ceiling),
+    // so the row-capped panel arrays can never exceed one note's
+    // size in exact-field bytes; hosts bound their DISPLAY of these
+    // fields instead.
+    Ok(OutgoingLink {
+        target_path: row.get::<_, Option<String>>(0)?,
+        target_raw: row.get::<_, String>(1)?,
+        target_anchor: deserialize_anchor_pair(row.get::<_, Option<String>>(2)?.as_deref()),
+        kind: row.get::<_, String>(3)?,
+        is_embed: row.get::<_, i64>(4)? != 0,
+        is_external: row.get::<_, i64>(5)? != 0,
+        // Unresolved when the link is internal (not external) AND the
+        // resolver couldn't pick a target. The fast-to-derive flag
+        // keeps consumers from re-implementing the "internal +
+        // null target" check at every call site.
+        is_unresolved: row.get::<_, Option<String>>(0)?.is_none() && row.get::<_, i64>(5)? == 0,
+        snippet: bound_snippet(row.get::<_, String>(6)?),
+        ordinal: row.get::<_, i64>(7)? as u32,
+        span_start: row.get::<_, i64>(8)? as u32,
+        span_end: row.get::<_, i64>(9)? as u32,
+        display_text: row.get::<_, Option<String>>(10)?.map(bound_snippet),
+    })
+}
+
+/// Bounded outgoing links (W4-2 round 10): the LIMIT lives in SQL so
+/// a link-dense note never materializes an unbounded `Vec` before a
+/// UI-side cap can apply. `embeds_only` restricts to embed links —
+/// the panel's embed candidates are bounded separately from the
+/// display rows.
+pub(crate) fn outgoing_links_bounded(
+    conn: &Connection,
+    source_path: &str,
+    limit: u32,
+    embeds_only: bool,
+) -> Result<Vec<OutgoingLink>, VaultError> {
+    let sql = if embeds_only {
+        "SELECT links.target_path, links.target_raw, links.target_anchor,
+                links.kind, links.is_embed, links.is_external, links.snippet,
+                links.ordinal, links.span_start, links.span_end, links.display_text
+         FROM links
+         JOIN files ON files.id = links.source_file_id
+         WHERE files.path = ?1 AND links.is_embed != 0
+         ORDER BY links.ordinal ASC
+         LIMIT ?2"
+    } else {
+        "SELECT links.target_path, links.target_raw, links.target_anchor,
+                links.kind, links.is_embed, links.is_external, links.snippet,
+                links.ordinal, links.span_start, links.span_end, links.display_text
+         FROM links
+         JOIN files ON files.id = links.source_file_id
+         WHERE files.path = ?1
+         ORDER BY links.ordinal ASC
+         LIMIT ?2"
+    };
+    let mut stmt = conn.prepare_cached(sql)?;
+    let rows = stmt.query_map(params![source_path, limit], outgoing_link_from_row)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+/// True totals for the bounded reads above.
+pub(crate) fn outgoing_links_count(
+    conn: &Connection,
+    source_path: &str,
+    embeds_only: bool,
+) -> Result<u32, VaultError> {
+    let sql = if embeds_only {
+        "SELECT COUNT(*)
+         FROM links
+         JOIN files ON files.id = links.source_file_id
+         WHERE files.path = ?1 AND links.is_embed != 0"
+    } else {
+        "SELECT COUNT(*)
+         FROM links
+         JOIN files ON files.id = links.source_file_id
+         WHERE files.path = ?1"
+    };
+    let mut stmt = conn.prepare_cached(sql)?;
+    let count: i64 = stmt.query_row(params![source_path], |row| row.get(0))?;
+    Ok(count.max(0) as u32)
 }
 
 /// Paged backlinks for a target path — every file with a resolved
@@ -350,7 +446,7 @@ pub(crate) fn backlinks_for(
             |row| {
                 Ok(Backlink {
                     source_path: row.get::<_, String>(0)?,
-                    snippet: row.get::<_, String>(1)?,
+                    snippet: bound_snippet(row.get::<_, String>(1)?),
                     ordinal: row.get::<_, i64>(2)? as u32,
                     kind: row.get::<_, String>(3)?,
                     is_embed: row.get::<_, i64>(4)? != 0,

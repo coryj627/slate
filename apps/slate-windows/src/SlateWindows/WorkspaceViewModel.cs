@@ -682,7 +682,6 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         ArgumentNullException.ThrowIfNull(anchor);
         ArgumentNullException.ThrowIfNull(announce);
-        _ = resolvedAnchorText;
         if (_editorInteractions is null || _editorSession is null)
         {
             return false;
@@ -723,6 +722,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
                         revision,
                         caretOffset,
                         anchor,
+                        resolvedAnchorText,
                         targetUtf16,
                         announce,
                         isStillActive)));
@@ -737,6 +737,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         long revision,
         int caretOffset,
         LinkAnchor anchor,
+        string? resolvedAnchorText,
         int? targetUtf16,
         Action<A11yEvent> announce,
         Func<bool>? isStillActive)
@@ -771,7 +772,11 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         else
         {
-            announce(new A11yEvent.ScrolledToHeading(anchor.Text));
+            // Speak the heading's display text when the caller resolved
+            // one — anchors sent by slug (outline rows, wikilinks with
+            // slug anchors) would otherwise announce the slug itself.
+            announce(new A11yEvent.ScrolledToHeading(
+                resolvedAnchorText ?? anchor.Text));
         }
         _editorInteractions!.RequestCaret(target);
     }
@@ -945,7 +950,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>?
             dirtyCloseDecision = null,
         bool startInteractionBackgroundWork = true,
-        AppPreferencesStore? preferencesStore = null)
+        AppPreferencesStore? preferencesStore = null,
+        Func<string, bool>? externalOpener = null)
     {
         _session = session;
         _persistence = new WorkspacePersistence(vaultRoot);
@@ -973,7 +979,32 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
         };
         _activeLeaf = Leaves[0];
+        // The right-pane link/structure leaves (W4-2). Constructed
+        // BEFORE Restore so the activation funnels can sync into it.
+        Panels = new Panels.RightPanePanelsViewModel(
+            session,
+            announce,
+            (path, target) =>
+            {
+                bool navigated = false;
+                RunWorkspaceMutation(() => navigated = OpenPathCore(path, target));
+                return navigated;
+            },
+            externalOpener ?? DefaultExternalOpener,
+            (anchor, resolvedText) =>
+            {
+                WorkspaceGroupViewModel group = ActiveGroup;
+                WorkspaceTabViewModel? tab = group.ActiveTab;
+                _ = tab?.NavigateToAnchor(
+                    anchor,
+                    resolvedText,
+                    _announce,
+                    () => ReferenceEquals(ActiveGroup, group)
+                        && ReferenceEquals(group.ActiveTab, tab));
+            },
+            synchronousForTests: !startInteractionBackgroundWork);
         (_root, _activeGroup) = Restore(_persistence.Load());
+        SyncPanels();
 
         CloseTabCommand = new RelayCommand(
             parameter => RunWorkspaceMutation(() => CloseTab(parameter)),
@@ -1047,6 +1078,41 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     ];
     public IReadOnlyList<WorkspaceLeafOption> LeafOptions => Leaves;
     public EditorPreferencesViewModel EditorPreferences { get; }
+
+    /// <summary>The W4-2 link/structure leaf data (backlinks, outgoing
+    /// links, outline, embeds).</summary>
+    public Panels.RightPanePanelsViewModel Panels { get; }
+
+    /// <summary>Re-derive the panels' active note from the workspace —
+    /// called from every activation funnel (tab activation, pane focus,
+    /// workspace mutations). Same-path calls are no-ops in the panels
+    /// VM, so over-calling is safe and refetch-free.</summary>
+    internal void SyncPanels() =>
+        Panels.NoteChanged(
+            ActiveGroup.ActiveTab is { IsMarkdown: true } tab ? tab.Path : null);
+
+    /// <summary>External links launch through the shell (the default
+    /// browser / mail client); the panels VM allowlists schemes before
+    /// this runs.</summary>
+    private static bool DefaultExternalOpener(string target)
+    {
+        try
+        {
+            _ = System.Diagnostics.Process.Start(
+                new System.Diagnostics.ProcessStartInfo(target)
+                {
+                    UseShellExecute = true,
+                });
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is System.ComponentModel.Win32Exception
+                or InvalidOperationException
+                or System.IO.FileNotFoundException)
+        {
+            return false;
+        }
+    }
 
     public WorkspaceLeafOption ActiveLeaf
     {
@@ -1206,6 +1272,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         }
 
         Persist();
+        // A rename that touched the ACTIVE tab changed its Path in
+        // place — without a re-derive the panels stay bound to the
+        // old path and ignore every save on the new one (adversarial
+        // round 2).
+        SyncPanels();
     }
 
     public void InvalidatePath(string path)
@@ -1241,6 +1312,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void Dispose()
     {
+        // Panels first: their workers hold the shared session, which
+        // the vault lifecycle disposes right after this workspace —
+        // invalidate every in-flight load before that happens.
+        Panels.Shutdown();
         Persist();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
@@ -1255,6 +1330,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         if (ActiveGroup.ActiveTab is WorkspaceTabViewModel tab && tab.Save())
         {
             _announce(new A11yEvent.NoteSaved(System.IO.Path.GetFileName(tab.Path)));
+            // Headings move under edits — the outline leaf re-reads
+            // after a save (link rows deliberately do not; mac parity).
+            Panels.NoteSaved(tab.Path);
         }
     }
 

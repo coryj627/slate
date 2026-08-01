@@ -122,6 +122,20 @@ impl EmbedResolveBudget {
         }
     }
 
+    /// The pool-clamped profile (W4-2 round 11): the image allowance
+    /// is the MINIMUM of the per-key preview budget and the caller's
+    /// remaining note-wide pool, so payloads past the pool are
+    /// refused before any FFI record carries them. Callers can only
+    /// LOWER the allowance, never raise it.
+    pub(crate) fn preview_with_image_pool(image_pool_bytes: u64) -> Self {
+        Self::Preview {
+            remaining_text_bytes: MAX_EMBED_PREVIEW_TEXT_BYTES,
+            remaining_nodes: MAX_EMBED_PREVIEW_NODES,
+            remaining_image_bytes: MAX_EMBED_PREVIEW_IMAGE_BYTES.min(image_pool_bytes),
+            truncated: false,
+        }
+    }
+
     pub(crate) fn is_preview(&self) -> bool {
         matches!(self, Self::Preview { .. })
     }

@@ -357,6 +357,33 @@ pub struct NoteLoadBundle {
     pub properties: Vec<crate::Property>,
 }
 
+/// The BOUNDED panel feed (W4-2 round 10): every collection is
+/// SQL-limited before a `Vec` is built or anything crosses FFI, and
+/// true totals ride alongside so the UI can announce and label what
+/// its display caps hide. No properties — the link panels don't
+/// read them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoteLinkPanels {
+    pub backlinks: Page<crate::Backlink>,
+    /// At most `outgoing_limit` rows, document order.
+    pub outgoing_links: Vec<crate::OutgoingLink>,
+    pub outgoing_total: u32,
+    /// At most `embed_limit` embed links, document order — bounded
+    /// SEPARATELY from the display rows so embeds beyond the display
+    /// cap stay discoverable.
+    pub embed_links: Vec<crate::OutgoingLink>,
+    pub embed_total: u32,
+}
+
+/// Bounded outline read (W4-2 round 10): headings are count-unbounded
+/// per note, so the panel asks for at most `limit` with the true
+/// total alongside.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OutlinePage {
+    pub headings: Vec<crate::Heading>,
+    pub total: u32,
+}
+
 // --- Note parts bundle ---
 
 /// Everything the U3 tab-open path needs to render a note as body-only
@@ -5051,6 +5078,30 @@ impl VaultSession {
         })
     }
 
+    /// Pool-bounded panel profile of the preview resolver (W4-2
+    /// round 11, the reading-card precedent below): the per-key
+    /// image allowance is clamped to the caller's remaining
+    /// NOTE-WIDE pool, so payloads past the pool degrade to
+    /// `Unresolved(ReadError)` core-side instead of marshalling —
+    /// without the clamp, 128 keys × the 8 MiB per-key allowance
+    /// was ~1 GiB of FFI traffic a crafted note triggered on
+    /// activation.
+    pub fn resolve_embed_preview_pooled(
+        &self,
+        host_path: &str,
+        target: &str,
+        alt: Option<String>,
+        image_pool_bytes: u64,
+    ) -> Result<crate::EmbedPreviewResolution, VaultError> {
+        let mut budget =
+            crate::embeds::EmbedResolveBudget::preview_with_image_pool(image_pool_bytes);
+        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        Ok(crate::EmbedPreviewResolution {
+            resolution,
+            truncated: budget.truncated(),
+        })
+    }
+
     /// Reading-card profile of the preview resolver (W3-5 round 4):
     /// same cumulative budgets, but nested image payloads are
     /// stripped BEFORE the result crosses the FFI (reading cards
@@ -5550,6 +5601,76 @@ impl VaultSession {
             backlinks,
             outgoing_links,
             properties,
+        })
+    }
+
+    /// The bounded panel twin of [`Self::note_load_bundle`] (W4-2
+    /// round 10): limits apply in SQL before any `Vec` exists.
+    pub fn note_link_panels(
+        &self,
+        path: &str,
+        backlinks_paging: Paging,
+        outgoing_limit: u32,
+        embed_limit: u32,
+    ) -> Result<NoteLinkPanels, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let backlinks = crate::links_db::backlinks_for(&conn, path, backlinks_paging)?;
+        let outgoing_links =
+            crate::links_db::outgoing_links_bounded(&conn, path, outgoing_limit, false)?;
+        let outgoing_total = crate::links_db::outgoing_links_count(&conn, path, false)?;
+        let embed_links = crate::links_db::outgoing_links_bounded(&conn, path, embed_limit, true)?;
+        let embed_total = crate::links_db::outgoing_links_count(&conn, path, true)?;
+        Ok(NoteLinkPanels {
+            backlinks,
+            outgoing_links,
+            outgoing_total,
+            embed_links,
+            embed_total,
+        })
+    }
+
+    /// Bounded outline read (W4-2 round 10). A path the scanner has
+    /// not indexed returns an empty page, not an error.
+    pub fn note_outline(&self, path: &str, limit: u32) -> Result<OutlinePage, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let file_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(file_id) = file_id else {
+            return Ok(OutlinePage {
+                headings: Vec::new(),
+                total: 0,
+            });
+        };
+        let mut stmt = conn.prepare_cached(
+            "SELECT ordinal, level, text, anchor_id, byte_offset
+             FROM headings WHERE file_id = ?1
+             ORDER BY ordinal ASC
+             LIMIT ?2",
+        )?;
+        let headings: Result<Vec<crate::Heading>, rusqlite::Error> = stmt
+            .query_map(rusqlite::params![file_id, limit], |row| {
+                Ok(crate::Heading {
+                    ordinal: row.get::<_, i64>(0)? as u32,
+                    level: row.get::<_, i64>(1)? as u8,
+                    text: row.get::<_, String>(2)?,
+                    anchor_id: row.get::<_, String>(3)?,
+                    byte_offset: row.get::<_, i64>(4)? as u32,
+                })
+            })?
+            .collect();
+        let total: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM headings WHERE file_id = ?1",
+            rusqlite::params![file_id],
+            |row| row.get(0),
+        )?;
+        Ok(OutlinePage {
+            headings: headings?,
+            total: total.max(0) as u32,
         })
     }
 
