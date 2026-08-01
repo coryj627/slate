@@ -525,6 +525,35 @@ final class AccessibleDataGridTests: XCTestCase {
                 + "re-sorting the stale result with a Swift display-value comparator")
     }
 
+    /// Round 15: the owner is AUTHORITATIVE for engine-backed sorts —
+    /// a rejecting setter (admission change, backend failure) must
+    /// produce NO success announcement, no header flip, and an
+    /// unchanged order; the owner's own error path narrates.
+    @MainActor
+    func testRejectedExternalSortAnnouncesNothingAndKeepsOrder() {
+        var announced: [String] = []
+        var rejectedWrites = 0
+        let rejecting = Binding<DataGridSortState?>(
+            get: { nil },
+            set: { _ in rejectedWrites += 1 })  // the owner refuses
+        let grid = makeGrid(
+            rows: Self.people,
+            sortState: rejecting,
+            sortsRowsLocally: false,
+            announce: { announced.append($0) })
+        let coordinator = GridCoordinator(grid: grid)
+
+        XCTAssertNil(coordinator.applySort(column: 0, ascending: true))
+        XCTAssertEqual(rejectedWrites, 1, "the request reached the owner")
+        XCTAssertTrue(
+            announced.isEmpty,
+            "a rejected sort must not announce success")
+        XCTAssertEqual(
+            coordinator.displayRows.map(\.a),
+            Self.people.map(\.a),
+            "the order is unchanged")
+    }
+
     @MainActor
     func testSortSurvivesReload() {
         let grid = makeGrid(rows: Self.people)

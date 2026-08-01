@@ -567,8 +567,18 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             grid.columns[columnIndex].sort != nil
         else { return nil }
         let sort = DataGridSortState(columnIndex: columnIndex, ascending: ascending)
+        if let sortState = grid.sortState {
+            sortState.wrappedValue = sort
+            // The OWNER is authoritative for engine-backed sorts
+            // (round 15): a rejecting setter — admission change,
+            // backend failure — leaves the read-back unchanged, and
+            // proceeding would flip the header and announce a sort
+            // that never happened (a degraded-dependency
+            // false-success). Keep the old state and say nothing;
+            // the owner's own error path narrates the failure.
+            guard sortState.wrappedValue == sort else { return nil }
+        }
         activeSort = sort
-        grid.sortState?.wrappedValue = sort
         // An UNBOUND grid keeps NSTableView's native selection — its
         // identity is captured BEFORE the reorder (round 8: routing it
         // through the binding sync deselected it, because an absent
