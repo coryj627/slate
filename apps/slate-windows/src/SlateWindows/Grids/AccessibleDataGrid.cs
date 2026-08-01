@@ -43,6 +43,7 @@ internal sealed class AccessibleDataGrid : UserControl
 {
     private readonly DataGrid _grid;
     private readonly TextBlock _summary;
+    private readonly ContextMenu _persistentMenu = new();
     private readonly ObservableCollection<object> _items = new();
     private IReadOnlyList<AccessibleGridColumn> _columns = Array.Empty<AccessibleGridColumn>();
     private IReadOnlyList<AccessibleGridRowAction> _rowActions =
@@ -121,6 +122,10 @@ internal sealed class AccessibleDataGrid : UserControl
         _grid.PreviewTextInput += OnTypeAhead;
         _grid.ContextMenuOpening += OnContextMenuOpening;
         _grid.LoadingRow += OnLoadingRow;
+        // The menu EXISTS from construction (see OnContextMenuOpening:
+        // first-request opening requires it); its items are rebuilt
+        // per opening from the current row.
+        _grid.ContextMenu = _persistentMenu;
         AutomationProperties.SetAutomationId(_grid, "AccessibleDataGrid");
         // The grid precedes the summary in tab order — MoveFocus(First)
         // and plain Tab must land on cells, never on the summary that
@@ -205,20 +210,30 @@ internal sealed class AccessibleDataGrid : UserControl
         {
             return _grid.Focus();
         }
-        _grid.ScrollIntoView(_items[0], _grid.Columns[0]);
+        return FocusCellElement(_items[0], _grid.Columns[0]);
+    }
+
+    /// <summary>
+    /// Put keyboard focus on the CELL ELEMENT for (item, column):
+    /// scroll, realize the container synchronously (under a starved
+    /// session the deferred generation leaves Focus() on the grid, and
+    /// AT announces the grid instead of the cell), set currency, focus
+    /// the realized DataGridCell. Falls back to the grid only when the
+    /// container genuinely cannot exist yet (pre-load).
+    /// </summary>
+    private bool FocusCellElement(object item, DataGridColumn column)
+    {
+        _grid.ScrollIntoView(item, column);
         if (_grid.IsLoaded)
         {
-            // Realize the container NOW — under a starved session the
-            // deferred generation leaves Focus() on the grid element,
-            // and entry announces the grid instead of headers + cell.
             _grid.UpdateLayout();
         }
-        _grid.CurrentCell = new DataGridCellInfo(_items[0], _grid.Columns[0]);
+        _grid.CurrentCell = new DataGridCellInfo(item, column);
         _grid.SelectedCells.Clear();
         _grid.SelectedCells.Add(_grid.CurrentCell);
-        if (_grid.ItemContainerGenerator.ContainerFromItem(_items[0])
+        if (_grid.ItemContainerGenerator.ContainerFromItem(item)
                 is DataGridRow row
-            && _grid.Columns[0].GetCellContent(row)?.Parent is DataGridCell cell)
+            && column.GetCellContent(row)?.Parent is DataGridCell cell)
         {
             return cell.Focus();
         }
@@ -343,13 +358,20 @@ internal sealed class AccessibleDataGrid : UserControl
             && _items.Contains(currentItem))
         {
             _lastAnnouncedRow = currentItem;
-            _grid.CurrentCell = new DataGridCellInfo(
-                currentItem, currentColumn ?? _grid.Columns[columnIndex]);
-            _grid.SelectedCells.Clear();
-            _grid.SelectedCells.Add(_grid.CurrentCell);
+            DataGridColumn column = currentColumn ?? _grid.Columns[columnIndex];
             if (hadFocus)
             {
-                _ = _grid.Focus();
+                // The CELL element, not the grid (round 4): currency
+                // is metadata, and a grid-level Focus() after the
+                // container was destroyed announces the grid — the
+                // reader's cell position is what must survive a sort.
+                _ = FocusCellElement(currentItem, column);
+            }
+            else
+            {
+                _grid.CurrentCell = new DataGridCellInfo(currentItem, column);
+                _grid.SelectedCells.Clear();
+                _grid.SelectedCells.Add(_grid.CurrentCell);
             }
         }
         var @event = new A11yEvent.GridSorted(_columns[columnIndex].Header, ascending);
@@ -450,7 +472,26 @@ internal sealed class AccessibleDataGrid : UserControl
 
     private void OnContextMenuOpening(object sender, ContextMenuEventArgs e)
     {
-        _grid.ContextMenu = BuildRowActionsMenu();
+        // The persistent menu is MUTATED, never replaced: WPF decides
+        // whether to open based on the menu that exists when the
+        // request arrives, and a menu first assigned inside this event
+        // is documented as too late for the initiating request — the
+        // first Menu-key press on a fresh grid showed nothing
+        // (adversarial round 4; the CI runner reproduced it every
+        // time, local timing masked it).
+        ContextMenu? built = BuildRowActionsMenu();
+        if (built is null)
+        {
+            e.Handled = true;
+            return;
+        }
+        _persistentMenu.Items.Clear();
+        while (built.Items.Count > 0)
+        {
+            object item = built.Items[0];
+            built.Items.RemoveAt(0);
+            _ = _persistentMenu.Items.Add(item);
+        }
     }
 
     /// <summary>Row-actions menu seam (Menu key / Shift+F10): visible

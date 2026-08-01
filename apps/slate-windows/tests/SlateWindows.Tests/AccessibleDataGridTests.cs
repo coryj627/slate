@@ -253,12 +253,13 @@ public sealed class AccessibleDataGridTests
     {
         RunSta(() =>
         {
+            object? executed = null;
             var actions = new[]
             {
                 new AccessibleGridRowAction
                 {
                     Name = "Open",
-                    Execute = _ => { },
+                    Execute = row => executed = row,
                 },
                 new AccessibleGridRowAction
                 {
@@ -284,6 +285,12 @@ public sealed class AccessibleDataGridTests
             var edit = Assert.IsType<MenuItem>(menu.Items[1]);
             Assert.False(edit.IsEnabled);
             Assert.Equal("Read-only view", AutomationProperties.GetHelpText(edit));
+
+            // Click → Execute wiring, not just composition (round 4):
+            // the invoked item must run its action against the row it
+            // was built for.
+            open.RaiseEvent(new System.Windows.RoutedEventArgs(MenuItem.ClickEvent));
+            Assert.Same(People[0], executed);
         });
     }
 

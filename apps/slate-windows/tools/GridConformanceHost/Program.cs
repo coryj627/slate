@@ -129,38 +129,14 @@ internal static class Program
         // lifecycle here — popup items are not reliably enumerable
         // through desktop UIA on a starved session, and "opening" is
         // not "open": keys sent between the two land on the grid
-        // underneath (measured: Down+Enter walked the selection).
-        grid.Grid.ContextMenuOpening += (_, _) =>
+        // underneath (measured: Down+Enter walked the selection). The
+        // substrate's menu is persistent, so the hooks attach once.
+        grid.Grid.ContextMenuOpening += (_, _) => actionLog.Text = "menu-opening";
+        if (grid.Grid.ContextMenu is { } persistentMenu)
         {
-            actionLog.Text = "menu-opening";
-            _ = grid.Dispatcher.BeginInvoke(
-                new Action(() =>
-                {
-                    if (grid.Grid.ContextMenu is { } menu)
-                    {
-                        // Composition first — on a session where the
-                        // popup never composes, this is the
-                        // cross-process proof of WHAT the Menu key
-                        // built; "menu-open" overwrites it wherever
-                        // the popup actually opens.
-                        actionLog.Text = "menu-built:" + string.Join(
-                            ",",
-                            menu.Items
-                                .OfType<System.Windows.Controls.MenuItem>()
-                                .Select(item => item.Header?.ToString() ?? "?"));
-                        if (menu.IsOpen)
-                        {
-                            actionLog.Text = "menu-open";
-                        }
-                        else
-                        {
-                            menu.Opened += (_, _) => actionLog.Text = "menu-open";
-                        }
-                        menu.Closed += (_, _) => actionLog.Text = "menu-closed";
-                    }
-                }),
-                System.Windows.Threading.DispatcherPriority.Input);
-        };
+            persistentMenu.Opened += (_, _) => actionLog.Text = "menu-open";
+            persistentMenu.Closed += (_, _) => actionLog.Text = "menu-closed";
+        }
         // The suite reads grid events cross-process through the log —
         // the observable that separates "input never arrived" from
         // "the sort never fired" on a hosted runner.

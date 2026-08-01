@@ -115,6 +115,16 @@ public sealed class GridConformanceTests
                 // stalled; anything else means input never arrived.
                 "descending sort did not reorder row 0; host log: "
                     + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+            // The reader's CELL survives both sorts (round 4): after
+            // two re-populations, UIA keyboard focus must still be the
+            // originally focused cell element, not the grid.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.Name == "Name: Note 00000",
+                    TimeSpan.FromSeconds(10)),
+                "post-sort focus is on "
+                    + $"'{automation.FocusedElement()?.Name ?? "<none>"}', "
+                    + "not the reader's cell");
 
             // Type-ahead: prefix matching on the FIRST column.
             Keyboard.Type("note 00042");
@@ -134,57 +144,29 @@ public sealed class GridConformanceTests
             // retained with its reason as HelpText — is pinned by the
             // in-process unit test
             // (RowActionsMenuRetainsDisabledActionsWithTheirReason).
+            // The FIRST Menu-key press must OPEN the menu — a menu
+            // first assigned inside ContextMenuOpening is too late for
+            // the initiating request (round 4: the runner reproduced
+            // the first-open production failure every time; the
+            // substrate now keeps a persistent menu and mutates its
+            // items), then Down + Enter execute the first action.
             Keyboard.Type(VirtualKeyShort.APPS);
-            string menuLog = "";
             Assert.True(
                 SpinWait.SpinUntil(
-                    () =>
-                    {
-                        menuLog = actionLog.Properties.Name.ValueOrDefault ?? "";
-                        return menuLog == "menu-open"
-                            || menuLog.StartsWith(
-                                "menu-built:", StringComparison.Ordinal);
-                    },
+                    () => actionLog.Properties.Name.ValueOrDefault == "menu-open",
                     TimeSpan.FromSeconds(10)),
-                "the Menu key never reached the row-actions pipeline; host log: "
+                "the first Menu-key press did not OPEN the row-actions menu; "
+                    + "host log: "
                     + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
-            // Give "built" a moment to become "open" — locally the
-            // popup composes in milliseconds.
-            if (menuLog != "menu-open")
-            {
-                _ = SpinWait.SpinUntil(
-                    () => (menuLog =
-                        actionLog.Properties.Name.ValueOrDefault ?? "")
-                        == "menu-open",
-                    TimeSpan.FromSeconds(2));
-            }
-            if (menuLog == "menu-open")
-            {
-                // Full keyboard journey: Down to the first action,
-                // Enter executes it.
-                Keyboard.Type(VirtualKeyShort.DOWN);
-                Keyboard.Type(VirtualKeyShort.RETURN);
-                Assert.True(
-                    SpinWait.SpinUntil(
-                        () => (actionLog.Properties.Name.ValueOrDefault ?? "")
-                            .StartsWith("opened:", StringComparison.Ordinal),
-                        TimeSpan.FromSeconds(10)),
-                    "the Open row action did not execute; host log: "
-                        + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
-            }
-            else
-            {
-                // The popup never COMPOSES on a starved session (its
-                // Opened event never fires) — assert the keyboard
-                // route and the built composition, which are what the
-                // runner can honestly witness; the open-menu Enter
-                // journey holds on composed desktops (this same block,
-                // local runs) and item Click→Execute wiring is pinned
-                // by the in-process unit suite.
-                Assert.Contains("Open", menuLog, StringComparison.Ordinal);
-                Assert.Contains("Edit property", menuLog, StringComparison.Ordinal);
-                Keyboard.Type(VirtualKeyShort.ESCAPE);
-            }
+            Keyboard.Type(VirtualKeyShort.DOWN);
+            Keyboard.Type(VirtualKeyShort.RETURN);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => (actionLog.Properties.Name.ValueOrDefault ?? "")
+                        .StartsWith("opened:", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(10)),
+                "the Open row action did not execute; host log: "
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
 
             // The summary region: separately addressable and named.
             AutomationElement summary = WaitForElement(
