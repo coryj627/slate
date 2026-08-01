@@ -99,6 +99,37 @@ fn scan_populates_tasks_table_from_markdown_body() {
 }
 
 #[test]
+fn note_tasks_bounds_rows_in_sql_and_reports_true_totals() {
+    // W4-3: the panel's bounded twin of tasks_for_file — a
+    // task-dense note must never materialize an unbounded Vec, and
+    // the header's "N open of M tasks" needs true counts past the
+    // display cap.
+    let mut body = String::from("# Dense\n\n");
+    for i in 0..30 {
+        let status = if i % 3 == 0 { 'x' } else { ' ' };
+        body.push_str(&format!("- [{status}] task {i}\n"));
+    }
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/dense.md", body.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let page = session.note_tasks("notes/dense.md", 12).unwrap();
+    assert_eq!(page.tasks.len(), 12);
+    assert_eq!(page.total, 30);
+    assert_eq!(page.open_total, 20);
+    // Document order survives the bound.
+    assert_eq!(page.tasks[0].text, "task 0");
+    assert_eq!(page.tasks[11].text, "task 11");
+
+    // Unknown paths are an empty page, not an error.
+    let missing = session.note_tasks("notes/none.md", 12).unwrap();
+    assert!(missing.tasks.is_empty());
+    assert_eq!(missing.total, 0);
+    assert_eq!(missing.open_total, 0);
+}
+
+#[test]
 fn save_text_rewrites_tasks_table_on_edit() {
     let (_tmp, session) = make_vault(|p| {
         p.write_file("notes/n.md", b"- [ ] a\n- [ ] b\n- [ ] c\n")

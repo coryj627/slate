@@ -1912,6 +1912,188 @@ public sealed class ShellAccessibilityTests
         }
     }
 
+    /// <summary>W4-3 (#735): the two task leaves — note-scoped rows
+    /// with the composed mac labels and a Space toggle that reaches
+    /// disk, then the vault-wide review with its filter chips and
+    /// filename-led rows.</summary>
+    [Fact]
+    public void TaskPanels_RowsToggleAndReviewCarriesTheMacShapes()
+    {
+        string testRoot = Path.Combine(
+            Path.GetTempPath(),
+            $"slate-tasks-{Guid.NewGuid():N}");
+        string vaultRoot = Path.Combine(testRoot, "Tasks Vault");
+        string logDirectory = Path.Combine(testRoot, "logs");
+        Directory.CreateDirectory(vaultRoot);
+        string todoPath = Path.Combine(vaultRoot, "todo.md");
+        File.WriteAllText(
+            todoPath,
+            "# Todo\n\n- [ ] first open 📅 2026-03-01\n- [x] finished\n");
+        File.WriteAllText(
+            Path.Combine(vaultRoot, "other.md"), "- [ ] from other\n");
+
+        Process? process = null;
+        try
+        {
+            var startInfo = new ProcessStartInfo(SlateWindowsExe())
+            {
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            };
+            startInfo.ArgumentList.Add(vaultRoot);
+            startInfo.Environment["SLATE_CENSUS_INSTANCE_ID"] =
+                $"slate-tasks-{Guid.NewGuid():N}";
+            startInfo.Environment["SLATE_LOG_DIR"] = logDirectory;
+            process = Process.Start(startInfo)
+                ?? throw new Xunit.Sdk.XunitException("SlateWindows.exe did not start.");
+
+            if (!Environment.UserInteractive)
+            {
+                Assert.False(
+                    process.WaitForExit(3_000),
+                    "Slate exited during the tasks startup smoke. " +
+                    $"app log: {ReadSharedLog(Path.Combine(logDirectory, "slate-windows.log"))}");
+                return;
+            }
+
+            using var automation = new UIA3Automation();
+            Window window = WaitForMainWindow(
+                process,
+                automation,
+                Path.Combine(logDirectory, "slate-windows.log"),
+                TimeSpan.FromSeconds(30));
+
+            AutomationElement filesTree = WaitForElement(
+                window, "FilesTree", TimeSpan.FromSeconds(30));
+            AutomationElement todoItem = filesTree
+                .FindAllDescendants(
+                    automation.ConditionFactory.ByControlType(ControlType.TreeItem))
+                .FirstOrDefault(item =>
+                    item.Name.StartsWith("todo", StringComparison.OrdinalIgnoreCase))
+                ?? throw new Xunit.Sdk.XunitException("The todo TreeItem is absent.");
+            todoItem.Patterns.SelectionItem.Pattern.Select();
+            WaitForEditor(
+                window, automation, "todo.md editor", TimeSpan.FromSeconds(10));
+
+            AutomationElement leaves = WaitForElement(
+                window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
+            void SelectLeaf(string title)
+            {
+                AutomationElement? entry = null;
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            entry = leaves
+                                .FindAllDescendants(
+                                    automation.ConditionFactory.ByControlType(
+                                        ControlType.ListItem))
+                                .FirstOrDefault(item =>
+                                    (item.Properties.Name.ValueOrDefault ?? "")
+                                        == title);
+                            return entry is not null;
+                        },
+                        TimeSpan.FromSeconds(15)),
+                    $"No rail entry named {title}.");
+                entry!.Patterns.SelectionItem.Pattern.Select();
+            }
+            AutomationElement WaitForRow(
+                string listId, Func<string, bool> match, string description)
+            {
+                AutomationElement list = WaitForElement(
+                    window, listId, TimeSpan.FromSeconds(10));
+                AutomationElement? found = null;
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            found = list
+                                .FindAllDescendants(
+                                    automation.ConditionFactory.ByControlType(
+                                        ControlType.ListItem))
+                                .FirstOrDefault(item =>
+                                    match(item.Properties.Name.ValueOrDefault ?? ""));
+                            return found is not null;
+                        },
+                        TimeSpan.FromSeconds(15)),
+                    $"no row matching {description} appeared");
+                return found!;
+            }
+
+            // The note-scoped Tasks leaf: composed mac labels on both
+            // groups.
+            SelectLeaf("Tasks");
+            AutomationElement openRow = WaitForRow(
+                "PanelTasksOpenList",
+                name => name == "Open. first open. Due 2026-03-01. Open task.",
+                "the open task row");
+            Assert.Equal(
+                "Scrolls the editor to this task's line.",
+                openRow.Properties.HelpText.ValueOrDefault);
+            _ = WaitForRow(
+                "PanelTasksDoneList",
+                name => name == "Done. finished. Done task.",
+                "the done task row");
+
+            // Space on the focused open row toggles through the
+            // guarded tab path — the DISK flip is the observable.
+            openRow.Patterns.SelectionItem.Pattern.Select();
+            openRow.Focus();
+            Keyboard.Type(VirtualKeyShort.SPACE);
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => File.ReadAllText(todoPath).Contains("- [x] first open"),
+                    TimeSpan.FromSeconds(20)),
+                "the Space toggle never reached disk");
+
+            // The vault-wide review: header, filter chips, and the
+            // filename-led row shape (the other note's task proves
+            // vault scope).
+            SelectLeaf("Tasks Review");
+            _ = WaitForElement(window, "PanelReviewList", TimeSpan.FromSeconds(10));
+            _ = WaitForRow(
+                "PanelReviewList",
+                name => name == "other.md. from other. Open task.",
+                "the cross-note review row");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => window.FindFirstDescendant(
+                        automation.ConditionFactory.ByName(
+                            "Filter the review to overdue tasks."))
+                        is not null
+                        || window.FindFirstDescendant(
+                            automation.ConditionFactory.ByName("Overdue"))
+                            is not null,
+                    TimeSpan.FromSeconds(10)),
+                "the review filter chips are absent");
+
+            AssertAxeClean(process, "task-panels");
+        }
+        finally
+        {
+            if (process is not null && !process.HasExited)
+            {
+                process.CloseMainWindow();
+                if (!process.WaitForExit(5_000))
+                {
+                    process.Kill(entireProcessTree: true);
+                }
+            }
+
+            try
+            {
+                Directory.Delete(testRoot, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
     private static Window WaitForMainWindow(
         Process process,
         UIA3Automation automation,

@@ -155,10 +155,10 @@ pub use session::{
     DashboardSectionStatus, DashboardSummary, DeletedFileEntry, DirListing, DirListingPage,
     DirNodeSummary, EventErrorCode, ExportFormat, FileChangeEvent, FileChangeKind, FileFilter,
     FileMetadata, FileSummary, IndexPhase, NoteLinkPanels, NoteLoadBundle, NotePartsBundle,
-    OpAnnotationSummary, OutlinePage, Page, Paging, RemnantLog, RenameAffected, RenameFailed,
-    RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport, SavedQuery,
-    SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener, ScanReport,
-    SessionConfig, VaultEventListener, VaultRootIdentity, VaultSession, VersionSummary,
+    NoteTasksPage, OpAnnotationSummary, OutlinePage, Page, Paging, RemnantLog, RenameAffected,
+    RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport,
+    SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener,
+    ScanReport, SessionConfig, VaultEventListener, VaultRootIdentity, VaultSession, VersionSummary,
 };
 pub use session::{SkippedFile, TagCount, TagEditReport};
 pub use sidebar_filter::{

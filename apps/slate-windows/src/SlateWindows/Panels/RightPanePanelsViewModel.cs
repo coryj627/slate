@@ -24,7 +24,7 @@ namespace SlateWindows.Panels;
 /// OUTLINE also refreshes after a save (headings move under edits;
 /// link rows deliberately do not chase the buffer).
 /// </summary>
-internal sealed class RightPanePanelsViewModel : BindableBase
+internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
 {
     /// <summary>Mac parity: backlinks page bound (limit 200).</summary>
     private const uint BacklinksLimit = 200;
@@ -67,6 +67,12 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     /// total.</summary>
     internal const int MaxOutlineRows = 512;
 
+    /// <summary>W4-3: the note-tasks display cap — same posture as
+    /// the outline (task extraction is count-unbounded per note);
+    /// core bounds the read in SQL and the header speaks the true
+    /// totals past the cap.</summary>
+    internal const int MaxTaskRows = 512;
+
     /// <summary>Rounds 4-5: encoded size says nothing about pixel
     /// allocation — a few-KB PNG decodes to ~5 MB at the 1120px
     /// decode bound, so 128 tiny images could pass the encoded
@@ -85,10 +91,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private readonly Func<string, WorkspaceOpenTarget, bool> _openInternal;
     private readonly Func<string, bool> _openExternal;
     private readonly Action<LinkAnchor, string?> _scrollToAnchor;
-    private readonly SynchronizationContext? _uiContext;
-
-    private readonly object _workLock = new();
-    private readonly HashSet<Task> _pendingWork = [];
+    private readonly Func<TaskItem, bool> _toggleTask;
+    private readonly Action<TaskItem> _scrollToTask;
 
     private string? _notePath;
     private string? _announcedOutlinePath;
@@ -104,8 +108,11 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private int _totalOutlineHeadings;
     private int _totalBacklinks;
     private int _totalEmbeds;
-    private volatile bool _isShutDown;
-    private readonly bool _synchronous;
+    private int _totalTasks;
+    private int _openTaskTotal;
+    private int _tasksRequestId;
+    private bool _isLoadingTasks;
+    private string? _tasksLoadError;
 
     public RightPanePanelsViewModel(
         VaultSession session,
@@ -113,15 +120,18 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         Func<string, WorkspaceOpenTarget, bool> openInternal,
         Func<string, bool> openExternal,
         Action<LinkAnchor, string?> scrollToAnchor,
+        Func<TaskItem, bool> toggleTask,
+        Action<TaskItem> scrollToTask,
         bool synchronousForTests = false)
+        : base(synchronousForTests)
     {
         _session = session;
         _announce = announce;
         _openInternal = openInternal;
         _openExternal = openExternal;
         _scrollToAnchor = scrollToAnchor;
-        _uiContext = SynchronizationContext.Current;
-        _synchronous = synchronousForTests;
+        _toggleTask = toggleTask;
+        _scrollToTask = scrollToTask;
     }
 
     internal int LoadGenerationForTests => _loadGeneration;
@@ -135,6 +145,14 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     public ObservableCollection<OutlineRowViewModel> Outline { get; } = [];
 
     public ObservableCollection<EmbedRowViewModel> Embeds { get; } = [];
+
+    /// <summary>Note tasks, grouped mac-style: open first, done
+    /// second, document order within each (grouping is by the
+    /// COMPLETED derivation only — a cancelled '[-]' task lists as
+    /// open unless its char is x/X, the shipped mac semantics).</summary>
+    public ObservableCollection<NoteTaskRowViewModel> OpenTasks { get; } = [];
+
+    public ObservableCollection<NoteTaskRowViewModel> DoneTasks { get; } = [];
 
     /// <summary>Null when no markdown note is active — the leaves show
     /// their "Select a note …" empty states.</summary>
@@ -258,6 +276,38 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             ? $"Showing {Outline.Count} of {_totalOutlineHeadings} headings."
             : null;
 
+    // ---- Tasks leaf (W4-3; mac TasksPanel strings, verbatim) ----
+
+    /// <summary>"Tasks, none" / "Tasks, N open of M task|tasks" —
+    /// TRUE totals, not the display-capped collections.</summary>
+    public string TasksHeader => _totalTasks == 0
+        ? "Tasks, none"
+        : $"Tasks, {_openTaskTotal} open of {_totalTasks} "
+            + (_totalTasks == 1 ? "task" : "tasks");
+
+    public string OpenTasksGroupHeader => $"Open ({OpenTasks.Count})";
+
+    public string DoneTasksGroupHeader => $"Done ({DoneTasks.Count})";
+
+    public string? TasksEmptyMessage =>
+        NotePath is null ? "Select a note to see its tasks."
+        : _tasksLoadError is { Length: > 0 } error
+            ? $"Could not load tasks: {error}"
+        : _isLoadingTasks ? "Loading tasks…"
+        : _totalTasks == 0 ? "No tasks in this note."
+        : null;
+
+    public string? TasksTruncationNotice
+    {
+        get
+        {
+            int shown = OpenTasks.Count + DoneTasks.Count;
+            return _totalTasks > shown && shown > 0
+                ? $"Showing {shown} of {_totalTasks} tasks."
+                : null;
+        }
+    }
+
     /// <summary>The TRUE embed count (round 17): the collection caps
     /// at 256 cards plus one synthetic summary row, so counting it
     /// would tell AT "257 entries" on a 2000-embed note.</summary>
@@ -311,7 +361,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     /// </summary>
     public void NoteChanged(string? path)
     {
-        if (_isShutDown
+        if (IsShutDown
             || string.Equals(path, _notePath, StringComparison.Ordinal))
         {
             return;
@@ -324,23 +374,30 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         OutgoingLinks.Clear();
         Outline.Clear();
         Embeds.Clear();
+        OpenTasks.Clear();
+        DoneTasks.Clear();
         LinksLoadError = null;
         OutlineLoadError = null;
         EmbedsLoadError = null;
+        _tasksLoadError = null;
         _totalOutgoingLinks = 0;
         _totalOutlineHeadings = 0;
         _totalBacklinks = 0;
         _totalEmbeds = 0;
+        _totalTasks = 0;
+        _openTaskTotal = 0;
         RaiseHeaderChanges();
         if (path is null)
         {
             IsLoadingLinks = false;
             IsLoadingOutline = false;
             IsResolvingEmbeds = false;
+            _isLoadingTasks = false;
             return;
         }
         LoadLinks(path, generation);
         LoadOutline(path, generation, announceCount: true);
+        LoadTasks(path, generation);
     }
 
     /// <summary>The active note was saved: the OUTLINE re-reads
@@ -353,6 +410,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             return;
         }
         LoadOutline(path, _loadGeneration, announceCount: false);
+        LoadTasks(path, _loadGeneration);
     }
 
     private void LoadLinks(string path, int generation)
@@ -721,6 +779,84 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         }
     }
 
+    private void LoadTasks(string path, int generation)
+    {
+        // Save-refreshes reuse the note generation (the outline
+        // pattern): ordering among task reads needs its own token.
+        int requestId = ++_tasksRequestId;
+        _isLoadingTasks = true;
+        RaiseHeaderChanges();
+        StartWork(() =>
+        {
+            NoteTasksPage? page = null;
+            string? failure = null;
+            try
+            {
+                page = _session.NoteTasks(path, MaxTaskRows);
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException
+                    and not StackOverflowException
+                    and not AccessViolationException)
+            {
+                failure = exception.Message;
+            }
+            Post(() => PublishTasks(generation, requestId, page, failure));
+        });
+    }
+
+    /// <summary>Internal so the stale-publish guard is testable with
+    /// deterministic ordering (the PublishOutline pattern).</summary>
+    internal void PublishTasks(
+        int generation, int requestId, NoteTasksPage? page, string? failure)
+    {
+        if (generation != _loadGeneration || requestId != _tasksRequestId)
+        {
+            return;
+        }
+        if (failure is not null || page is null)
+        {
+            // A read fault is NOT a task-free note (the W4-2 honesty
+            // posture; the mac panel's silent-error quirk is a
+            // recorded divergence).
+            _tasksLoadError = failure ?? "The note could not be read.";
+            _isLoadingTasks = false;
+            RaiseHeaderChanges();
+            return;
+        }
+        // Mutations before notifications (round 3): every raise must
+        // read final state.
+        OpenTasks.Clear();
+        DoneTasks.Clear();
+        foreach (TaskItem task in page.Tasks)
+        {
+            var row = new NoteTaskRowViewModel(task);
+            if (task.Completed)
+            {
+                DoneTasks.Add(row);
+            }
+            else
+            {
+                OpenTasks.Add(row);
+            }
+        }
+        _totalTasks = checked((int)page.Total);
+        _openTaskTotal = checked((int)page.OpenTotal);
+        _tasksLoadError = null;
+        _isLoadingTasks = false;
+        RaiseHeaderChanges();
+    }
+
+    /// <summary>Checkbox / Space: route the toggle through the
+    /// workspace seam (the active tab's guarded ToggleTask — dirty
+    /// refusal, conflict detection, and the canonical announcements
+    /// all live there). The refresh arrives via the save funnel.</summary>
+    public void ToggleTask(NoteTaskRowViewModel row) => _ = _toggleTask(row.Task);
+
+    /// <summary>Row activation scrolls the editor to the task's line
+    /// (mac: silent scroll; the caret move is the observable).</summary>
+    public void OpenTask(NoteTaskRowViewModel row) => _scrollToTask(row.Task);
+
     // ---- Activation (mac AppState.openBacklink / openLink twins) ----
 
     public void OpenBacklink(
@@ -809,6 +945,11 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         OnPropertyChanged(nameof(OutgoingLinksTruncationNotice));
         OnPropertyChanged(nameof(OutlineTruncationNotice));
         OnPropertyChanged(nameof(BacklinksTruncationNotice));
+        OnPropertyChanged(nameof(TasksHeader));
+        OnPropertyChanged(nameof(OpenTasksGroupHeader));
+        OnPropertyChanged(nameof(DoneTasksGroupHeader));
+        OnPropertyChanged(nameof(TasksEmptyMessage));
+        OnPropertyChanged(nameof(TasksTruncationNotice));
     }
 
     /// <summary>Workspace teardown: invalidate every in-flight load
@@ -816,68 +957,10 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     /// broadened worker catches make any still-running core call
     /// against a subsequently disposed session degrade instead of
     /// faulting (adversarial round 3).</summary>
-    internal void Shutdown()
+    internal override void Shutdown()
     {
-        _isShutDown = true;
+        base.Shutdown();
         _ = Interlocked.Increment(ref _loadGeneration);
-    }
-
-    /// <summary>All load work funnels through here. Synchronous mode
-    /// (the ReadingContentViewModel test pattern) runs the body
-    /// inline: without a UI SynchronizationContext, worker publishes
-    /// would land on background threads and race every list the test
-    /// thread is reading — the CI-only "Collection was modified"
-    /// failure in unrelated workspace tests.</summary>
-    private void StartWork(Action body)
-    {
-        if (_synchronous)
-        {
-            body();
-            return;
-        }
-        TrackWork(Task.Run(body));
-    }
-
-    /// <summary>Every worker is tracked so tests (and shutdown
-    /// diagnostics) can drain deterministically; bodies catch their
-    /// own failures, so tracked tasks never fault.</summary>
-    private void TrackWork(Task work)
-    {
-        lock (_workLock)
-        {
-            _ = _pendingWork.Add(work);
-        }
-        _ = work.ContinueWith(
-            completed =>
-            {
-                lock (_workLock)
-                {
-                    _ = _pendingWork.Remove(completed);
-                }
-            },
-            TaskScheduler.Default);
-    }
-
-    internal Task DrainForTests()
-    {
-        Task[] snapshot;
-        lock (_workLock)
-        {
-            snapshot = [.. _pendingWork];
-        }
-        return Task.WhenAll(snapshot);
-    }
-
-    private void Post(Action action)
-    {
-        if (_uiContext is null)
-        {
-            action();
-        }
-        else
-        {
-            _uiContext.Post(_ => action(), null);
-        }
     }
 }
 
@@ -954,6 +1037,53 @@ internal sealed class OutgoingLinkRowViewModel
         Link.IsExternal ? "Opens in the default browser."
         : Link.IsUnresolved ? "Cannot open. Target file is not in the vault."
         : "Opens the linked note.";
+}
+
+/// <summary>One note-task row (W4-3): the mac TasksPanel row shape.
+/// The record stays EXACT for toggling/scrolling; rendered text and
+/// the UIA name are display-bounded (the W4-2 round-14 split).</summary>
+internal sealed class NoteTaskRowViewModel
+{
+    public NoteTaskRowViewModel(TaskItem task)
+    {
+        Task = task;
+        DisplayText = EditorInteractionCoordinator.BoundDisplayText(task.Text);
+        MetadataCaption = string.Join(
+            " · ",
+            TaskStatusPhrase.MetadataParts(task)
+                .Select(EditorInteractionCoordinator.BoundDisplayText));
+    }
+
+    public TaskItem Task { get; }
+
+    public string DisplayText { get; }
+
+    public bool Completed => Task.Completed;
+
+    /// <summary>"Due … · Priority … · Repeats …" (empty when the
+    /// task carries no metadata; the caption row collapses).</summary>
+    public string MetadataCaption { get; }
+
+    public bool HasMetadata => MetadataCaption.Length > 0;
+
+    /// <summary>The mac note-panel row label, verbatim shape:
+    /// "&lt;statusWord&gt;. &lt;text&gt;. Due &lt;date&gt;.
+    /// Priority &lt;level&gt;. Repeats &lt;rec&gt;.
+    /// &lt;statusPhrase&gt;" joined by ". ".</summary>
+    public string AutomationName => string.Join(
+        ". ",
+        new[] { TaskStatusPhrase.StatusWord(Task), DisplayText }
+            .Concat(TaskStatusPhrase.MetadataParts(Task)
+                .Select(EditorInteractionCoordinator.BoundDisplayText))
+            .Append(TaskStatusPhrase.StatusPhrase(Task)));
+
+    public string AutomationHelpText => "Scrolls the editor to this task's line.";
+
+    /// <summary>Mac checkbox labels, verbatim.</summary>
+    public string CheckboxLabel =>
+        Completed ? "Mark incomplete" : "Mark complete";
+
+    public string CheckboxHelpText => "Toggles the task between open and done.";
 }
 
 /// <summary>One flat outline row (mac's OutlineSidebar list is flat —

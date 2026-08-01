@@ -103,6 +103,48 @@ pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskIt
     Ok(out)
 }
 
+/// Bounded per-file task read for the panel (W4-3, the W4-2 round-10
+/// posture): the LIMIT lives in SQL so a task-dense note never
+/// materializes an unbounded `Vec` before a UI display cap can
+/// apply, and the true totals ride alongside so the header can say
+/// "N open of M tasks" past the cap.
+pub(crate) fn note_tasks_bounded(
+    conn: &Connection,
+    path: &str,
+    limit: u32,
+) -> Result<(Vec<TaskItem>, u32, u32), VaultError> {
+    let file_id: Option<i64> = conn
+        .query_row(
+            "SELECT id FROM files WHERE path = ?1",
+            params![path],
+            |row| row.get(0),
+        )
+        .ok();
+    let Some(file_id) = file_id else {
+        return Ok((Vec::new(), 0, 0));
+    };
+    let mut stmt = conn.prepare_cached(
+        "SELECT ordinal, text, status_char, completed,
+                due_ms, scheduled_ms, priority, recurrence, line, byte_offset,
+                checkbox_start_byte, checkbox_end_byte
+         FROM tasks WHERE file_id = ?1
+         ORDER BY ordinal ASC
+         LIMIT ?2",
+    )?;
+    let rows = stmt.query_map(params![file_id, limit], row_to_task)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    let (total, open_total): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COUNT(*) FILTER (WHERE completed = 0)
+         FROM tasks WHERE file_id = ?1",
+        params![file_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    Ok((out, total.max(0) as u32, open_total.max(0) as u32))
+}
+
 /// Vault-wide paged task query. Order:
 /// `(due_ms ASC NULLS LAST, priority DESC NULLS LAST, file path, ordinal)`
 /// so overdue/today/soon surface first, then prioritised, then

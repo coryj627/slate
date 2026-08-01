@@ -835,6 +835,117 @@ public partial class MainWindow : Window
         }
     }
 
+    // ---- W4-3: tasks + tasks-review leaf handlers ----
+
+    private TasksReviewViewModel? TasksReviewViewModel =>
+        _viewModel.Workspace?.TasksReview;
+
+    /// <summary>The clicked-row contract (W4-2 rounds 5-8) plus the
+    /// task keyboard model: Enter activates (scroll/open), Space
+    /// toggles the selected row — the reading-surface convention.</summary>
+    private void PanelTasks_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is ListBox list
+            && PanelRowTargeting.TargetRowAt(list, e.OriginalSource, pointerRequest: true)
+            && list.SelectedItem is NoteTaskRowViewModel row)
+        {
+            PanelsViewModel?.OpenTask(row);
+            e.Handled = true;
+        }
+    }
+
+    private void PanelTasks_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (sender is not ListBox list
+            || list.SelectedItem is not NoteTaskRowViewModel row)
+        {
+            return;
+        }
+        if (e.Key == Key.Enter)
+        {
+            PanelsViewModel?.OpenTask(row);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Space)
+        {
+            PanelsViewModel?.ToggleTask(row);
+            e.Handled = true;
+        }
+    }
+
+    private void PanelTaskCheckbox_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox box)
+        {
+            return;
+        }
+        // Revert WPF's optimistic flip: the row re-renders from the
+        // refreshed task data once the toggle lands (the
+        // reading-surface checkbox convention).
+        box.IsChecked = box.IsChecked != true;
+        if (box.DataContext is NoteTaskRowViewModel row)
+        {
+            PanelsViewModel?.ToggleTask(row);
+        }
+        e.Handled = true;
+    }
+
+    private void PanelReview_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (PanelRowTargeting.TargetRowAt(
+                PanelReviewList, e.OriginalSource, pointerRequest: true)
+            && PanelReviewList.SelectedItem is ReviewTaskRowViewModel row)
+        {
+            TasksReviewViewModel?.OpenRow(row);
+            e.Handled = true;
+        }
+    }
+
+    private void PanelReview_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (PanelReviewList.SelectedItem is not ReviewTaskRowViewModel row)
+        {
+            return;
+        }
+        if (e.Key == Key.Enter)
+        {
+            TasksReviewViewModel?.OpenRow(row);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.Space)
+        {
+            TasksReviewViewModel?.ToggleTask(row);
+            e.Handled = true;
+        }
+    }
+
+    private void PanelReviewCheckbox_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not CheckBox box)
+        {
+            return;
+        }
+        box.IsChecked = box.IsChecked != true;
+        if (box.DataContext is ReviewTaskRowViewModel row)
+        {
+            TasksReviewViewModel?.ToggleTask(row);
+        }
+        e.Handled = true;
+    }
+
+    private void PanelReviewFilter_Click(object sender, RoutedEventArgs e)
+    {
+        TaskReviewFilter filter =
+            ReferenceEquals(sender, PanelReviewFilterDueToday) ? TaskReviewFilter.DueToday
+            : ReferenceEquals(sender, PanelReviewFilterOverdue) ? TaskReviewFilter.Overdue
+            : ReferenceEquals(sender, PanelReviewFilterThisWeek) ? TaskReviewFilter.ThisWeek
+            : TaskReviewFilter.All;
+        TasksReviewViewModel?.ApplyFilter(filter);
+    }
+
+    private void PanelReviewLoadMore_Click(object sender, RoutedEventArgs e) =>
+        TasksReviewViewModel?.LoadMore();
+
     private void PanelEmbedView_Loaded(object sender, RoutedEventArgs e)
     {
         // The shared card renderer's Jump seam for hosts without an

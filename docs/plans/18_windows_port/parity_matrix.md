@@ -1,6 +1,6 @@
 # Milestone W parity matrix (§W-F row-level checklist)
 
-Generated 2026-08-01 at `226f07c` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
+Generated 2026-08-01 at `0df8626` by `scripts/generate-parity-matrix.py` (W0-4, #716). **Re-runnable:** matrix drift = re-run, diff, re-triage (program §moving-target). Every row is burned down by its consuming W issue; §W-F gates close-out on zero unshipped/unwaived rows.
 
 ## Entry-criteria snapshot (w0_spec §W0-4 item 3)
 
@@ -188,7 +188,7 @@ Pinned from the then-current `BENCHMARKS.md` mac baselines — the #407 rope-nat
 | `slate.sidebar.unpinAllInFolder` | Unpin All in Folder | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.sidebar.unpinNote` | Unpin | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.sidebar.useVaultDefaultSort` | Use Vault Default Sort | — | — | #721 (W1-2) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
-| `slate.tasks.review` | Tasks Review | ⌘R | Command R | #735 (W4-3) | pending |
+| `slate.tasks.review` | Tasks Review | ⌘R | Command R | #735 (W4-3) | implemented; local gates green 2026-08-01; interactive CI + human AT pending |
 | `slate.vault.close` | Close Vault | — | — | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.vault.open` | Open Vault… | ⇧⌘O | Shift Command O | #720 (W1-1) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
 | `slate.view.toggleRightPane` | Toggle Right Pane | ⌥⌘I | Option Command I | #722 (W1-3) | implemented; local gates green 2026-07-20; interactive CI + human AT pending |
@@ -227,8 +227,8 @@ The palette surface itself (ranking via the W0.5-1 core engine, sections, recent
 | `math` | #729 (W3-2) | pending |
 | `code` | #731 (W3-4) | pending |
 | `diagrams` | #730 (W3-3) | pending |
-| `tasks` | #735 (W4-3) | pending |
-| `tasksReview` | #735 (W4-3) | pending |
+| `tasks` | #735 (W4-3) | implemented 2026-08-01 (#735): `RightPanePanelsViewModel` task sections + MainWindow leaf body; `TasksPanelTests` + FlaUI `TaskPanels_RowsToggleAndReviewCarriesTheMacShapes` |
+| `tasksReview` | #735 (W4-3) | implemented 2026-08-01 (#735): `TasksReviewViewModel` + MainWindow leaf body + Ctrl+R command; `TasksReviewTests` + FlaUI `TaskPanels_RowsToggleAndReviewCarriesTheMacShapes` |
 | `history` | #739 (W4-7) | pending |
 | `citations` | #737 (W4-5) | pending |
 | `bibliography` | #737 (W4-5) | pending |

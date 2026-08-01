@@ -1353,6 +1353,12 @@ impl VaultSession {
             .collect())
     }
 
+    /// Bounded per-note task read (W4-3): the panel twin of
+    /// `tasks_for_file`, limited in SQL with true totals alongside.
+    pub fn note_tasks(&self, path: String, limit: u32) -> Result<NoteTasksPage, VaultError> {
+        Ok(self.inner.note_tasks(&path, limit)?.into())
+    }
+
     /// Paged vault-wide task query. Used by the Mac TasksReviewView
     /// to render filtered overdue / today / soon views without
     /// loading every task into memory.
@@ -2840,6 +2846,25 @@ impl From<core::OutlinePage> for OutlinePage {
         Self {
             headings: p.headings.into_iter().map(Into::into).collect(),
             total: p.total,
+        }
+    }
+}
+
+/// FFI mirror of `slate_core::NoteTasksPage` (W4-3): the bounded
+/// per-note task read with true totals for the panel header.
+#[derive(uniffi::Record)]
+pub struct NoteTasksPage {
+    pub tasks: Vec<TaskItem>,
+    pub total: u32,
+    pub open_total: u32,
+}
+
+impl From<core::NoteTasksPage> for NoteTasksPage {
+    fn from(p: core::NoteTasksPage) -> Self {
+        Self {
+            tasks: p.tasks.into_iter().map(Into::into).collect(),
+            total: p.total,
+            open_total: p.open_total,
         }
     }
 }

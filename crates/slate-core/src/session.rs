@@ -384,6 +384,16 @@ pub struct OutlinePage {
     pub total: u32,
 }
 
+/// Bounded per-note task read (W4-3): at most `limit` tasks in
+/// document order plus the true totals the panel header speaks
+/// ("N open of M tasks").
+#[derive(Debug, Clone, PartialEq)]
+pub struct NoteTasksPage {
+    pub tasks: Vec<crate::TaskItem>,
+    pub total: u32,
+    pub open_total: u32,
+}
+
 // --- Note parts bundle ---
 
 /// Everything the U3 tab-open path needs to render a note as body-only
@@ -5726,6 +5736,21 @@ impl VaultSession {
     pub fn tasks_for_file(&self, path: &str) -> Result<Vec<crate::TaskItem>, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
         crate::tasks_db::tasks_for_file(&conn, path)
+    }
+
+    /// The bounded panel twin of [`Self::tasks_for_file`] (W4-3, the
+    /// W4-2 round-10 posture): at most `limit` tasks in document
+    /// order, with the true total and open-count alongside so the
+    /// panel header stays honest past its display cap. Unknown paths
+    /// return an empty page.
+    pub fn note_tasks(&self, path: &str, limit: u32) -> Result<NoteTasksPage, VaultError> {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let (tasks, total, open_total) = crate::tasks_db::note_tasks_bounded(&conn, path, limit)?;
+        Ok(NoteTasksPage {
+            tasks,
+            total,
+            open_total,
+        })
     }
 
     /// Replace one character — the `[X]` status — on a single task

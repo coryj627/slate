@@ -287,6 +287,15 @@
         "tests": [
           "apps/slate-windows/tests/SlateWindows.Tests/ReadingViewTests.cs#ReadingModeToggle"
         ]
+      },
+      "tasksReview": {
+        "implementation": [
+          "apps/slate-windows/src/SlateWindows/Panels/TasksReviewViewModel.cs#TasksReviewViewModel",
+          "apps/slate-windows/src/SlateWindows/WorkspaceViewModel.cs#OpenTasksReviewCommand"
+        ],
+        "tests": [
+          "apps/slate-windows/tests/SlateWindows.Tests/TasksReviewTests.cs#TasksReviewTests"
+        ]
       }
     },
     "commands": {
@@ -355,7 +364,8 @@
       "slate.workspace.shrinkPane": "workspace",
       "slate.workspace.splitDown": "workspace",
       "slate.workspace.splitRight": "workspace",
-      "slate.editor.toggleViewMode": "reading"
+      "slate.editor.toggleViewMode": "reading",
+      "slate.tasks.review": "tasksReview"
     },
     "issues": {
       "#720": "vault",
@@ -365,7 +375,8 @@
       "#724": "editorHost",
       "#381": "editorSpans",
       "#725": "editorInteractions",
-      "#728": "reading"
+      "#728": "reading",
+      "#735": "tasksReview"
     }
   }
 }

@@ -1002,6 +1002,25 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     () => ReferenceEquals(ActiveGroup, group)
                         && ReferenceEquals(group.ActiveTab, tab));
             },
+            TogglePanelTask,
+            ScrollToPanelTask,
+            synchronousForTests: !startInteractionBackgroundWork);
+        // The vault-wide Tasks Review leaf (W4-3): vault-lifetime
+        // state, deliberately NOT keyed on the active note.
+        TasksReview = new Panels.TasksReviewViewModel(
+            session,
+            announce,
+            (path, target) =>
+            {
+                bool navigated = false;
+                RunWorkspaceMutation(() => navigated = OpenPathCore(path, target));
+                return navigated;
+            },
+            () => ActiveGroup.ActiveTab is { IsMarkdown: true } tab
+                ? tab.Path
+                : null,
+            ScrollToPanelTask,
+            TryToggleTaskInOpenTab,
             synchronousForTests: !startInteractionBackgroundWork);
         (_root, _activeGroup) = Restore(_persistence.Load());
         SyncPanels();
@@ -1052,6 +1071,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         ShrinkPaneCommand = new RelayCommand(_ => ResizeActivePane(-0.05), _ => Groups.Count > 1);
         SaveActiveCommand = new RelayCommand(_ => SaveActive(), _ => ActiveGroup.ActiveTab?.IsMarkdown == true);
         ToggleRightPaneCommand = new RelayCommand(_ => IsRightPaneVisible = !IsRightPaneVisible, _ => true);
+        OpenTasksReviewCommand = new RelayCommand(_ => OpenTasksReview(), _ => true);
     }
 
     public event EventHandler<string>? FileOpened;
@@ -1082,6 +1102,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// <summary>The W4-2 link/structure leaf data (backlinks, outgoing
     /// links, outline, embeds).</summary>
     public Panels.RightPanePanelsViewModel Panels { get; }
+
+    public Panels.TasksReviewViewModel TasksReview { get; }
 
     /// <summary>Re-derive the panels' active note from the workspace —
     /// called from every activation funnel (tab activation, pane focus,
@@ -1122,9 +1144,35 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             if (value is not null && SetField(ref _activeLeaf, value))
             {
                 _announce(new A11yEvent.LeafPanelShown(value.Title));
+                // Rail reveal of the review is an idempotent snapshot
+                // load (mac ensureVaultTasksLoaded); only the review
+                // COMMAND forces a fresh page.
+                if (string.Equals(value.Id, "tasksReview", StringComparison.Ordinal))
+                {
+                    TasksReview.EnsureLoaded();
+                }
                 Persist();
             }
         }
+    }
+
+    /// <summary>W4-3 (mac openTasksReview, ⌘R → Ctrl+R): reveal the
+    /// review leaf, load a FRESH first page, announce, and move
+    /// focus to the pane.</summary>
+    public void OpenTasksReview()
+    {
+        WorkspaceLeafOption leaf = Leaves.First(
+            option => string.Equals(option.Id, "tasksReview", StringComparison.Ordinal));
+        if (!IsRightPaneVisible)
+        {
+            IsRightPaneVisible = true;
+        }
+        ActiveLeaf = leaf;
+        TasksReview.ForceReload();
+        _announce(new A11yEvent.TasksReviewShown(
+            SlateWindows.Panels.TasksReviewViewModel.DisplayName(
+                TasksReview.ActiveFilter)));
+        FocusBoundaryRequested?.Invoke(this, WorkspaceFocusBoundary.RightPane);
     }
 
     public bool IsRightPaneVisible
@@ -1161,6 +1209,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     public ICommand ShrinkPaneCommand { get; }
     public ICommand SaveActiveCommand { get; }
     public ICommand ToggleRightPaneCommand { get; }
+    public ICommand OpenTasksReviewCommand { get; }
 
     public void OpenPath(string path, WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab) =>
         RunWorkspaceMutation(() => OpenPathCore(path, target));
@@ -1316,6 +1365,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // the vault lifecycle disposes right after this workspace —
         // invalidate every in-flight load before that happens.
         Panels.Shutdown();
+        TasksReview.Shutdown();
         Persist();
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
@@ -1361,6 +1411,69 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 && string.Equals(tab.Path, item.Path, StringComparison.Ordinal))
             : null;
 
+    /// <summary>The review's tab-route seam (W4-3): a file with an
+    /// open tab must toggle through THAT tab's guarded path so the
+    /// buffer re-baselines — a direct session write would leave the
+    /// open editor stale. Returns false when no tab holds the file
+    /// (the review then toggles the session directly).</summary>
+    private bool TryToggleTaskInOpenTab(string path, TaskItem task)
+    {
+        WorkspaceTabViewModel? tab = Groups
+            .SelectMany(group => group.Tabs)
+            .FirstOrDefault(candidate => candidate.IsMarkdown
+                && string.Equals(candidate.Path, path, StringComparison.Ordinal));
+        if (tab is null)
+        {
+            return false;
+        }
+        if (tab.IsDirty)
+        {
+            _announce(new A11yEvent.TaskToggleUnsaved(
+                System.IO.Path.GetFileName(tab.Path)));
+            return true;
+        }
+        _ = tab.ToggleTask(task, _announce);
+        return true;
+    }
+
+    /// <summary>The panels' task-toggle seam (W4-3): the guarded tab
+    /// path owns conflict detection, generation gating, and the
+    /// canonical announcements. The tab's raw ToggleTask returns
+    /// false for dirty WITHOUT announcing, so the refusal is spoken
+    /// here (the reading-view precedent).</summary>
+    private bool TogglePanelTask(TaskItem task)
+    {
+        if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab)
+        {
+            return false;
+        }
+        if (tab.IsDirty)
+        {
+            _announce(new A11yEvent.TaskToggleUnsaved(
+                System.IO.Path.GetFileName(tab.Path)));
+            return true;
+        }
+        return tab.ToggleTask(task, _announce);
+    }
+
+    /// <summary>The panels' task-activation seam (W4-3): park the
+    /// caret at the task's line start — a silent scroll, the mac
+    /// note-panel behavior (the caret move is the observable).</summary>
+    private void ScrollToPanelTask(TaskItem task)
+    {
+        if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab
+            || tab.EditorInteractions is null)
+        {
+            return;
+        }
+        string source = tab.Text;
+        uint byteOffset = Math.Min(
+            task.ByteOffset, checked((uint)Encoding.UTF8.GetByteCount(source)));
+        int target = checked((int)SlateUniffiMethods.TextByteToUtf16(
+            source, byteOffset));
+        tab.EditorInteractions.RequestCaret(target);
+    }
+
     private void MirrorSamePathDocumentState(
         WorkspaceTabViewModel source,
         EditorDocumentSyncEvent? syncEvent)
@@ -1385,6 +1498,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     peer.ApplyPeerDocumentEvent(source, syncEvent);
                 }
             }
+        }
+
+        // A null sync event on a CLEAN buffer is a whole-document
+        // refresh — the task-toggle publish re-baselines saved
+        // (W4-3): the panels re-read what just changed on disk (the
+        // save command's own funnel covers ordinary saves).
+        if (syncEvent is null && !source.IsDirty)
+        {
+            Panels.NoteSaved(source.Path);
+            TasksReview.NoteRefreshed(source.Path);
         }
     }
 

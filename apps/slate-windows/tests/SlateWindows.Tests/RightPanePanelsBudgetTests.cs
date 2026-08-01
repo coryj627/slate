@@ -172,7 +172,9 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
                 return true;
             },
             _ => true,
-            (_, _) => { });
+            (_, _) => { },
+            _ => true,
+            _ => { });
         panels.NoteChanged("budget.md");
         Assert.True(
             SpinWait.SpinUntil(
@@ -216,7 +218,9 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
-            (_, _) => { });
+            (_, _) => { },
+            _ => true,
+            _ => { });
         panels.NoteChanged("decoded.md");
         Assert.True(
             SpinWait.SpinUntil(
@@ -267,7 +271,9 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
-            (_, _) => { });
+            (_, _) => { },
+            _ => true,
+            _ => { });
         panels.NoteChanged("nested.md");
         Assert.True(
             SpinWait.SpinUntil(
@@ -300,7 +306,9 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
-            (_, _) => { });
+            (_, _) => { },
+            _ => true,
+            _ => { });
         panels.NoteChanged("deep.md");
         Assert.True(
             SpinWait.SpinUntil(
@@ -332,7 +340,9 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
-            (_, _) => { });
+            (_, _) => { },
+            _ => true,
+            _ => { });
         panels.NoteChanged("huge.md");
         Assert.True(
             SpinWait.SpinUntil(
@@ -360,7 +370,9 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             _ => { },
             (_, _) => true,
             _ => true,
-            (_, _) => { });
+            (_, _) => { },
+            _ => true,
+            _ => { });
         panels.NoteChanged("hugepng.md");
         Assert.True(
             SpinWait.SpinUntil(

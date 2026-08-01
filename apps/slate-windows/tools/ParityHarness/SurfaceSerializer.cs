@@ -258,6 +258,104 @@ public static class SurfaceSerializer
             AppendEmbedResolution(j, preview.Resolution);
             j.Raw("}");
         }
+        j.Raw("]");
+
+        // W4-3: the canonical task-row artifact — byte-checks the
+        // exact TaskItem surface both task panels consume: text,
+        // the raw status char, the completed derivation, the
+        // Tasks-plugin metadata axes, and the parser-owned checkbox
+        // action range (migration 034's contract).
+        j.Raw(",\"tasks\":[");
+        var tasks = session.TasksForFile(relPath);
+        for (int i = 0; i < tasks.Length; i++)
+        {
+            var t = tasks[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            AppendTaskItem(j, t);
+        }
+        j.Raw("]}");
+        return j + "\n";
+    }
+
+    private static void AppendTaskItem(CanonicalJson j, TaskItem t)
+    {
+        j.Raw("{\"ordinal\":").Num((ulong)t.Ordinal)
+         .Raw(",\"text\":").Str(t.Text)
+         .Raw(",\"status\":").Str(t.StatusChar)
+         .Raw(",\"completed\":").Bool(t.Completed)
+         .Raw(",\"due_ms\":");
+        if (t.DueMs is long due)
+        {
+            j.Num(due);
+        }
+        else
+        {
+            j.Null();
+        }
+        j.Raw(",\"scheduled_ms\":");
+        if (t.ScheduledMs is long scheduled)
+        {
+            j.Num(scheduled);
+        }
+        else
+        {
+            j.Null();
+        }
+        j.Raw(",\"priority\":");
+        if (t.Priority is int priority)
+        {
+            j.Num(priority);
+        }
+        else
+        {
+            j.Null();
+        }
+        j.Raw(",\"recurrence\":");
+        if (t.Recurrence is { } recurrence)
+        {
+            j.Str(recurrence);
+        }
+        else
+        {
+            j.Null();
+        }
+        j.Raw(",\"line\":").Num((ulong)t.Line)
+         .Raw(",\"offset\":").Num((ulong)t.ByteOffset)
+         .Raw(",\"checkbox_start\":").Num((ulong)t.CheckboxStartByte)
+         .Raw(",\"checkbox_end\":").Num((ulong)t.CheckboxEndByte)
+         .Raw("}");
+    }
+
+    /// <summary>W4-3: the vault-wide task-review artifact — pins
+    /// tasks_in_vault's DEFAULT-filter ordering contract (due ASC
+    /// NULLS LAST, priority DESC NULLS LAST, path, ordinal) plus the
+    /// joined location fields the review rows consume. The default
+    /// filter carries no due windows, so the artifact is
+    /// wall-clock-free and deterministic.</summary>
+    public static string TasksArtifact(VaultSession session)
+    {
+        var j = new CanonicalJson();
+        var page = session.TasksInVault(
+            new TaskFilter(null, null, null, null),
+            new Paging(null, 1000));
+        j.Raw("{\"total\":").Num(page.TotalFiltered)
+         .Raw(",\"rows\":[");
+        for (int i = 0; i < page.Items.Length; i++)
+        {
+            var row = page.Items[i];
+            if (i > 0)
+            {
+                j.Raw(",");
+            }
+            j.Raw("{\"path\":").Str(Slash(row.Path))
+             .Raw(",\"file\":").Str(row.FileName)
+             .Raw(",\"task\":");
+            AppendTaskItem(j, row.Task);
+            j.Raw("}");
+        }
         j.Raw("]}");
         return j + "\n";
     }
