@@ -1270,7 +1270,22 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         EmbedResolution resolution,
         bool truncated)
     {
-        EditorEmbedPreviewNode root = BuildEmbedNode(resolution, depth: 0);
+        // The popover gets its own per-card decoded budget (round 5):
+        // a single card of many tiny nested images must not allocate
+        // unbounded bitmaps here either.
+        long spent = 0;
+        EditorEmbedPreviewNode root = BuildEmbedNode(
+            resolution,
+            depth: 0,
+            cost =>
+            {
+                if (spent + cost > MaxDecodedImageBytesPerCard)
+                {
+                    return false;
+                }
+                spent += cost;
+                return true;
+            });
         string body = string.Empty;
         if (truncated)
         {
@@ -1293,16 +1308,29 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             root);
     }
 
+    /// <summary>The decoded-pixel bound for one built card (W4-2
+    /// round 5): a valid preview may hold ~128 nested images whose
+    /// ENCODED bytes are tiny but decode to ~5 MB each at the 1120px
+    /// bound — enforcement must happen BEFORE pixels are allocated,
+    /// so the decoder reserves each image's bounded cost from its
+    /// header and elides the image when the budget is spent.</summary>
+    internal const long MaxDecodedImageBytesPerCard = 64L * 1024 * 1024;
+
     /// <summary>W4-2: the embeds LEAF renders the same card tree the
     /// Ctrl+E popover builds — one composition for the embed name
     /// shapes, nested splicing, image decode, and unresolved
-    /// descriptions.</summary>
+    /// descriptions. <paramref name="reserveDecodedBytes"/> is asked
+    /// before every image decode with the bounded decoded cost; a
+    /// false return elides that image with a loud warning body.</summary>
     internal static EditorEmbedPreviewNode BuildEmbedPreviewNode(
-        EmbedResolution resolution) => BuildEmbedNode(resolution, depth: 0);
+        EmbedResolution resolution,
+        Func<long, bool>? reserveDecodedBytes = null) =>
+        BuildEmbedNode(resolution, depth: 0, reserveDecodedBytes);
 
     private static EditorEmbedPreviewNode BuildEmbedNode(
         EmbedResolution resolution,
-        int depth)
+        int depth,
+        Func<long, bool>? reserveDecodedBytes = null)
     {
         if (depth >= 3)
         {
@@ -1322,7 +1350,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         {
             EmbedResolution.FullNote full => new EditorEmbedPreviewNode(
                 $"Embedded note: {full.TargetPath}",
-                BuildEmbedParts(full.Text, full.Nested, depth + 1),
+                BuildEmbedParts(
+                    full.Text, full.Nested, depth + 1, reserveDecodedBytes),
                 null,
                 full.TargetPath,
                 IsDisclosure: true,
@@ -1330,7 +1359,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 IsWarning: false),
             EmbedResolution.Section section => new EditorEmbedPreviewNode(
                 $"Embedded section: {section.Heading} from {section.TargetPath}",
-                BuildEmbedParts(section.Text, section.Nested, depth + 1),
+                BuildEmbedParts(
+                    section.Text, section.Nested, depth + 1, reserveDecodedBytes),
                 null,
                 section.TargetPath,
                 IsDisclosure: true,
@@ -1344,7 +1374,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 IsDisclosure: true,
                 InitiallyExpanded: depth == 0,
                 IsWarning: false),
-            EmbedResolution.Image image => BuildImageNode(image, depth),
+            EmbedResolution.Image image =>
+                BuildImageNode(image, depth, reserveDecodedBytes),
             EmbedResolution.Unresolved unresolved => new EditorEmbedPreviewNode(
                 Describe(unresolved.Reason),
                 [],
@@ -1364,15 +1395,23 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         };
     }
 
+    internal const string ImageBudgetSpentMessage =
+        "Image not shown: the embed image budget for this note is spent. "
+        + "Open source to view it.";
+
     private static EditorEmbedPreviewNode BuildImageNode(
         EmbedResolution.Image image,
-        int depth)
+        int depth,
+        Func<long, bool>? reserveDecodedBytes)
     {
-        ImageSource? decoded = DecodeImage(image.Bytes, image.Mime);
-        string body = decoded is null
-            ? $"Could not decode image. MIME: {image.Mime}. "
-                + "The file may be corrupt or use an unsupported codec."
-            : image.Mime;
+        ImageSource? decoded = DecodeImage(
+            image.Bytes, image.Mime, reserveDecodedBytes, out bool budgetSpent);
+        string body = budgetSpent
+            ? ImageBudgetSpentMessage
+            : decoded is null
+                ? $"Could not decode image. MIME: {image.Mime}. "
+                    + "The file may be corrupt or use an unsupported codec."
+                : image.Mime;
         return new EditorEmbedPreviewNode(
             ImageTitle(image.TargetPath, image.Alt),
             [new EditorEmbedPreviewPart(body, null)],
@@ -1386,7 +1425,8 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private static IReadOnlyList<EditorEmbedPreviewPart> BuildEmbedParts(
         string parentText,
         IReadOnlyList<NestedEmbed> nested,
-        int childDepth)
+        int childDepth,
+        Func<long, bool>? reserveDecodedBytes = null)
     {
         if (nested.Count == 0)
         {
@@ -1411,7 +1451,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             }
             parts.Add(new EditorEmbedPreviewPart(
                 null,
-                BuildEmbedNode(item.Resolution, childDepth)));
+                BuildEmbedNode(item.Resolution, childDepth, reserveDecodedBytes)));
             cursor = Math.Clamp(
                 checked((int)item.ByteEndInParent),
                 offset,
@@ -2555,8 +2595,22 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
     private const int MaxPreviewImageBytes = 8 * 1024 * 1024;
     private const int MaxPreviewImageDimension = 1120;
 
-    internal static ImageSource? DecodeImage(byte[] bytes, string? mime = null)
+    internal static ImageSource? DecodeImage(byte[] bytes, string? mime = null) =>
+        DecodeImage(bytes, mime, reserveDecodedBytes: null, out _);
+
+    /// <summary>Budgeted decode (round 5): the RESERVATION happens
+    /// from the image header's bounded target dimensions, before any
+    /// pixel allocation — post-decode accounting would let a card
+    /// full of tiny encoded images allocate hundreds of MB first.
+    /// A refused reservation reports <paramref name="budgetSpent"/>
+    /// so callers can say why the image is missing.</summary>
+    internal static ImageSource? DecodeImage(
+        byte[] bytes,
+        string? mime,
+        Func<long, bool>? reserveDecodedBytes,
+        out bool budgetSpent)
     {
+        budgetSpent = false;
         if (bytes.Length == 0 || bytes.Length > MaxPreviewImageBytes)
         {
             return null;
@@ -2565,10 +2619,15 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         bool isSvg = string.Equals(mime, "image/svg+xml", StringComparison.OrdinalIgnoreCase)
             || bytes.AsSpan(0, Math.Min(bytes.Length, 1024))
                 .IndexOf("<svg"u8) >= 0;
-        return isSvg ? DecodeSvgImage(bytes) : DecodeRasterImage(bytes);
+        return isSvg
+            ? DecodeSvgImage(bytes, reserveDecodedBytes, ref budgetSpent)
+            : DecodeRasterImage(bytes, reserveDecodedBytes, ref budgetSpent);
     }
 
-    private static ImageSource? DecodeSvgImage(byte[] bytes)
+    private static ImageSource? DecodeSvgImage(
+        byte[] bytes,
+        Func<long, bool>? reserveDecodedBytes,
+        ref bool budgetSpent)
     {
         try
         {
@@ -2607,6 +2666,14 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 MaxPreviewImageDimension / Math.Max(bounds.Width, bounds.Height));
             int width = Math.Max(1, (int)Math.Ceiling(bounds.Width * scale));
             int height = Math.Max(1, (int)Math.Ceiling(bounds.Height * scale));
+            // Reserve the rasterization cost BEFORE allocating; the
+            // inner raster decode reuses this reservation.
+            if (reserveDecodedBytes is not null
+                && !reserveDecodedBytes((long)width * height * 4))
+            {
+                budgetSpent = true;
+                return null;
+            }
             using var bitmap = new SKBitmap(new SKImageInfo(
                 width,
                 height,
@@ -2622,7 +2689,9 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             }
             using SKImage image = SKImage.FromBitmap(bitmap);
             using SKData encoded = image.Encode(SKEncodedImageFormat.Png, 100);
-            return DecodeRasterImage(encoded.ToArray());
+            bool alreadyReserved = false;
+            return DecodeRasterImage(
+                encoded.ToArray(), reserveDecodedBytes: null, ref alreadyReserved);
         }
         catch (Exception exception) when (
             exception is not OutOfMemoryException
@@ -2725,7 +2794,10 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         return true;
     }
 
-    private static ImageSource? DecodeRasterImage(byte[] bytes)
+    private static ImageSource? DecodeRasterImage(
+        byte[] bytes,
+        Func<long, bool>? reserveDecodedBytes,
+        ref bool budgetSpent)
     {
         try
         {
@@ -2743,6 +2815,22 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             int boundedDimension = Math.Min(
                 MaxPreviewImageDimension,
                 widthLimits ? frame.PixelWidth : frame.PixelHeight);
+            if (reserveDecodedBytes is not null)
+            {
+                // Projected size after the bounded decode, from the
+                // HEADER — nothing has been allocated yet.
+                long longSide = widthLimits ? frame.PixelWidth : frame.PixelHeight;
+                long shortSide = widthLimits ? frame.PixelHeight : frame.PixelWidth;
+                long scaledShort = Math.Max(
+                    1,
+                    (long)Math.Ceiling(
+                        shortSide * ((double)boundedDimension / longSide)));
+                if (!reserveDecodedBytes(boundedDimension * scaledShort * 4))
+                {
+                    budgetSpent = true;
+                    return null;
+                }
+            }
             stream.Position = 0;
             var image = new BitmapImage();
             image.BeginInit();

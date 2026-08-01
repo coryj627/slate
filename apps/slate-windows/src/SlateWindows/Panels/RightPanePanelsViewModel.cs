@@ -50,14 +50,18 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     internal const long MaxEmbedImageBytes = 16L * 1024 * 1024;
     internal const int MaxEmbedRows = 256;
 
-    /// <summary>Round 4: encoded size says nothing about pixel
+    /// <summary>Rounds 4-5: encoded size says nothing about pixel
     /// allocation — a few-KB PNG decodes to ~5 MB at the 1120px
     /// decode bound, so 128 tiny images could pass the encoded
-    /// budget while retaining ~640 MB of bitmaps. Decoded bytes are
-    /// charged per BUILT card (nested images included) before the
-    /// card is retained; a card that would cross the cap is dropped
-    /// and its row degrades loudly.</summary>
-    internal const long MaxEmbedDecodedImageBytes = 64L * 1024 * 1024;
+    /// budget while allocating ~640 MB of bitmaps. The bound is
+    /// enforced INSIDE the decode (each image reserves its bounded
+    /// cost from its header before pixels are allocated — a
+    /// post-build check would let one many-image card allocate it
+    /// all first); refused images are elided with a loud warning
+    /// body while the rest of the card survives. NOTE-wide here;
+    /// the popover applies the same figure per card.</summary>
+    internal const long MaxEmbedDecodedImageBytes =
+        EditorInteractionCoordinator.MaxDecodedImageBytesPerCard;
 
     private readonly VaultSession _session;
     private readonly Action<A11yEvent> _announce;
@@ -387,6 +391,17 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 (string Target, string? Alt), EmbedRowViewModel.Shared?>();
             long imageBytes = 0;
             long decodedBytes = 0;
+            // The note-wide decoded budget, reserved image-by-image
+            // INSIDE the decode (single worker thread — no locking).
+            bool ReserveDecoded(long cost)
+            {
+                if (decodedBytes + cost > MaxEmbedDecodedImageBytes)
+                {
+                    return false;
+                }
+                decodedBytes += cost;
+                return true;
+            }
             var rows = new List<EmbedRowViewModel>(
                 Math.Min(embedLinks.Length, MaxEmbedRows + 1));
             for (int index = 0; index < embedLinks.Length; index++)
@@ -465,26 +480,12 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                     continue;
                 }
 
-                EditorEmbedPreviewNode node =
-                    EditorInteractionCoordinator.BuildEmbedPreviewNode(
-                        resolution);
-
-                // The DECODED budget (round 4): encoded bytes do not
-                // bound pixel allocation, so the built card's actual
-                // bitmaps are charged before the card is retained.
-                long decodedCost = CountDecodedImageBytes(node);
-                if (decodedCost > 0
-                    && decodedBytes + decodedCost > MaxEmbedDecodedImageBytes)
-                {
-                    cache[key] = null;
-                    rows.Add(EmbedRowViewModel.OverBudget(link));
-                    continue;
-                }
-
                 imageBytes += cost;
-                decodedBytes += decodedCost;
                 var shared = new EmbedRowViewModel.Shared(
-                    resolution, truncated, node);
+                    resolution,
+                    truncated,
+                    EditorInteractionCoordinator.BuildEmbedPreviewNode(
+                        resolution, ReserveDecoded));
                 cache[key] = shared;
                 rows.Add(EmbedRowViewModel.FromShared(link, shared));
             }

@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using SlateWindows;
 using SlateWindows.Panels;
 using uniffi.slate_uniffi;
 
@@ -48,6 +49,18 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
         }
         File.WriteAllText(
             Path.Combine(_fixture.Root, "decoded.md"), embeds.ToString());
+        // ONE card holding every image as a NESTED embed (round 5):
+        // the decode itself must stay bounded — a post-build check
+        // would let this single card allocate ~100 MB first.
+        var gallery = new System.Text.StringBuilder("# Gallery\n\n");
+        for (int i = 1; i <= 20; i++)
+        {
+            gallery.Append($"![[pix{i}.png]]\n");
+        }
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "gallery.md"), gallery.ToString());
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "nested.md"), "![[gallery.md]]\n");
         _session = VaultSession.OpenFilesystem(_fixture.Root);
         using var cancel = new CancelToken();
         _session.ScanInitial(cancel);
@@ -130,23 +143,28 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
         Assert.Equal(20, panels.Embeds.Count);
 
         // Tiny encoded payloads, ~5 MB each decoded: exactly the
-        // rows that fit the decoded budget resolve, the rest degrade.
+        // images that fit the decoded budget decode; the rest are
+        // ELIDED with a loud warning body while their rows survive.
         long perImage = 1120L * 1120L * 4;
         int admitted = (int)(
             RightPanePanelsViewModel.MaxEmbedDecodedImageBytes / perImage);
         Assert.InRange(admitted, 1, 19);
         for (int i = 0; i < panels.Embeds.Count; i++)
         {
+            EmbedRowViewModel row = panels.Embeds[i];
+            Assert.IsType<EmbedResolution.Image>(row.Resolution);
             if (i < admitted)
             {
-                Assert.IsType<EmbedResolution.Image>(
-                    panels.Embeds[i].Resolution);
+                Assert.NotNull(row.Node.Image);
             }
             else
             {
-                Assert.Equal(
-                    EmbedRowViewModel.OverBudgetMessage,
-                    panels.Embeds[i].Node.Title);
+                Assert.Null(row.Node.Image);
+                Assert.True(row.Node.IsWarning);
+                Assert.Contains(
+                    row.Node.Parts,
+                    part => part.Text == EditorInteractionCoordinator
+                        .ImageBudgetSpentMessage);
             }
         }
 
@@ -155,5 +173,64 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             row => RightPanePanelsViewModel.CountDecodedImageBytes(row.Node));
         Assert.InRange(
             retained, 1, RightPanePanelsViewModel.MaxEmbedDecodedImageBytes);
+    }
+
+    [Fact]
+    public void NestedImagesInsideOneCardReserveBeforeDecoding()
+    {
+        var panels = new RightPanePanelsViewModel(
+            _session,
+            _ => { },
+            (_, _) => true,
+            _ => true,
+            (_, _) => { });
+        panels.NoteChanged("nested.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => !panels.IsLoadingLinks && !panels.IsResolvingEmbeds,
+                TimeSpan.FromSeconds(30)),
+            "the nested note never finished resolving");
+
+        // One card, every image nested inside it: decode-time
+        // reservation bounds the card WHILE it is built.
+        EmbedRowViewModel row = Assert.Single(panels.Embeds);
+        Assert.Equal("Embedded note: gallery.md", row.Node.Title);
+        Assert.InRange(
+            RightPanePanelsViewModel.CountDecodedImageBytes(row.Node),
+            1,
+            RightPanePanelsViewModel.MaxEmbedDecodedImageBytes);
+
+        (int decoded, int elided) = CountImages(row.Node);
+        long perImage = 1120L * 1120L * 4;
+        int admitted = (int)(
+            RightPanePanelsViewModel.MaxEmbedDecodedImageBytes / perImage);
+        Assert.Equal(admitted, decoded);
+        Assert.Equal(20 - admitted, elided);
+    }
+
+    private static (int Decoded, int Elided) CountImages(
+        SlateWindows.EditorEmbedPreviewNode node)
+    {
+        int decoded = 0;
+        int elided = 0;
+        if (node.Image is not null)
+        {
+            decoded++;
+        }
+        else if (node.Parts.Any(part => part.Text
+            == EditorInteractionCoordinator.ImageBudgetSpentMessage))
+        {
+            elided++;
+        }
+        foreach (SlateWindows.EditorEmbedPreviewPart part in node.Parts)
+        {
+            if (part.Nested is { } nested)
+            {
+                (int d, int e) = CountImages(nested);
+                decoded += d;
+                elided += e;
+            }
+        }
+        return (decoded, elided);
     }
 }
