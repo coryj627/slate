@@ -475,6 +475,33 @@ pub enum A11yEvent {
         text: String,
     },
 
+    // --- Accessible data grid (W4-1, the #969 grid announce family) ---
+    /// A grid column sort was applied (keyboard or header click).
+    GridSorted {
+        column: String,
+        ascending: bool,
+    },
+    /// Vertical navigation landed on a DIFFERENT row: the engine's row
+    /// `audio_description` deduplicated against the focused cell label
+    /// (spoken alone when it already contains the cell, case-folded;
+    /// mac's pre-conversion rule also folded diacritics -- the core
+    /// rule is case-only, a recorded refinement both twins now share).
+    GridRowMoved {
+        description: String,
+        focused_cell: String,
+    },
+    /// Horizontal / within-row navigation: the "Header: value" label.
+    GridCellMoved {
+        column: String,
+        value: String,
+    },
+    /// A group heading row.
+    GridGroup {
+        label: String,
+        row_count: u32,
+        summary: Option<String>,
+    },
+
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -847,6 +874,47 @@ impl A11yEvent {
                     format!("{text}.")
                 } else {
                     format!("{text}, {}.", target.spoken())
+                }
+            }
+
+            GridSorted { column, ascending } => format!(
+                "Sorted by {column}, {}",
+                if *ascending {
+                    "ascending"
+                } else {
+                    "descending"
+                }
+            ),
+            GridRowMoved {
+                description,
+                focused_cell,
+            } => {
+                let description = description.trim();
+                if description.is_empty() {
+                    focused_cell.clone()
+                } else if description
+                    .to_lowercase()
+                    .contains(&focused_cell.to_lowercase())
+                {
+                    description.to_owned()
+                } else if description.ends_with('.') {
+                    format!("{description} {focused_cell}")
+                } else {
+                    format!("{description}. {focused_cell}")
+                }
+            }
+            GridCellMoved { column, value } => format!("{column}: {value}"),
+            GridGroup {
+                label,
+                row_count,
+                summary,
+            } => {
+                let rows = format!("{row_count} {}", plural(*row_count, "row", "rows"));
+                match summary {
+                    Some(summary) if !summary.is_empty() => {
+                        format!("Group: {label}, {rows}. Summary: {summary}")
+                    }
+                    _ => format!("Group: {label}, {rows}"),
                 }
             }
 
@@ -1288,6 +1356,44 @@ pub fn corpus() -> Vec<A11yEvent> {
             target: ReadingNavTarget::Embed,
             text: "".into(),
         },
+        GridSorted {
+            column: "Status".into(),
+            ascending: true,
+        },
+        GridSorted {
+            column: "Due".into(),
+            ascending: false,
+        },
+        GridRowMoved {
+            // Dedup hit: the description already carries the focused
+            // cell label, so it is spoken alone.
+            description: "Ship the plan. Status: Open. Due: Friday".into(),
+            focused_cell: "Status: Open".into(),
+        },
+        GridRowMoved {
+            // Dedup miss, no trailing period: ". " joins.
+            description: "Ship the plan".into(),
+            focused_cell: "Status: Open".into(),
+        },
+        GridRowMoved {
+            // Dedup miss with a trailing period: a space joins.
+            description: "Done reviewing.".into(),
+            focused_cell: "Status: Open".into(),
+        },
+        GridCellMoved {
+            column: "Status".into(),
+            value: "Open".into(),
+        },
+        GridGroup {
+            label: "Open".into(),
+            row_count: 1,
+            summary: None,
+        },
+        GridGroup {
+            label: "Done".into(),
+            row_count: 12,
+            summary: Some("Count: 12".into()),
+        },
         HostComposed {
             text: "Composed by a host engine.".into(),
             priority: A11yPriority::High,
@@ -1538,6 +1644,14 @@ mod tests {
             (Medium, "No next diagram."),
             (Medium, "Flowchart with 3 steps, diagram."),
             (Medium, "Embed."),
+            (Medium, "Sorted by Status, ascending"),
+            (Medium, "Sorted by Due, descending"),
+            (Medium, "Ship the plan. Status: Open. Due: Friday"),
+            (Medium, "Ship the plan. Status: Open"),
+            (Medium, "Done reviewing. Status: Open"),
+            (Medium, "Status: Open"),
+            (Medium, "Group: Open, 1 row"),
+            (Medium, "Group: Done, 12 rows. Summary: Count: 12"),
             (High, "Composed by a host engine."),
         ];
 

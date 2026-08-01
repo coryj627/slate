@@ -1,0 +1,131 @@
+// Copyright (C) 2026 Cory Joseph
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+using System.Globalization;
+using System.Windows;
+using System.Windows.Automation;
+using System.Windows.Controls;
+using SlateWindows.Grids;
+using uniffi.slate_uniffi;
+
+namespace GridConformanceHost;
+
+/// <summary>
+/// The W4-1 conformance host: a minimal window carrying ONE
+/// AccessibleDataGrid over a generated fixture, driven by the FlaUI
+/// conformance suite (the reusable §W-C gate every consuming surface
+/// inherits). `args[0]` sets the row count — the suite runs the §8.7
+/// matrix at 200 rows and the UIA-virtualization trap probe at 10,000.
+/// </summary>
+internal static class Program
+{
+    private sealed record FixtureRow(int Index, string Name, string Status, string Notes);
+
+    [STAThread]
+    private static void Main(string[] args)
+    {
+        // The Fluent addendum (w4_spec baseline): the conformance suite
+        // must validate the FLUENT-restyled grid — the same explicit
+        // dictionary layering the app ships — never Aero defaults. The
+        // validation seam throws loudly if any dictionary fails to
+        // resolve, so a silent fallback cannot fake a green matrix.
+        AppContext.SetSwitch(
+            "Switch.System.Windows.Appearance.DisableFluentThemeWindowBackdrop",
+            true);
+        var app = new Application();
+        SlateWindows.ThemeManager.ValidateResourceDictionaries();
+        using var theme = new SlateWindows.ThemeManager(
+            app, SlateWindows.ThemeManager.ReadSystemTheme());
+
+        int rowCount = args.Length > 0
+            && int.TryParse(args[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed)
+            ? parsed
+            : 200;
+
+        var rows = new List<object>(rowCount);
+        for (int i = 0; i < rowCount; i++)
+        {
+            rows.Add(new FixtureRow(
+                i,
+                $"Note {i:D5}",
+                i % 3 == 0 ? "Open" : "Done",
+                $"fixture row {i}"));
+        }
+
+        var actionLog = new TextBlock
+        {
+            Text = "none",
+            Focusable = false,
+            Margin = new Thickness(8, 2, 8, 2),
+        };
+        AutomationProperties.SetAutomationId(actionLog, "GridActionLog");
+        AutomationProperties.SetName(actionLog, "Action log");
+
+        var grid = new AccessibleDataGrid();
+        grid.Bind(
+            new[]
+            {
+                new AccessibleGridColumn
+                {
+                    Header = "Name",
+                    Cell = row => ((FixtureRow)row).Name,
+                    Sort = Comparer<object>.Create((x, y) =>
+                        string.CompareOrdinal(((FixtureRow)x).Name, ((FixtureRow)y).Name)),
+                },
+                new AccessibleGridColumn
+                {
+                    Header = "Status",
+                    Cell = row => ((FixtureRow)row).Status,
+                    Sort = Comparer<object>.Create((x, y) =>
+                        string.CompareOrdinal(((FixtureRow)x).Status, ((FixtureRow)y).Status)),
+                },
+                new AccessibleGridColumn
+                {
+                    Header = "Notes",
+                    Cell = row => ((FixtureRow)row).Notes,
+                    AccessibilityHint = _ => "read-only: fixture",
+                },
+            },
+            rows,
+            $"{rowCount} rows, 3 columns.",
+            "Conformance fixture, data grid",
+            rowAudioDescription: row =>
+                $"{((FixtureRow)row).Name}. Status: {((FixtureRow)row).Status}",
+            rowActions: new[]
+            {
+                new AccessibleGridRowAction
+                {
+                    Name = "Open",
+                    Execute = row => actionLog.Text = $"opened:{((FixtureRow)row).Index}",
+                },
+                new AccessibleGridRowAction
+                {
+                    Name = "Edit property",
+                    Execute = _ => { },
+                    IsEnabled = _ => false,
+                    DisabledReason = "Read-only fixture",
+                },
+            },
+            exportProducer: format => format == ExportFormat.Csv
+                ? $"Name,Status,Notes\r\nfixture,{rowCount},rows"
+                : $"|Name|Status|Notes|\n|fixture|{rowCount}|rows|");
+        grid.ExportProduced += (format, text) =>
+            actionLog.Text = $"exported:{format}:{text.Length}";
+
+        var layout = new DockPanel();
+        DockPanel.SetDock(actionLog, Dock.Bottom);
+        layout.Children.Add(actionLog);
+        layout.Children.Add(grid);
+
+        var window = new Window
+        {
+            Title = "Slate Grid Conformance Host",
+            Width = 900,
+            Height = 600,
+            Content = layout,
+        };
+        AutomationProperties.SetAutomationId(window, "Slate.GridConformanceHost");
+
+        app.Run(window);
+    }
+}

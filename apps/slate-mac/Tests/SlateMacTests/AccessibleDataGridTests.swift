@@ -135,6 +135,9 @@ final class AccessibleDataGridTests: XCTestCase {
         rowAccessibilityDescription: ((Row) -> String?)? = nil,
         announce: @escaping (String) -> Void = { _ in }
     ) -> AccessibleDataGrid<Row> {
+        // Tests assert the rendered strings; the grid now posts
+        // canonical events, so the helper renders through the same
+        // core path production speech takes.
         AccessibleDataGrid(
             columns: [
                 .init("Name", cell: { $0.a }, sort: { $0.a < $1.a }),
@@ -155,7 +158,7 @@ final class AccessibleDataGridTests: XCTestCase {
             onCommitEdit: onCommitEdit,
             onCancelEdit: onCancelEdit,
             rowAccessibilityDescription: rowAccessibilityDescription,
-            announce: announce)
+            announce: { announce(a11yRender(event: $0).text) })
     }
 
     private static let people = [

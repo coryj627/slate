@@ -197,9 +197,12 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     var rowAccessibilityDescription: ((Row) -> String?)?
     var rowActions: [RowAction]
     var focusRequest: Int
-    /// Sort (and other grid-owned) announcements route here. Defaults
-    /// to the app-wide announcer; #363 injects the #518 coordinator.
-    var announce: (String) -> Void
+    /// Sort (and other grid-owned) announcements route here as
+    /// CANONICAL events (#969: the grid family's text and priority come
+    /// from core; trigger sites decide when, never what it says).
+    /// Defaults to the app-wide announcer; #363 injects the #518
+    /// coordinator, which renders the event into its status funnel.
+    var announce: (A11yEvent) -> Void
 
     init(
         columns: [Column],
@@ -222,9 +225,8 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
         rowAccessibilityDescription: ((Row) -> String?)? = nil,
         rowActions: [RowAction] = [],
         focusRequest: Int = 0,
-        announce: @escaping (String) -> Void = {
-            // W0.5-3 residue: AccessibleDataGrid announce relay
-            postAccessibilityAnnouncement(.hostComposed(text: $0, priority: .medium))
+        announce: @escaping (A11yEvent) -> Void = {
+            postAccessibilityAnnouncement($0)
         }
     ) {
         self.columns = columns
@@ -565,11 +567,10 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         syncSortDescriptorsToTable()
         syncHeaderAccessibilityToTable()
         table?.reloadData()
-        let text =
-            "Sorted by \(grid.columns[columnIndex].header), "
-            + (ascending ? "ascending" : "descending")
-        grid.announce(text)
-        return text
+        let event = A11yEvent.gridSorted(
+            column: grid.columns[columnIndex].header, ascending: ascending)
+        grid.announce(event)
+        return a11yRender(event: event).text
     }
 
     nonisolated func tableView(
@@ -982,10 +983,10 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         case .up, .down, .pageUp, .pageDown:
             grid.announce(
                 movedToDifferentRow
-                    ? rowMoveAnnouncement(for: row, columnIndex: columnIndex)
-                    : cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+                    ? rowMoveEvent(for: row, columnIndex: columnIndex)
+                    : cellMoveEvent(for: row, columnIndex: columnIndex))
         default:
-            grid.announce(cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+            grid.announce(cellMoveEvent(for: row, columnIndex: columnIndex))
         }
     }
 
@@ -1009,7 +1010,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             return accessibilityLabel(for: group)
         case .row(let rowValue):
             guard !grid.columns.isEmpty else { return nil }
-            return rowMoveAnnouncement(for: rowValue, columnIndex: 0)
+            return a11yRender(event: rowMoveEvent(for: rowValue, columnIndex: 0)).text
         }
     }
 
@@ -1050,20 +1051,23 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         return "\(column.header): \(column.cell(row))"
     }
 
-    private func rowMoveAnnouncement(for row: Row, columnIndex: Int) -> String {
-        let focusedCell = cellAccessibilityLabel(for: row, columnIndex: columnIndex)
-        guard let rawDescription = grid.rowAccessibilityDescription?(row) else {
-            return focusedCell
+    /// The row-move event: core renders the description/focused-cell
+    /// dedup (#969 conversion — the old Swift composition moved to
+    /// `A11yEvent::GridRowMoved` verbatim, its case-fold rule now
+    /// case-only on both twins).
+    private func rowMoveEvent(for row: Row, columnIndex: Int) -> A11yEvent {
+        .gridRowMoved(
+            description: grid.rowAccessibilityDescription?(row) ?? "",
+            focusedCell: cellAccessibilityLabel(for: row, columnIndex: columnIndex))
+    }
+
+    /// The cell-move event ("Header: value", rendered in core).
+    private func cellMoveEvent(for row: Row, columnIndex: Int) -> A11yEvent {
+        guard grid.columns.indices.contains(columnIndex) else {
+            return .gridCellMoved(column: "", value: "")
         }
-        let description = rawDescription.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !description.isEmpty else { return focusedCell }
-        if description.range(
-            of: focusedCell,
-            options: [.caseInsensitive, .diacriticInsensitive]
-        ) != nil {
-            return description
-        }
-        return description + (description.hasSuffix(".") ? " " : ". ") + focusedCell
+        let column = grid.columns[columnIndex]
+        return .gridCellMoved(column: column.header, value: column.cell(row))
     }
 
     @objc func doubleClicked(_ sender: Any?) {

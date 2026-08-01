@@ -211,6 +211,16 @@ final class A11yCorpusCensusTests: XCTestCase {
             .readingNavNoTarget(target: .diagram, forward: true),
             .readingNavLanded(target: .diagram, text: "Flowchart with 3 steps"),
             .readingNavLanded(target: .embed, text: ""),
+            .gridSorted(column: "Status", ascending: true),
+            .gridSorted(column: "Due", ascending: false),
+            .gridRowMoved(
+                description: "Ship the plan. Status: Open. Due: Friday",
+                focusedCell: "Status: Open"),
+            .gridRowMoved(description: "Ship the plan", focusedCell: "Status: Open"),
+            .gridRowMoved(description: "Done reviewing.", focusedCell: "Status: Open"),
+            .gridCellMoved(column: "Status", value: "Open"),
+            .gridGroup(label: "Open", rowCount: 1, summary: nil),
+            .gridGroup(label: "Done", rowCount: 12, summary: "Count: 12"),
             .hostComposed(text: "Composed by a host engine.", priority: .high),
         ]
     }
