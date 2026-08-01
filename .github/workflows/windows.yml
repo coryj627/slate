@@ -420,6 +420,7 @@ jobs:
           path: |
             apps/slate-windows/src/SlateWindows/bin/Release/**/*
             apps/slate-windows/tests/SlateWindows.AccessibilityTests/bin/Release/**/*
+            apps/slate-windows/tools/GridConformanceHost/bin/Release/**/*
           if-no-files-found: error
           retention-days: 1
 

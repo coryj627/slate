@@ -324,8 +324,8 @@ extension CanvasOutlineTests {
             },
             summary: "test",
             accessibilityLabel: "Canvas table",
-            announce: { [weak state] text in
-                state?.canvasAnnouncer.announce(.status(text))
+            announce: { [weak state] event in
+                state?.canvasAnnouncer.announce(.status(a11yRender(event: event).text))
             })
     }
 
