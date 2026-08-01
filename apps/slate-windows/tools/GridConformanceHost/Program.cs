@@ -125,6 +125,11 @@ internal static class Program
                 : $"|Name|Status|Notes|\n|fixture|{rowCount}|rows|");
         grid.ExportProduced += (format, text) =>
             actionLog.Text = $"exported:{format}:{text.Length}";
+        // The suite drives the menu by keyboard and reads its
+        // lifecycle here — popup items are not reliably enumerable
+        // through desktop UIA on a starved session.
+        grid.Grid.ContextMenuOpening += (_, _) =>
+            actionLog.Text = "menu-opening";
         // The suite reads grid events cross-process through the log —
         // the observable that separates "input never arrived" from
         // "the sort never fired" on a hosted runner.

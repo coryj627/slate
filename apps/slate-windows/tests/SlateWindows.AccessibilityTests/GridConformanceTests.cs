@@ -126,41 +126,30 @@ public sealed class GridConformanceTests
                     TimeSpan.FromSeconds(5)),
                 "type-ahead did not select the prefixed row");
 
-            // Row actions: the Menu key opens the actions menu; the
-            // disabled action stays listed WITH its reason. BOTH items
-            // are required from ONE snapshot — split waits let a menu
-            // re-render between them strand the second lookup.
+            // Row actions, the full keyboard journey: the Menu key
+            // opens the actions menu (host lifecycle log — popup items
+            // are not reliably enumerable through desktop UIA on a
+            // starved session), Down lands on the first action, Enter
+            // executes it. Menu COMPOSITION — the disabled action
+            // retained with its reason as HelpText — is pinned by the
+            // in-process unit test
+            // (RowActionsMenuRetainsDisabledActionsWithTheirReason).
             Keyboard.Type(VirtualKeyShort.APPS);
-            AutomationElement? open = null;
-            AutomationElement? edit = null;
             Assert.True(
                 SpinWait.SpinUntil(
-                    () =>
-                    {
-                        AutomationElement[] items = automation.GetDesktop()
-                            .FindAllDescendants(
-                                cf => cf.ByControlType(ControlType.MenuItem));
-                        open = items.FirstOrDefault(item => item.Name == "Open");
-                        edit = items.FirstOrDefault(
-                            item => item.Name == "Edit property");
-                        return open is not null && edit is not null;
-                    },
+                    () => actionLog.Properties.Name.ValueOrDefault == "menu-opening",
                     TimeSpan.FromSeconds(10)),
-                "the row-actions menu never showed both actions");
-            Assert.False(edit!.Properties.IsEnabled.ValueOrDefault);
-            Assert.Equal(
-                "Read-only fixture",
-                edit.Properties.HelpText.ValueOrDefault);
-            open!.AsMenuItem().Invoke();
-            AutomationElement log = WaitForElement(
-                window, "GridActionLog", TimeSpan.FromSeconds(5));
+                "the Menu key never opened the row-actions menu; host log: "
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
+            Keyboard.Type(VirtualKeyShort.DOWN);
+            Keyboard.Type(VirtualKeyShort.RETURN);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => (log.Properties.Name.ValueOrDefault ?? "")
+                    () => (actionLog.Properties.Name.ValueOrDefault ?? "")
                         .StartsWith("opened:", StringComparison.Ordinal),
-                    TimeSpan.FromSeconds(5)),
+                    TimeSpan.FromSeconds(10)),
                 "the Open row action did not execute; host log: "
-                    + (log.Properties.Name.ValueOrDefault ?? "<empty>"));
+                    + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
 
             // The summary region: separately addressable and named.
             AutomationElement summary = WaitForElement(
@@ -488,23 +477,6 @@ public sealed class GridConformanceTests
                 },
                 timeout),
             $"no element with AutomationId {automationId} appeared");
-        return found!;
-    }
-
-    private static AutomationElement WaitForNamedDescendant(
-        UIA3Automation automation, string name, TimeSpan timeout)
-    {
-        AutomationElement? found = null;
-        Assert.True(
-            SpinWait.SpinUntil(
-                () =>
-                {
-                    found = automation.GetDesktop()
-                        .FindFirstDescendant(cf => cf.ByName(name));
-                    return found is not null;
-                },
-                timeout),
-            $"no element named {name} appeared");
         return found!;
     }
 
