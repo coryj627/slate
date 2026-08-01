@@ -357,8 +357,8 @@ struct GraphTableView: View {
             showsRowContextMenu: true,
             rowActions: rowActions,
             focusRequest: gridFocusRequest,
-            announce: { [weak appState] text in
-                appState?.graphAnnouncer.announce(.status(text))
+            announce: { [weak appState] event in
+                appState?.graphAnnouncer.announce(.status(a11yRender(event: event).text))
             })
     }
 

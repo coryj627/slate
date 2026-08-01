@@ -773,7 +773,7 @@ public sealed class ShellAccessibilityTests
         }
     }
 
-    private static void AssertAxeClean(Process process, string surface)
+    internal static void AssertAxeClean(Process process, string surface)
     {
         var config = Config.Builder.ForProcessId(process.Id).Build();
         var output = ScannerFactory.CreateScanner(config).Scan(null);

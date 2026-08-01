@@ -6761,6 +6761,23 @@ pub enum A11yEvent {
         target: ReadingNavTarget,
         text: String,
     },
+    GridSorted {
+        column: String,
+        ascending: bool,
+    },
+    GridRowMoved {
+        description: String,
+        focused_cell: String,
+    },
+    GridCellMoved {
+        column: String,
+        value: String,
+    },
+    GridGroup {
+        label: String,
+        row_count: u32,
+        summary: Option<String>,
+    },
     HostComposed {
         text: String,
         priority: A11yPriority,
@@ -7004,6 +7021,24 @@ impl From<A11yEvent> for core::a11y::A11yEvent {
             F::ReadingNavLanded { target, text } => C::ReadingNavLanded {
                 target: target.into(),
                 text,
+            },
+            F::GridSorted { column, ascending } => C::GridSorted { column, ascending },
+            F::GridRowMoved {
+                description,
+                focused_cell,
+            } => C::GridRowMoved {
+                description,
+                focused_cell,
+            },
+            F::GridCellMoved { column, value } => C::GridCellMoved { column, value },
+            F::GridGroup {
+                label,
+                row_count,
+                summary,
+            } => C::GridGroup {
+                label,
+                row_count,
+                summary,
             },
             F::HostComposed { text, priority } => C::HostComposed {
                 text,

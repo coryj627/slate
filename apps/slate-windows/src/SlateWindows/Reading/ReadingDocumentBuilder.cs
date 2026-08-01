@@ -1044,18 +1044,24 @@ internal static class ReadingDocumentBuilder
 
     private static Block TableBlock(ReadingBlock block)
     {
-        // Plain accessible table until W4-1's grid substrate (§10.7).
+        // The table stays IN-RANGE for linear reading (G23: embedded
+        // objects blank say-all); Enter at the caret opens the SAME
+        // source on the W4-1 grid substrate, which is where the §8.7
+        // powers (headers on entry, cell nav, sort, type-ahead) live.
         ReadingTableCells? cells = SlateUniffiMethods.ReadingTableCells(block.Source);
         var table = new WpfTable();
-        ReadingSemantics.MarkTable(table);
         var group = new TableRowGroup();
         table.RowGroups.Add(group);
 
         if (cells is null || (cells.Header.Length == 0 && cells.Rows.Length == 0))
         {
+            // Degenerate: no grid destination — Enter must fall
+            // through, not open an empty window.
+            ReadingSemantics.MarkTable(table);
             group.Rows.Add(Row(new[] { block.Source }, header: false));
             return table;
         }
+        ReadingSemantics.MarkTable(table, block.Source);
 
         int columns = Math.Max(
             cells.Header.Length,
