@@ -1772,13 +1772,26 @@ public sealed class ShellAccessibilityTests
                 window, "RightPaneLeaves", TimeSpan.FromSeconds(10));
             void SelectLeaf(string title)
             {
-                AutomationElement entry = leaves
-                    .FindAllDescendants(
-                        automation.ConditionFactory.ByControlType(ControlType.ListItem))
-                    .FirstOrDefault(item => item.Name == title)
-                    ?? throw new Xunit.Sdk.XunitException(
-                        $"No rail entry named {title}.");
-                entry.Patterns.SelectionItem.Pattern.Select();
+                // Retried: the rail's ListItems materialize lazily on
+                // the gate runner (the W4-1 playbook — one-shot
+                // enumeration races composition).
+                AutomationElement? entry = null;
+                Assert.True(
+                    SpinWait.SpinUntil(
+                        () =>
+                        {
+                            entry = leaves
+                                .FindAllDescendants(
+                                    automation.ConditionFactory.ByControlType(
+                                        ControlType.ListItem))
+                                .FirstOrDefault(item =>
+                                    (item.Properties.Name.ValueOrDefault ?? "")
+                                        == title);
+                            return entry is not null;
+                        },
+                        TimeSpan.FromSeconds(15)),
+                    $"No rail entry named {title}.");
+                entry!.Patterns.SelectionItem.Pattern.Select();
             }
             AutomationElement WaitForRow(
                 AutomationElement list, Func<string, bool> match, string description)
