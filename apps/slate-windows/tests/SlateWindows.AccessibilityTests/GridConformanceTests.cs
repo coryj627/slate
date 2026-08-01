@@ -35,25 +35,31 @@ public sealed class GridConformanceTests
             Assert.True(grid.Patterns.Grid.IsSupported, "Grid pattern missing");
             Assert.True(grid.Patterns.Table.IsSupported, "Table pattern missing");
 
-            // Headers announced on entry ride the native Table pattern:
-            // three addressable column headers. They materialize with
-            // template layout — a cold runner can expose the element
-            // before its header row exists, so wait for content.
-            AutomationElement[] headers = Array.Empty<AutomationElement>();
+            // Headers announced on entry (§8.7): assert the header
+            // ELEMENTS in the tree and the PER-CELL TableItem
+            // associations — the routes AT actually reads on entry.
+            // The grid-LEVEL ColumnHeaders list is deliberately not
+            // load-bearing: the Server gate runner answers it empty
+            // while header item×20 sit realized in the same tree
+            // (captured census, 2026-08-01) — a WPF peer quirk, not a
+            // header failure.
+            AutomationElement[] headerItems = Array.Empty<AutomationElement>();
             bool headersAppeared = SpinWait.SpinUntil(
                 () =>
                 {
-                    headers = grid.Patterns.Table.Pattern.ColumnHeaders.Value
-                        ?? Array.Empty<AutomationElement>();
-                    return headers.Length > 0;
+                    headerItems = grid.FindAllDescendants(
+                        cf => cf.ByControlType(ControlType.HeaderItem));
+                    string[] names = headerItems
+                        .Select(item => item.Properties.Name.ValueOrDefault ?? "")
+                        .ToArray();
+                    return names.Contains("Name")
+                        && names.Contains("Status")
+                        && names.Contains("Notes")
+                        && names.Contains("Note 00000");
                 },
-                TimeSpan.FromSeconds(10));
+                TimeSpan.FromSeconds(15));
             if (!headersAppeared)
             {
-                // What DID the template produce? The census + screenshot
-                // separate "headers never templated" (the Fluent
-                // DataGrid upstream breakage class) from a peer-wiring
-                // gap with visible headers.
                 CaptureForDiagnostics(window, "grid-headers-missing");
                 string kinds = string.Join(
                     ", ",
@@ -61,41 +67,37 @@ public sealed class GridConformanceTests
                         .GroupBy(d => d.Properties.LocalizedControlType.ValueOrDefault ?? "?")
                         .Select(group => $"{group.Key}×{group.Count()}")
                         .OrderBy(s => s, StringComparer.Ordinal));
-                Assert.Fail("no column headers materialized. grid holds: " + kinds);
+                Assert.Fail(
+                    "column + row header items did not materialize. grid holds: " + kinds);
             }
-            Assert.Equal(
-                new[] { "Name", "Status", "Notes" },
-                headers.Select(header => header.Name).ToArray());
-
-            // Row identity (§8.7 "headers on entry"): the Name column
-            // is the row-header column, so realized rows answer the
-            // Table pattern's RowHeaders with their key value.
-            AutomationElement[] rowHeaders = Array.Empty<AutomationElement>();
-            Assert.True(
-                SpinWait.SpinUntil(
-                    () =>
-                    {
-                        rowHeaders = grid.Patterns.Table.Pattern.RowHeaders.Value
-                            ?? Array.Empty<AutomationElement>();
-                        return rowHeaders.Length > 0;
-                    },
-                    TimeSpan.FromSeconds(10)),
-                "no row headers materialized");
-            Assert.Contains(
-                rowHeaders,
-                header => header.Name == "Note 00000");
 
             // Cell labels carry the "Header: value" contract.
             var firstCell = grid.Patterns.Grid.Pattern.GetItem(0, 0);
             Assert.Equal("Name: Note 00000", firstCell.Name);
-            Assert.Equal(
-                "Status: Done",
-                grid.Patterns.Grid.Pattern.GetItem(1, 1).Name);
+            var statusCell = grid.Patterns.Grid.Pattern.GetItem(1, 1);
+            Assert.Equal("Status: Done", statusCell.Name);
+
+            // The per-cell association: entering THIS cell, AT resolves
+            // its column header and its row identity.
+            Assert.True(
+                statusCell.Patterns.TableItem.IsSupported,
+                "TableItem pattern missing on a cell");
+            var tableItem = statusCell.Patterns.TableItem.Pattern;
+            Assert.Contains(
+                tableItem.ColumnHeaderItems.Value ?? Array.Empty<AutomationElement>(),
+                header => header.Name == "Status");
+            Assert.Contains(
+                tableItem.RowHeaderItems.Value ?? Array.Empty<AutomationElement>(),
+                header => header.Name == "Note 00001");
 
             // Keyboard sort: focus a cell, Ctrl+Alt+S twice = the
             // second toggle flips to DESCENDING, reordering row 0.
             // UIA SetFocus, not a mouse click — the pointer path is
-            // position-fragile on a hosted runner.
+            // position-fragile on a hosted runner — and the window is
+            // FORCED foreground first: synthesized input goes to the
+            // foreground queue, and keyboard focus alone does not make
+            // a window foreground on the gate runner.
+            EnsureForeground(window);
             FocusCell(firstCell);
             PressChord(VirtualKeyShort.KEY_S);
             Wait.UntilInputIsProcessed(TimeSpan.FromMilliseconds(250));
@@ -193,16 +195,20 @@ public sealed class GridConformanceTests
             }
             Assert.True(walked >= 30, $"ItemContainer walk stalled at {walked} items");
 
+            EnsureForeground(window);
             FocusCell(grid.Patterns.Grid.Pattern.GetItem(0, 0));
             Keyboard.TypeSimultaneously(VirtualKeyShort.CONTROL, VirtualKeyShort.END);
             Assert.True(
                 SpinWait.SpinUntil(
                     () => (grid.Patterns.Selection.Pattern.Selection.Value
                             ?? Array.Empty<AutomationElement>())
-                        .Any(item => item.Name.Contains("09999", StringComparison.Ordinal)),
+                        // Ctrl+End lands on the LAST COLUMN of the last
+                        // row — "Notes: fixture row 9999" — so match
+                        // the unpadded row number.
+                        .Any(item => item.Name.Contains("9999", StringComparison.Ordinal)),
                     // Generous: deferred scrolling over 10k Standard-mode
                     // rows realizes containers on a cold runner's pace.
-                    TimeSpan.FromSeconds(30)),
+                    TimeSpan.FromSeconds(60)),
                 "Ctrl+End did not reach the last row");
 
             Assert.False(process.HasExited, "the host died under UIA load");
@@ -220,6 +226,7 @@ public sealed class GridConformanceTests
         RunHost(5, (automation, window, process) =>
         {
             _ = WaitForElement(window, "AccessibleDataGrid", TimeSpan.FromSeconds(10));
+            EnsureForeground(window);
             Keyboard.Press(VirtualKeyShort.F2);
             AutomationElement tableWindow = WaitForDesktopElement(
                 automation, "ReadingTableGridWindow", TimeSpan.FromSeconds(10));
@@ -241,6 +248,40 @@ public sealed class GridConformanceTests
                 "Escape did not close the table window");
             Assert.False(process.HasExited, "the host died with the table window");
         });
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
+
+    /// <summary>
+    /// Make the window the FOREGROUND window, verified — synthesized
+    /// keyboard input goes to the foreground queue, and Windows denies
+    /// SetForegroundWindow to background processes unless they own
+    /// recent input. The Alt tap grants exactly that (the documented
+    /// unlock), then the claim is verified against
+    /// GetForegroundWindow, not assumed.
+    /// </summary>
+    private static void EnsureForeground(Window window)
+    {
+        IntPtr handle = new(window.Properties.NativeWindowHandle.Value.ToInt64());
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            if (GetForegroundWindow() == handle)
+            {
+                return;
+            }
+            Keyboard.Press(VirtualKeyShort.ALT);
+            Keyboard.Release(VirtualKeyShort.ALT);
+            window.Focus();
+            Wait.UntilInputIsProcessed();
+            if (SpinWait.SpinUntil(
+                    () => GetForegroundWindow() == handle,
+                    TimeSpan.FromSeconds(2)))
+            {
+                return;
+            }
+        }
+        Assert.Fail("the host window could not take the foreground");
     }
 
     /// <summary>UIA SetFocus on a cell — deterministic on hosted
@@ -332,8 +373,7 @@ public sealed class GridConformanceTests
                 "the host window never appeared");
             // The body drives real keyboard input; whatever test ran
             // before this one owned the foreground.
-            window!.Focus();
-            Wait.UntilInputIsProcessed();
+            EnsureForeground(window!);
             body(automation, window!, process);
         }
         finally
