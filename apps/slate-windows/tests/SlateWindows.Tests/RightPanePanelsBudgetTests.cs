@@ -180,13 +180,20 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
         Assert.IsType<EmbedResolution.Image>(panels.Embeds[0].Resolution);
         Assert.IsType<EmbedResolution.Image>(panels.Embeds[1].Resolution);
 
-        // The third would push retained bytes past the cap: dropped
-        // AFTER resolution, degraded loudly, Jump kept alive.
+        // The third would cross the note-wide pool: refused IN CORE
+        // (round 11 — the payload never crosses FFI), surfacing as a
+        // loud unresolved card with truncation marked.
         EmbedRowViewModel degraded = panels.Embeds[2];
-        Assert.Equal(
-            EmbedRowViewModel.OverBudgetMessage, degraded.Node.Title);
+        Assert.IsType<EmbedResolution.Unresolved>(degraded.Resolution);
         Assert.True(degraded.Node.IsWarning);
-        Assert.Equal("big3.png", degraded.Node.SourcePath);
+        Assert.True(degraded.Truncated);
+        Assert.Null(degraded.Node.Image);
+
+        // Retained encoded bytes across all rows stay inside the cap.
+        long retained = panels.Embeds.Sum(
+            row => RightPanePanelsViewModel.CountImageBytes(row.Resolution));
+        Assert.InRange(
+            retained, 1, RightPanePanelsViewModel.MaxEmbedImageBytes);
     }
 
     [Fact]

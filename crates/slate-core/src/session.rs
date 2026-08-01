@@ -5078,6 +5078,30 @@ impl VaultSession {
         })
     }
 
+    /// Pool-bounded panel profile of the preview resolver (W4-2
+    /// round 11, the reading-card precedent below): the per-key
+    /// image allowance is clamped to the caller's remaining
+    /// NOTE-WIDE pool, so payloads past the pool degrade to
+    /// `Unresolved(ReadError)` core-side instead of marshalling —
+    /// without the clamp, 128 keys × the 8 MiB per-key allowance
+    /// was ~1 GiB of FFI traffic a crafted note triggered on
+    /// activation.
+    pub fn resolve_embed_preview_pooled(
+        &self,
+        host_path: &str,
+        target: &str,
+        alt: Option<String>,
+        image_pool_bytes: u64,
+    ) -> Result<crate::EmbedPreviewResolution, VaultError> {
+        let mut budget =
+            crate::embeds::EmbedResolveBudget::preview_with_image_pool(image_pool_bytes);
+        let resolution = self.resolve_embed_at_depth(host_path, target, 0, alt, &mut budget)?;
+        Ok(crate::EmbedPreviewResolution {
+            resolution,
+            truncated: budget.truncated(),
+        })
+    }
+
     /// Reading-card profile of the preview resolver (W3-5 round 4):
     /// same cumulative budgets, but nested image payloads are
     /// stripped BEFORE the result crosses the FFI (reading cards

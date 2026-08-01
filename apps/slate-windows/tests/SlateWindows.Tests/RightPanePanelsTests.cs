@@ -61,6 +61,15 @@ public sealed class RightPanePanelsTests : IDisposable
         }
         File.WriteAllText(
             Path.Combine(_fixture.Root, "embdense.md"), embDense.ToString());
+        // Backlink density (round 11): the page request is bounded
+        // at 200 — the header and notice must carry the true total.
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "hub.md"), "# Hub\n");
+        for (int i = 1; i <= 201; i++)
+        {
+            File.WriteAllText(
+                Path.Combine(_fixture.Root, $"in{i}.md"), "See [[hub]].\n");
+        }
         File.WriteAllText(
             Path.Combine(_fixture.Root, "bare.md"), "Plain text.\n");
         File.WriteAllText(
@@ -509,6 +518,20 @@ public sealed class RightPanePanelsTests : IDisposable
             panels.OutgoingLinksTruncationNotice);
         EmbedRowViewModel embed = Assert.Single(panels.Embeds);
         Assert.Equal("Embedded note: target.md", embed.Node.Title);
+    }
+
+    [Fact]
+    public void BacklinkDenseNotesKeepTheTrueTotalLoudly()
+    {
+        var panels = LoadHost([], path: "hub.md");
+
+        // 201 inbound links, page bounded at 200: the header speaks
+        // the TRUE count and the truncation is never silent.
+        Assert.Equal(200, panels.Backlinks.Count);
+        Assert.Equal("Backlinks, 201 entries", panels.BacklinksHeader);
+        Assert.Equal(
+            "Showing 200 of 201 backlinks.",
+            panels.BacklinksTruncationNotice);
     }
 
     [Fact]

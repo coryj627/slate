@@ -1508,6 +1508,21 @@ impl VaultSession {
             .into())
     }
 
+    /// Pool-clamped preview (W4-2 round 11): image payloads past the
+    /// caller's remaining note-wide pool never cross the FFI.
+    pub fn resolve_embed_preview_pooled(
+        &self,
+        host_path: String,
+        target: String,
+        alt: Option<String>,
+        image_pool_bytes: u64,
+    ) -> Result<EmbedPreviewResolution, VaultError> {
+        Ok(self
+            .inner
+            .resolve_embed_preview_pooled(&host_path, &target, alt, image_pool_bytes)?
+            .into())
+    }
+
     /// Resolve one READING-CARD embed (W3-5): preview budgets, nested
     /// image payloads never marshalled, root image included only when
     /// it fits `image_budget_bytes` — with its true size reported so

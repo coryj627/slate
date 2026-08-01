@@ -482,6 +482,49 @@ fn note_outline_bounds_headings_and_reports_the_total() {
 }
 
 #[test]
+fn pooled_preview_clamps_image_payloads_to_the_callers_pool() {
+    // W4-2 round 11: the caller's remaining note-wide pool bounds
+    // what may cross FFI. Within the pool the payload arrives;
+    // past it the image degrades core-side and truncation is
+    // marked — the bytes are never marshalled.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/host.md", b"![[pic.png]]\n").unwrap();
+        p.write_file("notes/pic.png", &[0u8; 8]).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let within = session
+        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, 1024)
+        .unwrap();
+    let crate::EmbedResolution::Image { bytes, .. } = &within.resolution else {
+        panic!("expected Image, got {:?}", within.resolution);
+    };
+    assert_eq!(bytes.len(), 8);
+    assert!(!within.truncated);
+
+    let over = session
+        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, 4)
+        .unwrap();
+    assert!(matches!(
+        over.resolution,
+        crate::EmbedResolution::Unresolved {
+            reason: crate::EmbedUnresolvedReason::ReadError { .. }
+        }
+    ));
+    assert!(over.truncated);
+
+    // The pool can only LOWER the per-key allowance, never raise it:
+    // a huge pool still leaves the preview budget in charge.
+    let huge_pool = session
+        .resolve_embed_preview_pooled("notes/host.md", "pic.png", None, u64::MAX)
+        .unwrap();
+    assert!(matches!(
+        huge_pool.resolution,
+        crate::EmbedResolution::Image { .. }
+    ));
+}
+
+#[test]
 fn note_load_bundle_returns_empty_arrays_for_unknown_path() {
     // The previous shape's three separate calls each independently
     // tolerated unknown paths (empty backlinks page, empty outgoing

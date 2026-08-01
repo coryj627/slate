@@ -643,6 +643,9 @@
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"
                                            Text="{Binding Panels.BacklinksEmptyMessage}" />
+                                <TextBlock DockPanel.Dock="Bottom"
+                                           Style="{StaticResource PanelEmptyMessage}"
+                                           Text="{Binding Panels.BacklinksTruncationNotice}" />
                                 <ListBox x:Name="PanelBacklinksList"
                                          Style="{StaticResource PanelListBox}"
                                          ItemsSource="{Binding Panels.Backlinks}"

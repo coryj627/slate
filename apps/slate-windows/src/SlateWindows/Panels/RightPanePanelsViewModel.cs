@@ -102,6 +102,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private string? _embedsLoadError;
     private int _totalOutgoingLinks;
     private int _totalOutlineHeadings;
+    private int _totalBacklinks;
     private volatile bool _isShutDown;
     private readonly bool _synchronous;
 
@@ -227,7 +228,16 @@ internal sealed class RightPanePanelsViewModel : BindableBase
 
     // ---- Header labels (mac LeafSection strings, verbatim) ----
 
-    public string BacklinksHeader => Header("Backlinks", Backlinks.Count);
+    /// <summary>The TRUE inbound count (round 11): the page request
+    /// is bounded at 200, and the header must not present the cap as
+    /// the whole story.</summary>
+    public string BacklinksHeader => Header(
+        "Backlinks", Math.Max(_totalBacklinks, Backlinks.Count));
+
+    public string? BacklinksTruncationNotice =>
+        _totalBacklinks > Backlinks.Count && Backlinks.Count > 0
+            ? $"Showing {Backlinks.Count} of {_totalBacklinks} backlinks."
+            : null;
 
     /// <summary>The TRUE link count — the list itself caps display
     /// at MaxOutgoingRows.</summary>
@@ -315,6 +325,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         EmbedsLoadError = null;
         _totalOutgoingLinks = 0;
         _totalOutlineHeadings = 0;
+        _totalBacklinks = 0;
         RaiseHeaderChanges();
         if (path is null)
         {
@@ -389,6 +400,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 }
                 // Mutations before the loading-flag flip (round 3):
                 // every binding notification must read final state.
+                _totalBacklinks = checked((int)bundle.Backlinks.TotalFiltered);
                 foreach (Backlink backlink in bundle.Backlinks.Items)
                 {
                     Backlinks.Add(new BacklinkRowViewModel(backlink));
@@ -499,8 +511,17 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 bool truncated = false;
                 try
                 {
-                    EmbedPreviewResolution preview = _session.ResolveEmbedPreview(
-                        path, target, link.DisplayText);
+                    // Pool-clamped (round 11): the remaining note-wide
+                    // image pool rides INTO core, so payloads past it
+                    // are refused before any FFI record carries them —
+                    // the post-arrival check below can no longer be
+                    // reached by images, but stays as the final wall.
+                    EmbedPreviewResolution preview =
+                        _session.ResolveEmbedPreviewPooled(
+                            path,
+                            target,
+                            link.DisplayText,
+                            (ulong)Math.Max(0, MaxEmbedImageBytes - imageBytes));
                     resolution = preview.Resolution;
                     truncated = preview.Truncated;
                 }
@@ -766,6 +787,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         OnPropertyChanged(nameof(EmbedsEmptyMessage));
         OnPropertyChanged(nameof(OutgoingLinksTruncationNotice));
         OnPropertyChanged(nameof(OutlineTruncationNotice));
+        OnPropertyChanged(nameof(BacklinksTruncationNotice));
     }
 
     /// <summary>Workspace teardown: invalidate every in-flight load
