@@ -785,6 +785,22 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             grid.onCancelEdit?()
         }
         if grid.selection != nil {
+            // A BOUND identity whose row no longer resolves must clear
+            // the OWNER's value too (round 13): the sync helper only
+            // deselects the table, and its guard suppresses the
+            // owner's changed handler — Canvas's shared selection
+            // would keep a filtered-out card targetable by the global
+            // Delete command. Each binding is written at most once.
+            if let wanted = grid.selection?.wrappedValue,
+                displayIndex(forRowID: wanted) == nil
+            {
+                grid.selection?.wrappedValue = nil
+            }
+            if let position = grid.cellSelection?.wrappedValue,
+                displayIndex(forRowID: position.rowID) == nil
+            {
+                grid.cellSelection?.wrappedValue = nil
+            }
             syncSelectionFromBinding()
             return
         }

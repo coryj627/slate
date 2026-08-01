@@ -413,6 +413,49 @@ final class AccessibleDataGridTests: XCTestCase {
         XCTAssertEqual(cancels, 1, "the owner is told its edit was canceled")
     }
 
+    /// Round 13: a BOUND identity whose row is removed must clear the
+    /// OWNER's bindings too — the sync helper only deselects the table
+    /// under its guard, and a shared selection (the Canvas shape,
+    /// where the same binding feeds the global Delete command) would
+    /// keep a filtered-out card as a hidden destructive target.
+    @MainActor
+    func testBoundReloadClearsRowAndCellSelectionWhenTheirRowIsRemoved() {
+        var selected: Int? = 1  // Ada
+        var position: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 1, columnIndex: 1)
+        let selectionBinding = Binding<Int?>(
+            get: { selected }, set: { selected = $0 })
+        let cellBinding = Binding<AccessibleDataGrid<Row>.CellPosition?>(
+            get: { position }, set: { position = $0 })
+        let grid = makeGrid(
+            rows: Self.people,
+            selection: selectionBinding,
+            cellSelection: cellBinding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        XCTAssertEqual(table.selectedRow, 1, "Ada selected via the binding")
+
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeGrid(
+            rows: remaining,
+            selection: selectionBinding,
+            cellSelection: cellBinding))
+
+        XCTAssertEqual(table.selectedRow, -1, "the table deselects")
+        XCTAssertNil(
+            selected,
+            "the shared row selection must not retain a hidden destructive target")
+        XCTAssertNil(
+            position,
+            "the cell selection must not retain a hidden target")
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?
