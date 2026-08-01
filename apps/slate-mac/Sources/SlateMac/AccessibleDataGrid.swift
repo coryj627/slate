@@ -414,6 +414,16 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         table?.reloadData()
         restoreSelectionAfterDisplayMutation(nativeSelectedID: nativeSelectedID)
         syncEditRequestToTable()
+        if let pending = pendingExternalSortAnnouncement {
+            // The deferred external-sort announcement (round 18):
+            // THIS reload is where the owner's committed rows became
+            // the rendered/AX order. Announce only if the owner still
+            // stands behind the sort; a revert drops it silently.
+            pendingExternalSortAnnouncement = nil
+            if grid.sortState?.wrappedValue == pending.0 {
+                grid.announce(pending.1)
+            }
+        }
     }
 
     func focusIfRequested() {
@@ -521,6 +531,10 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     /// doesn't re-announce the sort.
     private var isSyncingSortDescriptors = false
 
+    /// The accepted-but-not-yet-rendered external sort (round 18):
+    /// announced by the reload that adopts the owner's committed rows.
+    private var pendingExternalSortAnnouncement: (DataGridSortState, A11yEvent)?
+
     private func syncSortDescriptorsToTable() {
         guard let table else { return }
         let wanted =
@@ -606,7 +620,17 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         restoreSelectionAfterDisplayMutation(nativeSelectedID: nativeSelectedID)
         let event = A11yEvent.gridSorted(
             column: grid.columns[columnIndex].header, ascending: ascending)
-        grid.announce(event)
+        if grid.sortState != nil, !grid.sortsRowsLocally {
+            // Engine-backed grids announce on ADOPTION (round 18):
+            // this coordinator still renders the pre-write snapshot —
+            // the owner's committed rows arrive at the next
+            // reload(grid:) — and announcing now would narrate a sort
+            // the rendered/AX order has not adopted. One-shot, and
+            // dropped if the owner reverts before publishing.
+            pendingExternalSortAnnouncement = (sort, event)
+        } else {
+            grid.announce(event)
+        }
         return a11yRender(event: event).text
     }
 

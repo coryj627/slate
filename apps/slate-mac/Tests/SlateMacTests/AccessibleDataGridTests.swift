@@ -554,6 +554,62 @@ final class AccessibleDataGridTests: XCTestCase {
             "the order is unchanged")
     }
 
+    /// Round 18: an engine-backed sort announces on ADOPTION — the
+    /// coordinator renders the pre-write snapshot until the owner's
+    /// committed rows arrive at the next reload, and the announcement
+    /// must fire with the rendered/AX order ALREADY sorted.
+    @MainActor
+    func testExternalSortAnnouncesOnlyAfterTheCommittedRowsRender() {
+        var sortState: DataGridSortState?
+        let binding = Binding<DataGridSortState?>(
+            get: { sortState },
+            set: { sortState = $0 })
+        var announced: [String] = []
+        var orderAtAnnounce: [String]?
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        var coordinator: GridCoordinator<Row>!
+        let announceHook: (String) -> Void = { text in
+            announced.append(text)
+            orderAtAnnounce = (0..<coordinator.numberOfRows(in: table))
+                .compactMap { rowIndex in
+                    (coordinator.tableView(
+                        table, viewFor: table.tableColumns[0], row: rowIndex)
+                        as? NSTableCellView)?.textField?.stringValue
+                }
+        }
+        func makeExternalGrid(rows: [Row]) -> AccessibleDataGrid<Row> {
+            makeGrid(
+                rows: rows,
+                sortState: binding,
+                sortsRowsLocally: false,
+                announce: announceHook)
+        }
+        coordinator = GridCoordinator(grid: makeExternalGrid(rows: Self.people))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: makeExternalGrid(rows: Self.people))
+
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+        XCTAssertTrue(
+            announced.isEmpty,
+            "no announcement before the committed rows render")
+
+        // The owner publishes the committed order; SwiftUI reloads.
+        let committed = [Self.people[1], Self.people[2], Self.people[0]]
+        coordinator.reload(grid: makeExternalGrid(rows: committed))
+
+        XCTAssertEqual(announced, ["Sorted by Name, ascending"])
+        XCTAssertEqual(
+            orderAtAnnounce,
+            ["Ada", "Bea", "Charlie"],
+            "the rendered/AX order is already sorted when the hook fires")
+    }
+
     /// Round 16: NSTableView flips its own sortDescriptors BEFORE the
     /// delegate runs — a rejected header click must pull the native
     /// indicator back to the unchanged state, or the visual header
