@@ -1130,11 +1130,16 @@ public sealed class ShellAccessibilityTests
                     StringComparison.Ordinal),
                 "diagram element",
                 // Generous by design: the FIRST mermaid render pays
-                // fontdb's full system-font scan on a cold runner
-                // (observed >20s on windows-latest); SpinUntil returns
-                // the moment the element exists, so the timeout only
-                // bounds the failure case.
-                TimeSpan.FromSeconds(90),
+                // fontdb's full system-font scan on a cold runner, and
+                // the census-diag run (2026-08-01) proved 90 s is not
+                // enough on the 2-vCPU gate runner — the peer tree held
+                // 9 fresh children with NO diagram merge for the whole
+                // window, while the render starved the UI thread hard
+                // enough that concurrent UIA walks came back truncated
+                // (2 of 9 children). SpinUntil returns the moment the
+                // element exists, so the timeout only bounds the
+                // failure case.
+                TimeSpan.FromSeconds(300),
                 Path.Combine(logDirectory, "slate-windows.log"));
 
             // POSITIVE CENSUS - every custom peer kind, object-tree
