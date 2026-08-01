@@ -127,17 +127,31 @@ public sealed class GridConformanceTests
                 "type-ahead did not select the prefixed row");
 
             // Row actions: the Menu key opens the actions menu; the
-            // disabled action stays listed WITH its reason.
+            // disabled action stays listed WITH its reason. BOTH items
+            // are required from ONE snapshot — split waits let a menu
+            // re-render between them strand the second lookup.
             Keyboard.Type(VirtualKeyShort.APPS);
-            AutomationElement open = WaitForNamedDescendant(
-                automation, "Open", TimeSpan.FromSeconds(5));
-            AutomationElement edit = WaitForNamedDescendant(
-                automation, "Edit property", TimeSpan.FromSeconds(5));
-            Assert.False(edit.Properties.IsEnabled.ValueOrDefault);
+            AutomationElement? open = null;
+            AutomationElement? edit = null;
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        AutomationElement[] items = automation.GetDesktop()
+                            .FindAllDescendants(
+                                cf => cf.ByControlType(ControlType.MenuItem));
+                        open = items.FirstOrDefault(item => item.Name == "Open");
+                        edit = items.FirstOrDefault(
+                            item => item.Name == "Edit property");
+                        return open is not null && edit is not null;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "the row-actions menu never showed both actions");
+            Assert.False(edit!.Properties.IsEnabled.ValueOrDefault);
             Assert.Equal(
                 "Read-only fixture",
                 edit.Properties.HelpText.ValueOrDefault);
-            open.AsMenuItem().Invoke();
+            open!.AsMenuItem().Invoke();
             AutomationElement log = WaitForElement(
                 window, "GridActionLog", TimeSpan.FromSeconds(5));
             Assert.True(

@@ -206,9 +206,22 @@ internal sealed class AccessibleDataGrid : UserControl
             return _grid.Focus();
         }
         _grid.ScrollIntoView(_items[0], _grid.Columns[0]);
+        if (_grid.IsLoaded)
+        {
+            // Realize the container NOW — under a starved session the
+            // deferred generation leaves Focus() on the grid element,
+            // and entry announces the grid instead of headers + cell.
+            _grid.UpdateLayout();
+        }
         _grid.CurrentCell = new DataGridCellInfo(_items[0], _grid.Columns[0]);
         _grid.SelectedCells.Clear();
         _grid.SelectedCells.Add(_grid.CurrentCell);
+        if (_grid.ItemContainerGenerator.ContainerFromItem(_items[0])
+                is DataGridRow row
+            && _grid.Columns[0].GetCellContent(row)?.Parent is DataGridCell cell)
+        {
+            return cell.Focus();
+        }
         return _grid.Focus();
     }
 
