@@ -284,6 +284,39 @@ final class AccessibleDataGridTests: XCTestCase {
             "native selection follows Charlie to the new index, never deselects")
     }
 
+    /// Round 9: a sortState write schedules a SwiftUI update, whose
+    /// reload(grid:) pass must preserve unbound native selection
+    /// exactly as the immediate sort path does — the binding-only
+    /// sync deselected it right after applySort had restored it.
+    @MainActor
+    func testLifecycleReloadKeepsNativeSelectionForSortStateBoundGrids() {
+        var sortState: DataGridSortState?
+        let binding = Binding<DataGridSortState?>(
+            get: { sortState },
+            set: { sortState = $0 })
+        let grid = makeGrid(rows: Self.people, sortState: binding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        table.selectRowIndexes([0], byExtendingSelection: false)  // Charlie
+        XCTAssertEqual(
+            coordinator.applySort(column: 0, ascending: true),
+            "Sorted by Name, ascending")
+        XCTAssertEqual(table.selectedRow, 2, "sort carries the native selection")
+
+        // The SwiftUI update the sortState write scheduled.
+        coordinator.reload(grid: makeGrid(rows: Self.people, sortState: binding))
+        XCTAssertEqual(
+            table.selectedRow, 2,
+            "the lifecycle reload must not deselect the unbound grid")
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?

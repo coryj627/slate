@@ -463,10 +463,11 @@ internal sealed class AccessibleDataGrid : UserControl
         {
             return false;
         }
-        _grid.CurrentCell = new DataGridCellInfo(match, _grid.Columns[0]);
-        _grid.SelectedCells.Clear();
-        _grid.SelectedCells.Add(_grid.CurrentCell);
-        _grid.ScrollIntoView(match);
+        // The realized CELL, not just currency + scroll (round 9):
+        // currency is metadata, and after a distant virtualized jump
+        // the reader would stay on the old cell — or fall back to the
+        // grid — while SelectionPattern reported success.
+        _ = FocusCellElement(match, _grid.Columns[0]);
         return true;
     }
 

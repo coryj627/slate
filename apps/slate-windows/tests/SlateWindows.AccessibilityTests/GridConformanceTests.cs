@@ -135,6 +135,16 @@ public sealed class GridConformanceTests
                         .Any(item => item.Name.Contains("Note 00042", StringComparison.Ordinal)),
                     TimeSpan.FromSeconds(5)),
                 "type-ahead did not select the prefixed row");
+            // ...and the reader MOVED (round 9): after the virtualized
+            // jump, UIA keyboard focus is the matched cell, not the
+            // cell the reader typed from.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.Name == "Name: Note 00042",
+                    TimeSpan.FromSeconds(10)),
+                "type-ahead focus is on "
+                    + $"'{automation.FocusedElement()?.Name ?? "<none>"}', "
+                    + "not the matched cell");
 
             // Row actions, the full keyboard journey: the Menu key
             // opens the actions menu (host lifecycle log — popup items

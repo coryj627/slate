@@ -396,6 +396,12 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
 
     func reload(grid: AccessibleDataGrid<Row>) {
         self.grid = grid
+        // Captured BEFORE the display mutations below (round 9: a
+        // sortState write schedules this reload, and the
+        // binding-only sync deselected unbound grids right after
+        // applySort had restored them).
+        let nativeSelectedID: Row.ID? =
+            grid.selection == nil ? nativeSelectedRowID() : nil
         if let sortState = grid.sortState {
             activeSort = sortState.wrappedValue
         }
@@ -406,7 +412,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         syncSortDescriptorsToTable()
         syncHeaderAccessibilityToTable()
         table?.reloadData()
-        syncSelectionFromBinding()
+        restoreSelectionAfterDisplayMutation(nativeSelectedID: nativeSelectedID)
         syncEditRequestToTable()
     }
 
@@ -578,24 +584,7 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
         syncSortDescriptorsToTable()
         syncHeaderAccessibilityToTable()
         table?.reloadData()
-        // NSTableView selection is INDEX-based while identity lives in
-        // the row ID: after a reorder the old index points at a
-        // DIFFERENT row, and activation or a destructive action would
-        // target it (round 7 — the Canvas shape: selection binding, no
-        // sortState, Delete among the row actions). Bound grids
-        // re-derive from the binding exactly as reload(grid:) does;
-        // unbound grids restore the captured native identity.
-        if grid.selection != nil {
-            syncSelectionFromBinding()
-        } else if let nativeSelectedID,
-            let index = displayIndex(forRowID: nativeSelectedID),
-            let table
-        {
-            mirrorTableSelectionFromBinding {
-                table.selectRowIndexes([index], byExtendingSelection: false)
-                table.scrollRowToVisible(index)
-            }
-        }
+        restoreSelectionAfterDisplayMutation(nativeSelectedID: nativeSelectedID)
         let event = A11yEvent.gridSorted(
             column: grid.columns[columnIndex].header, ascending: ascending)
         grid.announce(event)
@@ -773,6 +762,26 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             case .row(let row) = displayEntries[table.selectedRow]
         else { return nil }
         return row.id
+    }
+
+    /// Selection is INDEX-based in the table while identity lives in
+    /// the row ID: EVERY display mutation (sort, SwiftUI reload) must
+    /// re-derive the index — from the binding when one exists, from
+    /// the identity captured before the mutation when not (rounds
+    /// 7–9: each path that skipped this either targeted the wrong row
+    /// or deselected).
+    private func restoreSelectionAfterDisplayMutation(nativeSelectedID: Row.ID?) {
+        if grid.selection != nil {
+            syncSelectionFromBinding()
+        } else if let nativeSelectedID,
+            let index = displayIndex(forRowID: nativeSelectedID),
+            let table
+        {
+            mirrorTableSelectionFromBinding {
+                table.selectRowIndexes([index], byExtendingSelection: false)
+                table.scrollRowToVisible(index)
+            }
+        }
     }
 
     private func syncSelectionFromBinding() {
