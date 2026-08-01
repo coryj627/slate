@@ -85,6 +85,11 @@ internal sealed partial class WorkspaceViewModel
 
         RaiseCommandStates();
         Persist();
+        // EVERY tab activation re-derives the panels' note — the
+        // ActiveGroup setter's sync alone misses same-pane tab
+        // switches, whose group identity is unchanged (adversarial
+        // round 1: the panels stayed bound to the previous note).
+        SyncPanels();
     }
 
     private void OpenItem(WorkspaceItemState item, WorkspaceOpenTarget target)

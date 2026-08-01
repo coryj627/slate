@@ -29,6 +29,24 @@ public sealed class RightPanePanelsTests : IDisposable
             "# Target\n\nBody. Links back to [[host]].\n");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "bare.md"), "Plain text.\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "dup.md"),
+            "# Beta\n\nIntro.\n\n## Beta\n\nDetail.\n");
+        // The budget fixture: every distinct target within the cap,
+        // then a REPEAT of the first (a dedupe cache hit, never a
+        // budget slot), then one more distinct target (over budget).
+        var many = new System.Text.StringBuilder("# Many\n\n");
+        for (int i = 1;
+            i <= RightPanePanelsViewModel.MaxResolvedEmbedTargets;
+            i++)
+        {
+            many.Append($"![[e{i}]]\n");
+        }
+        many.Append("![[e1]]\n");
+        many.Append(
+            $"![[e{RightPanePanelsViewModel.MaxResolvedEmbedTargets + 1}]]\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "many.md"), many.ToString());
         _session = VaultSession.OpenFilesystem(_fixture.Root);
         using var cancel = new CancelToken();
         _session.ScanInitial(cancel);
@@ -42,22 +60,30 @@ public sealed class RightPanePanelsTests : IDisposable
 
     private sealed record Navigation(string Path, WorkspaceOpenTarget Target);
 
+    private sealed record AnchorRequest(LinkAnchor Anchor, string? ResolvedText);
+
     private RightPanePanelsViewModel MakePanels(
         List<A11yEvent> announced,
         List<Navigation>? navigations = null,
         List<string>? externalOpens = null,
         bool externalSucceeds = true,
-        List<LinkAnchor>? anchors = null) =>
+        List<AnchorRequest>? anchors = null,
+        bool navigationSucceeds = true) =>
         new(
             _session,
             announced.Add,
-            (path, target) => navigations?.Add(new Navigation(path, target)),
+            (path, target) =>
+            {
+                navigations?.Add(new Navigation(path, target));
+                return navigationSucceeds;
+            },
             target =>
             {
                 externalOpens?.Add(target);
                 return externalSucceeds;
             },
-            anchor => anchors?.Add(anchor));
+            (anchor, resolvedText) =>
+                anchors?.Add(new AnchorRequest(anchor, resolvedText)));
 
     private static void WaitFor(Func<bool> condition, string reason)
     {
@@ -71,16 +97,19 @@ public sealed class RightPanePanelsTests : IDisposable
         List<Navigation>? navigations = null,
         List<string>? externalOpens = null,
         bool externalSucceeds = true,
-        List<LinkAnchor>? anchors = null)
+        List<AnchorRequest>? anchors = null,
+        bool navigationSucceeds = true,
+        string path = "host.md")
     {
         RightPanePanelsViewModel panels = MakePanels(
-            announced, navigations, externalOpens, externalSucceeds, anchors);
-        panels.NoteChanged("host.md");
+            announced, navigations, externalOpens, externalSucceeds, anchors,
+            navigationSucceeds);
+        panels.NoteChanged(path);
         WaitFor(
             () => !panels.IsLoadingLinks
                 && !panels.IsLoadingOutline
                 && !panels.IsResolvingEmbeds,
-            "the host note never finished loading");
+            $"the {path} note never finished loading");
         return panels;
     }
 
@@ -315,13 +344,53 @@ public sealed class RightPanePanelsTests : IDisposable
     [Fact]
     public void OutlineActivationScrollsByHeadingAnchor()
     {
-        var anchors = new List<LinkAnchor>();
+        var anchors = new List<AnchorRequest>();
         var panels = LoadHost([], anchors: anchors);
 
         panels.OpenHeading(panels.Outline[1]);
-        LinkAnchor anchor = Assert.Single(anchors);
-        Assert.Equal("heading", anchor.Kind);
-        Assert.Equal("Beta", anchor.Text);
+        AnchorRequest request = Assert.Single(anchors);
+        // The anchor carries the UNIQUE slug (duplicate headings all
+        // match the first occurrence by text); the display text rides
+        // along so the landing announcement speaks prose.
+        Assert.Equal("heading", request.Anchor.Kind);
+        Assert.Equal("beta", request.Anchor.Text);
+        Assert.Equal("Beta", request.ResolvedText);
+    }
+
+    [Fact]
+    public void DuplicateHeadingsActivateByTheirUniqueSlugs()
+    {
+        var anchors = new List<AnchorRequest>();
+        var panels = LoadHost([], anchors: anchors, path: "dup.md");
+
+        Assert.Equal(2, panels.Outline.Count);
+        Assert.Equal("beta", panels.Outline[0].AnchorId);
+        Assert.Equal("beta-2", panels.Outline[1].AnchorId);
+
+        // Activating the SECOND "Beta" must land on it — an anchor
+        // sent by display text would scroll to the first.
+        panels.OpenHeading(panels.Outline[1]);
+        AnchorRequest request = Assert.Single(anchors);
+        Assert.Equal("beta-2", request.Anchor.Text);
+        Assert.Equal("Beta", request.ResolvedText);
+    }
+
+    [Fact]
+    public void NavigationRefusalNeverAnnouncesSuccess()
+    {
+        var announced = new List<A11yEvent>();
+        var navigations = new List<Navigation>();
+        var panels = LoadHost(
+            announced, navigations, navigationSucceeds: false);
+
+        // A dirty-tab cancel (or failed save) refuses the navigation:
+        // the attempt reaches the workspace, but no "Opened" may be
+        // spoken while the editor stayed put.
+        panels.OpenBacklink(panels.Backlinks[0]);
+        panels.OpenOutgoingLink(panels.OutgoingLinks[0]);
+        panels.OpenEmbedSource("target.md");
+        Assert.Equal(3, navigations.Count);
+        Assert.Empty(announced.OfType<A11yEvent.InternalNavigated>());
     }
 
     [Fact]
@@ -336,5 +405,107 @@ public sealed class RightPanePanelsTests : IDisposable
         var navigated = Assert.Single(
             announced.OfType<A11yEvent.InternalNavigated>());
         Assert.Equal("Opened embed source", navigated.Kind);
+    }
+
+    [Fact]
+    public void EmbedResolutionDedupesAndDegradesTheBudgetLoudly()
+    {
+        int cap = RightPanePanelsViewModel.MaxResolvedEmbedTargets;
+        var panels = LoadHost([], path: "many.md");
+
+        // cap distinct targets + one repeat + one over-budget target.
+        Assert.Equal(cap + 2, panels.Embeds.Count);
+
+        // Distinct targets within the cap resolve through core.
+        Assert.NotEqual(
+            EmbedRowViewModel.OverBudgetMessage, panels.Embeds[0].Node.Title);
+        Assert.NotEqual(
+            EmbedRowViewModel.OverBudgetMessage,
+            panels.Embeds[cap - 1].Node.Title);
+
+        // The repeat past the cap is a dedupe CACHE HIT sharing the
+        // first row's resolution — never a budget casualty, never a
+        // second core call.
+        Assert.NotEqual(
+            EmbedRowViewModel.OverBudgetMessage, panels.Embeds[cap].Node.Title);
+        Assert.Same(
+            panels.Embeds[0].Resolution, panels.Embeds[cap].Resolution);
+
+        // The next DISTINCT target degrades loudly, not silently.
+        Assert.Equal(
+            EmbedRowViewModel.OverBudgetMessage,
+            panels.Embeds[cap + 1].Node.Title);
+        Assert.True(panels.Embeds[cap + 1].Node.IsWarning);
+    }
+
+    [Fact]
+    public void OverBudgetRowKeepsJumpToSourceAlive()
+    {
+        var link = new OutgoingLink(
+            TargetPath: "target.md", TargetRaw: "target", TargetAnchor: null,
+            Kind: "wiki", IsEmbed: true, IsExternal: false,
+            IsUnresolved: false, Snippet: "", Ordinal: 0,
+            SpanStart: 0, SpanEnd: 0, DisplayText: null);
+
+        EmbedRowViewModel row = EmbedRowViewModel.OverBudget(link);
+        Assert.Equal(EmbedRowViewModel.OverBudgetMessage, row.Node.Title);
+        Assert.True(row.Node.IsWarning);
+        Assert.False(row.Node.IsDisclosure);
+        Assert.Equal("target.md", row.Node.SourcePath);
+    }
+
+    [Fact]
+    public void CountImageBytesSpansNestedTrees()
+    {
+        var nestedImage = new EmbedResolution.Image(
+            "img.png", new byte[10], "image/png", null);
+        var deeper = new EmbedResolution.Section(
+            "b.md", "H", "text",
+            [
+                new NestedEmbed("![[img2.png]]", 0, 3,
+                    new EmbedResolution.Image(
+                        "img2.png", new byte[7], "image/png", null)),
+            ]);
+        var tree = new EmbedResolution.FullNote(
+            "a.md", "text",
+            [
+                new NestedEmbed("![[img.png]]", 0, 5, nestedImage),
+                new NestedEmbed("![[b]]", 6, 9, deeper),
+            ]);
+
+        Assert.Equal(
+            17, RightPanePanelsViewModel.CountImageBytes(tree));
+        Assert.Equal(
+            10, RightPanePanelsViewModel.CountImageBytes(nestedImage));
+        Assert.Equal(
+            0,
+            RightPanePanelsViewModel.CountImageBytes(
+                new EmbedResolution.Block("b.md", "id", "text")));
+    }
+
+    [Fact]
+    public void SamePaneTabSwitchRebindsThePanels()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("host.md");
+        workspace.OpenPath("target.md", WorkspaceOpenTarget.NewTab);
+        Assert.Equal("target.md", workspace.Panels.NotePath);
+
+        WorkspaceGroupViewModel group = workspace.ActiveGroup;
+        Assert.Equal(2, group.Tabs.Count);
+
+        // The round-1 regression: a same-pane switch leaves group
+        // identity unchanged, so the ActiveGroup setter's sync never
+        // fires — Activate itself must re-derive the panels' note.
+        group.ActiveTab = group.Tabs[0];
+        Assert.Equal("host.md", workspace.Panels.NotePath);
+        group.ActiveTab = group.Tabs[1];
+        Assert.Equal("target.md", workspace.Panels.NotePath);
     }
 }

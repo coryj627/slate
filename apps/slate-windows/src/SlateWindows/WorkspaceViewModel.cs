@@ -682,7 +682,6 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         ArgumentNullException.ThrowIfNull(anchor);
         ArgumentNullException.ThrowIfNull(announce);
-        _ = resolvedAnchorText;
         if (_editorInteractions is null || _editorSession is null)
         {
             return false;
@@ -723,6 +722,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
                         revision,
                         caretOffset,
                         anchor,
+                        resolvedAnchorText,
                         targetUtf16,
                         announce,
                         isStillActive)));
@@ -737,6 +737,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         long revision,
         int caretOffset,
         LinkAnchor anchor,
+        string? resolvedAnchorText,
         int? targetUtf16,
         Action<A11yEvent> announce,
         Func<bool>? isStillActive)
@@ -771,7 +772,11 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         else
         {
-            announce(new A11yEvent.ScrolledToHeading(anchor.Text));
+            // Speak the heading's display text when the caller resolved
+            // one — anchors sent by slug (outline rows, wikilinks with
+            // slug anchors) would otherwise announce the slug itself.
+            announce(new A11yEvent.ScrolledToHeading(
+                resolvedAnchorText ?? anchor.Text));
         }
         _editorInteractions!.RequestCaret(target);
     }
@@ -979,15 +984,20 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         Panels = new Panels.RightPanePanelsViewModel(
             session,
             announce,
-            (path, target) => RunWorkspaceMutation(() => OpenPathCore(path, target)),
+            (path, target) =>
+            {
+                bool navigated = false;
+                RunWorkspaceMutation(() => navigated = OpenPathCore(path, target));
+                return navigated;
+            },
             externalOpener ?? DefaultExternalOpener,
-            anchor =>
+            (anchor, resolvedText) =>
             {
                 WorkspaceGroupViewModel group = ActiveGroup;
                 WorkspaceTabViewModel? tab = group.ActiveTab;
                 _ = tab?.NavigateToAnchor(
                     anchor,
-                    null,
+                    resolvedText,
                     _announce,
                     () => ReferenceEquals(ActiveGroup, group)
                         && ReferenceEquals(group.ActiveTab, tab));

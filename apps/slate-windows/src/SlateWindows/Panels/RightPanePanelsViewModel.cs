@@ -29,11 +29,21 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     /// <summary>Mac parity: backlinks page bound (limit 200).</summary>
     private const uint BacklinksLimit = 200;
 
+    /// <summary>Note-wide embed budgets (adversarial round 1): the
+    /// core budgets bound each SINGLE preview, so a note with
+    /// hundreds of embed links — or a handful of huge images — still
+    /// multiplied that bound without limit. Distinct targets beyond
+    /// the cap, and any new target once the cumulative image budget
+    /// is spent, degrade to warning rows that keep Jump working.
+    /// The image figure matches the W3-5 reading-card host budget.</summary>
+    internal const int MaxResolvedEmbedTargets = 128;
+    internal const long MaxEmbedImageBytes = 16L * 1024 * 1024;
+
     private readonly VaultSession _session;
     private readonly Action<A11yEvent> _announce;
-    private readonly Action<string, WorkspaceOpenTarget> _openInternal;
+    private readonly Func<string, WorkspaceOpenTarget, bool> _openInternal;
     private readonly Func<string, bool> _openExternal;
-    private readonly Action<LinkAnchor> _scrollToAnchor;
+    private readonly Action<LinkAnchor, string?> _scrollToAnchor;
     private readonly SynchronizationContext? _uiContext;
 
     private string? _notePath;
@@ -47,9 +57,9 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     public RightPanePanelsViewModel(
         VaultSession session,
         Action<A11yEvent> announce,
-        Action<string, WorkspaceOpenTarget> openInternal,
+        Func<string, WorkspaceOpenTarget, bool> openInternal,
         Func<string, bool> openExternal,
-        Action<LinkAnchor> scrollToAnchor)
+        Action<LinkAnchor, string?> scrollToAnchor)
     {
         _session = session;
         _announce = announce;
@@ -180,7 +190,9 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             return;
         }
         NotePath = path;
-        int generation = ++_loadGeneration;
+        // Interlocked so the embed-resolve worker's mid-loop
+        // Volatile.Read observes the bump promptly and abandons.
+        int generation = Interlocked.Increment(ref _loadGeneration);
         Backlinks.Clear();
         OutgoingLinks.Clear();
         Outline.Clear();
@@ -273,9 +285,38 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         }
         _ = Task.Run(() =>
         {
+            // One core call per DISTINCT raw target: the same
+            // [[target]] embedded five times renders five rows off
+            // one shared resolution.
+            var resolved = new Dictionary<
+                string, (EmbedResolution Resolution, bool Truncated)>(
+                StringComparer.Ordinal);
+            long imageBytes = 0;
             var rows = new List<EmbedRowViewModel>(embedLinks.Length);
             foreach (OutgoingLink link in embedLinks)
             {
+                // Mid-loop staleness check: a note switch during a
+                // large batch must abandon, not keep resolving into
+                // a publish that will be discarded anyway.
+                if (Volatile.Read(ref _loadGeneration) != generation)
+                {
+                    return;
+                }
+
+                if (resolved.TryGetValue(link.TargetRaw, out var hit))
+                {
+                    rows.Add(new EmbedRowViewModel(
+                        link, hit.Resolution, hit.Truncated));
+                    continue;
+                }
+
+                if (resolved.Count >= MaxResolvedEmbedTargets
+                    || imageBytes >= MaxEmbedImageBytes)
+                {
+                    rows.Add(EmbedRowViewModel.OverBudget(link));
+                    continue;
+                }
+
                 EmbedResolution resolution;
                 bool truncated = false;
                 try
@@ -294,6 +335,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                         new EmbedUnresolvedReason.ReadError(
                             "The embed could not be resolved."));
                 }
+                imageBytes += CountImageBytes(resolution);
+                resolved[link.TargetRaw] = (resolution, truncated);
                 rows.Add(new EmbedRowViewModel(link, resolution, truncated));
             }
             Post(() =>
@@ -312,6 +355,20 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         });
     }
 
+    /// <summary>Every image payload anywhere in the resolved tree —
+    /// nested embeds resolve inline, so their images spend the same
+    /// note-wide budget as root ones.</summary>
+    internal static long CountImageBytes(EmbedResolution resolution) =>
+        resolution switch
+        {
+            EmbedResolution.Image image => image.Bytes.LongLength,
+            EmbedResolution.FullNote full =>
+                full.Nested.Sum(n => CountImageBytes(n.Resolution)),
+            EmbedResolution.Section section =>
+                section.Nested.Sum(n => CountImageBytes(n.Resolution)),
+            _ => 0,
+        };
+
     private void LoadOutline(string path, int generation, bool announceCount)
     {
         IsLoadingOutline = true;
@@ -320,7 +377,9 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             Heading[]? headings = null;
             try
             {
-                headings = _session.GetFileMetadata(path).Headings;
+                // Null for a path the scanner has not indexed (a file
+                // created moments ago): an empty outline, not a fault.
+                headings = _session.GetFileMetadata(path)?.Headings;
             }
             catch (VaultException)
             {
@@ -359,9 +418,15 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         BacklinkRowViewModel row,
         WorkspaceOpenTarget target = WorkspaceOpenTarget.CurrentTab)
     {
-        _openInternal(row.SourcePath, target);
-        _announce(new A11yEvent.InternalNavigated(
-            "Opened backlink to", row.FileName));
+        // Announce only what HAPPENED: a dirty-tab cancel or failed
+        // save refuses the navigation, and telling a reader the
+        // target opened while the editor stayed put is a false
+        // success (adversarial round 1).
+        if (_openInternal(row.SourcePath, target))
+        {
+            _announce(new A11yEvent.InternalNavigated(
+                "Opened backlink to", row.FileName));
+        }
     }
 
     public void OpenOutgoingLink(
@@ -381,23 +446,31 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             _announce(new A11yEvent.LinkUnresolved(link.TargetRaw));
             return;
         }
-        _openInternal(targetPath, target);
-        _announce(new A11yEvent.InternalNavigated(
-            "Opened", System.IO.Path.GetFileName(targetPath)));
+        if (_openInternal(targetPath, target))
+        {
+            _announce(new A11yEvent.InternalNavigated(
+                "Opened", System.IO.Path.GetFileName(targetPath)));
+        }
     }
 
     public void OpenEmbedSource(string targetPath)
     {
-        _openInternal(targetPath, WorkspaceOpenTarget.CurrentTab);
-        _announce(new A11yEvent.InternalNavigated(
-            "Opened embed source", System.IO.Path.GetFileName(targetPath)));
+        if (_openInternal(targetPath, WorkspaceOpenTarget.CurrentTab))
+        {
+            _announce(new A11yEvent.InternalNavigated(
+                "Opened embed source", System.IO.Path.GetFileName(targetPath)));
+        }
     }
 
     /// <summary>Outline activation scrolls the CURRENT note to the
     /// heading (the editor anchor path announces ScrolledToHeading on
-    /// an actual landing — mac #431 parity).</summary>
+    /// an actual landing — mac #431 parity). The anchor carries the
+    /// UNIQUE slug, not the display text: the core resolver matches
+    /// text against the first occurrence, so duplicate headings would
+    /// all land on the topmost one. The display text rides along so
+    /// the landing announcement speaks prose, not the slug.</summary>
     public void OpenHeading(OutlineRowViewModel row) =>
-        _scrollToAnchor(new LinkAnchor("heading", row.Text));
+        _scrollToAnchor(new LinkAnchor("heading", row.AnchorId), row.Text);
 
     private void OpenExternal(string target)
     {
@@ -534,14 +607,47 @@ internal sealed class OutlineRowViewModel
 /// EditorEmbedPreviewNode renderer) for one embed link.</summary>
 internal sealed class EmbedRowViewModel
 {
+    internal const string OverBudgetMessage =
+        "Embed limit reached for this note. Open source to view this content.";
+
     public EmbedRowViewModel(
         OutgoingLink link, EmbedResolution resolution, bool truncated)
+        : this(
+            link,
+            resolution,
+            truncated,
+            EditorInteractionCoordinator.BuildEmbedPreviewNode(resolution))
+    {
+    }
+
+    private EmbedRowViewModel(
+        OutgoingLink link,
+        EmbedResolution resolution,
+        bool truncated,
+        EditorEmbedPreviewNode node)
     {
         Link = link;
         Resolution = resolution;
         Truncated = truncated;
-        Node = EditorInteractionCoordinator.BuildEmbedPreviewNode(resolution);
+        Node = node;
     }
+
+    /// <summary>The note-wide budget refused to resolve this target:
+    /// a warning card that never silently drops the row, and keeps
+    /// Jump to source alive when the target is known.</summary>
+    public static EmbedRowViewModel OverBudget(OutgoingLink link) => new(
+        link,
+        new EmbedResolution.Unresolved(
+            new EmbedUnresolvedReason.ReadError(OverBudgetMessage)),
+        truncated: false,
+        new EditorEmbedPreviewNode(
+            OverBudgetMessage,
+            [],
+            null,
+            link.TargetPath,
+            IsDisclosure: false,
+            InitiallyExpanded: false,
+            IsWarning: true));
 
     public OutgoingLink Link { get; }
 
