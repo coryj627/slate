@@ -268,7 +268,15 @@ fn apply_operation(
     let context = census_operation_context(seed, step, operation, operation_prefix);
     match operation {
         CensusOperation::Create => {
-            let extension = if step.is_multiple_of(3) { "txt" } else { "md" };
+            // The extension draw comes from the walk rng, NOT the step
+            // number: `step.is_multiple_of(3)` aligned with the 12-long
+            // operation schedule (gcd(3, 12) = 3), so a third of seed
+            // indices put EVERY Create on a multiple of 3 - walks that
+            // never created markdown while rng-driven deletes consumed
+            // the seeded markdown files, emptying the pool the
+            // markdown-only operations assert on (#1069, FULL-tier
+            // seed 0x0f10320260714003 step 59).
+            let extension = if rng.bounded(3) == 0 { "txt" } else { "md" };
             // Create under an already-indexed directory. `create_exclusive`
             // creates one file, not an implicit structural folder operation;
             // manufacturing a brand-new parent here would violate the
@@ -523,7 +531,22 @@ fn apply_operation(
                 paths.len() > 2,
                 "{context}\ndelete precondition requires >2 files"
             );
-            let path = paths[rng.bounded(paths.len())].clone();
+            // Never delete the LAST markdown file: renames and moves
+            // preserve extensions, so Delete is the only operation that
+            // can empty the markdown pool the markdown-only steps
+            // assert non-empty (#1069). With >2 files and exactly one
+            // markdown, a non-markdown candidate always exists.
+            let markdown = indexed_paths(session, true, &context);
+            let candidates: Vec<String> = if markdown.len() == 1 {
+                paths
+                    .iter()
+                    .filter(|path| *path != &markdown[0])
+                    .cloned()
+                    .collect()
+            } else {
+                paths
+            };
+            let path = candidates[rng.bounded(candidates.len())].clone();
             let source = provider
                 .read_file(&path)
                 .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
