@@ -137,9 +137,9 @@ public sealed class GridConformanceTests
             Keyboard.Type(VirtualKeyShort.APPS);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => actionLog.Properties.Name.ValueOrDefault == "menu-opening",
+                    () => actionLog.Properties.Name.ValueOrDefault == "menu-open",
                     TimeSpan.FromSeconds(10)),
-                "the Menu key never opened the row-actions menu; host log: "
+                "the Menu key never OPENED the row-actions menu; host log: "
                     + (actionLog.Properties.Name.ValueOrDefault ?? "<empty>"));
             Keyboard.Type(VirtualKeyShort.DOWN);
             Keyboard.Type(VirtualKeyShort.RETURN);

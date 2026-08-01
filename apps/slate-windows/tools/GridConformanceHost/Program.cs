@@ -127,9 +127,30 @@ internal static class Program
             actionLog.Text = $"exported:{format}:{text.Length}";
         // The suite drives the menu by keyboard and reads its
         // lifecycle here — popup items are not reliably enumerable
-        // through desktop UIA on a starved session.
+        // through desktop UIA on a starved session, and "opening" is
+        // not "open": keys sent between the two land on the grid
+        // underneath (measured: Down+Enter walked the selection).
         grid.Grid.ContextMenuOpening += (_, _) =>
+        {
             actionLog.Text = "menu-opening";
+            _ = grid.Dispatcher.BeginInvoke(
+                new Action(() =>
+                {
+                    if (grid.Grid.ContextMenu is { } menu)
+                    {
+                        if (menu.IsOpen)
+                        {
+                            actionLog.Text = "menu-open";
+                        }
+                        else
+                        {
+                            menu.Opened += (_, _) => actionLog.Text = "menu-open";
+                        }
+                        menu.Closed += (_, _) => actionLog.Text = "menu-closed";
+                    }
+                }),
+                System.Windows.Threading.DispatcherPriority.Input);
+        };
         // The suite reads grid events cross-process through the log —
         // the observable that separates "input never arrived" from
         // "the sort never fired" on a hosted runner.
