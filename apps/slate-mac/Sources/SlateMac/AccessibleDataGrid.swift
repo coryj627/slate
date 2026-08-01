@@ -781,14 +781,25 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
                 table.selectRowIndexes([index], byExtendingSelection: false)
                 table.scrollRowToVisible(index)
             }
-        } else if table.selectedRow != -1 {
+        } else {
             // The captured identity is GONE (removed row, or a group
             // heading was selected): the index-based selection would
             // silently retarget whatever row now occupies the old
             // index, and a destructive action would take it
-            // (round 10). Deselect instead.
-            mirrorTableSelectionFromBinding {
-                table.deselectAll(nil)
+            // (round 10). Deselect instead — and clear a
+            // cell-selection binding EXPLICITLY (round 11): the sync
+            // guard skips tableViewSelectionDidChange's normal
+            // cleanup, which would otherwise leave cell navigation
+            // anchored to an identity absent from the display.
+            if let position = grid.cellSelection?.wrappedValue,
+                displayIndex(forRowID: position.rowID) == nil
+            {
+                grid.cellSelection?.wrappedValue = nil
+            }
+            if table.selectedRow != -1 {
+                mirrorTableSelectionFromBinding {
+                    table.deselectAll(nil)
+                }
             }
         }
     }

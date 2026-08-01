@@ -342,6 +342,38 @@ final class AccessibleDataGridTests: XCTestCase {
             "a removed selected row must deselect, never retarget the old index")
     }
 
+    /// Round 11: the removal deselect runs under the sync guard, which
+    /// skips the selection-changed handler's normal cellSelection
+    /// cleanup — the binding must be cleared explicitly, or cell
+    /// navigation stays anchored to an identity absent from the
+    /// display.
+    @MainActor
+    func testUnboundReloadClearsCellSelectionWhenItsRowIsRemoved() {
+        var position: AccessibleDataGrid<Row>.CellPosition? =
+            .init(rowID: 1, columnIndex: 1)  // Ada's Role cell
+        let binding = Binding<AccessibleDataGrid<Row>.CellPosition?>(
+            get: { position },
+            set: { position = $0 })
+        let grid = makeGrid(rows: Self.people, cellSelection: binding)
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+        table.selectRowIndexes([1], byExtendingSelection: false)  // Ada
+
+        let remaining = [Self.people[0], Self.people[2]]  // Charlie, Bea
+        coordinator.reload(grid: makeGrid(rows: remaining, cellSelection: binding))
+
+        XCTAssertEqual(table.selectedRow, -1, "the removed row deselects")
+        XCTAssertNil(
+            position,
+            "the cell-selection binding must not keep referencing the removed row")
+    }
+
     @MainActor
     func testExternallySortedGridDoesNotReapplyLocalComparatorAfterSortBinding() {
         var sortState: DataGridSortState?
