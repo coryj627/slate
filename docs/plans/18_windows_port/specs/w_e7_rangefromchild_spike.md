@@ -108,6 +108,22 @@ not just range children. Embedded elements' range TEXT stays blank
 (G23) — identity rides the round-trip, which is NVDA's own detection
 mechanism.
 
+**Viewport constraint (measured 2026-08-01, seven diagnostic CI
+rounds):** RichTextBox text layout is VIEWPORT-VIRTUALIZED — content
+below the fold is never laid out, and its embedded elements have **no
+navigable UIA peers** (a raw-view sibling walk ends cleanly at the
+last viewport child), until something scrolls it into view. The app's
+peer list is complete the whole time (`GetChildrenCore` serves every
+child from the text container); it is the client-visible projection
+that stops at the fold. The census therefore reads the document the
+way a user does — a Text-pattern `ScrollIntoView` sweep end-to-end
+before each probe — and this is a REAL constraint for the W-E7
+appModule: object-nav over a reading document only reaches what has
+been laid out, exactly as say-all and caret traversal lay it out in
+passing. Not a defect to fix host-side: forcing full-document layout
+on merge would defeat the W3-1 chunked-streaming budget that keeps
+6.9 MB notes responsive.
+
 ## Contingency (recorded, not needed today)
 
 If a future element ever genuinely requires nesting, the app controls
