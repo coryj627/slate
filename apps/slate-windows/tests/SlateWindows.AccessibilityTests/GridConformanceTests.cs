@@ -36,8 +36,20 @@ public sealed class GridConformanceTests
             Assert.True(grid.Patterns.Table.IsSupported, "Table pattern missing");
 
             // Headers announced on entry ride the native Table pattern:
-            // three addressable column headers.
-            var headers = grid.Patterns.Table.Pattern.ColumnHeaders.Value;
+            // three addressable column headers. They materialize with
+            // template layout — a cold runner can expose the element
+            // before its header row exists, so wait for content.
+            AutomationElement[] headers = Array.Empty<AutomationElement>();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () =>
+                    {
+                        headers = grid.Patterns.Table.Pattern.ColumnHeaders.Value
+                            ?? Array.Empty<AutomationElement>();
+                        return headers.Length > 0;
+                    },
+                    TimeSpan.FromSeconds(10)),
+                "no column headers materialized");
             Assert.Equal(
                 new[] { "Name", "Status", "Notes" },
                 headers.Select(header => header.Name).ToArray());
@@ -132,7 +144,9 @@ public sealed class GridConformanceTests
                     () => (grid.Patterns.Selection.Pattern.Selection.Value
                             ?? Array.Empty<AutomationElement>())
                         .Any(item => item.Name.Contains("09999", StringComparison.Ordinal)),
-                    TimeSpan.FromSeconds(10)),
+                    // Generous: deferred scrolling over 10k Standard-mode
+                    // rows realizes containers on a cold runner's pace.
+                    TimeSpan.FromSeconds(30)),
                 "Ctrl+End did not reach the last row");
 
             Assert.False(process.HasExited, "the host died under UIA load");
@@ -178,6 +192,10 @@ public sealed class GridConformanceTests
                     },
                     TimeSpan.FromSeconds(30)),
                 "the host window never appeared");
+            // The body drives real keyboard input; whatever test ran
+            // before this one owned the foreground.
+            window!.Focus();
+            Wait.UntilInputIsProcessed();
             body(automation, window!, process);
         }
         finally
