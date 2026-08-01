@@ -24,22 +24,35 @@ on:
 permissions:
   contents: read
 
-# A manual workflow_dispatch never overlaps the RUNNING cron (or vice
-# versa): the group serializes them, and cancel-in-progress: false means
-# an in-flight census is never cancelled. Honest limitation
-# (adversarial review): GitHub keeps at most ONE pending run per group —
-# a newer dispatch replaces an older *pending* one. Acceptable here:
-# dispatches take no inputs and always run the same content on the
-# default branch, so the newest pending run is equivalent to the one it
-# replaced.
+# The group is keyed BY REF (adversarial round 1: with one constant
+# group, a pending dispatch for ref A was silently replaced by a newer
+# dispatch for ref B - dropping a requested verification - and the old
+# comment's claim that all dispatches run equivalent default-branch
+# content stopped being true once dispatch-on-any-ref was
+# acknowledged). Same-ref runs still serialize with
+# cancel-in-progress: false, so the cron is never cancelled and a
+# same-ref runs queue FIFO without replacement (queue: max,
+# adversarial round 2: with the default single pending slot, a main
+# dispatch arriving while a run was active would cancel a PENDING
+# cron - cancel-in-progress only protects the running one); different
+# refs may run concurrently (two census jobs fit the Namespace
+# concurrency pool).
 concurrency:
-  group: nightly-deep-verification
+  group: nightly-deep-verification-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   full-census:
     name: full-tier censuses (400 seeds)
-    runs-on: namespace-profile-arm64-fast
+    # Cache trust (adversarial round 1: an event-based rule sent a
+    # maintainer's MAIN dispatch to the fork-writable -pr lineage -
+    # restoring untrusted artifacts in a trusted context): routing is
+    # by REF. The cron and any dispatch on main share rust.yml's
+    # trusted slate-arm64 lineage; a dispatch on any other ref routes
+    # to -pr (see rust.yml header; the trusted volume carries a
+    # dashboard branch allow-list).
+    runs-on: namespace-profile-arm64-fast;overrides.cache-tag=slate-arm64${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     # A hung census must not burn the runner all night; per-PR runs finish
     # in ~4 min, full tier is expected in the 15-30 min band.
     timeout-minutes: 60
@@ -64,6 +77,53 @@ jobs:
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: rust
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation. Measured
+        # at the VOLUME ROOT (adversarial round 4: the mount points are
+        # symlinks/junctions on mac/Windows and du reported link nodes,
+        # 0B even fully warm; NSC_CACHE_PATH holds the real content for
+        # every cache mode).
+        run: |
+          shopt -s nullglob dotglob
+          # Platform/vendor metadata is not cache content: skipped
+          # silently for both the cold decision and measurement
+          # (adversarial round 6: lost+found and containerscache on
+          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
+          # every attestation in the warning path, and permanent noise
+          # buries a real measurement failure).
+          is_metadata() {
+            case "$(basename "$1")" in
+              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          root="${NSC_CACHE_PATH:?cache volume root missing}"
+          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
+            # Fail CLOSED (adversarial round 7): with nullglob, a
+            # missing or unreadable root yields zero entries and the
+            # cold sentinel - a mount failure must never masquerade as
+            # bootstrap proof.
+            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
+            exit 1
+          fi
+          entries=()
+          for entry in "$root"/*; do
+            is_metadata "$entry" || entries+=("$entry")
+          done
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "cache volume empty (cold mount)"
+          else
+            for entry in "${entries[@]}"; do
+              # Per-entry measurement: one unreadable entry must not
+              # taint the rest, and emptiness is decided by
+              # enumeration, never by du's exit status (rounds 5-6).
+              du -sh "$entry" 2>/dev/null \
+                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
+            done
+          fi
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@07b4745e0c39a41822af610387492e3e53aa222b  # v2.83.4

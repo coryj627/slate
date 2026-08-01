@@ -48,7 +48,12 @@ jobs:
     # (e.g. MainSplitView) require a current Swift toolchain — Swift 6.2.4
     # specifically regressed the expression type-checker and times out on
     # MainSplitView.body, so this profile must track latest Xcode.
-    runs-on: namespace-profile-mac-actions
+    # Cache trust: runs on main commit the trusted slate-mac lineage,
+    # every other ref the -pr lineage (windows.yml documents the full
+    # reasoning; the trusted volume carries a dashboard branch
+    # allow-list). First run per new tag is cold once - a full
+    # Xcode/SwiftPM rebuild here.
+    runs-on: namespace-profile-mac-actions;overrides.cache-tag=slate-mac${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     permissions:
       contents: read
     steps:
@@ -74,6 +79,53 @@ jobs:
             xcode
           path: |
             apps/slate-mac/.build
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (windows.yml runbook step 4): read
+        # BEFORE any build repopulates the volume, so a cold mount is
+        # distinguishable from a surviving stale generation. Measured
+        # at the VOLUME ROOT (adversarial round 4: the mount points are
+        # symlinks/junctions on mac/Windows and du reported link nodes,
+        # 0B even fully warm; NSC_CACHE_PATH holds the real content for
+        # every cache mode).
+        run: |
+          shopt -s nullglob dotglob
+          # Platform/vendor metadata is not cache content: skipped
+          # silently for both the cold decision and measurement
+          # (adversarial round 6: lost+found and containerscache on
+          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
+          # every attestation in the warning path, and permanent noise
+          # buries a real measurement failure).
+          is_metadata() {
+            case "$(basename "$1")" in
+              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          root="${NSC_CACHE_PATH:?cache volume root missing}"
+          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
+            # Fail CLOSED (adversarial round 7): with nullglob, a
+            # missing or unreadable root yields zero entries and the
+            # cold sentinel - a mount failure must never masquerade as
+            # bootstrap proof.
+            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
+            exit 1
+          fi
+          entries=()
+          for entry in "$root"/*; do
+            is_metadata "$entry" || entries+=("$entry")
+          done
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "cache volume empty (cold mount)"
+          else
+            for entry in "${entries[@]}"; do
+              # Per-entry measurement: one unreadable entry must not
+              # taint the rest, and emptiness is decided by
+              # enumeration, never by du's exit status (rounds 5-6).
+              du -sh "$entry" 2>/dev/null \
+                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
+            done
+          fi
 
       - name: Build slate-uniffi + generate Swift bindings + swift build
         # scripts/build-mac-app.sh runs:
@@ -104,3 +156,47 @@ jobs:
         # that isn't handled fails to compile. Building it here turns that
         # into a red CI run instead of a silently-rotting example (#390).
         run: make swift-cli
+
+      - name: Cache footprint report
+        # Growth monitoring (the volume resets to EMPTY past its
+        # configured size - the windows.yml/rust.yml doctrine; this
+        # lane previously had no report at all).
+        if: ${{ always() }}
+        run: |
+          shopt -s nullglob dotglob
+          # Platform/vendor metadata is not cache content: skipped
+          # silently for both the cold decision and measurement
+          # (adversarial round 6: lost+found and containerscache on
+          # Linux, .Spotlight-V100/.Trashes/.fseventsd on macOS kept
+          # every attestation in the warning path, and permanent noise
+          # buries a real measurement failure).
+          is_metadata() {
+            case "$(basename "$1")" in
+              "lost+found"|containerscache|gitmirror|.Spotlight-V100|.Trashes|.fseventsd|.DS_Store) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
+          root="${NSC_CACHE_PATH:?cache volume root missing}"
+          if [ ! -d "$root" ] || [ ! -r "$root" ]; then
+            # Fail CLOSED (adversarial round 7): with nullglob, a
+            # missing or unreadable root yields zero entries and the
+            # cold sentinel - a mount failure must never masquerade as
+            # bootstrap proof.
+            echo "::error::cache volume root $root is not an accessible directory - attestation impossible"
+            exit 1
+          fi
+          entries=()
+          for entry in "$root"/*; do
+            is_metadata "$entry" || entries+=("$entry")
+          done
+          if [ ${#entries[@]} -eq 0 ]; then
+            echo "cache volume empty (cold mount)"
+          else
+            for entry in "${entries[@]}"; do
+              # Per-entry measurement: one unreadable entry must not
+              # taint the rest, and emptiness is decided by
+              # enumeration, never by du's exit status (rounds 5-6).
+              du -sh "$entry" 2>/dev/null \
+                || echo "::warning::cannot measure $entry - measurement incomplete, NOT cold"
+            done
+          fi

@@ -54,20 +54,51 @@
 # Cache-trust posture (adversarial rounds 1–2 — round 2 corrected the
 # round-1 premise: this repository is PUBLIC, so fork PRs are possible
 # even with workflow-approval gates): the cache tags are
-# EVENT-CONDITIONAL. Main pushes commit the trusted lineages
-# (slate-windows-rust / slate-windows-app); every other event — PRs,
-# workflow_dispatch — reads and commits the parallel *-pr lineages.
+# REF-CONDITIONAL (adversarial follow-up on #1068: the event-based
+# rule sent a maintainer's MAIN workflow_dispatch to the fork-writable
+# -pr lineage — restoring untrusted artifacts in a trusted context).
+# Runs on refs/heads/main — pushes and main dispatches — commit the
+# trusted lineages (slate-windows-rust / slate-windows-app); every
+# other ref reads and commits the parallel *-pr lineages.
 # PR-controlled build code can therefore never write state a main
 # build consumes, while the 7–9 adversarial-review rounds per PR still
 # inherit each other's warm state inside the PR lineage (the blast
 # radius of a poisoned PR volume is other PR builds, never main
 # artifacts — the same bound GitHub's own cache scoping draws).
-# Namespace's per-tag cache-protection allow-list (runner-
-# configuration#advanced-protect-caches-from-updates) is available as
-# dashboard belt-and-braces. NOTE: rust.yml, swift-tests.yml, and
-# audit.yml still run unconditional shared volumes — the pre-existing
-# repo-wide exposure this scheme fixes here; propagate the same
-# event-conditional tags there in a follow-up.
+# rust.yml, swift-tests.yml, audit.yml, and nightly.yml carry the
+# same ref-conditional tags (#1068).
+#
+# The dashboard allow-list is MANDATORY enforcement, not optional
+# hardening: in-workflow routing cannot bind PR-controlled YAML, and
+# the trusted tag names are public before protection exists. The ONE
+# bootstrap runbook (adversarial round 2 on #1068):
+#   1. FREEZE — disable Actions for the ENTIRE repository
+#      (gh api -X PUT repos/OWNER/REPO/actions/permissions
+#      -F enabled=false), THEN drain by QUERY, not by a hand-written
+#      state list (adversarial round 5: "requested" and "pending" were
+#      missing and action_required is a conclusion, not a status):
+#      page through repos/OWNER/REPO/actions/runs and cancel or await
+#      every run whose status is not "completed"; proceed only when
+#      that count is zero and Actions is still disabled, and keep
+#      Actions disabled through steps 2—3. Per-workflow disable is NOT enough
+#      (adversarial round 4): completed runs stay re-runnable for 30
+#      days with their original main ref, so an old run re-run during
+#      the critical section would mount pre-reset and promote its
+#      fork on clean exit. The repo-level disable fences re-runs too;
+#   2. apply the per-volume branch allow-list ("main") to all four
+#      trusted volumes: slate-windows-rust, slate-windows-app,
+#      slate-arm64, slate-mac (dashboard — cache volume
+#      configuration — Show Advanced features);
+#   3. RESET each trusted volume, discarding any generation seeded
+#      before protection;
+#   4. RE-ENABLE Actions (enabled=true) and VERIFY on the next main
+#      run that
+#      every trusted lane's "Cache mount state (pre-build)" step reads
+#      absent/near-zero — that step runs BEFORE the build repopulates
+#      the volume, so it is the cold-mount proof (end-of-job reports
+#      only track growth and cannot distinguish a cold mount from a
+#      surviving stale generation). Its commit is the first protected
+#      generation. Leave every *-pr volume unprotected.
 
 name: windows
 
@@ -101,7 +132,7 @@ permissions:
 jobs:
   rust-tests:
     name: rust tests (windows x64)
-    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-rust${{ github.event_name != 'push' && '-pr' || '' }}
+    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-rust${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -133,6 +164,55 @@ jobs:
         uses: namespacelabs/nscloud-cache-action@c5f8dab7560444c4bf8dbc64f1b203431873c547  # v1
         with:
           cache: rust
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (runbook step 4): read BEFORE any build
+        # repopulates the volume, so a cold mount is distinguishable
+        # from a surviving stale generation. Measured at the VOLUME
+        # ROOT (adversarial round 4: junction/symlink mount points make
+        # per-directory sizing lie; NSC_CACHE_PATH holds the real
+        # content for every cache mode).
+        run: |
+          $root = $env:NSC_CACHE_PATH
+          if (-not $root) {
+            Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
+            exit 1
+          }
+          try {
+            # Fail CLOSED (adversarial rounds 7-8): SilentlyContinue let
+            # a failed root enumeration print the cold sentinel and an
+            # unreadable child render as 0.00 GiB (System Volume
+            # Information, observed live); Get-ChildItem on a FILE path
+            # succeeds and would attest a plausible 0.00 GiB, so the
+            # root must resolve as a DIRECTORY first - a mount or access
+            # failure must never masquerade as a cold attestation.
+            $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+          } catch {
+            Write-Host "::error::cannot resolve cache volume root ${root}: $_"
+            exit 1
+          }
+          if (-not $rootItem.PSIsContainer) {
+            Write-Host "::error::cache volume root $root is not a directory - attestation impossible"
+            exit 1
+          }
+          try {
+            $children = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
+          } catch {
+            Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
+            exit 1
+          }
+          $metadata = @('System Volume Information', '$RECYCLE.BIN', 'containerscache', 'gitmirror', 'lost+found')
+          $children = @($children | Where-Object { $metadata -notcontains $_.Name })
+          if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
+          foreach ($child in $children) {
+            try {
+              $bytes = (Get-ChildItem -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            } catch {
+              Write-Host "::warning::cannot measure $($child.Name) - measurement incomplete, NOT cold"
+            }
+          }
 
       - name: ARM64 cross-compile check (slate-uniffi)
         run: |
@@ -168,17 +248,50 @@ jobs:
         # the fork it measured is still the size the next run inherits.
         if: ${{ always() }}
         run: |
-          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry")) {
-            if (Test-Path $dir) {
-              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
+          $root = $env:NSC_CACHE_PATH
+          if (-not $root) {
+            Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
+            exit 1
+          }
+          try {
+            # Fail CLOSED (adversarial rounds 7-8): SilentlyContinue let
+            # a failed root enumeration print the cold sentinel and an
+            # unreadable child render as 0.00 GiB (System Volume
+            # Information, observed live); Get-ChildItem on a FILE path
+            # succeeds and would attest a plausible 0.00 GiB, so the
+            # root must resolve as a DIRECTORY first - a mount or access
+            # failure must never masquerade as a cold attestation.
+            $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+          } catch {
+            Write-Host "::error::cannot resolve cache volume root ${root}: $_"
+            exit 1
+          }
+          if (-not $rootItem.PSIsContainer) {
+            Write-Host "::error::cache volume root $root is not a directory - attestation impossible"
+            exit 1
+          }
+          try {
+            $children = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
+          } catch {
+            Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
+            exit 1
+          }
+          $metadata = @('System Volume Information', '$RECYCLE.BIN', 'containerscache', 'gitmirror', 'lost+found')
+          $children = @($children | Where-Object { $metadata -notcontains $_.Name })
+          if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
+          foreach ($child in $children) {
+            try {
+              $bytes = (Get-ChildItem -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop |
                 Measure-Object Length -Sum).Sum
-              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
+              '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            } catch {
+              Write-Host "::warning::cannot measure $($child.Name) - measurement incomplete, NOT cold"
             }
           }
 
   windows:
     name: app build + test (windows x64)
-    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-app${{ github.event_name != 'push' && '-pr' || '' }}
+    runs-on: namespace-profile-winx64-fast;overrides.cache-tag=slate-windows-app${{ github.ref != 'refs/heads/main' && '-pr' || '' }}
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -206,6 +319,55 @@ jobs:
           cache: rust
           path: |
             ~/.nuget/packages
+
+      - name: Cache mount state (pre-build)
+        # Bootstrap attestation (runbook step 4): read BEFORE any build
+        # repopulates the volume, so a cold mount is distinguishable
+        # from a surviving stale generation. Measured at the VOLUME
+        # ROOT (adversarial round 4: junction/symlink mount points make
+        # per-directory sizing lie; NSC_CACHE_PATH holds the real
+        # content for every cache mode).
+        run: |
+          $root = $env:NSC_CACHE_PATH
+          if (-not $root) {
+            Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
+            exit 1
+          }
+          try {
+            # Fail CLOSED (adversarial rounds 7-8): SilentlyContinue let
+            # a failed root enumeration print the cold sentinel and an
+            # unreadable child render as 0.00 GiB (System Volume
+            # Information, observed live); Get-ChildItem on a FILE path
+            # succeeds and would attest a plausible 0.00 GiB, so the
+            # root must resolve as a DIRECTORY first - a mount or access
+            # failure must never masquerade as a cold attestation.
+            $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+          } catch {
+            Write-Host "::error::cannot resolve cache volume root ${root}: $_"
+            exit 1
+          }
+          if (-not $rootItem.PSIsContainer) {
+            Write-Host "::error::cache volume root $root is not a directory - attestation impossible"
+            exit 1
+          }
+          try {
+            $children = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
+          } catch {
+            Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
+            exit 1
+          }
+          $metadata = @('System Volume Information', '$RECYCLE.BIN', 'containerscache', 'gitmirror', 'lost+found')
+          $children = @($children | Where-Object { $metadata -notcontains $_.Name })
+          if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
+          foreach ($child in $children) {
+            try {
+              $bytes = (Get-ChildItem -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop |
+                Measure-Object Length -Sum).Sum
+              '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            } catch {
+              Write-Host "::warning::cannot measure $($child.Name) - measurement incomplete, NOT cold"
+            }
+          }
 
       - name: Cache uniffi-bindgen-cs
         id: bindgen-cache
@@ -263,11 +425,44 @@ jobs:
         # NuGet packages folder.
         if: ${{ always() }}
         run: |
-          foreach ($dir in @('target', "$env:USERPROFILE\.cargo\registry", "$env:USERPROFILE\.nuget\packages")) {
-            if (Test-Path $dir) {
-              $bytes = (Get-ChildItem $dir -Recurse -Force -ErrorAction SilentlyContinue |
+          $root = $env:NSC_CACHE_PATH
+          if (-not $root) {
+            Write-Host "::error::NSC_CACHE_PATH missing - cache volume not mounted"
+            exit 1
+          }
+          try {
+            # Fail CLOSED (adversarial rounds 7-8): SilentlyContinue let
+            # a failed root enumeration print the cold sentinel and an
+            # unreadable child render as 0.00 GiB (System Volume
+            # Information, observed live); Get-ChildItem on a FILE path
+            # succeeds and would attest a plausible 0.00 GiB, so the
+            # root must resolve as a DIRECTORY first - a mount or access
+            # failure must never masquerade as a cold attestation.
+            $rootItem = Get-Item -LiteralPath $root -Force -ErrorAction Stop
+          } catch {
+            Write-Host "::error::cannot resolve cache volume root ${root}: $_"
+            exit 1
+          }
+          if (-not $rootItem.PSIsContainer) {
+            Write-Host "::error::cache volume root $root is not a directory - attestation impossible"
+            exit 1
+          }
+          try {
+            $children = @(Get-ChildItem -LiteralPath $root -Force -ErrorAction Stop)
+          } catch {
+            Write-Host "::error::cannot enumerate cache volume root ${root}: $_"
+            exit 1
+          }
+          $metadata = @('System Volume Information', '$RECYCLE.BIN', 'containerscache', 'gitmirror', 'lost+found')
+          $children = @($children | Where-Object { $metadata -notcontains $_.Name })
+          if ($children.Count -eq 0) { "cache volume empty (cold mount)" }
+          foreach ($child in $children) {
+            try {
+              $bytes = (Get-ChildItem -LiteralPath $child.FullName -Recurse -Force -ErrorAction Stop |
                 Measure-Object Length -Sum).Sum
-              '{0,8:N1} GiB  {1}' -f ($bytes / 1GB), $dir
+              '{0,8:N2} GiB  {1}' -f ([double]$bytes / 1GB), $child.Name
+            } catch {
+              Write-Host "::warning::cannot measure $($child.Name) - measurement incomplete, NOT cold"
             }
           }
 
