@@ -1185,6 +1185,30 @@ impl VaultSession {
         Ok(bundle.into())
     }
 
+    /// The bounded panel twin of `note_load_bundle` (W4-2 round 10):
+    /// limits apply in core SQL before anything crosses FFI.
+    pub fn note_link_panels(
+        &self,
+        path: String,
+        backlinks_paging: Paging,
+        outgoing_limit: u32,
+        embed_limit: u32,
+    ) -> Result<NoteLinkPanels, VaultError> {
+        let panels = self.inner.note_link_panels(
+            &path,
+            backlinks_paging.into(),
+            outgoing_limit,
+            embed_limit,
+        )?;
+        Ok(panels.into())
+    }
+
+    /// Bounded outline read (W4-2 round 10); unknown paths return an
+    /// empty page.
+    pub fn note_outline(&self, path: String, limit: u32) -> Result<OutlinePage, VaultError> {
+        Ok(self.inner.note_outline(&path, limit)?.into())
+    }
+
     /// Paged vault-wide audit of unresolved internal links.
     pub fn list_unresolved_links(&self, paging: Paging) -> Result<UnresolvedLinkPage, VaultError> {
         let page = self.inner.list_unresolved_links(paging.into())?;
@@ -2761,6 +2785,46 @@ impl From<core::NoteLoadBundle> for NoteLoadBundle {
             backlinks: b.backlinks.into(),
             outgoing_links: b.outgoing_links.into_iter().map(Into::into).collect(),
             properties: b.properties.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+/// FFI mirror of `slate_core::NoteLinkPanels` (W4-2 round 10): the
+/// BOUNDED panel feed — every collection SQL-limited before it
+/// crosses FFI, true totals alongside, no properties.
+#[derive(uniffi::Record)]
+pub struct NoteLinkPanels {
+    pub backlinks: BacklinkPage,
+    pub outgoing_links: Vec<OutgoingLink>,
+    pub outgoing_total: u32,
+    pub embed_links: Vec<OutgoingLink>,
+    pub embed_total: u32,
+}
+
+impl From<core::NoteLinkPanels> for NoteLinkPanels {
+    fn from(p: core::NoteLinkPanels) -> Self {
+        Self {
+            backlinks: p.backlinks.into(),
+            outgoing_links: p.outgoing_links.into_iter().map(Into::into).collect(),
+            outgoing_total: p.outgoing_total,
+            embed_links: p.embed_links.into_iter().map(Into::into).collect(),
+            embed_total: p.embed_total,
+        }
+    }
+}
+
+/// FFI mirror of `slate_core::OutlinePage`.
+#[derive(uniffi::Record)]
+pub struct OutlinePage {
+    pub headings: Vec<Heading>,
+    pub total: u32,
+}
+
+impl From<core::OutlinePage> for OutlinePage {
+    fn from(p: core::OutlinePage) -> Self {
+        Self {
+            headings: p.headings.into_iter().map(Into::into).collect(),
+            total: p.total,
         }
     }
 }

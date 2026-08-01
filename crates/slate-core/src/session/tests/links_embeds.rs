@@ -425,6 +425,63 @@ fn note_load_bundle_returns_backlinks_outgoing_and_properties_in_one_call() {
 }
 
 #[test]
+fn note_link_panels_bounds_every_collection_in_sql() {
+    // W4-2 round 10: a link-dense note must never materialize an
+    // unbounded Vec before the UI's display caps can apply. Limits
+    // live in the SQL; true totals ride alongside. The embed
+    // candidates are bounded SEPARATELY so embeds past the display
+    // cap stay discoverable.
+    let mut body = String::from("# Dense\n\n");
+    for i in 0..40 {
+        body.push_str(&format!("[[d{i}]]\n"));
+    }
+    for i in 0..10 {
+        body.push_str(&format!("![[e{i}]]\n"));
+    }
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/dense.md", body.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let panels = session
+        .note_link_panels("notes/dense.md", Paging::first(50), 8, 4)
+        .unwrap();
+
+    assert_eq!(panels.outgoing_links.len(), 8);
+    assert_eq!(panels.outgoing_total, 50);
+    assert_eq!(panels.embed_links.len(), 4);
+    assert_eq!(panels.embed_total, 10);
+    assert!(panels.embed_links.iter().all(|link| link.is_embed));
+    // Document order survives the bound: the first embed is e0 even
+    // though every plain link precedes it.
+    assert_eq!(panels.embed_links[0].target_raw, "e0");
+    assert_eq!(panels.outgoing_links[0].target_raw, "d0");
+}
+
+#[test]
+fn note_outline_bounds_headings_and_reports_the_total() {
+    let mut body = String::new();
+    for i in 0..30 {
+        body.push_str(&format!("# H{i}\n\n"));
+    }
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/heads.md", body.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let page = session.note_outline("notes/heads.md", 12).unwrap();
+    assert_eq!(page.headings.len(), 12);
+    assert_eq!(page.total, 30);
+    assert_eq!(page.headings[0].text, "H0");
+
+    // Unknown paths are an empty page, not an error (the panel shows
+    // its empty state).
+    let missing = session.note_outline("notes/none.md", 12).unwrap();
+    assert!(missing.headings.is_empty());
+    assert_eq!(missing.total, 0);
+}
+
+#[test]
 fn note_load_bundle_returns_empty_arrays_for_unknown_path() {
     // The previous shape's three separate calls each independently
     // tolerated unknown paths (empty backlinks page, empty outgoing

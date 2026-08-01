@@ -680,6 +680,7 @@ public sealed class RightPanePanelsTests : IDisposable
             panels.LoadGenerationForTests,
             panels.OutlineRequestIdForTests - 1,
             [stale],
+            total: 1,
             announceCount: false);
         Assert.Equal(2, panels.Outline.Count);
         Assert.Same(first, panels.Outline[0]);
@@ -690,6 +691,7 @@ public sealed class RightPanePanelsTests : IDisposable
             panels.LoadGenerationForTests,
             panels.OutlineRequestIdForTests,
             [stale],
+            total: 1,
             announceCount: false);
         OutlineRowViewModel row = Assert.Single(panels.Outline);
         Assert.Equal("Stale", row.Text);
@@ -716,6 +718,7 @@ public sealed class RightPanePanelsTests : IDisposable
             panels.LoadGenerationForTests,
             panels.OutlineRequestIdForTests,
             [],
+            total: 0,
             announceCount: false);
         Assert.NotEmpty(observed);
         Assert.All(
@@ -732,6 +735,7 @@ public sealed class RightPanePanelsTests : IDisposable
             panels.LoadGenerationForTests,
             panels.OutlineRequestIdForTests,
             [heading],
+            total: 1,
             announceCount: false);
         Assert.NotEmpty(observed);
         Assert.All(observed, Assert.Null);

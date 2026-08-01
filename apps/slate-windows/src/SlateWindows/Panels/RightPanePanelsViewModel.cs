@@ -345,12 +345,19 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         IsResolvingEmbeds = true;
         StartWork(() =>
         {
-            NoteLoadBundle? bundle = null;
+            NoteLinkPanels? bundle = null;
             string? failure = null;
             try
             {
-                bundle = _session.NoteLoadBundle(
-                    path, new Paging(null, BacklinksLimit));
+                // The BOUNDED feed (round 10): display, candidate,
+                // and outline caps apply in core SQL — a link-dense
+                // note never materializes an unbounded vector on
+                // either side of the FFI boundary.
+                bundle = _session.NoteLinkPanels(
+                    path,
+                    new Paging(null, BacklinksLimit),
+                    MaxOutgoingRows,
+                    MaxEmbedRows + 1);
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -361,21 +368,6 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 // torn down mid-flight throws the binding's disposal
                 // guard, and an uncaught worker fault is unobserved.
                 failure = exception.Message;
-            }
-            // Embed candidates are derived OFF-THREAD (round 8): the
-            // resolve loop consumes at most MaxEmbedRows + 1 items,
-            // so the retained candidate array is capped too — the
-            // true total rides along for the tail summary.
-            int totalEmbeds = 0;
-            OutgoingLink[] embedLinks = [];
-            if (bundle is not null)
-            {
-                totalEmbeds = bundle.OutgoingLinks.Count(
-                    link => link.IsEmbed);
-                embedLinks = bundle.OutgoingLinks
-                    .Where(link => link.IsEmbed)
-                    .Take(MaxEmbedRows + 1)
-                    .ToArray();
             }
             Post(() =>
             {
@@ -401,18 +393,20 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 {
                     Backlinks.Add(new BacklinkRowViewModel(backlink));
                 }
-                // Display-capped (round 7): each Add is a UI-thread
-                // collection notification, so a link-dense note must
-                // not publish unbounded rows.
-                _totalOutgoingLinks = bundle.OutgoingLinks.Length;
-                foreach (OutgoingLink link in
-                    bundle.OutgoingLinks.Take(MaxOutgoingRows))
+                // Rows arrive pre-capped from core (rounds 7 + 10);
+                // the true total labels what the cap hides.
+                _totalOutgoingLinks = checked((int)bundle.OutgoingTotal);
+                foreach (OutgoingLink link in bundle.OutgoingLinks)
                 {
                     OutgoingLinks.Add(new OutgoingLinkRowViewModel(link));
                 }
                 IsLoadingLinks = false;
                 RaiseHeaderChanges();
-                ResolveEmbeds(path, generation, embedLinks, totalEmbeds);
+                ResolveEmbeds(
+                    path,
+                    generation,
+                    bundle.EmbedLinks,
+                    checked((int)bundle.EmbedTotal));
             });
         });
     }
@@ -606,13 +600,16 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         IsLoadingOutline = true;
         StartWork(() =>
         {
-            Heading[]? headings = null;
+            Heading[] headings = [];
+            int total = 0;
             string? failure = null;
             try
             {
-                // Null for a path the scanner has not indexed (a file
-                // created moments ago): an empty outline, not a fault.
-                headings = _session.GetFileMetadata(path)?.Headings;
+                // Bounded in core SQL (round 10): an unindexed path
+                // is an empty page, not a fault.
+                OutlinePage page = _session.NoteOutline(path, MaxOutlineRows);
+                headings = page.Headings;
+                total = checked((int)page.Total);
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -622,7 +619,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 failure = exception.Message;
             }
             Post(() => PublishOutline(
-                path, generation, requestId, headings, announceCount, failure));
+                path, generation, requestId, headings, total,
+                announceCount, failure));
         });
     }
 
@@ -632,7 +630,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         string path,
         int generation,
         int requestId,
-        Heading[]? headings,
+        Heading[] headings,
+        int total,
         bool announceCount,
         string? failure = null)
     {
@@ -652,15 +651,13 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         // Mutations FIRST: the loading-flag setter notifies the
         // empty-message binding, and WPF re-reads it synchronously —
         // notifying before the rows land froze the previous state's
-        // sentence on screen (adversarial round 3). Display-capped
-        // (round 8): heading extraction is count-unbounded in core,
-        // so every publish — including save-refreshes — bounds its
-        // dispatcher fan-out; the notice and announcement carry the
-        // TRUE total.
-        _totalOutlineHeadings = headings?.Length ?? 0;
+        // sentence on screen (adversarial round 3). Rows arrive
+        // pre-capped from core (rounds 8 + 10) — the .Take is a
+        // belt-and-suspenders bound on this dispatcher fan-out; the
+        // notice and announcement carry the TRUE total.
+        _totalOutlineHeadings = total;
         Outline.Clear();
-        foreach (Heading heading in
-            (headings ?? []).Take(MaxOutlineRows))
+        foreach (Heading heading in headings.Take(MaxOutlineRows))
         {
             Outline.Add(new OutlineRowViewModel(heading));
         }
