@@ -181,6 +181,19 @@ internal sealed class AccessibleDataGrid : UserControl
     }
 
     /// <summary>
+    /// The group-heading grammar, rendered CORE-side (#969 GridGroup)
+    /// — the mac twin labels its group rows with the same render, so
+    /// the two hosts can never drift. Grouped PRESENTATION arrives
+    /// with its owning surface (W4-6's Bases grid consumes
+    /// `BasesResultSet.groups`); the substrate owns the canonical
+    /// heading text every grouped consumer must use.
+    /// </summary>
+    public static string ComposeGroupHeading(
+        string label, uint rowCount, string? summary) =>
+        SlateUniffiMethods.A11yRender(
+            new A11yEvent.GridGroup(label, rowCount, summary)).Text;
+
+    /// <summary>
     /// Put keyboard focus on the FIRST CELL — the §8.7 entry point.
     /// Window openers call this on load so entry announces headers +
     /// cell, never the summary that precedes the grid in the tree

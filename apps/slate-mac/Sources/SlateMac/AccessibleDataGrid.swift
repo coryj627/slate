@@ -1038,11 +1038,17 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
     }
 
     private func accessibilityLabel(for group: AccessibleDataGrid<Row>.Group) -> String {
-        let rowText = "\(CountCopy.counted(group.rowCount, "row", "rows"))"
-        if let summary = group.summary, !summary.isEmpty {
-            return "Group: \(group.label), \(rowText). Summary: \(summary)"
-        }
-        return "Group: \(group.label), \(rowText)"
+        // The #969 grid family renders this grammar CORE-side — the
+        // label and the announcement must be the same string, so both
+        // come from the same render (adversarial round 2: the local
+        // composition could drift from the corpus without any test
+        // failing).
+        a11yRender(
+            event: .gridGroup(
+                label: group.label,
+                rowCount: UInt32(clamping: group.rowCount),
+                summary: group.summary.flatMap { $0.isEmpty ? nil : $0 })
+        ).text
     }
 
     private func cellAccessibilityLabel(for row: Row, columnIndex: Int) -> String {

@@ -186,6 +186,8 @@ public sealed class GridConformanceTests
             var containers = grid.Patterns.ItemContainer.Pattern;
             AutomationElement? cursor = null;
             int walked = 0;
+            int realized = 0;
+            AutomationElement? lastRealized = null;
             for (int i = 0; i < 40; i++)
             {
                 cursor = containers.FindItemByProperty(cursor, null, null);
@@ -197,9 +199,25 @@ public sealed class GridConformanceTests
                 if (cursor.Patterns.VirtualizedItem.IsSupported)
                 {
                     cursor.Patterns.VirtualizedItem.Pattern.Realize();
+                    realized++;
+                    lastRealized = cursor;
                 }
             }
             Assert.True(walked >= 30, $"ItemContainer walk stalled at {walked} items");
+            // Realization is MANDATORY evidence, not opportunistic
+            // (adversarial round 2): a provider that stops offering
+            // VirtualizedItem must fail here, and a realized row must
+            // answer with real content.
+            Assert.True(
+                realized >= 1,
+                $"no virtualized container offered VirtualizedItem across {walked} items");
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => lastRealized!.FindAllChildren().Any(
+                        cell => (cell.Properties.Name.ValueOrDefault ?? "")
+                            .StartsWith("Name: Note", StringComparison.Ordinal)),
+                    TimeSpan.FromSeconds(10)),
+                "the realized row never produced its cells");
 
             EnsureForeground(window);
             FocusCell(grid.Patterns.Grid.Pattern.GetItem(0, 0));
@@ -269,6 +287,16 @@ public sealed class GridConformanceTests
                         cf => cf.ByAutomationId("ReadingTableGridWindow")) is null,
                     TimeSpan.FromSeconds(10)),
                 "Escape did not close the table window");
+            // Focus RESTORATION, not just closure (adversarial round
+            // 2): the owner window must hold keyboard focus again —
+            // focus stranded on the desktop or another process would
+            // otherwise pass.
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => automation.FocusedElement()?.Properties.ProcessId.ValueOrDefault
+                        == process.Id,
+                    TimeSpan.FromSeconds(10)),
+                "Escape did not return keyboard focus to the host");
             Assert.False(process.HasExited, "the host died with the table window");
         });
     }

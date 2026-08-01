@@ -323,6 +323,24 @@ public sealed class AccessibleDataGridTests
     }
 
     [Fact]
+    public void GroupHeadingComposesThroughTheCoreEventFamily()
+    {
+        // The corpus goldens, byte-for-byte — grouped consumers (W4-6)
+        // label group rows with THIS text, the same render the mac
+        // twin now labels with.
+        Assert.Equal(
+            "Group: Open, 1 row",
+            AccessibleDataGrid.ComposeGroupHeading("Open", 1, null));
+        Assert.Equal(
+            "Group: Done, 12 rows. Summary: Count: 12",
+            AccessibleDataGrid.ComposeGroupHeading("Done", 12, "Count: 12"));
+        Assert.Equal(
+            SlateUniffiMethods.A11yRender(
+                new A11yEvent.GridGroup("Team A", 2, null)).Text,
+            AccessibleDataGrid.ComposeGroupHeading("Team A", 2, null));
+    }
+
+    [Fact]
     public void FilterHookGatesCtrlFOnASubscriber()
     {
         RunSta(() =>
