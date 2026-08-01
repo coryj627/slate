@@ -26,7 +26,12 @@ public sealed class RightPanePanelsTests : IDisposable
                 + "[link](https://example.com) here.\n\n![[target]]\n");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "target.md"),
-            "# Target\n\nBody. Links back to [[host]].\n");
+            "# Target\n\nBody. Links back to [[host]].\n\n"
+                + "## Alpha\n\nFirst section.\n\n"
+                + "## Beta\n\nSecond section. ^b1\n");
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "anchored.md"),
+            "![[target#Alpha]]\n\n![[target#Beta]]\n\n![[target^b1]]\n");
         File.WriteAllText(
             Path.Combine(_fixture.Root, "bare.md"), "Plain text.\n");
         File.WriteAllText(
@@ -455,6 +460,28 @@ public sealed class RightPanePanelsTests : IDisposable
             EmbedRowViewModel.OverBudgetMessage,
             panels.Embeds[cap + 1].Node.Title);
         Assert.True(panels.Embeds[cap + 1].Node.IsWarning);
+    }
+
+    [Fact]
+    public void AnchoredEmbedsResolveTheirSectionsNotTheWholeNote()
+    {
+        var panels = LoadHost([], path: "anchored.md");
+
+        // TargetRaw is anchor-stripped: resolving by it rendered
+        // every anchored embed as the full note, and the cache
+        // collapsed distinct anchors of one note into one card
+        // (round 6).
+        Assert.Equal(3, panels.Embeds.Count);
+        Assert.Equal(
+            "Embedded section: Alpha from target.md",
+            panels.Embeds[0].Node.Title);
+        Assert.Equal(
+            "Embedded section: Beta from target.md",
+            panels.Embeds[1].Node.Title);
+        Assert.Equal(
+            "Embedded block from target.md",
+            panels.Embeds[2].Node.Title);
+        Assert.NotSame(panels.Embeds[0].Node, panels.Embeds[1].Node);
     }
 
     [Fact]

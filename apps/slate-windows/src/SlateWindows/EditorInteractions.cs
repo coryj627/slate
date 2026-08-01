@@ -2535,7 +2535,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         _announce(new A11yEvent.HostComposed(
             $"Reload {Path.GetFileName(_tab.Path)} before using this interaction.",
             A11yPriority.High));
-    private static string ComposeAnchoredTarget(OutgoingLink link)
+    /// <summary>The resolver target INCLUDING the anchor —
+    /// OutgoingLink.TargetRaw is anchor-stripped, so resolving by it
+    /// alone renders `![[note#Section]]` as the whole note (W4-2
+    /// round 6). Shared by the popover and the embeds panel.</summary>
+    internal static string ComposeAnchoredTarget(OutgoingLink link)
     {
         if (link.TargetAnchor is null)
         {
@@ -2802,10 +2806,11 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
         try
         {
             using var stream = new MemoryStream(bytes, writable: false);
-            BitmapFrame frame = BitmapDecoder.Create(
+            BitmapDecoder decoder = BitmapDecoder.Create(
                 stream,
                 BitmapCreateOptions.PreservePixelFormat,
-                BitmapCacheOption.OnDemand).Frames[0];
+                BitmapCacheOption.OnDemand);
+            BitmapFrame frame = decoder.Frames[0];
             if (frame.PixelWidth <= 0 || frame.PixelHeight <= 0)
             {
                 return null;
@@ -2817,15 +2822,38 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
                 widthLimits ? frame.PixelWidth : frame.PixelHeight);
             if (reserveDecodedBytes is not null)
             {
-                // Projected size after the bounded decode, from the
-                // HEADER — nothing has been allocated yet.
-                long longSide = widthLimits ? frame.PixelWidth : frame.PixelHeight;
-                long shortSide = widthLimits ? frame.PixelHeight : frame.PixelWidth;
-                long scaledShort = Math.Max(
-                    1,
-                    (long)Math.Ceiling(
-                        shortSide * ((double)boundedDimension / longSide)));
-                if (!reserveDecodedBytes(boundedDimension * scaledShort * 4))
+                // Reserve PEAK allocation from the HEADER, before any
+                // pixels exist. Only JPEG and PNG downsample natively
+                // at DecodePixelWidth/Height; every other codec (GIF,
+                // BMP, TIFF, ...) decodes the FULL source frame first
+                // and scales after, so a tiny compressed file with
+                // enormous declared dimensions must be charged at
+                // source size (round 6). Bytes-per-pixel comes from
+                // the source format — a fixed 4 undercounts 48/64-bpp
+                // images.
+                long bytesPerPixel = Math.Max(
+                    4, ((long)frame.Format.BitsPerPixel + 7) / 8);
+                long reservedWidth;
+                long reservedHeight;
+                if (decoder is JpegBitmapDecoder or PngBitmapDecoder)
+                {
+                    long longSide =
+                        widthLimits ? frame.PixelWidth : frame.PixelHeight;
+                    long shortSide =
+                        widthLimits ? frame.PixelHeight : frame.PixelWidth;
+                    reservedWidth = boundedDimension;
+                    reservedHeight = Math.Max(
+                        1,
+                        (long)Math.Ceiling(
+                            shortSide * ((double)boundedDimension / longSide)));
+                }
+                else
+                {
+                    reservedWidth = frame.PixelWidth;
+                    reservedHeight = frame.PixelHeight;
+                }
+                if (!reserveDecodedBytes(
+                    reservedWidth * reservedHeight * bytesPerPixel))
                 {
                     budgetSpent = true;
                     return null;

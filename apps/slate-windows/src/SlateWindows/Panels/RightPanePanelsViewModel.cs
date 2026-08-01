@@ -33,8 +33,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     /// core budgets bound each SINGLE preview, so a note with
     /// hundreds of embed links — or a handful of huge images — still
     /// multiplied that bound without limit. Resolution slots are
-    /// charged per occurrence KEY (raw target + display text, since
-    /// display text is per-occurrence image alt), so alt-text
+    /// charged per occurrence KEY (anchored target + display text,
+    /// since display text is per-occurrence image alt), so alt-text
     /// variation cannot multiply core calls past the cap either.
     /// A resolution whose image payload would push the cumulative
     /// budget past the cap is dropped, not retained (round 2: the
@@ -427,8 +427,14 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                     break;
                 }
 
-                (string TargetRaw, string? DisplayText) key =
-                    (link.TargetRaw, link.DisplayText);
+                // The ANCHORED target (round 6): TargetRaw is anchor-
+                // stripped, so resolving by it renders ![[note#S]] as
+                // the whole note and collides every anchored embed of
+                // one note in the cache.
+                string target =
+                    EditorInteractionCoordinator.ComposeAnchoredTarget(link);
+                (string Target, string? DisplayText) key =
+                    (target, link.DisplayText);
                 if (cache.TryGetValue(key, out EmbedRowViewModel.Shared? hit))
                 {
                     rows.Add(hit is null
@@ -449,7 +455,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 try
                 {
                     EmbedPreviewResolution preview = _session.ResolveEmbedPreview(
-                        path, link.TargetRaw, link.DisplayText);
+                        path, target, link.DisplayText);
                     resolution = preview.Resolution;
                     truncated = preview.Truncated;
                 }
@@ -526,7 +532,8 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     {
         long total = node.Image is System.Windows.Media.Imaging.BitmapSource
             bitmap
-            ? (long)bitmap.PixelWidth * bitmap.PixelHeight * 4
+            ? (long)bitmap.PixelWidth * bitmap.PixelHeight
+                * Math.Max(4, ((long)bitmap.Format.BitsPerPixel + 7) / 8)
             : 0;
         foreach (EditorEmbedPreviewPart part in node.Parts)
         {

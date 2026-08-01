@@ -61,14 +61,64 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             Path.Combine(_fixture.Root, "gallery.md"), gallery.ToString());
         File.WriteAllText(
             Path.Combine(_fixture.Root, "nested.md"), "![[gallery.md]]\n");
+        // High-bit-depth PNGs (round 6): a fixed 4-bytes-per-pixel
+        // multiplier undercounts Rgba64 sources by half.
+        byte[] deepPng = MakeCompressiblePng(
+            System.Windows.Media.PixelFormats.Rgba64, bytesPerPixel: 8);
+        var deep = new System.Text.StringBuilder("# Deep\n\n");
+        for (int i = 1; i <= 10; i++)
+        {
+            File.WriteAllBytes(
+                Path.Combine(_fixture.Root, $"deep{i}.png"), deepPng);
+            deep.Append($"![[deep{i}.png]]\n");
+        }
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "deep.md"), deep.ToString());
+        // A small compressed file with large decoded dimensions in a
+        // codec that cannot downsample natively (round 6): GIF
+        // decodes the full source frame before scaling, so the
+        // reservation must charge source size and refuse before any
+        // allocation.
+        File.WriteAllBytes(
+            Path.Combine(_fixture.Root, "huge.gif"), MakeLargeGif());
+        File.WriteAllText(
+            Path.Combine(_fixture.Root, "huge.md"), "![[huge.gif]]\n");
         _session = VaultSession.OpenFilesystem(_fixture.Root);
         using var cancel = new CancelToken();
         _session.ScanInitial(cancel);
     }
 
-    private static byte[] MakeCompressiblePng()
+    private static byte[] MakeCompressiblePng() => MakeCompressiblePng(
+        System.Windows.Media.PixelFormats.Bgra32, bytesPerPixel: 4);
+
+    private static byte[] MakeCompressiblePng(
+        System.Windows.Media.PixelFormat format, int bytesPerPixel)
     {
         const int size = 1120;
+        int stride = size * bytesPerPixel;
+        var source = System.Windows.Media.Imaging.BitmapSource.Create(
+            size,
+            size,
+            96,
+            96,
+            format,
+            null,
+            new byte[stride * size],
+            stride);
+        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        encoder.Frames.Add(
+            System.Windows.Media.Imaging.BitmapFrame.Create(source));
+        using var stream = new MemoryStream();
+        encoder.Save(stream);
+        return stream.ToArray();
+    }
+
+    /// <summary>A VALID solid-black 4200x4200 GIF (compresses to a
+    /// few KB): decoding it would allocate ~70 MB — past the budget
+    /// — because GIF cannot downsample natively.</summary>
+    private static byte[] MakeLargeGif()
+    {
+        const int size = 4200;
         const int stride = size * 4;
         var source = System.Windows.Media.Imaging.BitmapSource.Create(
             size,
@@ -79,7 +129,7 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             null,
             new byte[stride * size],
             stride);
-        var encoder = new System.Windows.Media.Imaging.PngBitmapEncoder();
+        var encoder = new System.Windows.Media.Imaging.GifBitmapEncoder();
         encoder.Frames.Add(
             System.Windows.Media.Imaging.BitmapFrame.Create(source));
         using var stream = new MemoryStream();
@@ -206,6 +256,66 @@ public sealed class RightPanePanelsBudgetTests : IDisposable
             RightPanePanelsViewModel.MaxEmbedDecodedImageBytes / perImage);
         Assert.Equal(admitted, decoded);
         Assert.Equal(20 - admitted, elided);
+    }
+
+    [Fact]
+    public void HighBitDepthImagesChargeTheirTruePixelCost()
+    {
+        var panels = new RightPanePanelsViewModel(
+            _session,
+            _ => { },
+            (_, _) => true,
+            _ => true,
+            (_, _) => { });
+        panels.NoteChanged("deep.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => !panels.IsLoadingLinks && !panels.IsResolvingEmbeds,
+                TimeSpan.FromSeconds(30)),
+            "the deep note never finished resolving");
+
+        // Rgba64 decodes at 8 bytes per pixel — a fixed 4 would
+        // admit twice as many images as the budget allows.
+        Assert.Equal(10, panels.Embeds.Count);
+        long perImage = 1120L * 1120L * 8;
+        int admitted = (int)(
+            RightPanePanelsViewModel.MaxEmbedDecodedImageBytes / perImage);
+        Assert.InRange(admitted, 1, 9);
+        int decodedCount = panels.Embeds.Count(
+            row => row.Node.Image is not null);
+        Assert.Equal(admitted, decodedCount);
+        long retained = panels.Embeds.Sum(
+            row => RightPanePanelsViewModel.CountDecodedImageBytes(row.Node));
+        Assert.InRange(
+            retained, 1, RightPanePanelsViewModel.MaxEmbedDecodedImageBytes);
+    }
+
+    [Fact]
+    public void DeclaredHugeDimensionsAreRefusedFromTheHeader()
+    {
+        var panels = new RightPanePanelsViewModel(
+            _session,
+            _ => { },
+            (_, _) => true,
+            _ => true,
+            (_, _) => { });
+        panels.NoteChanged("huge.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => !panels.IsLoadingLinks && !panels.IsResolvingEmbeds,
+                TimeSpan.FromSeconds(30)),
+            "the huge note never finished resolving");
+
+        // GIF cannot downsample natively: the 4200x4200 source must
+        // be refused from its HEADER (a scaled-size reservation
+        // would admit ~5 MB, then decode ~70 MB).
+        EmbedRowViewModel row = Assert.Single(panels.Embeds);
+        Assert.Null(row.Node.Image);
+        Assert.True(row.Node.IsWarning);
+        Assert.Contains(
+            row.Node.Parts,
+            part => part.Text
+                == EditorInteractionCoordinator.ImageBudgetSpentMessage);
     }
 
     private static (int Decoded, int Elided) CountImages(
