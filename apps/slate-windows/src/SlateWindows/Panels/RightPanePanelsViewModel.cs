@@ -80,13 +80,15 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     private string? _outlineLoadError;
     private string? _embedsLoadError;
     private volatile bool _isShutDown;
+    private readonly bool _synchronous;
 
     public RightPanePanelsViewModel(
         VaultSession session,
         Action<A11yEvent> announce,
         Func<string, WorkspaceOpenTarget, bool> openInternal,
         Func<string, bool> openExternal,
-        Action<LinkAnchor, string?> scrollToAnchor)
+        Action<LinkAnchor, string?> scrollToAnchor,
+        bool synchronousForTests = false)
     {
         _session = session;
         _announce = announce;
@@ -94,6 +96,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         _openExternal = openExternal;
         _scrollToAnchor = scrollToAnchor;
         _uiContext = SynchronizationContext.Current;
+        _synchronous = synchronousForTests;
     }
 
     internal int LoadGenerationForTests => _loadGeneration;
@@ -299,7 +302,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     {
         IsLoadingLinks = true;
         IsResolvingEmbeds = true;
-        TrackWork(Task.Run(() =>
+        StartWork(() =>
         {
             NoteLoadBundle? bundle = null;
             string? failure = null;
@@ -353,7 +356,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                     generation,
                     bundle.OutgoingLinks.Where(link => link.IsEmbed).ToArray());
             });
-        }));
+        });
     }
 
     /// <summary>
@@ -372,7 +375,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             RaiseHeaderChanges();
             return;
         }
-        TrackWork(Task.Run(() =>
+        StartWork(() =>
         {
             // One core call AND one built card per occurrence key
             // (raw target + per-occurrence alt): the same [[target]]
@@ -498,7 +501,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
                 IsResolvingEmbeds = false;
                 RaiseHeaderChanges();
             });
-        }));
+        });
     }
 
     /// <summary>Every image payload anywhere in the resolved tree —
@@ -542,7 +545,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
         // save's headings (adversarial round 2).
         int requestId = ++_outlineRequestId;
         IsLoadingOutline = true;
-        TrackWork(Task.Run(() =>
+        StartWork(() =>
         {
             Heading[]? headings = null;
             string? failure = null;
@@ -561,7 +564,7 @@ internal sealed class RightPanePanelsViewModel : BindableBase
             }
             Post(() => PublishOutline(
                 path, generation, requestId, headings, announceCount, failure));
-        }));
+        });
     }
 
     /// <summary>Internal so the stale-publish guard is testable with
@@ -709,6 +712,22 @@ internal sealed class RightPanePanelsViewModel : BindableBase
     {
         _isShutDown = true;
         _ = Interlocked.Increment(ref _loadGeneration);
+    }
+
+    /// <summary>All load work funnels through here. Synchronous mode
+    /// (the ReadingContentViewModel test pattern) runs the body
+    /// inline: without a UI SynchronizationContext, worker publishes
+    /// would land on background threads and race every list the test
+    /// thread is reading — the CI-only "Collection was modified"
+    /// failure in unrelated workspace tests.</summary>
+    private void StartWork(Action body)
+    {
+        if (_synchronous)
+        {
+            body();
+            return;
+        }
+        TrackWork(Task.Run(body));
     }
 
     /// <summary>Every worker is tracked so tests (and shutdown

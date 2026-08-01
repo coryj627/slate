@@ -1001,7 +1001,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     _announce,
                     () => ReferenceEquals(ActiveGroup, group)
                         && ReferenceEquals(group.ActiveTab, tab));
-            });
+            },
+            synchronousForTests: !startInteractionBackgroundWork);
         (_root, _activeGroup) = Restore(_persistence.Load());
         SyncPanels();
 
