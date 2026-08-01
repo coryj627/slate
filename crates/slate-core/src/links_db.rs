@@ -314,10 +314,17 @@ pub(crate) fn bound_snippet(mut snippet: String) -> String {
 }
 
 fn outgoing_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutgoingLink> {
+    // EVERY authored string is bounded, not just the snippet (W4-2
+    // round 13): display_text (the alias — it becomes image alt and
+    // UI titles), target_raw, and anchor text all carry attacker-
+    // sized content verbatim otherwise. The ceiling cannot break
+    // resolution — real file names are bounded far below it, so
+    // only unresolvable adversarial targets are ever clipped.
     Ok(OutgoingLink {
         target_path: row.get::<_, Option<String>>(0)?,
-        target_raw: row.get::<_, String>(1)?,
-        target_anchor: deserialize_anchor_pair(row.get::<_, Option<String>>(2)?.as_deref()),
+        target_raw: bound_snippet(row.get::<_, String>(1)?),
+        target_anchor: deserialize_anchor_pair(row.get::<_, Option<String>>(2)?.as_deref())
+            .map(|(kind, text)| (kind, bound_snippet(text))),
         kind: row.get::<_, String>(3)?,
         is_embed: row.get::<_, i64>(4)? != 0,
         is_external: row.get::<_, i64>(5)? != 0,
@@ -330,7 +337,7 @@ fn outgoing_link_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<OutgoingL
         ordinal: row.get::<_, i64>(7)? as u32,
         span_start: row.get::<_, i64>(8)? as u32,
         span_end: row.get::<_, i64>(9)? as u32,
-        display_text: row.get::<_, Option<String>>(10)?,
+        display_text: row.get::<_, Option<String>>(10)?.map(bound_snippet),
     })
 }
 

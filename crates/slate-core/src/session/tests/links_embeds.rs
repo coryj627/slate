@@ -489,7 +489,9 @@ fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
     // allocation. The ceiling applies on READ, covering rows cached
     // before the cap existed.
     let alias = "A".repeat(1024 * 1024);
-    let body = format!("intro [[hub|{alias}]] outro\n");
+    let giant_target = "T".repeat(1024 * 1024);
+    let body =
+        format!("intro [[hub|{alias}]] outro\n\n![[hub|{alias}]]\n\n[[{giant_target}#{alias}]]\n");
     let (_tmp, session) = make_vault(|p| {
         p.write_file("notes/src.md", body.as_bytes()).unwrap();
         p.write_file("notes/hub.md", b"# Hub\n").unwrap();
@@ -501,14 +503,38 @@ fn oversized_link_aliases_are_snippet_bounded_at_the_read_boundary() {
     let panels = session
         .note_link_panels("notes/hub.md", Paging::first(50), 8, 4)
         .unwrap();
-    assert_eq!(panels.backlinks.items.len(), 1);
-    assert!(panels.backlinks.items[0].snippet.len() <= ceiling);
+    assert_eq!(panels.backlinks.items.len(), 2);
+    for backlink in &panels.backlinks.items {
+        assert!(backlink.snippet.len() <= ceiling);
+    }
 
+    // EVERY authored string field is bounded — display_text (the
+    // alias, which becomes image alt and UI titles), target_raw,
+    // anchor text, and snippet — across outgoing AND embed arrays
+    // (round 13: the first fix bounded only snippet).
     let source = session
         .note_link_panels("notes/src.md", Paging::first(50), 8, 4)
         .unwrap();
-    assert_eq!(source.outgoing_links.len(), 1);
-    assert!(source.outgoing_links[0].snippet.len() <= ceiling);
+    assert_eq!(source.outgoing_links.len(), 3);
+    assert_eq!(source.embed_links.len(), 1);
+    for link in source
+        .outgoing_links
+        .iter()
+        .chain(source.embed_links.iter())
+    {
+        assert!(link.snippet.len() <= ceiling);
+        assert!(link.target_raw.len() <= ceiling);
+        assert!(
+            link.display_text
+                .as_ref()
+                .is_none_or(|d| d.len() <= ceiling)
+        );
+        assert!(
+            link.target_anchor
+                .as_ref()
+                .is_none_or(|(_, text)| text.len() <= ceiling)
+        );
+    }
 }
 
 #[test]
