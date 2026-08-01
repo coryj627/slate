@@ -330,6 +330,46 @@ public sealed class AccessibleDataGridTests
     }
 
     [Fact]
+    public void PointerInvokedMenuTargetsTheClickedRowNotTheCurrentOne()
+    {
+        RunSta(() =>
+        {
+            object? executed = null;
+            var grid = MakeGrid(
+                new List<A11yEvent>(),
+                rowActions: new[]
+                {
+                    new AccessibleGridRowAction
+                    {
+                        Name = "Open",
+                        Execute = row => executed = row,
+                    },
+                });
+            // Realize containers so row B's cell element exists.
+            grid.Measure(new System.Windows.Size(800, 600));
+            grid.Arrange(new System.Windows.Rect(0, 0, 800, 600));
+            grid.UpdateLayout();
+
+            // Currency on row A; the pointer opens the menu over row B
+            // (round 5: WPF moves currency only on the left-button
+            // path — without targeting, the action executes against A,
+            // destructively for real actions).
+            grid.Grid.CurrentCell = new DataGridCellInfo(People[0], grid.Grid.Columns[0]);
+            var rowB = (DataGridRow)grid.Grid.ItemContainerGenerator
+                .ContainerFromItem(People[1]);
+            var cellB = Assert.IsType<DataGridCell>(
+                grid.Grid.Columns[0].GetCellContent(rowB)?.Parent);
+
+            grid.TargetRowActionsAt(cellB);
+            ContextMenu menu = grid.BuildRowActionsMenu()
+                ?? throw new Xunit.Sdk.XunitException("no menu built");
+            var open = Assert.IsType<MenuItem>(menu.Items[0]);
+            open.RaiseEvent(new System.Windows.RoutedEventArgs(MenuItem.ClickEvent));
+            Assert.Same(People[1], executed);
+        });
+    }
+
+    [Fact]
     public void GroupHeadingComposesThroughTheCoreEventFamily()
     {
         // The corpus goldens, byte-for-byte — grouped consumers (W4-6)
