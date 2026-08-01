@@ -1037,6 +1037,37 @@ final class BasesTabRoutingTests: XCTestCase {
             "file.name,status\r\nAlpha.md,active\r\nBeta.md,done\r\n")
     }
 
+    /// Round 19: if the engine rollback after an execution failure
+    /// ALSO fails, the engine may hold the rejected sort while the
+    /// surface describes the previous one — the document DETACHES (the
+    /// batch-Trash posture) so no later execute can render rows that
+    /// contradict the published identity; reopening restores a
+    /// coherent pair.
+    func testSortRollbackFailureDetachesTheDocument() async throws {
+        let state = try await makeQuickFilterAppState()
+        state.openFile("Queries/Reading.base", target: .currentTab)
+        let doc = state.baseDocument(for: "Queries/Reading.base")
+        let session = try XCTUnwrap(state.currentSession)
+        XCTAssertNotNil(doc.result)
+
+        struct Fault: Error {}
+        doc.executeFaultForTests = { Fault() }
+        doc.rollbackFaultForTests = { Fault() }
+        XCTAssertFalse(
+            doc.setTransientSort(
+                DataGridSortState(columnIndex: 0, ascending: true),
+                session: session))
+        XCTAssertNil(doc.handle, "a failed rollback detaches the handle")
+        XCTAssertNil(doc.sortState, "the published identity keeps the previous order")
+
+        doc.executeFaultForTests = nil
+        doc.rollbackFaultForTests = nil
+        doc.executeActiveView(session: session)
+        XCTAssertNil(
+            doc.result,
+            "a detached document cannot publish rows that contradict the identity")
+    }
+
     func testTransientTypedSortDrivesTableListExportAndLifecycle() async throws {
         let state = try await makeTypedSortAppState()
         state.openFile("Queries/Typed.base", target: .currentTab)

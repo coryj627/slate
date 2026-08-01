@@ -483,6 +483,10 @@ final class BaseDocument: ObservableObject {
     /// a corruptible fixture.
     var executeFaultForTests: (() -> Error)?
 
+    /// Rollback-fault seam (round 19): fails the post-execution-failure
+    /// engine rollback so the detach posture is testable.
+    var rollbackFaultForTests: (() -> Error)?
+
     func executeActiveView(session: VaultSession, thisPath: String? = nil) {
         contentRefreshGeneration &+= 1
         // A batch-Trash unknown outcome deliberately detaches the handle while
@@ -655,11 +659,25 @@ final class BaseDocument: ObservableObject {
                 // failed state stays visible — that is the honest
                 // display — but the sort identity and the engine both
                 // keep the previous order.
-                try? session.baseSetTransientSort(
-                    handle: handle,
-                    view: UInt32(activeViewIndex),
-                    columnId: previousColumnID,
-                    ascending: previousSort?.ascending ?? true)
+                do {
+                    if let fault = rollbackFaultForTests?() {
+                        throw fault
+                    }
+                    try session.baseSetTransientSort(
+                        handle: handle,
+                        view: UInt32(activeViewIndex),
+                        columnId: previousColumnID,
+                        ascending: previousSort?.ascending ?? true)
+                } catch {
+                    // The engine may now hold the REJECTED sort while
+                    // the surface describes the previous one
+                    // (round 19). DETACH — the batch-Trash posture —
+                    // so no later execute can render rows that
+                    // contradict the published identity; reopening
+                    // restores a coherent pair.
+                    self.handle = nil
+                    state = .failed(friendlyMessage(for: error))
+                }
                 return false
             }
             sortState = newSort

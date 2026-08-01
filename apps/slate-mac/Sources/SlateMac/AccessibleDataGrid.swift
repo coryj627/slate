@@ -170,6 +170,15 @@ struct AccessibleDataGrid<Row: Identifiable>: View {
     var groups: [Group]
     var selection: Binding<Row.ID?>?
     var cellSelection: Binding<CellPosition?>?
+    /// OWNER CONTRACT for engine-backed grids (rounds 17–19): sort
+    /// acceptance must be published ATOMICALLY with the committed rows
+    /// — assign the accepted state only after the rows exist
+    /// (`BaseDocument.setTransientSort` is the reference: transactional
+    /// through execution, engine rolled back on failure). The deferred
+    /// external-sort announcement fires on the first reload whose
+    /// sortState matches the accepted request; an owner that published
+    /// state before rows would make that announcement narrate an order
+    /// the display has not adopted.
     var sortState: Binding<DataGridSortState?>?
     var cellNavigation: Bool
     /// When false, the binding owner supplies rows in authoritative sort order.
