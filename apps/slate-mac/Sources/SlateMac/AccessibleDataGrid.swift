@@ -575,8 +575,17 @@ final class GridCoordinator<Row: Identifiable>: NSObject, NSTableViewDelegate,
             // proceeding would flip the header and announce a sort
             // that never happened (a degraded-dependency
             // false-success). Keep the old state and say nothing;
-            // the owner's own error path narrates the failure.
-            guard sortState.wrappedValue == sort else { return nil }
+            // the owner's own error path narrates the failure. The
+            // HEADER-CLICK path already flipped NSTableView's own
+            // descriptor before the delegate ran (round 16) — pull
+            // the native indicator and its accessibility label back
+            // to the unchanged state; the sync guard keeps this from
+            // becoming a second owner write.
+            guard sortState.wrappedValue == sort else {
+                syncSortDescriptorsToTable()
+                syncHeaderAccessibilityToTable()
+                return nil
+            }
         }
         activeSort = sort
         // An UNBOUND grid keeps NSTableView's native selection — its

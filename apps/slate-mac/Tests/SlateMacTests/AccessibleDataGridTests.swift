@@ -554,6 +554,52 @@ final class AccessibleDataGridTests: XCTestCase {
             "the order is unchanged")
     }
 
+    /// Round 16: NSTableView flips its own sortDescriptors BEFORE the
+    /// delegate runs — a rejected header click must pull the native
+    /// indicator back to the unchanged state, or the visual header
+    /// (and its accessibility label) shows a sort that never happened.
+    @MainActor
+    func testRejectedHeaderClickRestoresTheNativeSortIndicator() {
+        var announced: [String] = []
+        var rejectedWrites = 0
+        let rejecting = Binding<DataGridSortState?>(
+            get: { nil },
+            set: { _ in rejectedWrites += 1 })
+        let grid = makeGrid(
+            rows: Self.people,
+            sortState: rejecting,
+            sortsRowsLocally: false,
+            announce: { announced.append($0) })
+        let coordinator = GridCoordinator(grid: grid)
+        let table = NSTableView()
+        table.addTableColumn(NSTableColumn(identifier: .init("col0")))
+        table.addTableColumn(NSTableColumn(identifier: .init("col1")))
+        table.delegate = coordinator
+        table.dataSource = coordinator
+        coordinator.table = table
+        coordinator.reload(grid: grid)
+
+        // The header gesture: AppKit sets the descriptor, THEN tells
+        // the delegate. A programmatic set may dispatch the delegate
+        // itself — invoke manually only if it did not, so the
+        // single-write assertion stays exact under either behavior.
+        let old = table.sortDescriptors
+        table.sortDescriptors = [NSSortDescriptor(key: "0", ascending: true)]
+        if rejectedWrites == 0 {
+            coordinator.tableView(table, sortDescriptorsDidChange: old)
+        }
+
+        XCTAssertEqual(rejectedWrites, 1, "exactly one owner write")
+        XCTAssertTrue(announced.isEmpty, "no success announcement")
+        XCTAssertEqual(
+            coordinator.displayRows.map(\.a),
+            Self.people.map(\.a),
+            "the order is unchanged")
+        XCTAssertTrue(
+            table.sortDescriptors.isEmpty,
+            "the native indicator is pulled back to the unchanged state")
+    }
+
     @MainActor
     func testSortSurvivesReload() {
         let grid = makeGrid(rows: Self.people)
