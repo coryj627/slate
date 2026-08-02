@@ -423,6 +423,84 @@ fn stale_repairs_never_erase_a_replacement_writers_intent() {
 }
 
 #[test]
+fn deleted_file_intents_converge_instead_of_poisoning_queries() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 23: a conflict refusal clears its own intent
+    // (provable no-write), and an intent stranded against a DELETED
+    // file converges to deletion — the aged repair used to hit
+    // NotFound forever and fail every vault-wide task query.
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("notes/doomed-intent.md", b"- [ ] flip me\n")
+            .unwrap();
+        p.write_file("notes/bystander.md", b"- [ ] safe\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Phase 1: a stale-hash save against an externally deleted file
+    // refuses with a conflict AND clears its own registration.
+    std::fs::remove_file(tmp.path().join("notes/doomed-intent.md")).unwrap();
+    let conflicted = session.save_text("notes/doomed-intent.md", "- [x] flip me\n", Some("stale"));
+    assert!(matches!(conflicted, Err(VaultError::WriteConflict { .. })));
+    {
+        let conn = session.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM text_write_intents", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 0, "a provable no-write must clear its intent");
+    }
+
+    // Phase 2: an intent stranded by a post-write failure whose file
+    // is THEN deleted — the aged sweep must converge to deletion
+    // (index row gone, marker cleared) instead of erroring forever.
+    session
+        .save_text("notes/doomed-intent.md", "- [ ] back again\n", None)
+        .unwrap();
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "doomed-intent") };
+    assert!(
+        session
+            .toggle_task_status("notes/doomed-intent.md", 0, 'x', None)
+            .is_err()
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    std::fs::remove_file(tmp.path().join("notes/doomed-intent.md")).unwrap();
+
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "doomed-intent") };
+    let page = session.tasks_in_vault(crate::TaskFilter::default(), Paging::first(50));
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+
+    let page = page.expect("the vault-wide query must succeed after convergence");
+    assert!(
+        page.items
+            .iter()
+            .all(|r| r.path != "notes/doomed-intent.md"),
+        "the deleted file's ghost rows are gone"
+    );
+    assert!(
+        page.items.iter().any(|r| r.path == "notes/bystander.md"),
+        "unrelated tasks still serve"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let intents: i64 = conn
+            .query_row("SELECT COUNT(*) FROM text_write_intents", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(intents, 0, "the stranded marker converged away");
+        let files: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'notes/doomed-intent.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(files, 0, "the deleted file's index row converged away");
+    }
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.

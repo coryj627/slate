@@ -3340,6 +3340,19 @@ impl VaultSession {
                     self.config.large_file_refuse_bytes,
                 )?;
                 if current_hash != expected {
+                    // A conflict refusal is a PROVABLE no-write: this
+                    // save's own intent registration clears here
+                    // (token-scoped) rather than lingering to age
+                    // into a pointless repair — and for a conflict
+                    // against a DELETED file, lingering was worse
+                    // than pointless (adversarial round 23): the
+                    // aged repair hit NotFound forever and poisoned
+                    // every vault-wide task query.
+                    drop(tx);
+                    let _ = conn.execute(
+                        "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                        rusqlite::params![path, intent_token],
+                    );
                     return Err(VaultError::WriteConflict {
                         current_content_hash: current_hash,
                         expected_content_hash: expected.to_string(),
@@ -5956,7 +5969,7 @@ impl VaultSession {
         let mut report = ScanReport::default();
         let (name, _, _) = classify_path(path);
         let mut graph_sink = self.graph_sink();
-        index_file(
+        match index_file(
             &tx,
             self.provider.as_ref(),
             path,
@@ -5968,12 +5981,31 @@ impl VaultSession {
             self.config.large_file_refuse_bytes,
             None,
             &mut graph_sink,
-        )?;
+        ) {
+            Ok(()) => {}
+            Err(VaultError::Io(ref io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => {
+                // The path is GONE from disk: convergence means
+                // removing its index rows, not erroring forever
+                // (adversarial round 23) — a conflicted save against
+                // a deleted note left an intent whose repair would
+                // otherwise poison every vault-wide task query. The
+                // graph hears the removal like the delete path does.
+                graph_sink.stage_with(|| {
+                    Ok(crate::graph::GraphOp::FileRemoved {
+                        path: path.to_string(),
+                        inbound: crate::links_db::graph_inbound_rows(&tx, path)?,
+                    })
+                })?;
+                tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+            }
+            Err(other) => return Err(other),
+        }
         // A successful repair converges the index to disk truth for
-        // this path, so the durable suspicion marker clears with it
-        // (round 21) - but ONLY the registration the sweep selected
-        // (round 22): a fresh replacement registered meanwhile is a
-        // live writer's marker and must survive this repair.
+        // this path — including "the truth is that it's deleted" —
+        // so the durable suspicion marker clears with it (round 21),
+        // but ONLY the registration the sweep selected (round 22): a
+        // fresh replacement registered meanwhile is a live writer's
+        // marker and must survive this repair.
         if let Some(token) = clear_intent_token {
             tx.execute(
                 "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
