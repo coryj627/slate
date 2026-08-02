@@ -2323,6 +2323,16 @@ impl VaultSession {
             self.restore_structural_batch_rewrites_locked(conn, inflight, true)?;
         }
 
+        // Round 35: crash-recovery renames are filesystem mutations
+        // like any other — mark both sides before reversing
+        // (best-effort; recovery proceeds regardless).
+        let _ = self.plant_move_markers_locked(
+            conn,
+            inflight
+                .entries
+                .iter()
+                .flat_map(|entry| [entry.from.as_str(), entry.to.as_str()]),
+        );
         // Reverse only the renames that physically landed, always in strict
         // reverse plan order. A crash between rename and progress update is
         // therefore indistinguishable from (and as safe as) a recorded step.
@@ -6225,6 +6235,40 @@ impl VaultSession {
     /// with nothing to heal it. Aged-marker-conditional rather than
     /// unconditional so repeated containments don't accumulate
     /// token rows.
+    /// Durably mark BOTH sides of every structural rename BEFORE the
+    /// filesystem mutation (adversarial round 35): the rename is not
+    /// ordered against another process's writer-locked save, so a
+    /// save can interleave anywhere in the rename→index-commit gap —
+    /// including a SUCCESSFUL source save whose freshly indexed row
+    /// the move then relocates to the destination, its own marker
+    /// already cleared, leaving both paths silently wrong with no
+    /// trigger. These markers are planted already-aged, committed
+    /// before any byte moves, and NEVER cleared by the move itself:
+    /// the next task query's sweep re-reads both paths under the
+    /// writer lock and converges whatever any interleaving produced
+    /// — disk truth on both sides, markers cleared by those reads.
+    /// The cost is one re-read per touched path on the first query
+    /// after a move; correctness under unordered filesystem
+    /// interleaving is exactly worth it.
+    fn plant_move_markers_locked<'p>(
+        &self,
+        conn: &Connection,
+        paths: impl IntoIterator<Item = &'p str>,
+    ) -> Result<(), VaultError> {
+        for path in paths {
+            conn.execute(
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                 VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+                rusqlite::params![
+                    path,
+                    now_ms() - Self::intent_abandon_threshold_ms(path) - 1,
+                    fresh_intent_token()
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
     fn ensure_aged_healing_marker(
         tx: &rusqlite::Transaction,
         path: &str,
@@ -11100,6 +11144,17 @@ impl VaultSession {
 
         let mut inflight = StructuralBatchInflight::from_plans(&plans);
         structural_batch_insert_inflight(&conn, &inflight)?;
+        // Round 35: mark both sides of every file this batch touches
+        // BEFORE the first filesystem mutation — see
+        // plant_move_markers_locked.
+        self.plant_move_markers_locked(
+            &conn,
+            plans.iter().flat_map(|plan| {
+                plan.moved_files
+                    .iter()
+                    .flat_map(|(old, new)| [old.as_str(), new.as_str()])
+            }),
+        )?;
         let mut applied: Vec<crate::structural_batch::PlannedBatchMove> = Vec::new();
         for plan in &plans {
             if let Err(error) = self.provider.rename(&plan.item.path, &plan.destination) {
@@ -11607,6 +11662,18 @@ impl VaultSession {
     ) -> Result<crate::BatchMoveReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchMoveState};
 
+        // Round 35: recovery renames are filesystem mutations like
+        // any other — mark both sides before reversing anything
+        // (best-effort: recovery must not abort on a marker insert;
+        // the forward flow's markers already cover these paths).
+        let _ = self.plant_move_markers_locked(
+            conn,
+            applied.iter().flat_map(|plan| {
+                plan.moved_files
+                    .iter()
+                    .flat_map(|(old, new)| [old.as_str(), new.as_str()])
+            }),
+        );
         let mut rollback_failures = Vec::new();
         for plan in applied.iter().rev() {
             if let Err(error) = self.provider.rename(&plan.destination, &plan.item.path) {
@@ -11952,6 +12019,17 @@ impl VaultSession {
 
         let mut inflight = StructuralBatchInflight::from_plans(&plans);
         structural_batch_insert_inflight(&conn, &inflight)?;
+        // Round 35: mark both sides of every file this inverse batch
+        // touches before the first filesystem mutation — see
+        // plant_move_markers_locked.
+        self.plant_move_markers_locked(
+            &conn,
+            plans.iter().flat_map(|plan| {
+                plan.moved_files
+                    .iter()
+                    .flat_map(|(old, new)| [old.as_str(), new.as_str()])
+            }),
+        )?;
         let mut applied = Vec::new();
         for plan in &plans {
             if let Err(error) = self.provider.rename(&plan.item.path, &plan.destination) {
@@ -13645,6 +13723,14 @@ impl VaultSession {
             out
         };
 
+        // Round 35: mark BOTH sides of every file this move touches
+        // BEFORE the filesystem mutation — see plant_move_markers_locked.
+        self.plant_move_markers_locked(
+            &conn,
+            moved
+                .iter()
+                .flat_map(|(old, new)| [old.as_str(), new.as_str()]),
+        )?;
         self.provider.rename(from, to)?;
         self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, |tx, _sink| {
             rename_prefix_in_index(tx, from, to)
@@ -13689,6 +13775,9 @@ impl VaultSession {
         let provider = Arc::clone(&self.provider);
         let parser_version = self.config.parser_version;
         let large_file_refuse_bytes = self.config.large_file_refuse_bytes;
+        // Round 35: mark both sides before the filesystem mutation —
+        // see plant_move_markers_locked.
+        self.plant_move_markers_locked(&conn, [from, to])?;
         self.provider.rename(from, to)?;
         let moved = vec![(from.to_string(), to.to_string())];
         self.finish_structural_move(

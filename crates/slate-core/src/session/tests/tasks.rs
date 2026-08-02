@@ -1434,6 +1434,96 @@ fn moved_files_resolve_prior_destination_markers_by_reading() {
 }
 
 #[test]
+fn moves_leave_markers_that_converge_interleaved_saves() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 35: a SUCCESSFUL save on the source can
+    // interleave between the move's filesystem rename and its index
+    // commit — the save recreates the source, indexes it, clears
+    // its own marker, and the move then relocates that fresh row to
+    // the destination: both paths silently wrong, no marker, no
+    // trigger. Every move therefore durably marks BOTH sides of
+    // each rename before touching the filesystem and never clears
+    // those markers itself; the next query's sweep re-reads both
+    // paths and converges whatever the interleaving produced. The
+    // recreated-source residue below stands in for the schedule's
+    // end state: a file on disk at the source with no index row.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/src35.md", b"- [ ] source truth\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let _ = session
+        .rename_file("notes/src35.md", "relocated.md")
+        .unwrap();
+    {
+        // The move's own markers stand on both sides.
+        let conn = session.conn.lock().unwrap();
+        let (src_markers, dst_markers): (i64, i64) = (
+            conn.query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/src35.md"],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/relocated.md"],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        );
+        assert!(
+            src_markers >= 1 && dst_markers >= 1,
+            "the move marks both sides before mutating the filesystem"
+        );
+    }
+    // The interleaved save's residue: bytes at the source, no row.
+    session
+        .provider
+        .write_file("notes/src35.md", b"- [x] recreated at source\n")
+        .unwrap();
+
+    // The next query's sweep re-reads BOTH sides and converges:
+    // the destination serves its disk bytes, and the recreated
+    // source is discovered and indexed — no scan, no restart.
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "35") };
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    let moved = page
+        .items
+        .iter()
+        .find(|r| r.path == "notes/relocated.md")
+        .expect("the moved file's rows serve");
+    assert!(
+        !moved.task.completed && moved.task.text.contains("source truth"),
+        "the destination serves its actual disk bytes"
+    );
+    let recreated = page
+        .items
+        .iter()
+        .find(|r| r.path == "notes/src35.md")
+        .expect("the interleaved save's file is discovered via the move's marker");
+    assert!(
+        recreated.task.completed && recreated.task.text.contains("recreated"),
+        "the recreated source serves its actual disk bytes"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path IN (?1, ?2)",
+                rusqlite::params!["notes/src35.md", "notes/relocated.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0, "the reads resolved every move marker");
+    }
+}
+
+#[test]
 fn renamed_over_writes_never_serve_stale_rows() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
     // Adversarial round 34, the exact schedule: process A's save on
