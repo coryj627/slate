@@ -2240,10 +2240,46 @@ impl VaultSession {
             }
         };
 
-        match self.rollback_structural_batch_inflight_locked(&mut conn, &inflight, &planted) {
-            Ok(()) => Ok(()),
-            Err(error) => self.fail_structural_batch_recovery_locked(&mut conn, error),
+        if let Err(error) = self.rollback_structural_batch_inflight_locked(&mut conn, &inflight) {
+            return self.fail_structural_batch_recovery_locked(&mut conn, error);
         }
+
+        // FINALIZATION (adversarial rounds 39-40), one atomic
+        // transaction: re-assert the FULL marker set aged (restoring
+        // any marker a sweep consumed against the mid-recovery
+        // topology) AND consume the journal together. A failure here
+        // must NOT reach the barrier handler — the reversals already
+        // ran and are idempotent to re-enter, so the deferred error
+        // below keeps the journal (the deletion rolled back with
+        // this transaction) and the next open re-runs recovery to
+        // this same point and retries.
+        let finalize = (|| -> Result<(), VaultError> {
+            let tx = conn.transaction()?;
+            // Test-only seam (round 40): a transient finalization
+            // failure — the journal must survive it.
+            if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_RECOVERY_FINALIZE")
+                && planted
+                    .iter()
+                    .any(|(path, _)| path.contains(trigger.to_string_lossy().as_ref()))
+            {
+                return Err(VaultError::InvalidArgument {
+                    message: "test fault: injected recovery finalization failure".into(),
+                });
+            }
+            Self::age_move_markers_in_tx(&tx, &planted)?;
+            tx.execute("DELETE FROM structural_batch_inflight WHERE id = 1", [])?;
+            tx.commit()?;
+            Ok(())
+        })();
+        if let Err(finalize_error) = finalize {
+            return Err(VaultError::InvalidArgument {
+                message: format!(
+                    "structural batch recovery deferred at finalization ({finalize_error}); \
+                     the journal is retained and the next open retries"
+                ),
+            });
+        }
+        Ok(())
     }
 
     fn fail_structural_batch_recovery_locked(
@@ -2275,7 +2311,6 @@ impl VaultSession {
         &self,
         conn: &mut Connection,
         inflight: &StructuralBatchInflight,
-        planted_markers: &[(String, i64)],
     ) -> Result<(), VaultError> {
         let plans = inflight.plans();
         let mut physical = Vec::with_capacity(inflight.entries.len());
@@ -2400,17 +2435,10 @@ impl VaultSession {
             }
         }
 
-        // Round 39: recovery's mutations are done — re-assert the
-        // FULL marker set aged, restoring any marker a sweep
-        // consumed against the mid-recovery topology while the
-        // reversal ran. Every path recovery touched is guaranteed a
-        // durable re-read trigger from this commit on.
-        {
-            let tx = conn.transaction()?;
-            Self::age_move_markers_in_tx(&tx, planted_markers)?;
-            tx.commit()?;
-        }
-        structural_batch_delete_inflight(conn)?;
+        // (Rounds 39-40: the marker re-assertion and the journal
+        // deletion are FINALIZED by the caller, atomically, and a
+        // finalization failure defers with the journal intact —
+        // never through the barrier handler.)
         Ok(())
     }
 
@@ -6321,36 +6349,22 @@ impl VaultSession {
                     message: "test fault: injected marker plant failure".into(),
                 });
             }
-            // Test-only seam (adversarial round 39): a slow or
-            // suspended planting pass — per-row timestamps taken
-            // here would drift apart across the stall.
-            if let Some(trigger) = std::env::var_os("SLATE_TEST_STALL_PLANT_LOOP")
-                && path.contains(trigger.to_string_lossy().as_ref())
-            {
-                std::thread::sleep(std::time::Duration::from_millis(60));
-            }
+            // HELD, not timestamped (adversarial rounds 39-40): any
+            // wall-clock stamp — even one taken adjacent to the
+            // commit — can expire while a suspended process sits
+            // between planting and its terminal state, letting a
+            // sweep consume markers against mid-move topology. The
+            // sentinel never ages; sweeps honor it while the vault
+            // structural lock (held across the whole move) is held,
+            // and treat it as an orphan resolved by a real read
+            // only once the lock is provably free.
             let token = fresh_intent_token();
             tx.execute(
                 "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
                  VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
-                rusqlite::params![path, now_ms(), token],
+                rusqlite::params![path, Self::HELD_MOVE_MARKER_MS, token],
             )?;
             planted.push((path.to_string(), token));
-        }
-        // ONE commit-adjacent stamp for the whole set (adversarial
-        // round 39): per-row timestamps taken during the insert loop
-        // age from the moment they were WRITTEN, not the moment they
-        // became visible — a large set or a suspended process could
-        // commit markers that were already sweep-eligible, letting
-        // another process consume the early ones against a mid-move
-        // topology. Re-stamping every row microseconds before commit
-        // makes freshness as atomic as persistence.
-        let stamp = now_ms();
-        for (path, token) in &planted {
-            tx.execute(
-                "UPDATE text_write_intents SET created_ms = ?1 WHERE path = ?2 AND token = ?3",
-                rusqlite::params![stamp, path, token],
-            )?;
         }
         tx.commit()?;
         Ok(planted)
@@ -6409,6 +6423,59 @@ impl VaultSession {
         Ok(())
     }
 
+    /// `created_ms` sentinel for a HELD move marker (adversarial
+    /// round 40): planted rows carry this instead of a wall-clock
+    /// stamp, so no amount of suspension between planting and the
+    /// move's terminal state can make them sweep-eligible by age.
+    /// Sweeps honor held markers while the vault structural lock is
+    /// held — every move holds that lock across its whole lifetime
+    /// — and treat them as orphans (sweepable, resolved by a real
+    /// read) only when the lock is FREE, which means the mover
+    /// crashed or already reached a terminal state that failed to
+    /// re-stamp. Terminal states overwrite the sentinel with a real
+    /// aged stamp via [`Self::age_move_markers_in_tx`].
+    const HELD_MOVE_MARKER_MS: i64 = i64::MAX;
+
+    /// Probe whether the vault structural lock is currently free
+    /// (round 40): consulted by sweeps before treating a HELD move
+    /// marker as an orphan. Conservative on every error — a probe
+    /// that cannot prove the lock free reports it held, and the
+    /// marker stays untouched until a later sweep can prove it.
+    fn structural_lock_is_free(cache_dir: &Path) -> bool {
+        let Ok(canonical_cache) = std::fs::canonicalize(cache_dir) else {
+            return false;
+        };
+        let lock_path = canonical_cache.join("structural.lock");
+        {
+            // In-process holders first — the same registry
+            // VaultStructuralLock::acquire consults.
+            let registry = process_structural_locks();
+            let held = registry
+                .held
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if held.contains(&lock_path) {
+                return false;
+            }
+        }
+        let Ok(file) = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+        else {
+            return false;
+        };
+        match file.try_lock() {
+            Ok(()) => {
+                let _ = file.unlock();
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
     /// Millisecond age past which a surviving [`text_write_intents`]
     /// row counts as ABANDONED (its writer rolled back or crashed)
     /// rather than in-flight. Tests collapse it per-path via
@@ -6438,6 +6505,7 @@ impl VaultSession {
         scope: Option<&str>,
     ) -> Result<(), VaultError> {
         let now = now_ms();
+        let mut structural_lock_free: Option<bool> = None;
         // Grouped per path (round 25: several in-flight writers can
         // each own a row for the same path) so one reindex clears
         // every abandoned registration it selected.
@@ -6459,7 +6527,22 @@ impl VaultSession {
                 {
                     continue;
                 }
-                if now - created_ms >= Self::intent_abandon_threshold_ms(&path) {
+                // HELD move markers (adversarial round 40) never age
+                // by wall clock: they are honored while the vault
+                // structural lock is held (an active move owns them)
+                // and become sweepable orphans only once the lock is
+                // provably FREE — the mover crashed or a terminal
+                // state failed to re-stamp, and a real read resolves
+                // whatever state it left. One conservative probe per
+                // sweep, only when a held marker is present.
+                let selectable = if created_ms == Self::HELD_MOVE_MARKER_MS {
+                    *structural_lock_free.get_or_insert_with(|| {
+                        Self::structural_lock_is_free(&self.config.cache_dir)
+                    })
+                } else {
+                    now - created_ms >= Self::intent_abandon_threshold_ms(&path)
+                };
+                if selectable {
                     if let Some(entry) = grouped.iter_mut().find(|(p, _)| *p == path) {
                         entry.1.push(token);
                     } else {

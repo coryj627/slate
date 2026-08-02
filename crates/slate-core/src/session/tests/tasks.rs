@@ -1434,15 +1434,15 @@ fn moved_files_resolve_prior_destination_markers_by_reading() {
 }
 
 #[test]
-fn fresh_move_markers_survive_sweeps_until_the_move_commits() {
+fn held_move_markers_are_fenced_by_the_structural_lock() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
-    // Adversarial round 36: a pre-aged move marker is immediately
-    // sweep-eligible — another process could repair it against
-    // PRE-move disk truth and clear it before the rename even ran,
-    // reopening the interleaved-save class the markers exist to
-    // close. Markers are therefore planted FRESH (invisible to
-    // sweeps, which select only aged rows) and aged atomically by
-    // the move's own index commit.
+    // Adversarial rounds 36-40: no wall-clock stamp survives an
+    // arbitrarily suspended mover, so planted markers carry the
+    // HELD sentinel and never age. Sweeps honor them while the
+    // vault structural lock — held across every move's whole
+    // lifetime — is held, and treat them as orphans resolved by a
+    // real read only once the lock is provably free (the mover
+    // crashed, or a terminal state failed to re-stamp).
     let (_tmp, session) = make_vault(|p| {
         p.write_file(
             "notes/pinned36.md",
@@ -1460,35 +1460,30 @@ fn fresh_move_markers_survive_sweeps_until_the_move_commits() {
     };
     assert_eq!(planted.len(), 2);
     {
-        // Planted FRESH: not sweep-eligible.
+        // Planted HELD: the sentinel, not a wall-clock stamp.
         let conn = session.conn.lock().unwrap();
-        let aged: i64 = conn
+        let held: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM text_write_intents
-                 WHERE path IN (?1, ?2) AND created_ms <= ?3",
-                rusqlite::params![
-                    "notes/pinned36.md",
-                    "notes/elsewhere36.md",
-                    now_ms() - 15_000
-                ],
+                 WHERE path IN (?1, ?2) AND created_ms = ?3",
+                rusqlite::params!["notes/pinned36.md", "notes/elsewhere36.md", i64::MAX],
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(
-            aged, 0,
-            "move markers must be planted fresh, never pre-aged"
-        );
+        assert_eq!(held, 2, "move markers must be planted HELD, never stamped");
     }
 
-    // A sweep runs (no zero-threshold override): the fresh markers
-    // are invisible to it — nothing repaired, nothing cleared, the
-    // path's rows serve as the consistent pre-move snapshot.
+    // With the structural lock held (an active move), even a
+    // zero-threshold sweep must leave the markers alone — the
+    // pre-move snapshot keeps serving.
+    let lock = VaultStructuralLock::acquire(&session.config.cache_dir).unwrap();
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "36.md") };
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
     assert!(
         page.items.iter().any(|r| r.path == "notes/pinned36.md"),
-        "fresh markers don't bar the pre-move snapshot"
+        "held markers don't bar the pre-move snapshot"
     );
     {
         let conn = session.conn.lock().unwrap();
@@ -1501,57 +1496,34 @@ fn fresh_move_markers_survive_sweeps_until_the_move_commits() {
             .unwrap();
         assert_eq!(
             survivors, 2,
-            "a sweep before the move commits must not clear its markers"
+            "a sweep during an active move must not clear its markers"
         );
     }
-}
 
-#[test]
-fn planted_markers_share_one_commit_adjacent_stamp() {
-    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
-    // Adversarial round 39: per-row timestamps taken during the
-    // insert loop age from the moment they were WRITTEN, not the
-    // moment they became visible — a stalled planting pass could
-    // commit markers already sweep-eligible, letting another
-    // process consume the early ones against a mid-move topology.
-    // The whole set is re-stamped with ONE value microseconds
-    // before commit; the stall seam below would spread per-row
-    // stamps at least 60ms apart.
-    let (_tmp, session) = make_vault(|p| {
-        p.write_file("notes/stamp39.md", b"- [ ] stamped\n")
-            .unwrap();
-    });
-    session.scan_initial(&CancelToken::new()).unwrap();
-
-    unsafe { std::env::set_var("SLATE_TEST_STALL_PLANT_LOOP", "stamp39") };
-    let planted = {
-        let conn = session.conn.lock().unwrap();
-        session
-            .plant_move_markers_locked(
-                &conn,
-                [
-                    "notes/stamp39-a.md",
-                    "notes/stamp39-b.md",
-                    "notes/stamp39-c.md",
-                ],
-            )
-            .unwrap()
-    };
-    unsafe { std::env::remove_var("SLATE_TEST_STALL_PLANT_LOOP") };
-    assert_eq!(planted.len(), 3);
+    // The lock releases (the mover crashed or finished without
+    // re-stamping): the orphaned markers become sweepable and a
+    // real read resolves both paths.
+    drop(lock);
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        healed.items.iter().any(|r| r.path == "notes/pinned36.md"),
+        "the readable path still serves after the orphan sweep"
+    );
     {
         let conn = session.conn.lock().unwrap();
-        let (min_stamp, max_stamp): (i64, i64) = conn
+        let survivors: i64 = conn
             .query_row(
-                "SELECT MIN(created_ms), MAX(created_ms) FROM text_write_intents
-                 WHERE path LIKE 'notes/stamp39-%'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                "SELECT COUNT(*) FROM text_write_intents WHERE path IN (?1, ?2)",
+                rusqlite::params!["notes/pinned36.md", "notes/elsewhere36.md"],
+                |row| row.get(0),
             )
             .unwrap();
         assert_eq!(
-            min_stamp, max_stamp,
-            "the whole planted set must share one commit-adjacent stamp"
+            survivors, 0,
+            "orphaned held markers are resolved by real reads once the lock is free"
         );
     }
 }

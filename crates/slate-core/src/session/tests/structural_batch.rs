@@ -3454,3 +3454,58 @@ fn recovery_marker_failures_leave_no_partial_markers() {
     assert!(page.items.iter().any(|r| r.path == "left/a.md"));
     assert!(page.items.iter().any(|r| r.path == "left/b.md"));
 }
+
+#[test]
+fn recovery_finalization_failure_defers_without_consuming_the_journal() {
+    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 40: a failure in the final marker
+    // re-assertion flowed through the generic recovery handler,
+    // which appends a barrier and DELETES the inflight journal —
+    // recreating the round-37 journal-loss bug at the second
+    // marker-persistence point, after the reversals already ran.
+    // Finalization is now one atomic transaction (re-assert + journal
+    // deletion) and its failure defers: the journal survives, the
+    // reversals are idempotent to re-enter, and the next open
+    // completes recovery.
+    let (tmp, session, _state) = fixture(&[("y.md", "- [ ] yankee\n")], &["dest"]);
+    let provider = Arc::clone(&session.provider);
+    let crashed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = session.batch_move_with_faults(
+            BatchMoveRequest {
+                items: vec![file("y.md")],
+                new_parent: "dest".into(),
+            },
+            &PanicBatchFault(BatchFaultPoint::MoveJournal),
+        );
+    }));
+    assert!(crashed.is_err());
+    assert_eq!(structural_inflight_count(tmp.path()), 1);
+    drop(session);
+
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_RECOVERY_FINALIZE", "y.md") };
+    let deferred = VaultSession::open(
+        Arc::clone(&provider),
+        SessionConfig::new(tmp.path().join(".slate")),
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_RECOVERY_FINALIZE") };
+    let error = deferred.err().expect("the deferred open fails");
+    assert!(
+        error.to_string().contains("deferred at finalization"),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        structural_inflight_count(tmp.path()),
+        1,
+        "the journal must survive a deferred finalization"
+    );
+    // The reversals already ran before finalization — that is fine,
+    // because re-entry is idempotent.
+    assert!(tmp.path().join("y.md").is_file());
+
+    let recovered = VaultSession::open(provider, SessionConfig::new(tmp.path().join(".slate")))
+        .expect("the next open re-enters recovery and finalizes");
+    assert!(tmp.path().join("y.md").is_file());
+    assert!(!tmp.path().join("dest/y.md").exists());
+    assert_eq!(structural_inflight_count(tmp.path()), 0);
+    drop(recovered);
+}
