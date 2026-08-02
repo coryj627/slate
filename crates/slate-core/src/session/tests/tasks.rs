@@ -327,6 +327,102 @@ fn cross_process_post_write_rollbacks_self_heal_on_other_sessions() {
 }
 
 #[test]
+fn stale_repairs_never_erase_a_replacement_writers_intent() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 22: a sweep selects an abandoned intent, a
+    // NEW writer replaces the row before the repair transaction, and
+    // the repair's clear must miss — deleting by path alone would
+    // erase the only durable marker covering the new writer's own
+    // post-write rollback. The stale sweep is simulated by calling
+    // the repair with the OLD token after the replacement landed.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/token-race.md", b"- [ ] flip me\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Writer 1 fails post-write: intent T1 survives, index stale.
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "token-race") };
+    assert!(
+        session
+            .toggle_task_status("notes/token-race.md", 0, 'x', None)
+            .is_err()
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    let old_token: i64 = {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT token FROM text_write_intents WHERE path = ?1",
+            rusqlite::params!["notes/token-race.md"],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+
+    // A NEW writer's registration replaces the row (fresh token).
+    let new_token = old_token.wrapping_add(1);
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["notes/token-race.md", now_ms(), new_token],
+        )
+        .unwrap();
+    }
+
+    // The stale sweep repairs with the OLD token: the index heals,
+    // and the replacement intent SURVIVES.
+    {
+        let mut conn = session.conn.lock().unwrap();
+        session
+            .reindex_path_locked(&mut conn, "notes/token-race.md", Some(old_token))
+            .unwrap();
+        let surviving: i64 = conn
+            .query_row(
+                "SELECT token FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/token-race.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(surviving, new_token, "the fresh registration must survive");
+    }
+
+    // The host-facing repair route never clears intents at all.
+    session.reindex_path("notes/token-race.md").unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/token-race.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "host repairs must not clear intents");
+    }
+
+    // The replacement writer rolls back too (simulated: its intent
+    // simply ages out with the index already healed): a third
+    // session's query token-safely clears it and reads disk truth.
+    let third = VaultSession::from_filesystem(_tmp.path().to_path_buf()).unwrap();
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "token-race") };
+    let healed = third.note_tasks("notes/token-race.md", 10).unwrap();
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(healed.tasks[0].completed, "third session reads disk truth");
+    {
+        let conn = session.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/token-race.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "the aged replacement clears token-safely");
+    }
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.

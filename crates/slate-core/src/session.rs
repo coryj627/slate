@@ -3318,9 +3318,10 @@ impl VaultSession {
         // committed insert advances other connections'
         // `data_version`, so their paging drift checks fire even
         // before the main transaction lands.
+        let intent_token = fresh_intent_token();
         conn.execute(
-            "INSERT OR REPLACE INTO text_write_intents(path, created_ms) VALUES (?1, ?2)",
-            rusqlite::params![path, now_ms()],
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+            rusqlite::params![path, now_ms(), intent_token],
         )?;
 
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -3419,10 +3420,13 @@ impl VaultSession {
         // Clear the write intent ATOMICALLY with the index commit
         // (round 21): a rollback of this transaction re-exposes the
         // committed intent row, which is exactly the durable
-        // post-write marker other processes need.
+        // post-write marker other processes need. TOKEN-scoped
+        // (round 22): only this save's own registration clears —
+        // deleting by path alone could erase a replacement another
+        // writer registered meanwhile.
         tx.execute(
-            "DELETE FROM text_write_intents WHERE path = ?1",
-            rusqlite::params![path],
+            "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+            rusqlite::params![path, intent_token],
         )?;
         tx.commit()?;
         self.graph_apply(graph_sink);
@@ -5836,7 +5840,13 @@ impl VaultSession {
     /// exactly what's wrong.
     pub fn reindex_path(&self, path: &str) -> Result<(), VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
-        self.reindex_path_locked(&mut conn, path)
+        // No intent clearing from the host route (round 22): this
+        // caller cannot know whose registration currently occupies
+        // the path, and deleting by path alone could erase a NEWER
+        // writer's durable marker. Any lingering abandoned intent is
+        // token-safely cleared by a later query's sweep; the extra
+        // single-file reindex it costs is negligible.
+        self.reindex_path_locked(&mut conn, path, None)
     }
 
     /// Millisecond age past which a surviving [`text_write_intents`]
@@ -5868,33 +5878,48 @@ impl VaultSession {
         scope: Option<&str>,
     ) -> Result<(), VaultError> {
         let now = now_ms();
-        let candidates: Vec<String> = {
+        let candidates: Vec<(String, i64)> = {
             let mut stmt =
-                conn.prepare_cached("SELECT path, created_ms FROM text_write_intents")?;
+                conn.prepare_cached("SELECT path, created_ms, token FROM text_write_intents")?;
             let rows = stmt.query_map([], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
             })?;
             let mut out = Vec::new();
             for row in rows {
-                let (path, created_ms) = row?;
+                let (path, created_ms, token) = row?;
                 if let Some(scope_path) = scope
                     && path != scope_path
                 {
                     continue;
                 }
                 if now - created_ms >= Self::intent_abandon_threshold_ms(&path) {
-                    out.push(path);
+                    out.push((path, token));
                 }
             }
             out
         };
-        for path in candidates {
-            self.reindex_path_locked(conn, &path)?;
+        // The SELECTED token rides into the repair (round 22): the
+        // clear is token-conditional, so a fresh replacement a new
+        // writer registers between this selection and the repair
+        // transaction survives untouched - deleting by path alone
+        // could erase the only durable marker covering that writer's
+        // own post-write rollback.
+        for (path, token) in candidates {
+            self.reindex_path_locked(conn, &path, Some(token))?;
         }
         Ok(())
     }
 
-    fn reindex_path_locked(&self, conn: &mut Connection, path: &str) -> Result<(), VaultError> {
+    fn reindex_path_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        clear_intent_token: Option<i64>,
+    ) -> Result<(), VaultError> {
         // Test-only fault seam (adversarial round 14): a repair can
         // itself fail, and the hosts must not treat "repair
         // attempted" as "repair succeeded" — same env-var path
@@ -5906,7 +5931,10 @@ impl VaultSession {
                 message: "test fault: injected reindex failure".into(),
             });
         }
-        let tx = conn.transaction()?;
+        // IMMEDIATE (round 22): the repair reads and conditionally
+        // clears intent state - taking the writer lock up front
+        // serializes it against every save's own intent lifecycle.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // Poison the cached stat tuple FIRST (adversarial round 13):
         // `index_file`'s fast path trusts a matching (mtime, size,
         // ctime) and skips the read entirely — but a checkbox toggle
@@ -5942,12 +5970,16 @@ impl VaultSession {
             &mut graph_sink,
         )?;
         // A successful repair converges the index to disk truth for
-        // this path, so the durable cross-process suspicion marker
-        // clears with it (round 21).
-        tx.execute(
-            "DELETE FROM text_write_intents WHERE path = ?1",
-            rusqlite::params![path],
-        )?;
+        // this path, so the durable suspicion marker clears with it
+        // (round 21) - but ONLY the registration the sweep selected
+        // (round 22): a fresh replacement registered meanwhile is a
+        // live writer's marker and must survive this repair.
+        if let Some(token) = clear_intent_token {
+            tx.execute(
+                "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                rusqlite::params![path, token],
+            )?;
+        }
         tx.commit()?;
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
@@ -9432,6 +9464,20 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// A cross-process-unique token for one write intent (adversarial
+/// round 22): `RandomState` seeds from OS entropy per instance, so
+/// two processes registering intents for the same path in the same
+/// millisecond still get distinct tokens with overwhelming
+/// probability — and every clear is token-conditional, so a
+/// collision's worst case is one redundant repair, never a lost
+/// marker for a DIFFERENT interval.
+fn fresh_intent_token() -> i64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+    hasher.write_i64(now_ms());
+    hasher.finish() as i64
 }
 
 // --- Internal: save_text helpers ---

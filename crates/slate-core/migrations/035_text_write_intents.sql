@@ -12,10 +12,18 @@
 -- Rows abandoned past a liveness threshold are self-healed by the task
 -- query paths via a single-file reindex.
 
+-- `token` (adversarial round 22): every intent carries its writer's
+-- unique token, and every clear — the save's own, or a repair's — is
+-- token-conditional.  A repair that selected an abandoned row can
+-- therefore never erase a NEWER writer's replacement registered in
+-- the meantime; deleting by path alone reopened the exact uncovered
+-- interval the table exists to close.
+--
 -- IF NOT EXISTS: migration replay must be safe (the migration-026
 -- epoch-mtime test replays the tail of this list on an existing
 -- schema, the migration-033 precedent).
 CREATE TABLE IF NOT EXISTS text_write_intents (
     path       TEXT PRIMARY KEY,
-    created_ms INTEGER NOT NULL
+    created_ms INTEGER NOT NULL,
+    token      INTEGER NOT NULL DEFAULT 0
 ) WITHOUT ROWID;
