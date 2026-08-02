@@ -6092,36 +6092,74 @@ impl VaultSession {
         // could erase the only durable marker covering that writer's
         // own post-write rollback.
         for (path, tokens) in candidates {
-            if let Err(repair_err) = self.reindex_path_locked(conn, &path, &tokens) {
-                // An UN-REPAIRABLE path (adversarial round 28) must
-                // not fail every task query forever: a marker whose
-                // file stays unreadable — permissions, an AV lock —
-                // would otherwise re-fail this sweep on EVERY query,
-                // a permanent vault-wide outage over one bad file.
-                // Quarantine instead: the suspect rows stop serving,
-                // the marker STAYS (suspicion persists until a
-                // repair lands), and every later query retries the
-                // repair — the first success rebuilds the rows and
-                // clears the token. Only if the quarantine itself
-                // fails (the database is the broken thing, not the
-                // file) does the original error propagate.
-                //
-                // Gated to FILE-condition failures (adversarial
-                // round 29): Io, non-UTF-8, oversize — the classes
-                // honest-empty containment is FOR. A database
-                // failure (a broken trigger, a corrupt cache) must
-                // keep failing queries loud; absorbing it would
-                // silently drop the path's tasks over an error the
-                // file never caused.
-                match &repair_err {
-                    VaultError::Io(_)
-                    | VaultError::InvalidUtf8 { .. }
-                    | VaultError::FileTooLarge { .. } => {
-                        self.quarantine_unrepairable_path_locked(conn, &path, &tokens)
-                            .map_err(|_| repair_err)?;
+            // An UN-REPAIRABLE path (adversarial round 28) must
+            // not fail every task query forever: a marker whose
+            // file stays unreadable — permissions, an AV lock —
+            // would otherwise re-fail this sweep on EVERY query,
+            // a permanent vault-wide outage over one bad file.
+            // Quarantine instead: the suspect rows stop serving,
+            // the marker STAYS (suspicion persists until a repair
+            // lands), and every later query retries the repair —
+            // the first success rebuilds the rows and clears the
+            // token. Only if the quarantine itself fails (the
+            // database is the broken thing, not the file) does the
+            // original error propagate.
+            //
+            // Gated to FILE-condition failures (adversarial round
+            // 29): Io, non-UTF-8, oversize — the classes
+            // honest-empty containment is FOR. A database failure
+            // (a broken trigger, a corrupt cache) must keep failing
+            // queries loud; absorbing it would silently drop the
+            // path's tasks over an error the file never caused.
+            //
+            // Two-attempt loop (adversarial round 30): the repair
+            // and the quarantine are separate transactions, so a
+            // NEWER writer can commit fresh rows — clearing only
+            // its OWN token — in the gap; the surviving old token
+            // would then quarantine rows that are the consistent
+            // truth. Each attempt captures `data_version` BEFORE
+            // the repair; the quarantine declines (`Ok(false)`)
+            // when any other connection committed since — the
+            // retry usually finds the file readable and serves the
+            // fresh rows. A second supersession propagates the
+            // repair error: one honest failed query beats a wrong
+            // quarantine, and the next query starts clean.
+            let mut handled = false;
+            let mut last_err: Option<VaultError> = None;
+            for _attempt in 0..2 {
+                let dv_before_repair: i64 =
+                    conn.query_row("PRAGMA data_version", [], |row| row.get(0))?;
+                match self.reindex_path_locked(conn, &path, &tokens) {
+                    Ok(()) => {
+                        handled = true;
+                        break;
                     }
-                    _ => return Err(repair_err),
+                    Err(repair_err) => match &repair_err {
+                        VaultError::Io(_)
+                        | VaultError::InvalidUtf8 { .. }
+                        | VaultError::FileTooLarge { .. } => {
+                            match self.quarantine_unrepairable_path_locked(
+                                conn,
+                                &path,
+                                &tokens,
+                                dv_before_repair,
+                            ) {
+                                Ok(true) => {
+                                    handled = true;
+                                    break;
+                                }
+                                Ok(false) => {
+                                    last_err = Some(repair_err);
+                                }
+                                Err(_) => return Err(repair_err),
+                            }
+                        }
+                        _ => return Err(repair_err),
+                    },
                 }
+            }
+            if !handled && let Some(err) = last_err {
+                return Err(err);
             }
         }
         Ok(())
@@ -6134,12 +6172,20 @@ impl VaultSession {
     /// marker. Idempotent and quiet: an already-quarantined path
     /// returns without re-announcing, so repeated failing sweeps
     /// don't storm hosts with Modified events.
+    ///
+    /// Returns `Ok(true)` when the candidate is handled — contained,
+    /// or resolved by its own writer (round-29 token fence) — and
+    /// `Ok(false)` when another connection committed since the
+    /// failed repair (round-30 data-version fence): the index may
+    /// have been rebuilt under us, so nothing destructive happened
+    /// and the caller should retry the repair against fresh state.
     fn quarantine_unrepairable_path_locked(
         &self,
         conn: &mut Connection,
         path: &str,
         selected_tokens: &[i64],
-    ) -> Result<(), VaultError> {
+        data_version_before_repair: i64,
+    ) -> Result<bool, VaultError> {
         // Test-only seam (adversarial round 29): a live writer
         // resolving — index committed, own token cleared — in the
         // gap between the sweep's candidate selection and this
@@ -6153,6 +6199,26 @@ impl VaultSession {
                     rusqlite::params![path, token],
                 );
             }
+        }
+        // Test-only seam (adversarial round 30): a NEWER writer on
+        // another connection committing in the repair→quarantine
+        // gap — fresh rows, its OWN token cleared, the aged
+        // selected token untouched. Any second-connection commit
+        // bumps this connection's `data_version`, which is all the
+        // fence below observes.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE")
+            && path.contains(trigger.to_string_lossy().as_ref())
+            && let Some(db_path) = conn.path()
+            && let Ok(other) = Connection::open(db_path)
+        {
+            let _ = other.execute(
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES ('test/second-writer-bump', ?1, 0)",
+                rusqlite::params![now_ms()],
+            );
+            let _ = other.execute(
+                "DELETE FROM text_write_intents WHERE path = 'test/second-writer-bump'",
+                [],
+            );
         }
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         // Ownership fence (adversarial round 29): the candidates
@@ -6178,7 +6244,21 @@ impl VaultSession {
             }
         }
         if !still_marked {
-            return Ok(());
+            return Ok(true);
+        }
+        // Data-version fence (adversarial round 30): the token
+        // fence can't see a NEWER writer that committed fresh rows
+        // and cleared only its OWN token — the aged selected token
+        // survives and would vouch for quarantining rows that are
+        // now the consistent truth. `data_version` moves exactly
+        // when ANOTHER connection commits (same-connection writers
+        // can't interleave — the session mutex serializes them), so
+        // any movement since the failed repair means the index may
+        // have been rebuilt under us: decline (`Ok(false)`) and let
+        // the sweep retry the repair against the new state.
+        let data_version_now: i64 = tx.query_row("PRAGMA data_version", [], |row| row.get(0))?;
+        if data_version_now != data_version_before_repair {
+            return Ok(false);
         }
         let already_quarantined: Option<bool> = tx
             .query_row(
@@ -6191,8 +6271,8 @@ impl VaultSession {
             .optional()?;
         match already_quarantined {
             // No index row at all: nothing suspect is being served.
-            None => return Ok(()),
-            Some(true) => return Ok(()),
+            None => return Ok(true),
+            Some(true) => return Ok(true),
             Some(false) => {}
         }
         tx.execute(
@@ -6208,7 +6288,7 @@ impl VaultSession {
         // Hosts hear Modified and refresh: the honest surface for an
         // unreadable file is task-free, not last-known-stale.
         self.notify_file_change(FileChangeKind::Modified, path, None);
-        Ok(())
+        Ok(true)
     }
 
     fn reindex_path_locked(

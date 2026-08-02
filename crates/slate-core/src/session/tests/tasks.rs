@@ -883,6 +883,99 @@ fn resolved_candidates_skip_the_quarantine() {
 }
 
 #[test]
+fn newer_writers_commits_survive_a_stale_quarantine() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 30: the round-29 token fence can't see a
+    // NEWER writer that committed fresh rows and cleared only its
+    // OWN token — the aged selected token survives and would vouch
+    // for quarantining rows that are now the consistent truth. The
+    // data-version fence must decline the quarantine whenever
+    // another connection committed since the failed repair; with
+    // the supersession persisting, the sweep gives up LOUDLY (one
+    // honest failed query) instead of deleting fresh rows, and the
+    // next query heals in full.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/second-writer.md", b"- [ ] fresh truth\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["notes/second-writer.md", now_ms(), 0xA6EDi64],
+        )
+        .unwrap();
+    }
+
+    let db_state = |session: &VaultSession| -> (i64, i64) {
+        let conn = session.conn.lock().unwrap();
+        let tasks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks t JOIN files f ON f.id = t.file_id WHERE f.path = ?1",
+                rusqlite::params!["notes/second-writer.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/second-writer.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        (tasks, intents)
+    };
+
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "second-writer") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "second-writer") };
+    unsafe {
+        std::env::set_var(
+            "SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE",
+            "second-writer",
+        )
+    };
+    let failed = session.tasks_in_vault(crate::TaskFilter::default(), Paging::first(50));
+    unsafe { std::env::remove_var("SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE") };
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    assert!(
+        matches!(failed, Err(VaultError::Io(_))),
+        "a persistently superseded quarantine gives up loudly, not destructively"
+    );
+    assert_eq!(
+        db_state(&session),
+        (1, 1),
+        "the newer writer's rows AND the aged marker both survive"
+    );
+
+    // The transient interference is gone: the next query repairs in
+    // full and both surfaces serve the fresh truth.
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    let per_file = session
+        .note_tasks("notes/second-writer.md", 10)
+        .expect("the per-file surface heals too");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        healed
+            .items
+            .iter()
+            .any(|r| r.path == "notes/second-writer.md"),
+        "the vault surface serves the fresh rows"
+    );
+    assert!(
+        !per_file.tasks.is_empty() && !per_file.tasks[0].completed,
+        "the note surface serves the fresh rows"
+    );
+    assert_eq!(
+        db_state(&session).1,
+        0,
+        "the successful repair clears the stale marker"
+    );
+}
+
+#[test]
 fn database_failures_during_repair_still_fail_queries() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
     // Adversarial round 29: honest-empty containment is for FILE
