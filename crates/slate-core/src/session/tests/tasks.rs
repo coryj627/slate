@@ -375,7 +375,7 @@ fn stale_repairs_never_erase_a_replacement_writers_intent() {
     {
         let mut conn = session.conn.lock().unwrap();
         session
-            .reindex_path_locked(&mut conn, "notes/token-race.md", Some(old_token))
+            .reindex_path_locked(&mut conn, "notes/token-race.md", &[old_token])
             .unwrap();
         let surviving: i64 = conn
             .query_row(
@@ -518,6 +518,81 @@ fn deleted_file_intents_converge_instead_of_poisoning_queries() {
             )
             .unwrap();
         assert_eq!(files, 0, "the deleted file's index row converged away");
+    }
+}
+
+#[test]
+fn overlapping_writers_keep_their_own_durable_registrations() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 25: with `path` as the sole primary key, a
+    // second writer's registration REPLACED the first's — the second
+    // completed, cleared its own token, and the first writer's
+    // post-write failure went unmarked forever. Writer A's paused
+    // registration is staged directly (the gap between a writer's
+    // autocommit insert and its transaction begin cannot be paused
+    // from a test); writer B is a real full save on the same path.
+    let (tmp, session_a) = make_vault(|p| {
+        p.write_file("notes/overlap.md", b"- [ ] flip me\n")
+            .unwrap();
+    });
+    session_a.scan_initial(&CancelToken::new()).unwrap();
+
+    // Writer A: registered, paused before its transaction.
+    let token_a: i64 = 0x5EED;
+    {
+        let conn = session_a.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["notes/overlap.md", now_ms(), token_a],
+        )
+        .unwrap();
+    }
+
+    // Writer B (a second session): a full successful save of the
+    // same path. Its completion clears only ITS registration.
+    let session_b = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session_b
+        .save_text("notes/overlap.md", "- [x] flip me\n", None)
+        .unwrap();
+
+    // A's registration survives B's entire lifecycle.
+    {
+        let conn = session_a.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                rusqlite::params!["notes/overlap.md", token_a],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "writer A's registration must survive writer B");
+    }
+
+    // A's write then fails post-write: with the marker intact, a
+    // later query heals to disk truth and clears it token-safely.
+    // (The simulated A resumes as a real fault-injected save.)
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "overlap") };
+    assert!(
+        session_a
+            .save_text("notes/overlap.md", "- [/] half flipped\n", None)
+            .is_err()
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "overlap") };
+    let healed = session_b.note_tasks("notes/overlap.md", 10).unwrap();
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert_eq!(healed.tasks[0].status_char, '/', "healed to A's disk bytes");
+    {
+        let conn = session_a.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/overlap.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 0, "every abandoned registration cleared");
     }
 }
 

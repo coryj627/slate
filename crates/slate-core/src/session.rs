@@ -5859,7 +5859,7 @@ impl VaultSession {
         // writer's durable marker. Any lingering abandoned intent is
         // token-safely cleared by a later query's sweep; the extra
         // single-file reindex it costs is negligible.
-        self.reindex_path_locked(&mut conn, path, None)
+        self.reindex_path_locked(&mut conn, path, &[])
     }
 
     /// Millisecond age past which a surviving [`text_write_intents`]
@@ -5891,7 +5891,10 @@ impl VaultSession {
         scope: Option<&str>,
     ) -> Result<(), VaultError> {
         let now = now_ms();
-        let candidates: Vec<(String, i64)> = {
+        // Grouped per path (round 25: several in-flight writers can
+        // each own a row for the same path) so one reindex clears
+        // every abandoned registration it selected.
+        let candidates: Vec<(String, Vec<i64>)> = {
             let mut stmt =
                 conn.prepare_cached("SELECT path, created_ms, token FROM text_write_intents")?;
             let rows = stmt.query_map([], |row| {
@@ -5901,7 +5904,7 @@ impl VaultSession {
                     row.get::<_, i64>(2)?,
                 ))
             })?;
-            let mut out = Vec::new();
+            let mut grouped: Vec<(String, Vec<i64>)> = Vec::new();
             for row in rows {
                 let (path, created_ms, token) = row?;
                 if let Some(scope_path) = scope
@@ -5910,10 +5913,14 @@ impl VaultSession {
                     continue;
                 }
                 if now - created_ms >= Self::intent_abandon_threshold_ms(&path) {
-                    out.push((path, token));
+                    if let Some(entry) = grouped.iter_mut().find(|(p, _)| *p == path) {
+                        entry.1.push(token);
+                    } else {
+                        grouped.push((path, vec![token]));
+                    }
                 }
             }
-            out
+            grouped
         };
         // The SELECTED token rides into the repair (round 22): the
         // clear is token-conditional, so a fresh replacement a new
@@ -5921,8 +5928,8 @@ impl VaultSession {
         // transaction survives untouched - deleting by path alone
         // could erase the only durable marker covering that writer's
         // own post-write rollback.
-        for (path, token) in candidates {
-            self.reindex_path_locked(conn, &path, Some(token))?;
+        for (path, tokens) in candidates {
+            self.reindex_path_locked(conn, &path, &tokens)?;
         }
         Ok(())
     }
@@ -5931,7 +5938,7 @@ impl VaultSession {
         &self,
         conn: &mut Connection,
         path: &str,
-        clear_intent_token: Option<i64>,
+        clear_intent_tokens: &[i64],
     ) -> Result<(), VaultError> {
         // Test-only fault seam (adversarial round 14): a repair can
         // itself fail, and the hosts must not treat "repair
@@ -6008,7 +6015,7 @@ impl VaultSession {
         // but ONLY the registration the sweep selected (round 22): a
         // fresh replacement registered meanwhile is a live writer's
         // marker and must survive this repair.
-        if let Some(token) = clear_intent_token {
+        for token in clear_intent_tokens {
             tx.execute(
                 "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
                 rusqlite::params![path, token],

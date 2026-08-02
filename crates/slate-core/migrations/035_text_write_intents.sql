@@ -22,8 +22,14 @@
 -- IF NOT EXISTS: migration replay must be safe (the migration-026
 -- epoch-mtime test replays the tail of this list on an existing
 -- schema, the migration-033 precedent).
+-- (path, token) PRIMARY KEY (adversarial round 25): one row per
+-- path let a second writer's registration REPLACE the first's — the
+-- second completed and cleared its own token, leaving the first
+-- writer's post-write failure unmarked.  Every in-flight writer owns
+-- its own durable row; each clear names its own (path, token) pair.
 CREATE TABLE IF NOT EXISTS text_write_intents (
-    path       TEXT PRIMARY KEY,
+    path       TEXT NOT NULL,
     created_ms INTEGER NOT NULL,
-    token      INTEGER NOT NULL DEFAULT 0
+    token      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (path, token)
 ) WITHOUT ROWID;
