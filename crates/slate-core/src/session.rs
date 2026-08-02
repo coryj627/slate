@@ -5789,6 +5789,18 @@ impl VaultSession {
     pub fn reindex_path(&self, path: &str) -> Result<(), VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
         let tx = conn.transaction()?;
+        // Poison the cached stat tuple FIRST (adversarial round 13):
+        // `index_file`'s fast path trusts a matching (mtime, size,
+        // ctime) and skips the read entirely — but a checkbox toggle
+        // preserves size, Windows reports no portable ctime, and
+        // coarse-mtime filesystems can preserve mtime, so the tuple
+        // can match while the CONTENT columns hold the rolled-back
+        // state. A repair that can fast-path is no repair at all;
+        // −1 never matches a real stat, forcing the full re-read.
+        tx.execute(
+            "UPDATE files SET mtime_ms = -1, size_bytes = -1, ctime_ms = -1 WHERE path = ?1",
+            rusqlite::params![path],
+        )?;
         let mut indexed_paths = tx
             .prepare("SELECT path FROM files")?
             .query_map([], |row| row.get::<_, String>(0))?

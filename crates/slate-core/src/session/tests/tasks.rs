@@ -213,6 +213,27 @@ fn post_write_failures_leave_disk_newer_and_reindex_path_repairs_it() {
     );
     assert_ne!(stale.content_hash, disk.content_hash);
 
+    // Pin the row's stat tuple to DISK's current values — the
+    // coarse-mtime world (adversarial round 13): a checkbox toggle
+    // preserves size, and a filesystem can preserve mtime/ctime, so
+    // index_file's fast path would consider the row current while
+    // its CONTENT columns hold the rolled-back state. The repair
+    // must bypass the fast path and converge anyway.
+    {
+        let stat = session.provider.stat("notes/fault-target-a1b2.md").unwrap();
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE files SET mtime_ms = ?1, size_bytes = ?2, ctime_ms = ?3 WHERE path = ?4",
+            rusqlite::params![
+                stat.mtime_ms,
+                i64::try_from(stat.size_bytes).unwrap(),
+                stat.ctime_ms,
+                "notes/fault-target-a1b2.md"
+            ],
+        )
+        .unwrap();
+    }
+
     // The repair forces the path back to disk truth.
     session.reindex_path("notes/fault-target-a1b2.md").unwrap();
     let repaired = session
