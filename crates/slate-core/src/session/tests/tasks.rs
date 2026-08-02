@@ -597,6 +597,54 @@ fn overlapping_writers_keep_their_own_durable_registrations() {
 }
 
 #[test]
+fn swept_registrations_are_refenced_before_the_write() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 26: a writer suspended past the liveness
+    // threshold between its registration and its transaction can be
+    // swept as abandoned — resuming to write with no durable marker
+    // reopens the unmarked-failure window. The seam deletes the
+    // registration exactly in that gap; the fence must re-register
+    // before the write, so the subsequent post-write failure still
+    // leaves a marker and another session heals to disk truth.
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("notes/fence-probe.md", b"- [ ] flip me\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    unsafe { std::env::set_var("SLATE_TEST_SWEEP_AFTER_INTENT", "fence-probe") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "fence-probe") };
+    let result = session.save_text("notes/fence-probe.md", "- [x] flip me\n", None);
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    unsafe { std::env::remove_var("SLATE_TEST_SWEEP_AFTER_INTENT") };
+    assert!(result.is_err());
+
+    // The fence's re-registration survived the rollback — without
+    // it, the swept marker stayed gone and the failure was unmarked.
+    {
+        let conn = session.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/fence-probe.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "the re-fenced registration must survive");
+    }
+
+    // Another session heals to the written bytes.
+    let other = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "fence-probe") };
+    let healed = other.note_tasks("notes/fence-probe.md", 10).unwrap();
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        healed.tasks[0].completed,
+        "healed to the fenced write's bytes"
+    );
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.

@@ -3324,7 +3324,55 @@ impl VaultSession {
             rusqlite::params![path, now_ms(), intent_token],
         )?;
 
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Test-only seam (adversarial round 26): simulates a
+        // concurrent aged sweep landing exactly in the gap between
+        // this writer's registration and its transaction — the
+        // schedule the ownership fence below exists for.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_SWEEP_AFTER_INTENT")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            conn.execute(
+                "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                rusqlite::params![path, intent_token],
+            )?;
+        }
+
+        let mut tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+
+        // Ownership FENCE at the transaction boundary (adversarial
+        // round 26): a writer suspended past the liveness threshold
+        // in the registration→transaction gap can have its row
+        // swept as abandoned — resuming to write with no durable
+        // marker reopens the unmarked-failure window. Verify the
+        // registration under the writer lock; if swept, re-register
+        // (a COMMITTED insert — an in-transaction one would roll
+        // back with the failure it exists to mark) and retake the
+        // lock. Reaching the retry bound requires multi-second
+        // suspensions inside consecutive microsecond windows; fail
+        // closed rather than write unmarked.
+        let mut intent_secured = false;
+        for _ in 0..3 {
+            let alive: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM text_write_intents WHERE path = ?1 AND token = ?2)",
+                rusqlite::params![path, intent_token],
+                |row| row.get(0),
+            )?;
+            if alive {
+                intent_secured = true;
+                break;
+            }
+            drop(tx);
+            conn.execute(
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+                rusqlite::params![path, now_ms(), intent_token],
+            )?;
+            tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        }
+        if !intent_secured {
+            return Err(VaultError::InvalidArgument {
+                message: "could not secure a durable write intent".into(),
+            });
+        }
 
         // `old_contents` is `Some(text)` only on the Some(expected_hash)
         // path with UTF-8-decodable disk content — the diff-on-save base
