@@ -612,6 +612,66 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void ExternallyModifiedCleanTabsRefuseEveryRouteUntilReconciled()
+    {
+        // Adversarial round 9: an external write leaves an open
+        // CLEAN tab and task rows born from its baseline sharing the
+        // same obsolete hash — SavedContentHash == row hash matches
+        // vacuously and every guard would pass. The vault change
+        // stream's Modified seam (VaultLifecycle drives it in
+        // production) must derive staleness from the INDEX.
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        workspace.OpenTasksReview();
+        ReviewTaskRowViewModel staleReviewRow = workspace.TasksReview.Rows.First(
+            r => r.Path == "todo.md" && r.Task.Text == "first open");
+        NoteTaskRowViewModel stalePanelRow = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "second open");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        int caretBefore = tab.EditorCaretOffset;
+
+        // Disk and index move on WITHOUT the tab.
+        _ = _session.SaveText(
+            "todo.md",
+            "- [ ] rewritten externally \U0001F4C5 2026-01-01\n",
+            null);
+        workspace.InvalidateModifiedPath("todo.md");
+
+        // Review activation: stale refusal, pinned caret, no
+        // success verbs, snapshot reloaded.
+        workspace.TasksReview.OpenRow(staleReviewRow);
+        Assert.Equal(caretBefore, tab.EditorCaretOffset);
+        Assert.Empty(announced.OfType<A11yEvent.ScrolledToLine>());
+        Assert.Empty(announced.OfType<A11yEvent.OpenedAtLine>());
+        _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
+            composed.Text == "todo.md changed since these tasks loaded. Refreshing.");
+
+        // Panel activation: silent refusal, pinned caret.
+        workspace.Panels.OpenTask(stalePanelRow);
+        Assert.Equal(caretBefore, tab.EditorCaretOffset);
+
+        // Both toggle routes refuse with a conflict instead of
+        // starting a doomed write (the CAS retry loop): disk keeps
+        // the external content untouched.
+        workspace.TasksReview.ToggleTask(staleReviewRow);
+        workspace.Panels.ToggleTask(stalePanelRow);
+        Assert.Equal(2, announced.OfType<A11yEvent.TaskToggleConflict>().Count());
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text == "Task completed.");
+        Assert.Contains(
+            "- [ ] rewritten externally",
+            File.ReadAllText(Path.Combine(_fixture.Root, "todo.md")));
+    }
+
+    [Fact]
     public void DirectWritesReconcileTabsThatRacedOpen()
     {
         var announced = new List<A11yEvent>();

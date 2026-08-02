@@ -382,6 +382,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
 
         _text = source._text;
         _contentHash = source._contentHash;
+        IsExternallyStale = source.IsExternallyStale;
         _isDirty = source._isDirty;
         _isMissingFromDisk = source._isMissingFromDisk;
         _status = source._status;
@@ -467,6 +468,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         {
             SaveReport report = _session.SaveText(Path, saveText, _contentHash);
             _contentHash = report.NewContentHash;
+            IsExternallyStale = false;
             _text = saveText;
             _editorSession?.MarkSaved(saveText);
             IsDirty = false;
@@ -699,6 +701,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         _editorSession.Document.Replace(statusStartUtf16, statusLengthUtf16, nextStatus);
         _text = updatedText;
         _contentHash = report.NewContentHash;
+        IsExternallyStale = false;
         _editorSession.MarkSavedAfterVerifiedDelta(
             new EditorSavedBaseline(
                 updatedText,
@@ -709,6 +712,40 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         Status = task.Completed ? "Task reopened." : "Task completed.";
         _documentChanged?.Invoke(this, null);
         announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+    }
+
+    /// <summary>True when the vault change stream reported this
+    /// file modified and the INDEX now carries a different content
+    /// hash than this tab's saved baseline (adversarial round 9):
+    /// the buffer is clean but obsolete, so row hashes born from the
+    /// same baseline match it vacuously — every snapshot-identity
+    /// guard must refuse until the tab re-baselines. Cleared by the
+    /// re-baselining writes (save, verified toggle splice, peer
+    /// mirror) and re-derived on every Modified event.</summary>
+    internal bool IsExternallyStale { get; private set; }
+
+    /// <summary>Re-derive <see cref="IsExternallyStale"/> against
+    /// the index. Own saves also flow through the change stream
+    /// (the #802 single emission seat), so this must COMPARE, never
+    /// assume: a just-saved tab's baseline equals the index and
+    /// derives false. An unreadable index leaves the flag alone.</summary>
+    internal void RefreshExternalStaleness()
+    {
+        if (!IsMarkdown || _disposed)
+        {
+            return;
+        }
+        string indexedHash;
+        try
+        {
+            indexedHash = _session.NoteTasks(Path, 1).ContentHash;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return;
+        }
+        IsExternallyStale = indexedHash.Length > 0
+            && !string.Equals(_contentHash, indexedHash, StringComparison.Ordinal);
     }
 
     /// <summary>A task toggle wrote this tab's file WITHOUT
@@ -722,12 +759,19 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         string newContentHash, Action<A11yEvent> announce)
     {
         ArgumentNullException.ThrowIfNull(announce);
-        if (!IsMarkdown
-            || _disposed
-            || string.Equals(_contentHash, newContentHash, StringComparison.Ordinal))
+        if (!IsMarkdown || _disposed)
         {
             return;
         }
+        if (string.Equals(_contentHash, newContentHash, StringComparison.Ordinal))
+        {
+            // The write landed exactly where this tab already is.
+            IsExternallyStale = false;
+            return;
+        }
+        // Definitionally stale against the just-written hash: the
+        // identity guards refuse until the tab re-baselines (round 9).
+        IsExternallyStale = true;
         _editorInteractions?.InvalidateExternalState();
         Status = "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.";
         announce(new A11yEvent.HostComposed(Status, A11yPriority.High));
@@ -1507,8 +1551,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 System.IO.Path.GetFileName(tab.Path)));
             return SlateWindows.Panels.ReviewToggleRoute.RefusedDirty;
         }
-        if (!string.Equals(
-            tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        // Round 9: an externally rewritten file leaves this clean
+        // tab AND rows born from its baseline sharing the obsolete
+        // hash — matching vacuously. Refusing here (instead of
+        // letting the core CAS conflict) breaks the retry loop the
+        // doomed write would otherwise announce forever.
+        if (tab.IsExternallyStale
+            || !string.Equals(
+                tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
         {
             _announce(new A11yEvent.TaskToggleConflict(
                 System.IO.Path.GetFileName(tab.Path)));
@@ -1616,8 +1666,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 System.IO.Path.GetFileName(tab.Path)));
             return true;
         }
-        if (!string.Equals(
-            tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        if (tab.IsExternallyStale
+            || !string.Equals(
+                tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
         {
             _announce(new A11yEvent.TaskToggleConflict(
                 System.IO.Path.GetFileName(tab.Path)));
@@ -1672,8 +1723,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         {
             return SlateWindows.Panels.ReviewOpenRoute.RefusedDirty;
         }
-        if (!string.Equals(
-            tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        // Round 9: after an EXTERNAL write, a clean-but-obsolete tab
+        // and rows born from the same baseline match each other
+        // vacuously — the index-derived staleness refuses too.
+        if (tab.IsExternallyStale
+            || !string.Equals(
+                tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
         {
             return SlateWindows.Panels.ReviewOpenRoute.RefusedStale;
         }
@@ -1710,8 +1765,9 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 A11yPriority.High));
             return;
         }
-        if (!string.Equals(
-            tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        if (tab.IsExternallyStale
+            || !string.Equals(
+                tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
         {
             Panels.ReloadTasks();
             return;
@@ -1783,6 +1839,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 && string.Equals(tab.Path, modified, StringComparison.Ordinal))
             {
                 tab.InvalidateExternalState();
+                // Round 9: an external write leaves this CLEAN tab
+                // and any task rows born from its baseline sharing
+                // the same obsolete hash — they match each other
+                // vacuously, so the snapshot-identity guards need an
+                // index-derived staleness signal to refuse on.
+                tab.RefreshExternalStaleness();
             }
         }
     }
