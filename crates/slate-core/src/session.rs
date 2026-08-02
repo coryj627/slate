@@ -6123,7 +6123,7 @@ impl VaultSession {
     /// empty vec when the file isn't indexed yet or has no tasks.
     pub fn tasks_for_file(&self, path: &str) -> Result<Vec<crate::TaskItem>, VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
-        self.repair_abandoned_intents_locked(&mut conn, Some(path))?;
+        let _move_guard = self.repair_abandoned_intents_locked(&mut conn, Some(path))?;
         crate::tasks_db::tasks_for_file(&conn, path)
     }
 
@@ -6134,7 +6134,7 @@ impl VaultSession {
     /// return an empty page.
     pub fn note_tasks(&self, path: &str, limit: u32) -> Result<NoteTasksPage, VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
-        self.repair_abandoned_intents_locked(&mut conn, Some(path))?;
+        let _move_guard = self.repair_abandoned_intents_locked(&mut conn, Some(path))?;
         let (tasks, total, open_total, content_hash) =
             crate::tasks_db::note_tasks_bounded(&conn, path, limit)?;
         Ok(NoteTasksPage {
@@ -6436,43 +6436,83 @@ impl VaultSession {
     /// aged stamp via [`Self::age_move_markers_in_tx`].
     const HELD_MOVE_MARKER_MS: i64 = i64::MAX;
 
-    /// Probe whether the vault structural lock is currently free
-    /// (round 40): consulted by sweeps before treating a HELD move
-    /// marker as an orphan. Conservative on every error — a probe
-    /// that cannot prove the lock free reports it held, and the
-    /// marker stays untouched until a later sweep can prove it.
+    /// Probe whether the vault structural lock is currently free.
+    /// Test-observability only since round 41 — the sweep uses
+    /// [`Self::try_acquire_structural_guard`], which CLAIMS the lock
+    /// instead of sampling it. Registry-only and NON-INVASIVE: a
+    /// claiming probe could collide with the claimant it is trying
+    /// to observe.
+    #[cfg(test)]
     fn structural_lock_is_free(cache_dir: &Path) -> bool {
         let Ok(canonical_cache) = std::fs::canonicalize(cache_dir) else {
             return false;
         };
         let lock_path = canonical_cache.join("structural.lock");
+        let registry = process_structural_locks();
+        let held = registry
+            .held
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        !held.contains(&lock_path)
+    }
+
+    /// Nonblocking claim of the vault structural lock (adversarial
+    /// rounds 40-41): the round-40 boolean probe released the lock
+    /// the instant it proved it free, so a mover could acquire it
+    /// and start renaming between the probe and the sweep's orphan
+    /// repair — the sweep then read a MID-MOVE filesystem topology.
+    /// The sweep now claims the lock itself and HOLDS the guard
+    /// through candidate repair and the resulting task read: while
+    /// it stands, no mover can enter its planting-to-terminal
+    /// interval. Conservative on every error — a claim that cannot
+    /// complete returns `None` and the held markers stay untouched
+    /// for a later sweep. Never blocks, so the reversed lock order
+    /// (connection mutex already held here; movers take the
+    /// structural lock FIRST) cannot deadlock: an unavailable lock
+    /// just skips this sweep's orphans.
+    fn try_acquire_structural_guard(cache_dir: &Path) -> Option<VaultStructuralLock> {
+        let canonical_cache = std::fs::canonicalize(cache_dir).ok()?;
+        let lock_path = canonical_cache.join("structural.lock");
         {
             // In-process holders first — the same registry
-            // VaultStructuralLock::acquire consults.
+            // VaultStructuralLock::acquire consults. Claim our slot
+            // without waiting.
             let registry = process_structural_locks();
-            let held = registry
+            let mut held = registry
                 .held
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if held.contains(&lock_path) {
-                return false;
+                return None;
             }
+            held.insert(lock_path.clone());
         }
-        let Ok(file) = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true)
-            .open(&lock_path)
-        else {
-            return false;
-        };
-        match file.try_lock() {
-            Ok(()) => {
-                let _ = file.unlock();
-                true
+        let acquired = (|| {
+            let file = std::fs::OpenOptions::new()
+                .create(true)
+                .truncate(false)
+                .read(true)
+                .write(true)
+                .open(&lock_path)?;
+            file.try_lock()
+                .map_err(|_| std::io::Error::other("structural lock is busy"))?;
+            Ok::<_, std::io::Error>(file)
+        })();
+        match acquired {
+            Ok(file) => Some(VaultStructuralLock {
+                file: Some(file),
+                lock_path,
+            }),
+            Err(_) => {
+                let registry = process_structural_locks();
+                let mut held = registry
+                    .held
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                held.remove(&lock_path);
+                registry.available.notify_all();
+                None
             }
-            Err(_) => false,
         }
     }
 
@@ -6503,9 +6543,9 @@ impl VaultSession {
         &self,
         conn: &mut Connection,
         scope: Option<&str>,
-    ) -> Result<(), VaultError> {
+    ) -> Result<Option<VaultStructuralLock>, VaultError> {
         let now = now_ms();
-        let mut structural_lock_free: Option<bool> = None;
+        let mut orphan_guard: Option<Option<VaultStructuralLock>> = None;
         // Grouped per path (round 25: several in-flight writers can
         // each own a row for the same path) so one reindex clears
         // every abandoned registration it selected.
@@ -6527,18 +6567,23 @@ impl VaultSession {
                 {
                     continue;
                 }
-                // HELD move markers (adversarial round 40) never age
-                // by wall clock: they are honored while the vault
-                // structural lock is held (an active move owns them)
-                // and become sweepable orphans only once the lock is
-                // provably FREE — the mover crashed or a terminal
-                // state failed to re-stamp, and a real read resolves
-                // whatever state it left. One conservative probe per
-                // sweep, only when a held marker is present.
+                // HELD move markers (adversarial rounds 40-41) never
+                // age by wall clock: they are honored while the
+                // vault structural lock is held (an active move owns
+                // them) and become sweepable orphans only once this
+                // sweep CLAIMS the lock itself — the guard is held
+                // through the repairs and the task read that
+                // follows, so no mover can start renaming between
+                // the claim and the reads that resolve the orphans.
+                // One nonblocking claim per sweep, only when a held
+                // marker is present; unavailable means an active
+                // move owns the markers — skip them.
                 let selectable = if created_ms == Self::HELD_MOVE_MARKER_MS {
-                    *structural_lock_free.get_or_insert_with(|| {
-                        Self::structural_lock_is_free(&self.config.cache_dir)
-                    })
+                    orphan_guard
+                        .get_or_insert_with(|| {
+                            Self::try_acquire_structural_guard(&self.config.cache_dir)
+                        })
+                        .is_some()
                 } else {
                     now - created_ms >= Self::intent_abandon_threshold_ms(&path)
                 };
@@ -6559,6 +6604,15 @@ impl VaultSession {
         // could erase the only durable marker covering that writer's
         // own post-write rollback.
         for (path, tokens) in candidates {
+            // Test-only seam (adversarial round 41): stalls a
+            // sweep's repair so a test can observe that the orphan
+            // guard is HELD across it — a mover attempting to start
+            // during the stall blocks on the structural lock.
+            if let Some(trigger) = std::env::var_os("SLATE_TEST_STALL_ORPHAN_REPAIR")
+                && path.contains(trigger.to_string_lossy().as_ref())
+            {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+            }
             // An UN-REPAIRABLE path (adversarial round 28) must
             // not fail every task query forever: a marker whose
             // file stays unreadable — permissions, an AV lock —
@@ -6605,7 +6659,11 @@ impl VaultSession {
                 }
             }
         }
-        Ok(())
+        // The orphan guard (rounds 40-41) rides back to the caller,
+        // which holds it through its task read: the sweep's repairs
+        // AND the query they served stay fenced against a mover
+        // starting mid-flight.
+        Ok(orphan_guard.flatten())
     }
 
     /// The round-28 containment for a path whose repair cannot
@@ -7763,7 +7821,7 @@ impl VaultSession {
         let mut conn = self.conn.lock().expect("session connection mutex");
         // Vault-wide query → vault-wide abandoned-intent sweep
         // (round 21): any path's ghost rows could land in this page.
-        self.repair_abandoned_intents_locked(&mut conn, None)?;
+        let _move_guard = self.repair_abandoned_intents_locked(&mut conn, None)?;
         crate::tasks_db::tasks_in_vault(&conn, filter, paging)
     }
 

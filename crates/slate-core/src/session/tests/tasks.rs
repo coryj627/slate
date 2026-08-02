@@ -1529,6 +1529,77 @@ fn held_move_markers_are_fenced_by_the_structural_lock() {
 }
 
 #[test]
+fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 41: the round-40 probe released the lock
+    // the instant it proved it free — a mover could acquire it and
+    // start renaming between the probe and the sweep's orphan
+    // repair, so the sweep read a MID-MOVE topology. The sweep now
+    // CLAIMS the lock and holds the guard through its repairs and
+    // the task read that follows; a mover attempting to start in
+    // that window blocks on the very lock every move must acquire
+    // first. The stall seam widens the repair so the held claim is
+    // observable from another thread.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/guard41.md", b"- [ ] fenced read\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        let _ = session
+            .plant_move_markers_locked(&conn, ["notes/guard41.md"])
+            .unwrap();
+    }
+
+    unsafe { std::env::set_var("SLATE_TEST_STALL_ORPHAN_REPAIR", "guard41") };
+    let observed_held = std::sync::atomic::AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        let worker = scope.spawn(|| {
+            session
+                .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+                .expect("the sweeping query succeeds")
+        });
+        // While the sweep stalls inside its repair, the structural
+        // lock must be observably CLAIMED — a mover starting now
+        // would block exactly here.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < deadline {
+            if !VaultSession::structural_lock_is_free(&session.config.cache_dir) {
+                observed_held.store(true, std::sync::atomic::Ordering::SeqCst);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let page = worker.join().expect("worker thread");
+        assert!(
+            page.items.iter().any(|r| r.path == "notes/guard41.md"),
+            "the fenced read serves the repaired path"
+        );
+    });
+    unsafe { std::env::remove_var("SLATE_TEST_STALL_ORPHAN_REPAIR") };
+    assert!(
+        observed_held.load(std::sync::atomic::Ordering::SeqCst),
+        "the orphan sweep must hold the structural lock through its repair"
+    );
+    assert!(
+        VaultSession::structural_lock_is_free(&session.config.cache_dir),
+        "the guard releases once the sweep and its read complete"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/guard41.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0, "the fenced repair resolved the orphan marker");
+    }
+}
+
+#[test]
 fn consumed_move_markers_are_restored_at_index_commit() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
     // Adversarial round 39: a move outliving the liveness threshold
