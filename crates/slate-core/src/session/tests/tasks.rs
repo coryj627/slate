@@ -145,6 +145,42 @@ fn note_tasks_bounds_rows_in_sql_and_reports_true_totals() {
 }
 
 #[test]
+fn vault_pages_bound_task_text_before_ffi() {
+    // Adversarial round 4: LIMIT bounds row COUNT, but a valid task
+    // line can approach the per-file byte ceiling, and a vault-wide
+    // page spans many files — exact rows would marshal the whole
+    // text through SQLite → Rust → FFI → host. text/recurrence get
+    // the links-panel snippet bound; identity fields stay exact.
+    let huge = "x".repeat(64 * 1024);
+    let body = format!("- [ ] {huge} \u{1F501} every {huge}\n");
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/huge.md", body.as_bytes()).unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(10))
+        .unwrap();
+    let row = &page.items[0];
+    let ceiling = 4096 + '…'.len_utf8();
+    assert!(row.task.text.len() <= ceiling);
+    // (No ellipsis assert: SQL clips CHARS first, so an ASCII text
+    // arrives at the byte bound already inside it.)
+    assert!(row.task.text.starts_with("xxxx"));
+    if let Some(recurrence) = row.task.recurrence.as_ref() {
+        assert!(recurrence.len() <= ceiling);
+    }
+    assert_eq!(row.task.ordinal, 0);
+    assert!(!row.content_hash.is_empty());
+
+    // The per-NOTE read keeps the panel's exact record: a single
+    // note's tasks are substrings of one file, so its exposure is
+    // the file ceiling, not a vault-wide multiplier.
+    let note = session.note_tasks("notes/huge.md", 10).unwrap();
+    assert!(note.tasks[0].text.len() >= 64 * 1024);
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.

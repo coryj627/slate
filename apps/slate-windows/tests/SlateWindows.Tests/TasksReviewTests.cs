@@ -432,6 +432,57 @@ public sealed class TasksReviewTests : IDisposable
     }
 
     [Fact]
+    public void FailedFilterChangesCannotLeaveOldRowsActionable()
+    {
+        var review = MakeReview();
+        review.EnsureLoaded();
+        Assert.Equal(200, review.Rows.Count);
+        Assert.True(review.HasMore);
+
+        // The chip commits Overdue but its load fails (adversarial
+        // round 4): the old All rows and cursor must not stay
+        // actionable under the new chip — mac hides the list here.
+        review.InterleaveForTests = () =>
+            throw new InvalidOperationException("boom");
+        review.ApplyFilter(TaskReviewFilter.Overdue);
+
+        Assert.Empty(review.Rows);
+        Assert.False(review.HasMore);
+        Assert.Equal("Couldn’t load tasks. boom", review.EmptyMessage);
+        int requests = review.LoadRequestIdForTests;
+        review.LoadMore();
+        Assert.Equal(requests, review.LoadRequestIdForTests);
+        Assert.Empty(review.Rows);
+
+        // A successful retry publishes the NEW filter's population
+        // and clears the transient error.
+        review.InterleaveForTests = null;
+        review.ForceReload();
+        ReviewTaskRowViewModel row = Assert.Single(review.Rows);
+        Assert.Equal("overdue one", row.Task.Text);
+        Assert.Null(review.EmptyMessage);
+    }
+
+    [Fact]
+    public void FailedSameFilterRefreshesKeepTheRowsTheyHad()
+    {
+        var review = MakeReview();
+        review.EnsureLoaded();
+        int rows = review.Rows.Count;
+
+        // A same-filter refresh failure is a transient fault over a
+        // still-valid population: rows survive (the round-2 posture,
+        // narrowed by round 4 to same-filter only).
+        review.InterleaveForTests = () =>
+            throw new InvalidOperationException("boom");
+        review.ForceReload();
+        review.InterleaveForTests = null;
+
+        Assert.Equal(rows, review.Rows.Count);
+        Assert.Equal("Couldn’t load tasks. boom", review.EmptyMessage);
+    }
+
+    [Fact]
     public void SupersededLoadMoreCannotWedgeThePagingButton()
     {
         var review = MakeReview();

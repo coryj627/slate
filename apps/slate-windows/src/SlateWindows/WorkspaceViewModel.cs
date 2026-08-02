@@ -1523,17 +1523,34 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 System.IO.Path.GetFileName(tab.Path)));
             return SlateWindows.Panels.ReviewToggleRoute.RefusedStale;
         }
-        string fileName = System.IO.Path.GetFileName(tab.Path);
-        return tab.ToggleTask(task, _announce, completion: (report, error, publishedThroughTab) =>
+        return tab.ToggleTask(task, _announce, TaskToggleCompletion(path, task)) switch
         {
-            // Terminal-state handling that outlives the tab
-            // (adversarial round 3): closing the originating tab
-            // mid-flight must not eat the outcome.
+            TabTaskToggle.Started => SlateWindows.Panels.ReviewToggleRoute.Started,
+            // Busy: the tab announced; the review must NOT arm a
+            // refresh for an operation that never ran (round 2).
+            TabTaskToggle.RefusedBusy => SlateWindows.Panels.ReviewToggleRoute.RefusedBusy,
+            // A dirty race between the check above and the call.
+            _ => SlateWindows.Panels.ReviewToggleRoute.RefusedDirty,
+        };
+    }
+
+    /// <summary>Terminal-state handling for tab-routed toggles that
+    /// OUTLIVES the originating tab (adversarial rounds 3-4, both
+    /// the review route and the note panel's): closing the tab
+    /// mid-flight must not eat the outcome. Failures disarm the
+    /// review's pending refresh; successes announce when the tab
+    /// could not, re-snapshot the panels and the review, and give
+    /// orphaned same-path tabs the divergence honesty.</summary>
+    private Action<SaveReport?, VaultException?, bool> TaskToggleCompletion(
+        string path, TaskItem task)
+    {
+        string fileName = System.IO.Path.GetFileName(path);
+        return (report, error, publishedThroughTab) =>
+        {
             if (report is null)
             {
-                // Disk never changed: disarm the review's pending
-                // refresh so a later unrelated save of this path
-                // cannot reset its paging.
+                // Disk never changed: a later unrelated save of this
+                // path must not reset the review's paging.
                 TasksReview.ToggleAbandoned(path);
                 if (!publishedThroughTab)
                 {
@@ -1557,19 +1574,14 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     task.Completed ? "Task reopened." : "Task completed.",
                     A11yPriority.Medium));
             }
-            // The review refresh is completion-driven, independent of
-            // the tab's lifetime; same-path peers that could not
-            // mirror from a disposed source re-baseline honesty here.
+            // Refreshes are completion-driven, independent of the
+            // tab's lifetime: the panel save funnel and the review
+            // NoteRefreshed can't fire from a disposed tab, and
+            // same-path tabs that lost their mirror source (or raced
+            // open) re-baseline honesty here.
+            Panels.NoteSaved(path);
             TasksReview.NoteRefreshed(path);
             ReconcileTabsAfterDirectTaskWrite(path, report.NewContentHash);
-        }) switch
-        {
-            TabTaskToggle.Started => SlateWindows.Panels.ReviewToggleRoute.Started,
-            // Busy: the tab announced; the review must NOT arm a
-            // refresh for an operation that never ran (round 2).
-            TabTaskToggle.RefusedBusy => SlateWindows.Panels.ReviewToggleRoute.RefusedBusy,
-            // A dirty race between the check above and the call.
-            _ => SlateWindows.Panels.ReviewToggleRoute.RefusedDirty,
         };
     }
 
@@ -1621,7 +1633,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             Panels.ReloadTasks();
             return true;
         }
-        return tab.ToggleTask(task, _announce) != TabTaskToggle.Refused;
+        // The same terminal completion as the review route
+        // (adversarial round 4): a panel toggle whose tab is closed
+        // mid-flight must still announce and re-snapshot.
+        return tab.ToggleTask(task, _announce, TaskToggleCompletion(tab.Path, task))
+            != TabTaskToggle.Refused;
     }
 
     /// <summary>The panels' task-activation seam (W4-3): park the

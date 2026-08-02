@@ -432,6 +432,43 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void ClosingTheActiveTabStillCompletesPanelToggles()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        NoteTaskRowViewModel row = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "first open");
+
+        // The panel toggle routes through the active tab (round 4:
+        // this route lacked the review's terminal completion)…
+        workspace.Panels.ToggleTask(row);
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        // …and the user closes that tab before the publish runs.
+        workspace.CloseTabCommand.Execute(tab);
+
+        string diskPath = Path.Combine(_fixture.Root, "todo.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => File.ReadAllText(diskPath).Contains("- [x] first open"),
+                TimeSpan.FromSeconds(20)),
+            "the panel toggle never reached disk");
+
+        // The terminal completion outlives the tab: the success
+        // still announces instead of vanishing silently.
+        PumpDispatcherUntil(
+            () => announced.OfType<A11yEvent.HostComposed>()
+                .Any(composed => composed.Text == "Task completed."),
+            "the disposed-tab panel completion never announced");
+    }
+
+    [Fact]
     public void DirectWritesReconcileTabsThatRacedOpen()
     {
         var announced = new List<A11yEvent>();

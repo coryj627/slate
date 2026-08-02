@@ -288,10 +288,20 @@ pub(crate) fn tasks_in_vault(
     // (Codoki PR #134 High regression fix).
     const DUE_NULL_SENTINEL: i64 = i64::MAX;
     const PRIORITY_NULL_SENTINEL: i64 = i32::MIN as i64;
+    // `text` and `recurrence` are DISPLAY-BOUNDED here (adversarial
+    // round 4): the LIMIT bounds row COUNT, but a valid indexed task
+    // line can approach the per-file byte ceiling, and a vault-wide
+    // page spans many files — 200 exact rows could marshal gigabytes
+    // through SQLite → Rust → FFI → host before any display ceiling
+    // applies. Identity fields (ordinal, status, offsets, hash) stay
+    // exact — toggling and scrolling never read the text. substr
+    // bounds CHARS inside SQLite so the full text is never
+    // materialized; `bound_snippet` re-bounds BYTES on the way out
+    // (the links-panel snippet ceiling, shared).
     let sql = format!(
         "SELECT f.path, f.name, f.content_hash,
-                t.ordinal, t.text, t.status_char, t.completed,
-                t.due_ms, t.scheduled_ms, t.priority, t.recurrence,
+                t.ordinal, substr(t.text, 1, {snippet_chars}), t.status_char, t.completed,
+                t.due_ms, t.scheduled_ms, t.priority, substr(t.recurrence, 1, {snippet_chars}),
                 t.line, t.byte_offset, t.checkbox_start_byte, t.checkbox_end_byte,
                 (SELECT COUNT(*) FROM tasks t JOIN files f ON f.id = t.file_id {count_where}) AS total_filtered
          FROM tasks t
@@ -302,6 +312,7 @@ pub(crate) fn tasks_in_vault(
                   f.path COLLATE BINARY ASC,
                   t.ordinal ASC
          LIMIT ?",
+        snippet_chars = crate::links_db::MAX_LINK_SNIPPET_BYTES,
         count_where = build_count_where(&filter),
         where_clause = where_clause,
         due_sentinel = DUE_NULL_SENTINEL,
@@ -347,13 +358,15 @@ pub(crate) fn tasks_in_vault(
             let content_hash: String = row.get(2)?;
             let item = TaskItem {
                 ordinal: row.get::<_, i64>(3)? as u32,
-                text: row.get(4)?,
+                text: crate::links_db::bound_snippet(row.get(4)?),
                 status_char: row.get::<_, String>(5)?.chars().next().unwrap_or(' '),
                 completed: row.get::<_, i64>(6)? != 0,
                 due_ms: row.get(7)?,
                 scheduled_ms: row.get(8)?,
                 priority: row.get::<_, Option<i64>>(9)?.map(|p| p as i32),
-                recurrence: row.get(10)?,
+                recurrence: row
+                    .get::<_, Option<String>>(10)?
+                    .map(crate::links_db::bound_snippet),
                 line: row.get::<_, i64>(11)? as u32,
                 byte_offset: row.get::<_, i64>(12)? as u32,
                 checkbox_start_byte: row.get::<_, i64>(13)? as u32,

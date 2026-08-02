@@ -82,6 +82,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private int _loadMoreToken;
     private ulong _snapshotGeneration;
     private TaskFilter? _snapshotFilter;
+    private TaskReviewFilter? _publishedFilter;
     private readonly HashSet<string> _pendingToggleRefreshPaths =
         new(StringComparer.Ordinal);
 
@@ -234,7 +235,8 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         // load-more must page the SAME population, so recomputing the
         // window from a later clock — after a UTC midnight — would
         // append rows from a different day's window to this page.
-        TaskFilter concreteFilter = ToTaskFilter(ActiveFilter);
+        TaskReviewFilter requestFilter = ActiveFilter;
+        TaskFilter concreteFilter = ToTaskFilter(requestFilter);
         _isLoading = true;
         _loadError = null;
         RaiseStateChanges();
@@ -274,7 +276,8 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 failure = exception.Message;
             }
             Post(() => PublishFirstPage(
-                requestId, page, failure, generation, concreteFilter));
+                requestId, page, failure, generation, concreteFilter,
+                requestFilter));
         });
     }
 
@@ -290,7 +293,8 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         TaskWithLocationPage? page,
         string? failure,
         ulong generation = 0,
-        TaskFilter? concreteFilter = null)
+        TaskFilter? concreteFilter = null,
+        TaskReviewFilter? requestFilter = null)
     {
         if (requestId != _loadRequestId)
         {
@@ -298,18 +302,33 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         }
         if (failure is not null || page is null)
         {
-            // Failed loads keep existing rows; the error is spoken by
-            // the empty-state only when nothing is showing (mac keeps
-            // rows on failed load-more; first-page parity here).
+            // A failed SAME-filter refresh keeps existing rows (mac
+            // keeps rows on failed load-more; first-page parity). A
+            // failed load for a DIFFERENT filter than the published
+            // rows must NOT leave them actionable (adversarial round
+            // 4): the new chip would label old-filter rows, Load More
+            // would page the dead population, and toggles would act
+            // outside the selected filter — mac hides the list here.
             _loadError = failure ?? "The vault could not be read.";
             _isLoading = false;
+            if (requestFilter is { } requested
+                && requested != _publishedFilter)
+            {
+                Rows.Clear();
+                _nextCursor = null;
+                _totalFiltered = 0;
+                _snapshotFilter = null;
+                _publishedFilter = null;
+            }
             RaiseStateChanges();
             return;
         }
         _snapshotGeneration = generation;
         // Stored only on SUCCESS: rows and cursor stay bound to the
-        // concrete window they were queried with (round 3).
+        // concrete window they were queried with (round 3), and the
+        // chip state to the population it actually shows (round 4).
         _snapshotFilter = concreteFilter;
+        _publishedFilter = requestFilter ?? ActiveFilter;
         Rows.Clear();
         foreach (TaskWithLocation row in page.Items)
         {
