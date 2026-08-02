@@ -399,6 +399,20 @@ pub struct NoteTasksPage {
     pub content_hash: String,
 }
 
+/// Outcome of [`VaultSession::repair_or_contain_path`] (W4-3
+/// adversarial round 31). `Repaired`: the index is disk truth.
+/// `Contained`: a persistent file condition; the path's suspect
+/// rows were dropped honest-empty with a self-healing durable
+/// marker planted — task queries are safe, the host may release
+/// its gate. `Declined`: another process committed mid-attempt;
+/// nothing destructive happened — retry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TaskIndexRepairOutcome {
+    Repaired,
+    Contained,
+    Declined,
+}
+
 // --- Note parts bundle ---
 
 /// Everything the U3 tab-open path needs to render a note as body-only
@@ -3360,7 +3374,8 @@ impl VaultSession {
         // before the main transaction lands.
         let intent_token = fresh_intent_token();
         conn.execute(
-            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
             rusqlite::params![path, now_ms(), intent_token],
         )?;
 
@@ -3437,7 +3452,8 @@ impl VaultSession {
             }
             drop(tx);
             if let Err(e) = conn.execute(
-                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                 VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
                 rusqlite::params![path, now_ms(), intent_token],
             ) {
                 self.clear_own_intent_registration(conn, path, intent_token);
@@ -4101,6 +4117,15 @@ impl VaultSession {
                 )?;
             }
         }
+        // Index epoch (adversarial round 31): this commit is a
+        // successful full-file index of `contents` — durable proof
+        // that any write intent registered BEFORE it is superseded.
+        // Bumped in the same transaction as the rows it vouches for,
+        // so a rollback moves neither.
+        tx.execute(
+            "UPDATE files SET index_epoch = index_epoch + 1 WHERE id = ?1",
+            rusqlite::params![file_id],
+        )?;
         Ok(file_id)
     }
 
@@ -6025,6 +6050,127 @@ impl VaultSession {
         self.reindex_path_locked(&mut conn, path, &[])
     }
 
+    /// Host-facing repair-or-contain (adversarial round 31): the
+    /// Windows repair coordinator bars EVERY task query while a
+    /// pending path exists, so a path whose repair persistently
+    /// fails on a FILE condition (unreadable, non-UTF-8, oversize)
+    /// must resolve to something the host can safely release —
+    /// otherwise one bad file outages every task surface until
+    /// restart.
+    ///
+    /// `Repaired`: the index is disk truth again. `Contained`: the
+    /// file condition persists; the path's suspect task rows were
+    /// dropped (honest-empty), its stat tuple poisoned, and an
+    /// already-aged durable marker planted so every later query's
+    /// sweep — in ANY process — retries the repair and heals in full
+    /// the moment the file reads again. The host may release its
+    /// gate: queries are safe. `Declined`: another process committed
+    /// mid-attempt; nothing destructive happened — retry. Database
+    /// and other non-file failures propagate as errors: a broken
+    /// database must stay loud (round 29).
+    pub fn repair_or_contain_path(&self, path: &str) -> Result<TaskIndexRepairOutcome, VaultError> {
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let epoch_before_attempt: Option<i64> = conn
+            .query_row(
+                "SELECT index_epoch FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match self.reindex_path_locked(&mut conn, path, &[]) {
+            Ok(()) => Ok(TaskIndexRepairOutcome::Repaired),
+            Err(repair_err) => match &repair_err {
+                VaultError::Io(_)
+                | VaultError::InvalidUtf8 { .. }
+                | VaultError::FileTooLarge { .. } => {
+                    if self.contain_unrepairable_pending_path_locked(
+                        &mut conn,
+                        path,
+                        epoch_before_attempt,
+                    )? {
+                        Ok(TaskIndexRepairOutcome::Contained)
+                    } else {
+                        Ok(TaskIndexRepairOutcome::Declined)
+                    }
+                }
+                _ => Err(repair_err),
+            },
+        }
+    }
+
+    /// The host-route containment body. Unlike the sweep's
+    /// token-driven quarantine, the voucher here is the HOST's own
+    /// knowledge of its failed write; the epoch guard covers the
+    /// attempt window instead — any other-process commit between the
+    /// caller's epoch capture and this transaction declines
+    /// (`Ok(false)`, nothing destructive), because that commit may
+    /// have rebuilt the very rows containment would delete.
+    /// Same-process writers cannot interleave: the caller holds the
+    /// session mutex across capture, repair, and containment.
+    ///
+    /// Containment plants an ALREADY-AGED durable marker (fresh
+    /// token, current epoch), so the standard sweep machinery —
+    /// cross-process — keeps retrying the repair and rebuilds the
+    /// rows the moment the file reads again.
+    fn contain_unrepairable_pending_path_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+        epoch_before_attempt: Option<i64>,
+    ) -> Result<bool, VaultError> {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let current_epoch: Option<i64> = tx
+            .query_row(
+                "SELECT index_epoch FROM files WHERE path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if current_epoch != epoch_before_attempt {
+            return Ok(false);
+        }
+        let already_quarantined: Option<bool> = tx
+            .query_row(
+                "SELECT f.mtime_ms = -1
+                       AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.file_id = f.id)
+                 FROM files f WHERE f.path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match already_quarantined {
+            // No index row at all: nothing suspect is being served.
+            None => return Ok(true),
+            Some(true) => return Ok(true),
+            Some(false) => {}
+        }
+        tx.execute(
+            "UPDATE files SET mtime_ms = -1, size_bytes = -1, ctime_ms = -1 WHERE path = ?1",
+            rusqlite::params![path],
+        )?;
+        tx.execute(
+            "DELETE FROM tasks WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+            rusqlite::params![path],
+        )?;
+        // The planted marker is registered at the CURRENT epoch and
+        // already aged: the very next task query sweeps it, retries
+        // the repair, and clears it on success — self-healing in
+        // every process sharing the cache.
+        tx.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+            rusqlite::params![
+                path,
+                now_ms() - Self::intent_abandon_threshold_ms(path) - 1,
+                fresh_intent_token()
+            ],
+        )?;
+        tx.commit()?;
+        self.bump_bases_generation();
+        self.notify_file_change(FileChangeKind::Modified, path, None);
+        Ok(true)
+    }
+
     /// Millisecond age past which a surviving [`text_write_intents`]
     /// row counts as ABANDONED (its writer rolled back or crashed)
     /// rather than in-flight. Tests collapse it per-path via
@@ -6112,54 +6258,30 @@ impl VaultSession {
             // queries loud; absorbing it would silently drop the
             // path's tasks over an error the file never caused.
             //
-            // Two-attempt loop (adversarial round 30): the repair
-            // and the quarantine are separate transactions, so a
-            // NEWER writer can commit fresh rows — clearing only
-            // its OWN token — in the gap; the surviving old token
-            // would then quarantine rows that are the consistent
-            // truth. Each attempt captures `data_version` BEFORE
-            // the repair; the quarantine declines (`Ok(false)`)
-            // when any other connection committed since — the
-            // retry usually finds the file readable and serves the
-            // fresh rows. A second supersession propagates the
-            // repair error: one honest failed query beats a wrong
-            // quarantine, and the next query starts clean.
-            let mut handled = false;
-            let mut last_err: Option<VaultError> = None;
-            for _attempt in 0..2 {
-                let dv_before_repair: i64 =
-                    conn.query_row("PRAGMA data_version", [], |row| row.get(0))?;
-                match self.reindex_path_locked(conn, &path, &tokens) {
-                    Ok(()) => {
-                        handled = true;
-                        break;
+            // Supersession is decided by DURABLE state (adversarial
+            // rounds 30-31): a newer writer committing fresh rows in
+            // the repair→quarantine gap clears only its OWN token,
+            // so the aged selected token would otherwise vouch for
+            // quarantining rows that are now the consistent truth.
+            // Version SAMPLING could not close this — a commit
+            // landing before the baseline capture, or between retry
+            // attempts, hides from any sampled comparison. Instead
+            // every successful full-file index commit bumps
+            // `files.index_epoch` atomically with the rows it
+            // vouches for, and the quarantine re-derives
+            // supersession from that epoch UNDER its own writer
+            // lock: markers registered before the current epoch are
+            // provably obsolete, deleted without containment.
+            if let Err(repair_err) = self.reindex_path_locked(conn, &path, &tokens) {
+                match &repair_err {
+                    VaultError::Io(_)
+                    | VaultError::InvalidUtf8 { .. }
+                    | VaultError::FileTooLarge { .. } => {
+                        self.quarantine_unrepairable_path_locked(conn, &path, &tokens)
+                            .map_err(|_| repair_err)?;
                     }
-                    Err(repair_err) => match &repair_err {
-                        VaultError::Io(_)
-                        | VaultError::InvalidUtf8 { .. }
-                        | VaultError::FileTooLarge { .. } => {
-                            match self.quarantine_unrepairable_path_locked(
-                                conn,
-                                &path,
-                                &tokens,
-                                dv_before_repair,
-                            ) {
-                                Ok(true) => {
-                                    handled = true;
-                                    break;
-                                }
-                                Ok(false) => {
-                                    last_err = Some(repair_err);
-                                }
-                                Err(_) => return Err(repair_err),
-                            }
-                        }
-                        _ => return Err(repair_err),
-                    },
+                    _ => return Err(repair_err),
                 }
-            }
-            if !handled && let Some(err) = last_err {
-                return Err(err);
             }
         }
         Ok(())
@@ -6173,19 +6295,22 @@ impl VaultSession {
     /// returns without re-announcing, so repeated failing sweeps
     /// don't storm hosts with Modified events.
     ///
-    /// Returns `Ok(true)` when the candidate is handled — contained,
-    /// or resolved by its own writer (round-29 token fence) — and
-    /// `Ok(false)` when another connection committed since the
-    /// failed repair (round-30 data-version fence): the index may
-    /// have been rebuilt under us, so nothing destructive happened
-    /// and the caller should retry the repair against fresh state.
+    /// Containment runs only while a selected registration still
+    /// stands at the file's CURRENT index epoch (rounds 29-31): a
+    /// registration deleted by its own writer means the candidate
+    /// resolved itself, and a registration whose epoch is behind
+    /// `files.index_epoch` is provably superseded — some later
+    /// commit re-read the whole file — so it is deleted here without
+    /// containment and the fresh rows keep serving. Both facts are
+    /// durable and re-derived under this transaction's writer lock,
+    /// so no racing commit can hide in a selection-to-containment
+    /// gap.
     fn quarantine_unrepairable_path_locked(
         &self,
         conn: &mut Connection,
         path: &str,
         selected_tokens: &[i64],
-        data_version_before_repair: i64,
-    ) -> Result<bool, VaultError> {
+    ) -> Result<(), VaultError> {
         // Test-only seam (adversarial round 29): a live writer
         // resolving — index committed, own token cleared — in the
         // gap between the sweep's candidate selection and this
@@ -6200,65 +6325,76 @@ impl VaultSession {
                 );
             }
         }
-        // Test-only seam (adversarial round 30): a NEWER writer on
-        // another connection committing in the repair→quarantine
-        // gap — fresh rows, its OWN token cleared, the aged
-        // selected token untouched. Any second-connection commit
-        // bumps this connection's `data_version`, which is all the
-        // fence below observes.
+        // Test-only seam (adversarial rounds 30-31): a NEWER writer
+        // on another connection committing fresh rows in the
+        // repair→quarantine gap — its full-file index commit bumps
+        // the path's `index_epoch` (as index_saved_file/index_file
+        // do), clears its OWN token, and leaves the aged selected
+        // token untouched.
         if let Some(trigger) = std::env::var_os("SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE")
             && path.contains(trigger.to_string_lossy().as_ref())
             && let Some(db_path) = conn.path()
             && let Ok(other) = Connection::open(db_path)
         {
             let _ = other.execute(
-                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES ('test/second-writer-bump', ?1, 0)",
-                rusqlite::params![now_ms()],
-            );
-            let _ = other.execute(
-                "DELETE FROM text_write_intents WHERE path = 'test/second-writer-bump'",
-                [],
+                "UPDATE files SET index_epoch = index_epoch + 1 WHERE path = ?1",
+                rusqlite::params![path],
             );
         }
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        // Ownership fence (adversarial round 29): the candidates
-        // were selected BEFORE this lock. A live writer may have
-        // committed and cleared its token in the gap — its fresh
-        // rows are the CONSISTENT truth now, and quarantining them
-        // would serve empty with NO marker left to ever trigger the
-        // repair that refills them. Only quarantine while at least
-        // one selected registration still stands; a vanished
-        // selection means the candidate resolved itself. Unselected
-        // fresh registrations don't count — they belong to live
-        // writers whose own lifecycle (or a later sweep, once aged)
-        // covers them (round-22 token discipline).
-        let mut still_marked = false;
-        for token in selected_tokens {
-            still_marked = tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM text_write_intents WHERE path = ?1 AND token = ?2)",
-                rusqlite::params![path, token],
+        // Ownership + supersession fence (rounds 29-31), re-derived
+        // from durable state under this writer lock. A selected
+        // registration that is GONE was resolved by its own writer.
+        // One whose registered epoch is BEHIND the file's current
+        // epoch is provably superseded — a later successful commit
+        // re-read the whole file — and is deleted here, without
+        // containment, so the fresh rows keep serving. Containment
+        // proceeds only while a selected registration still stands
+        // AT the current epoch. Unselected fresh registrations
+        // don't count — they belong to live writers whose own
+        // lifecycle (or a later sweep, once aged) covers them
+        // (round-22 token discipline).
+        let current_epoch: Option<i64> = tx
+            .query_row(
+                "SELECT index_epoch FROM files WHERE path = ?1",
+                rusqlite::params![path],
                 |row| row.get(0),
-            )?;
-            if still_marked {
-                break;
+            )
+            .optional()?;
+        let mut still_marked = false;
+        let mut cleared_obsolete = false;
+        for token in selected_tokens {
+            let registered_epoch: Option<i64> = tx
+                .query_row(
+                    "SELECT registered_epoch FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                    rusqlite::params![path, token],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(registered_epoch) = registered_epoch else {
+                continue; // resolved by its own writer
+            };
+            match current_epoch {
+                Some(current) if current > registered_epoch => {
+                    tx.execute(
+                        "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                        rusqlite::params![path, token],
+                    )?;
+                    cleared_obsolete = true;
+                }
+                // A missing files row can't prove supersession —
+                // fall through to the no-row containment arm below,
+                // which serves nothing anyway.
+                _ => still_marked = true,
             }
         }
         if !still_marked {
-            return Ok(true);
-        }
-        // Data-version fence (adversarial round 30): the token
-        // fence can't see a NEWER writer that committed fresh rows
-        // and cleared only its OWN token — the aged selected token
-        // survives and would vouch for quarantining rows that are
-        // now the consistent truth. `data_version` moves exactly
-        // when ANOTHER connection commits (same-connection writers
-        // can't interleave — the session mutex serializes them), so
-        // any movement since the failed repair means the index may
-        // have been rebuilt under us: decline (`Ok(false)`) and let
-        // the sweep retry the repair against the new state.
-        let data_version_now: i64 = tx.query_row("PRAGMA data_version", [], |row| row.get(0))?;
-        if data_version_now != data_version_before_repair {
-            return Ok(false);
+            // Nothing suspect stands; persist any obsolete-marker
+            // deletions (quiet — task rows were untouched).
+            if cleared_obsolete {
+                tx.commit()?;
+            }
+            return Ok(());
         }
         let already_quarantined: Option<bool> = tx
             .query_row(
@@ -6271,8 +6407,18 @@ impl VaultSession {
             .optional()?;
         match already_quarantined {
             // No index row at all: nothing suspect is being served.
-            None => return Ok(true),
-            Some(true) => return Ok(true),
+            None => {
+                if cleared_obsolete {
+                    tx.commit()?;
+                }
+                return Ok(());
+            }
+            Some(true) => {
+                if cleared_obsolete {
+                    tx.commit()?;
+                }
+                return Ok(());
+            }
             Some(false) => {}
         }
         tx.execute(
@@ -6288,7 +6434,7 @@ impl VaultSession {
         // Hosts hear Modified and refresh: the honest surface for an
         // unreadable file is task-free, not last-known-stale.
         self.notify_file_change(FileChangeKind::Modified, path, None);
-        Ok(true)
+        Ok(())
     }
 
     fn reindex_path_locked(
@@ -8767,6 +8913,14 @@ fn index_file(
         purge_markdown_derivatives(tx, file_id, path, vault_index, graph_sink)?;
         purge_canvas_rows(tx, file_id)?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
+        // Index epoch (adversarial round 31): the oversized posture
+        // — metadata row, empty body, derivatives purged — IS this
+        // file's full index truth, so the commit supersedes any
+        // older write intent just like a normal index does.
+        tx.execute(
+            "UPDATE files SET index_epoch = index_epoch + 1 WHERE id = ?1",
+            rusqlite::params![file_id],
+        )?;
         report.files_indexed += 1;
         return Ok(());
     }
@@ -8880,6 +9034,14 @@ fn index_file(
         }
     }
 
+    // Index epoch (adversarial round 31): a successful full-file
+    // index commit — durable proof that any write intent registered
+    // before it is superseded. The fast-path skip above deliberately
+    // does NOT bump: a tuple match re-reads nothing.
+    tx.execute(
+        "UPDATE files SET index_epoch = index_epoch + 1 WHERE id = ?1",
+        rusqlite::params![file_id],
+    )?;
     report.files_indexed += 1;
     report.bytes_processed += stat.size_bytes;
     Ok(())

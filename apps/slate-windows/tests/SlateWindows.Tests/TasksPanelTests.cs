@@ -887,9 +887,13 @@ public sealed class TasksPanelTests : IDisposable
         // Adversarial round 15: pending repairs were review-only —
         // the note panel queried NoteTasks directly, so navigating
         // away and back republished the rolled-back row and its
-        // ghost hash. The quarantine is shared now: while the repair
-        // keeps failing, the panel shows its honest read-fault
-        // surface; once it lands, the rows show disk truth.
+        // ghost hash. The quarantine is shared now. Round 31: a
+        // repair that keeps failing on a FILE condition resolves to
+        // CONTAINMENT — the core drops the path's suspect rows
+        // honest-empty and plants a self-healing marker — so the
+        // panel serves an honest empty surface (never the ghost)
+        // instead of barring forever, and heals to disk truth once
+        // the file reads again.
         _ = _session.SaveText("fault-tab-target.md", "- [ ] flip me\n", null);
         var announced = new List<A11yEvent>();
         using var workspace = new WorkspaceViewModel(
@@ -918,13 +922,13 @@ public sealed class TasksPanelTests : IDisposable
 
             // Navigate away and back with the fault still held: the
             // panel must NOT republish the ghost open row from the
-            // known-stale index — the honest read fault shows.
+            // known-stale index — containment serves honest-empty.
             workspace.OpenPath("todo.md");
             workspace.OpenPath("fault-tab-target.md");
             Assert.Empty(workspace.Panels.OpenTasks);
             Assert.Empty(workspace.Panels.DoneTasks);
-            Assert.StartsWith(
-                "Could not load tasks: ",
+            Assert.Equal(
+                "No tasks in this note.",
                 workspace.Panels.TasksEmptyMessage);
         }
         finally
@@ -1182,19 +1186,28 @@ public sealed class TasksPanelTests : IDisposable
                 "- [x] done manually",
                 File.ReadAllText(Path.Combine(_fixture.Root, "manual-probe.md")));
 
-            // Both surfaces are barred while the repair keeps
-            // failing — no pre-save ghost publishes.
+            // While the repair keeps failing, containment (round
+            // 31) serves BOTH surfaces honest-empty for this path —
+            // no pre-save ghost publishes anywhere, and unrelated
+            // notes keep serving.
             workspace.TasksReview.ForceReload();
-            Assert.StartsWith(
-                "Couldn’t load tasks. ", workspace.TasksReview.EmptyMessage);
+            Assert.DoesNotContain(
+                workspace.TasksReview.Rows,
+                r => r.Path == "manual-probe.md");
+            Assert.Contains(
+                workspace.TasksReview.Rows,
+                r => r.Path != "manual-probe.md");
+            Assert.Null(workspace.TasksReview.EmptyMessage);
             workspace.Panels.ReloadTasks();
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => workspace.Panels.TasksEmptyMessage is { } message
-                        && message.StartsWith(
-                            "Could not load tasks: ", StringComparison.Ordinal),
+                    () => workspace.Panels.TasksEmptyMessage
+                        == "No tasks in this note.",
                     TimeSpan.FromSeconds(20)),
-                "the panel quarantine never surfaced");
+                "the contained panel never settled honest-empty; message: "
+                    + (workspace.Panels.TasksEmptyMessage ?? "<null>"));
+            Assert.Empty(workspace.Panels.OpenTasks);
+            Assert.Empty(workspace.Panels.DoneTasks);
         }
         finally
         {

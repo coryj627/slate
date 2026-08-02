@@ -1368,6 +1368,20 @@ impl VaultSession {
         Ok(self.inner.reindex_path(&path)?)
     }
 
+    /// Repair-or-contain for the host repair coordinator (W4-3
+    /// adversarial round 31). `Repaired`: index is disk truth.
+    /// `Contained`: a persistent file condition (unreadable,
+    /// non-UTF-8, oversize) was contained honest-empty with a
+    /// self-healing durable marker — task queries are safe, the
+    /// host may release its gate. `Declined`: another process
+    /// committed mid-attempt; retry. Database failures throw.
+    pub fn repair_or_contain_path(
+        &self,
+        path: String,
+    ) -> Result<TaskIndexRepairOutcome, VaultError> {
+        Ok(self.inner.repair_or_contain_path(&path)?.into())
+    }
+
     /// Cross-process-aware revision for paged index snapshots
     /// (adversarial round 14): the session-local generation cannot
     /// see another process committing to the shared cache database;
@@ -1831,6 +1845,25 @@ impl From<core::sync_detect::SyncProviderKind> for SyncProviderKind {
             K::GoogleDrive => Self::GoogleDrive,
             K::Git => Self::Git,
             K::Syncthing => Self::Syncthing,
+        }
+    }
+}
+
+/// Mirrors `slate_core::TaskIndexRepairOutcome` (W4-3 round 31).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum TaskIndexRepairOutcome {
+    Repaired,
+    Contained,
+    Declined,
+}
+
+impl From<core::TaskIndexRepairOutcome> for TaskIndexRepairOutcome {
+    fn from(o: core::TaskIndexRepairOutcome) -> Self {
+        use core::TaskIndexRepairOutcome as O;
+        match o {
+            O::Repaired => Self::Repaired,
+            O::Contained => Self::Contained,
+            O::Declined => Self::Declined,
         }
     }
 }

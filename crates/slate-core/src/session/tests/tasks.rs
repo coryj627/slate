@@ -885,15 +885,16 @@ fn resolved_candidates_skip_the_quarantine() {
 #[test]
 fn newer_writers_commits_survive_a_stale_quarantine() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
-    // Adversarial round 30: the round-29 token fence can't see a
-    // NEWER writer that committed fresh rows and cleared only its
-    // OWN token — the aged selected token survives and would vouch
-    // for quarantining rows that are now the consistent truth. The
-    // data-version fence must decline the quarantine whenever
-    // another connection committed since the failed repair; with
-    // the supersession persisting, the sweep gives up LOUDLY (one
-    // honest failed query) instead of deleting fresh rows, and the
-    // next query heals in full.
+    // Adversarial rounds 30-31: a NEWER writer commits fresh rows in
+    // the repair→quarantine gap, clearing only its OWN token — the
+    // aged selected token survives and would vouch for quarantining
+    // rows that are now the consistent truth. Supersession is
+    // durable: the writer's commit bumped the path's index_epoch, so
+    // the quarantine — re-deriving under its writer lock — must
+    // delete the obsolete marker WITHOUT containment and keep the
+    // fresh rows serving. No sampled baseline is involved, so there
+    // is no window (before selection, between retries) where the
+    // commit can hide.
     let (_tmp, session) = make_vault(|p| {
         p.write_file("notes/second-writer.md", b"- [ ] fresh truth\n")
             .unwrap();
@@ -901,8 +902,12 @@ fn newer_writers_commits_survive_a_stale_quarantine() {
     session.scan_initial(&CancelToken::new()).unwrap();
     {
         let conn = session.conn.lock().unwrap();
+        // Staged at the CURRENT epoch — a live marker, not
+        // pre-obsolete; only the seam's simulated newer-writer
+        // commit supersedes it.
         conn.execute(
-            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
             rusqlite::params!["notes/second-writer.md", now_ms(), 0xA6EDi64],
         )
         .unwrap();
@@ -935,43 +940,32 @@ fn newer_writers_commits_survive_a_stale_quarantine() {
             "second-writer",
         )
     };
-    let failed = session.tasks_in_vault(crate::TaskFilter::default(), Paging::first(50));
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds — the superseded marker resolves, nothing contains");
     unsafe { std::env::remove_var("SLATE_TEST_SECOND_WRITER_BEFORE_QUARANTINE") };
     unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
     assert!(
-        matches!(failed, Err(VaultError::Io(_))),
-        "a persistently superseded quarantine gives up loudly, not destructively"
+        page.items
+            .iter()
+            .any(|r| r.path == "notes/second-writer.md"),
+        "the newer writer's rows keep serving through the vault surface"
     );
     assert_eq!(
         db_state(&session),
-        (1, 1),
-        "the newer writer's rows AND the aged marker both survive"
+        (1, 0),
+        "the fresh rows survive untouched and the obsolete marker is deleted"
     );
 
-    // The transient interference is gone: the next query repairs in
-    // full and both surfaces serve the fresh truth.
-    let healed = session
-        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
-        .expect("the healed query succeeds");
+    // The per-file surface agrees, and everything stays healthy once
+    // the faults are gone.
     let per_file = session
         .note_tasks("notes/second-writer.md", 10)
-        .expect("the per-file surface heals too");
+        .expect("the per-file surface serves too");
     unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
-    assert!(
-        healed
-            .items
-            .iter()
-            .any(|r| r.path == "notes/second-writer.md"),
-        "the vault surface serves the fresh rows"
-    );
     assert!(
         !per_file.tasks.is_empty() && !per_file.tasks[0].completed,
         "the note surface serves the fresh rows"
-    );
-    assert_eq!(
-        db_state(&session).1,
-        0,
-        "the successful repair clears the stale marker"
     );
 }
 
@@ -1044,6 +1038,112 @@ fn database_failures_during_repair_still_fail_queries() {
             )
             .unwrap();
         assert_eq!(intents, 0, "the successful repair clears the marker");
+    }
+}
+
+#[test]
+fn repair_or_contain_releases_a_permanently_unreadable_path() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 31 (host route): the Windows repair
+    // coordinator bars EVERY task query while a pending path
+    // exists, so a persistently unreadable file must resolve to an
+    // outcome the host can release. Contained = suspect rows
+    // dropped honest-empty + an already-aged self-healing marker
+    // planted, so queries are immediately safe in every process and
+    // the path heals in full the moment the file reads again.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/host-stuck.md", b"- [ ] locked away\n")
+            .unwrap();
+        p.write_file("notes/host-bystander.md", b"- [ ] serving\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // Healthy path: plain repair.
+    assert_eq!(
+        session
+            .repair_or_contain_path("notes/host-stuck.md")
+            .unwrap(),
+        TaskIndexRepairOutcome::Repaired,
+    );
+
+    // Persistent file condition: containment.
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "host-stuck") };
+    assert_eq!(
+        session
+            .repair_or_contain_path("notes/host-stuck.md")
+            .unwrap(),
+        TaskIndexRepairOutcome::Contained,
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let (tasks, intents): (i64, i64) = (
+            conn.query_row(
+                "SELECT COUNT(*) FROM tasks t JOIN files f ON f.id = t.file_id WHERE f.path = ?1",
+                rusqlite::params!["notes/host-stuck.md"],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/host-stuck.md"],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        );
+        assert_eq!(tasks, 0, "suspect rows dropped honest-empty");
+        assert_eq!(intents, 1, "a self-healing marker was planted");
+    }
+
+    // Queries are safe DURING the outage — the planted marker's
+    // sweep re-fails the repair, re-contains quietly, and serves
+    // everything else.
+    let during = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("queries stay available while the file is unreadable");
+    assert!(
+        during.items.iter().all(|r| r.path != "notes/host-stuck.md"),
+        "the contained path serves nothing"
+    );
+    assert!(
+        during
+            .items
+            .iter()
+            .any(|r| r.path == "notes/host-bystander.md"),
+        "unrelated tasks still serve"
+    );
+
+    // A DATABASE failure propagates instead of containing.
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX_DB", "host-stuck") };
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    assert!(
+        matches!(
+            session.repair_or_contain_path("notes/host-stuck.md"),
+            Err(VaultError::Db(_))
+        ),
+        "database failures stay loud on the host route"
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX_DB") };
+
+    // The file reads again: the planted marker heals everything on
+    // the next query.
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    assert!(
+        healed.items.iter().any(|r| r.path == "notes/host-stuck.md"),
+        "the contained path's tasks return"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/host-stuck.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(intents, 0, "the planted marker cleared with the repair");
     }
 }
 

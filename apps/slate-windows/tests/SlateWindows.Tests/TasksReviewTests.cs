@@ -627,16 +627,17 @@ public sealed class TasksReviewTests : IDisposable
         using var _envLock = EnvFaultLock.Acquire();
         // Adversarial round 14: after a post-write failure the index
         // is KNOWN stale — if the repair itself fails, reloading
-        // republishes the rolled-back rows as ghosts. The reload is
-        // gated on repair success; failed repairs go pending and the
-        // load workers retry them before every query.
+        // republishes the rolled-back rows as ghosts. Round 31: a
+        // repair failing on a FILE condition resolves to CONTAINMENT
+        // — the core drops the path's suspect rows honest-empty —
+        // so the reload proceeds but the ghost open row can never
+        // publish; disk truth returns once the file reads again.
         _ = _session.SaveText("fault-pre-commit.md", "- [ ] flip me\n", null);
         var announced = new List<A11yEvent>();
         var review = MakeReview(announced);
         review.EnsureLoaded();
         ReviewTaskRowViewModel row = review.Rows.First(
             r => r.Path == "fault-pre-commit.md");
-        int requestsBefore = review.LoadRequestIdForTests;
 
         Environment.SetEnvironmentVariable(
             "SLATE_TEST_FAULT_AFTER_WRITE", "fault-pre-commit");
@@ -646,33 +647,26 @@ public sealed class TasksReviewTests : IDisposable
         {
             review.ToggleTask(row);
 
-            // Disk flipped, but the repair failed: NO reload — the
-            // stale index must not republish the open ghost row.
+            // Disk flipped; the contained path serves NOTHING — the
+            // one thing that must never appear is the rolled-back
+            // ghost open row.
             Assert.Contains(
                 "- [x] flip me",
                 File.ReadAllText(Path.Combine(_fixture.Root, "fault-pre-commit.md")));
-            Assert.Equal(requestsBefore, review.LoadRequestIdForTests);
-            Assert.False(
-                review.Rows.First(r => r.Path == "fault-pre-commit.md")
-                    .Task.Completed,
-                "rows must keep the last honest snapshot, not a ghost reload");
+            Assert.DoesNotContain(
+                review.Rows, r => r.Path == "fault-pre-commit.md");
 
-            // Round 15: with the fault STILL HELD, every reload path
-            // is barred — a forced reload and a load-more both keep
-            // the last honest snapshot behind the failure banner
-            // instead of querying the known-stale index.
-            int rowsBefore = review.Rows.Count;
+            // With the fault STILL HELD, reload paths keep serving
+            // the contained state — honest-empty for this path,
+            // unrelated rows intact, never the ghost.
             review.ForceReload();
-            Assert.Equal(rowsBefore, review.Rows.Count);
-            Assert.False(
-                review.Rows.First(r => r.Path == "fault-pre-commit.md")
-                    .Task.Completed,
-                "a barred reload must not publish ghost rows");
-            Assert.StartsWith(
-                "Couldn’t load tasks. ", review.EmptyMessage);
+            Assert.DoesNotContain(
+                review.Rows, r => r.Path == "fault-pre-commit.md");
+            Assert.Contains(review.Rows, r => r.Path != "fault-pre-commit.md");
 
             review.LoadMore();
-            Assert.Equal(rowsBefore, review.Rows.Count);
+            Assert.DoesNotContain(
+                review.Rows, r => r.Path == "fault-pre-commit.md");
             Assert.False(review.IsLoadingMore);
         }
         finally
@@ -683,8 +677,8 @@ public sealed class TasksReviewTests : IDisposable
                 "SLATE_TEST_FAULT_REINDEX", null);
         }
 
-        // Once the fault clears, the next query retries the pending
-        // repair first and converges to disk truth.
+        // Once the fault clears, the planted marker's sweep repairs
+        // on the next query and converges to disk truth.
         review.ForceReload();
         Assert.True(
             review.Rows.First(r => r.Path == "fault-pre-commit.md")
@@ -865,18 +859,24 @@ public sealed class TasksReviewTests : IDisposable
     public void FailingRepairsMidQueryStillDiscardTheResult()
     {
         using var _envLock = EnvFaultLock.Acquire();
-        // Adversarial round 18: a FAILING repair registering while
-        // the query is in flight advances the epoch and stays
-        // pending — the atomic ticket taken before the query plus
-        // the post-read comparison must discard the result (the
-        // split check-then-capture missed exactly this schedule).
-        _ = _session.SaveText("quarantine-probe.md", "- [ ] probe\n", null);
+        // Adversarial round 18: a repair interval registering while
+        // the query is in flight advances the epoch — the atomic
+        // ticket taken before the query plus the post-read
+        // comparison must discard the result (the split
+        // check-then-capture missed exactly this schedule). Round
+        // 31: the failing repair now resolves to CONTAINMENT
+        // (success for the coordinator), but its interval still
+        // registers and removes, so the overlapped ticket still
+        // invalidates.
+        // Dated so the probe sorts into page one (round-1 lesson).
+        _ = _session.SaveText(
+            "quarantine-probe.md", "- [ ] probe \U0001F4C5 2026-01-01\n", null);
         var repairs = new TaskIndexRepairCoordinator(_session);
         var review = MakeReview(repairs: repairs);
         review.EnsureLoaded();
         int rows = review.Rows.Count;
 
-        bool attemptFailed = false;
+        bool attemptContained = false;
         review.InterleaveForTests = () =>
         {
             review.InterleaveForTests = null;
@@ -884,7 +884,7 @@ public sealed class TasksReviewTests : IDisposable
                 "SLATE_TEST_FAULT_REINDEX", "quarantine-probe");
             try
             {
-                attemptFailed = !repairs.TryRepairNow(
+                attemptContained = repairs.TryRepairNow(
                     "quarantine-probe.md", out _);
             }
             finally
@@ -895,14 +895,16 @@ public sealed class TasksReviewTests : IDisposable
         };
         review.ForceReload();
 
-        Assert.True(attemptFailed);
+        Assert.True(attemptContained);
         Assert.Equal(rows, review.Rows.Count);
         Assert.StartsWith("Couldn’t load tasks. ", review.EmptyMessage);
 
-        // The path stays pending; the next load repairs it (fault
-        // cleared) and converges.
+        // Nothing stays pending; the next load's sweep repairs the
+        // contained path (fault cleared) and converges — the probe
+        // row is back.
         review.ForceReload();
         Assert.Null(review.EmptyMessage);
+        Assert.Contains(review.Rows, r => r.Path == "quarantine-probe.md");
     }
 
     [Fact]
@@ -977,15 +979,20 @@ public sealed class TasksReviewTests : IDisposable
         };
         review.ForceReload();
 
-        // The in-flight page was discarded — the ghost open row is
-        // NOT republished — and the write is on disk.
-        Assert.Equal(rows, review.Rows.Count);
-        Assert.StartsWith("Couldn’t load tasks. ", review.EmptyMessage);
+        // The overlapped ticket was invalidated — whatever
+        // published, the one impossible outcome is the rolled-back
+        // GHOST open row (round 31: containment may already serve
+        // the path honest-empty instead) — and the write is on
+        // disk.
+        _ = rows;
+        Assert.DoesNotContain(
+            review.Rows,
+            r => r.Path == "lease-probe.md" && !r.Task.Completed);
         Assert.Contains(
             "- [x] probe",
             File.ReadAllText(Path.Combine(_fixture.Root, "lease-probe.md")));
 
-        // Faults cleared: the next load repairs the pending path and
+        // Faults cleared: the next load heals the path and
         // converges to disk truth.
         review.ForceReload();
         Assert.Null(review.EmptyMessage);

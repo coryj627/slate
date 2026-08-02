@@ -27,9 +27,19 @@
 -- second completed and cleared its own token, leaving the first
 -- writer's post-write failure unmarked.  Every in-flight writer owns
 -- its own durable row; each clear names its own (path, token) pair.
+-- `registered_epoch` (adversarial round 31): the path's
+-- `files.index_epoch` at registration time.  Every SUCCESSFUL
+-- full-file index commit bumps the epoch (migration 036), so a
+-- marker whose registered epoch is BEHIND the file's current epoch
+-- is provably superseded — some later commit re-read the whole file
+-- — and can be deleted without a repair.  This is durable state,
+-- not a sampled baseline: the containment path re-derives it under
+-- the writer lock, closing the selection-to-containment races that
+-- version sampling could not.
 CREATE TABLE IF NOT EXISTS text_write_intents (
-    path       TEXT NOT NULL,
-    created_ms INTEGER NOT NULL,
-    token      INTEGER NOT NULL DEFAULT 0,
+    path             TEXT NOT NULL,
+    created_ms       INTEGER NOT NULL,
+    token            INTEGER NOT NULL DEFAULT 0,
+    registered_epoch INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (path, token)
 ) WITHOUT ROWID;

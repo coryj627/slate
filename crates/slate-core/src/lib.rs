@@ -158,7 +158,8 @@ pub use session::{
     NoteTasksPage, OpAnnotationSummary, OutlinePage, Page, Paging, RemnantLog, RenameAffected,
     RenameFailed, RenameFailureKind, RenameReport, RenameSkipReason, RenameSkipped, SaveReport,
     SavedQuery, SavedQuerySourceSyntax, SavedQuerySummary, ScanProgress, ScanProgressListener,
-    ScanReport, SessionConfig, VaultEventListener, VaultRootIdentity, VaultSession, VersionSummary,
+    ScanReport, SessionConfig, TaskIndexRepairOutcome, VaultEventListener, VaultRootIdentity,
+    VaultSession, VersionSummary,
 };
 pub use session::{SkippedFile, TagCount, TagEditReport};
 pub use sidebar_filter::{

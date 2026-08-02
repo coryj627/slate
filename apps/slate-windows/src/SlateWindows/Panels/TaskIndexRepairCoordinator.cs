@@ -163,7 +163,22 @@ internal sealed class TaskIndexRepairCoordinator(VaultSession session)
             }
             try
             {
-                session.ReindexPath(path);
+                // Repair-or-contain (adversarial round 31): a path
+                // whose repair persistently fails on a FILE
+                // condition must not bar every task surface forever.
+                // Contained means the core dropped the path's
+                // suspect rows honest-empty and planted a
+                // self-healing durable marker — queries are safe, so
+                // the gate releases exactly like a repair. Declined
+                // (another process committed mid-attempt) keeps the
+                // registration for the next retry; database
+                // failures throw and stay pending — loud.
+                TaskIndexRepairOutcome outcome = session.RepairOrContainPath(path);
+                if (outcome == TaskIndexRepairOutcome.Declined)
+                {
+                    error = "repair declined by a concurrent write; will retry";
+                    return false;
+                }
                 _ = RemoveIfUnchanged(path, generation);
                 error = null;
                 return true;
@@ -210,9 +225,17 @@ internal sealed class TaskIndexRepairCoordinator(VaultSession session)
                 }
                 try
                 {
-                    session.ReindexPath(path);
+                    // Round 31: Contained releases the gate exactly
+                    // like Repaired (queries are safe; the core's
+                    // planted marker heals cross-process). Declined
+                    // stays pending for the next sweep.
+                    TaskIndexRepairOutcome outcome = session.RepairOrContainPath(path);
                     BetweenRepairAndRemovalForTests?.Invoke();
-                    if (RemoveIfUnchanged(path, current))
+                    if (outcome == TaskIndexRepairOutcome.Declined)
+                    {
+                        lastError = "repair declined by a concurrent write; will retry";
+                    }
+                    else if (RemoveIfUnchanged(path, current))
                     {
                         repaired.Add(path);
                     }

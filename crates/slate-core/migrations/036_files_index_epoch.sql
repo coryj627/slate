@@ -1,0 +1,13 @@
+-- Migration 036: per-file index epoch (W4-3 adversarial round 31).
+--
+-- Bumped inside the SAME transaction as every SUCCESSFUL full-file
+-- index commit (`index_file` and `index_saved_file`), so the epoch
+-- advances exactly when the index provably reflects a fresh read of
+-- the whole file.  A durable write intent (035) records the epoch it
+-- registered against; a marker whose epoch is behind the file's
+-- current epoch is provably superseded by a later successful commit
+-- and may be cleared without a repair.  Because the bump commits
+-- atomically with the index rows it vouches for, there is no
+-- rollback hazard: a failed save moves neither the rows nor the
+-- epoch, keeping its marker suspect — exactly right.
+ALTER TABLE files ADD COLUMN index_epoch INTEGER NOT NULL DEFAULT 0;
