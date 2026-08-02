@@ -314,6 +314,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 });
                 return;
             }
+            long quarantineEpoch = _repairs.Epoch;
             TaskWithLocationPage? page = null;
             string? failure = null;
             ulong generation = 0;
@@ -346,6 +347,17 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 failure = exception.Message;
+            }
+            // Re-validated AFTER the query, BEFORE publication
+            // (adversarial round 16): a post-write failure that
+            // registered between the sweep and the query moved no
+            // revision counter — its index transaction ROLLED BACK —
+            // so only the quarantine epoch can prove the rows were
+            // read from a clean index.
+            if (failure is null && _repairs.Epoch != quarantineEpoch)
+            {
+                page = null;
+                failure = "The vault index needs repair.";
             }
             Post(() =>
             {
@@ -480,6 +492,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 });
                 return;
             }
+            long quarantineEpoch = _repairs.Epoch;
             TaskWithLocationPage? page = null;
             string? failure = null;
             bool drifted = false;
@@ -513,6 +526,15 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 failure = exception.Message;
+            }
+            // Round 16: a quarantine registration during the query
+            // means the appended rows may be ghosts — treat it as
+            // drift. The page-one reload re-sweeps and bars itself
+            // while any repair remains pending.
+            if (failure is null && !drifted && _repairs.Epoch != quarantineEpoch)
+            {
+                drifted = true;
+                page = null;
             }
             Post(() =>
             {
@@ -646,24 +668,25 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     _announce(new A11yEvent.HostComposed(
                         $"Task could not be toggled: {failure}",
                         A11yPriority.High));
-                    if (postFailureDiskHash is not null
+                    // The write may have landed before the failure
+                    // (round 12: the real window leaves the index
+                    // uncommitted). Hash moved → certain; hash
+                    // UNREADABLE → unknown, and unknown fails CLOSED
+                    // (round 16): treating it as "no write" would let
+                    // both surfaces query a possibly-stale index with
+                    // nothing barring them. Either way the repair
+                    // must succeed before any reload (rounds 14-15).
+                    bool diskMoved = postFailureDiskHash is not null
                         && !string.Equals(
-                            postFailureDiskHash, expectedHash, StringComparison.Ordinal))
+                            postFailureDiskHash, expectedHash, StringComparison.Ordinal);
+                    bool outcomeUnknown = postFailureDiskHash is null;
+                    if (diskMoved || outcomeUnknown)
                     {
-                        // The write landed before the failure: repair
-                        // the INDEX first (round 12 — the real
-                        // failure window leaves it uncommitted, and
-                        // reloading a stale index resurrects the
-                        // pre-write state as ghost rows). The tab
-                        // reconciliation is hash-truth and runs
-                        // either way, but the reload is GATED on the
-                        // repair succeeding (round 14): reloading a
-                        // known-stale index is exactly the ghost
-                        // republish the repair exists to prevent —
-                        // a failed repair goes pending and the load
-                        // workers retry it before every query.
                         bool repaired = _repairs.TryRepairNow(path, out _);
-                        DiskWriteLanded?.Invoke(path, postFailureDiskHash);
+                        if (diskMoved)
+                        {
+                            DiskWriteLanded?.Invoke(path, postFailureDiskHash!);
+                        }
                         if (repaired)
                         {
                             LoadFirstPage();

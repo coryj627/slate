@@ -811,6 +811,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
                     repairError ?? "The vault index needs repair."));
                 return;
             }
+            TasksInterleaveForTests?.Invoke();
             try
             {
                 page = _session.NoteTasks(path, MaxTaskRows);
@@ -822,9 +823,24 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
             {
                 failure = exception.Message;
             }
+            // Re-checked AFTER the query (adversarial round 16): a
+            // post-write failure that registered the path between the
+            // gate above and the read moved no revision the read
+            // could see — its index transaction rolled back — so the
+            // page may hold the ghost pre-write row.
+            if (failure is null && _repairs.HasPendingFor(path))
+            {
+                page = null;
+                failure = "The vault index needs repair.";
+            }
             Post(() => PublishTasks(generation, requestId, page, failure));
         });
     }
+
+    /// <summary>Test seam (round 16): runs between the quarantine
+    /// gate and the note-tasks query, where a concurrent post-write
+    /// failure is otherwise impossible to schedule.</summary>
+    internal Action? TasksInterleaveForTests { get; set; }
 
     /// <summary>Internal so the stale-publish guard is testable with
     /// deterministic ordering (the PublishOutline pattern).</summary>

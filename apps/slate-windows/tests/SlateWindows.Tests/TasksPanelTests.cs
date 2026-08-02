@@ -53,7 +53,8 @@ public sealed class TasksPanelTests : IDisposable
     private RightPanePanelsViewModel MakePanels(
         List<A11yEvent>? announced = null,
         List<TaskItem>? toggles = null,
-        List<TaskItem>? scrolls = null)
+        List<TaskItem>? scrolls = null,
+        TaskIndexRepairCoordinator? repairs = null)
     {
         var panels = new RightPanePanelsViewModel(
             _session,
@@ -66,7 +67,8 @@ public sealed class TasksPanelTests : IDisposable
                 toggles?.Add(task);
                 return true;
             },
-            (task, _) => scrolls?.Add(task));
+            (task, _) => scrolls?.Add(task),
+            repairs);
         return panels;
     }
 
@@ -937,6 +939,98 @@ public sealed class TasksPanelTests : IDisposable
         workspace.OpenPath("fault-tab-target.md");
         Assert.Contains(
             workspace.Panels.DoneTasks, r => r.Task.Text == "flip me");
+    }
+
+    [Fact]
+    public void PanelQueriesDiscardResultsWhenThePathQuarantinesMidRead()
+    {
+        // Adversarial round 16: a post-write failure registering the
+        // path between the panel's quarantine gate and its NoteTasks
+        // read moves no revision the read could see — the page may
+        // hold the ghost pre-write row, so it must be discarded.
+        var repairs = new TaskIndexRepairCoordinator(_session);
+        var panels = MakePanels(repairs: repairs);
+        panels.TasksInterleaveForTests = () =>
+        {
+            panels.TasksInterleaveForTests = null;
+            repairs.NotePending("todo.md");
+        };
+        panels.NoteChanged("todo.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => panels.TasksEmptyMessage is { } message
+                    && message != "Loading tasks…",
+                TimeSpan.FromSeconds(20)),
+            "the tasks load never settled");
+        Assert.StartsWith("Could not load tasks: ", panels.TasksEmptyMessage);
+        Assert.Empty(panels.OpenTasks);
+
+        // The pending path repairs on the next load and rows return.
+        panels.NoteSaved("todo.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => panels.OpenTasks.Count == 3, TimeSpan.FromSeconds(20)),
+            "the repaired reload never landed");
+        Assert.Null(panels.TasksEmptyMessage);
+    }
+
+    [Fact]
+    public void TabRouteUnknownOutcomesFailClosed()
+    {
+        // Adversarial round 16, tab route: the toggle write lands,
+        // the failure hook deletes the file, and the read-back
+        // fails — an unknown outcome must quarantine the path, not
+        // read as "no write happened".
+        _ = _session.SaveText("fault-unknown-tab.md", "- [ ] flip me\n", null);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("fault-unknown-tab.md");
+        NoteTaskRowViewModel row = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "flip me");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        string diskPath = Path.Combine(_fixture.Root, "fault-unknown-tab.md");
+
+        tab.TaskToggleFaultForTests = () =>
+        {
+            tab.TaskToggleFaultForTests = null;
+            File.Delete(diskPath);
+            throw new InvalidOperationException("boom after write");
+        };
+        workspace.Panels.ToggleTask(row);
+        PumpDispatcherUntil(
+            () => announced.OfType<A11yEvent.HostComposed>().Any(composed =>
+                composed.Text.StartsWith(
+                    "Task could not be toggled:", StringComparison.Ordinal)),
+            () => "the injected failure never published; announced: "
+                + AnnouncementDump(announced));
+
+        // Quarantined: the panel's reload shows the honest read
+        // fault instead of the ghost open row.
+        workspace.Panels.ReloadTasks();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => workspace.Panels.TasksEmptyMessage is { } message
+                    && message.StartsWith(
+                        "Could not load tasks: ", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(20)),
+            "the quarantine never surfaced");
+
+        // The path becomes readable again: the next reload repairs
+        // it and shows disk truth.
+        File.WriteAllText(diskPath, "- [x] flip me\n");
+        workspace.Panels.ReloadTasks();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => workspace.Panels.DoneTasks.Any(
+                    r => r.Task.Text == "flip me"),
+                TimeSpan.FromSeconds(20)),
+            "the repaired reload never landed");
     }
 
     [Fact]

@@ -56,7 +56,8 @@ public sealed class TasksReviewTests : IDisposable
         List<A11yEvent>? announced = null,
         Func<string, TaskItem, string, ReviewOpenRoute>? activateRow = null,
         Func<string, TaskItem, string, ReviewToggleRoute>? toggleViaTab = null,
-        Func<DateTimeOffset>? clock = null)
+        Func<DateTimeOffset>? clock = null,
+        TaskIndexRepairCoordinator? repairs = null)
     {
         return new TasksReviewViewModel(
             _session,
@@ -64,6 +65,7 @@ public sealed class TasksReviewTests : IDisposable
             activateRow ?? ((_, _, _) => ReviewOpenRoute.Opened),
             toggleViaTab ?? ((_, _, _) => ReviewToggleRoute.NoOpenTab),
             clock ?? (() => Clock),
+            repairs,
             synchronousForTests: true);
     }
 
@@ -712,6 +714,97 @@ public sealed class TasksReviewTests : IDisposable
         Assert.Equal(before + 1, review.LoadRequestIdForTests);
         Assert.Equal(200, review.Rows.Count);
         Assert.False(review.IsLoadingMore);
+    }
+
+    [Fact]
+    public void SweepsNeverEraseFailuresRegisteredMidRepair()
+    {
+        // Adversarial round 16: an unversioned removal let a sweep
+        // that repaired a path erase a FRESH failure registered
+        // concurrently — the quarantine went silently empty while
+        // the index was stale again.
+        var coordinator = new TaskIndexRepairCoordinator(_session);
+        coordinator.NotePending("a.md");
+        coordinator.BetweenRepairAndRemovalForTests = () =>
+        {
+            coordinator.BetweenRepairAndRemovalForTests = null;
+            coordinator.NotePending("a.md");
+        };
+
+        RepairSweep sweep = coordinator.Retry();
+
+        Assert.True(coordinator.HasPendingFor("a.md"));
+        Assert.True(sweep.AnyPending);
+        Assert.Empty(sweep.Repaired);
+    }
+
+    [Fact]
+    public void QuarantineRegistrationsDuringTheQueryDiscardTheResult()
+    {
+        // Adversarial round 16: a post-write failure that registers
+        // between the sweep and the query moves no revision counter
+        // (its index transaction rolled back) — only the quarantine
+        // epoch can prove the rows came from a clean index.
+        var repairs = new TaskIndexRepairCoordinator(_session);
+        var review = MakeReview(repairs: repairs);
+        review.EnsureLoaded();
+        int rows = review.Rows.Count;
+
+        review.InterleaveForTests = () =>
+        {
+            review.InterleaveForTests = null;
+            repairs.NotePending("a.md");
+        };
+        review.ForceReload();
+
+        // The freshly queried page was discarded: the last honest
+        // snapshot stays behind the failure banner.
+        Assert.Equal(rows, review.Rows.Count);
+        Assert.StartsWith("Couldn’t load tasks. ", review.EmptyMessage);
+
+        // The pending path repairs on the next load and rows return.
+        review.ForceReload();
+        Assert.Null(review.EmptyMessage);
+        Assert.Equal(rows, review.Rows.Count);
+    }
+
+    [Fact]
+    public void UnreadableReadBacksQuarantineInsteadOfAssumingNoWrite()
+    {
+        // Adversarial round 16: core can write the file before its
+        // index transaction fails, and the read-back can ALSO fail —
+        // an unknown outcome must fail CLOSED, not read as "no
+        // write happened". The fault hook deletes the file after the
+        // real write so the read-back genuinely fails.
+        _ = _session.SaveText("fault-unknown.md", "- [ ] flip me\n", null);
+        var announced = new List<A11yEvent>();
+        var review = MakeReview(announced);
+        review.EnsureLoaded();
+        ReviewTaskRowViewModel row = review.Rows.First(
+            r => r.Path == "fault-unknown.md");
+        string diskPath = Path.Combine(_fixture.Root, "fault-unknown.md");
+
+        review.DirectToggleFaultForTests = () =>
+        {
+            review.DirectToggleFaultForTests = null;
+            File.Delete(diskPath);
+            throw new InvalidOperationException("boom after write");
+        };
+        review.ToggleTask(row);
+
+        // Unknown outcome → quarantined (the repair of the missing
+        // file also fails): reloads are barred, not ghost-published.
+        review.ForceReload();
+        Assert.StartsWith("Couldn’t load tasks. ", review.EmptyMessage);
+
+        // The path becomes readable again: the next load repairs it
+        // and converges to disk truth.
+        File.WriteAllText(diskPath, "- [x] flip me\n");
+        review.ForceReload();
+        Assert.Null(review.EmptyMessage);
+        Assert.True(
+            review.Rows.First(r => r.Path == "fault-unknown.md")
+                .Task.Completed);
     }
 
     [Fact]

@@ -1656,21 +1656,33 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     && preToggleHash is not null
                     && !string.Equals(
                         postFailureDiskHash, preToggleHash, StringComparison.Ordinal);
-                if (diskMoved)
+                // A WriteConflict refused BEFORE any write — the one
+                // failure whose no-write outcome is CERTAIN. Every
+                // other failure with an unreadable read-back is
+                // UNKNOWN, and unknown fails closed (round 16):
+                // treating it as "no write" would let both surfaces
+                // query a possibly-stale index with nothing barring
+                // them.
+                bool outcomeUnknown = postFailureDiskHash is null
+                    && error is not VaultException.WriteConflict;
+                if (diskMoved || outcomeUnknown)
                 {
                     // Repair the INDEX first (adversarial round 12):
                     // the real failure window is file-written /
                     // index-uncommitted, so reloading before the
                     // repair would re-query the stale index and
                     // resurrect the pre-write state as ghost rows.
-                    // Tab reconciliation is hash-truth and runs
-                    // either way; the surface reloads are GATED on
-                    // the repair succeeding (rounds 14-15) — a
-                    // failed repair enters the SHARED quarantine,
-                    // which bars both surfaces' queries until a
-                    // retry lands.
+                    // Tab reconciliation is hash-truth and runs when
+                    // the hash is known; the surface reloads are
+                    // GATED on the repair succeeding (rounds 14-15)
+                    // — a failed repair enters the SHARED
+                    // quarantine, which bars both surfaces' queries
+                    // until a retry lands.
                     bool repaired = _taskIndexRepairs.TryRepairNow(path, out _);
-                    ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash!);
+                    if (diskMoved)
+                    {
+                        ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash!);
+                    }
                     if (repaired)
                     {
                         Panels.NoteSaved(path);
