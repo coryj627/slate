@@ -117,6 +117,20 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private readonly HashSet<string> _pendingToggleRefreshPaths =
         new(StringComparer.Ordinal);
 
+    /// <summary>Paths whose index repair FAILED after a post-write
+    /// toggle failure (adversarial round 14): the index is known
+    /// stale for these, so reloading would republish the rolled-back
+    /// rows. Both load workers retry the repair before querying and
+    /// clear entries that succeed; a successful save of the path
+    /// also repairs it implicitly (the save commits the index).</summary>
+    private readonly HashSet<string> _pendingRepairs =
+        new(StringComparer.Ordinal);
+
+    /// <summary>Register a path whose repair must be retried before
+    /// the next query (the workspace's tab-route recovery reports
+    /// its failed repairs here too).</summary>
+    public void NotePendingRepair(string path) => _ = _pendingRepairs.Add(path);
+
     public TasksReviewViewModel(
         VaultSession session,
         Action<A11yEvent> announce,
@@ -281,8 +295,10 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         _isLoading = true;
         _loadError = null;
         RaiseStateChanges();
+        string[] pendingRepairs = [.. _pendingRepairs];
         StartWork(() =>
         {
+            List<string>? repairedNow = RetryPendingRepairs(pendingRepairs);
             TaskWithLocationPage? page = null;
             string? failure = null;
             ulong generation = 0;
@@ -299,11 +315,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 // direction, never the corrupt one.
                 for (int attempt = 0; attempt < 3; attempt++)
                 {
-                    generation = _session.InteractionGeneration();
+                    generation = _session.TasksIndexRevision();
                     InterleaveForTests?.Invoke();
                     page = _session.TasksInVault(
                         concreteFilter, new Paging(null, PageSize));
-                    if (_session.InteractionGeneration() == generation)
+                    if (_session.TasksIndexRevision() == generation)
                     {
                         break;
                     }
@@ -316,10 +332,48 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             {
                 failure = exception.Message;
             }
-            Post(() => PublishFirstPage(
-                requestId, page, failure, generation, concreteFilter,
-                requestFilter));
+            Post(() =>
+            {
+                ClearRepairedPending(repairedNow);
+                PublishFirstPage(
+                    requestId, page, failure, generation, concreteFilter,
+                    requestFilter);
+            });
         });
+    }
+
+    /// <summary>Retry outstanding index repairs on the worker thread
+    /// BEFORE the query (adversarial round 14): querying while a
+    /// repair is pending would republish the rolled-back rows. Runs
+    /// per load, so the stale window closes on the next query once
+    /// the underlying fault clears; failures simply stay pending.</summary>
+    private List<string>? RetryPendingRepairs(string[] pendingRepairs)
+    {
+        List<string>? repaired = null;
+        foreach (string pending in pendingRepairs)
+        {
+            try
+            {
+                _session.ReindexPath(pending);
+                (repaired ??= []).Add(pending);
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+            }
+        }
+        return repaired;
+    }
+
+    private void ClearRepairedPending(List<string>? repairedNow)
+    {
+        if (repairedNow is null)
+        {
+            return;
+        }
+        foreach (string repaired in repairedNow)
+        {
+            _ = _pendingRepairs.Remove(repaired);
+        }
     }
 
     /// <summary>Test seam: runs between the generation snapshot and
@@ -412,14 +466,19 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         ulong snapshotGeneration = _snapshotGeneration;
         _isLoadingMore = true;
         RaiseStateChanges();
+        string[] pendingRepairs = [.. _pendingRepairs];
         StartWork(() =>
         {
+            // A successful retry bumps the revision, so the drift
+            // check below converts the repair into a page-one reload
+            // — never an append over the previously stale index.
+            List<string>? repairedNow = RetryPendingRepairs(pendingRepairs);
             TaskWithLocationPage? page = null;
             string? failure = null;
             bool drifted = false;
             try
             {
-                if (_session.InteractionGeneration() != snapshotGeneration)
+                if (_session.TasksIndexRevision() != snapshotGeneration)
                 {
                     drifted = true;
                 }
@@ -434,7 +493,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     // cursor rows from the mutated index — which
                     // appended against the old page duplicates moved
                     // rows and skips others.
-                    if (_session.InteractionGeneration() != snapshotGeneration)
+                    if (_session.TasksIndexRevision() != snapshotGeneration)
                     {
                         drifted = true;
                         page = null;
@@ -448,7 +507,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             {
                 failure = exception.Message;
             }
-            Post(() => PublishLoadMore(token, page, failure, drifted));
+            Post(() =>
+            {
+                ClearRepairedPending(repairedNow);
+                PublishLoadMore(token, page, failure, drifted);
+            });
         });
     }
 
@@ -584,20 +647,34 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                         // the INDEX first (round 12 — the real
                         // failure window leaves it uncommitted, and
                         // reloading a stale index resurrects the
-                        // pre-write state as ghost rows), then the
-                        // workspace reconciles any tab that opened,
-                        // and the rows re-snapshot so a retry can't
-                        // conflict against ghost state (round 11).
+                        // pre-write state as ghost rows). The tab
+                        // reconciliation is hash-truth and runs
+                        // either way, but the reload is GATED on the
+                        // repair succeeding (round 14): reloading a
+                        // known-stale index is exactly the ghost
+                        // republish the repair exists to prevent —
+                        // a failed repair goes pending and the load
+                        // workers retry it before every query.
+                        bool repaired;
                         try
                         {
                             _session.ReindexPath(path);
+                            repaired = true;
                         }
                         catch (Exception exception) when (
                             exception is not OutOfMemoryException)
                         {
+                            repaired = false;
                         }
                         DiskWriteLanded?.Invoke(path, postFailureDiskHash);
-                        LoadFirstPage();
+                        if (repaired)
+                        {
+                            LoadFirstPage();
+                        }
+                        else
+                        {
+                            _ = _pendingRepairs.Add(path);
+                        }
                     }
                     return;
                 }

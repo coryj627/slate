@@ -1368,6 +1368,15 @@ impl VaultSession {
         Ok(self.inner.reindex_path(&path)?)
     }
 
+    /// Cross-process-aware revision for paged index snapshots
+    /// (adversarial round 14): the session-local generation cannot
+    /// see another process committing to the shared cache database;
+    /// this folds SQLite's `data_version` in so paging drift checks
+    /// stay honest across sessions and processes.
+    pub fn tasks_index_revision(&self) -> u64 {
+        self.inner.tasks_index_revision()
+    }
+
     /// Paged vault-wide task query. Used by the Mac TasksReviewView
     /// to render filtered overdue / today / soon views without
     /// loading every task into memory.

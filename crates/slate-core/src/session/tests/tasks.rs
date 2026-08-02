@@ -244,6 +244,33 @@ fn post_write_failures_leave_disk_newer_and_reindex_path_repairs_it() {
 }
 
 #[test]
+fn tasks_index_revision_sees_other_sessions_where_the_generation_cannot() {
+    // Adversarial round 14: the session-local generation cannot see
+    // another PROCESS committing to the shared cache DB — a paging
+    // cursor could read a mutated index with both drift checks still
+    // equal. A second session on the same vault stands in for the
+    // second process (same shared DB, different connection).
+    let (tmp, session_a) = make_vault(|p| {
+        p.write_file("notes/shared.md", b"- [ ] cross-process\n")
+            .unwrap();
+    });
+    session_a.scan_initial(&CancelToken::new()).unwrap();
+
+    let generation_before = session_a.interaction_generation();
+    let revision_before = session_a.tasks_index_revision();
+
+    let session_b = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    session_b
+        .save_text("notes/shared.md", "- [x] cross-process\n", None)
+        .unwrap();
+
+    // The gap: A's generation never moved…
+    assert_eq!(generation_before, session_a.interaction_generation());
+    // …but the revision did, so drift checks built on it stay honest.
+    assert_ne!(revision_before, session_a.tasks_index_revision());
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.

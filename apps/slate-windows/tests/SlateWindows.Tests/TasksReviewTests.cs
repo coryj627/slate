@@ -619,6 +619,83 @@ public sealed class TasksReviewTests : IDisposable
     }
 
     [Fact]
+    public void FailedRepairsNeverReloadTheStaleIndex()
+    {
+        // Adversarial round 14: after a post-write failure the index
+        // is KNOWN stale — if the repair itself fails, reloading
+        // republishes the rolled-back rows as ghosts. The reload is
+        // gated on repair success; failed repairs go pending and the
+        // load workers retry them before every query.
+        _ = _session.SaveText("fault-pre-commit.md", "- [ ] flip me\n", null);
+        var announced = new List<A11yEvent>();
+        var review = MakeReview(announced);
+        review.EnsureLoaded();
+        ReviewTaskRowViewModel row = review.Rows.First(
+            r => r.Path == "fault-pre-commit.md");
+        int requestsBefore = review.LoadRequestIdForTests;
+
+        Environment.SetEnvironmentVariable(
+            "SLATE_TEST_FAULT_AFTER_WRITE", "fault-pre-commit");
+        Environment.SetEnvironmentVariable(
+            "SLATE_TEST_FAULT_REINDEX", "fault-pre-commit");
+        try
+        {
+            review.ToggleTask(row);
+
+            // Disk flipped, but the repair failed: NO reload — the
+            // stale index must not republish the open ghost row.
+            Assert.Contains(
+                "- [x] flip me",
+                File.ReadAllText(Path.Combine(_fixture.Root, "fault-pre-commit.md")));
+            Assert.Equal(requestsBefore, review.LoadRequestIdForTests);
+            Assert.False(
+                review.Rows.First(r => r.Path == "fault-pre-commit.md")
+                    .Task.Completed,
+                "rows must keep the last honest snapshot, not a ghost reload");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", null);
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_REINDEX", null);
+        }
+
+        // Once the fault clears, the next query retries the pending
+        // repair first and converges to disk truth.
+        review.ForceReload();
+        Assert.True(
+            review.Rows.First(r => r.Path == "fault-pre-commit.md")
+                .Task.Completed);
+    }
+
+    [Fact]
+    public void OtherSessionsWritingTheSharedIndexDriftThePaging()
+    {
+        // Adversarial round 14: the session-local generation cannot
+        // see another PROCESS committing to the shared cache DB — a
+        // second session stands in for it. The revision folds
+        // SQLite's data_version in, so the cursor drifts and reloads
+        // instead of appending a mixed snapshot.
+        var review = MakeReview();
+        review.EnsureLoaded();
+        Assert.True(review.HasMore);
+        int before = review.LoadRequestIdForTests;
+
+        using var otherSession = VaultSession.OpenFilesystem(_fixture.Root);
+        review.InterleaveForTests = () =>
+        {
+            review.InterleaveForTests = null;
+            _ = otherSession.SaveText("b.md", "- [ ] from b, moved\n", null);
+        };
+        review.LoadMore();
+
+        Assert.Equal(before + 1, review.LoadRequestIdForTests);
+        Assert.Equal(200, review.Rows.Count);
+        Assert.False(review.IsLoadingMore);
+    }
+
+    [Fact]
     public void SupersededLoadMoreCannotWedgeThePagingButton()
     {
         var review = MakeReview();

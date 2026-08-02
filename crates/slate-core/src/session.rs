@@ -1611,6 +1611,26 @@ impl VaultSession {
         self.bases_generation()
     }
 
+    /// Cross-process-aware revision for PAGED index snapshots
+    /// (adversarial round 14). [`Self::interaction_generation`] is
+    /// session-local: another PROCESS committing to the shared cache
+    /// database never advances it, so a paging cursor could read a
+    /// mutated index with both before/after checks still equal.
+    /// SQLite's `data_version` pragma increments exactly when a
+    /// DIFFERENT connection commits; summing both axes (each
+    /// non-decreasing) makes "unchanged between reads" honest across
+    /// sessions and processes. Takes the session lock briefly —
+    /// callers are background snapshot workers, never per-keystroke
+    /// editor paths (those keep the lock-free generation).
+    pub fn tasks_index_revision(&self) -> u64 {
+        let conn = self.conn.lock().expect("session connection mutex");
+        let data_version: i64 = conn
+            .query_row("PRAGMA data_version", [], |row| row.get(0))
+            .unwrap_or(0);
+        self.bases_generation()
+            .wrapping_add(u64::try_from(data_version).unwrap_or(0))
+    }
+
     // --- GraphIndex plumbing (Milestone P #550) -------------------------
 
     /// Open a staging sink for one hooked mutation. Live only when
@@ -5787,6 +5807,17 @@ impl VaultSession {
     /// [`Self::ensure_open_base_indexed`]: the existing row is
     /// exactly what's wrong.
     pub fn reindex_path(&self, path: &str) -> Result<(), VaultError> {
+        // Test-only fault seam (adversarial round 14): a repair can
+        // itself fail, and the hosts must not treat "repair
+        // attempted" as "repair succeeded" — same env-var path
+        // trigger discipline as the save-path seam.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_REINDEX")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return Err(VaultError::InvalidArgument {
+                message: "test fault: injected reindex failure".into(),
+            });
+        }
         let mut conn = self.conn.lock().expect("session connection mutex");
         let tx = conn.transaction()?;
         // Poison the cached stat tuple FIRST (adversarial round 13):

@@ -1652,10 +1652,22 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     // index-uncommitted, so reloading before the
                     // repair would re-query the stale index and
                     // resurrect the pre-write state as ghost rows.
-                    TryReindexPath(path);
+                    // Tab reconciliation is hash-truth and runs
+                    // either way; the surface reloads are GATED on
+                    // the repair succeeding (round 14) — a failed
+                    // repair goes pending and the review's load
+                    // workers retry it before every query.
+                    bool repaired = TryReindexPath(path);
                     ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash!);
-                    Panels.NoteSaved(path);
-                    TasksReview.NoteRefreshed(path);
+                    if (repaired)
+                    {
+                        Panels.NoteSaved(path);
+                        TasksReview.NoteRefreshed(path);
+                    }
+                    else
+                    {
+                        TasksReview.NotePendingRepair(path);
+                    }
                 }
                 // Idempotent after NoteRefreshed consumed the marker;
                 // disarms it when disk truly never changed.
@@ -1693,18 +1705,22 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         };
     }
 
-    /// <summary>Best-effort per-path index repair (adversarial round
-    /// 12): a failed repair leaves the reload no worse than before —
-    /// the honesty announcements already happened, and the next scan
-    /// converges by mtime.</summary>
-    private void TryReindexPath(string path)
+    /// <summary>Per-path index repair (adversarial rounds 12 and
+    /// 14): reports success so callers can GATE surface reloads on
+    /// it — a failed repair leaves the index known-stale, and
+    /// reloading it would republish the rolled-back rows. The
+    /// coarse-mtime world means a later scan may never converge by
+    /// itself, so failed repairs go pending with the review.</summary>
+    private bool TryReindexPath(string path)
     {
         try
         {
             _session.ReindexPath(path);
+            return true;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
+            return false;
         }
     }
 
