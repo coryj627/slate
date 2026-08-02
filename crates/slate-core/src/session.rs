@@ -3305,6 +3305,24 @@ impl VaultSession {
         // `WriteConflict`, never a silent clobber. A post-timeout
         // SQLITE_BUSY surfaces as `Db` (the CLI maps it to its "cache is
         // busy" copy).
+        // Durable cross-process write intent (adversarial round 21):
+        // committed BEFORE the write (autocommit, its own fsync) so a
+        // post-write rollback — or a crash — leaves it behind for
+        // EVERY process sharing the cache; deleted inside the index
+        // transaction below so success clears it atomically with the
+        // commit. Pre-write failures (a WriteConflict refusal, say)
+        // also leave it behind; the abandoned-intent repair path
+        // reindexes a consistent file — a cheap no-op — and clears
+        // it, which is accepted over restructuring this function
+        // around early-return cleanup. Side effect worth noting: the
+        // committed insert advances other connections'
+        // `data_version`, so their paging drift checks fire even
+        // before the main transaction lands.
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms) VALUES (?1, ?2)",
+            rusqlite::params![path, now_ms()],
+        )?;
+
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
 
         // `old_contents` is `Some(text)` only on the Some(expected_hash)
@@ -3398,6 +3416,14 @@ impl VaultSession {
         // atomically with the save it serves (O-1 #539). Best-effort:
         // `None` skips the append below exactly like an append failure.
         let oplog_name = self.ensure_oplog_name(&tx, file_id, path);
+        // Clear the write intent ATOMICALLY with the index commit
+        // (round 21): a rollback of this transaction re-exposes the
+        // committed intent row, which is exactly the durable
+        // post-write marker other processes need.
+        tx.execute(
+            "DELETE FROM text_write_intents WHERE path = ?1",
+            rusqlite::params![path],
+        )?;
         tx.commit()?;
         self.graph_apply(graph_sink);
         self.bump_bases_generation();
@@ -5774,7 +5800,8 @@ impl VaultSession {
     /// Every task parsed from `path`, in document order. Returns an
     /// empty vec when the file isn't indexed yet or has no tasks.
     pub fn tasks_for_file(&self, path: &str) -> Result<Vec<crate::TaskItem>, VaultError> {
-        let conn = self.conn.lock().expect("session connection mutex");
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        self.repair_abandoned_intents_locked(&mut conn, Some(path))?;
         crate::tasks_db::tasks_for_file(&conn, path)
     }
 
@@ -5784,7 +5811,8 @@ impl VaultSession {
     /// panel header stays honest past its display cap. Unknown paths
     /// return an empty page.
     pub fn note_tasks(&self, path: &str, limit: u32) -> Result<NoteTasksPage, VaultError> {
-        let conn = self.conn.lock().expect("session connection mutex");
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        self.repair_abandoned_intents_locked(&mut conn, Some(path))?;
         let (tasks, total, open_total, content_hash) =
             crate::tasks_db::note_tasks_bounded(&conn, path, limit)?;
         Ok(NoteTasksPage {
@@ -5807,6 +5835,66 @@ impl VaultSession {
     /// [`Self::ensure_open_base_indexed`]: the existing row is
     /// exactly what's wrong.
     pub fn reindex_path(&self, path: &str) -> Result<(), VaultError> {
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        self.reindex_path_locked(&mut conn, path)
+    }
+
+    /// Millisecond age past which a surviving [`text_write_intents`]
+    /// row counts as ABANDONED (its writer rolled back or crashed)
+    /// rather than in-flight. Tests collapse it per-path via
+    /// `SLATE_TEST_INTENT_ABANDON_ZERO_FOR=<path-substring>` so
+    /// parallel suites' healthy in-flight saves stay untouched.
+    fn intent_abandon_threshold_ms(path: &str) -> i64 {
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_INTENT_ABANDON_ZERO_FOR")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return 0;
+        }
+        15_000
+    }
+
+    /// Self-heal ABANDONED cross-process write intents before a task
+    /// query (adversarial round 21): another process's post-write
+    /// rollback moves no committed state this session could observe,
+    /// but the intent row it committed BEFORE its write survives —
+    /// repair every abandoned path (a single-file reindex, which
+    /// also clears the intent) so the query below reads disk truth
+    /// instead of the other process's ghost rows. Fresh intents are
+    /// in-flight writes and are left alone: reading past them is
+    /// ordinary transient staleness that converges on their commit.
+    fn repair_abandoned_intents_locked(
+        &self,
+        conn: &mut Connection,
+        scope: Option<&str>,
+    ) -> Result<(), VaultError> {
+        let now = now_ms();
+        let candidates: Vec<String> = {
+            let mut stmt =
+                conn.prepare_cached("SELECT path, created_ms FROM text_write_intents")?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (path, created_ms) = row?;
+                if let Some(scope_path) = scope
+                    && path != scope_path
+                {
+                    continue;
+                }
+                if now - created_ms >= Self::intent_abandon_threshold_ms(&path) {
+                    out.push(path);
+                }
+            }
+            out
+        };
+        for path in candidates {
+            self.reindex_path_locked(conn, &path)?;
+        }
+        Ok(())
+    }
+
+    fn reindex_path_locked(&self, conn: &mut Connection, path: &str) -> Result<(), VaultError> {
         // Test-only fault seam (adversarial round 14): a repair can
         // itself fail, and the hosts must not treat "repair
         // attempted" as "repair succeeded" — same env-var path
@@ -5818,7 +5906,6 @@ impl VaultSession {
                 message: "test fault: injected reindex failure".into(),
             });
         }
-        let mut conn = self.conn.lock().expect("session connection mutex");
         let tx = conn.transaction()?;
         // Poison the cached stat tuple FIRST (adversarial round 13):
         // `index_file`'s fast path trusts a matching (mtime, size,
@@ -5853,6 +5940,13 @@ impl VaultSession {
             self.config.large_file_refuse_bytes,
             None,
             &mut graph_sink,
+        )?;
+        // A successful repair converges the index to disk truth for
+        // this path, so the durable cross-process suspicion marker
+        // clears with it (round 21).
+        tx.execute(
+            "DELETE FROM text_write_intents WHERE path = ?1",
+            rusqlite::params![path],
         )?;
         tx.commit()?;
         self.graph_apply(graph_sink);
@@ -6742,7 +6836,10 @@ impl VaultSession {
         filter: crate::TaskFilter,
         paging: Paging,
     ) -> Result<Page<crate::TaskWithLocation>, VaultError> {
-        let conn = self.conn.lock().expect("session connection mutex");
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        // Vault-wide query → vault-wide abandoned-intent sweep
+        // (round 21): any path's ghost rows could land in this page.
+        self.repair_abandoned_intents_locked(&mut conn, None)?;
         crate::tasks_db::tasks_in_vault(&conn, filter, paging)
     }
 

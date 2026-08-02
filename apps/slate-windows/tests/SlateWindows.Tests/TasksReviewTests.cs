@@ -572,6 +572,7 @@ public sealed class TasksReviewTests : IDisposable
     [Fact]
     public void RealPreCommitFailuresRepairTheIndexBeforeReloading()
     {
+        using var _envLock = EnvFaultLock.Acquire();
         // Adversarial round 12: the round-11 seam injected AFTER the
         // core committed, so it never exercised the REAL window —
         // file written, index rolled back. The core's own fault seam
@@ -623,6 +624,7 @@ public sealed class TasksReviewTests : IDisposable
     [Fact]
     public void FailedRepairsNeverReloadTheStaleIndex()
     {
+        using var _envLock = EnvFaultLock.Acquire();
         // Adversarial round 14: after a post-write failure the index
         // is KNOWN stale — if the repair itself fails, reloading
         // republishes the rolled-back rows as ghosts. The reload is
@@ -858,6 +860,7 @@ public sealed class TasksReviewTests : IDisposable
     [Fact]
     public void FailingRepairsMidQueryStillDiscardTheResult()
     {
+        using var _envLock = EnvFaultLock.Acquire();
         // Adversarial round 18: a FAILING repair registering while
         // the query is in flight advances the epoch and stays
         // pending — the atomic ticket taken before the query plus
@@ -933,6 +936,7 @@ public sealed class TasksReviewTests : IDisposable
     [Fact]
     public void TogglesOverlappingAQueryInvalidateItsTicket()
     {
+        using var _envLock = EnvFaultLock.Acquire();
         // Adversarial round 19: the stale-index interval starts at
         // the file WRITE, not at the dispatcher-side completion — a
         // query whose clean ticket predates the toggle must

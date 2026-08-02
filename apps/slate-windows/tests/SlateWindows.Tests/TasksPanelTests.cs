@@ -818,6 +818,7 @@ public sealed class TasksPanelTests : IDisposable
     [Fact]
     public void RealPreCommitFailuresRepairTheIndexOnTheTabRoute()
     {
+        using var _envLock = EnvFaultLock.Acquire();
         // Adversarial round 12, tab route at the REAL boundary: the
         // core's fault seam rolls the index back after the file
         // write, so recovery must reindex the path before any
@@ -882,6 +883,7 @@ public sealed class TasksPanelTests : IDisposable
     [Fact]
     public void ThePanelHonorsTheSharedRepairQuarantine()
     {
+        using var _envLock = EnvFaultLock.Acquire();
         // Adversarial round 15: pending repairs were review-only —
         // the note panel queried NoteTasks directly, so navigating
         // away and back republished the rolled-back row and its
@@ -1071,6 +1073,7 @@ public sealed class TasksPanelTests : IDisposable
     [Fact]
     public void TogglesOverlappingAPanelReadInvalidateItsTicket()
     {
+        using var _envLock = EnvFaultLock.Acquire();
         // Adversarial round 19, panel surface: a direct review
         // toggle of an UNRELATED path fails post-write (both fault
         // seams) while the panel reads its own note — the panel's
@@ -1135,6 +1138,7 @@ public sealed class TasksPanelTests : IDisposable
     [Fact]
     public void ManualSavesFailingPostWriteQuarantineBothSurfaces()
     {
+        using var _envLock = EnvFaultLock.Acquire();
         // Adversarial round 20: ordinary saves route through the
         // same file-before-index pipeline as toggles — a manual
         // task edit whose save fails post-write must enter the same

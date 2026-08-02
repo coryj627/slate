@@ -182,6 +182,7 @@ fn vault_pages_bound_task_text_before_ffi() {
 
 #[test]
 fn post_write_failures_leave_disk_newer_and_reindex_path_repairs_it() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
     // Adversarial round 12: the REAL partial-failure boundary —
     // save_text writes the file, then the index commit fails. The
     // fault seam trips only on a path containing the trigger, so
@@ -268,6 +269,61 @@ fn tasks_index_revision_sees_other_sessions_where_the_generation_cannot() {
     assert_eq!(generation_before, session_a.interaction_generation());
     // …but the revision did, so drift checks built on it stay honest.
     assert_ne!(revision_before, session_a.tasks_index_revision());
+}
+
+#[test]
+fn cross_process_post_write_rollbacks_self_heal_on_other_sessions() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 21: process A's post-write rollback moves no
+    // committed state process B could observe (`data_version` only
+    // advances on commits), so B's task queries would publish A's
+    // ghost rows forever. The durable write intent — committed
+    // BEFORE A's file write, surviving its rollback — marks the path
+    // suspect for every process; abandoned intents self-heal via a
+    // single-file reindex inside the query paths. A second session
+    // on the same vault stands in for the second process.
+    let (tmp, session_a) = make_vault(|p| {
+        p.write_file("notes/xproc-intent.md", b"- [ ] flip me\n")
+            .unwrap();
+    });
+    session_a.scan_initial(&CancelToken::new()).unwrap();
+    let session_b = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+
+    // A fails post-write: disk flipped, A's index tx rolled back,
+    // the intent row (committed pre-write) survives.
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "xproc-intent") };
+    let result = session_a.toggle_task_status("notes/xproc-intent.md", 0, 'x', None);
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    assert!(result.is_err());
+
+    // Fresh intent (within the liveness threshold): B reads the old
+    // but CONSISTENT snapshot — ordinary transient staleness, not an
+    // error.
+    let fresh = session_b.note_tasks("notes/xproc-intent.md", 10).unwrap();
+    assert!(!fresh.tasks[0].completed);
+
+    // Abandoned (threshold collapsed for this path only): BOTH of
+    // B's query surfaces self-heal to disk truth.
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "xproc-intent") };
+    let healed = session_b.note_tasks("notes/xproc-intent.md", 10).unwrap();
+    let page = session_b
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .unwrap();
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        healed.tasks[0].completed,
+        "note_tasks must heal to disk truth"
+    );
+    let row = page
+        .items
+        .iter()
+        .find(|r| r.path == "notes/xproc-intent.md")
+        .expect("the healed task row");
+    assert!(row.task.completed, "tasks_in_vault must heal to disk truth");
+
+    // The heal cleared the intent: later queries take the fast path.
+    let settled = session_b.note_tasks("notes/xproc-intent.md", 10).unwrap();
+    assert!(settled.tasks[0].completed);
 }
 
 #[test]
