@@ -3404,6 +3404,27 @@ impl VaultSession {
             );
         }
 
+        // Test-only seam (adversarial round 32): another writer's
+        // FULL INDEX COMMIT landing in the registration→transaction
+        // gap — it indexed the OLD bytes, advancing the file's
+        // epoch past this writer's stamp. Committed through a
+        // genuine second connection, exactly as a real racing
+        // process would.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_COMMIT_AFTER_INTENT")
+            && path.contains(trigger.to_string_lossy().as_ref())
+            && let Some(db_path) = conn.path()
+            && let Ok(other) = Connection::open(db_path)
+        {
+            let _ = other.execute_batch(&format!(
+                "BEGIN IMMEDIATE;
+                 UPDATE index_epoch_clock SET clock = clock + 1;
+                 UPDATE files SET index_epoch = (SELECT clock FROM index_epoch_clock)
+                  WHERE path = '{}';
+                 COMMIT;",
+                path.replace('\'', "''")
+            ));
+        }
+
         // `new_unchecked` (shared-borrow) rather than
         // `transaction_with_behavior` (&mut): the error arm must
         // clear the registration through `conn`, and the &mut
@@ -3422,31 +3443,55 @@ impl VaultSession {
         };
 
         // Ownership FENCE at the transaction boundary (adversarial
-        // round 26): a writer suspended past the liveness threshold
-        // in the registration→transaction gap can have its row
-        // swept as abandoned — resuming to write with no durable
-        // marker reopens the unmarked-failure window. Verify the
-        // registration under the writer lock; if swept, re-register
-        // (a COMMITTED insert — an in-transaction one would roll
-        // back with the failure it exists to mark) and retake the
-        // lock. Reaching the retry bound requires multi-second
+        // rounds 26 + 32): a writer suspended past the liveness
+        // threshold in the registration→transaction gap can have
+        // its row swept as abandoned — resuming to write with no
+        // durable marker reopens the unmarked-failure window. And a
+        // FULL INDEX COMMIT landing in that same gap (another
+        // writer indexing the OLD bytes) advances the file's epoch
+        // past the stamp, so a post-write failure's marker would
+        // read as provably-superseded and be deleted — leaving the
+        // OTHER writer's now-stale rows serving unmarked. Verify
+        // BOTH under the writer lock — the row stands AND its stamp
+        // equals the file's current epoch; on either miss,
+        // re-register (a COMMITTED insert re-stamping the current
+        // epoch — an in-transaction one would roll back with the
+        // failure it exists to mark) and retake the lock. The lock
+        // is then held from this validation through the write, so
+        // the stamp provably equals the epoch AT the write.
+        // Reaching the retry bound requires multi-second
         // suspensions inside consecutive microsecond windows; fail
         // closed rather than write unmarked.
         let mut intent_secured = false;
         for _ in 0..3 {
-            let alive: bool = match tx.query_row(
-                "SELECT EXISTS(SELECT 1 FROM text_write_intents WHERE path = ?1 AND token = ?2)",
-                rusqlite::params![path, intent_token],
-                |row| row.get(0),
-            ) {
-                Ok(alive) => alive,
+            let stamped_epoch: Option<i64> = match tx
+                .query_row(
+                    "SELECT registered_epoch FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                    rusqlite::params![path, intent_token],
+                    |row| row.get(0),
+                )
+                .optional()
+            {
+                Ok(stamped) => stamped,
                 Err(e) => {
                     drop(tx);
                     self.clear_own_intent_registration(conn, path, intent_token);
                     return Err(e.into());
                 }
             };
-            if alive {
+            let current_epoch: i64 = match tx.query_row(
+                "SELECT COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0)",
+                rusqlite::params![path],
+                |row| row.get(0),
+            ) {
+                Ok(current) => current,
+                Err(e) => {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e.into());
+                }
+            };
+            if stamped_epoch == Some(current_epoch) {
                 intent_secured = true;
                 break;
             }
@@ -4117,15 +4162,14 @@ impl VaultSession {
                 )?;
             }
         }
-        // Index epoch (adversarial round 31): this commit is a
+        // Index epoch (adversarial rounds 31-32): this commit is a
         // successful full-file index of `contents` — durable proof
         // that any write intent registered BEFORE it is superseded.
-        // Bumped in the same transaction as the rows it vouches for,
-        // so a rollback moves neither.
-        tx.execute(
-            "UPDATE files SET index_epoch = index_epoch + 1 WHERE id = ?1",
-            rusqlite::params![file_id],
-        )?;
+        // Stamped from the GLOBAL monotonic clock in the same
+        // transaction as the rows it vouches for, so a rollback
+        // moves neither and a delete/recreate can never reuse an
+        // earlier value (ABA).
+        stamp_index_epoch(tx, file_id)?;
         Ok(file_id)
     }
 
@@ -6139,9 +6183,18 @@ impl VaultSession {
             )
             .optional()?;
         match already_quarantined {
-            // No index row at all: nothing suspect is being served.
-            None => return Ok(true),
-            Some(true) => return Ok(true),
+            // No index row (never indexed, or deleted) or already
+            // quarantined: nothing suspect is being served, but the
+            // gate release still needs a durable healing trigger
+            // (adversarial round 32) — Contained without a marker
+            // left the path honest-empty FOREVER when the file
+            // became readable without a filesystem event. Ensure a
+            // marker stands before releasing.
+            None | Some(true) => {
+                Self::ensure_aged_healing_marker(&tx, path)?;
+                tx.commit()?;
+                return Ok(true);
+            }
             Some(false) => {}
         }
         tx.execute(
@@ -6156,6 +6209,34 @@ impl VaultSession {
         // already aged: the very next task query sweeps it, retries
         // the repair, and clears it on success — self-healing in
         // every process sharing the cache.
+        Self::ensure_aged_healing_marker(&tx, path)?;
+        tx.commit()?;
+        self.bump_bases_generation();
+        self.notify_file_change(FileChangeKind::Modified, path, None);
+        Ok(true)
+    }
+
+    /// Plant an ALREADY-AGED durable marker for `path` unless an
+    /// aged one already stands (adversarial round 32): every
+    /// Contained outcome must leave a trigger the sweep will
+    /// actually FIRE on — a fresh marker (the failed save's own, a
+    /// live writer's) doesn't age for 15s, and a pre-write failure
+    /// could even clear it, leaving the contained path honest-empty
+    /// with nothing to heal it. Aged-marker-conditional rather than
+    /// unconditional so repeated containments don't accumulate
+    /// token rows.
+    fn ensure_aged_healing_marker(
+        tx: &rusqlite::Transaction,
+        path: &str,
+    ) -> Result<(), VaultError> {
+        let aged_marker_stands: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM text_write_intents WHERE path = ?1 AND created_ms <= ?2)",
+            rusqlite::params![path, now_ms() - Self::intent_abandon_threshold_ms(path)],
+            |row| row.get(0),
+        )?;
+        if aged_marker_stands {
+            return Ok(());
+        }
         tx.execute(
             "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
              VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
@@ -6165,10 +6246,7 @@ impl VaultSession {
                 fresh_intent_token()
             ],
         )?;
-        tx.commit()?;
-        self.bump_bases_generation();
-        self.notify_file_change(FileChangeKind::Modified, path, None);
-        Ok(true)
+        Ok(())
     }
 
     /// Millisecond age past which a surviving [`text_write_intents`]
@@ -8913,14 +8991,11 @@ fn index_file(
         purge_markdown_derivatives(tx, file_id, path, vault_index, graph_sink)?;
         purge_canvas_rows(tx, file_id)?;
         crate::bases_db::delete_base_file_for_file(tx, file_id)?;
-        // Index epoch (adversarial round 31): the oversized posture
-        // — metadata row, empty body, derivatives purged — IS this
-        // file's full index truth, so the commit supersedes any
-        // older write intent just like a normal index does.
-        tx.execute(
-            "UPDATE files SET index_epoch = index_epoch + 1 WHERE id = ?1",
-            rusqlite::params![file_id],
-        )?;
+        // Index epoch (adversarial rounds 31-32): the oversized
+        // posture — metadata row, empty body, derivatives purged —
+        // IS this file's full index truth, so the commit supersedes
+        // any older write intent just like a normal index does.
+        stamp_index_epoch(tx, file_id)?;
         report.files_indexed += 1;
         return Ok(());
     }
@@ -9034,16 +9109,32 @@ fn index_file(
         }
     }
 
-    // Index epoch (adversarial round 31): a successful full-file
-    // index commit — durable proof that any write intent registered
-    // before it is superseded. The fast-path skip above deliberately
-    // does NOT bump: a tuple match re-reads nothing.
-    tx.execute(
-        "UPDATE files SET index_epoch = index_epoch + 1 WHERE id = ?1",
-        rusqlite::params![file_id],
-    )?;
+    // Index epoch (adversarial rounds 31-32): a successful
+    // full-file index commit — durable proof that any write intent
+    // registered before it is superseded. The fast-path skip above
+    // deliberately does NOT stamp: a tuple match re-reads nothing.
+    stamp_index_epoch(tx, file_id)?;
     report.files_indexed += 1;
     report.bytes_processed += stat.size_bytes;
+    Ok(())
+}
+
+/// Advance the GLOBAL index-epoch clock and stamp the new value onto
+/// `file_id` (W4-3 adversarial round 32). Global and monotonic —
+/// never per-file — so a deleted-and-recreated path can never stamp
+/// a value at or below a prior incarnation's markers (ABA), and any
+/// marker whose `registered_epoch` is behind its file's stamp is
+/// provably superseded by a full re-read that committed after it.
+fn stamp_index_epoch(tx: &rusqlite::Transaction, file_id: i64) -> Result<(), VaultError> {
+    let clock: i64 = tx.query_row(
+        "UPDATE index_epoch_clock SET clock = clock + 1 RETURNING clock",
+        [],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "UPDATE files SET index_epoch = ?1 WHERE id = ?2",
+        rusqlite::params![clock, file_id],
+    )?;
     Ok(())
 }
 

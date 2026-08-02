@@ -1148,6 +1148,204 @@ fn repair_or_contain_releases_a_permanently_unreadable_path() {
 }
 
 #[test]
+fn commits_in_the_registration_gap_never_orphan_the_marker() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 32: writer A registers (stamping epoch E),
+    // writer B wins the lock and fully indexes the OLD bytes
+    // (epoch E+1), then A writes the NEW bytes and fails before its
+    // index commit. A's marker stamped E would read as
+    // provably-superseded (E+1 > E) and be deleted — leaving B's
+    // stale rows serving with no repair trigger. The fence must
+    // re-stamp the marker to the current epoch under the writer
+    // lock before the write, so the post-write failure's marker
+    // stays CURRENT and containment (not silent staleness) wins.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/gap-commit.md", b"- [ ] old truth\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    unsafe { std::env::set_var("SLATE_TEST_COMMIT_AFTER_INTENT", "gap-commit") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "gap-commit") };
+    let result = session.save_text("notes/gap-commit.md", "- [x] old truth\n", None);
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    unsafe { std::env::remove_var("SLATE_TEST_COMMIT_AFTER_INTENT") };
+    assert!(result.is_err());
+
+    // The surviving marker is stamped AT the file's current epoch —
+    // the fence re-registered past the gap commit.
+    {
+        let conn = session.conn.lock().unwrap();
+        let (stamped, current): (i64, i64) = conn
+            .query_row(
+                "SELECT i.registered_epoch, f.index_epoch
+                 FROM text_write_intents i JOIN files f ON f.path = i.path
+                 WHERE i.path = ?1",
+                rusqlite::params!["notes/gap-commit.md"],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            stamped, current,
+            "the fence must re-stamp the marker to the epoch at the write"
+        );
+    }
+
+    // Un-repairable: the CURRENT marker contains (honest-empty) —
+    // the stale pre-write rows must not serve.
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "gap-commit") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "gap-commit") };
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("queries stay available");
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    assert!(
+        page.items.iter().all(|r| r.path != "notes/gap-commit.md"),
+        "the stale rows must not serve under a live current marker"
+    );
+
+    // Readable again: heals to the written bytes.
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    let row = healed
+        .items
+        .iter()
+        .find(|r| r.path == "notes/gap-commit.md")
+        .expect("the repaired path serves");
+    assert!(row.task.completed, "healed to the fenced write's bytes");
+}
+
+#[test]
+fn recreated_files_supersede_prior_incarnation_markers() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 32: a per-file epoch counter resets on
+    // delete/recreate, so a prior incarnation's marker could
+    // compare at-or-above the recreation's epoch (ABA) and vouch
+    // for quarantining the replacement's fresh rows. The GLOBAL
+    // clock never repeats: the recreation's full index commit
+    // stamps strictly greater than every earlier marker, so the old
+    // marker resolves as obsolete and the fresh rows keep serving.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/reborn.md", b"- [ ] first life\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        // A crashed writer's marker from the FIRST incarnation.
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+            rusqlite::params!["notes/reborn.md", now_ms(), 0xABAi64],
+        )
+        .unwrap();
+        // The incarnation dies: its files row goes away entirely
+        // (cascade takes the tasks), the marker survives.
+        conn.execute(
+            "DELETE FROM files WHERE path = ?1",
+            rusqlite::params!["notes/reborn.md"],
+        )
+        .unwrap();
+    }
+
+    // The recreation: a full save indexes the second incarnation.
+    let _ = session
+        .save_text("notes/reborn.md", "- [ ] second life\n", None)
+        .unwrap();
+
+    // Un-repairable moment: the old marker must resolve as
+    // obsolete — the recreation's stamp is strictly greater — and
+    // the second life's rows keep serving.
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "reborn") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "reborn") };
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        page.items
+            .iter()
+            .any(|r| r.path == "notes/reborn.md" && r.task.text.contains("second life")),
+        "the recreation's fresh rows keep serving"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/reborn.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(intents, 0, "the prior incarnation's marker resolved");
+    }
+}
+
+#[test]
+fn containment_without_an_index_row_still_plants_the_healing_marker() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 32: the host containment's missing-row arm
+    // released the coordinator gate WITHOUT a durable marker — if
+    // the file later became readable with no filesystem event, its
+    // tasks stayed honest-empty until a full scan. Contained must
+    // always leave a healing trigger.
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("notes/anchor.md", b"- [ ] anchor\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    // Created AFTER the scan: on disk, but no files row.
+    std::fs::write(
+        tmp.path().join("notes").join("ghostly.md"),
+        b"- [ ] unseen\n",
+    )
+    .unwrap();
+
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "ghostly") };
+    assert_eq!(
+        session.repair_or_contain_path("notes/ghostly.md").unwrap(),
+        TaskIndexRepairOutcome::Contained,
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    {
+        let conn = session.conn.lock().unwrap();
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/ghostly.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(intents, 1, "Contained must leave a healing marker");
+    }
+
+    // The file reads fine now: the planted marker heals on the very
+    // next query — no filesystem event, no full scan.
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "ghostly") };
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        healed.items.iter().any(|r| r.path == "notes/ghostly.md"),
+        "the never-indexed file's tasks appear via the planted marker"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/ghostly.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(intents, 0, "the marker cleared with the heal");
+    }
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.
