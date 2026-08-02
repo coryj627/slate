@@ -740,7 +740,14 @@ public sealed class TasksPanelTests : IDisposable
             SpinWait.SpinUntil(
                 () => DiskContains(densePath, "- [x] task 2\n"),
                 TimeSpan.FromSeconds(20)),
-            "the review toggle never reached disk");
+            "the review toggle never reached disk; announced: "
+                + string.Join(
+                    " | ",
+                    announced.Select(a => a switch
+                    {
+                        A11yEvent.HostComposed composed => composed.Text,
+                        _ => a.GetType().Name,
+                    })));
         Assert.Empty(announced.OfType<A11yEvent.TaskToggleConflict>());
         Assert.DoesNotContain(
             announced.OfType<A11yEvent.HostComposed>(),
