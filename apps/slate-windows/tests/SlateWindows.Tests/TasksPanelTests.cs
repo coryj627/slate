@@ -66,7 +66,7 @@ public sealed class TasksPanelTests : IDisposable
                 toggles?.Add(task);
                 return true;
             },
-            task => scrolls?.Add(task));
+            (task, _) => scrolls?.Add(task));
         return panels;
     }
 
@@ -211,7 +211,7 @@ public sealed class TasksPanelTests : IDisposable
         // round 0; surfaced by unrelated JIT-timing shifts in round 5).
         var panels = new RightPanePanelsViewModel(
             session, _ => { }, (_, _) => true, _ => true, (_, _) => { },
-            (_, _) => true, _ => { }, synchronousForTests: true);
+            (_, _) => true, (_, _) => { }, synchronousForTests: true);
         session.Dispose();
 
         panels.NoteChanged("n.md");
@@ -469,6 +469,41 @@ public sealed class TasksPanelTests : IDisposable
             () => announced.OfType<A11yEvent.HostComposed>()
                 .Any(composed => composed.Text == "Task completed."),
             "the disposed-tab panel completion never announced");
+    }
+
+    [Fact]
+    public void StalePanelRowsRefuseActivationUntilRefreshed()
+    {
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            _ => { },
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        // Captured BEFORE the save: rows read against the old content
+        // stay actionable while a refresh is in flight (adversarial
+        // round 7 — the review guard's note-panel twin).
+        NoteTaskRowViewModel stale = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "second open");
+
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        tab.EditorDocument!.Insert(0, "- [ ] inserted before everything\n");
+        Assert.True(tab.Save());
+        int caretBefore = tab.EditorCaretOffset;
+
+        // The stale row's byte offset points into the OLD text: the
+        // silent-refusal observable is the caret NOT moving.
+        workspace.Panels.OpenTask(stale);
+        Assert.Equal(caretBefore, tab.EditorCaretOffset);
+
+        // A fresh row activates: the caret parks at its task line.
+        NoteTaskRowViewModel fresh = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "second open");
+        Assert.NotSame(stale, fresh);
+        workspace.Panels.OpenTask(fresh);
+        Assert.NotEqual(caretBefore, tab.EditorCaretOffset);
     }
 
     [Fact]

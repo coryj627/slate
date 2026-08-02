@@ -1079,7 +1079,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                         && ReferenceEquals(group.ActiveTab, tab));
             },
             TogglePanelTask,
-            ScrollToPanelTask,
+            ScrollToPanelTaskIfCurrent,
             synchronousForTests: !startInteractionBackgroundWork);
         // The vault-wide Tasks Review leaf (W4-3): vault-lifetime
         // state, deliberately NOT keyed on the active note.
@@ -1672,6 +1672,28 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         return wasActive
             ? SlateWindows.Panels.ReviewOpenRoute.ScrolledInPlace
             : SlateWindows.Panels.ReviewOpenRoute.Opened;
+    }
+
+    /// <summary>The note panel's activation seam (adversarial round
+    /// 7, the review guard's note-panel twin): after a save, the old
+    /// rows stay actionable until the async refresh publishes, and a
+    /// stale byte offset against the new text moves the caret to
+    /// unrelated content. A hash mismatch refuses SILENTLY — the
+    /// panel's activation posture is a silent scroll, so the caret
+    /// NOT moving is the honest observable — and re-snapshots.</summary>
+    private void ScrollToPanelTaskIfCurrent(TaskItem task, string expectedContentHash)
+    {
+        if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab)
+        {
+            return;
+        }
+        if (!string.Equals(
+            tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        {
+            Panels.ReloadTasks();
+            return;
+        }
+        ScrollToPanelTask(task);
     }
 
     /// <summary>The panels' task-activation seam (W4-3): park the

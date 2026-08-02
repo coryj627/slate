@@ -92,7 +92,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
     private readonly Func<string, bool> _openExternal;
     private readonly Action<LinkAnchor, string?> _scrollToAnchor;
     private readonly Func<TaskItem, string, bool> _toggleTask;
-    private readonly Action<TaskItem> _scrollToTask;
+    private readonly Action<TaskItem, string> _scrollToTask;
 
     private string? _notePath;
     private string? _announcedOutlinePath;
@@ -121,7 +121,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         Func<string, bool> openExternal,
         Action<LinkAnchor, string?> scrollToAnchor,
         Func<TaskItem, string, bool> toggleTask,
-        Action<TaskItem> scrollToTask,
+        Action<TaskItem, string> scrollToTask,
         bool synchronousForTests = false)
         : base(synchronousForTests)
     {
@@ -869,8 +869,13 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
     }
 
     /// <summary>Row activation scrolls the editor to the task's line
-    /// (mac: silent scroll; the caret move is the observable).</summary>
-    public void OpenTask(NoteTaskRowViewModel row) => _scrollToTask(row.Task);
+    /// (mac: silent scroll; the caret move is the observable). The
+    /// row's snapshot hash rides along (adversarial round 7): a byte
+    /// offset only means anything against the content it was read
+    /// from, so the workspace refuses the scroll — silently, the
+    /// panel's activation posture — when the saved note has moved on.</summary>
+    public void OpenTask(NoteTaskRowViewModel row) =>
+        _scrollToTask(row.Task, row.ContentHash);
 
     // ---- Activation (mac AppState.openBacklink / openLink twins) ----
 

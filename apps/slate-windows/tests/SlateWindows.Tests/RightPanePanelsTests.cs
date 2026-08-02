@@ -155,7 +155,7 @@ public sealed class RightPanePanelsTests : IDisposable
             (anchor, resolvedText) =>
                 anchors?.Add(new AnchorRequest(anchor, resolvedText)),
             (_, _) => true,
-            _ => { });
+            (_, _) => { });
 
     private static void WaitFor(Func<bool> condition, string reason)
     {
@@ -848,7 +848,7 @@ public sealed class RightPanePanelsTests : IDisposable
         }
         var panels = new RightPanePanelsViewModel(
             session, _ => { }, (_, _) => true, _ => true, (_, _) => { },
-            (_, _) => true, _ => { });
+            (_, _) => true, (_, _) => { });
         session.Dispose();
 
         // Every core call now fails: the leaves must SAY so — a read
@@ -887,7 +887,7 @@ public sealed class RightPanePanelsTests : IDisposable
         }
         var panels = new RightPanePanelsViewModel(
             session, _ => { }, (_, _) => true, _ => true, (_, _) => { },
-            (_, _) => true, _ => { });
+            (_, _) => true, (_, _) => { });
 
         // Close the vault mid-batch: workers must degrade through
         // their catches — a drain that faults fails this test.
