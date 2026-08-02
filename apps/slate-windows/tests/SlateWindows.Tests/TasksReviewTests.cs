@@ -523,6 +523,51 @@ public sealed class TasksReviewTests : IDisposable
     }
 
     [Fact]
+    public void PostWriteFailuresStillRefreshTheSnapshot()
+    {
+        // Adversarial round 11: the core writes the FILE before
+        // committing the index, so an error without a SaveReport
+        // does NOT mean disk is unchanged. The fault seam throws
+        // AFTER the real write landed — the honest outcome is the
+        // failure announcement PLUS reconciliation, never a clean
+        // "nothing happened".
+        var announced = new List<A11yEvent>();
+        var review = MakeReview(announced);
+        review.EnsureLoaded();
+        ReviewTaskRowViewModel row = review.Rows.First(
+            r => r.Path == "a.md" && r.Task.Text == "overdue one");
+        var reconciled = new List<(string Path, string Hash)>();
+        review.DiskWriteLanded = (path, hash) => reconciled.Add((path, hash));
+        review.DirectToggleFaultForTests = () =>
+            throw new InvalidOperationException("index commit failed");
+
+        review.ToggleTask(row);
+
+        // The write landed before the injected failure…
+        Assert.Contains(
+            "- [x] overdue one",
+            File.ReadAllText(Path.Combine(_fixture.Root, "a.md")));
+        // …the failure is spoken, with no success verb…
+        _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
+            composed.Text == "Task could not be toggled: index commit failed");
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text == "Task completed.");
+        // …and the surfaces reconcile instead of assuming unchanged:
+        // the workspace seam heard the moved hash and the snapshot
+        // re-queried, so the toggled row reads Done and a retry
+        // cannot conflict against ghost state.
+        (string reconciledPath, string reconciledHash) = Assert.Single(reconciled);
+        Assert.Equal("a.md", reconciledPath);
+        Assert.NotEqual(row.ContentHash, reconciledHash);
+        Assert.Contains(
+            review.Rows,
+            r => r.Path == "a.md"
+                && r.Task.Text == "overdue one"
+                && r.Task.Completed);
+    }
+
+    [Fact]
     public void SupersededLoadMoreCannotWedgeThePagingButton()
     {
         var review = MakeReview();

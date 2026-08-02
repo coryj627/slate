@@ -528,7 +528,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     public TabTaskToggle ToggleTask(
         TaskItem task,
         Action<A11yEvent> announce,
-        Action<SaveReport?, VaultException?, bool>? completion = null)
+        Action<SaveReport?, VaultException?, string?, bool>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(announce);
@@ -567,7 +567,37 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     private sealed record TaskToggleOutcome(
         SaveReport? Report,
         VaultException? Error,
-        string? UpdatedText);
+        string? UpdatedText,
+        string? PostFailureDiskHash = null);
+
+    /// <summary>Test seam (adversarial round 11): runs INSIDE the
+    /// toggle worker after the core write succeeded — throwing here
+    /// simulates the core's real partial-failure window (file
+    /// written, index commit failed) with an actual landed write.</summary>
+    internal Action? TaskToggleFaultForTests { get; set; }
+
+    /// <summary>Disk hash read back after a failed toggle
+    /// (adversarial round 11): the core writes the FILE before
+    /// committing the index, so an error without a SaveReport does
+    /// NOT mean disk is unchanged. WriteConflict refuses BEFORE any
+    /// write, so it skips the read; unreadable disk reports null
+    /// (unknown).</summary>
+    private string? ReadBackDiskHashAfterFailure(
+        string path, VaultException? error)
+    {
+        if (error is VaultException.WriteConflict)
+        {
+            return null;
+        }
+        try
+        {
+            return _session.ReadNoteParts(path).ContentHash;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return null;
+        }
+    }
 
     private void PerformTaskToggle(
         int generation,
@@ -578,7 +608,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         TaskItem task,
         string nextStatus,
         Action<A11yEvent> announce,
-        Action<SaveReport?, VaultException?, bool>? completion = null)
+        Action<SaveReport?, VaultException?, string?, bool>? completion = null)
     {
         TaskToggleOutcome outcome;
         try
@@ -592,18 +622,24 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
                 task.Ordinal,
                 nextStatus,
                 expectedHash);
+            TaskToggleFaultForTests?.Invoke();
             outcome = new TaskToggleOutcome(report, null, updatedText);
         }
         catch (VaultException exception)
         {
-            outcome = new TaskToggleOutcome(null, exception, null);
+            outcome = new TaskToggleOutcome(
+                null,
+                exception,
+                null,
+                ReadBackDiskHashAfterFailure(path, exception));
         }
         catch (InvalidOperationException exception)
         {
             outcome = new TaskToggleOutcome(
                 null,
                 new VaultException.InvalidArgument(exception.Message),
-                null);
+                null,
+                ReadBackDiskHashAfterFailure(path, null));
         }
 
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
@@ -634,7 +670,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         string nextStatus,
         Action<A11yEvent> announce,
         TaskToggleOutcome outcome,
-        Action<SaveReport?, VaultException?, bool>? completion = null)
+        Action<SaveReport?, VaultException?, string?, bool>? completion = null)
     {
         // The completion outlives THIS TAB deliberately (adversarial
         // round 3): the dispatcher belongs to the app, so a caller
@@ -649,7 +685,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
             PublishTaskToggleThroughTab(
                 path, expectedHash, revision, task, nextStatus, announce, outcome);
         }
-        completion?.Invoke(outcome.Report, outcome.Error, tabPublished);
+        completion?.Invoke(
+            outcome.Report, outcome.Error, outcome.PostFailureDiskHash, tabPublished);
     }
 
     private void PublishTaskToggleThroughTab(
@@ -1569,7 +1606,8 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 System.IO.Path.GetFileName(tab.Path)));
             return SlateWindows.Panels.ReviewToggleRoute.RefusedStale;
         }
-        return tab.ToggleTask(task, _announce, TaskToggleCompletion(path, task)) switch
+        return tab.ToggleTask(
+            task, _announce, TaskToggleCompletion(path, task, tab.SavedContentHash)) switch
         {
             TabTaskToggle.Started => SlateWindows.Panels.ReviewToggleRoute.Started,
             // Busy: the tab announced; the review must NOT arm a
@@ -1587,16 +1625,34 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     /// review's pending refresh; successes announce when the tab
     /// could not, re-snapshot the panels and the review, and give
     /// orphaned same-path tabs the divergence honesty.</summary>
-    private Action<SaveReport?, VaultException?, bool> TaskToggleCompletion(
-        string path, TaskItem task)
+    private Action<SaveReport?, VaultException?, string?, bool> TaskToggleCompletion(
+        string path, TaskItem task, string? preToggleHash)
     {
         string fileName = System.IO.Path.GetFileName(path);
-        return (report, error, publishedThroughTab) =>
+        return (report, error, postFailureDiskHash, publishedThroughTab) =>
         {
             if (report is null)
             {
-                // Disk never changed: a later unrelated save of this
-                // path must not reset the review's paging.
+                // No SaveReport does NOT mean disk is unchanged
+                // (adversarial round 11): the core writes the FILE
+                // before committing the index, so a post-write
+                // failure leaves the checkbox flipped on disk with
+                // no report. The worker read the disk back — a moved
+                // hash reconciles tabs and re-snapshots both task
+                // surfaces instead of retaining an obsolete clean
+                // editor over changed disk.
+                bool diskMoved = postFailureDiskHash is not null
+                    && preToggleHash is not null
+                    && !string.Equals(
+                        postFailureDiskHash, preToggleHash, StringComparison.Ordinal);
+                if (diskMoved)
+                {
+                    ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash!);
+                    Panels.NoteSaved(path);
+                    TasksReview.NoteRefreshed(path);
+                }
+                // Idempotent after NoteRefreshed consumed the marker;
+                // disarms it when disk truly never changed.
                 TasksReview.ToggleAbandoned(path);
                 if (!publishedThroughTab)
                 {
@@ -1683,7 +1739,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // The same terminal completion as the review route
         // (adversarial round 4): a panel toggle whose tab is closed
         // mid-flight must still announce and re-snapshot.
-        return tab.ToggleTask(task, _announce, TaskToggleCompletion(tab.Path, task))
+        return tab.ToggleTask(
+                task,
+                _announce,
+                TaskToggleCompletion(tab.Path, task, tab.SavedContentHash))
             != TabTaskToggle.Refused;
     }
 

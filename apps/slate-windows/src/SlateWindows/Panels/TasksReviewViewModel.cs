@@ -327,6 +327,13 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     /// save is otherwise impossible to schedule deterministically.</summary>
     internal Action? InterleaveForTests { get; set; }
 
+    /// <summary>Test seam (adversarial round 11): runs inside the
+    /// direct-toggle worker after the core write succeeded —
+    /// throwing here simulates the core's partial-failure window
+    /// (file written, index commit failed) with a real landed
+    /// write.</summary>
+    internal Action? DirectToggleFaultForTests { get; set; }
+
     /// <summary>Internal so stale-ordering is testable
     /// deterministically (the PublishOutline pattern).</summary>
     internal void PublishFirstPage(
@@ -517,10 +524,12 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             SaveReport? report = null;
             bool conflict = false;
             string? failure = null;
+            string? postFailureDiskHash = null;
             try
             {
                 report = _session.ToggleTaskStatus(
                     path, task.Ordinal, nextStatus, expectedHash);
+                DirectToggleFaultForTests?.Invoke();
             }
             catch (VaultException.WriteConflict)
             {
@@ -532,6 +541,19 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 failure = exception.Message;
+                // Round 11: the core writes the FILE before
+                // committing the index, so a non-conflict failure
+                // does NOT mean disk is unchanged — read it back.
+                try
+                {
+                    postFailureDiskHash =
+                        _session.ReadNoteParts(path).ContentHash;
+                }
+                catch (Exception readBack) when (
+                    readBack is not OutOfMemoryException)
+                {
+                    postFailureDiskHash = null;
+                }
             }
             Post(() =>
             {
@@ -554,6 +576,17 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     _announce(new A11yEvent.HostComposed(
                         $"Task could not be toggled: {failure}",
                         A11yPriority.High));
+                    if (postFailureDiskHash is not null
+                        && !string.Equals(
+                            postFailureDiskHash, expectedHash, StringComparison.Ordinal))
+                    {
+                        // The write landed before the failure: the
+                        // workspace reconciles any tab that opened,
+                        // and the rows re-snapshot so a retry can't
+                        // conflict against ghost state (round 11).
+                        DiskWriteLanded?.Invoke(path, postFailureDiskHash);
+                        LoadFirstPage();
+                    }
                     return;
                 }
                 // The NoOpenTab route was decided BEFORE this write

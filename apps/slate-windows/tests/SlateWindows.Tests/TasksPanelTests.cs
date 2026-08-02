@@ -756,6 +756,63 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void PostWriteToggleFailuresReconcileInsteadOfAssumingUnchanged()
+    {
+        // Adversarial round 11, tab route: the checkbox flips on
+        // disk, then the failure lands — the clean editor is now
+        // obsolete and the rows are ghosts. The completion must
+        // reconcile, not assume "disk never changed".
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        NoteTaskRowViewModel row = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "first open");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        tab.TaskToggleFaultForTests = () =>
+            throw new InvalidOperationException("index commit failed");
+
+        workspace.Panels.ToggleTask(row);
+        string diskPath = Path.Combine(_fixture.Root, "todo.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => DiskContains(diskPath, "- [x] first open"),
+                TimeSpan.FromSeconds(20)),
+            "the write never landed");
+        // (The wrapped VaultException renders its message with the
+        // generated "@message=" prefix — match on both halves.)
+        PumpDispatcherUntil(
+            () => announced.OfType<A11yEvent.HostComposed>().Any(composed =>
+                composed.Text.StartsWith(
+                    "Task could not be toggled:", StringComparison.Ordinal)
+                && composed.Text.Contains("index commit failed")),
+            "the failure never published");
+
+        // The completion reconciled: divergence honesty on the tab,
+        // fresh panel rows showing what disk actually holds, and
+        // further toggles refuse until the note is reopened.
+        _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
+            composed.Text
+                == "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.");
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text == "Task completed.");
+        Assert.Contains(
+            workspace.Panels.DoneTasks, r => r.Task.Text == "first open");
+
+        NoteTaskRowViewModel second = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "second open");
+        workspace.Panels.ToggleTask(second);
+        _ = Assert.Single(announced.OfType<A11yEvent.TaskToggleConflict>());
+        Assert.Contains("- [ ] second open", File.ReadAllText(diskPath));
+    }
+
+    [Fact]
     public void DirectWritesReconcileTabsThatRacedOpen()
     {
         var announced = new List<A11yEvent>();
