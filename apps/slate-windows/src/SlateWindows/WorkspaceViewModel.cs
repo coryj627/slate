@@ -1185,8 +1185,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             synchronousForTests: !startInteractionBackgroundWork);
         // Round 3: a tab can open for a file BETWEEN the review's
         // NoOpenTab route decision and its direct write landing —
-        // the workspace re-checks at write completion.
-        TasksReview.DiskWriteLanded = ReconcileTabsAfterDirectTaskWrite;
+        // the workspace re-checks at write completion. Round 17:
+        // that raced-open tab's NOTE PANEL can also have finished a
+        // pre-write read — NoteSaved re-snapshots it (and ignores
+        // non-active paths).
+        TasksReview.DiskWriteLanded = (path, newContentHash) =>
+        {
+            ReconcileTabsAfterDirectTaskWrite(path, newContentHash);
+            Panels.NoteSaved(path);
+        };
         // Round 15: a repair landing inside a review load worker
         // refreshes the note panel too — both surfaces converge.
         TasksReview.RepairLanded = path => Panels.NoteSaved(path);

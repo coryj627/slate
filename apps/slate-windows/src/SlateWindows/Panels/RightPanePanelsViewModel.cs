@@ -811,6 +811,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
                     repairError ?? "The vault index needs repair."));
                 return;
             }
+            long quarantineEpoch = _repairs.Epoch;
             TasksInterleaveForTests?.Invoke();
             try
             {
@@ -823,12 +824,15 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
             {
                 failure = exception.Message;
             }
-            // Re-checked AFTER the query (adversarial round 16): a
-            // post-write failure that registered the path between the
-            // gate above and the read moved no revision the read
-            // could see — its index transaction rolled back — so the
-            // page may hold the ghost pre-write row.
-            if (failure is null && _repairs.HasPendingFor(path))
+            // Epoch, not HasPendingFor, re-checked AFTER the query
+            // (adversarial rounds 16-17): a post-write failure that
+            // registered between the gate and the read moved no
+            // revision the read could see (its index transaction
+            // rolled back) — and a register-repair-remove completing
+            // DURING the read leaves nothing pending while the page
+            // still holds the pre-repair ghost. Only the epoch sees
+            // both.
+            if (failure is null && _repairs.Epoch != quarantineEpoch)
             {
                 page = null;
                 failure = "The vault index needs repair.";

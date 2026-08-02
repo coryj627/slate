@@ -67,27 +67,34 @@ internal sealed class TaskIndexRepairCoordinator(VaultSession session)
         }
     }
 
-    /// <summary>Repair one path NOW; a failure registers it pending.
-    /// A successful repair only clears the registration it observed
-    /// at entry — a fresh failure racing in stays quarantined.</summary>
+    /// <summary>Repair one path NOW; a failure leaves it pending.
+    /// The path is REGISTERED before the repair is attempted
+    /// (adversarial round 17): the repair interval must be visible
+    /// to every overlapping query's epoch validation — a query that
+    /// read the rolled-back index just before this repair landed
+    /// would otherwise publish ghost rows afterward with the epoch
+    /// unmoved, and nothing left to refresh them. A successful
+    /// repair clears only its own registration, so a fresh failure
+    /// racing in stays quarantined.</summary>
     public bool TryRepairNow(string path, out string? error)
     {
-        long generationAtEntry;
+        long generation;
         lock (_gate)
         {
-            _ = _pending.TryGetValue(path, out generationAtEntry);
+            generation = ++_nextGeneration;
+            _pending[path] = generation;
+            _epoch++;
         }
         try
         {
             session.ReindexPath(path);
-            RemoveIfUnchanged(path, generationAtEntry);
+            _ = RemoveIfUnchanged(path, generation);
             error = null;
             return true;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
             error = exception.Message;
-            NotePending(path);
             return false;
         }
     }

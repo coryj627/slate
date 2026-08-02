@@ -808,6 +808,54 @@ public sealed class TasksReviewTests : IDisposable
     }
 
     [Fact]
+    public void SuccessfulFirstRepairsAdvanceTheEpoch()
+    {
+        // Adversarial round 17: a repair of a path that was never
+        // pending must still advance the epoch — its interval is
+        // exactly what an overlapping query needs to see, or a page
+        // read from the rolled-back index publishes ghosts AFTER
+        // the repair with nothing left to refresh them.
+        var coordinator = new TaskIndexRepairCoordinator(_session);
+        long before = coordinator.Epoch;
+
+        Assert.True(coordinator.TryRepairNow("a.md", out string? error));
+
+        Assert.Null(error);
+        Assert.NotEqual(before, coordinator.Epoch);
+        Assert.False(coordinator.HasPendingFor("a.md"));
+    }
+
+    [Fact]
+    public void RepairsOverlappingAReviewQueryDiscardItsResult()
+    {
+        // The deterministic stand-in for the round-17 schedule: a
+        // successful repair completes while a review query is in
+        // flight — the query's result must be discarded, because a
+        // page read before the repair would carry the pre-repair
+        // ghost and no revision counter distinguishes the two.
+        var repairs = new TaskIndexRepairCoordinator(_session);
+        var review = MakeReview(repairs: repairs);
+        review.EnsureLoaded();
+        int rows = review.Rows.Count;
+
+        bool repaired = false;
+        review.InterleaveForTests = () =>
+        {
+            review.InterleaveForTests = null;
+            repaired = repairs.TryRepairNow("a.md", out _);
+        };
+        review.ForceReload();
+
+        Assert.True(repaired);
+        Assert.Equal(rows, review.Rows.Count);
+        Assert.StartsWith("Couldn’t load tasks. ", review.EmptyMessage);
+
+        review.ForceReload();
+        Assert.Null(review.EmptyMessage);
+        Assert.Equal(rows, review.Rows.Count);
+    }
+
+    [Fact]
     public void SupersededLoadMoreCannotWedgeThePagingButton()
     {
         var review = MakeReview();

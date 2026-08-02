@@ -1034,6 +1034,41 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void RepairsOverlappingAPanelReadDiscardItsResult()
+    {
+        // Adversarial round 17: a register-repair-remove completing
+        // DURING the panel's read leaves nothing pending while the
+        // page still holds the pre-repair ghost — only the epoch
+        // sees the interval, so the result is discarded.
+        var repairs = new TaskIndexRepairCoordinator(_session);
+        var panels = MakePanels(repairs: repairs);
+        bool repaired = false;
+        panels.TasksInterleaveForTests = () =>
+        {
+            panels.TasksInterleaveForTests = null;
+            repaired = repairs.TryRepairNow("todo.md", out _);
+        };
+        panels.NoteChanged("todo.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => panels.TasksEmptyMessage is { } message
+                    && message != "Loading tasks…",
+                TimeSpan.FromSeconds(20)),
+            "the tasks load never settled");
+        Assert.True(repaired);
+        Assert.StartsWith("Could not load tasks: ", panels.TasksEmptyMessage);
+        Assert.Empty(panels.OpenTasks);
+
+        // The next load runs against the repaired index and settles.
+        panels.NoteSaved("todo.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => panels.OpenTasks.Count == 3, TimeSpan.FromSeconds(20)),
+            "the post-repair reload never landed");
+        Assert.Null(panels.TasksEmptyMessage);
+    }
+
+    [Fact]
     public void DirectWritesReconcileTabsThatRacedOpen()
     {
         var announced = new List<A11yEvent>();
@@ -1067,6 +1102,17 @@ public sealed class TasksPanelTests : IDisposable
             "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.",
             diverged.Text);
         Assert.Equal(diverged.Text, tab.Status);
+
+        // Round 17: the raced-open note PANEL finished a pre-write
+        // read too — the write completion re-snapshots it, so its
+        // rows converge to disk truth instead of retaining obsolete
+        // checkboxes until a manual refresh.
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => workspace.Panels.OpenTasks.Any(
+                    r => r.Task.Text == "rewritten elsewhere"),
+                TimeSpan.FromSeconds(20)),
+            "the raced-open panel never converged to disk truth");
     }
 
     /// <summary>Disk poll tolerant of the session's atomic
