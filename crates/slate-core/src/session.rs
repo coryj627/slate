@@ -2323,16 +2323,22 @@ impl VaultSession {
             self.restore_structural_batch_rewrites_locked(conn, inflight, true)?;
         }
 
-        // Round 35: crash-recovery renames are filesystem mutations
-        // like any other — mark both sides before reversing
-        // (best-effort; recovery proceeds regardless).
-        let _ = self.plant_move_markers_locked(
+        // Rounds 35-36: crash-recovery renames are filesystem
+        // mutations like any other — mark both sides before
+        // reversing, and FAIL CLOSED if the markers cannot persist
+        // (round 36): the crashed process's forward markers may
+        // have legitimately aged and been swept while it was down,
+        // so recovery cannot rely on them; renaming without durable
+        // triggers would expose the reversal to racing saves with
+        // no reconciliation. The inflight record survives the
+        // abort, so the next open retries.
+        self.plant_move_markers_locked(
             conn,
             inflight
                 .entries
                 .iter()
                 .flat_map(|entry| [entry.from.as_str(), entry.to.as_str()]),
-        );
+        )?;
         // Reverse only the renames that physically landed, always in strict
         // reverse plan order. A crash between rename and progress update is
         // therefore indistinguishable from (and as safe as) a recorded step.
@@ -6236,33 +6242,65 @@ impl VaultSession {
     /// unconditional so repeated containments don't accumulate
     /// token rows.
     /// Durably mark BOTH sides of every structural rename BEFORE the
-    /// filesystem mutation (adversarial round 35): the rename is not
-    /// ordered against another process's writer-locked save, so a
-    /// save can interleave anywhere in the rename→index-commit gap —
-    /// including a SUCCESSFUL source save whose freshly indexed row
-    /// the move then relocates to the destination, its own marker
-    /// already cleared, leaving both paths silently wrong with no
-    /// trigger. These markers are planted already-aged, committed
-    /// before any byte moves, and NEVER cleared by the move itself:
-    /// the next task query's sweep re-reads both paths under the
-    /// writer lock and converges whatever any interleaving produced
-    /// — disk truth on both sides, markers cleared by those reads.
-    /// The cost is one re-read per touched path on the first query
-    /// after a move; correctness under unordered filesystem
-    /// interleaving is exactly worth it.
+    /// filesystem mutation (adversarial rounds 35-36): the rename is
+    /// not ordered against another process's writer-locked save, so
+    /// a save can interleave anywhere in the rename→index-commit gap
+    /// — including a SUCCESSFUL source save whose freshly indexed
+    /// row the move then relocates to the destination, its own
+    /// marker already cleared, leaving both paths silently wrong
+    /// with no trigger. These markers are committed before any byte
+    /// moves and NEVER cleared by the move itself: once aged, the
+    /// next task query's sweep re-reads both paths under the writer
+    /// lock and converges whatever any interleaving produced.
+    ///
+    /// Planted FRESH, not pre-aged (round 36): a pre-aged marker is
+    /// immediately sweep-eligible, so another process could repair
+    /// it against PRE-move disk truth and clear it before the
+    /// rename even ran — reopening the whole class. Fresh markers
+    /// are invisible to sweeps (only aged rows are selected) and
+    /// carry tokens nobody else clears; the move AGES its own
+    /// tokens atomically inside its index commit
+    /// ([`age_move_markers_in_tx`]), so convergence fires exactly
+    /// when the move lands. A move that fails, compensates, or
+    /// crashes leaves them to age naturally within the liveness
+    /// threshold — the re-read then converges the compensated or
+    /// crashed state instead. Returns the planted (path, token)
+    /// pairs for that in-commit aging.
     fn plant_move_markers_locked<'p>(
         &self,
         conn: &Connection,
         paths: impl IntoIterator<Item = &'p str>,
-    ) -> Result<(), VaultError> {
+    ) -> Result<Vec<(String, i64)>, VaultError> {
+        let mut planted = Vec::new();
         for path in paths {
+            let token = fresh_intent_token();
             conn.execute(
                 "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
                  VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+                rusqlite::params![path, now_ms(), token],
+            )?;
+            planted.push((path.to_string(), token));
+        }
+        Ok(planted)
+    }
+
+    /// Age a move's own planted markers atomically with its index
+    /// commit (adversarial round 36): the tokens become
+    /// sweep-eligible in the same durable instant the moved rows
+    /// become visible, so the first task query after the move
+    /// re-reads every touched path — and no earlier sweep could
+    /// have cleared them (they were fresh until this commit).
+    fn age_move_markers_in_tx(
+        tx: &rusqlite::Transaction,
+        planted: &[(String, i64)],
+    ) -> Result<(), VaultError> {
+        for (path, token) in planted {
+            tx.execute(
+                "UPDATE text_write_intents SET created_ms = ?1 WHERE path = ?2 AND token = ?3",
                 rusqlite::params![
-                    path,
                     now_ms() - Self::intent_abandon_threshold_ms(path) - 1,
-                    fresh_intent_token()
+                    path,
+                    token
                 ],
             )?;
         }
@@ -11147,7 +11185,7 @@ impl VaultSession {
         // Round 35: mark both sides of every file this batch touches
         // BEFORE the first filesystem mutation — see
         // plant_move_markers_locked.
-        self.plant_move_markers_locked(
+        let planted_markers = self.plant_move_markers_locked(
             &conn,
             plans.iter().flat_map(|plan| {
                 plan.moved_files
@@ -11225,6 +11263,9 @@ impl VaultSession {
         let index_result = (|| -> Result<(), VaultError> {
             faults.check(BatchFaultPoint::MoveIndex)?;
             let tx = conn.transaction()?;
+            // Round 36: sweep-eligible atomically with this commit —
+            // see age_move_markers_in_tx.
+            Self::age_move_markers_in_tx(&tx, &planted_markers)?;
             for (old, new) in &moved {
                 graph_sink.stage(|| crate::graph::GraphOp::FileRenamed {
                     old_path: old.clone(),
@@ -11662,18 +11703,21 @@ impl VaultSession {
     ) -> Result<crate::BatchMoveReport, VaultError> {
         use crate::structural_batch::{BatchFailureStage, BatchMoveState};
 
-        // Round 35: recovery renames are filesystem mutations like
-        // any other — mark both sides before reversing anything
-        // (best-effort: recovery must not abort on a marker insert;
-        // the forward flow's markers already cover these paths).
-        let _ = self.plant_move_markers_locked(
+        // Rounds 35-36: recovery renames are filesystem mutations
+        // like any other — mark both sides before reversing
+        // anything, and FAIL CLOSED if the markers cannot persist
+        // (round 36): renaming without durable reconciliation
+        // triggers would expose the rollback to exactly the racing
+        // saves the markers exist for. The inflight record survives
+        // the abort, so open-time recovery retries.
+        self.plant_move_markers_locked(
             conn,
             applied.iter().flat_map(|plan| {
                 plan.moved_files
                     .iter()
                     .flat_map(|(old, new)| [old.as_str(), new.as_str()])
             }),
-        );
+        )?;
         let mut rollback_failures = Vec::new();
         for plan in applied.iter().rev() {
             if let Err(error) = self.provider.rename(&plan.destination, &plan.item.path) {
@@ -12022,7 +12066,7 @@ impl VaultSession {
         // Round 35: mark both sides of every file this inverse batch
         // touches before the first filesystem mutation — see
         // plant_move_markers_locked.
-        self.plant_move_markers_locked(
+        let planted_markers = self.plant_move_markers_locked(
             &conn,
             plans.iter().flat_map(|plan| {
                 plan.moved_files
@@ -12093,6 +12137,9 @@ impl VaultSession {
         let index_result = (|| -> Result<(), VaultError> {
             faults.check(BatchFaultPoint::MoveIndex)?;
             let tx = conn.transaction()?;
+            // Round 36: sweep-eligible atomically with this commit —
+            // see age_move_markers_in_tx.
+            Self::age_move_markers_in_tx(&tx, &planted_markers)?;
             for (old, new) in &moved {
                 graph_sink.stage(|| crate::graph::GraphOp::FileRenamed {
                     old_path: old.clone(),
@@ -13725,16 +13772,23 @@ impl VaultSession {
 
         // Round 35: mark BOTH sides of every file this move touches
         // BEFORE the filesystem mutation — see plant_move_markers_locked.
-        self.plant_move_markers_locked(
+        let planted_markers = self.plant_move_markers_locked(
             &conn,
             moved
                 .iter()
                 .flat_map(|(old, new)| [old.as_str(), new.as_str()]),
         )?;
         self.provider.rename(from, to)?;
-        self.finish_structural_move(conn, kind, from, to, moved, plan_rewrites, |tx, _sink| {
-            rename_prefix_in_index(tx, from, to)
-        })
+        self.finish_structural_move(
+            conn,
+            kind,
+            from,
+            to,
+            moved,
+            plan_rewrites,
+            planted_markers,
+            |tx, _sink| rename_prefix_in_index(tx, from, to),
+        )
     }
 
     fn structural_move_file(
@@ -13777,7 +13831,7 @@ impl VaultSession {
         let large_file_refuse_bytes = self.config.large_file_refuse_bytes;
         // Round 35: mark both sides before the filesystem mutation —
         // see plant_move_markers_locked.
-        self.plant_move_markers_locked(&conn, [from, to])?;
+        let planted_markers = self.plant_move_markers_locked(&conn, [from, to])?;
         self.provider.rename(from, to)?;
         let moved = vec![(from.to_string(), to.to_string())];
         self.finish_structural_move(
@@ -13787,6 +13841,7 @@ impl VaultSession {
             to,
             moved,
             plan_rewrites,
+            planted_markers,
             move |tx, sink| {
                 let (name, extension, is_markdown) = classify_path(to);
                 let is_base = extension.as_deref() == Some("base");
@@ -13863,6 +13918,7 @@ impl VaultSession {
         to: &str,
         moved: Vec<(String, String)>,
         plan_rewrites: bool,
+        planted_markers: Vec<(String, i64)>,
         update_index: impl FnOnce(
             &rusqlite::Transaction,
             &mut crate::graph::GraphOpSink,
@@ -13871,6 +13927,9 @@ impl VaultSession {
         let mut graph_sink = self.graph_sink();
         let tx1 = (|| -> Result<(), VaultError> {
             let tx = conn.transaction()?;
+            // Round 36: the move's own markers become sweep-eligible
+            // atomically with this commit — see age_move_markers_in_tx.
+            Self::age_move_markers_in_tx(&tx, &planted_markers)?;
             // Graph replay order (#550): rename ops FIRST, so a
             // reclassification's LinksetChanged (staged inside
             // `update_index`) lands on the already-renamed node. The

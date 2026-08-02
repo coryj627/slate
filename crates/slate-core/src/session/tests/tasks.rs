@@ -1434,6 +1434,79 @@ fn moved_files_resolve_prior_destination_markers_by_reading() {
 }
 
 #[test]
+fn fresh_move_markers_survive_sweeps_until_the_move_commits() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 36: a pre-aged move marker is immediately
+    // sweep-eligible — another process could repair it against
+    // PRE-move disk truth and clear it before the rename even ran,
+    // reopening the interleaved-save class the markers exist to
+    // close. Markers are therefore planted FRESH (invisible to
+    // sweeps, which select only aged rows) and aged atomically by
+    // the move's own index commit.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file(
+            "notes/pinned36.md",
+            "- [ ] \u{1F4C5} 2026-01-01 stay put\n".as_bytes(),
+        )
+        .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let planted = {
+        let conn = session.conn.lock().unwrap();
+        session
+            .plant_move_markers_locked(&conn, ["notes/pinned36.md", "notes/elsewhere36.md"])
+            .unwrap()
+    };
+    assert_eq!(planted.len(), 2);
+    {
+        // Planted FRESH: not sweep-eligible.
+        let conn = session.conn.lock().unwrap();
+        let aged: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents
+                 WHERE path IN (?1, ?2) AND created_ms <= ?3",
+                rusqlite::params![
+                    "notes/pinned36.md",
+                    "notes/elsewhere36.md",
+                    now_ms() - 15_000
+                ],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            aged, 0,
+            "move markers must be planted fresh, never pre-aged"
+        );
+    }
+
+    // A sweep runs (no zero-threshold override): the fresh markers
+    // are invisible to it — nothing repaired, nothing cleared, the
+    // path's rows serve as the consistent pre-move snapshot.
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    assert!(
+        page.items.iter().any(|r| r.path == "notes/pinned36.md"),
+        "fresh markers don't bar the pre-move snapshot"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let survivors: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path IN (?1, ?2)",
+                rusqlite::params!["notes/pinned36.md", "notes/elsewhere36.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            survivors, 2,
+            "a sweep before the move commits must not clear its markers"
+        );
+    }
+}
+
+#[test]
 fn moves_leave_markers_that_converge_interleaved_saves() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
     // Adversarial round 35: a SUCCESSFUL save on the source can
@@ -1457,25 +1530,29 @@ fn moves_leave_markers_that_converge_interleaved_saves() {
         .rename_file("notes/src35.md", "relocated.md")
         .unwrap();
     {
-        // The move's own markers stand on both sides.
+        // The move's own markers stand on both sides — and are AGED
+        // (adversarial round 36): the markers were fresh until the
+        // move's index commit aged them atomically, so no sweep
+        // could clear them early, and the very next query re-reads.
         let conn = session.conn.lock().unwrap();
+        let aged_cutoff = now_ms() - 15_000;
         let (src_markers, dst_markers): (i64, i64) = (
             conn.query_row(
-                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
-                rusqlite::params!["notes/src35.md"],
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1 AND created_ms <= ?2",
+                rusqlite::params!["notes/src35.md", aged_cutoff],
                 |row| row.get(0),
             )
             .unwrap(),
             conn.query_row(
-                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
-                rusqlite::params!["notes/relocated.md"],
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1 AND created_ms <= ?2",
+                rusqlite::params!["notes/relocated.md", aged_cutoff],
                 |row| row.get(0),
             )
             .unwrap(),
         );
         assert!(
             src_markers >= 1 && dst_markers >= 1,
-            "the move marks both sides before mutating the filesystem"
+            "the completed move leaves AGED markers on both sides"
         );
     }
     // The interleaved save's residue: bytes at the source, no row.
