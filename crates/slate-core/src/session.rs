@@ -9138,6 +9138,27 @@ fn stamp_index_epoch(tx: &rusqlite::Transaction, file_id: i64) -> Result<(), Vau
     Ok(())
 }
 
+/// Re-stamp a freshly MOVED row's epoch by its new path (W4-3
+/// adversarial round 33): every `files.path` transition is a new
+/// destination incarnation. A moved row keeping its source epoch
+/// could rank BELOW an abandoned marker surviving from the
+/// destination path's prior incarnation, letting a failed repair
+/// quarantine the moved file's fresh rows — the round-32 ABA
+/// through the structural-move door. A fresh clock value out-ranks
+/// every earlier marker on the destination, in any incarnation.
+fn restamp_index_epoch_for_path(tx: &rusqlite::Transaction, path: &str) -> Result<(), VaultError> {
+    let clock: i64 = tx.query_row(
+        "UPDATE index_epoch_clock SET clock = clock + 1 RETURNING clock",
+        [],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "UPDATE files SET index_epoch = ?1 WHERE path = ?2",
+        rusqlite::params![clock, path],
+    )?;
+    Ok(())
+}
+
 /// Atomically replace all `headings` rows for `file_id` with the
 /// headings extracted from `markdown_source`.
 ///
@@ -10959,6 +10980,7 @@ fn apply_batch_move_index_direction(
                     reason: "batch index source is missing".into(),
                 });
             }
+            restamp_index_epoch_for_path(tx, to)?;
         }
     }
     let moved = batch_move_file_mapping(plans, forward);
@@ -11163,6 +11185,7 @@ impl VaultSession {
                             reason: "batch index source is missing".into(),
                         });
                     }
+                    restamp_index_epoch_for_path(&tx, &plan.destination)?;
                 }
             }
             {
@@ -12007,6 +12030,7 @@ impl VaultSession {
                             reason: "batch inverse index source is missing".into(),
                         });
                     }
+                    restamp_index_epoch_for_path(&tx, &plan.destination)?;
                 }
             }
             {
@@ -13682,6 +13706,7 @@ impl VaultSession {
                             reason: "file move index source disappeared".into(),
                         });
                     }
+                    restamp_index_epoch_for_path(tx, to)?;
                     let file_id: i64 = tx.query_row(
                         "SELECT id FROM files WHERE path = ?1",
                         rusqlite::params![to],
@@ -13711,6 +13736,7 @@ impl VaultSession {
                             reason: "file move index source disappeared".into(),
                         });
                     }
+                    restamp_index_epoch_for_path(tx, to)?;
                 }
                 Ok(())
             },
@@ -14765,6 +14791,9 @@ fn rename_prefix_in_index(
                 reason: "directory move file row disappeared during update".into(),
             });
         }
+        // Every path transition is a new destination incarnation
+        // (adversarial round 33) — see restamp_index_epoch_for_path.
+        stamp_index_epoch(tx, id)?;
     }
 
     let dir_rows: Vec<(i64, String)> = {

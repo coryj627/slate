@@ -134,12 +134,28 @@ pub(crate) fn note_tasks_bounded(
     path: &str,
     limit: u32,
 ) -> Result<(Vec<TaskItem>, u32, u32, String), VaultError> {
+    // ONE read snapshot for hash + rows + totals (adversarial round
+    // 33): these are separate statements, and another PROCESS can
+    // commit between autocommit reads — pairing an old content_hash
+    // with new task offsets would defeat the exact hash/offset
+    // identity premise the hash exists to serve. A deferred read
+    // transaction pins every statement below to a single database
+    // snapshot; the session mutex only excludes THIS session's
+    // writers. `unchecked_transaction` because only a shared borrow
+    // is available — no nesting is possible on this connection while
+    // the session mutex is held.
+    let tx = conn.unchecked_transaction()?;
+    // Test-only seam: lets a regression commit through a SECOND
+    // connection between this snapshot's establishment and the row
+    // reads, proving the page cannot tear.
+    let torn_probe = std::env::var_os("SLATE_TEST_TORN_NOTE_READ")
+        .filter(|trigger| path.contains(trigger.to_string_lossy().as_ref()));
     // `.optional()`, not `.ok()` (adversarial round 3): `.ok()`
     // collapsed EVERY SQLite failure — corruption, schema skew, type
     // errors — into "no tasks in this note", bypassing the panel's
     // read-fault surface entirely. Only a genuinely missing row is
     // the empty page.
-    let file_row: Option<(i64, String)> = conn
+    let file_row: Option<(i64, String)> = tx
         .query_row(
             "SELECT id, content_hash FROM files WHERE path = ?1",
             params![path],
@@ -149,7 +165,20 @@ pub(crate) fn note_tasks_bounded(
     let Some((file_id, content_hash)) = file_row else {
         return Ok((Vec::new(), 0, 0, String::new()));
     };
-    let mut stmt = conn.prepare_cached(
+    if torn_probe.is_some()
+        && let Some(db_path) = conn.path()
+        && let Ok(other) = Connection::open(db_path)
+    {
+        let _ = other.execute(
+            "UPDATE files SET content_hash = 'torn-by-second-connection' WHERE path = ?1",
+            params![path],
+        );
+        let _ = other.execute(
+            "DELETE FROM tasks WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+            params![path],
+        );
+    }
+    let mut stmt = tx.prepare_cached(
         "SELECT ordinal, text, status_char, completed,
                 due_ms, scheduled_ms, priority, recurrence, line, byte_offset,
                 checkbox_start_byte, checkbox_end_byte
@@ -168,7 +197,8 @@ pub(crate) fn note_tasks_bounded(
             out.push(r?);
         }
     }
-    let (total, open_total): (i64, i64) = conn.query_row(
+    drop(stmt);
+    let (total, open_total): (i64, i64) = tx.query_row(
         "SELECT COUNT(*), COUNT(*) FILTER (WHERE completed = 0)
          FROM tasks WHERE file_id = ?1",
         params![file_id],

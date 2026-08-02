@@ -1346,6 +1346,104 @@ fn containment_without_an_index_row_still_plants_the_healing_marker() {
 }
 
 #[test]
+fn moved_files_out_rank_prior_destination_markers() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 33: a structural move rewrote `files.path`
+    // while KEEPING the source row's older epoch — an abandoned
+    // marker surviving from the destination path's prior incarnation
+    // could out-rank the moved row, and a failed repair would then
+    // quarantine the moved file's fresh task rows: the round-32 ABA
+    // through the structural-move door. Every path transition now
+    // re-stamps a fresh clock value, which out-ranks every earlier
+    // marker on the destination.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/mover.md", b"- [ ] travels with me\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        // A marker from the destination path's PRIOR incarnation:
+        // the incarnation's history advanced the clock well past the
+        // mover's epoch, and the marker stamped that later value —
+        // realistic, since markers always stamp at-or-below the
+        // clock.
+        let conn = session.conn.lock().unwrap();
+        conn.execute("UPDATE index_epoch_clock SET clock = clock + 100", [])
+            .unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3, (SELECT clock FROM index_epoch_clock))",
+            rusqlite::params!["notes/dest.md", now_ms(), 0x40Ei64],
+        )
+        .unwrap();
+    }
+
+    let _ = session.rename_file("notes/mover.md", "dest.md").unwrap();
+
+    // Un-repairable moment: the moved row's fresh stamp must
+    // out-rank the prior incarnation's marker, so it resolves as
+    // obsolete and the moved rows keep serving.
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "dest") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "dest") };
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        page.items
+            .iter()
+            .any(|r| r.path == "notes/dest.md" && r.task.text.contains("travels with me")),
+        "the moved file's fresh rows keep serving"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/dest.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(intents, 0, "the prior incarnation's marker resolved");
+    }
+}
+
+#[test]
+fn note_task_pages_read_one_snapshot() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 33: hash, rows, and totals were separate
+    // autocommit reads — another process committing between them
+    // paired an old content_hash with new offsets, defeating the
+    // panel's hash/offset identity premise. The whole page now
+    // reads from ONE deferred-transaction snapshot; the seam
+    // commits a hash rewrite + row deletion through a second
+    // connection between the hash read and the row reads.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/torn-read.md", b"- [ ] one\n- [x] two\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let baseline = session.note_tasks("notes/torn-read.md", 10).unwrap();
+    assert_eq!(baseline.tasks.len(), 2);
+
+    unsafe { std::env::set_var("SLATE_TEST_TORN_NOTE_READ", "torn-read") };
+    let page = session.note_tasks("notes/torn-read.md", 10).unwrap();
+    unsafe { std::env::remove_var("SLATE_TEST_TORN_NOTE_READ") };
+    assert_eq!(
+        page.content_hash, baseline.content_hash,
+        "the hash comes from the snapshot, not the racing commit"
+    );
+    assert_eq!(
+        page.tasks.len(),
+        2,
+        "the rows come from the SAME snapshot as the hash"
+    );
+    assert_eq!(page.total, 2, "totals agree with the snapshot too");
+    assert_eq!(page.open_total, 1);
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.
