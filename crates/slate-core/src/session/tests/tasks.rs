@@ -714,6 +714,131 @@ fn pre_write_failures_clear_their_own_registration() {
 }
 
 #[test]
+fn unclearable_markers_quarantine_instead_of_poisoning_queries() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 28: the pre-write cleanup DELETE can itself
+    // fail (BUSY from another process's writer lock, database I/O) —
+    // the same stranded-marker posture as a crash. If the stranded
+    // path also stays unreadable, its aged repair fails before token
+    // clearing on EVERY vault-wide query. The sweep must quarantine
+    // the path (suspect rows stop serving, marker stays, queries
+    // stay available) and heal in full once the file reads again.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/stuck-marker.md", b"- [ ] trapped\n")
+            .unwrap();
+        p.write_file("notes/bystander28.md", b"- [ ] serving\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let current_hash = session
+        .note_tasks("notes/stuck-marker.md", 1)
+        .unwrap()
+        .content_hash;
+
+    let intent_count = |session: &VaultSession| -> i64 {
+        let conn = session.conn.lock().unwrap();
+        conn.query_row(
+            "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+            rusqlite::params!["notes/stuck-marker.md"],
+            |row| row.get(0),
+        )
+        .unwrap()
+    };
+
+    // A pre-write failure whose cleanup ALSO fails: the marker strands.
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_PRE_WRITE", "stuck-marker") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_INTENT_CLEAR", "stuck-marker") };
+    let result = session.save_text(
+        "notes/stuck-marker.md",
+        "- [x] trapped\n",
+        Some(&current_hash),
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_INTENT_CLEAR") };
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_PRE_WRITE") };
+    assert!(result.is_err());
+    assert_eq!(intent_count(&session), 1, "the marker stranded");
+
+    // Count Modified announcements: the quarantine must fire ONCE,
+    // not once per query — repeated failing sweeps would otherwise
+    // storm hosts with refresh events.
+    struct KindRecorder(std::sync::Mutex<Vec<(FileChangeKind, String)>>);
+    impl VaultEventListener for KindRecorder {
+        fn on_error(&self, _c: EventErrorCode, _p: String, _m: String) {}
+        fn on_file_change(&self, event: FileChangeEvent) {
+            self.0.lock().unwrap().push((event.kind, event.path));
+        }
+    }
+    let recorder = std::sync::Arc::new(KindRecorder(std::sync::Mutex::new(Vec::new())));
+    let listener_token = session.register_event_listener(recorder.clone());
+
+    // The marker ages while the path stays unreadable (the reindex
+    // fault stands in for permissions / an AV lock).
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "stuck-marker") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "stuck-marker") };
+    for _ in 0..2 {
+        let page = session
+            .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+            .expect("vault-wide queries stay available under an un-repairable marker");
+        assert!(
+            page.items.iter().all(|r| r.path != "notes/stuck-marker.md"),
+            "the quarantined path's suspect rows must not serve"
+        );
+        assert!(
+            page.items.iter().any(|r| r.path == "notes/bystander28.md"),
+            "unrelated tasks still serve"
+        );
+    }
+    let honest_empty = session
+        .note_tasks("notes/stuck-marker.md", 10)
+        .expect("per-file queries stay available too");
+    assert!(
+        honest_empty.tasks.is_empty(),
+        "the honest surface for an unreadable file is task-free"
+    );
+    assert_eq!(
+        intent_count(&session),
+        1,
+        "suspicion persists until a repair actually lands"
+    );
+    assert_eq!(
+        recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(
+                |(kind, path)| *kind == FileChangeKind::Modified && path == "notes/stuck-marker.md"
+            )
+            .count(),
+        1,
+        "the quarantine announces once, not once per query"
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+
+    // The file reads again: the next query's sweep repairs in full —
+    // rows rebuilt to disk truth, marker cleared.
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    session.unregister_event_listener(listener_token);
+    let row = healed
+        .items
+        .iter()
+        .find(|r| r.path == "notes/stuck-marker.md")
+        .expect("the repaired path's tasks return");
+    assert!(
+        !row.task.completed,
+        "disk truth: the failed save never wrote"
+    );
+    assert_eq!(
+        intent_count(&session),
+        0,
+        "the successful repair clears the marker"
+    );
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.

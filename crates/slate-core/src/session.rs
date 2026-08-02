@@ -3280,17 +3280,44 @@ impl VaultSession {
     /// `toggle_task_status` — pass it here and the op-log entry wraps
     /// it; plain text saves pass `&[]`. Kept off the public `save_text`
     /// signature: hosts never supply intent directly.
-    /// Token-scoped, best-effort removal of THIS save's own durable
-    /// write-intent registration — the shared cleanup for every
-    /// provable pre-write error exit in `save_text_locked`
-    /// (adversarial round 27). Best-effort (`let _`): a failed delete
-    /// merely restores the lingering-intent posture, whose worst case
-    /// is one redundant sweep repair later.
+    /// Token-scoped removal of THIS save's own durable write-intent
+    /// registration — the shared cleanup for every provable pre-write
+    /// error exit in `save_text_locked` (adversarial round 27).
+    /// Bounded retry (round 28): rusqlite's busy_timeout already
+    /// waits out transient writers inside each attempt, so a couple
+    /// of short-backoff retries close the remaining BUSY/LOCKED
+    /// races. A marker that STILL cannot be deleted is left behind
+    /// deliberately — the same posture as a crash in this interval —
+    /// because the sweep now absorbs an un-repairable marker by
+    /// quarantining its path instead of failing queries, so a
+    /// stranded row can no longer poison anything.
     fn clear_own_intent_registration(&self, conn: &Connection, path: &str, intent_token: i64) {
-        let _ = conn.execute(
-            "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
-            rusqlite::params![path, intent_token],
-        );
+        // Test-only seam (adversarial round 28): a cleanup DELETE
+        // that persistently fails — another process camped on the
+        // writer lock, or database I/O errors — strands the marker
+        // exactly as a crash in the pre-write interval does.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_INTENT_CLEAR")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return;
+        }
+        for attempt in 0..3 {
+            match conn.execute(
+                "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                rusqlite::params![path, intent_token],
+            ) {
+                // A completed DELETE statement proves the row is
+                // absent — no separate verification read needed.
+                Ok(_) => return,
+                Err(e) if attempt == 2 => {
+                    log::warn!(
+                        "pre-write intent cleanup failed; the sweep will absorb the stale marker: db error"
+                    );
+                    log::debug!("intent cleanup failure for {path:?}: {e}");
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(10 << attempt)),
+            }
+        }
     }
 
     fn save_text_locked(
@@ -6065,8 +6092,67 @@ impl VaultSession {
         // could erase the only durable marker covering that writer's
         // own post-write rollback.
         for (path, tokens) in candidates {
-            self.reindex_path_locked(conn, &path, &tokens)?;
+            if let Err(repair_err) = self.reindex_path_locked(conn, &path, &tokens) {
+                // An UN-REPAIRABLE path (adversarial round 28) must
+                // not fail every task query forever: a marker whose
+                // file stays unreadable — permissions, an AV lock —
+                // would otherwise re-fail this sweep on EVERY query,
+                // a permanent vault-wide outage over one bad file.
+                // Quarantine instead: the suspect rows stop serving,
+                // the marker STAYS (suspicion persists until a
+                // repair lands), and every later query retries the
+                // repair — the first success rebuilds the rows and
+                // clears the token. Only if the quarantine itself
+                // fails (the database is the broken thing, not the
+                // file) does the original error propagate.
+                self.quarantine_unrepairable_path_locked(conn, &path)
+                    .map_err(|_| repair_err)?;
+            }
         }
+        Ok(())
+    }
+
+    /// The round-28 containment for a path whose repair cannot
+    /// succeed: drop its task rows inside one IMMEDIATE transaction
+    /// (suspect rows must not serve) and poison its stat tuple (the
+    /// next successful read reindexes in full), KEEPING the intent
+    /// marker. Idempotent and quiet: an already-quarantined path
+    /// returns without re-announcing, so repeated failing sweeps
+    /// don't storm hosts with Modified events.
+    fn quarantine_unrepairable_path_locked(
+        &self,
+        conn: &mut Connection,
+        path: &str,
+    ) -> Result<(), VaultError> {
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let already_quarantined: Option<bool> = tx
+            .query_row(
+                "SELECT f.mtime_ms = -1
+                       AND NOT EXISTS(SELECT 1 FROM tasks t WHERE t.file_id = f.id)
+                 FROM files f WHERE f.path = ?1",
+                rusqlite::params![path],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match already_quarantined {
+            // No index row at all: nothing suspect is being served.
+            None => return Ok(()),
+            Some(true) => return Ok(()),
+            Some(false) => {}
+        }
+        tx.execute(
+            "UPDATE files SET mtime_ms = -1, size_bytes = -1, ctime_ms = -1 WHERE path = ?1",
+            rusqlite::params![path],
+        )?;
+        tx.execute(
+            "DELETE FROM tasks WHERE file_id = (SELECT id FROM files WHERE path = ?1)",
+            rusqlite::params![path],
+        )?;
+        tx.commit()?;
+        self.bump_bases_generation();
+        // Hosts hear Modified and refresh: the honest surface for an
+        // unreadable file is task-free, not last-known-stale.
+        self.notify_file_change(FileChangeKind::Modified, path, None);
         Ok(())
     }
 
