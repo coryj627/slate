@@ -1507,6 +1507,111 @@ fn fresh_move_markers_survive_sweeps_until_the_move_commits() {
 }
 
 #[test]
+fn planted_markers_share_one_commit_adjacent_stamp() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 39: per-row timestamps taken during the
+    // insert loop age from the moment they were WRITTEN, not the
+    // moment they became visible — a stalled planting pass could
+    // commit markers already sweep-eligible, letting another
+    // process consume the early ones against a mid-move topology.
+    // The whole set is re-stamped with ONE value microseconds
+    // before commit; the stall seam below would spread per-row
+    // stamps at least 60ms apart.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/stamp39.md", b"- [ ] stamped\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    unsafe { std::env::set_var("SLATE_TEST_STALL_PLANT_LOOP", "stamp39") };
+    let planted = {
+        let conn = session.conn.lock().unwrap();
+        session
+            .plant_move_markers_locked(
+                &conn,
+                [
+                    "notes/stamp39-a.md",
+                    "notes/stamp39-b.md",
+                    "notes/stamp39-c.md",
+                ],
+            )
+            .unwrap()
+    };
+    unsafe { std::env::remove_var("SLATE_TEST_STALL_PLANT_LOOP") };
+    assert_eq!(planted.len(), 3);
+    {
+        let conn = session.conn.lock().unwrap();
+        let (min_stamp, max_stamp): (i64, i64) = conn
+            .query_row(
+                "SELECT MIN(created_ms), MAX(created_ms) FROM text_write_intents
+                 WHERE path LIKE 'notes/stamp39-%'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            min_stamp, max_stamp,
+            "the whole planted set must share one commit-adjacent stamp"
+        );
+    }
+}
+
+#[test]
+fn consumed_move_markers_are_restored_at_index_commit() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 39: a move outliving the liveness threshold
+    // can have some of its markers consumed by a sweep against the
+    // mid-move topology. The index commit re-asserts the FULL set
+    // (INSERT OR REPLACE, aged), so every touched path carries a
+    // durable re-read trigger the instant the moved rows land —
+    // regardless of what happened in between.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/restore39.md", b"- [ ] restored\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    let planted = {
+        let conn = session.conn.lock().unwrap();
+        session
+            .plant_move_markers_locked(&conn, ["notes/restore39.md", "notes/target39.md"])
+            .unwrap()
+    };
+    {
+        // A sweep consumed one marker mid-move.
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+            rusqlite::params![planted[0].0, planted[0].1],
+        )
+        .unwrap();
+    }
+    {
+        // The move's index commit restores AND ages the full set.
+        let mut conn = session.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        VaultSession::age_move_markers_in_tx(&tx, &planted).unwrap();
+        tx.commit().unwrap();
+    }
+    {
+        let conn = session.conn.lock().unwrap();
+        let aged_cutoff = now_ms() - 15_000;
+        let aged: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents
+                 WHERE path IN (?1, ?2) AND created_ms <= ?3",
+                rusqlite::params![planted[0].0, planted[1].0, aged_cutoff],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            aged, 2,
+            "the index commit must restore consumed markers and age the full set"
+        );
+    }
+}
+
+#[test]
 fn moves_leave_markers_that_converge_interleaved_saves() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
     // Adversarial round 35: a SUCCESSFUL save on the source can

@@ -2222,22 +2222,25 @@ impl VaultSession {
         // deletes the inflight journal (round 37): this open fails,
         // the journal survives, and the next open retries with the
         // filesystem untouched.
-        if let Err(plant_error) = self.plant_move_markers_locked(
+        let planted = match self.plant_move_markers_locked(
             &conn,
             inflight
                 .moved
                 .iter()
                 .flat_map(|(old, new)| [old.as_str(), new.as_str()]),
         ) {
-            return Err(VaultError::InvalidArgument {
-                message: format!(
-                    "structural batch recovery deferred: reconciliation markers could not \
-                     persist ({plant_error}); recovery will retry on the next open"
-                ),
-            });
-        }
+            Ok(planted) => planted,
+            Err(plant_error) => {
+                return Err(VaultError::InvalidArgument {
+                    message: format!(
+                        "structural batch recovery deferred: reconciliation markers could not \
+                         persist ({plant_error}); recovery will retry on the next open"
+                    ),
+                });
+            }
+        };
 
-        match self.rollback_structural_batch_inflight_locked(&mut conn, &inflight) {
+        match self.rollback_structural_batch_inflight_locked(&mut conn, &inflight, &planted) {
             Ok(()) => Ok(()),
             Err(error) => self.fail_structural_batch_recovery_locked(&mut conn, error),
         }
@@ -2272,6 +2275,7 @@ impl VaultSession {
         &self,
         conn: &mut Connection,
         inflight: &StructuralBatchInflight,
+        planted_markers: &[(String, i64)],
     ) -> Result<(), VaultError> {
         let plans = inflight.plans();
         let mut physical = Vec::with_capacity(inflight.entries.len());
@@ -2396,6 +2400,16 @@ impl VaultSession {
             }
         }
 
+        // Round 39: recovery's mutations are done — re-assert the
+        // FULL marker set aged, restoring any marker a sweep
+        // consumed against the mid-recovery topology while the
+        // reversal ran. Every path recovery touched is guaranteed a
+        // durable re-read trigger from this commit on.
+        {
+            let tx = conn.transaction()?;
+            Self::age_move_markers_in_tx(&tx, planted_markers)?;
+            tx.commit()?;
+        }
         structural_batch_delete_inflight(conn)?;
         Ok(())
     }
@@ -6307,6 +6321,14 @@ impl VaultSession {
                     message: "test fault: injected marker plant failure".into(),
                 });
             }
+            // Test-only seam (adversarial round 39): a slow or
+            // suspended planting pass — per-row timestamps taken
+            // here would drift apart across the stall.
+            if let Some(trigger) = std::env::var_os("SLATE_TEST_STALL_PLANT_LOOP")
+                && path.contains(trigger.to_string_lossy().as_ref())
+            {
+                std::thread::sleep(std::time::Duration::from_millis(60));
+            }
             let token = fresh_intent_token();
             tx.execute(
                 "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
@@ -6315,26 +6337,47 @@ impl VaultSession {
             )?;
             planted.push((path.to_string(), token));
         }
+        // ONE commit-adjacent stamp for the whole set (adversarial
+        // round 39): per-row timestamps taken during the insert loop
+        // age from the moment they were WRITTEN, not the moment they
+        // became visible — a large set or a suspended process could
+        // commit markers that were already sweep-eligible, letting
+        // another process consume the early ones against a mid-move
+        // topology. Re-stamping every row microseconds before commit
+        // makes freshness as atomic as persistence.
+        let stamp = now_ms();
+        for (path, token) in &planted {
+            tx.execute(
+                "UPDATE text_write_intents SET created_ms = ?1 WHERE path = ?2 AND token = ?3",
+                rusqlite::params![stamp, path, token],
+            )?;
+        }
         tx.commit()?;
         Ok(planted)
     }
 
-    /// Age a move's own planted markers atomically with its index
-    /// commit (adversarial round 36): the tokens become
-    /// sweep-eligible in the same durable instant the moved rows
-    /// become visible, so the first task query after the move
-    /// re-reads every touched path — and no earlier sweep could
-    /// have cleared them (they were fresh until this commit).
+    /// ENSURE-and-age a move's own planted markers atomically with
+    /// its index commit (adversarial rounds 36 + 39): the tokens
+    /// become sweep-eligible in the same durable instant the moved
+    /// rows become visible, so the first task query after the move
+    /// re-reads every touched path. INSERT OR REPLACE, not UPDATE
+    /// (round 39): if the move outlived the liveness threshold, a
+    /// sweep may have already consumed some markers against the
+    /// mid-move topology — re-asserting the full set here restores
+    /// them, so every path this move touched is guaranteed a
+    /// durable re-read trigger the moment its index state lands,
+    /// regardless of what happened in between.
     fn age_move_markers_in_tx(
         tx: &rusqlite::Transaction,
         planted: &[(String, i64)],
     ) -> Result<(), VaultError> {
         for (path, token) in planted {
             tx.execute(
-                "UPDATE text_write_intents SET created_ms = ?1 WHERE path = ?2 AND token = ?3",
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                 VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
                 rusqlite::params![
-                    now_ms() - Self::intent_abandon_threshold_ms(path) - 1,
                     path,
+                    now_ms() - Self::intent_abandon_threshold_ms(path) - 1,
                     token
                 ],
             )?;
@@ -14004,6 +14047,17 @@ impl VaultSession {
         })();
         if let Err(e) = tx1 {
             let _ = self.provider.rename(to, from);
+            // Round 39: the failed transaction rolled back its
+            // ensure-and-age, but the compensating rename above is
+            // one more filesystem mutation — re-assert the marker
+            // set aged (best-effort: the freshly planted rows still
+            // stand in the common case; this restores any a sweep
+            // consumed during a long-running failed move and makes
+            // the compensated state re-read on the next query).
+            if let Ok(tx) = conn.transaction() {
+                let _ = Self::age_move_markers_in_tx(&tx, &planted_markers)
+                    .and_then(|()| tx.commit().map_err(Into::into));
+            }
             return Err(e);
         }
         self.graph_apply(graph_sink);
