@@ -715,19 +715,21 @@ public sealed class TasksPanelTests : IDisposable
         _ = Assert.Single(announced.OfType<A11yEvent.ScrolledToLine>());
 
         // Both toggle routes write through to disk. The tab allows
-        // one in-flight toggle at a time, so each waits for its
-        // publish (pumped) before the next starts.
+        // one in-flight toggle at a time, so each PUMPS while
+        // waiting — a queued failure publish must be able to surface
+        // (an unpumped dispatcher makes a transient toggle error
+        // look like a silent 20s timeout on CI). A leaked stale flag
+        // would refuse IMMEDIATELY with a conflict, so the refusal
+        // asserts run right after each call.
         string densePath = Path.Combine(_fixture.Root, "dense.md");
         workspace.Panels.ToggleTask(panelRow);
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => DiskContains(densePath, "- [x] task 1\n"),
-                TimeSpan.FromSeconds(20)),
-            "the panel toggle never reached disk");
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggleConflict>());
         PumpDispatcherUntil(
-            () => announced.OfType<A11yEvent.HostComposed>()
-                .Any(composed => composed.Text == "Task completed."),
-            "the panel toggle never published");
+            () => DiskContains(densePath, "- [x] task 1\n")
+                && announced.OfType<A11yEvent.HostComposed>()
+                    .Any(composed => composed.Text == "Task completed."),
+            () => "the panel toggle never completed; announced: "
+                + AnnouncementDump(announced));
 
         // The panel toggle re-baselined the tab, so rows captured
         // before it are stale BY DESIGN — the review route needs a
@@ -736,24 +738,26 @@ public sealed class TasksPanelTests : IDisposable
         ReviewTaskRowViewModel freshReviewRow = workspace.TasksReview.Rows.First(
             r => r.Path == "dense.md" && r.Task.Text == "task 2");
         workspace.TasksReview.ToggleTask(freshReviewRow);
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => DiskContains(densePath, "- [x] task 2\n"),
-                TimeSpan.FromSeconds(20)),
-            "the review toggle never reached disk; announced: "
-                + string.Join(
-                    " | ",
-                    announced.Select(a => a switch
-                    {
-                        A11yEvent.HostComposed composed => composed.Text,
-                        _ => a.GetType().Name,
-                    })));
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggleConflict>());
+        PumpDispatcherUntil(
+            () => DiskContains(densePath, "- [x] task 2\n"),
+            () => "the review toggle never reached disk; announced: "
+                + AnnouncementDump(announced));
         Assert.Empty(announced.OfType<A11yEvent.TaskToggleConflict>());
         Assert.DoesNotContain(
             announced.OfType<A11yEvent.HostComposed>(),
             composed => composed.Text
                 == "A task update is already in progress.");
     }
+
+    private static string AnnouncementDump(List<A11yEvent> announced) =>
+        string.Join(
+            " | ",
+            announced.Select(a => a switch
+            {
+                A11yEvent.HostComposed composed => composed.Text,
+                _ => a.GetType().Name,
+            }));
 
     [Fact]
     public void PostWriteToggleFailuresReconcileInsteadOfAssumingUnchanged()
@@ -863,7 +867,10 @@ public sealed class TasksPanelTests : IDisposable
         }
     }
 
-    private static void PumpDispatcherUntil(Func<bool> condition, string reason)
+    private static void PumpDispatcherUntil(Func<bool> condition, string reason) =>
+        PumpDispatcherUntil(condition, () => reason);
+
+    private static void PumpDispatcherUntil(Func<bool> condition, Func<string> reason)
     {
         DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
         while (!condition() && DateTime.UtcNow < deadline)
@@ -882,7 +889,7 @@ public sealed class TasksPanelTests : IDisposable
             timer.Start();
             System.Windows.Threading.Dispatcher.PushFrame(frame);
         }
-        Assert.True(condition(), reason);
+        Assert.True(condition(), reason());
     }
 
     [Fact]
