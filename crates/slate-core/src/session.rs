@@ -6105,8 +6105,23 @@ impl VaultSession {
                 // clears the token. Only if the quarantine itself
                 // fails (the database is the broken thing, not the
                 // file) does the original error propagate.
-                self.quarantine_unrepairable_path_locked(conn, &path)
-                    .map_err(|_| repair_err)?;
+                //
+                // Gated to FILE-condition failures (adversarial
+                // round 29): Io, non-UTF-8, oversize — the classes
+                // honest-empty containment is FOR. A database
+                // failure (a broken trigger, a corrupt cache) must
+                // keep failing queries loud; absorbing it would
+                // silently drop the path's tasks over an error the
+                // file never caused.
+                match &repair_err {
+                    VaultError::Io(_)
+                    | VaultError::InvalidUtf8 { .. }
+                    | VaultError::FileTooLarge { .. } => {
+                        self.quarantine_unrepairable_path_locked(conn, &path, &tokens)
+                            .map_err(|_| repair_err)?;
+                    }
+                    _ => return Err(repair_err),
+                }
             }
         }
         Ok(())
@@ -6123,8 +6138,48 @@ impl VaultSession {
         &self,
         conn: &mut Connection,
         path: &str,
+        selected_tokens: &[i64],
     ) -> Result<(), VaultError> {
+        // Test-only seam (adversarial round 29): a live writer
+        // resolving — index committed, own token cleared — in the
+        // gap between the sweep's candidate selection and this
+        // quarantine acquiring the writer lock.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_RESOLVE_BEFORE_QUARANTINE")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            for token in selected_tokens {
+                let _ = conn.execute(
+                    "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                    rusqlite::params![path, token],
+                );
+            }
+        }
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // Ownership fence (adversarial round 29): the candidates
+        // were selected BEFORE this lock. A live writer may have
+        // committed and cleared its token in the gap — its fresh
+        // rows are the CONSISTENT truth now, and quarantining them
+        // would serve empty with NO marker left to ever trigger the
+        // repair that refills them. Only quarantine while at least
+        // one selected registration still stands; a vanished
+        // selection means the candidate resolved itself. Unselected
+        // fresh registrations don't count — they belong to live
+        // writers whose own lifecycle (or a later sweep, once aged)
+        // covers them (round-22 token discipline).
+        let mut still_marked = false;
+        for token in selected_tokens {
+            still_marked = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM text_write_intents WHERE path = ?1 AND token = ?2)",
+                rusqlite::params![path, token],
+                |row| row.get(0),
+            )?;
+            if still_marked {
+                break;
+            }
+        }
+        if !still_marked {
+            return Ok(());
+        }
         let already_quarantined: Option<bool> = tx
             .query_row(
                 "SELECT f.mtime_ms = -1
@@ -6169,9 +6224,24 @@ impl VaultSession {
         if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_REINDEX")
             && path.contains(trigger.to_string_lossy().as_ref())
         {
-            return Err(VaultError::InvalidArgument {
-                message: "test fault: injected reindex failure".into(),
-            });
+            // Io (adversarial round 29): the seam models an
+            // unreadable FILE — the recoverable class the sweep's
+            // quarantine may absorb — not a broken database.
+            return Err(VaultError::Io(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "test fault: injected reindex failure",
+            )));
+        }
+        // Test-only seam (adversarial round 29): a DATABASE failure
+        // during repair — a corrupt FTS trigger, say — must keep
+        // failing queries loud, never be absorbed into honest-empty
+        // quarantine.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_REINDEX_DB")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return Err(VaultError::Db(crate::db::DbError::Sqlite(
+                rusqlite::Error::InvalidQuery,
+            )));
         }
         // IMMEDIATE (round 22): the repair reads and conditionally
         // clears intent state - taking the writer lock up front

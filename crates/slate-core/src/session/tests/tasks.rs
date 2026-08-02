@@ -839,6 +839,122 @@ fn unclearable_markers_quarantine_instead_of_poisoning_queries() {
 }
 
 #[test]
+fn resolved_candidates_skip_the_quarantine() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 29: the sweep selects its candidates BEFORE
+    // taking the writer lock. A live writer can commit its index
+    // update and clear its own aged token in that gap — its fresh
+    // rows are the consistent truth. A quarantine that doesn't
+    // revalidate ownership would delete those fresh rows and leave
+    // NO marker behind, so nothing would ever repair them: honest
+    // truth silently replaced by permanent empty.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/resolved-race.md", b"- [ ] fresh truth\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["notes/resolved-race.md", now_ms(), 0xACEi64],
+        )
+        .unwrap();
+    }
+
+    // The marker ages, the repair fails (unreadable file), and the
+    // 'writer' resolves — clears its token — just before the
+    // quarantine takes the lock (the resolve seam).
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "resolved-race") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "resolved-race") };
+    unsafe { std::env::set_var("SLATE_TEST_RESOLVE_BEFORE_QUARANTINE", "resolved-race") };
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query still succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_RESOLVE_BEFORE_QUARANTINE") };
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        page.items
+            .iter()
+            .any(|r| r.path == "notes/resolved-race.md"),
+        "a resolved candidate's fresh rows keep serving — the quarantine must skip"
+    );
+}
+
+#[test]
+fn database_failures_during_repair_still_fail_queries() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 29: honest-empty containment is for FILE
+    // conditions. A DATABASE failure during repair — a corrupt FTS
+    // trigger, a broken cache — must keep failing queries loud;
+    // absorbing it would silently drop the path's tasks over an
+    // error the file never caused.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/db-broken.md", b"- [ ] survive me\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
+            rusqlite::params!["notes/db-broken.md", now_ms(), 0xD8i64],
+        )
+        .unwrap();
+    }
+
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "db-broken") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX_DB", "db-broken") };
+    let failed = session.tasks_in_vault(crate::TaskFilter::default(), Paging::first(50));
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX_DB") };
+    assert!(
+        matches!(failed, Err(VaultError::Db(_))),
+        "database failures propagate instead of quarantining"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let tasks: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tasks t JOIN files f ON f.id = t.file_id WHERE f.path = ?1",
+                rusqlite::params!["notes/db-broken.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tasks, 1, "no quarantine ran: the task rows survive");
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/db-broken.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(intents, 1, "the marker survives too");
+    }
+
+    // The database recovers: the same sweep now repairs in full.
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        healed.items.iter().any(|r| r.path == "notes/db-broken.md"),
+        "the repaired path serves its tasks"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/db-broken.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(intents, 0, "the successful repair clears the marker");
+    }
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.
