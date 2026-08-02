@@ -48,6 +48,32 @@ internal enum ReviewToggleRoute
     Started,
 }
 
+/// <summary>What the workspace did with a review row ACTIVATION
+/// (adversarial round 6): the snapshot's byte offset and line are
+/// only meaningful against the content they were read from, so the
+/// workspace verifies the row's hash against the target tab's SAVED
+/// content before scrolling — the toggle paths already guard this
+/// same stale-identity condition, and an unguarded scroll lands on
+/// unrelated text while announcing success.</summary>
+internal enum ReviewOpenRoute
+{
+    /// <summary>The task's file was already the active note; the
+    /// caret moved in place.</summary>
+    ScrolledInPlace,
+
+    /// <summary>The file was opened first, then the caret moved.</summary>
+    Opened,
+
+    /// <summary>The target's saved content no longer matches the
+    /// row's snapshot; nothing scrolled. The snapshot needs a
+    /// reload.</summary>
+    RefusedStale,
+
+    /// <summary>The file could not be opened; nothing scrolled and
+    /// nothing is announced (the refused-open posture).</summary>
+    OpenFailed,
+}
+
 /// <summary>
 /// W4-3 (#735): the vault-wide Tasks Review leaf — the mac
 /// TasksReviewPanel flow, ported. An explicit SNAPSHOT: it loads on
@@ -66,9 +92,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
 
     private readonly VaultSession _session;
     private readonly Action<A11yEvent> _announce;
-    private readonly Func<string, WorkspaceOpenTarget, bool> _openInternal;
-    private readonly Func<string?> _activeNotePath;
-    private readonly Action<TaskItem> _scrollToTask;
+    private readonly Func<string, TaskItem, string, ReviewOpenRoute> _activateRow;
     private readonly Func<string, TaskItem, string, ReviewToggleRoute> _toggleViaOpenTab;
     private readonly Func<DateTimeOffset> _clock;
 
@@ -89,9 +113,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     public TasksReviewViewModel(
         VaultSession session,
         Action<A11yEvent> announce,
-        Func<string, WorkspaceOpenTarget, bool> openInternal,
-        Func<string?> activeNotePath,
-        Action<TaskItem> scrollToTask,
+        Func<string, TaskItem, string, ReviewOpenRoute> activateRow,
         Func<string, TaskItem, string, ReviewToggleRoute> toggleViaOpenTab,
         Func<DateTimeOffset>? clock = null,
         bool synchronousForTests = false)
@@ -99,9 +121,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     {
         _session = session;
         _announce = announce;
-        _openInternal = openInternal;
-        _activeNotePath = activeNotePath;
-        _scrollToTask = scrollToTask;
+        _activateRow = activateRow;
         _toggleViaOpenTab = toggleViaOpenTab;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
@@ -576,21 +596,34 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     /// <summary>Row activation (mac openTaskRowInEditor): scroll in
     /// place when the task's file IS the active note, else open it
     /// first. Announces the mac verbs, only on what actually
-    /// happened.</summary>
+    /// happened — and the workspace verifies the row's snapshot hash
+    /// before any scroll (adversarial round 6): a stale offset lands
+    /// on unrelated text, so staleness refuses, reloads, and says
+    /// why instead of announcing a landing that never happened.</summary>
     public void OpenRow(ReviewTaskRowViewModel row)
     {
-        if (string.Equals(
-            _activeNotePath(), row.Path, StringComparison.Ordinal))
+        switch (_activateRow(row.Path, row.Task, row.ContentHash))
         {
-            _scrollToTask(row.Task);
-            _announce(new A11yEvent.ScrolledToLine(
-                row.FileName, row.Task.Line));
-            return;
-        }
-        if (_openInternal(row.Path, WorkspaceOpenTarget.CurrentTab))
-        {
-            _scrollToTask(row.Task);
-            _announce(new A11yEvent.OpenedAtLine(row.FileName, row.Task.Line));
+            case ReviewOpenRoute.ScrolledInPlace:
+                _announce(new A11yEvent.ScrolledToLine(
+                    row.FileName, row.Task.Line));
+                return;
+            case ReviewOpenRoute.Opened:
+                _announce(new A11yEvent.OpenedAtLine(
+                    row.FileName, row.Task.Line));
+                return;
+            case ReviewOpenRoute.RefusedStale:
+                // W0.5-3 residue: the review's stale-activation
+                // refusal (no mac counterpart — the mac review
+                // scrolls unverified; the recorded W4-3 divergence).
+                _announce(new A11yEvent.HostComposed(
+                    $"{row.FileName} changed since these tasks loaded. Refreshing.",
+                    A11yPriority.Medium));
+                LoadFirstPage();
+                return;
+            case ReviewOpenRoute.OpenFailed:
+                // Refused opens announce nothing (existing posture).
+                return;
         }
     }
 

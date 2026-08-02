@@ -54,23 +54,14 @@ public sealed class TasksReviewTests : IDisposable
 
     private TasksReviewViewModel MakeReview(
         List<A11yEvent>? announced = null,
-        List<string>? opens = null,
-        bool openSucceeds = true,
-        string? activePath = null,
+        Func<string, TaskItem, string, ReviewOpenRoute>? activateRow = null,
         Func<string, TaskItem, string, ReviewToggleRoute>? toggleViaTab = null,
-        List<TaskItem>? scrolls = null,
         Func<DateTimeOffset>? clock = null)
     {
         return new TasksReviewViewModel(
             _session,
             (announced ?? []).Add,
-            (path, _) =>
-            {
-                opens?.Add(path);
-                return openSucceeds;
-            },
-            () => activePath,
-            task => scrolls?.Add(task),
+            activateRow ?? ((_, _, _) => ReviewOpenRoute.Opened),
             toggleViaTab ?? ((_, _, _) => ReviewToggleRoute.NoOpenTab),
             clock ?? (() => Clock),
             synchronousForTests: true);
@@ -555,43 +546,74 @@ public sealed class TasksReviewTests : IDisposable
     public void ActivationSpeaksTheMacVerbsForWhatActuallyHappened()
     {
         var announced = new List<A11yEvent>();
-        var opens = new List<string>();
-        var scrolls = new List<TaskItem>();
+        var activations = new List<(string Path, string Hash)>();
         var review = MakeReview(
-            announced, opens, activePath: "a.md", scrolls: scrolls);
+            announced,
+            activateRow: (path, _, hash) =>
+            {
+                activations.Add((path, hash));
+                return path == "a.md"
+                    ? ReviewOpenRoute.ScrolledInPlace
+                    : ReviewOpenRoute.Opened;
+            });
         review.EnsureLoaded();
         ReviewTaskRowViewModel sameFile = review.Rows.First(
             r => r.Path == "a.md");
         ReviewTaskRowViewModel crossFile = review.Rows.First(
             r => r.Path == "b.md");
 
-        // Same file: scroll in place, "Scrolled to …" — no open.
+        // Same file: scrolled in place, "Scrolled to …".
         review.OpenRow(sameFile);
-        Assert.Empty(opens);
-        Assert.Single(scrolls);
         var scrolled = Assert.Single(announced.OfType<A11yEvent.ScrolledToLine>());
         Assert.Equal("a.md", scrolled.Filename);
 
-        // Cross file: open first, then scroll, "Opened …".
+        // Cross file: opened first, "Opened …".
         review.OpenRow(crossFile);
-        Assert.Equal("b.md", Assert.Single(opens));
-        Assert.Equal(2, scrolls.Count);
         var opened = Assert.Single(announced.OfType<A11yEvent.OpenedAtLine>());
         Assert.Equal("b.md", opened.Filename);
+
+        // The seam receives each row's SNAPSHOT hash (round 6): the
+        // workspace verifies it before any scroll.
+        Assert.Equal(2, activations.Count);
+        Assert.Equal(sameFile.ContentHash, activations[0].Hash);
+        Assert.Equal(crossFile.ContentHash, activations[1].Hash);
+        Assert.All(activations, a => Assert.NotEmpty(a.Hash));
     }
 
     [Fact]
     public void RefusedOpensAnnounceNothing()
     {
         var announced = new List<A11yEvent>();
-        var opens = new List<string>();
-        var review = MakeReview(announced, opens, openSucceeds: false);
+        var review = MakeReview(
+            announced, activateRow: (_, _, _) => ReviewOpenRoute.OpenFailed);
         review.EnsureLoaded();
 
         review.OpenRow(review.Rows.First(r => r.Path == "b.md"));
-        Assert.Single(opens);
         Assert.Empty(announced.OfType<A11yEvent.OpenedAtLine>());
         Assert.Empty(announced.OfType<A11yEvent.ScrolledToLine>());
+        Assert.Empty(announced.OfType<A11yEvent.HostComposed>());
+    }
+
+    [Fact]
+    public void StaleActivationsRefuseReloadAndSayWhy()
+    {
+        // Round 6: the snapshot's byte offset only means anything
+        // against the content it was read from — an unverified
+        // scroll lands on unrelated text while announcing success.
+        var announced = new List<A11yEvent>();
+        var review = MakeReview(
+            announced, activateRow: (_, _, _) => ReviewOpenRoute.RefusedStale);
+        review.EnsureLoaded();
+        int before = review.LoadRequestIdForTests;
+
+        review.OpenRow(review.Rows.First(r => r.Path == "a.md"));
+
+        var composed = Assert.Single(announced.OfType<A11yEvent.HostComposed>());
+        Assert.Equal(
+            "a.md changed since these tasks loaded. Refreshing.", composed.Text);
+        Assert.Empty(announced.OfType<A11yEvent.ScrolledToLine>());
+        Assert.Empty(announced.OfType<A11yEvent.OpenedAtLine>());
+        Assert.Equal(before + 1, review.LoadRequestIdForTests);
     }
 
     [Fact]

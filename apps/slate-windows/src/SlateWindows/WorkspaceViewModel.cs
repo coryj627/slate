@@ -1086,16 +1086,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         TasksReview = new Panels.TasksReviewViewModel(
             session,
             announce,
-            (path, target) =>
-            {
-                bool navigated = false;
-                RunWorkspaceMutation(() => navigated = OpenPathCore(path, target));
-                return navigated;
-            },
-            () => ActiveGroup.ActiveTab is { IsMarkdown: true } tab
-                ? tab.Path
-                : null,
-            ScrollToPanelTask,
+            TryActivateTaskRow,
             TryToggleTaskInOpenTab,
             synchronousForTests: !startInteractionBackgroundWork);
         // Round 3: a tab can open for a file BETWEEN the review's
@@ -1638,6 +1629,49 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         // mid-flight must still announce and re-snapshot.
         return tab.ToggleTask(task, _announce, TaskToggleCompletion(tab.Path, task))
             != TabTaskToggle.Refused;
+    }
+
+    /// <summary>The review's row-activation seam (adversarial round
+    /// 6): open the file if it isn't the active note, then verify
+    /// the row's snapshot hash against the tab's SAVED content
+    /// BEFORE scrolling — the snapshot's byte offset and line only
+    /// mean anything against the content they were read from, and
+    /// the toggle paths already guard this identity. A dirty buffer
+    /// over a matching baseline still scrolls (the mac posture:
+    /// unsaved edits shift offsets approximately, they don't change
+    /// which task the row names).</summary>
+    private SlateWindows.Panels.ReviewOpenRoute TryActivateTaskRow(
+        string path, TaskItem task, string expectedContentHash)
+    {
+        bool wasActive = ActiveGroup.ActiveTab is WorkspaceTabViewModel
+        {
+            IsMarkdown: true
+        } active
+            && string.Equals(active.Path, path, StringComparison.Ordinal);
+        if (!wasActive)
+        {
+            bool navigated = false;
+            RunWorkspaceMutation(
+                () => navigated = OpenPathCore(path, WorkspaceOpenTarget.CurrentTab));
+            if (!navigated)
+            {
+                return SlateWindows.Panels.ReviewOpenRoute.OpenFailed;
+            }
+        }
+        if (ActiveGroup.ActiveTab is not WorkspaceTabViewModel { IsMarkdown: true } tab
+            || !string.Equals(tab.Path, path, StringComparison.Ordinal))
+        {
+            return SlateWindows.Panels.ReviewOpenRoute.OpenFailed;
+        }
+        if (!string.Equals(
+            tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        {
+            return SlateWindows.Panels.ReviewOpenRoute.RefusedStale;
+        }
+        ScrollToPanelTask(task);
+        return wasActive
+            ? SlateWindows.Panels.ReviewOpenRoute.ScrolledInPlace
+            : SlateWindows.Panels.ReviewOpenRoute.Opened;
     }
 
     /// <summary>The panels' task-activation seam (W4-3): park the

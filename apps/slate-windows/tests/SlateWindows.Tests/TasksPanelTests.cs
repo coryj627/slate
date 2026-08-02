@@ -258,7 +258,7 @@ public sealed class TasksPanelTests : IDisposable
         string path = Path.Combine(_fixture.Root, "todo.md");
         Assert.True(
             SpinWait.SpinUntil(
-                () => File.ReadAllText(path).Contains("- [x] first open"),
+                () => DiskContains(path, "- [x] first open"),
                 TimeSpan.FromSeconds(20)),
             "the panel toggle never reached disk");
     }
@@ -417,7 +417,7 @@ public sealed class TasksPanelTests : IDisposable
         string diskPath = Path.Combine(_fixture.Root, "todo.md");
         Assert.True(
             SpinWait.SpinUntil(
-                () => File.ReadAllText(diskPath).Contains("- [x] first open"),
+                () => DiskContains(diskPath, "- [x] first open"),
                 TimeSpan.FromSeconds(20)),
             "the toggle never reached disk");
 
@@ -459,7 +459,7 @@ public sealed class TasksPanelTests : IDisposable
         string diskPath = Path.Combine(_fixture.Root, "todo.md");
         Assert.True(
             SpinWait.SpinUntil(
-                () => File.ReadAllText(diskPath).Contains("- [x] first open"),
+                () => DiskContains(diskPath, "- [x] first open"),
                 TimeSpan.FromSeconds(20)),
             "the panel toggle never reached disk");
 
@@ -469,6 +469,72 @@ public sealed class TasksPanelTests : IDisposable
             () => announced.OfType<A11yEvent.HostComposed>()
                 .Any(composed => composed.Text == "Task completed."),
             "the disposed-tab panel completion never announced");
+    }
+
+    [Fact]
+    public void ActivationRefusesWhenDiskMovedUnderTheSnapshot()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenTasksReview();
+        ReviewTaskRowViewModel stale = workspace.TasksReview.Rows.First(
+            r => r.Path == "todo.md");
+
+        // The file is rewritten AFTER the snapshot: the row's byte
+        // offset now points into different content — an unverified
+        // scroll would land on unrelated text and announce success
+        // (adversarial round 6).
+        _ = _session.SaveText(
+            "todo.md", "- [ ] rewritten \U0001F4C5 2026-01-01\n", null);
+
+        workspace.TasksReview.OpenRow(stale);
+
+        _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
+            composed.Text == "todo.md changed since these tasks loaded. Refreshing.");
+        Assert.Empty(announced.OfType<A11yEvent.OpenedAtLine>());
+        Assert.Empty(announced.OfType<A11yEvent.ScrolledToLine>());
+
+        // The refusal re-snapshotted; the fresh row carries the new
+        // hash and activates (the refused attempt opened the tab, so
+        // this scrolls in place).
+        ReviewTaskRowViewModel fresh = workspace.TasksReview.Rows.First(
+            r => r.Path == "todo.md");
+        workspace.TasksReview.OpenRow(fresh);
+        var scrolled = Assert.Single(announced.OfType<A11yEvent.ScrolledToLine>());
+        Assert.Equal("todo.md", scrolled.Filename);
+    }
+
+    [Fact]
+    public void DirtyBuffersOverAMatchingBaselineStillActivate()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        workspace.OpenTasksReview();
+        ReviewTaskRowViewModel row = workspace.TasksReview.Rows.First(
+            r => r.Path == "todo.md");
+
+        // Unsaved edits shift offsets approximately — they don't
+        // change which task the row names (the mac posture): the
+        // saved baseline still matches, so activation proceeds.
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        tab.EditorDocument!.Insert(0, "draft ");
+        Assert.True(tab.IsDirty);
+
+        workspace.TasksReview.OpenRow(row);
+        var scrolled = Assert.Single(announced.OfType<A11yEvent.ScrolledToLine>());
+        Assert.Equal("todo.md", scrolled.Filename);
     }
 
     [Fact]
@@ -505,6 +571,21 @@ public sealed class TasksPanelTests : IDisposable
             "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.",
             diverged.Text);
         Assert.Equal(diverged.Text, tab.Status);
+    }
+
+    /// <summary>Disk poll tolerant of the session's atomic
+    /// temp+rename write: a read that lands mid-rename throws a
+    /// sharing violation out of the SpinWait lambda.</summary>
+    private static bool DiskContains(string path, string needle)
+    {
+        try
+        {
+            return File.ReadAllText(path).Contains(needle);
+        }
+        catch (IOException)
+        {
+            return false;
+        }
     }
 
     private static void PumpDispatcherUntil(Func<bool> condition, string reason)

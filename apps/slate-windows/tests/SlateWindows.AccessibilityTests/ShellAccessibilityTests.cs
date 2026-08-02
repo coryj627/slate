@@ -2043,7 +2043,20 @@ public sealed class ShellAccessibilityTests
             Keyboard.Type(VirtualKeyShort.SPACE);
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => File.ReadAllText(todoPath).Contains("- [x] first open"),
+                    () =>
+                    {
+                        // Tolerant of the app's atomic temp+rename
+                        // write racing this poll.
+                        try
+                        {
+                            return File.ReadAllText(todoPath)
+                                .Contains("- [x] first open");
+                        }
+                        catch (IOException)
+                        {
+                            return false;
+                        }
+                    },
                     TimeSpan.FromSeconds(20)),
                 "the Space toggle never reached disk");
 
