@@ -57,6 +57,25 @@ internal abstract class BindableBase : INotifyPropertyChanged
         PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
 }
 
+/// <summary>What the tab did with a toggle request (adversarial
+/// round 2): the legacy bool conflated "busy — refused, announced"
+/// with "started", so review routing armed refresh state for
+/// operations that never ran. Refused stays SILENT — the caller
+/// owns that announcement (the reading-view precedent).</summary>
+internal enum TabTaskToggle
+{
+    /// <summary>Not a saved markdown tab; nothing announced.</summary>
+    Refused,
+
+    /// <summary>An earlier toggle is still in flight; the refusal
+    /// was announced here.</summary>
+    RefusedBusy,
+
+    /// <summary>The guarded toggle started; completion arrives as a
+    /// whole-document refresh.</summary>
+    Started,
+}
+
 internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
@@ -491,20 +510,20 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     // surface rebind that hides it), and Dispose still tears it down.
     public void Deactivate() => _editorInteractions?.CloseTransientUi();
 
-    public bool ToggleTask(TaskItem task, Action<A11yEvent> announce)
+    public TabTaskToggle ToggleTask(TaskItem task, Action<A11yEvent> announce)
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(announce);
         if (!IsMarkdown || IsDirty)
         {
-            return false;
+            return TabTaskToggle.Refused;
         }
         if (_taskToggleInFlight)
         {
             announce(new A11yEvent.HostComposed(
                 "A task update is already in progress.",
                 A11yPriority.Medium));
-            return true;
+            return TabTaskToggle.RefusedBusy;
         }
 
         _taskToggleInFlight = true;
@@ -523,7 +542,7 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
             task,
             nextStatus,
             announce));
-        return true;
+        return TabTaskToggle.Started;
     }
 
     private sealed record TaskToggleOutcome(
@@ -1443,17 +1462,27 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 System.IO.Path.GetFileName(tab.Path)));
             return SlateWindows.Panels.ReviewToggleRoute.RefusedStale;
         }
-        return tab.ToggleTask(task, _announce)
-            ? SlateWindows.Panels.ReviewToggleRoute.Started
-            : SlateWindows.Panels.ReviewToggleRoute.RefusedDirty;
+        return tab.ToggleTask(task, _announce) switch
+        {
+            TabTaskToggle.Started => SlateWindows.Panels.ReviewToggleRoute.Started,
+            // Busy: the tab announced; the review must NOT arm a
+            // refresh for an operation that never ran (round 2).
+            TabTaskToggle.RefusedBusy => SlateWindows.Panels.ReviewToggleRoute.RefusedBusy,
+            // A dirty race between the check above and the call.
+            _ => SlateWindows.Panels.ReviewToggleRoute.RefusedDirty,
+        };
     }
 
     /// <summary>The panels' task-toggle seam (W4-3): the guarded tab
     /// path owns conflict detection, generation gating, and the
-    /// canonical announcements. The tab's raw ToggleTask returns
-    /// false for dirty WITHOUT announcing, so the refusal is spoken
-    /// here (the reading-view precedent).</summary>
-    private bool TogglePanelTask(TaskItem task)
+    /// canonical announcements. The tab's raw ToggleTask refuses
+    /// dirty WITHOUT announcing, so the refusal is spoken here (the
+    /// reading-view precedent). The row's snapshot hash is verified
+    /// against the tab's SAVED content first (adversarial round 2):
+    /// panel rows survive a save until the async refresh publishes,
+    /// and the tab's own CAS uses the CURRENT hash — it would happily
+    /// toggle whichever task inherited a stale row's ordinal.</summary>
+    private bool TogglePanelTask(TaskItem task, string expectedContentHash)
     {
         if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab)
         {
@@ -1465,7 +1494,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 System.IO.Path.GetFileName(tab.Path)));
             return true;
         }
-        return tab.ToggleTask(task, _announce);
+        if (!string.Equals(
+            tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
+        {
+            _announce(new A11yEvent.TaskToggleConflict(
+                System.IO.Path.GetFileName(tab.Path)));
+            Panels.ReloadTasks();
+            return true;
+        }
+        return tab.ToggleTask(task, _announce) != TabTaskToggle.Refused;
     }
 
     /// <summary>The panels' task-activation seam (W4-3): park the

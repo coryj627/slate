@@ -32,6 +32,12 @@ internal enum ReviewToggleRoute
     /// announced. Nothing changed.</summary>
     RefusedDirty,
 
+    /// <summary>The tab refused because an earlier toggle is still
+    /// in flight; the refusal was announced. Nothing changed —
+    /// mapping this to Started would arm a refresh for an operation
+    /// that never ran (adversarial round 2).</summary>
+    RefusedBusy,
+
     /// <summary>The row's snapshot no longer matches the open tab's
     /// saved content; the conflict was announced. The snapshot needs
     /// a reload.</summary>
@@ -233,12 +239,26 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             ulong generation = 0;
             try
             {
-                // Captured BEFORE the query: a bump in between makes
-                // the next load-more reload instead of appending —
-                // the safe direction.
-                generation = _session.InteractionGeneration();
-                page = _session.TasksInVault(
-                    ToTaskFilter(filter), new Paging(null, PageSize));
+                // The generation and the page must describe the SAME
+                // index state, so the generation is re-read after the
+                // query (adversarial round 2: checking only before
+                // leaves a window where a save lands between check
+                // and query). A mismatch retries; if writes keep
+                // landing, the PRE-query generation is kept — it can
+                // never match the live index again, so the next
+                // load-more reloads instead of appending. The safe
+                // direction, never the corrupt one.
+                for (int attempt = 0; attempt < 3; attempt++)
+                {
+                    generation = _session.InteractionGeneration();
+                    InterleaveForTests?.Invoke();
+                    page = _session.TasksInVault(
+                        ToTaskFilter(filter), new Paging(null, PageSize));
+                    if (_session.InteractionGeneration() == generation)
+                    {
+                        break;
+                    }
+                }
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -250,6 +270,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             Post(() => PublishFirstPage(requestId, page, failure, generation));
         });
     }
+
+    /// <summary>Test seam: runs between the generation snapshot and
+    /// the index query inside both load workers, where a concurrent
+    /// save is otherwise impossible to schedule deterministically.</summary>
+    internal Action? InterleaveForTests { get; set; }
 
     /// <summary>Internal so stale-ordering is testable
     /// deterministically (the PublishOutline pattern).</summary>
@@ -316,8 +341,20 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 }
                 else
                 {
+                    InterleaveForTests?.Invoke();
                     page = _session.TasksInVault(
                         ToTaskFilter(filter), new Paging(cursor, PageSize));
+                    // Re-checked AFTER the query (adversarial round
+                    // 2): a save can land between the check above and
+                    // the query, bump the generation, and hand this
+                    // cursor rows from the mutated index — which
+                    // appended against the old page duplicates moved
+                    // rows and skips others.
+                    if (_session.InteractionGeneration() != snapshotGeneration)
+                    {
+                        drifted = true;
+                        page = null;
+                    }
                 }
             }
             catch (Exception exception) when (
@@ -385,6 +422,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 LoadFirstPage();
                 return;
             case ReviewToggleRoute.RefusedDirty:
+            case ReviewToggleRoute.RefusedBusy:
                 return;
         }
 

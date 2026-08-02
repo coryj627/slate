@@ -91,7 +91,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
     private readonly Func<string, WorkspaceOpenTarget, bool> _openInternal;
     private readonly Func<string, bool> _openExternal;
     private readonly Action<LinkAnchor, string?> _scrollToAnchor;
-    private readonly Func<TaskItem, bool> _toggleTask;
+    private readonly Func<TaskItem, string, bool> _toggleTask;
     private readonly Action<TaskItem> _scrollToTask;
 
     private string? _notePath;
@@ -120,7 +120,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         Func<string, WorkspaceOpenTarget, bool> openInternal,
         Func<string, bool> openExternal,
         Action<LinkAnchor, string?> scrollToAnchor,
-        Func<TaskItem, bool> toggleTask,
+        Func<TaskItem, string, bool> toggleTask,
         Action<TaskItem> scrollToTask,
         bool synchronousForTests = false)
         : base(synchronousForTests)
@@ -830,7 +830,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         DoneTasks.Clear();
         foreach (TaskItem task in page.Tasks)
         {
-            var row = new NoteTaskRowViewModel(task);
+            var row = new NoteTaskRowViewModel(task, page.ContentHash);
             if (task.Completed)
             {
                 DoneTasks.Add(row);
@@ -850,8 +850,23 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
     /// <summary>Checkbox / Space: route the toggle through the
     /// workspace seam (the active tab's guarded ToggleTask — dirty
     /// refusal, conflict detection, and the canonical announcements
-    /// all live there). The refresh arrives via the save funnel.</summary>
-    public void ToggleTask(NoteTaskRowViewModel row) => _ = _toggleTask(row.Task);
+    /// all live there), carrying the row's snapshot hash so a row
+    /// read before a save can't toggle whichever task inherited its
+    /// ordinal (adversarial round 2). The refresh arrives via the
+    /// save funnel.</summary>
+    public void ToggleTask(NoteTaskRowViewModel row) =>
+        _ = _toggleTask(row.Task, row.ContentHash);
+
+    /// <summary>Re-snapshot only the task rows (adversarial round 2):
+    /// a toggle that failed its snapshot-hash check needs fresh rows
+    /// without disturbing the outline.</summary>
+    public void ReloadTasks()
+    {
+        if (_notePath is { } path)
+        {
+            LoadTasks(path, _loadGeneration);
+        }
+    }
 
     /// <summary>Row activation scrolls the editor to the task's line
     /// (mac: silent scroll; the caret move is the observable).</summary>
@@ -1041,12 +1056,17 @@ internal sealed class OutgoingLinkRowViewModel
 
 /// <summary>One note-task row (W4-3): the mac TasksPanel row shape.
 /// The record stays EXACT for toggling/scrolling; rendered text and
-/// the UIA name are display-bounded (the W4-2 round-14 split).</summary>
+/// the UIA name are display-bounded (the W4-2 round-14 split). The
+/// row also pins the note's content hash AT READ TIME (adversarial
+/// round 2): rows are snapshots, and a toggle must prove the note
+/// wasn't rewritten underneath it — a stale ordinal against newer
+/// content could name a different task.</summary>
 internal sealed class NoteTaskRowViewModel
 {
-    public NoteTaskRowViewModel(TaskItem task)
+    public NoteTaskRowViewModel(TaskItem task, string contentHash)
     {
         Task = task;
+        ContentHash = contentHash;
         DisplayText = EditorInteractionCoordinator.BoundDisplayText(task.Text);
         MetadataCaption = string.Join(
             " · ",
@@ -1055,6 +1075,9 @@ internal sealed class NoteTaskRowViewModel
     }
 
     public TaskItem Task { get; }
+
+    /// <summary>The note's content hash when this row was read.</summary>
+    public string ContentHash { get; }
 
     public string DisplayText { get; }
 

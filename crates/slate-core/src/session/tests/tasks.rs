@@ -124,12 +124,24 @@ fn note_tasks_bounds_rows_in_sql_and_reports_true_totals() {
     assert!(page.tasks.iter().all(|t| !t.completed));
     assert_eq!(page.tasks[0].text, "task 1");
     assert_eq!(page.tasks[1].text, "task 2");
+    // The snapshot hash rides along (round 2) and matches the save
+    // path's conflict-check hash, so panel rows can prove their
+    // ordinals still name the same tasks before a toggle.
+    assert!(!page.content_hash.is_empty());
+    assert_eq!(
+        page.content_hash,
+        session
+            .read_note_parts("notes/dense.md")
+            .unwrap()
+            .content_hash
+    );
 
     // Unknown paths are an empty page, not an error.
     let missing = session.note_tasks("notes/none.md", 12).unwrap();
     assert!(missing.tasks.is_empty());
     assert_eq!(missing.total, 0);
     assert_eq!(missing.open_total, 0);
+    assert!(missing.content_hash.is_empty());
 }
 
 #[test]

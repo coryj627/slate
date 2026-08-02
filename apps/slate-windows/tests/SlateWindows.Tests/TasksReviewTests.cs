@@ -290,6 +290,73 @@ public sealed class TasksReviewTests : IDisposable
     }
 
     [Fact]
+    public void LoadMoreDetectsWritesThatLandBetweenCheckAndQuery()
+    {
+        var review = MakeReview();
+        review.EnsureLoaded();
+        Assert.True(review.HasMore);
+        int before = review.LoadRequestIdForTests;
+
+        // Round 2: the round-1 guard checked the generation only
+        // BEFORE the query — a save landing in that window let the
+        // dead cursor read the mutated index with drift undetected.
+        // The seam commits a save exactly inside the window.
+        review.InterleaveForTests = () =>
+        {
+            review.InterleaveForTests = null;
+            _ = _session.SaveText("b.md", "- [ ] from b, edited\n", null);
+        };
+        review.LoadMore();
+
+        Assert.Equal(before + 1, review.LoadRequestIdForTests);
+        Assert.Equal(200, review.Rows.Count);
+        Assert.False(review.IsLoadingMore);
+    }
+
+    [Fact]
+    public void FirstPagesBindTheGenerationTheirRowsCameFrom()
+    {
+        var review = MakeReview();
+        bool interleaved = false;
+        review.InterleaveForTests = () =>
+        {
+            if (interleaved)
+            {
+                return;
+            }
+            interleaved = true;
+            _ = _session.SaveText("b.md", "- [ ] from b, edited\n", null);
+        };
+        review.EnsureLoaded();
+        Assert.True(interleaved);
+
+        // The first-page worker retried past the interleaved write
+        // and stored a generation matching its rows — so the next
+        // load-more APPENDS (no false drift, no paging reset).
+        int before = review.LoadRequestIdForTests;
+        review.InterleaveForTests = null;
+        review.LoadMore();
+        Assert.Equal(before, review.LoadRequestIdForTests);
+        Assert.Equal(236, review.Rows.Count);
+    }
+
+    [Fact]
+    public void BusyTabRefusalsNeverArmTheRefreshFlag()
+    {
+        // Round 2: the tab's legacy bool reported its busy refusal
+        // as true, which the round-1 mapping read as Started — the
+        // review armed a refresh for an operation that never ran.
+        var review = MakeReview(
+            toggleViaTab: (_, _, _) => ReviewToggleRoute.RefusedBusy);
+        review.EnsureLoaded();
+        int before = review.LoadRequestIdForTests;
+
+        review.ToggleTask(review.Rows[0]);
+        review.NoteRefreshed(review.Rows[0].Path);
+        Assert.Equal(before, review.LoadRequestIdForTests);
+    }
+
+    [Fact]
     public void SupersededLoadMoreCannotWedgeThePagingButton()
     {
         var review = MakeReview();

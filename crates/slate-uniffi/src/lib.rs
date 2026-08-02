@@ -2851,12 +2851,16 @@ impl From<core::OutlinePage> for OutlinePage {
 }
 
 /// FFI mirror of `slate_core::NoteTasksPage` (W4-3): the bounded
-/// per-note task read with true totals for the panel header.
+/// per-note task read with true totals for the panel header, plus
+/// the file's content hash at read time so snapshot rows can prove
+/// their ordinals still name the same tasks before a toggle
+/// (adversarial round 2).
 #[derive(uniffi::Record)]
 pub struct NoteTasksPage {
     pub tasks: Vec<TaskItem>,
     pub total: u32,
     pub open_total: u32,
+    pub content_hash: String,
 }
 
 impl From<core::NoteTasksPage> for NoteTasksPage {
@@ -2865,6 +2869,7 @@ impl From<core::NoteTasksPage> for NoteTasksPage {
             tasks: p.tasks.into_iter().map(Into::into).collect(),
             total: p.total,
             open_total: p.open_total,
+            content_hash: p.content_hash,
         }
     }
 }

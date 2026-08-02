@@ -61,7 +61,7 @@ public sealed class TasksPanelTests : IDisposable
             (_, _) => true,
             _ => true,
             (_, _) => { },
-            task =>
+            (task, _) =>
             {
                 toggles?.Add(task);
                 return true;
@@ -189,7 +189,7 @@ public sealed class TasksPanelTests : IDisposable
         panels.PublishTasks(
             panels.LoadGenerationForTests,
             requestId: -1,
-            new NoteTasksPage([], 0, 0),
+            new NoteTasksPage([], 0, 0, "stale-hash"),
             failure: null);
         Assert.Same(first, panels.OpenTasks[0]);
         Assert.Equal(3, panels.OpenTasks.Count);
@@ -207,7 +207,7 @@ public sealed class TasksPanelTests : IDisposable
         }
         var panels = new RightPanePanelsViewModel(
             session, _ => { }, (_, _) => true, _ => true, (_, _) => { },
-            _ => true, _ => { });
+            (_, _) => true, _ => { });
         session.Dispose();
 
         panels.NoteChanged("n.md");
@@ -289,6 +289,75 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void StalePanelRowsRefuseTogglesWithAConflict()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        Assert.NotEmpty(workspace.Panels.OpenTasks);
+        // Captured BEFORE the save: panel refreshes are async, so
+        // rows read against the old content stay clickable while the
+        // refresh is in flight (adversarial round 2).
+        NoteTaskRowViewModel staleRow = workspace.Panels.OpenTasks[0];
+
+        // A task is inserted BEFORE the captured row and saved
+        // through the tab: the row's ordinal now names the inserted
+        // task, and the tab's CURRENT hash would sail through the
+        // core CAS — the round-2 failure completed the wrong task.
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        tab.EditorDocument!.Insert(0, "- [ ] inserted before everything\n");
+        Assert.True(tab.Save());
+
+        workspace.Panels.ToggleTask(staleRow);
+
+        _ = Assert.Single(announced.OfType<A11yEvent.TaskToggleConflict>());
+        string content = File.ReadAllText(Path.Combine(_fixture.Root, "todo.md"));
+        Assert.Contains("- [ ] inserted before everything", content);
+        Assert.Contains("- [ ] first open", content);
+        // The refusal re-snapshots: fresh rows carry the new hash and
+        // the inserted task leads.
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => workspace.Panels.OpenTasks.Count == 4
+                    && workspace.Panels.OpenTasks[0].Task.Text
+                        == "inserted before everything",
+                TimeSpan.FromSeconds(20)),
+            "the conflict refusal never re-snapshotted the panel");
+    }
+
+    [Fact]
+    public void BusyTabsReportBusyNotStarted()
+    {
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            _ => { },
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        TaskItem task = _session.TasksForFile("todo.md")[0];
+        var announced = new List<A11yEvent>();
+
+        // Round 2: the legacy bool conflated these — a busy refusal
+        // read as Started armed review refresh state for an
+        // operation that never ran.
+        Assert.Equal(TabTaskToggle.Started, tab.ToggleTask(task, announced.Add));
+        Assert.Equal(
+            TabTaskToggle.RefusedBusy, tab.ToggleTask(task, announced.Add));
+        Assert.Contains(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text == "A task update is already in progress.");
+    }
+
+    [Fact]
     public void StaleTabsRefuseReviewTogglesWithAConflict()
     {
         var announced = new List<A11yEvent>();
@@ -322,10 +391,12 @@ public sealed class TasksPanelTests : IDisposable
     public void DisplayBoundsWhileTaskDataStaysExact()
     {
         string giant = new('t', 1024 * 1024);
-        var row = new NoteTaskRowViewModel(new TaskItem(
-            Ordinal: 0, Text: giant, StatusChar: " ", Completed: false,
-            DueMs: null, ScheduledMs: null, Priority: null, Recurrence: null,
-            Line: 1, ByteOffset: 0, CheckboxStartByte: 2, CheckboxEndByte: 5));
+        var row = new NoteTaskRowViewModel(
+            new TaskItem(
+                Ordinal: 0, Text: giant, StatusChar: " ", Completed: false,
+                DueMs: null, ScheduledMs: null, Priority: null, Recurrence: null,
+                Line: 1, ByteOffset: 0, CheckboxStartByte: 2, CheckboxEndByte: 5),
+            contentHash: "hash");
 
         Assert.True(row.DisplayText.Length <= 4097);
         Assert.True(row.AutomationName.Length <= 4300);

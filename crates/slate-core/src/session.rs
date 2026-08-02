@@ -386,12 +386,17 @@ pub struct OutlinePage {
 
 /// Bounded per-note task read (W4-3): at most `limit` tasks in
 /// document order plus the true totals the panel header speaks
-/// ("N open of M tasks").
+/// ("N open of M tasks"). `content_hash` is the indexed file's hash
+/// at read time (adversarial round 2): rows are snapshots, and a
+/// toggle raised from one must prove the note hasn't been rewritten
+/// underneath it — a stale ordinal against newer content could name
+/// a different task. Empty for unknown paths.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NoteTasksPage {
     pub tasks: Vec<crate::TaskItem>,
     pub total: u32,
     pub open_total: u32,
+    pub content_hash: String,
 }
 
 // --- Note parts bundle ---
@@ -5745,11 +5750,13 @@ impl VaultSession {
     /// return an empty page.
     pub fn note_tasks(&self, path: &str, limit: u32) -> Result<NoteTasksPage, VaultError> {
         let conn = self.conn.lock().expect("session connection mutex");
-        let (tasks, total, open_total) = crate::tasks_db::note_tasks_bounded(&conn, path, limit)?;
+        let (tasks, total, open_total, content_hash) =
+            crate::tasks_db::note_tasks_bounded(&conn, path, limit)?;
         Ok(NoteTasksPage {
             tasks,
             total,
             open_total,
+            content_hash,
         })
     }
 

@@ -13273,8 +13273,18 @@ final class AppState: ObservableObject {
     /// Same selection+scroll pattern as the search-overlay
     /// activation flow.
     func openTaskRowInEditor(_ row: TaskWithLocation) {
-        let target = row.path
-        let line = Int(row.task.line)
+        openTaskRow(path: row.path, fileLine: Int(row.task.line))
+    }
+
+    /// The path+line core of task-row activation, split from the
+    /// `TaskWithLocation` overload so callers that only hold a
+    /// `TaskItem` (Bases row open) don't have to synthesize an FFI
+    /// transport record — its generated initializer grows with the
+    /// record, and a hand-built one is a build break in waiting
+    /// (W4-3 adversarial round 2).
+    func openTaskRow(path: String, fileLine: Int) {
+        let target = path
+        let line = fileLine
         recordExplicitSidebarNavigationIntent()
 
         // If we're already on the file, just scroll.

@@ -121,20 +121,25 @@ pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskIt
 /// work and hide every actionable row. Each group reads in document
 /// order via its own PK-ordered scan — no temp sort on adversarial
 /// task counts.
+///
+/// The file's `content_hash` rides alongside (adversarial round 2):
+/// panel rows are snapshots, and a toggle against a row read before
+/// a save must be able to prove its ordinals still name the same
+/// tasks. Unknown paths return an empty hash with the empty page.
 pub(crate) fn note_tasks_bounded(
     conn: &Connection,
     path: &str,
     limit: u32,
-) -> Result<(Vec<TaskItem>, u32, u32), VaultError> {
-    let file_id: Option<i64> = conn
+) -> Result<(Vec<TaskItem>, u32, u32, String), VaultError> {
+    let file_row: Option<(i64, String)> = conn
         .query_row(
-            "SELECT id FROM files WHERE path = ?1",
+            "SELECT id, content_hash FROM files WHERE path = ?1",
             params![path],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .ok();
-    let Some(file_id) = file_id else {
-        return Ok((Vec::new(), 0, 0));
+    let Some((file_id, content_hash)) = file_row else {
+        return Ok((Vec::new(), 0, 0, String::new()));
     };
     let mut stmt = conn.prepare_cached(
         "SELECT ordinal, text, status_char, completed,
@@ -161,7 +166,12 @@ pub(crate) fn note_tasks_bounded(
         params![file_id],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    Ok((out, total.max(0) as u32, open_total.max(0) as u32))
+    Ok((
+        out,
+        total.max(0) as u32,
+        open_total.max(0) as u32,
+        content_hash,
+    ))
 }
 
 /// Vault-wide paged task query. Order:

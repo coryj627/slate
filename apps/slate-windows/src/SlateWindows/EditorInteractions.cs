@@ -1582,7 +1582,7 @@ internal sealed class EditorInteractionCoordinator : BindableBase, IDisposable
             return true;
         }
 
-        return _tab.ToggleTask(task, _announce);
+        return _tab.ToggleTask(task, _announce) != TabTaskToggle.Refused;
     }
 
     private TaskItem? CachedTaskAt(int utf16Offset, EditorInteractionOrigin origin)

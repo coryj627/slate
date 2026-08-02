@@ -2742,8 +2742,7 @@ extension AppState {
         if let taskOrdinal = row.taskOrdinal,
             let task = taskItem(path: row.filePath, ordinal: taskOrdinal)
         {
-            openTaskRowInEditor(
-                TaskWithLocation(task: task, path: row.filePath, fileName: baseFilename(row.filePath)))
+            openTaskRow(path: row.filePath, fileLine: Int(task.line))
             return postBaseActionEvent(
                 .openedAtLine(filename: baseFilename(row.filePath), line: UInt32(task.line)))
         }
