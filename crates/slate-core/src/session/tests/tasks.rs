@@ -181,6 +181,48 @@ fn vault_pages_bound_task_text_before_ffi() {
 }
 
 #[test]
+fn post_write_failures_leave_disk_newer_and_reindex_path_repairs_it() {
+    // Adversarial round 12: the REAL partial-failure boundary —
+    // save_text writes the file, then the index commit fails. The
+    // fault seam trips only on a path containing the trigger, so
+    // parallel tests' saves are unaffected.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/fault-target-a1b2.md", b"- [ ] flip me\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // SAFETY: env vars are process-global; the trigger string is
+    // unique to this test's fixture path.
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_AFTER_WRITE", "fault-target-a1b2") };
+    let result = session.toggle_task_status("notes/fault-target-a1b2.md", 0, 'x', None);
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
+    assert!(result.is_err(), "the injected fault must surface");
+
+    // Disk moved; the index did not.
+    let disk = session
+        .read_note_parts("notes/fault-target-a1b2.md")
+        .unwrap();
+    assert!(disk.body.contains("- [x] flip me"));
+    let stale = session
+        .note_tasks("notes/fault-target-a1b2.md", 10)
+        .unwrap();
+    assert!(
+        !stale.tasks[0].completed,
+        "the index must still be pre-write"
+    );
+    assert_ne!(stale.content_hash, disk.content_hash);
+
+    // The repair forces the path back to disk truth.
+    session.reindex_path("notes/fault-target-a1b2.md").unwrap();
+    let repaired = session
+        .note_tasks("notes/fault-target-a1b2.md", 10)
+        .unwrap();
+    assert!(repaired.tasks[0].completed);
+    assert_eq!(repaired.content_hash, disk.content_hash);
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.

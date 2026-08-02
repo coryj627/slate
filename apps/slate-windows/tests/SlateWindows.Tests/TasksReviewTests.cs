@@ -568,6 +568,57 @@ public sealed class TasksReviewTests : IDisposable
     }
 
     [Fact]
+    public void RealPreCommitFailuresRepairTheIndexBeforeReloading()
+    {
+        // Adversarial round 12: the round-11 seam injected AFTER the
+        // core committed, so it never exercised the REAL window —
+        // file written, index rolled back. The core's own fault seam
+        // (env-var path trigger, unique to this fixture file) trips
+        // exactly there; the recovery must repair the index before
+        // reloading, or the rows resurrect the pre-write state.
+        _ = _session.SaveText("fault-pre-commit.md", "- [ ] flip me\n", null);
+        var announced = new List<A11yEvent>();
+        var review = MakeReview(announced);
+        review.EnsureLoaded();
+        ReviewTaskRowViewModel row = review.Rows.First(
+            r => r.Path == "fault-pre-commit.md");
+
+        Environment.SetEnvironmentVariable(
+            "SLATE_TEST_FAULT_AFTER_WRITE", "fault-pre-commit");
+        try
+        {
+            review.ToggleTask(row);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", null);
+        }
+
+        // Disk flipped, the failure spoke with no success verb…
+        string diskPath = Path.Combine(_fixture.Root, "fault-pre-commit.md");
+        Assert.Contains("- [x] flip me", File.ReadAllText(diskPath));
+        _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
+            composed.Text.StartsWith(
+                "Task could not be toggled:", StringComparison.Ordinal)
+            && composed.Text.Contains("test fault"));
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text == "Task completed.");
+
+        // …and the reload shows DISK truth, not the rolled-back
+        // index's ghost: the repair ran first.
+        ReviewTaskRowViewModel repaired = review.Rows.First(
+            r => r.Path == "fault-pre-commit.md");
+        Assert.True(repaired.Task.Completed);
+
+        // A retry is a clean fresh toggle, not a ghost conflict.
+        review.ToggleTask(repaired);
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggleConflict>());
+        Assert.Contains("- [ ] flip me", File.ReadAllText(diskPath));
+    }
+
+    [Fact]
     public void SupersededLoadMoreCannotWedgeThePagingButton()
     {
         var review = MakeReview();

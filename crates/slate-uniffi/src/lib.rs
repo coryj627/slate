@@ -1359,6 +1359,15 @@ impl VaultSession {
         Ok(self.inner.note_tasks(&path, limit)?.into())
     }
 
+    /// Repair one path's index after a post-write failure
+    /// (adversarial round 12): `save_text` writes the file before
+    /// the index commit, so a failure in between leaves disk newer
+    /// than the index — hosts call this before re-querying task
+    /// surfaces so the stale index cannot resurrect ghost rows.
+    pub fn reindex_path(&self, path: String) -> Result<(), VaultError> {
+        Ok(self.inner.reindex_path(&path)?)
+    }
+
     /// Paged vault-wide task query. Used by the Mac TasksReviewView
     /// to render filtered overdue / today / soon views without
     /// loading every task into memory.

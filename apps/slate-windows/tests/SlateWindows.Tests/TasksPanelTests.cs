@@ -814,6 +814,70 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void RealPreCommitFailuresRepairTheIndexOnTheTabRoute()
+    {
+        // Adversarial round 12, tab route at the REAL boundary: the
+        // core's fault seam rolls the index back after the file
+        // write, so recovery must reindex the path before any
+        // surface reloads — a stale-index reload shows the ghost
+        // pre-write rows.
+        _ = _session.SaveText("fault-tab-target.md", "- [ ] flip me\n", null);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("fault-tab-target.md");
+        NoteTaskRowViewModel row = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "flip me");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+
+        Environment.SetEnvironmentVariable(
+            "SLATE_TEST_FAULT_AFTER_WRITE", "fault-tab-target");
+        try
+        {
+            workspace.Panels.ToggleTask(row);
+            PumpDispatcherUntil(
+                () => announced.OfType<A11yEvent.HostComposed>().Any(composed =>
+                    composed.Text.StartsWith(
+                        "Task could not be toggled:", StringComparison.Ordinal)
+                    && composed.Text.Contains("test fault")),
+                () => "the injected failure never published; announced: "
+                    + AnnouncementDump(announced));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", null);
+        }
+
+        // Disk flipped; the repaired index feeds the re-snapshot, so
+        // the panel shows disk truth; the clean tab gets the
+        // divergence honesty and stays guarded.
+        string diskPath = Path.Combine(_fixture.Root, "fault-tab-target.md");
+        Assert.Contains("- [x] flip me", File.ReadAllText(diskPath));
+        Assert.Contains(
+            workspace.Panels.DoneTasks, r => r.Task.Text == "flip me");
+        _ = announced.OfType<A11yEvent.HostComposed>().Single(composed =>
+            composed.Text
+                == "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.");
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text == "Task completed.");
+
+        // Retrying through the obsolete tab refuses with a conflict
+        // (the tab never re-baselined) instead of writing blind.
+        NoteTaskRowViewModel fresh = workspace.Panels.DoneTasks.First(
+            r => r.Task.Text == "flip me");
+        workspace.Panels.ToggleTask(fresh);
+        _ = Assert.Single(announced.OfType<A11yEvent.TaskToggleConflict>());
+        Assert.Contains("- [x] flip me", File.ReadAllText(diskPath));
+    }
+
+    [Fact]
     public void DirectWritesReconcileTabsThatRacedOpen()
     {
         var announced = new List<A11yEvent>();

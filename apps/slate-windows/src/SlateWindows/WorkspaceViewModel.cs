@@ -1647,6 +1647,12 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                         postFailureDiskHash, preToggleHash, StringComparison.Ordinal);
                 if (diskMoved)
                 {
+                    // Repair the INDEX first (adversarial round 12):
+                    // the real failure window is file-written /
+                    // index-uncommitted, so reloading before the
+                    // repair would re-query the stale index and
+                    // resurrect the pre-write state as ghost rows.
+                    TryReindexPath(path);
                     ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash!);
                     Panels.NoteSaved(path);
                     TasksReview.NoteRefreshed(path);
@@ -1685,6 +1691,21 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             TasksReview.NoteRefreshed(path);
             ReconcileTabsAfterDirectTaskWrite(path, report.NewContentHash);
         };
+    }
+
+    /// <summary>Best-effort per-path index repair (adversarial round
+    /// 12): a failed repair leaves the reload no worse than before —
+    /// the honesty announcements already happened, and the next scan
+    /// converges by mtime.</summary>
+    private void TryReindexPath(string path)
+    {
+        try
+        {
+            _session.ReindexPath(path);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+        }
     }
 
     /// <summary>A task toggle changed <paramref name="path"/> on disk

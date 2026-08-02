@@ -3343,6 +3343,21 @@ impl VaultSession {
         // `atomic_write` is temp-file + rename.)
         self.provider.write_file(path, contents.as_bytes())?;
 
+        // Test-only fault seam (adversarial round 12): THIS is the
+        // real partial-failure boundary — file written, index not
+        // yet committed. The env var carries a path substring so
+        // only the targeted test's saves trip it; production never
+        // sets it. Returning here rolls the transaction back,
+        // leaving disk newer than the index — the exact state the
+        // hosts' post-write reconciliation must repair.
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_AFTER_WRITE") {
+            if path.contains(trigger.to_string_lossy().as_ref()) {
+                return Err(VaultError::InvalidArgument {
+                    message: "test fault: injected failure after write, before index commit".into(),
+                });
+            }
+        }
+
         let new_stat = self.provider.stat(path)?;
         let new_hash = crate::vault::content_hash(contents.as_bytes());
 
@@ -5758,6 +5773,52 @@ impl VaultSession {
             open_total,
             content_hash,
         })
+    }
+
+    /// Repair the index for one path after a post-write failure
+    /// (adversarial round 12). `save_text` writes the FILE before
+    /// the index commit, so a failure in between leaves disk newer
+    /// than the index. A host that detects the divergence — a
+    /// failed toggle whose read-back hash moved — calls this to
+    /// force the path's index back to disk truth BEFORE re-querying
+    /// any task surface: re-querying the stale index would
+    /// resurrect the pre-write state as ghost rows and make retries
+    /// conflict forever. Unconditional, unlike
+    /// [`Self::ensure_open_base_indexed`]: the existing row is
+    /// exactly what's wrong.
+    pub fn reindex_path(&self, path: &str) -> Result<(), VaultError> {
+        let mut conn = self.conn.lock().expect("session connection mutex");
+        let tx = conn.transaction()?;
+        let mut indexed_paths = tx
+            .prepare("SELECT path FROM files")?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        indexed_paths.push(path.to_string());
+        let vault_index = crate::InMemoryVaultIndex::new(indexed_paths);
+        let mut report = ScanReport::default();
+        let (name, _, _) = classify_path(path);
+        let mut graph_sink = self.graph_sink();
+        index_file(
+            &tx,
+            self.provider.as_ref(),
+            path,
+            &name,
+            self.config.parser_version,
+            now_ms(),
+            &mut report,
+            &vault_index,
+            self.config.large_file_refuse_bytes,
+            None,
+            &mut graph_sink,
+        )?;
+        tx.commit()?;
+        self.graph_apply(graph_sink);
+        self.bump_bases_generation();
+        // The save path's #802 tail: listeners hear the repaired
+        // truth (delivered with the session lock held, the
+        // documented contract — listeners marshal).
+        self.notify_file_change(FileChangeKind::Modified, path, None);
+        Ok(())
     }
 
     /// Replace one character — the `[X]` status — on a single task

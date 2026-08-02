@@ -580,10 +580,22 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                         && !string.Equals(
                             postFailureDiskHash, expectedHash, StringComparison.Ordinal))
                     {
-                        // The write landed before the failure: the
+                        // The write landed before the failure: repair
+                        // the INDEX first (round 12 — the real
+                        // failure window leaves it uncommitted, and
+                        // reloading a stale index resurrects the
+                        // pre-write state as ghost rows), then the
                         // workspace reconciles any tab that opened,
                         // and the rows re-snapshot so a retry can't
                         // conflict against ghost state (round 11).
+                        try
+                        {
+                            _session.ReindexPath(path);
+                        }
+                        catch (Exception exception) when (
+                            exception is not OutOfMemoryException)
+                        {
+                        }
                         DiskWriteLanded?.Invoke(path, postFailureDiskHash);
                         LoadFirstPage();
                     }
