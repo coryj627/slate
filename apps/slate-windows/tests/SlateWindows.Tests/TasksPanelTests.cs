@@ -415,11 +415,10 @@ public sealed class TasksPanelTests : IDisposable
         workspace.CloseTabCommand.Execute(tab);
 
         string diskPath = Path.Combine(_fixture.Root, "todo.md");
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => DiskContains(diskPath, "- [x] first open"),
-                TimeSpan.FromSeconds(20)),
-            "the toggle never reached disk");
+        PumpDispatcherUntil(
+            () => DiskContains(diskPath, "- [x] first open"),
+            () => "the toggle never reached disk; announced: "
+                + AnnouncementDump(announced));
 
         // The completion outlives the tab: the success announcement
         // still fires and the review re-snapshots.
@@ -457,11 +456,10 @@ public sealed class TasksPanelTests : IDisposable
         workspace.CloseTabCommand.Execute(tab);
 
         string diskPath = Path.Combine(_fixture.Root, "todo.md");
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => DiskContains(diskPath, "- [x] first open"),
-                TimeSpan.FromSeconds(20)),
-            "the panel toggle never reached disk");
+        PumpDispatcherUntil(
+            () => DiskContains(diskPath, "- [x] first open"),
+            () => "the panel toggle never reached disk; announced: "
+                + AnnouncementDump(announced));
 
         // The terminal completion outlives the tab: the success
         // still announces instead of vanishing silently.
@@ -783,11 +781,10 @@ public sealed class TasksPanelTests : IDisposable
 
         workspace.Panels.ToggleTask(row);
         string diskPath = Path.Combine(_fixture.Root, "todo.md");
-        Assert.True(
-            SpinWait.SpinUntil(
-                () => DiskContains(diskPath, "- [x] first open"),
-                TimeSpan.FromSeconds(20)),
-            "the write never landed");
+        PumpDispatcherUntil(
+            () => DiskContains(diskPath, "- [x] first open"),
+            () => "the write never landed; announced: "
+                + AnnouncementDump(announced));
         // (The wrapped VaultException renders its message with the
         // generated "@message=" prefix — match on both halves.)
         PumpDispatcherUntil(
@@ -872,7 +869,10 @@ public sealed class TasksPanelTests : IDisposable
 
     private static void PumpDispatcherUntil(Func<bool> condition, Func<string> reason)
     {
-        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        // 60s: on a loaded CI runner the thread pool injects threads
+        // at ~1/500ms, so a queued Task.Run toggle worker can wait
+        // tens of seconds before its write even starts.
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(60);
         while (!condition() && DateTime.UtcNow < deadline)
         {
             var frame = new System.Windows.Threading.DispatcherFrame();
