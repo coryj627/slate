@@ -466,9 +466,30 @@ fn deleted_file_intents_converge_instead_of_poisoning_queries() {
     unsafe { std::env::remove_var("SLATE_TEST_FAULT_AFTER_WRITE") };
     std::fs::remove_file(tmp.path().join("notes/doomed-intent.md")).unwrap();
 
+    // The convergence must announce as DELETED (adversarial round
+    // 24): a Modified event leaves hosts presenting the note as
+    // existing — an open tab never marked missing, a ghost Quick
+    // Switcher entry — while only the task lists heal.
+    struct KindRecorder(std::sync::Mutex<Vec<(FileChangeKind, String)>>);
+    impl VaultEventListener for KindRecorder {
+        fn on_error(&self, _c: EventErrorCode, _p: String, _m: String) {}
+        fn on_file_change(&self, event: FileChangeEvent) {
+            self.0.lock().unwrap().push((event.kind, event.path));
+        }
+    }
+    let recorder = std::sync::Arc::new(KindRecorder(std::sync::Mutex::new(Vec::new())));
+    let listener_token = session.register_event_listener(recorder.clone());
+
     unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "doomed-intent") };
     let page = session.tasks_in_vault(crate::TaskFilter::default(), Paging::first(50));
     unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    session.unregister_event_listener(listener_token);
+    assert!(
+        recorder.0.lock().unwrap().iter().any(
+            |(kind, path)| *kind == FileChangeKind::Deleted && path == "notes/doomed-intent.md"
+        ),
+        "convergence to deletion must announce as Deleted"
+    );
 
     let page = page.expect("the vault-wide query must succeed after convergence");
     assert!(

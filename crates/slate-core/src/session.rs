@@ -5969,6 +5969,7 @@ impl VaultSession {
         let mut report = ScanReport::default();
         let (name, _, _) = classify_path(path);
         let mut graph_sink = self.graph_sink();
+        let mut converged_to_deletion = false;
         match index_file(
             &tx,
             self.provider.as_ref(),
@@ -5984,6 +5985,7 @@ impl VaultSession {
         ) {
             Ok(()) => {}
             Err(VaultError::Io(ref io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => {
+                converged_to_deletion = true;
                 // The path is GONE from disk: convergence means
                 // removing its index rows, not erroring forever
                 // (adversarial round 23) — a conflicted save against
@@ -6017,8 +6019,20 @@ impl VaultSession {
         self.bump_bases_generation();
         // The save path's #802 tail: listeners hear the repaired
         // truth (delivered with the session lock held, the
-        // documented contract — listeners marshal).
-        self.notify_file_change(FileChangeKind::Modified, path, None);
+        // documented contract — listeners marshal). The KIND matches
+        // the outcome (adversarial round 24): a convergence to
+        // deletion announced as Modified left hosts presenting the
+        // note as existing — open tab never marked missing, a ghost
+        // Quick Switcher entry — while only the task lists healed.
+        self.notify_file_change(
+            if converged_to_deletion {
+                FileChangeKind::Deleted
+            } else {
+                FileChangeKind::Modified
+            },
+            path,
+            None,
+        );
         Ok(())
     }
 
