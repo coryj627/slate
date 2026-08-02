@@ -386,11 +386,15 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             {
                 return true;
             }
-            if (!leasesOnly || attempt >= 50)
+            // Leases are transient (one bounded file write), but a
+            // loaded CI runner can hold one past a short budget —
+            // and a barred FIRST page has no auto-retry, so patience
+            // here beats a stuck banner (10s total).
+            if (!leasesOnly || attempt >= 200)
             {
                 return false;
             }
-            Thread.Sleep(10);
+            Thread.Sleep(50);
         }
     }
 
@@ -648,17 +652,20 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             // this worker's publish. A non-conflict failure converts
             // the lease into the pending repair atomically.
             _repairs.BeginMutation(path);
+            bool leaseSettled = false;
             try
             {
                 report = _session.ToggleTaskStatus(
                     path, task.Ordinal, nextStatus, expectedHash);
                 DirectToggleFaultForTests?.Invoke();
                 _repairs.EndMutation(path, indexConsistent: true);
+                leaseSettled = true;
             }
             catch (VaultException.WriteConflict)
             {
                 conflict = true;
                 _repairs.EndMutation(path, indexConsistent: true);
+                leaseSettled = true;
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -666,6 +673,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 _repairs.EndMutation(path, indexConsistent: false);
+                leaseSettled = true;
                 failure = exception.Message;
                 // Round 11: the core writes the FILE before
                 // committing the index, so a non-conflict failure
@@ -679,6 +687,15 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     readBack is not OutOfMemoryException)
                 {
                     postFailureDiskHash = null;
+                }
+            }
+            finally
+            {
+                // Fail-closed for exception types the arms miss - a
+                // leaked lease bars every task query forever.
+                if (!leaseSettled)
+                {
+                    _repairs.EndMutation(path, indexConsistent: false);
                 }
             }
             Post(() =>

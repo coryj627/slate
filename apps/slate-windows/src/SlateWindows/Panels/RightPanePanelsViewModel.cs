@@ -853,11 +853,15 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
             {
                 return true;
             }
-            if (!leasesOnly || attempt >= 50)
+            // Leases are transient (one bounded file write), but a
+            // loaded CI runner can hold one past a short budget —
+            // and a barred FIRST page has no auto-retry, so patience
+            // here beats a stuck banner (10s total).
+            if (!leasesOnly || attempt >= 200)
             {
                 return false;
             }
-            Thread.Sleep(10);
+            Thread.Sleep(50);
         }
     }
 

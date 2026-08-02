@@ -478,10 +478,12 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         // checkbox edit can never resurrect ghost task rows either.
         Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
         repairs?.BeginMutation(Path);
+        bool leaseSettled = false;
         try
         {
             SaveReport report = _session.SaveText(Path, saveText, _contentHash);
             repairs?.EndMutation(Path, indexConsistent: true);
+            leaseSettled = true;
             _contentHash = report.NewContentHash;
             IsExternallyStale = false;
             _text = saveText;
@@ -495,9 +497,19 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         {
             repairs?.EndMutation(
                 Path, indexConsistent: exception is VaultException.WriteConflict);
+            leaseSettled = true;
             Status = $"Save blocked: {exception.Message}";
             _documentChanged?.Invoke(this, null);
             return false;
+        }
+        finally
+        {
+            // Fail-closed on exception types the arms above miss -
+            // a leaked lease bars every task query forever.
+            if (!leaseSettled)
+            {
+                repairs?.EndMutation(Path, indexConsistent: false);
+            }
         }
     }
 
@@ -644,29 +656,46 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
             // refuse or invalidate. A non-conflict failure converts
             // the lease into the pending repair atomically.
             repairs?.BeginMutation(path);
+            bool leaseSettled = false;
             try
             {
-                SaveReport report = _session.ToggleTaskStatus(
-                    path,
-                    task.Ordinal,
-                    nextStatus,
-                    expectedHash);
-                TaskToggleFaultForTests?.Invoke();
-                repairs?.EndMutation(path, indexConsistent: true);
-                outcome = new TaskToggleOutcome(report, null, updatedText);
+                try
+                {
+                    SaveReport report = _session.ToggleTaskStatus(
+                        path,
+                        task.Ordinal,
+                        nextStatus,
+                        expectedHash);
+                    TaskToggleFaultForTests?.Invoke();
+                    repairs?.EndMutation(path, indexConsistent: true);
+                    leaseSettled = true;
+                    outcome = new TaskToggleOutcome(report, null, updatedText);
+                }
+                catch (Exception inner) when (
+                    inner is VaultException or InvalidOperationException)
+                {
+                    repairs?.EndMutation(
+                        path, indexConsistent: inner is VaultException.WriteConflict);
+                    leaseSettled = true;
+                    VaultException error = inner as VaultException
+                        ?? new VaultException.InvalidArgument(inner.Message);
+                    outcome = new TaskToggleOutcome(
+                        null,
+                        error,
+                        null,
+                        ReadBackDiskHashAfterFailure(path, error));
+                }
             }
-            catch (Exception inner) when (
-                inner is VaultException or InvalidOperationException)
+            finally
             {
-                repairs?.EndMutation(
-                    path, indexConsistent: inner is VaultException.WriteConflict);
-                VaultException error = inner as VaultException
-                    ?? new VaultException.InvalidArgument(inner.Message);
-                outcome = new TaskToggleOutcome(
-                    null,
-                    error,
-                    null,
-                    ReadBackDiskHashAfterFailure(path, error));
+                // A leaked lease bars every task query FOREVER - an
+                // exception type outside the arms above (a runtime
+                // panic surfacing through the FFI, say) must still
+                // settle it, fail-closed.
+                if (!leaseSettled)
+                {
+                    repairs?.EndMutation(path, indexConsistent: false);
+                }
             }
         }
         catch (InvalidOperationException exception)
