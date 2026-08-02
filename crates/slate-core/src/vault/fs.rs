@@ -1153,8 +1153,34 @@ fn atomic_write(target: &Path, tmp_dir: &Path, contents: &[u8]) -> io::Result<()
         // is still better than aborting the write on a perms snag.
         let _ = temp.as_file().set_permissions(perms);
     }
-    temp.persist(target).map_err(|e| e.error)?;
-    Ok(())
+    // Windows can transiently refuse the final rename with
+    // ACCESS_DENIED (os error 5) or ERROR_SHARING_VIOLATION (32)
+    // while an antivirus or indexer briefly holds the target or the
+    // fresh temp file — observed as a rare CI task-toggle write
+    // failure (W4-3 round-21 diagnostics: "Access is denied. (os
+    // error 5)" from an otherwise healthy toggle). `persist` hands
+    // the temp file back on failure, so retry briefly with backoff;
+    // a persistent refusal is a real permissions problem and still
+    // surfaces.
+    let mut temp = temp;
+    let mut delay = std::time::Duration::from_millis(5);
+    let mut attempts = 0u32;
+    loop {
+        match temp.persist(target) {
+            Ok(_) => return Ok(()),
+            Err(persist_error) => {
+                let transient = cfg!(windows)
+                    && matches!(persist_error.error.raw_os_error(), Some(5) | Some(32));
+                attempts += 1;
+                if !transient || attempts >= 10 {
+                    return Err(persist_error.error);
+                }
+                temp = persist_error.file;
+                std::thread::sleep(delay);
+                delay = (delay * 2).min(std::time::Duration::from_millis(100));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
