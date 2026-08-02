@@ -469,9 +469,19 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
             return false;
         }
 
+        // Ordinary saves route through the same file-before-index
+        // core pipeline as task toggles (adversarial round 20): a
+        // post-write failure leaves disk newer than the rolled-back
+        // task index with no revision counter moved — the mutation
+        // lease covers the interval, and a non-conflict failure
+        // converts into the pending repair atomically, so a manual
+        // checkbox edit can never resurrect ghost task rows either.
+        Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
+        repairs?.BeginMutation(Path);
         try
         {
             SaveReport report = _session.SaveText(Path, saveText, _contentHash);
+            repairs?.EndMutation(Path, indexConsistent: true);
             _contentHash = report.NewContentHash;
             IsExternallyStale = false;
             _text = saveText;
@@ -483,6 +493,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         }
         catch (VaultException exception)
         {
+            repairs?.EndMutation(
+                Path, indexConsistent: exception is VaultException.WriteConflict);
             Status = $"Save blocked: {exception.Message}";
             _documentChanged?.Invoke(this, null);
             return false;

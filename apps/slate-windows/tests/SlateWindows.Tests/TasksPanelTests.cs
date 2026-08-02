@@ -1133,6 +1133,86 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void ManualSavesFailingPostWriteQuarantineBothSurfaces()
+    {
+        // Adversarial round 20: ordinary saves route through the
+        // same file-before-index pipeline as toggles — a manual
+        // task edit whose save fails post-write must enter the same
+        // quarantine, or panel and review queries publish pre-save
+        // ghost rows with clean tickets.
+        _ = _session.SaveText(
+            "manual-probe.md", "- [ ] probe \U0001F4C5 2026-01-01\n", null);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("manual-probe.md");
+        workspace.OpenTasksReview();
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+
+        // A MANUAL task edit through the editor, saved while the
+        // core hits the post-write fault; the repair fault holds so
+        // the quarantine's bar is observable.
+        tab.EditorDocument!.Insert(
+            0, "- [x] done manually \U0001F4C5 2026-01-02\n");
+        Environment.SetEnvironmentVariable(
+            "SLATE_TEST_FAULT_AFTER_WRITE", "manual-probe");
+        Environment.SetEnvironmentVariable(
+            "SLATE_TEST_FAULT_REINDEX", "manual-probe");
+        try
+        {
+            Assert.False(tab.Save());
+            Assert.StartsWith("Save blocked: ", tab.Status);
+            // The write landed; the index rolled back.
+            Assert.Contains(
+                "- [x] done manually",
+                File.ReadAllText(Path.Combine(_fixture.Root, "manual-probe.md")));
+
+            // Both surfaces are barred while the repair keeps
+            // failing — no pre-save ghost publishes.
+            workspace.TasksReview.ForceReload();
+            Assert.StartsWith(
+                "Couldn’t load tasks. ", workspace.TasksReview.EmptyMessage);
+            workspace.Panels.ReloadTasks();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => workspace.Panels.TasksEmptyMessage is { } message
+                        && message.StartsWith(
+                            "Could not load tasks: ", StringComparison.Ordinal),
+                    TimeSpan.FromSeconds(20)),
+                "the panel quarantine never surfaced");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", null);
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_REINDEX", null);
+        }
+
+        // Faults cleared: both surfaces repair and converge to disk
+        // truth — the manually completed task is real on both.
+        workspace.TasksReview.ForceReload();
+        Assert.Null(workspace.TasksReview.EmptyMessage);
+        Assert.Contains(
+            workspace.TasksReview.Rows,
+            r => r.Path == "manual-probe.md"
+                && r.Task.Text == "done manually"
+                && r.Task.Completed);
+        workspace.Panels.ReloadTasks();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => workspace.Panels.DoneTasks.Any(
+                    r => r.Task.Text == "done manually"),
+                TimeSpan.FromSeconds(20)),
+            "the panel never converged to disk truth");
+    }
+
+    [Fact]
     public void DirectWritesReconcileTabsThatRacedOpen()
     {
         var announced = new List<A11yEvent>();
