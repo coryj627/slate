@@ -388,6 +388,108 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void ClosingTheOriginatingTabStillCompletesReviewToggles()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        workspace.TasksReview.ForceReload();
+        ReviewTaskRowViewModel row = workspace.TasksReview.Rows.First(
+            r => r.Path == "todo.md" && r.Task.Text == "first open");
+
+        // The toggle routes through the open tab (Started)…
+        workspace.TasksReview.ToggleTask(row);
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+        // …and the user closes that tab before the publish runs
+        // (adversarial round 3: disposal used to eat the outcome —
+        // no announcement, review stale, refresh armed forever).
+        workspace.CloseTabCommand.Execute(tab);
+
+        string diskPath = Path.Combine(_fixture.Root, "todo.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => File.ReadAllText(diskPath).Contains("- [x] first open"),
+                TimeSpan.FromSeconds(20)),
+            "the toggle never reached disk");
+
+        // The completion outlives the tab: the success announcement
+        // still fires and the review re-snapshots.
+        PumpDispatcherUntil(
+            () => announced.OfType<A11yEvent.HostComposed>()
+                .Any(composed => composed.Text == "Task completed."),
+            "the disposed-tab completion never announced");
+        Assert.Contains(
+            workspace.TasksReview.Rows,
+            r => r.Path == "todo.md"
+                && r.Task.Text == "first open"
+                && r.Task.Completed);
+    }
+
+    [Fact]
+    public void DirectWritesReconcileTabsThatRacedOpen()
+    {
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+
+        // The round-3 race, staged deterministically: the review's
+        // NoOpenTab route was decided, THEN this tab opened, THEN
+        // the direct write landed — the workspace re-checks at write
+        // completion through the DiskWriteLanded seam.
+        SaveReport report = _session.SaveText(
+            "todo.md",
+            "# Todo\n\n- [ ] rewritten elsewhere \U0001F4C5 2026-01-01\n",
+            null);
+        workspace.TasksReview.DiskWriteLanded!("todo.md", report.NewContentHash);
+
+        // The raced-open tab is a stale editor over changed disk:
+        // the splice path's divergence honesty, verbatim.
+        A11yEvent.HostComposed diverged = announced
+            .OfType<A11yEvent.HostComposed>()
+            .Single(composed => composed.Text.StartsWith(
+                "Task toggled on disk", StringComparison.Ordinal));
+        Assert.Equal(
+            "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.",
+            diverged.Text);
+        Assert.Equal(diverged.Text, tab.Status);
+    }
+
+    private static void PumpDispatcherUntil(Func<bool> condition, string reason)
+    {
+        DateTime deadline = DateTime.UtcNow + TimeSpan.FromSeconds(20);
+        while (!condition() && DateTime.UtcNow < deadline)
+        {
+            var frame = new System.Windows.Threading.DispatcherFrame();
+            var timer = new System.Windows.Threading.DispatcherTimer(
+                System.Windows.Threading.DispatcherPriority.Send)
+            {
+                Interval = TimeSpan.FromMilliseconds(50),
+            };
+            timer.Tick += (_, _) =>
+            {
+                timer.Stop();
+                frame.Continue = false;
+            };
+            timer.Start();
+            System.Windows.Threading.Dispatcher.PushFrame(frame);
+        }
+        Assert.True(condition(), reason);
+    }
+
+    [Fact]
     public void DisplayBoundsWhileTaskDataStaysExact()
     {
         string giant = new('t', 1024 * 1024);

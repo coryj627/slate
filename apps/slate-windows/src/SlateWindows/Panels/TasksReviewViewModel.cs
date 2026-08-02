@@ -81,6 +81,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private int _loadRequestId;
     private int _loadMoreToken;
     private ulong _snapshotGeneration;
+    private TaskFilter? _snapshotFilter;
     private readonly HashSet<string> _pendingToggleRefreshPaths =
         new(StringComparer.Ordinal);
 
@@ -228,7 +229,12 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         // append nor leave the button stuck on "Loading more tasks…".
         _ = ++_loadMoreToken;
         _isLoadingMore = false;
-        TaskReviewFilter filter = ActiveFilter;
+        // The CONCRETE filter (clock-derived UTC bounds) is fixed at
+        // request time and rides with the page (adversarial round 3):
+        // load-more must page the SAME population, so recomputing the
+        // window from a later clock — after a UTC midnight — would
+        // append rows from a different day's window to this page.
+        TaskFilter concreteFilter = ToTaskFilter(ActiveFilter);
         _isLoading = true;
         _loadError = null;
         RaiseStateChanges();
@@ -253,7 +259,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     generation = _session.InteractionGeneration();
                     InterleaveForTests?.Invoke();
                     page = _session.TasksInVault(
-                        ToTaskFilter(filter), new Paging(null, PageSize));
+                        concreteFilter, new Paging(null, PageSize));
                     if (_session.InteractionGeneration() == generation)
                     {
                         break;
@@ -267,7 +273,8 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             {
                 failure = exception.Message;
             }
-            Post(() => PublishFirstPage(requestId, page, failure, generation));
+            Post(() => PublishFirstPage(
+                requestId, page, failure, generation, concreteFilter));
         });
     }
 
@@ -282,7 +289,8 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         int requestId,
         TaskWithLocationPage? page,
         string? failure,
-        ulong generation = 0)
+        ulong generation = 0,
+        TaskFilter? concreteFilter = null)
     {
         if (requestId != _loadRequestId)
         {
@@ -299,6 +307,9 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             return;
         }
         _snapshotGeneration = generation;
+        // Stored only on SUCCESS: rows and cursor stay bound to the
+        // concrete window they were queried with (round 3).
+        _snapshotFilter = concreteFilter;
         Rows.Clear();
         foreach (TaskWithLocation row in page.Items)
         {
@@ -324,7 +335,13 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             return;
         }
         int token = ++_loadMoreToken;
-        TaskReviewFilter filter = ActiveFilter;
+        // The SNAPSHOT's concrete window, never a recomputed one
+        // (adversarial round 3): recomputing from the live clock lets
+        // a UTC midnight change the query population underneath the
+        // cursor while the interaction generation stays put — rows
+        // from the new day's window would append to the old page.
+        TaskFilter concreteFilter =
+            _snapshotFilter ?? ToTaskFilter(ActiveFilter);
         ulong snapshotGeneration = _snapshotGeneration;
         _isLoadingMore = true;
         RaiseStateChanges();
@@ -343,7 +360,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 {
                     InterleaveForTests?.Invoke();
                     page = _session.TasksInVault(
-                        ToTaskFilter(filter), new Paging(cursor, PageSize));
+                        concreteFilter, new Paging(cursor, PageSize));
                     // Re-checked AFTER the query (adversarial round
                     // 2): a save can land between the check above and
                     // the query, bump the generation, and hand this
@@ -433,11 +450,12 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         string nextStatus = task.Completed ? " " : "x";
         StartWork(() =>
         {
+            SaveReport? report = null;
             bool conflict = false;
             string? failure = null;
             try
             {
-                _ = _session.ToggleTaskStatus(
+                report = _session.ToggleTaskStatus(
                     path, task.Ordinal, nextStatus, expectedHash);
             }
             catch (VaultException.WriteConflict)
@@ -474,6 +492,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                         A11yPriority.High));
                     return;
                 }
+                // The NoOpenTab route was decided BEFORE this write
+                // (adversarial round 3): a tab can have opened for the
+                // file in the meantime and loaded pre-write content —
+                // the workspace re-checks now that the disk moved.
+                DiskWriteLanded?.Invoke(path, report!.NewContentHash);
                 // W0.5-3 residue: the Windows toggle-success strings —
                 // the editor precedent (mac is silent on success).
                 _announce(new A11yEvent.HostComposed(
@@ -483,6 +506,20 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             });
         });
     }
+
+    /// <summary>Workspace seam (adversarial round 3): fired on the UI
+    /// thread after a DIRECT (tabless) toggle wrote to disk, with the
+    /// note's new content hash — the workspace reconciles any tab
+    /// that raced open between the route decision and the write.</summary>
+    internal Action<string, string>? DiskWriteLanded { get; set; }
+
+    /// <summary>A tab-routed toggle reached its terminal state
+    /// WITHOUT changing disk (adversarial round 3): disarm the
+    /// pending refresh so a later unrelated save of the same path
+    /// cannot reset paging (the round-1 refusal concern, extended to
+    /// failures that surface after Started).</summary>
+    public void ToggleAbandoned(string path) =>
+        _ = _pendingToggleRefreshPaths.Remove(path);
 
     /// <summary>A whole-document refresh landed for <paramref
     /// name="path"/> (the task-toggle publish): re-query page one
@@ -540,6 +577,10 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         OnPropertyChanged(nameof(DueTodayFilterName));
         OnPropertyChanged(nameof(OverdueFilterName));
         OnPropertyChanged(nameof(ThisWeekFilterName));
+        OnPropertyChanged(nameof(AllFilterActive));
+        OnPropertyChanged(nameof(DueTodayFilterActive));
+        OnPropertyChanged(nameof(OverdueFilterActive));
+        OnPropertyChanged(nameof(ThisWeekFilterActive));
     }
 
     // Per-chip binding surfaces (WPF bindings cannot pass the enum
@@ -554,6 +595,44 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
 
     public string ThisWeekFilterName =>
         FilterAutomationName(TaskReviewFilter.ThisWeek);
+
+    // Per-chip selection surfaces (adversarial round 3): the chips
+    // render as radio buttons so the active filter is a real UIA
+    // selection state, not a name suffix. TwoWay: the radio click
+    // drives the setter (a OneWay binding would be replaced by the
+    // click's local value and never update again); false writes are
+    // the group unchecking a sibling and are ignored.
+    public bool AllFilterActive
+    {
+        get => ActiveFilter == TaskReviewFilter.All;
+        set => ApplyFilterWhenChecked(value, TaskReviewFilter.All);
+    }
+
+    public bool DueTodayFilterActive
+    {
+        get => ActiveFilter == TaskReviewFilter.DueToday;
+        set => ApplyFilterWhenChecked(value, TaskReviewFilter.DueToday);
+    }
+
+    public bool OverdueFilterActive
+    {
+        get => ActiveFilter == TaskReviewFilter.Overdue;
+        set => ApplyFilterWhenChecked(value, TaskReviewFilter.Overdue);
+    }
+
+    public bool ThisWeekFilterActive
+    {
+        get => ActiveFilter == TaskReviewFilter.ThisWeek;
+        set => ApplyFilterWhenChecked(value, TaskReviewFilter.ThisWeek);
+    }
+
+    private void ApplyFilterWhenChecked(bool isChecked, TaskReviewFilter filter)
+    {
+        if (isChecked)
+        {
+            ApplyFilter(filter);
+        }
+    }
 }
 
 /// <summary>One review row (mac TasksReviewPanel row): the record

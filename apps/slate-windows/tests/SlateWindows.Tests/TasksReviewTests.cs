@@ -58,7 +58,8 @@ public sealed class TasksReviewTests : IDisposable
         bool openSucceeds = true,
         string? activePath = null,
         Func<string, TaskItem, string, ReviewToggleRoute>? toggleViaTab = null,
-        List<TaskItem>? scrolls = null)
+        List<TaskItem>? scrolls = null,
+        Func<DateTimeOffset>? clock = null)
     {
         return new TasksReviewViewModel(
             _session,
@@ -71,7 +72,7 @@ public sealed class TasksReviewTests : IDisposable
             () => activePath,
             task => scrolls?.Add(task),
             toggleViaTab ?? ((_, _, _) => ReviewToggleRoute.NoOpenTab),
-            () => Clock,
+            clock ?? (() => Clock),
             synchronousForTests: true);
     }
 
@@ -352,6 +353,80 @@ public sealed class TasksReviewTests : IDisposable
         int before = review.LoadRequestIdForTests;
 
         review.ToggleTask(review.Rows[0]);
+        review.NoteRefreshed(review.Rows[0].Path);
+        Assert.Equal(before, review.LoadRequestIdForTests);
+    }
+
+    [Fact]
+    public void MidnightRolloverCannotChangeTheWindowUnderTheCursor()
+    {
+        // >200 tasks due "today" so Due today pages.
+        var dated = new System.Text.StringBuilder();
+        for (int i = 0; i < 230; i++)
+        {
+            dated.Append("- [ ] dated ").Append(i).Append(" 📅 2026-03-02\n");
+        }
+        _ = _session.SaveText("dated.md", dated.ToString(), null);
+
+        DateTimeOffset now = Clock;
+        var review = MakeReview(clock: () => now);
+        review.ApplyFilter(TaskReviewFilter.DueToday);
+        Assert.Equal(200, review.Rows.Count);
+        Assert.True(review.HasMore);
+        int before = review.LoadRequestIdForTests;
+
+        // UTC midnight passes between pages (adversarial round 3):
+        // recomputing the window from the live clock would page a
+        // DIFFERENT population — "due today" is now empty — while
+        // the interaction generation never moved.
+        now = new DateTimeOffset(2026, 3, 3, 0, 30, 0, TimeSpan.Zero);
+        review.LoadMore();
+
+        // The cursor paged the SNAPSHOT's window: every dated task
+        // plus a.md's "due today" appended, no reload, no reset.
+        Assert.Equal(before, review.LoadRequestIdForTests);
+        Assert.Equal(231, review.Rows.Count);
+        Assert.False(review.IsLoadingMore);
+    }
+
+    [Fact]
+    public void FilterChipsExposeExactlyOneActiveSelection()
+    {
+        var announced = new List<A11yEvent>();
+        var review = MakeReview(announced);
+        review.EnsureLoaded();
+        Assert.True(review.AllFilterActive);
+        Assert.False(review.OverdueFilterActive);
+
+        // The radio group's checked write commits the filter…
+        review.OverdueFilterActive = true;
+        Assert.Equal(TaskReviewFilter.Overdue, review.ActiveFilter);
+        Assert.True(review.OverdueFilterActive);
+        Assert.False(review.AllFilterActive);
+        var set = Assert.Single(announced.OfType<A11yEvent.TasksFilterSet>());
+        Assert.Equal("Overdue", set.FilterName);
+
+        // …the sibling UNCHECK the group writes is ignored, and
+        // re-checking the active chip is a no-op (no re-announce).
+        review.AllFilterActive = false;
+        review.OverdueFilterActive = true;
+        Assert.Equal(TaskReviewFilter.Overdue, review.ActiveFilter);
+        _ = Assert.Single(announced.OfType<A11yEvent.TasksFilterSet>());
+    }
+
+    [Fact]
+    public void AbandonedTogglesDisarmTheirPendingRefresh()
+    {
+        // Round 3: a Started toggle whose write never landed (the
+        // originating tab closed, the save failed) must not leave
+        // the refresh armed for a later unrelated save to trip.
+        var review = MakeReview(
+            toggleViaTab: (_, _, _) => ReviewToggleRoute.Started);
+        review.EnsureLoaded();
+        int before = review.LoadRequestIdForTests;
+
+        review.ToggleTask(review.Rows[0]);
+        review.ToggleAbandoned(review.Rows[0].Path);
         review.NoteRefreshed(review.Rows[0].Path);
         Assert.Equal(before, review.LoadRequestIdForTests);
     }

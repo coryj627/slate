@@ -954,32 +954,42 @@
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelHeading}"
                                            Text="{Binding TasksReview.Header}" />
+                                <!-- Radio buttons, not plain buttons (adversarial
+                                     round 3): the active filter is a real UIA
+                                     selection state with a non-color visual, and
+                                     WPF radios keep the mac chip semantics — arrow
+                                     keys move focus without committing; Space or
+                                     click commits. -->
                                 <WrapPanel DockPanel.Dock="Top"
                                            Margin="0,0,0,6"
                                            AutomationProperties.Name="Filter">
-                                    <Button x:Name="PanelReviewFilterAll"
-                                            Content="All"
-                                            Margin="0,0,6,0"
-                                            Click="PanelReviewFilter_Click"
-                                            AutomationProperties.Name="{Binding TasksReview.AllFilterName}"
-                                            AutomationProperties.HelpText="Filter the review to all tasks." />
-                                    <Button x:Name="PanelReviewFilterDueToday"
-                                            Content="Due today"
-                                            Margin="0,0,6,0"
-                                            Click="PanelReviewFilter_Click"
-                                            AutomationProperties.Name="{Binding TasksReview.DueTodayFilterName}"
-                                            AutomationProperties.HelpText="Filter the review to due today tasks." />
-                                    <Button x:Name="PanelReviewFilterOverdue"
-                                            Content="Overdue"
-                                            Margin="0,0,6,0"
-                                            Click="PanelReviewFilter_Click"
-                                            AutomationProperties.Name="{Binding TasksReview.OverdueFilterName}"
-                                            AutomationProperties.HelpText="Filter the review to overdue tasks." />
-                                    <Button x:Name="PanelReviewFilterThisWeek"
-                                            Content="This week"
-                                            Click="PanelReviewFilter_Click"
-                                            AutomationProperties.Name="{Binding TasksReview.ThisWeekFilterName}"
-                                            AutomationProperties.HelpText="Filter the review to this week tasks." />
+                                    <RadioButton x:Name="PanelReviewFilterAll"
+                                                 Content="All"
+                                                 GroupName="PanelReviewFilters"
+                                                 Margin="0,0,10,0"
+                                                 IsChecked="{Binding TasksReview.AllFilterActive, Mode=TwoWay}"
+                                                 AutomationProperties.Name="{Binding TasksReview.AllFilterName}"
+                                                 AutomationProperties.HelpText="Filter the review to all tasks." />
+                                    <RadioButton x:Name="PanelReviewFilterDueToday"
+                                                 Content="Due today"
+                                                 GroupName="PanelReviewFilters"
+                                                 Margin="0,0,10,0"
+                                                 IsChecked="{Binding TasksReview.DueTodayFilterActive, Mode=TwoWay}"
+                                                 AutomationProperties.Name="{Binding TasksReview.DueTodayFilterName}"
+                                                 AutomationProperties.HelpText="Filter the review to due today tasks." />
+                                    <RadioButton x:Name="PanelReviewFilterOverdue"
+                                                 Content="Overdue"
+                                                 GroupName="PanelReviewFilters"
+                                                 Margin="0,0,10,0"
+                                                 IsChecked="{Binding TasksReview.OverdueFilterActive, Mode=TwoWay}"
+                                                 AutomationProperties.Name="{Binding TasksReview.OverdueFilterName}"
+                                                 AutomationProperties.HelpText="Filter the review to overdue tasks." />
+                                    <RadioButton x:Name="PanelReviewFilterThisWeek"
+                                                 Content="This week"
+                                                 GroupName="PanelReviewFilters"
+                                                 IsChecked="{Binding TasksReview.ThisWeekFilterActive, Mode=TwoWay}"
+                                                 AutomationProperties.Name="{Binding TasksReview.ThisWeekFilterName}"
+                                                 AutomationProperties.HelpText="Filter the review to this week tasks." />
                                 </WrapPanel>
                                 <TextBlock DockPanel.Dock="Top"
                                            Style="{StaticResource PanelEmptyMessage}"

@@ -510,7 +510,18 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     // surface rebind that hides it), and Dispose still tears it down.
     public void Deactivate() => _editorInteractions?.CloseTransientUi();
 
-    public TabTaskToggle ToggleTask(TaskItem task, Action<A11yEvent> announce)
+    /// <summary>Toggle a task through this tab's guarded splice path.
+    /// <paramref name="completion"/> (adversarial round 3) fires on
+    /// the dispatcher at the toggle's TERMINAL state — with the save
+    /// report when disk changed, the error when it didn't, and
+    /// whether this tab was still alive to publish — EVEN when the
+    /// tab was disposed mid-flight: a review-originated toggle must
+    /// neither complete silently nor leave its refresh armed just
+    /// because the user closed the originating tab.</summary>
+    public TabTaskToggle ToggleTask(
+        TaskItem task,
+        Action<A11yEvent> announce,
+        Action<SaveReport?, VaultException?, bool>? completion = null)
     {
         ArgumentNullException.ThrowIfNull(task);
         ArgumentNullException.ThrowIfNull(announce);
@@ -541,7 +552,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
             baseline,
             task,
             nextStatus,
-            announce));
+            announce,
+            completion));
         return TabTaskToggle.Started;
     }
 
@@ -558,7 +570,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         EditorSavedBaseline baseline,
         TaskItem task,
         string nextStatus,
-        Action<A11yEvent> announce)
+        Action<A11yEvent> announce,
+        Action<SaveReport?, VaultException?, bool>? completion = null)
     {
         TaskToggleOutcome outcome;
         try
@@ -601,7 +614,8 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
                 task,
                 nextStatus,
                 announce,
-                outcome)));
+                outcome,
+                completion)));
     }
 
     private void PublishTaskToggle(
@@ -612,13 +626,34 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         TaskItem task,
         string nextStatus,
         Action<A11yEvent> announce,
+        TaskToggleOutcome outcome,
+        Action<SaveReport?, VaultException?, bool>? completion = null)
+    {
+        // The completion outlives THIS TAB deliberately (adversarial
+        // round 3): the dispatcher belongs to the app, so a caller
+        // that needs the terminal state — the review's pending
+        // refresh, the disposed-tab announcement — hears it even
+        // when disposal suppresses the tab-state publish. It fires
+        // AFTER the tab publish so the source tab and its mirrored
+        // peers are already re-baselined when the caller reconciles.
+        bool tabPublished = !_disposed && generation == _taskToggleGeneration;
+        if (tabPublished)
+        {
+            PublishTaskToggleThroughTab(
+                path, expectedHash, revision, task, nextStatus, announce, outcome);
+        }
+        completion?.Invoke(outcome.Report, outcome.Error, tabPublished);
+    }
+
+    private void PublishTaskToggleThroughTab(
+        string path,
+        string? expectedHash,
+        long revision,
+        TaskItem task,
+        string nextStatus,
+        Action<A11yEvent> announce,
         TaskToggleOutcome outcome)
     {
-        if (_disposed || generation != _taskToggleGeneration)
-        {
-            return;
-        }
-
         _taskToggleInFlight = false;
         if (outcome.Error is VaultException.WriteConflict)
         {
@@ -674,6 +709,28 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         Status = task.Completed ? "Task reopened." : "Task completed.";
         _documentChanged?.Invoke(this, null);
         announce(new A11yEvent.HostComposed(Status, A11yPriority.Medium));
+    }
+
+    /// <summary>A task toggle wrote this tab's file WITHOUT
+    /// publishing through it (adversarial round 3: the review's
+    /// tabless route decided before this tab raced open, or the
+    /// originating same-path tab was disposed mid-flight). A buffer
+    /// still holding pre-write content is a stale editor over
+    /// changed disk — reuse the splice path's divergence honesty,
+    /// verbatim, and drop the interaction caches.</summary>
+    internal void ReconcileAfterExternalTaskWrite(
+        string newContentHash, Action<A11yEvent> announce)
+    {
+        ArgumentNullException.ThrowIfNull(announce);
+        if (!IsMarkdown
+            || _disposed
+            || string.Equals(_contentHash, newContentHash, StringComparison.Ordinal))
+        {
+            return;
+        }
+        _editorInteractions?.InvalidateExternalState();
+        Status = "Task toggled on disk, but the editor no longer matches it. Reopen the note before editing.";
+        announce(new A11yEvent.HostComposed(Status, A11yPriority.High));
     }
 
     private static string ApplyTaskStatusToBaseline(
@@ -1041,6 +1098,10 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             ScrollToPanelTask,
             TryToggleTaskInOpenTab,
             synchronousForTests: !startInteractionBackgroundWork);
+        // Round 3: a tab can open for a file BETWEEN the review's
+        // NoOpenTab route decision and its direct write landing —
+        // the workspace re-checks at write completion.
+        TasksReview.DiskWriteLanded = ReconcileTabsAfterDirectTaskWrite;
         (_root, _activeGroup) = Restore(_persistence.Load());
         SyncPanels();
 
@@ -1462,7 +1523,46 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                 System.IO.Path.GetFileName(tab.Path)));
             return SlateWindows.Panels.ReviewToggleRoute.RefusedStale;
         }
-        return tab.ToggleTask(task, _announce) switch
+        string fileName = System.IO.Path.GetFileName(tab.Path);
+        return tab.ToggleTask(task, _announce, completion: (report, error, publishedThroughTab) =>
+        {
+            // Terminal-state handling that outlives the tab
+            // (adversarial round 3): closing the originating tab
+            // mid-flight must not eat the outcome.
+            if (report is null)
+            {
+                // Disk never changed: disarm the review's pending
+                // refresh so a later unrelated save of this path
+                // cannot reset its paging.
+                TasksReview.ToggleAbandoned(path);
+                if (!publishedThroughTab)
+                {
+                    if (error is VaultException.WriteConflict)
+                    {
+                        _announce(new A11yEvent.TaskToggleConflict(fileName));
+                    }
+                    else
+                    {
+                        _announce(new A11yEvent.HostComposed(
+                            $"Task could not be toggled: {error!.Message}",
+                            A11yPriority.High));
+                    }
+                }
+                return;
+            }
+            if (!publishedThroughTab)
+            {
+                // W0.5-3 residue: WorkspaceTabViewModel.PublishTaskToggle
+                _announce(new A11yEvent.HostComposed(
+                    task.Completed ? "Task reopened." : "Task completed.",
+                    A11yPriority.Medium));
+            }
+            // The review refresh is completion-driven, independent of
+            // the tab's lifetime; same-path peers that could not
+            // mirror from a disposed source re-baseline honesty here.
+            TasksReview.NoteRefreshed(path);
+            ReconcileTabsAfterDirectTaskWrite(path, report.NewContentHash);
+        }) switch
         {
             TabTaskToggle.Started => SlateWindows.Panels.ReviewToggleRoute.Started,
             // Busy: the tab announced; the review must NOT arm a
@@ -1471,6 +1571,25 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             // A dirty race between the check above and the call.
             _ => SlateWindows.Panels.ReviewToggleRoute.RefusedDirty,
         };
+    }
+
+    /// <summary>A task toggle changed <paramref name="path"/> on disk
+    /// WITHOUT publishing through an open tab (adversarial round 3):
+    /// either the review's tabless route decided before a tab raced
+    /// open, or the originating tab was disposed mid-flight and its
+    /// same-path peers lost their mirror source. Any tab still
+    /// holding pre-write content is a stale editor over changed disk
+    /// — it gets the tab's own divergence honesty.</summary>
+    private void ReconcileTabsAfterDirectTaskWrite(string path, string newContentHash)
+    {
+        foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
+        {
+            if (tab.IsMarkdown
+                && string.Equals(tab.Path, path, StringComparison.Ordinal))
+            {
+                tab.ReconcileAfterExternalTaskWrite(newContentHash, _announce);
+            }
+        }
     }
 
     /// <summary>The panels' task-toggle seam (W4-3): the guarded tab

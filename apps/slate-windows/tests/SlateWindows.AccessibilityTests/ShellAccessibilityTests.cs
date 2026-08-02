@@ -2056,17 +2056,43 @@ public sealed class ShellAccessibilityTests
                 "PanelReviewList",
                 name => name == "other.md. from other. Open task.",
                 "the cross-note review row");
+            // The chips are RADIO buttons (adversarial round 3): the
+            // active filter is a real UIA selection state — activate
+            // one and assert the mutually exclusive selection moved.
+            AutomationElement? overdueChip = null;
+            AutomationElement? allChip = null;
             Assert.True(
                 SpinWait.SpinUntil(
-                    () => window.FindFirstDescendant(
-                        automation.ConditionFactory.ByName(
-                            "Filter the review to overdue tasks."))
-                        is not null
-                        || window.FindFirstDescendant(
-                            automation.ConditionFactory.ByName("Overdue"))
-                            is not null,
+                    () =>
+                    {
+                        AutomationElement[] chips = window.FindAllDescendants(
+                            automation.ConditionFactory.ByControlType(
+                                ControlType.RadioButton));
+                        overdueChip = chips.FirstOrDefault(chip =>
+                            (chip.Properties.HelpText.ValueOrDefault ?? "")
+                                == "Filter the review to overdue tasks.");
+                        allChip = chips.FirstOrDefault(chip =>
+                            (chip.Properties.HelpText.ValueOrDefault ?? "")
+                                == "Filter the review to all tasks.");
+                        return overdueChip is not null && allChip is not null;
+                    },
                     TimeSpan.FromSeconds(10)),
-                "the review filter chips are absent");
+                "the review filter radio chips are absent");
+            Assert.True(
+                allChip!.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault,
+                "the All chip must start selected");
+            Assert.False(
+                overdueChip!.Patterns.SelectionItem.Pattern.IsSelected.ValueOrDefault);
+
+            overdueChip.Patterns.SelectionItem.Pattern.Select();
+            Assert.True(
+                SpinWait.SpinUntil(
+                    () => overdueChip.Patterns.SelectionItem.Pattern
+                            .IsSelected.ValueOrDefault
+                        && !allChip.Patterns.SelectionItem.Pattern
+                            .IsSelected.ValueOrDefault,
+                    TimeSpan.FromSeconds(10)),
+                "selecting the Overdue chip never took the UIA selection");
 
             AssertAxeClean(process, "task-panels");
         }

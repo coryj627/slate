@@ -7,7 +7,7 @@
 //! exclusively by the scanner's slow path (and by `save_text`); the
 //! query side serves the Mac Tasks panel + vault-wide review view.
 
-use rusqlite::{Connection, Transaction, params};
+use rusqlite::{Connection, OptionalExtension, Transaction, params};
 
 use crate::VaultError;
 use crate::session::{Page, Paging};
@@ -84,13 +84,16 @@ pub(crate) fn replace_tasks_for_file(
 /// Fetch every task in a file in document order. Empty result if
 /// the path isn't indexed yet — same shape as `outgoing_links`.
 pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskItem>, VaultError> {
+    // `.optional()`, not `.ok()` (adversarial round 3): only a
+    // missing row means "not indexed" — corruption or schema skew
+    // must surface as an error, never as a task-free file.
     let file_id: Option<i64> = conn
         .query_row(
             "SELECT id FROM files WHERE path = ?1",
             params![path],
             |row| row.get(0),
         )
-        .ok();
+        .optional()?;
     let Some(file_id) = file_id else {
         return Ok(Vec::new());
     };
@@ -131,13 +134,18 @@ pub(crate) fn note_tasks_bounded(
     path: &str,
     limit: u32,
 ) -> Result<(Vec<TaskItem>, u32, u32, String), VaultError> {
+    // `.optional()`, not `.ok()` (adversarial round 3): `.ok()`
+    // collapsed EVERY SQLite failure — corruption, schema skew, type
+    // errors — into "no tasks in this note", bypassing the panel's
+    // read-fault surface entirely. Only a genuinely missing row is
+    // the empty page.
     let file_row: Option<(i64, String)> = conn
         .query_row(
             "SELECT id, content_hash FROM files WHERE path = ?1",
             params![path],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
-        .ok();
+        .optional()?;
     let Some((file_id, content_hash)) = file_row else {
         return Ok((Vec::new(), 0, 0, String::new()));
     };
@@ -489,4 +497,23 @@ fn parse_cursor(s: &str) -> Option<(i64, i64, String, i64)> {
     };
     let ord: i64 = ord_part.parse().ok()?;
     Some((due, prio, path_part.to_string(), ord))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Adversarial round 3: `.ok()` on the file lookup collapsed
+    /// EVERY SQLite failure into a successful empty page, so
+    /// corruption or schema skew read as "No tasks in this note"
+    /// instead of surfacing through the panel's read-fault path. A
+    /// connection with no schema at all must be an error, never an
+    /// empty result.
+    #[test]
+    fn broken_schemas_error_instead_of_reading_as_task_free() {
+        let conn = Connection::open_in_memory().expect("in-memory db");
+
+        assert!(note_tasks_bounded(&conn, "a.md", 10).is_err());
+        assert!(tasks_for_file(&conn, "a.md").is_err());
+    }
 }

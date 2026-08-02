@@ -933,16 +933,6 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void PanelReviewFilter_Click(object sender, RoutedEventArgs e)
-    {
-        TaskReviewFilter filter =
-            ReferenceEquals(sender, PanelReviewFilterDueToday) ? TaskReviewFilter.DueToday
-            : ReferenceEquals(sender, PanelReviewFilterOverdue) ? TaskReviewFilter.Overdue
-            : ReferenceEquals(sender, PanelReviewFilterThisWeek) ? TaskReviewFilter.ThisWeek
-            : TaskReviewFilter.All;
-        TasksReviewViewModel?.ApplyFilter(filter);
-    }
-
     private void PanelReviewLoadMore_Click(object sender, RoutedEventArgs e) =>
         TasksReviewViewModel?.LoadMore();
 
