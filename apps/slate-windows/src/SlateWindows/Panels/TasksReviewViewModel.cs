@@ -69,6 +69,13 @@ internal enum ReviewOpenRoute
     /// reload.</summary>
     RefusedStale,
 
+    /// <summary>The target tab holds unsaved edits (adversarial
+    /// round 8): the saved hash still matches, but the LIVE text the
+    /// caret would move through has shifted — a saved-content offset
+    /// can land on unrelated words. Nothing scrolled; the snapshot
+    /// stays valid.</summary>
+    RefusedDirty,
+
     /// <summary>The file could not be opened; nothing scrolled and
     /// nothing is announced (the refused-open posture).</summary>
     OpenFailed,
@@ -620,6 +627,16 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     $"{row.FileName} changed since these tasks loaded. Refreshing.",
                     A11yPriority.Medium));
                 LoadFirstPage();
+                return;
+            case ReviewOpenRoute.RefusedDirty:
+                // W0.5-3 residue: the TaskToggleUnsaved family's
+                // wording with the activation verb — dirty buffers
+                // shift live offsets under saved-content rows
+                // (adversarial round 8). The snapshot stays valid;
+                // no reload.
+                _announce(new A11yEvent.HostComposed(
+                    $"Cannot open this task. The editor has unsaved changes in {row.FileName}. Save the note first.",
+                    A11yPriority.High));
                 return;
             case ReviewOpenRoute.OpenFailed:
                 // Refused opens announce nothing (existing posture).

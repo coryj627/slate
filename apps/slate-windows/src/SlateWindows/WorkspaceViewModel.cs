@@ -1631,15 +1631,13 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             != TabTaskToggle.Refused;
     }
 
-    /// <summary>The review's row-activation seam (adversarial round
-    /// 6): open the file if it isn't the active note, then verify
-    /// the row's snapshot hash against the tab's SAVED content
-    /// BEFORE scrolling — the snapshot's byte offset and line only
-    /// mean anything against the content they were read from, and
-    /// the toggle paths already guard this identity. A dirty buffer
-    /// over a matching baseline still scrolls (the mac posture:
-    /// unsaved edits shift offsets approximately, they don't change
-    /// which task the row names).</summary>
+    /// <summary>The review's row-activation seam (adversarial rounds
+    /// 6 and 8): open the file if it isn't the active note, then
+    /// verify the row's snapshot hash against the tab's SAVED
+    /// content and refuse DIRTY buffers before scrolling — the
+    /// snapshot's byte offset only means anything against the exact
+    /// text the caret would move through, and the toggle paths
+    /// already guard both conditions.</summary>
     private SlateWindows.Panels.ReviewOpenRoute TryActivateTaskRow(
         string path, TaskItem task, string expectedContentHash)
     {
@@ -1663,6 +1661,17 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
         {
             return SlateWindows.Panels.ReviewOpenRoute.OpenFailed;
         }
+        // Dirty buffers refuse (adversarial round 8): the saved hash
+        // still matches the row, but the LIVE text the caret moves
+        // through has shifted under unsaved edits — a saved-content
+        // offset can land on unrelated words while announcing
+        // success. The platform's dirty posture (editor, panel, and
+        // review toggles) extends to activation; a divergence from
+        // the mac review's unverified line scroll, recorded.
+        if (tab.IsDirty)
+        {
+            return SlateWindows.Panels.ReviewOpenRoute.RefusedDirty;
+        }
         if (!string.Equals(
             tab.SavedContentHash, expectedContentHash, StringComparison.Ordinal))
         {
@@ -1685,6 +1694,20 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
     {
         if (ActiveGroup.ActiveTab is not { IsMarkdown: true } tab)
         {
+            return;
+        }
+        // Dirty buffers refuse LOUDLY (adversarial round 8): the
+        // saved hash still matches these rows, but unsaved edits
+        // have shifted the live text — a saved-content offset can
+        // park the caret on unrelated words. The panel's toggle
+        // already announces its dirty refusal; activation joins it
+        // (W0.5-3 residue: the TaskToggleUnsaved family's wording
+        // with the activation verb).
+        if (tab.IsDirty)
+        {
+            _announce(new A11yEvent.HostComposed(
+                $"Cannot open this task. The editor has unsaved changes in {System.IO.Path.GetFileName(tab.Path)}. Save the note first.",
+                A11yPriority.High));
             return;
         }
         if (!string.Equals(

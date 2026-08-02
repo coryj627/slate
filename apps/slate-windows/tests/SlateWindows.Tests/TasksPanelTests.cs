@@ -498,12 +498,15 @@ public sealed class TasksPanelTests : IDisposable
         workspace.Panels.OpenTask(stale);
         Assert.Equal(caretBefore, tab.EditorCaretOffset);
 
-        // A fresh row activates: the caret parks at its task line.
+        // A fresh row activates: the caret parks EXACTLY at its task
+        // line's start in the new text.
         NoteTaskRowViewModel fresh = workspace.Panels.OpenTasks.First(
             r => r.Task.Text == "second open");
         Assert.NotSame(stale, fresh);
         workspace.Panels.OpenTask(fresh);
-        Assert.NotEqual(caretBefore, tab.EditorCaretOffset);
+        Assert.Equal(
+            tab.Text.IndexOf("- [ ] second open", StringComparison.Ordinal),
+            tab.EditorCaretOffset);
     }
 
     [Fact]
@@ -545,8 +548,15 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
-    public void DirtyBuffersOverAMatchingBaselineStillActivate()
+    public void DirtyBuffersRefuseBothActivationRoutesLoudly()
     {
+        // Adversarial round 8: unsaved edits shift the LIVE text
+        // while SavedContentHash stays put, so a saved-content
+        // offset can park the caret on unrelated words. Both
+        // activation routes refuse dirty buffers with the
+        // TaskToggleUnsaved family's wording — round 6's
+        // scroll-anyway posture was a false green that asserted the
+        // announcement but never where the caret landed.
         var announced = new List<A11yEvent>();
         using var workspace = new WorkspaceViewModel(
             _session,
@@ -556,20 +566,49 @@ public sealed class TasksPanelTests : IDisposable
             startInteractionBackgroundWork: false);
         workspace.OpenPath("todo.md");
         workspace.OpenTasksReview();
-        ReviewTaskRowViewModel row = workspace.TasksReview.Rows.First(
+        ReviewTaskRowViewModel reviewRow = workspace.TasksReview.Rows.First(
             r => r.Path == "todo.md");
+        NoteTaskRowViewModel panelRow = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "second open");
 
-        // Unsaved edits shift offsets approximately — they don't
-        // change which task the row names (the mac posture): the
-        // saved baseline still matches, so activation proceeds.
         WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
             workspace.ActiveGroup.ActiveTab);
-        tab.EditorDocument!.Insert(0, "draft ");
+        tab.EditorDocument!.Insert(0, "- [ ] draft insertion\n");
+        tab.EditorDocument.Remove(
+            tab.EditorDocument.Text.IndexOf(
+                "# Todo", StringComparison.Ordinal),
+            "# Todo".Length);
         Assert.True(tab.IsDirty);
+        int caretBefore = tab.EditorCaretOffset;
+        int reviewRequests = workspace.TasksReview.LoadRequestIdForTests;
 
-        workspace.TasksReview.OpenRow(row);
-        var scrolled = Assert.Single(announced.OfType<A11yEvent.ScrolledToLine>());
-        Assert.Equal("todo.md", scrolled.Filename);
+        // Review route: refusal announced, caret pinned, no reload
+        // (the snapshot is still valid against SAVED content).
+        workspace.TasksReview.OpenRow(reviewRow);
+        Assert.Equal(caretBefore, tab.EditorCaretOffset);
+        Assert.Empty(announced.OfType<A11yEvent.ScrolledToLine>());
+        Assert.Empty(announced.OfType<A11yEvent.OpenedAtLine>());
+        Assert.Equal(reviewRequests, workspace.TasksReview.LoadRequestIdForTests);
+
+        // Panel route: same refusal, same pinned caret.
+        workspace.Panels.OpenTask(panelRow);
+        Assert.Equal(caretBefore, tab.EditorCaretOffset);
+
+        Assert.Equal(
+            2,
+            announced.OfType<A11yEvent.HostComposed>().Count(composed =>
+                composed.Text
+                    == "Cannot open this task. The editor has unsaved changes in todo.md. Save the note first."));
+
+        // Saving re-enables activation, and the caret lands EXACTLY
+        // on the task's byte offset in the saved text.
+        Assert.True(tab.Save());
+        NoteTaskRowViewModel fresh = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "second open");
+        workspace.Panels.OpenTask(fresh);
+        Assert.Equal(
+            tab.Text.IndexOf("- [ ] second open", StringComparison.Ordinal),
+            tab.EditorCaretOffset);
     }
 
     [Fact]
