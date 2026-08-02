@@ -795,34 +795,22 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
             NoteTasksPage? page = null;
             string? failure = null;
             // The shared repair quarantine gates THIS surface too
-            // (adversarial round 15): after a post-write failure
-            // whose repair also failed, the index is known stale for
-            // the path — querying it would republish the rolled-back
-            // row and its ghost hash. Retry the repair here; while it
-            // keeps failing, the honest read-fault surface shows
-            // instead of the ghost.
-            if (_repairs.HasPendingFor(path)
-                && !_repairs.TryRepairNow(path, out string? repairError))
+            // (adversarial rounds 15-19): after a post-write failure
+            // whose repair also failed, the index is known stale —
+            // querying it would republish the rolled-back row and
+            // its ghost hash. The panel SWEEPS like the review (a
+            // pending path must not bar this surface forever when
+            // the review is closed), then takes the atomic
+            // clean-state ticket; while repairs keep failing, the
+            // honest read-fault surface shows instead of the ghost.
+            RepairSweep sweep = _repairs.Retry();
+            if (!TryAwaitCleanTicket(out long quarantineEpoch))
             {
                 Post(() => PublishTasks(
                     generation,
                     requestId,
                     page: null,
-                    repairError ?? "The vault index needs repair."));
-                return;
-            }
-            // Atomic clean-state ticket (round 18): the gate above
-            // and a separate epoch capture left a gap where a
-            // failing repair could register with its advanced epoch
-            // becoming the baseline — the post-read comparison then
-            // passed over a known-stale read.
-            if (!_repairs.TryBeginCleanQuery(out long quarantineEpoch))
-            {
-                Post(() => PublishTasks(
-                    generation,
-                    requestId,
-                    page: null,
-                    "The vault index needs repair."));
+                    sweep.LastError ?? "The vault index needs repair."));
                 return;
             }
             TasksInterleaveForTests?.Invoke();
@@ -852,6 +840,25 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
             }
             Post(() => PublishTasks(generation, requestId, page, failure));
         });
+    }
+
+    /// <summary>Worker-side clean-ticket acquisition (round 19):
+    /// lease-only blocks are live writes milliseconds from settling
+    /// — retry briefly; pending repairs refuse immediately.</summary>
+    private bool TryAwaitCleanTicket(out long epoch)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            if (_repairs.TryBeginCleanQuery(out epoch, out bool leasesOnly))
+            {
+                return true;
+            }
+            if (!leasesOnly || attempt >= 50)
+            {
+                return false;
+            }
+            Thread.Sleep(10);
+        }
     }
 
     /// <summary>Test seam (round 16): runs between the quarantine

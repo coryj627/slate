@@ -927,7 +927,63 @@ public sealed class TasksReviewTests : IDisposable
         // The inner interval is visible: register (+1) and remove
         // (+1) both advanced the epoch past the sweep's baseline.
         Assert.True(coordinator.Epoch >= start + 2);
-        Assert.True(coordinator.TryBeginCleanQuery(out _));
+        Assert.True(coordinator.TryBeginCleanQuery(out _, out _));
+    }
+
+    [Fact]
+    public void TogglesOverlappingAQueryInvalidateItsTicket()
+    {
+        // Adversarial round 19: the stale-index interval starts at
+        // the file WRITE, not at the dispatcher-side completion — a
+        // query whose clean ticket predates the toggle must
+        // invalidate. The overlapped toggle here hits BOTH fault
+        // seams, so its mutation lease converts atomically into the
+        // pending repair with the epoch advanced.
+        _ = _session.SaveText("lease-probe.md", "- [ ] probe\n", null);
+        var repairs = new TaskIndexRepairCoordinator(_session);
+        var announced = new List<A11yEvent>();
+        var review = MakeReview(announced, repairs: repairs);
+        review.EnsureLoaded();
+        ReviewTaskRowViewModel probe = review.Rows.First(
+            r => r.Path == "lease-probe.md");
+        int rows = review.Rows.Count;
+
+        review.InterleaveForTests = () =>
+        {
+            review.InterleaveForTests = null;
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", "lease-probe");
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_REINDEX", "lease-probe");
+            try
+            {
+                review.ToggleTask(probe);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(
+                    "SLATE_TEST_FAULT_AFTER_WRITE", null);
+                Environment.SetEnvironmentVariable(
+                    "SLATE_TEST_FAULT_REINDEX", null);
+            }
+        };
+        review.ForceReload();
+
+        // The in-flight page was discarded — the ghost open row is
+        // NOT republished — and the write is on disk.
+        Assert.Equal(rows, review.Rows.Count);
+        Assert.StartsWith("Couldn’t load tasks. ", review.EmptyMessage);
+        Assert.Contains(
+            "- [x] probe",
+            File.ReadAllText(Path.Combine(_fixture.Root, "lease-probe.md")));
+
+        // Faults cleared: the next load repairs the pending path and
+        // converges to disk truth.
+        review.ForceReload();
+        Assert.Null(review.EmptyMessage);
+        Assert.True(
+            review.Rows.First(r => r.Path == "lease-probe.md")
+                .Task.Completed);
     }
 
     [Fact]

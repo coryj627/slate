@@ -576,6 +576,13 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
     /// written, index commit failed) with an actual landed write.</summary>
     internal Action? TaskToggleFaultForTests { get; set; }
 
+    /// <summary>The workspace's shared repair quarantine (adversarial
+    /// round 19): set at tab creation so EVERY toggle route through
+    /// this tab — panel, review, editor, reading view — leases the
+    /// path around the session write. Null only in tab-level unit
+    /// tests that construct tabs directly.</summary>
+    internal Panels.TaskIndexRepairCoordinator? TaskRepairs { get; set; }
+
     /// <summary>Disk hash read back after a failed toggle
     /// (adversarial round 11): the core writes the FILE before
     /// committing the index, so an error without a SaveReport does
@@ -611,35 +618,53 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         Action<SaveReport?, VaultException?, string?, bool>? completion = null)
     {
         TaskToggleOutcome outcome;
+        Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
         try
         {
             string updatedText = ApplyTaskStatusToBaseline(
                 baseline.Text,
                 task,
                 nextStatus);
-            SaveReport report = _session.ToggleTaskStatus(
-                path,
-                task.Ordinal,
-                nextStatus,
-                expectedHash);
-            TaskToggleFaultForTests?.Invoke();
-            outcome = new TaskToggleOutcome(report, null, updatedText);
-        }
-        catch (VaultException exception)
-        {
-            outcome = new TaskToggleOutcome(
-                null,
-                exception,
-                null,
-                ReadBackDiskHashAfterFailure(path, exception));
+            // The mutation LEASE brackets the session write
+            // (adversarial round 19): the stale-index interval
+            // starts at the file write, not at the dispatcher-side
+            // completion — a clean ticket taken in between must
+            // refuse or invalidate. A non-conflict failure converts
+            // the lease into the pending repair atomically.
+            repairs?.BeginMutation(path);
+            try
+            {
+                SaveReport report = _session.ToggleTaskStatus(
+                    path,
+                    task.Ordinal,
+                    nextStatus,
+                    expectedHash);
+                TaskToggleFaultForTests?.Invoke();
+                repairs?.EndMutation(path, indexConsistent: true);
+                outcome = new TaskToggleOutcome(report, null, updatedText);
+            }
+            catch (Exception inner) when (
+                inner is VaultException or InvalidOperationException)
+            {
+                repairs?.EndMutation(
+                    path, indexConsistent: inner is VaultException.WriteConflict);
+                VaultException error = inner as VaultException
+                    ?? new VaultException.InvalidArgument(inner.Message);
+                outcome = new TaskToggleOutcome(
+                    null,
+                    error,
+                    null,
+                    ReadBackDiskHashAfterFailure(path, error));
+            }
         }
         catch (InvalidOperationException exception)
         {
+            // The splice failed BEFORE any session write: a certain
+            // no-write, no lease was taken.
             outcome = new TaskToggleOutcome(
                 null,
                 new VaultException.InvalidArgument(exception.Message),
-                null,
-                ReadBackDiskHashAfterFailure(path, null));
+                null);
         }
 
         if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)

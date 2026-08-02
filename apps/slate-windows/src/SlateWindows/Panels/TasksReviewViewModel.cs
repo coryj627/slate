@@ -304,7 +304,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             // a failing repair register in the gap with its advanced
             // epoch as the baseline — the post-read comparison then
             // passed over a known-stale read.
-            if (!_repairs.TryBeginCleanQuery(out long quarantineEpoch))
+            if (!TryAwaitCleanTicket(out long quarantineEpoch))
             {
                 Post(() =>
                 {
@@ -371,6 +371,27 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                     requestFilter);
             });
         });
+    }
+
+    /// <summary>Worker-side clean-ticket acquisition (round 19): a
+    /// ticket blocked ONLY by mutation leases is a live write a few
+    /// milliseconds from settling — retry briefly instead of
+    /// flashing the repair banner at every ordinary toggle. A ticket
+    /// blocked by pending repairs refuses immediately.</summary>
+    private bool TryAwaitCleanTicket(out long epoch)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            if (_repairs.TryBeginCleanQuery(out epoch, out bool leasesOnly))
+            {
+                return true;
+            }
+            if (!leasesOnly || attempt >= 50)
+            {
+                return false;
+            }
+            Thread.Sleep(10);
+        }
     }
 
     /// <summary>UI-thread tail of a repair sweep: paths repaired
@@ -485,7 +506,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             RepairSweep sweep = _repairs.Retry();
             // Atomic clean-state ticket (round 18) — see the
             // first-page worker.
-            if (!_repairs.TryBeginCleanQuery(out long quarantineEpoch))
+            if (!TryAwaitCleanTicket(out long quarantineEpoch))
             {
                 Post(() =>
                 {
@@ -622,21 +643,29 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             bool conflict = false;
             string? failure = null;
             string? postFailureDiskHash = null;
+            // Round 19: the LEASE brackets the session write — the
+            // stale-index interval starts at the file write, not at
+            // this worker's publish. A non-conflict failure converts
+            // the lease into the pending repair atomically.
+            _repairs.BeginMutation(path);
             try
             {
                 report = _session.ToggleTaskStatus(
                     path, task.Ordinal, nextStatus, expectedHash);
                 DirectToggleFaultForTests?.Invoke();
+                _repairs.EndMutation(path, indexConsistent: true);
             }
             catch (VaultException.WriteConflict)
             {
                 conflict = true;
+                _repairs.EndMutation(path, indexConsistent: true);
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
                     and not StackOverflowException
                     and not AccessViolationException)
             {
+                _repairs.EndMutation(path, indexConsistent: false);
                 failure = exception.Message;
                 // Round 11: the core writes the FILE before
                 // committing the index, so a non-conflict failure

@@ -196,6 +196,7 @@ internal sealed partial class WorkspaceViewModel
             _announce,
             EditorPreferences,
             startInteractionBackgroundWork: _startInteractionBackgroundWork);
+        tab.TaskRepairs = _taskIndexRepairs;
         if (peer is not null)
         {
             tab.MirrorDocumentStateFrom(peer);

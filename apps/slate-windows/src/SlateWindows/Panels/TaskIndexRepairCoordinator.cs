@@ -43,9 +43,54 @@ internal sealed class TaskIndexRepairCoordinator(VaultSession session)
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, long> _pending = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, int> _leases = new(StringComparer.Ordinal);
     private readonly Dictionary<string, object> _pathLocks = new(StringComparer.Ordinal);
     private long _nextGeneration;
     private long _epoch;
+
+    /// <summary>Take a mutation lease BEFORE a task write
+    /// (adversarial round 19): the stale-index interval starts the
+    /// moment the core writes the file, not when the failure reaches
+    /// the dispatcher — a query in between could obtain a clean
+    /// ticket, read the rolled-back index, and validate an unmoved
+    /// epoch. While any lease is active, clean tickets refuse (as
+    /// transiently lease-blocked) and the epoch has advanced, so
+    /// tickets taken earlier invalidate.</summary>
+    public void BeginMutation(string path)
+    {
+        lock (_gate)
+        {
+            _leases[path] = _leases.GetValueOrDefault(path) + 1;
+            _epoch++;
+        }
+    }
+
+    /// <summary>Release a mutation lease. <paramref
+    /// name="indexConsistent"/> is true only for a successful
+    /// indexed commit or a CERTAIN no-write (a pre-write conflict);
+    /// anything else converts the lease into a pending repair in
+    /// the SAME lock hold — there is never an instant where neither
+    /// a lease nor a pending entry covers the stale interval.</summary>
+    public void EndMutation(string path, bool indexConsistent)
+    {
+        lock (_gate)
+        {
+            int count = _leases.GetValueOrDefault(path);
+            if (count <= 1)
+            {
+                _ = _leases.Remove(path);
+            }
+            else
+            {
+                _leases[path] = count - 1;
+            }
+            _epoch++;
+            if (!indexConsistent)
+            {
+                _pending[path] = ++_nextGeneration;
+            }
+        }
+    }
 
     /// <summary>Monotonic stamp of quarantine state: advances on
     /// every registration and removal. Prefer
@@ -62,18 +107,22 @@ internal sealed class TaskIndexRepairCoordinator(VaultSession session)
         }
     }
 
-    /// <summary>Atomically verify that NOTHING is pending and hand
-    /// back the epoch from the same lock hold (adversarial round
-    /// 18): checking and capturing separately let a failing repair
-    /// register in the gap — its advanced epoch became the caller's
-    /// baseline, so the post-read comparison passed over a
-    /// known-stale read.</summary>
-    public bool TryBeginCleanQuery(out long epoch)
+    /// <summary>Atomically verify that NOTHING is pending or leased
+    /// and hand back the epoch from the same lock hold (adversarial
+    /// rounds 18-19): checking and capturing separately let a
+    /// failing repair register in the gap — its advanced epoch
+    /// became the caller's baseline, so the post-read comparison
+    /// passed over a known-stale read. <paramref
+    /// name="blockedOnlyByLeases"/> distinguishes a transient
+    /// in-flight write (retry briefly) from a failed repair (bar the
+    /// query honestly).</summary>
+    public bool TryBeginCleanQuery(out long epoch, out bool blockedOnlyByLeases)
     {
         lock (_gate)
         {
             epoch = _epoch;
-            return _pending.Count == 0;
+            blockedOnlyByLeases = _pending.Count == 0 && _leases.Count > 0;
+            return _pending.Count == 0 && _leases.Count == 0;
         }
     }
 

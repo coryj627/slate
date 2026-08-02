@@ -1069,6 +1069,70 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void TogglesOverlappingAPanelReadInvalidateItsTicket()
+    {
+        // Adversarial round 19, panel surface: a direct review
+        // toggle of an UNRELATED path fails post-write (both fault
+        // seams) while the panel reads its own note — the panel's
+        // ticket predates the toggle's lease, so the read result
+        // must be discarded rather than published over a vault whose
+        // index is now part-stale.
+        // Dated so the probe sorts into page one ahead of the 600
+        // undated dense rows (the round-1 fixture lesson).
+        _ = _session.SaveText(
+            "lease-panel-probe.md", "- [ ] probe \U0001F4C5 2026-01-01\n", null);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenTasksReview();
+        ReviewTaskRowViewModel probe = workspace.TasksReview.Rows.First(
+            r => r.Path == "lease-panel-probe.md");
+
+        workspace.Panels.TasksInterleaveForTests = () =>
+        {
+            workspace.Panels.TasksInterleaveForTests = null;
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", "lease-panel-probe");
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_REINDEX", "lease-panel-probe");
+            try
+            {
+                workspace.TasksReview.ToggleTask(probe);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(
+                    "SLATE_TEST_FAULT_AFTER_WRITE", null);
+                Environment.SetEnvironmentVariable(
+                    "SLATE_TEST_FAULT_REINDEX", null);
+            }
+        };
+        workspace.OpenPath("todo.md");
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => workspace.Panels.TasksEmptyMessage is { } message
+                    && message != "Loading tasks…",
+                TimeSpan.FromSeconds(20)),
+            "the tasks load never settled");
+        Assert.StartsWith(
+            "Could not load tasks: ", workspace.Panels.TasksEmptyMessage);
+
+        // Faults cleared: the panel's own sweep repairs the pending
+        // path on the next reload — the review does not have to run.
+        workspace.Panels.ReloadTasks();
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => workspace.Panels.OpenTasks.Count == 3,
+                TimeSpan.FromSeconds(20)),
+            "the post-repair reload never landed");
+        Assert.Null(workspace.Panels.TasksEmptyMessage);
+    }
+
+    [Fact]
     public void DirectWritesReconcileTabsThatRacedOpen()
     {
         var announced = new List<A11yEvent>();
