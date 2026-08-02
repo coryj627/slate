@@ -49,20 +49,38 @@ internal static class TaskStatusPhrase
         _ => priority.ToString(CultureInfo.InvariantCulture),
     };
 
+    /// <summary>The .NET-representable epoch-millis window
+    /// (0001-01-01 … 9999-12-31). Core enforces the same task-date
+    /// domain at parse time (adversarial round 5), but a value that
+    /// slips through — an old index, a future core change — must
+    /// degrade, never throw: this formatter runs at ROW-PUBLISH time
+    /// on the UI thread, where an ArgumentOutOfRangeException is an
+    /// application crash from one line of vault input.</summary>
+    internal static readonly long MinFormattableMs =
+        DateTimeOffset.MinValue.ToUnixTimeMilliseconds();
+
+    internal static readonly long MaxFormattableMs =
+        DateTimeOffset.MaxValue.ToUnixTimeMilliseconds();
+
     /// <summary>Mac formatDueDate: UTC-midnight epoch millis back to
-    /// the authored "yyyy-MM-dd" — readers hear what the user wrote.</summary>
-    public static string FormatDueDate(long dueMs) =>
-        DateTimeOffset.FromUnixTimeMilliseconds(dueMs)
-            .UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    /// the authored "yyyy-MM-dd" — readers hear what the user wrote.
+    /// Null when the value has no .NET calendar representation.</summary>
+    public static string? FormatDueDate(long dueMs) =>
+        dueMs < MinFormattableMs || dueMs > MaxFormattableMs
+            ? null
+            : DateTimeOffset.FromUnixTimeMilliseconds(dueMs)
+                .UtcDateTime.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
     /// <summary>The optional metadata parts of a row, in mac order:
     /// "Due …", "Priority …", "Repeats …". The visible caption joins
-    /// them with " · ", the accessible label with ". ".</summary>
+    /// them with " · ", the accessible label with ". ". An
+    /// unformattable date drops its part — the same degradation the
+    /// core parser applies to malformed dates.</summary>
     public static IEnumerable<string> MetadataParts(TaskItem task)
     {
-        if (task.DueMs is long due)
+        if (task.DueMs is long due && FormatDueDate(due) is { } formatted)
         {
-            yield return $"Due {FormatDueDate(due)}";
+            yield return $"Due {formatted}";
         }
         if (task.Priority is int priority)
         {

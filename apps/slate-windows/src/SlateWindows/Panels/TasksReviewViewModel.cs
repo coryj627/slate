@@ -237,6 +237,20 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         // append rows from a different day's window to this page.
         TaskReviewFilter requestFilter = ActiveFilter;
         TaskFilter concreteFilter = ToTaskFilter(requestFilter);
+        // A DIFFERENT filter than the published rows clears them NOW,
+        // not at publication (adversarial round 5): during the
+        // in-flight window the old population would render under the
+        // new chip — mislabeled rows, the old total, and toggles
+        // acting outside the selected filter. Same-filter reloads
+        // keep their rows (a refresh over a still-valid population).
+        if (_publishedFilter is { } published && requestFilter != published)
+        {
+            Rows.Clear();
+            _nextCursor = null;
+            _totalFiltered = 0;
+            _snapshotFilter = null;
+            _publishedFilter = null;
+        }
         _isLoading = true;
         _loadError = null;
         RaiseStateChanges();
@@ -435,6 +449,10 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         }
         _nextCursor = page.NextCursor;
         _totalFiltered = checked((long)page.TotalFiltered);
+        // A successful append is a recovery: a banner left over from
+        // an earlier failed load-more would report an ongoing vault
+        // failure forever (adversarial round 5).
+        _loadError = null;
         RaiseStateChanges();
     }
 

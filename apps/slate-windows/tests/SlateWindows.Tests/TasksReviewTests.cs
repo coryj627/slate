@@ -464,6 +464,55 @@ public sealed class TasksReviewTests : IDisposable
     }
 
     [Fact]
+    public void FilterTransitionsNeverLeaveOldRowsActionableWhileLoading()
+    {
+        var review = MakeReview();
+        review.EnsureLoaded();
+        Assert.Equal(200, review.Rows.Count);
+
+        // Observed INSIDE the in-flight window of the Overdue load
+        // (adversarial round 5): the All population must already be
+        // gone — mislabeled rows under the new chip were clickable
+        // until publication.
+        int rowsDuringLoad = -1;
+        bool hasMoreDuringLoad = true;
+        review.InterleaveForTests = () =>
+        {
+            rowsDuringLoad = review.Rows.Count;
+            hasMoreDuringLoad = review.HasMore;
+        };
+        review.ApplyFilter(TaskReviewFilter.Overdue);
+        review.InterleaveForTests = null;
+
+        Assert.Equal(0, rowsDuringLoad);
+        Assert.False(hasMoreDuringLoad);
+        ReviewTaskRowViewModel row = Assert.Single(review.Rows);
+        Assert.Equal("overdue one", row.Task.Text);
+    }
+
+    [Fact]
+    public void LoadMoreRecoveryClearsTheFailureBanner()
+    {
+        var review = MakeReview();
+        review.EnsureLoaded();
+
+        review.InterleaveForTests = () =>
+        {
+            review.InterleaveForTests = null;
+            throw new InvalidOperationException("boom");
+        };
+        review.LoadMore();
+        Assert.Equal("Couldn’t load tasks. boom", review.EmptyMessage);
+        Assert.Equal(200, review.Rows.Count);
+
+        // A successful retry is a recovery: the banner clears
+        // (adversarial round 5: it reported vault failure forever).
+        review.LoadMore();
+        Assert.Equal(236, review.Rows.Count);
+        Assert.Null(review.EmptyMessage);
+    }
+
+    [Fact]
     public void FailedSameFilterRefreshesKeepTheRowsTheyHad()
     {
         var review = MakeReview();

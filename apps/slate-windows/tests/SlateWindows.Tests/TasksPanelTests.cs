@@ -205,13 +205,16 @@ public sealed class TasksPanelTests : IDisposable
         {
             session.ScanInitial(cancel);
         }
+        // Synchronous mode: the async worker's failure publish routes
+        // through the xunit SynchronizationContext, which races the
+        // assertion below even behind DrainForTests (latent since
+        // round 0; surfaced by unrelated JIT-timing shifts in round 5).
         var panels = new RightPanePanelsViewModel(
             session, _ => { }, (_, _) => true, _ => true, (_, _) => { },
-            (_, _) => true, _ => { });
+            (_, _) => true, _ => { }, synchronousForTests: true);
         session.Dispose();
 
         panels.NoteChanged("n.md");
-        panels.DrainForTests().GetAwaiter().GetResult();
         Assert.StartsWith("Could not load tasks: ", panels.TasksEmptyMessage);
     }
 

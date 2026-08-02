@@ -39,7 +39,7 @@
 //! - The Dataview inline syntax (`[due:: 2026-06-01]`) — deferred to
 //!   V1.x per the Milestone G plan.
 
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 
 /// One task parsed from a Markdown source.
 ///
@@ -411,6 +411,14 @@ fn parse_date_to_ms(s: &str) -> Option<i64> {
         return None;
     }
     let date = NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?;
+    // The SHARED task-date domain (adversarial round 5): chrono's
+    // proleptic calendar reaches far outside .NET's 0001–9999, and a
+    // due_ms from `📅 0000-01-01` throws in the Windows formatter at
+    // ROW-PUBLISH time — a UI-thread crash from one line of input.
+    // Outside the domain is malformed metadata, same as `2026-13-45`.
+    if !(1..=9999).contains(&date.year()) {
+        return None;
+    }
     // Midnight UTC of the parsed date.
     let dt = date.and_hms_opt(0, 0, 0)?.and_utc();
     Some(dt.timestamp_millis())
@@ -968,6 +976,24 @@ mod tests {
         assert_eq!(tasks[0].text, "thing");
         assert_eq!(tasks[0].due_ms, None);
         assert_eq!(tasks[0].priority, Some(2));
+    }
+
+    #[test]
+    fn dates_outside_the_shared_domain_drop_like_malformed_ones() {
+        // Adversarial round 5: chrono parses proleptic years far
+        // outside .NET's 0001–9999, and an out-of-domain due_ms
+        // crashes the Windows formatter at row-publish time. The
+        // task-date domain is shared: outside it is malformed.
+        let src = "- [ ] ancient 📅 0000-01-01\n- [ ] far future ⏳ +10000-01-01\n";
+        let tasks = extract_tasks(src);
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].due_ms, None);
+        assert_eq!(tasks[1].scheduled_ms, None);
+
+        // The domain edges themselves survive.
+        let edges = extract_tasks("- [ ] first 📅 0001-01-01\n- [ ] last 📅 9999-12-31\n");
+        assert!(edges[0].due_ms.is_some());
+        assert!(edges[1].due_ms.is_some());
     }
 
     #[test]

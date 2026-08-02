@@ -72,6 +72,34 @@ public sealed class TaskStatusPhraseTests
     }
 
     [Fact]
+    public void UnformattableDatesDegradeInsteadOfThrowing()
+    {
+        // Adversarial round 5: chrono's proleptic calendar reaches
+        // outside .NET's 0001–9999, and this formatter runs at
+        // ROW-PUBLISH time on the UI thread — a year-0000 due date
+        // must drop its part, never crash the application. Core now
+        // rejects such dates at parse time; this is the host's own
+        // guard for values that slip through (old index, core drift).
+        long yearZeroMs = -62167219200000;
+        Assert.Null(TaskStatusPhrase.FormatDueDate(yearZeroMs));
+        Assert.Null(TaskStatusPhrase.FormatDueDate(long.MinValue));
+        Assert.Null(TaskStatusPhrase.FormatDueDate(long.MaxValue));
+
+        TaskItem ancient = Task(" ", false, dueMs: yearZeroMs, priority: 1);
+        Assert.Equal(
+            new[] { "Priority high" },
+            TaskStatusPhrase.MetadataParts(ancient));
+
+        // Both row surfaces publish without throwing and omit the
+        // unformattable part.
+        var noteRow = new NoteTaskRowViewModel(ancient, "hash");
+        Assert.Equal("Open. t. Priority high. Open task.", noteRow.AutomationName);
+        var reviewRow = new ReviewTaskRowViewModel(
+            new TaskWithLocation(ancient, "a.md", "a.md", "hash"));
+        Assert.Equal("a.md. t. Priority high. Open task.", reviewRow.AutomationName);
+    }
+
+    [Fact]
     public void MetadataPartsFollowTheMacOrder()
     {
         var task = Task(
