@@ -811,7 +811,20 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
                     repairError ?? "The vault index needs repair."));
                 return;
             }
-            long quarantineEpoch = _repairs.Epoch;
+            // Atomic clean-state ticket (round 18): the gate above
+            // and a separate epoch capture left a gap where a
+            // failing repair could register with its advanced epoch
+            // becoming the baseline — the post-read comparison then
+            // passed over a known-stale read.
+            if (!_repairs.TryBeginCleanQuery(out long quarantineEpoch))
+            {
+                Post(() => PublishTasks(
+                    generation,
+                    requestId,
+                    page: null,
+                    "The vault index needs repair."));
+                return;
+            }
             TasksInterleaveForTests?.Invoke();
             try
             {

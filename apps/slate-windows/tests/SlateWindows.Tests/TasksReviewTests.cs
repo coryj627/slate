@@ -856,6 +856,81 @@ public sealed class TasksReviewTests : IDisposable
     }
 
     [Fact]
+    public void FailingRepairsMidQueryStillDiscardTheResult()
+    {
+        // Adversarial round 18: a FAILING repair registering while
+        // the query is in flight advances the epoch and stays
+        // pending — the atomic ticket taken before the query plus
+        // the post-read comparison must discard the result (the
+        // split check-then-capture missed exactly this schedule).
+        _ = _session.SaveText("quarantine-probe.md", "- [ ] probe\n", null);
+        var repairs = new TaskIndexRepairCoordinator(_session);
+        var review = MakeReview(repairs: repairs);
+        review.EnsureLoaded();
+        int rows = review.Rows.Count;
+
+        bool attemptFailed = false;
+        review.InterleaveForTests = () =>
+        {
+            review.InterleaveForTests = null;
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_REINDEX", "quarantine-probe");
+            try
+            {
+                attemptFailed = !repairs.TryRepairNow(
+                    "quarantine-probe.md", out _);
+            }
+            finally
+            {
+                Environment.SetEnvironmentVariable(
+                    "SLATE_TEST_FAULT_REINDEX", null);
+            }
+        };
+        review.ForceReload();
+
+        Assert.True(attemptFailed);
+        Assert.Equal(rows, review.Rows.Count);
+        Assert.StartsWith("Couldn’t load tasks. ", review.EmptyMessage);
+
+        // The path stays pending; the next load repairs it (fault
+        // cleared) and converges.
+        review.ForceReload();
+        Assert.Null(review.EmptyMessage);
+    }
+
+    [Fact]
+    public void ConcurrentRepairsNeverEraseRegistrationsOrHideIntervals()
+    {
+        // Adversarial round 18: overlapping same-path repairs could
+        // erase the only active registration or complete invisibly.
+        // Repairs are single-flight per path now (cross-thread
+        // attempts block on the path lock); the same-thread reentry
+        // below stands in for the overlap and pins the versioning:
+        // the inner repair's interval advances the epoch, and the
+        // outer sweep's stale snapshot must not double-clear or
+        // resurrect anything.
+        var coordinator = new TaskIndexRepairCoordinator(_session);
+        coordinator.NotePending("a.md");
+        long start = coordinator.Epoch;
+        bool innerRepaired = false;
+        coordinator.BetweenRepairAndRemovalForTests = () =>
+        {
+            coordinator.BetweenRepairAndRemovalForTests = null;
+            innerRepaired = coordinator.TryRepairNow("a.md", out _);
+        };
+
+        RepairSweep sweep = coordinator.Retry();
+
+        Assert.True(innerRepaired);
+        Assert.False(coordinator.HasPendingFor("a.md"));
+        Assert.False(sweep.AnyPending);
+        // The inner interval is visible: register (+1) and remove
+        // (+1) both advanced the epoch past the sweep's baseline.
+        Assert.True(coordinator.Epoch >= start + 2);
+        Assert.True(coordinator.TryBeginCleanQuery(out _));
+    }
+
+    [Fact]
     public void SupersededLoadMoreCannotWedgeThePagingButton()
     {
         var review = MakeReview();

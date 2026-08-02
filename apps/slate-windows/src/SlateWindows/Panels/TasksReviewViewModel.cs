@@ -299,7 +299,12 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             // resurrect rolled-back rows as ghosts. The failure
             // keeps the last honest snapshot (same-filter posture).
             RepairSweep sweep = _repairs.Retry();
-            if (sweep.AnyPending)
+            // The clean-state ticket is ATOMIC (round 18): a
+            // pending-check followed by a separate epoch capture let
+            // a failing repair register in the gap with its advanced
+            // epoch as the baseline — the post-read comparison then
+            // passed over a known-stale read.
+            if (!_repairs.TryBeginCleanQuery(out long quarantineEpoch))
             {
                 Post(() =>
                 {
@@ -314,7 +319,6 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 });
                 return;
             }
-            long quarantineEpoch = _repairs.Epoch;
             TaskWithLocationPage? page = null;
             string? failure = null;
             ulong generation = 0;
@@ -479,7 +483,9 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             // repair into a page-one reload — never an append over
             // the previously stale index.
             RepairSweep sweep = _repairs.Retry();
-            if (sweep.AnyPending)
+            // Atomic clean-state ticket (round 18) — see the
+            // first-page worker.
+            if (!_repairs.TryBeginCleanQuery(out long quarantineEpoch))
             {
                 Post(() =>
                 {
@@ -492,7 +498,6 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                 });
                 return;
             }
-            long quarantineEpoch = _repairs.Epoch;
             TaskWithLocationPage? page = null;
             string? failure = null;
             bool drifted = false;
