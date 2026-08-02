@@ -6286,11 +6286,20 @@ impl VaultSession {
         conn: &Connection,
         paths: impl IntoIterator<Item = &'p str>,
     ) -> Result<Vec<(String, i64)>, VaultError> {
+        // ALL-OR-NOTHING (adversarial round 38): each insert
+        // autocommitting individually let a mid-loop persistence
+        // failure strand a PARTIAL marker set — durable rows an
+        // already-open process could age and sweep against a
+        // mid-crash topology, deleting descendant rows and
+        // consuming markers before the deferred recovery retried.
+        // One transaction: every marker persists, or none do.
+        let tx = conn.unchecked_transaction()?;
         let mut planted = Vec::new();
         for path in paths {
             // Test-only seam (adversarial round 37): a transient
             // persistence failure while planting — recovery flows
-            // must fail closed WITHOUT consuming their journal.
+            // must fail closed WITHOUT consuming their journal, and
+            // (round 38) without leaving any partial markers.
             if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_PLANT_MARKERS")
                 && path.contains(trigger.to_string_lossy().as_ref())
             {
@@ -6299,13 +6308,14 @@ impl VaultSession {
                 });
             }
             let token = fresh_intent_token();
-            conn.execute(
+            tx.execute(
                 "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
                  VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
                 rusqlite::params![path, now_ms(), token],
             )?;
             planted.push((path.to_string(), token));
         }
+        tx.commit()?;
         Ok(planted)
     }
 
