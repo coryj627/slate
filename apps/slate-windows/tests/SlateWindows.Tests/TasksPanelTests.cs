@@ -672,6 +672,83 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void NavigationClearsStalenessSoTheNextNoteWorks()
+    {
+        // Adversarial round 10: the staleness verdict belongs to the
+        // note that went stale — current-tab navigation reuses the
+        // tab in place, and the replacement note must not inherit
+        // the flag or every identity guard falsely refuses its
+        // fresh rows.
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("todo.md");
+        WorkspaceTabViewModel tab = Assert.IsType<WorkspaceTabViewModel>(
+            workspace.ActiveGroup.ActiveTab);
+
+        // Note A goes externally stale under the open tab.
+        _ = _session.SaveText(
+            "todo.md", "- [ ] rewritten externally\n", null);
+        workspace.InvalidateModifiedPath("todo.md");
+
+        // Current-tab navigation reuses the SAME tab for note B.
+        workspace.OpenPath("dense.md");
+        Assert.Same(tab, workspace.ActiveGroup.ActiveTab);
+        workspace.OpenTasksReview();
+
+        // Panel activation lands exactly.
+        NoteTaskRowViewModel panelRow = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "task 1");
+        workspace.Panels.OpenTask(panelRow);
+        Assert.Equal(
+            tab.Text.IndexOf("- [ ] task 1\n", StringComparison.Ordinal),
+            tab.EditorCaretOffset);
+
+        // Review activation speaks the same-file verb.
+        ReviewTaskRowViewModel reviewRow = workspace.TasksReview.Rows.First(
+            r => r.Path == "dense.md" && r.Task.Text == "task 2");
+        workspace.TasksReview.OpenRow(reviewRow);
+        _ = Assert.Single(announced.OfType<A11yEvent.ScrolledToLine>());
+
+        // Both toggle routes write through to disk. The tab allows
+        // one in-flight toggle at a time, so each waits for its
+        // publish (pumped) before the next starts.
+        string densePath = Path.Combine(_fixture.Root, "dense.md");
+        workspace.Panels.ToggleTask(panelRow);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => DiskContains(densePath, "- [x] task 1\n"),
+                TimeSpan.FromSeconds(20)),
+            "the panel toggle never reached disk");
+        PumpDispatcherUntil(
+            () => announced.OfType<A11yEvent.HostComposed>()
+                .Any(composed => composed.Text == "Task completed."),
+            "the panel toggle never published");
+
+        // The panel toggle re-baselined the tab, so rows captured
+        // before it are stale BY DESIGN — the review route needs a
+        // fresh snapshot row.
+        workspace.TasksReview.ForceReload();
+        ReviewTaskRowViewModel freshReviewRow = workspace.TasksReview.Rows.First(
+            r => r.Path == "dense.md" && r.Task.Text == "task 2");
+        workspace.TasksReview.ToggleTask(freshReviewRow);
+        Assert.True(
+            SpinWait.SpinUntil(
+                () => DiskContains(densePath, "- [x] task 2\n"),
+                TimeSpan.FromSeconds(20)),
+            "the review toggle never reached disk");
+        Assert.Empty(announced.OfType<A11yEvent.TaskToggleConflict>());
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text
+                == "A task update is already in progress.");
+    }
+
+    [Fact]
     public void DirectWritesReconcileTabsThatRacedOpen()
     {
         var announced = new List<A11yEvent>();

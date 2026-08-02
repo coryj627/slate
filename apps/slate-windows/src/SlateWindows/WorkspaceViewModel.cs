@@ -310,6 +310,11 @@ internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
         Item = item;
         _text = string.Empty;
         _contentHash = null;
+        // The staleness verdict belongs to the PREVIOUS note
+        // (adversarial round 10): a reused current tab must not make
+        // the replacement note inherit it — every identity guard
+        // would falsely refuse the fresh rows.
+        IsExternallyStale = false;
         _isDirty = false;
         _status = string.Empty;
         _isMissingFromDisk = false;
