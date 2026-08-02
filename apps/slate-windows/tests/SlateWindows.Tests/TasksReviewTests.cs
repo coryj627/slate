@@ -794,16 +794,20 @@ public sealed class TasksReviewTests : IDisposable
         };
         review.ToggleTask(row);
 
-        // Unknown outcome → quarantined (the repair of the missing
-        // file also fails): reloads are barred, not ghost-published.
-        review.ForceReload();
-        Assert.StartsWith("Couldn’t load tasks. ", review.EmptyMessage);
-
-        // The path becomes readable again: the next load repairs it
-        // and converges to disk truth.
-        File.WriteAllText(diskPath, "- [x] flip me\n");
+        // Unknown outcome → fail-closed repair. With the file GONE,
+        // the repair CONVERGES TO DELETION (round 23) instead of
+        // barring forever: no ghost open row survives, no banner —
+        // the honest truth is that the note no longer exists.
         review.ForceReload();
         Assert.Null(review.EmptyMessage);
+        Assert.DoesNotContain(review.Rows, r => r.Path == "fault-unknown.md");
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text == "Task completed.");
+
+        // The note returns via an indexed write: rows show it again.
+        _ = _session.SaveText("fault-unknown.md", "- [x] flip me\n", null);
+        review.ForceReload();
         Assert.True(
             review.Rows.First(r => r.Path == "fault-unknown.md")
                 .Task.Completed);

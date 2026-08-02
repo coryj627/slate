@@ -1012,27 +1012,33 @@ public sealed class TasksPanelTests : IDisposable
             () => "the injected failure never published; announced: "
                 + AnnouncementDump(announced));
 
-        // Quarantined: the panel's reload shows the honest read
-        // fault instead of the ghost open row.
+        // Unknown outcome → fail-closed repair. With the file GONE,
+        // the repair CONVERGES TO DELETION (round 23): the panel's
+        // reload shows the honest empty state — never the ghost
+        // open row, and no eternal read-fault bar.
         workspace.Panels.ReloadTasks();
         Assert.True(
             SpinWait.SpinUntil(
-                () => workspace.Panels.TasksEmptyMessage is { } message
-                    && message.StartsWith(
-                        "Could not load tasks: ", StringComparison.Ordinal),
+                () => workspace.Panels.OpenTasks.Count == 0
+                    && workspace.Panels.DoneTasks.Count == 0
+                    && workspace.Panels.TasksEmptyMessage is not null
+                    && workspace.Panels.TasksEmptyMessage != "Loading tasks…",
                 TimeSpan.FromSeconds(20)),
-            "the quarantine never surfaced");
+            "the converged reload never settled");
+        Assert.DoesNotContain(
+            announced.OfType<A11yEvent.HostComposed>(),
+            composed => composed.Text == "Task completed.");
 
-        // The path becomes readable again: the next reload repairs
-        // it and shows disk truth.
-        File.WriteAllText(diskPath, "- [x] flip me\n");
+        // The note returns via an indexed write: the panel shows
+        // disk truth again.
+        _ = _session.SaveText("fault-unknown-tab.md", "- [x] flip me\n", null);
         workspace.Panels.ReloadTasks();
         Assert.True(
             SpinWait.SpinUntil(
                 () => workspace.Panels.DoneTasks.Any(
                     r => r.Task.Text == "flip me"),
                 TimeSpan.FromSeconds(20)),
-            "the repaired reload never landed");
+            "the recreated note never landed");
     }
 
     [Fact]
