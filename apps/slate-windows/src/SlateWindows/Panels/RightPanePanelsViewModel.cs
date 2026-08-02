@@ -114,6 +114,8 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
     private bool _isLoadingTasks;
     private string? _tasksLoadError;
 
+    private readonly TaskIndexRepairCoordinator _repairs;
+
     public RightPanePanelsViewModel(
         VaultSession session,
         Action<A11yEvent> announce,
@@ -122,6 +124,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         Action<LinkAnchor, string?> scrollToAnchor,
         Func<TaskItem, string, bool> toggleTask,
         Action<TaskItem, string> scrollToTask,
+        TaskIndexRepairCoordinator? repairs = null,
         bool synchronousForTests = false)
         : base(synchronousForTests)
     {
@@ -132,6 +135,7 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         _scrollToAnchor = scrollToAnchor;
         _toggleTask = toggleTask;
         _scrollToTask = scrollToTask;
+        _repairs = repairs ?? new TaskIndexRepairCoordinator(session);
     }
 
     internal int LoadGenerationForTests => _loadGeneration;
@@ -790,6 +794,23 @@ internal sealed class RightPanePanelsViewModel : PanelWorkScheduler
         {
             NoteTasksPage? page = null;
             string? failure = null;
+            // The shared repair quarantine gates THIS surface too
+            // (adversarial round 15): after a post-write failure
+            // whose repair also failed, the index is known stale for
+            // the path — querying it would republish the rolled-back
+            // row and its ghost hash. Retry the repair here; while it
+            // keeps failing, the honest read-fault surface shows
+            // instead of the ghost.
+            if (_repairs.HasPendingFor(path)
+                && !_repairs.TryRepairNow(path, out string? repairError))
+            {
+                Post(() => PublishTasks(
+                    generation,
+                    requestId,
+                    page: null,
+                    repairError ?? "The vault index needs repair."));
+                return;
+            }
             try
             {
                 page = _session.NoteTasks(path, MaxTaskRows);

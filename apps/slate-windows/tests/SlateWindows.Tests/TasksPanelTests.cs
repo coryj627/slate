@@ -878,6 +878,68 @@ public sealed class TasksPanelTests : IDisposable
     }
 
     [Fact]
+    public void ThePanelHonorsTheSharedRepairQuarantine()
+    {
+        // Adversarial round 15: pending repairs were review-only —
+        // the note panel queried NoteTasks directly, so navigating
+        // away and back republished the rolled-back row and its
+        // ghost hash. The quarantine is shared now: while the repair
+        // keeps failing, the panel shows its honest read-fault
+        // surface; once it lands, the rows show disk truth.
+        _ = _session.SaveText("fault-tab-target.md", "- [ ] flip me\n", null);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            _session,
+            _fixture.Root,
+            () => [],
+            announced.Add,
+            startInteractionBackgroundWork: false);
+        workspace.OpenPath("fault-tab-target.md");
+        NoteTaskRowViewModel row = workspace.Panels.OpenTasks.First(
+            r => r.Task.Text == "flip me");
+
+        Environment.SetEnvironmentVariable(
+            "SLATE_TEST_FAULT_AFTER_WRITE", "fault-tab-target");
+        Environment.SetEnvironmentVariable(
+            "SLATE_TEST_FAULT_REINDEX", "fault-tab-target");
+        try
+        {
+            workspace.Panels.ToggleTask(row);
+            PumpDispatcherUntil(
+                () => announced.OfType<A11yEvent.HostComposed>().Any(composed =>
+                    composed.Text.StartsWith(
+                        "Task could not be toggled:", StringComparison.Ordinal)),
+                () => "the injected failure never published; announced: "
+                    + AnnouncementDump(announced));
+
+            // Navigate away and back with the fault still held: the
+            // panel must NOT republish the ghost open row from the
+            // known-stale index — the honest read fault shows.
+            workspace.OpenPath("todo.md");
+            workspace.OpenPath("fault-tab-target.md");
+            Assert.Empty(workspace.Panels.OpenTasks);
+            Assert.Empty(workspace.Panels.DoneTasks);
+            Assert.StartsWith(
+                "Could not load tasks: ",
+                workspace.Panels.TasksEmptyMessage);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_AFTER_WRITE", null);
+            Environment.SetEnvironmentVariable(
+                "SLATE_TEST_FAULT_REINDEX", null);
+        }
+
+        // The fault cleared: the next visit retries the repair and
+        // the rows show DISK truth.
+        workspace.OpenPath("todo.md");
+        workspace.OpenPath("fault-tab-target.md");
+        Assert.Contains(
+            workspace.Panels.DoneTasks, r => r.Task.Text == "flip me");
+    }
+
+    [Fact]
     public void DirectWritesReconcileTabsThatRacedOpen()
     {
         var announced = new List<A11yEvent>();

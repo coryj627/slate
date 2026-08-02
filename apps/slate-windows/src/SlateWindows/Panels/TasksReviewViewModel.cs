@@ -117,19 +117,13 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
     private readonly HashSet<string> _pendingToggleRefreshPaths =
         new(StringComparer.Ordinal);
 
-    /// <summary>Paths whose index repair FAILED after a post-write
-    /// toggle failure (adversarial round 14): the index is known
-    /// stale for these, so reloading would republish the rolled-back
-    /// rows. Both load workers retry the repair before querying and
-    /// clear entries that succeed; a successful save of the path
-    /// also repairs it implicitly (the save commits the index).</summary>
-    private readonly HashSet<string> _pendingRepairs =
-        new(StringComparer.Ordinal);
+    /// <summary>Fired on the UI thread for each path whose pending
+    /// repair succeeded inside a load worker (adversarial round 15):
+    /// the workspace refreshes the note panel so both task surfaces
+    /// converge, not just this one.</summary>
+    internal Action<string>? RepairLanded { get; set; }
 
-    /// <summary>Register a path whose repair must be retried before
-    /// the next query (the workspace's tab-route recovery reports
-    /// its failed repairs here too).</summary>
-    public void NotePendingRepair(string path) => _ = _pendingRepairs.Add(path);
+    private readonly TaskIndexRepairCoordinator _repairs;
 
     public TasksReviewViewModel(
         VaultSession session,
@@ -137,6 +131,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         Func<string, TaskItem, string, ReviewOpenRoute> activateRow,
         Func<string, TaskItem, string, ReviewToggleRoute> toggleViaOpenTab,
         Func<DateTimeOffset>? clock = null,
+        TaskIndexRepairCoordinator? repairs = null,
         bool synchronousForTests = false)
         : base(synchronousForTests)
     {
@@ -145,6 +140,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         _activateRow = activateRow;
         _toggleViaOpenTab = toggleViaOpenTab;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _repairs = repairs ?? new TaskIndexRepairCoordinator(session);
     }
 
     public ObservableCollection<ReviewTaskRowViewModel> Rows { get; } = [];
@@ -295,10 +291,29 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         _isLoading = true;
         _loadError = null;
         RaiseStateChanges();
-        string[] pendingRepairs = [.. _pendingRepairs];
         StartWork(() =>
         {
-            List<string>? repairedNow = RetryPendingRepairs(pendingRepairs);
+            // Retry outstanding repairs first; while ANY remains
+            // failed the index is known stale and the query is
+            // BARRED (adversarial round 15) — publishing it would
+            // resurrect rolled-back rows as ghosts. The failure
+            // keeps the last honest snapshot (same-filter posture).
+            RepairSweep sweep = _repairs.Retry();
+            if (sweep.AnyPending)
+            {
+                Post(() =>
+                {
+                    AnnounceRepairsLanded(sweep);
+                    PublishFirstPage(
+                        requestId,
+                        page: null,
+                        sweep.LastError ?? "The vault index needs repair.",
+                        0,
+                        concreteFilter,
+                        requestFilter);
+                });
+                return;
+            }
             TaskWithLocationPage? page = null;
             string? failure = null;
             ulong generation = 0;
@@ -334,7 +349,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             }
             Post(() =>
             {
-                ClearRepairedPending(repairedNow);
+                AnnounceRepairsLanded(sweep);
                 PublishFirstPage(
                     requestId, page, failure, generation, concreteFilter,
                     requestFilter);
@@ -342,37 +357,15 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         });
     }
 
-    /// <summary>Retry outstanding index repairs on the worker thread
-    /// BEFORE the query (adversarial round 14): querying while a
-    /// repair is pending would republish the rolled-back rows. Runs
-    /// per load, so the stale window closes on the next query once
-    /// the underlying fault clears; failures simply stay pending.</summary>
-    private List<string>? RetryPendingRepairs(string[] pendingRepairs)
+    /// <summary>UI-thread tail of a repair sweep: paths repaired
+    /// inside a load worker also refresh the note panel through the
+    /// workspace seam (round 15 — both surfaces converge, not just
+    /// this one).</summary>
+    private void AnnounceRepairsLanded(RepairSweep sweep)
     {
-        List<string>? repaired = null;
-        foreach (string pending in pendingRepairs)
+        foreach (string repaired in sweep.Repaired)
         {
-            try
-            {
-                _session.ReindexPath(pending);
-                (repaired ??= []).Add(pending);
-            }
-            catch (Exception exception) when (exception is not OutOfMemoryException)
-            {
-            }
-        }
-        return repaired;
-    }
-
-    private void ClearRepairedPending(List<string>? repairedNow)
-    {
-        if (repairedNow is null)
-        {
-            return;
-        }
-        foreach (string repaired in repairedNow)
-        {
-            _ = _pendingRepairs.Remove(repaired);
+            RepairLanded?.Invoke(repaired);
         }
     }
 
@@ -466,13 +459,27 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
         ulong snapshotGeneration = _snapshotGeneration;
         _isLoadingMore = true;
         RaiseStateChanges();
-        string[] pendingRepairs = [.. _pendingRepairs];
         StartWork(() =>
         {
-            // A successful retry bumps the revision, so the drift
-            // check below converts the repair into a page-one reload
-            // — never an append over the previously stale index.
-            List<string>? repairedNow = RetryPendingRepairs(pendingRepairs);
+            // Retry outstanding repairs first. Still-pending → the
+            // query is BARRED (round 15). A successful retry bumps
+            // the revision, so the drift check below converts the
+            // repair into a page-one reload — never an append over
+            // the previously stale index.
+            RepairSweep sweep = _repairs.Retry();
+            if (sweep.AnyPending)
+            {
+                Post(() =>
+                {
+                    AnnounceRepairsLanded(sweep);
+                    PublishLoadMore(
+                        token,
+                        page: null,
+                        sweep.LastError ?? "The vault index needs repair.",
+                        drifted: false);
+                });
+                return;
+            }
             TaskWithLocationPage? page = null;
             string? failure = null;
             bool drifted = false;
@@ -509,7 +516,7 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
             }
             Post(() =>
             {
-                ClearRepairedPending(repairedNow);
+                AnnounceRepairsLanded(sweep);
                 PublishLoadMore(token, page, failure, drifted);
             });
         });
@@ -655,25 +662,11 @@ internal sealed class TasksReviewViewModel : PanelWorkScheduler
                         // republish the repair exists to prevent —
                         // a failed repair goes pending and the load
                         // workers retry it before every query.
-                        bool repaired;
-                        try
-                        {
-                            _session.ReindexPath(path);
-                            repaired = true;
-                        }
-                        catch (Exception exception) when (
-                            exception is not OutOfMemoryException)
-                        {
-                            repaired = false;
-                        }
+                        bool repaired = _repairs.TryRepairNow(path, out _);
                         DiskWriteLanded?.Invoke(path, postFailureDiskHash);
                         if (repaired)
                         {
                             LoadFirstPage();
-                        }
-                        else
-                        {
-                            _ = _pendingRepairs.Add(path);
                         }
                     }
                     return;

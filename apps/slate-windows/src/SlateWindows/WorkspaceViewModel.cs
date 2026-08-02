@@ -1094,6 +1094,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
     private readonly Action<A11yEvent> _announce;
+    private readonly Panels.TaskIndexRepairCoordinator _taskIndexRepairs;
     private readonly Func<WorkspaceTabViewModel, WorkspaceItemState, WorkspaceDirtyNavigationDecision>
         _dirtyNavigationDecision;
     private readonly Func<WorkspaceTabViewModel, WorkspaceDirtyNavigationDecision>
@@ -1141,6 +1142,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             }
         };
         _activeLeaf = Leaves[0];
+        // ONE repair quarantine shared by every task surface
+        // (adversarial round 15): a path whose post-write index
+        // repair failed is known stale, and no surface may query it
+        // past another surface's quarantine.
+        _taskIndexRepairs = new Panels.TaskIndexRepairCoordinator(session);
         // The right-pane link/structure leaves (W4-2). Constructed
         // BEFORE Restore so the activation funnels can sync into it.
         Panels = new Panels.RightPanePanelsViewModel(
@@ -1166,6 +1172,7 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             },
             TogglePanelTask,
             ScrollToPanelTaskIfCurrent,
+            repairs: _taskIndexRepairs,
             synchronousForTests: !startInteractionBackgroundWork);
         // The vault-wide Tasks Review leaf (W4-3): vault-lifetime
         // state, deliberately NOT keyed on the active note.
@@ -1174,11 +1181,15 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             announce,
             TryActivateTaskRow,
             TryToggleTaskInOpenTab,
+            repairs: _taskIndexRepairs,
             synchronousForTests: !startInteractionBackgroundWork);
         // Round 3: a tab can open for a file BETWEEN the review's
         // NoOpenTab route decision and its direct write landing —
         // the workspace re-checks at write completion.
         TasksReview.DiskWriteLanded = ReconcileTabsAfterDirectTaskWrite;
+        // Round 15: a repair landing inside a review load worker
+        // refreshes the note panel too — both surfaces converge.
+        TasksReview.RepairLanded = path => Panels.NoteSaved(path);
         (_root, _activeGroup) = Restore(_persistence.Load());
         SyncPanels();
 
@@ -1654,19 +1665,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
                     // resurrect the pre-write state as ghost rows.
                     // Tab reconciliation is hash-truth and runs
                     // either way; the surface reloads are GATED on
-                    // the repair succeeding (round 14) — a failed
-                    // repair goes pending and the review's load
-                    // workers retry it before every query.
-                    bool repaired = TryReindexPath(path);
+                    // the repair succeeding (rounds 14-15) — a
+                    // failed repair enters the SHARED quarantine,
+                    // which bars both surfaces' queries until a
+                    // retry lands.
+                    bool repaired = _taskIndexRepairs.TryRepairNow(path, out _);
                     ReconcileTabsAfterDirectTaskWrite(path, postFailureDiskHash!);
                     if (repaired)
                     {
                         Panels.NoteSaved(path);
                         TasksReview.NoteRefreshed(path);
-                    }
-                    else
-                    {
-                        TasksReview.NotePendingRepair(path);
                     }
                 }
                 // Idempotent after NoteRefreshed consumed the marker;
@@ -1703,25 +1711,6 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             TasksReview.NoteRefreshed(path);
             ReconcileTabsAfterDirectTaskWrite(path, report.NewContentHash);
         };
-    }
-
-    /// <summary>Per-path index repair (adversarial rounds 12 and
-    /// 14): reports success so callers can GATE surface reloads on
-    /// it — a failed repair leaves the index known-stale, and
-    /// reloading it would republish the rolled-back rows. The
-    /// coarse-mtime world means a later scan may never converge by
-    /// itself, so failed repairs go pending with the review.</summary>
-    private bool TryReindexPath(string path)
-    {
-        try
-        {
-            _session.ReindexPath(path);
-            return true;
-        }
-        catch (Exception exception) when (exception is not OutOfMemoryException)
-        {
-            return false;
-        }
     }
 
     /// <summary>A task toggle changed <paramref name="path"/> on disk

@@ -652,6 +652,24 @@ public sealed class TasksReviewTests : IDisposable
                 review.Rows.First(r => r.Path == "fault-pre-commit.md")
                     .Task.Completed,
                 "rows must keep the last honest snapshot, not a ghost reload");
+
+            // Round 15: with the fault STILL HELD, every reload path
+            // is barred — a forced reload and a load-more both keep
+            // the last honest snapshot behind the failure banner
+            // instead of querying the known-stale index.
+            int rowsBefore = review.Rows.Count;
+            review.ForceReload();
+            Assert.Equal(rowsBefore, review.Rows.Count);
+            Assert.False(
+                review.Rows.First(r => r.Path == "fault-pre-commit.md")
+                    .Task.Completed,
+                "a barred reload must not publish ghost rows");
+            Assert.StartsWith(
+                "Couldn’t load tasks. ", review.EmptyMessage);
+
+            review.LoadMore();
+            Assert.Equal(rowsBefore, review.Rows.Count);
+            Assert.False(review.IsLoadingMore);
         }
         finally
         {
@@ -667,6 +685,7 @@ public sealed class TasksReviewTests : IDisposable
         Assert.True(
             review.Rows.First(r => r.Path == "fault-pre-commit.md")
                 .Task.Completed);
+        Assert.Null(review.EmptyMessage);
     }
 
     [Fact]
