@@ -9138,23 +9138,30 @@ fn stamp_index_epoch(tx: &rusqlite::Transaction, file_id: i64) -> Result<(), Vau
     Ok(())
 }
 
-/// Re-stamp a freshly MOVED row's epoch by its new path (W4-3
-/// adversarial round 33): every `files.path` transition is a new
-/// destination incarnation. A moved row keeping its source epoch
-/// could rank BELOW an abandoned marker surviving from the
-/// destination path's prior incarnation, letting a failed repair
-/// quarantine the moved file's fresh rows — the round-32 ABA
-/// through the structural-move door. A fresh clock value out-ranks
-/// every earlier marker on the destination, in any incarnation.
-fn restamp_index_epoch_for_path(tx: &rusqlite::Transaction, path: &str) -> Result<(), VaultError> {
-    let clock: i64 = tx.query_row(
-        "UPDATE index_epoch_clock SET clock = clock + 1 RETURNING clock",
-        [],
-        |row| row.get(0),
-    )?;
+/// Zero a freshly MOVED row's epoch by its new path (W4-3
+/// adversarial rounds 33-34): every `files.path` transition is a
+/// new destination incarnation, and the row's carried epoch never
+/// described the destination. Zero — not a fresh clock stamp — is
+/// the only sound value: a fresh stamp VOUCHES for content the move
+/// never read, and the filesystem rename is not ordered against
+/// another process's in-flight save on the destination (the rename
+/// can land inside that save's writer-locked interval), so a
+/// stamped move could retire the save's post-write marker while the
+/// index still holds the SOURCE's rows and the disk holds the
+/// SAVE's bytes — silent stale serving with no repair trigger.
+/// Epoch 0 out-ranks nothing: any marker surviving on the
+/// destination stays live, and the next query's sweep resolves it
+/// with a REAL full read under the writer lock — repair converges
+/// to disk truth, or containment holds honest-empty until it can.
+/// Supersession is therefore only ever concluded from an actual
+/// read, never from move bookkeeping.
+fn clear_index_epoch_for_moved_path(
+    tx: &rusqlite::Transaction,
+    path: &str,
+) -> Result<(), VaultError> {
     tx.execute(
-        "UPDATE files SET index_epoch = ?1 WHERE path = ?2",
-        rusqlite::params![clock, path],
+        "UPDATE files SET index_epoch = 0 WHERE path = ?1",
+        rusqlite::params![path],
     )?;
     Ok(())
 }
@@ -10980,7 +10987,7 @@ fn apply_batch_move_index_direction(
                     reason: "batch index source is missing".into(),
                 });
             }
-            restamp_index_epoch_for_path(tx, to)?;
+            clear_index_epoch_for_moved_path(tx, to)?;
         }
     }
     let moved = batch_move_file_mapping(plans, forward);
@@ -11185,7 +11192,7 @@ impl VaultSession {
                             reason: "batch index source is missing".into(),
                         });
                     }
-                    restamp_index_epoch_for_path(&tx, &plan.destination)?;
+                    clear_index_epoch_for_moved_path(&tx, &plan.destination)?;
                 }
             }
             {
@@ -12030,7 +12037,7 @@ impl VaultSession {
                             reason: "batch inverse index source is missing".into(),
                         });
                     }
-                    restamp_index_epoch_for_path(&tx, &plan.destination)?;
+                    clear_index_epoch_for_moved_path(&tx, &plan.destination)?;
                 }
             }
             {
@@ -13706,7 +13713,7 @@ impl VaultSession {
                             reason: "file move index source disappeared".into(),
                         });
                     }
-                    restamp_index_epoch_for_path(tx, to)?;
+                    clear_index_epoch_for_moved_path(tx, to)?;
                     let file_id: i64 = tx.query_row(
                         "SELECT id FROM files WHERE path = ?1",
                         rusqlite::params![to],
@@ -13736,7 +13743,7 @@ impl VaultSession {
                             reason: "file move index source disappeared".into(),
                         });
                     }
-                    restamp_index_epoch_for_path(tx, to)?;
+                    clear_index_epoch_for_moved_path(tx, to)?;
                 }
                 Ok(())
             },
@@ -14792,8 +14799,12 @@ fn rename_prefix_in_index(
             });
         }
         // Every path transition is a new destination incarnation
-        // (adversarial round 33) — see restamp_index_epoch_for_path.
-        stamp_index_epoch(tx, id)?;
+        // (adversarial rounds 33-34) — see
+        // clear_index_epoch_for_moved_path.
+        tx.execute(
+            "UPDATE files SET index_epoch = 0 WHERE id = ?1",
+            rusqlite::params![id],
+        )?;
     }
 
     let dir_rows: Vec<(i64, String)> = {

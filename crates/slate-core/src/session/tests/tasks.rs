@@ -1346,16 +1346,17 @@ fn containment_without_an_index_row_still_plants_the_healing_marker() {
 }
 
 #[test]
-fn moved_files_out_rank_prior_destination_markers() {
+fn moved_files_resolve_prior_destination_markers_by_reading() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
-    // Adversarial round 33: a structural move rewrote `files.path`
-    // while KEEPING the source row's older epoch — an abandoned
-    // marker surviving from the destination path's prior incarnation
-    // could out-rank the moved row, and a failed repair would then
-    // quarantine the moved file's fresh task rows: the round-32 ABA
-    // through the structural-move door. Every path transition now
-    // re-stamps a fresh clock value, which out-ranks every earlier
-    // marker on the destination.
+    // Adversarial rounds 33-34: a marker surviving from the
+    // destination path's prior incarnation must be resolved by a
+    // REAL read, never by move bookkeeping — round 34 proved a
+    // move-time clock stamp vouches for content the move never
+    // read and can retire a racing save's post-write marker. Moved
+    // rows carry epoch 0 (unknown incarnation): while the repair
+    // cannot read, the marker holds and the path serves
+    // honest-empty (never stale); the first successful read
+    // converges to disk truth and clears it.
     let (_tmp, session) = make_vault(|p| {
         p.write_file("notes/mover.md", b"- [ ] travels with me\n")
             .unwrap();
@@ -1380,21 +1381,17 @@ fn moved_files_out_rank_prior_destination_markers() {
 
     let _ = session.rename_file("notes/mover.md", "dest.md").unwrap();
 
-    // Un-repairable moment: the moved row's fresh stamp must
-    // out-rank the prior incarnation's marker, so it resolves as
-    // obsolete and the moved rows keep serving.
+    // Un-repairable moment: the marker holds — honest-empty, never
+    // the moved rows served on a path a live marker still suspects.
     unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "dest") };
     unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "dest") };
     let page = session
         .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
         .expect("the query succeeds");
     unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
-    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
     assert!(
-        page.items
-            .iter()
-            .any(|r| r.path == "notes/dest.md" && r.task.text.contains("travels with me")),
-        "the moved file's fresh rows keep serving"
+        page.items.iter().all(|r| r.path != "notes/dest.md"),
+        "a still-suspect path serves nothing, not unverified rows"
     );
     {
         let conn = session.conn.lock().unwrap();
@@ -1405,7 +1402,116 @@ fn moved_files_out_rank_prior_destination_markers() {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(intents, 0, "the prior incarnation's marker resolved");
+        assert!(intents >= 1, "the marker survives until a read resolves it");
+    }
+
+    // Readable: the repair's real read converges and clears.
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(
+        healed
+            .items
+            .iter()
+            .any(|r| r.path == "notes/dest.md" && r.task.text.contains("travels with me")),
+        "the moved file's rows serve after a real read"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/dest.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            intents, 0,
+            "the read resolved the prior incarnation's marker"
+        );
+    }
+}
+
+#[test]
+fn renamed_over_writes_never_serve_stale_rows() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 34, the exact schedule: process A's save on
+    // the destination registers its marker while the path has NO
+    // files row (stamp 0), process B's rename lands the source's
+    // row on the path afterward, and A's file write (which the
+    // rename does not order against) leaves DISK holding A's bytes
+    // while the INDEX holds the source's rows. A move-time clock
+    // stamp would out-rank A's marker and retire it — stale rows
+    // served silently forever. With moved rows carrying epoch 0 the
+    // marker holds, containment refuses the stale rows, and the
+    // first real read converges to disk truth.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/source.md", b"- [ ] source truth\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // B's rename: the source's row lands on the destination path.
+    let _ = session
+        .rename_file("notes/source.md", "landing.md")
+        .unwrap();
+    {
+        // A's racing save, staged at its true fence state: it read
+        // the destination BEFORE B's index commit — no files row —
+        // so its marker stamped 0. Its file write then landed after
+        // B's rename.
+        let conn = session.conn.lock().unwrap();
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3, 0)",
+            rusqlite::params!["notes/landing.md", now_ms(), 0xACEDi64],
+        )
+        .unwrap();
+    }
+    session
+        .provider
+        .write_file("notes/landing.md", b"- [x] A's bytes won the disk\n")
+        .unwrap();
+
+    // Un-repairable moment: A's marker must HOLD (the moved row's
+    // epoch vouches for nothing), so the source-content rows are
+    // refused, not served against A's bytes.
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "landing") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "landing") };
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    assert!(
+        page.items.iter().all(|r| r.path != "notes/landing.md"),
+        "index rows describing the source must not serve over A's bytes"
+    );
+
+    // Readable: the real read converges to DISK truth — A's bytes.
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    let row = healed
+        .items
+        .iter()
+        .find(|r| r.path == "notes/landing.md")
+        .expect("the destination serves after the read");
+    assert!(
+        row.task.completed && row.task.text.contains("A's bytes"),
+        "converged to the disk truth A actually wrote"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let intents: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/landing.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(intents, 0, "the read resolved A's marker");
     }
 }
 
