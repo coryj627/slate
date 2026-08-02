@@ -3280,6 +3280,19 @@ impl VaultSession {
     /// `toggle_task_status` — pass it here and the op-log entry wraps
     /// it; plain text saves pass `&[]`. Kept off the public `save_text`
     /// signature: hosts never supply intent directly.
+    /// Token-scoped, best-effort removal of THIS save's own durable
+    /// write-intent registration — the shared cleanup for every
+    /// provable pre-write error exit in `save_text_locked`
+    /// (adversarial round 27). Best-effort (`let _`): a failed delete
+    /// merely restores the lingering-intent posture, whose worst case
+    /// is one redundant sweep repair later.
+    fn clear_own_intent_registration(&self, conn: &Connection, path: &str, intent_token: i64) {
+        let _ = conn.execute(
+            "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+            rusqlite::params![path, intent_token],
+        );
+    }
+
     fn save_text_locked(
         &self,
         conn: &mut Connection,
@@ -3324,20 +3337,47 @@ impl VaultSession {
             rusqlite::params![path, now_ms(), intent_token],
         )?;
 
+        // INVARIANT (adversarial round 27): every error exit between
+        // the registration above and `provider.write_file` below is a
+        // PROVABLE no-write, so it must clear its own (path, token)
+        // row — a stranded pre-write intent is an unnecessary marker,
+        // and if the file is persistently unreadable its aged repair
+        // fails before token clearing on EVERY vault-wide task query.
+        // Only a crash in this interval may strand one (accepted:
+        // the sweep repairs a consistent file as a cheap no-op).
+        // New fallible steps in this interval must follow suit.
+
         // Test-only seam (adversarial round 26): simulates a
         // concurrent aged sweep landing exactly in the gap between
         // this writer's registration and its transaction — the
-        // schedule the ownership fence below exists for.
+        // schedule the ownership fence below exists for. Best-effort:
+        // a failed delete leaves the row alive and the fence simply
+        // sees a live registration.
         if let Some(trigger) = std::env::var_os("SLATE_TEST_SWEEP_AFTER_INTENT")
             && path.contains(trigger.to_string_lossy().as_ref())
         {
-            conn.execute(
+            let _ = conn.execute(
                 "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
                 rusqlite::params![path, intent_token],
-            )?;
+            );
         }
 
-        let mut tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // `new_unchecked` (shared-borrow) rather than
+        // `transaction_with_behavior` (&mut): the error arm must
+        // clear the registration through `conn`, and the &mut
+        // wrapper's borrow spans the whole match under current
+        // borrowck. Exclusivity is already held — the session mutex
+        // serializes every writer on this connection.
+        let mut tx = match rusqlite::Transaction::new_unchecked(
+            conn,
+            rusqlite::TransactionBehavior::Immediate,
+        ) {
+            Ok(tx) => tx,
+            Err(e) => {
+                self.clear_own_intent_registration(conn, path, intent_token);
+                return Err(e.into());
+            }
+        };
 
         // Ownership FENCE at the transaction boundary (adversarial
         // round 26): a writer suspended past the liveness threshold
@@ -3352,23 +3392,44 @@ impl VaultSession {
         // closed rather than write unmarked.
         let mut intent_secured = false;
         for _ in 0..3 {
-            let alive: bool = tx.query_row(
+            let alive: bool = match tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM text_write_intents WHERE path = ?1 AND token = ?2)",
                 rusqlite::params![path, intent_token],
                 |row| row.get(0),
-            )?;
+            ) {
+                Ok(alive) => alive,
+                Err(e) => {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e.into());
+                }
+            };
             if alive {
                 intent_secured = true;
                 break;
             }
             drop(tx);
-            conn.execute(
+            if let Err(e) = conn.execute(
                 "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token) VALUES (?1, ?2, ?3)",
                 rusqlite::params![path, now_ms(), intent_token],
-            )?;
-            tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            ) {
+                self.clear_own_intent_registration(conn, path, intent_token);
+                return Err(e.into());
+            }
+            tx = match rusqlite::Transaction::new_unchecked(
+                conn,
+                rusqlite::TransactionBehavior::Immediate,
+            ) {
+                Ok(tx) => tx,
+                Err(e) => {
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e.into());
+                }
+            };
         }
         if !intent_secured {
+            drop(tx);
+            self.clear_own_intent_registration(conn, path, intent_token);
             return Err(VaultError::InvalidArgument {
                 message: "could not secure a durable write intent".into(),
             });
@@ -3380,48 +3441,75 @@ impl VaultSession {
         // those bytes costs no extra I/O. The None path (CLI/scripted)
         // and any non-UTF-8 file leave it `None`, which routes the op-log
         // append to a `WholeFileReplace` snapshot.
-        let (hash_before, old_contents): (String, Option<String>) =
-            if let Some(expected) = expected_content_hash {
-                let (old_bytes, current_hash, current_mtime_ms) = read_disk_contents_and_hash(
+        let (hash_before, old_contents): (String, Option<String>) = if let Some(expected) =
+            expected_content_hash
+        {
+            // Test-only fault seam (adversarial round 27): a
+            // provable pre-write failure — durable registration
+            // committed, file untouched. Routed through the REAL
+            // disk-read error arm below so the regression pins
+            // that arm's cleanup, not a seam-private copy.
+            let disk_read = if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_PRE_WRITE")
+                && path.contains(trigger.to_string_lossy().as_ref())
+            {
+                Err(VaultError::InvalidArgument {
+                    message: "test fault: injected failure before write, after intent registration"
+                        .into(),
+                })
+            } else {
+                read_disk_contents_and_hash(
                     self.provider.as_ref(),
                     path,
                     self.config.large_file_refuse_bytes,
-                )?;
-                if current_hash != expected {
-                    // A conflict refusal is a PROVABLE no-write: this
-                    // save's own intent registration clears here
-                    // (token-scoped) rather than lingering to age
-                    // into a pointless repair — and for a conflict
-                    // against a DELETED file, lingering was worse
-                    // than pointless (adversarial round 23): the
-                    // aged repair hit NotFound forever and poisoned
-                    // every vault-wide task query.
-                    drop(tx);
-                    let _ = conn.execute(
-                        "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
-                        rusqlite::params![path, intent_token],
-                    );
-                    return Err(VaultError::WriteConflict {
-                        current_content_hash: current_hash,
-                        expected_content_hash: expected.to_string(),
-                        current_mtime_ms,
-                    });
-                }
-                (current_hash, String::from_utf8(old_bytes).ok())
-            } else {
-                // No conflict check: the cached index hash is good enough
-                // for the entry's `hash_before`, and we don't re-read disk
-                // just to diff — the None path logs a `WholeFileReplace`.
-                let cached = tx
-                    .query_row(
-                        "SELECT content_hash FROM files WHERE path = ?1",
-                        rusqlite::params![path],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?
-                    .unwrap_or_default();
-                (cached, None)
+                )
             };
+            let (old_bytes, current_hash, current_mtime_ms) = match disk_read {
+                Ok(v) => v,
+                Err(e) => {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e);
+                }
+            };
+            if current_hash != expected {
+                // A conflict refusal is a PROVABLE no-write: this
+                // save's own intent registration clears here
+                // (token-scoped) rather than lingering to age
+                // into a pointless repair — and for a conflict
+                // against a DELETED file, lingering was worse
+                // than pointless (adversarial round 23): the
+                // aged repair hit NotFound forever and poisoned
+                // every vault-wide task query.
+                drop(tx);
+                self.clear_own_intent_registration(conn, path, intent_token);
+                return Err(VaultError::WriteConflict {
+                    current_content_hash: current_hash,
+                    expected_content_hash: expected.to_string(),
+                    current_mtime_ms,
+                });
+            }
+            (current_hash, String::from_utf8(old_bytes).ok())
+        } else {
+            // No conflict check: the cached index hash is good enough
+            // for the entry's `hash_before`, and we don't re-read disk
+            // just to diff — the None path logs a `WholeFileReplace`.
+            let cached = match tx
+                .query_row(
+                    "SELECT content_hash FROM files WHERE path = ?1",
+                    rusqlite::params![path],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()
+            {
+                Ok(cached) => cached.unwrap_or_default(),
+                Err(e) => {
+                    drop(tx);
+                    self.clear_own_intent_registration(conn, path, intent_token);
+                    return Err(e.into());
+                }
+            };
+            (cached, None)
+        };
 
         // Created-vs-Modified for the #802 event, read inside the
         // save's own transaction so a racing writer can't flip it.

@@ -645,6 +645,75 @@ fn swept_registrations_are_refenced_before_the_write() {
 }
 
 #[test]
+fn pre_write_failures_clear_their_own_registration() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Adversarial round 27: any error between the durable
+    // registration and the file write is a PROVABLE no-write, so it
+    // must clear its own token. A stranded pre-write intent on a
+    // persistently unreadable file would otherwise fail its aged
+    // repair BEFORE token clearing on every vault-wide task query —
+    // a permanent Tasks Review outage over a marker that never
+    // marked anything.
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("notes/prewrite-probe.md", b"- [ ] keep me\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    let current_hash = session
+        .note_tasks("notes/prewrite-probe.md", 1)
+        .unwrap()
+        .content_hash;
+
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_PRE_WRITE", "prewrite-probe") };
+    let result = session.save_text(
+        "notes/prewrite-probe.md",
+        "- [x] keep me\n",
+        Some(&current_hash),
+    );
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_PRE_WRITE") };
+    assert!(result.is_err());
+
+    // The provable no-write cleared its own registration.
+    {
+        let conn = session.conn.lock().unwrap();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/prewrite-probe.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            count, 0,
+            "a provable pre-write failure must clear its own registration"
+        );
+    }
+
+    // The outage vector itself: were an intent stranded here AND the
+    // path's repair failing (the reindex fault stands in for a
+    // persistently unreadable file), every vault-wide query would
+    // error before token clearing — forever. With the cleanup there
+    // is nothing to repair, so queries stay available even with the
+    // repair path broken.
+    let other = VaultSession::from_filesystem(tmp.path().to_path_buf()).unwrap();
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "prewrite-probe") };
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "prewrite-probe") };
+    let page = other.tasks_in_vault(crate::TaskFilter::default(), Paging::first(50));
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    let page = page.expect("vault-wide task queries stay available");
+    let row = page
+        .items
+        .iter()
+        .find(|r| r.path == "notes/prewrite-probe.md")
+        .expect("the untouched file's tasks still serve");
+    assert!(
+        !row.task.completed,
+        "disk truth: the failed save never wrote"
+    );
+}
+
+#[test]
 fn note_tasks_never_buries_open_tasks_behind_completed_ones() {
     // Adversarial round 1: a note whose first N tasks are completed
     // must not spend the entire bounded budget on finished work.
