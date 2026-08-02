@@ -3350,12 +3350,12 @@ impl VaultSession {
         // sets it. Returning here rolls the transaction back,
         // leaving disk newer than the index — the exact state the
         // hosts' post-write reconciliation must repair.
-        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_AFTER_WRITE") {
-            if path.contains(trigger.to_string_lossy().as_ref()) {
-                return Err(VaultError::InvalidArgument {
-                    message: "test fault: injected failure after write, before index commit".into(),
-                });
-            }
+        if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_AFTER_WRITE")
+            && path.contains(trigger.to_string_lossy().as_ref())
+        {
+            return Err(VaultError::InvalidArgument {
+                message: "test fault: injected failure after write, before index commit".into(),
+            });
         }
 
         let new_stat = self.provider.stat(path)?;
