@@ -84,10 +84,17 @@ pub(crate) fn replace_tasks_for_file(
 /// Fetch every task in a file in document order. Empty result if
 /// the path isn't indexed yet — same shape as `outgoing_links`.
 pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskItem>, VaultError> {
+    // ONE read snapshot for the id lookup and the rows (design
+    // audit, post-round-41): SQLite recycles rowids, so between two
+    // autocommit reads another process can delete this file's row
+    // and a NEW file's row can land on the same id — the rows query
+    // would then serve a DIFFERENT file's tasks under this path's
+    // name. Same posture as `note_tasks_bounded` (round 33).
+    let tx = conn.unchecked_transaction()?;
     // `.optional()`, not `.ok()` (adversarial round 3): only a
     // missing row means "not indexed" — corruption or schema skew
     // must surface as an error, never as a task-free file.
-    let file_id: Option<i64> = conn
+    let file_id: Option<i64> = tx
         .query_row(
             "SELECT id FROM files WHERE path = ?1",
             params![path],
@@ -97,7 +104,21 @@ pub(crate) fn tasks_for_file(conn: &Connection, path: &str) -> Result<Vec<TaskIt
     let Some(file_id) = file_id else {
         return Ok(Vec::new());
     };
-    let mut stmt = conn.prepare_cached(
+    // Test-only seam: lets a regression commit through a SECOND
+    // connection between the id lookup and the row read, proving
+    // the two cannot tear apart.
+    if std::env::var_os("SLATE_TEST_TORN_FILE_TASKS")
+        .is_some_and(|trigger| path.contains(trigger.to_string_lossy().as_ref()))
+        && let Some(db_path) = conn.path()
+        && let Ok(other) = Connection::open(db_path)
+    {
+        let _ = other.execute(
+            "UPDATE tasks SET text = 'torn-by-second-connection', completed = 1
+             WHERE file_id = ?1",
+            params![file_id],
+        );
+    }
+    let mut stmt = tx.prepare_cached(
         "SELECT ordinal, text, status_char, completed,
                 due_ms, scheduled_ms, priority, recurrence, line, byte_offset,
                 checkbox_start_byte, checkbox_end_byte

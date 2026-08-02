@@ -1529,6 +1529,114 @@ fn held_move_markers_are_fenced_by_the_structural_lock() {
 }
 
 #[test]
+fn file_task_reads_cannot_tear_across_statements() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Design audit (post-round-41): tasks_for_file read the id and
+    // the rows in two autocommit statements — SQLite recycles
+    // rowids, so a cross-process delete-and-recreate between them
+    // could serve a DIFFERENT file's tasks under this path's name.
+    // The whole read now shares one snapshot, like
+    // note_tasks_bounded (round 33). The seam commits a row
+    // mutation through a second connection between the id lookup
+    // and the row read.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/torn-file.md", b"- [ ] the real one\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    unsafe { std::env::set_var("SLATE_TEST_TORN_FILE_TASKS", "torn-file") };
+    let tasks = session.tasks_for_file("notes/torn-file.md").unwrap();
+    unsafe { std::env::remove_var("SLATE_TEST_TORN_FILE_TASKS") };
+    assert_eq!(tasks.len(), 1);
+    assert!(
+        tasks[0].text.contains("the real one") && !tasks[0].completed,
+        "the rows must come from the SAME snapshot as the id lookup"
+    );
+}
+
+#[test]
+fn held_markers_are_never_epoch_superseded() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Design audit (post-round-41): epoch supersession is only
+    // sound for markers whose stamp was taken under the writer lock
+    // at divergence-creation time (save markers, via the round-32
+    // fence). A HELD move marker stamps at PLANT time and its
+    // divergence — the rename — lands later: a save committing on
+    // the path in between raises the epoch past the stamp, and a
+    // mid-move crash leaves an orphan the quarantine would falsely
+    // retire as "superseded", letting stale rows serve with no
+    // trigger. Held markers must only ever resolve by real reads.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/heldsafe.md", b"- [ ] guarded\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        // The mover plants (stamping the CURRENT epoch), then a
+        // save lands on the path, bumping the epoch past the stamp
+        // — then the mover crashes (no terminal re-stamp; the
+        // structural lock is free).
+        let conn = session.conn.lock().unwrap();
+        let _ = session
+            .plant_move_markers_locked(&conn, ["notes/heldsafe.md"])
+            .unwrap();
+    }
+    let _ = session
+        .save_text("notes/heldsafe.md", "- [ ] guarded still\n", None)
+        .unwrap();
+
+    // Un-repairable moment: the orphaned held marker must HOLD —
+    // containment refuses the rows — never be retired as obsolete.
+    unsafe { std::env::set_var("SLATE_TEST_FAULT_REINDEX", "heldsafe") };
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_FAULT_REINDEX") };
+    assert!(
+        page.items.iter().all(|r| r.path != "notes/heldsafe.md"),
+        "a held marker's path serves nothing while unreadable — never unverified rows"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1 AND created_ms = ?2",
+                rusqlite::params!["notes/heldsafe.md", i64::MAX],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            markers, 1,
+            "the held marker survives — never epoch-superseded"
+        );
+    }
+
+    // Readable again: the real read converges and clears.
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    assert!(
+        healed
+            .items
+            .iter()
+            .any(|r| r.path == "notes/heldsafe.md" && r.task.text.contains("guarded still")),
+        "the path serves disk truth after the read"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/heldsafe.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0, "the read resolved the held marker");
+    }
+}
+
+#[test]
 fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
     // Adversarial round 41: the round-40 probe released the lock

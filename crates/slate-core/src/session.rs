@@ -6743,18 +6743,33 @@ impl VaultSession {
         let mut still_marked = false;
         let mut cleared_obsolete = false;
         for token in selected_tokens {
-            let registered_epoch: Option<i64> = tx
+            let marker: Option<(i64, i64)> = tx
                 .query_row(
-                    "SELECT registered_epoch FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                    "SELECT registered_epoch, created_ms FROM text_write_intents
+                     WHERE path = ?1 AND token = ?2",
                     rusqlite::params![path, token],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
-            let Some(registered_epoch) = registered_epoch else {
+            let Some((registered_epoch, created_ms)) = marker else {
                 continue; // resolved by its own writer
             };
+            // Epoch supersession applies ONLY to markers whose stamp
+            // was taken under the writer lock at divergence-creation
+            // time — save markers, whose round-32 fence re-stamps at
+            // the transaction boundary and holds the lock through
+            // the write. A HELD move marker (design audit,
+            // post-round-41) stamps at PLANT time, and its
+            // divergence — the rename — lands later: a save
+            // committing on the path in between raises the epoch
+            // past the stamp, and a mid-move crash then leaves an
+            // orphan whose "supersession" predates the divergence it
+            // guards. Held markers are therefore never superseded,
+            // only resolved by real reads (repair) or contained.
             match current_epoch {
-                Some(current) if current > registered_epoch => {
+                Some(current)
+                    if current > registered_epoch && created_ms != Self::HELD_MOVE_MARKER_MS =>
+                {
                     tx.execute(
                         "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
                         rusqlite::params![path, token],
