@@ -2209,6 +2209,34 @@ impl VaultSession {
             );
         }
 
+        // Rounds 35-37: crash-recovery renames and rewrite
+        // restorations are filesystem mutations like any other —
+        // mark both sides of every MOVED FILE (adversarial round
+        // 37: `inflight.entries` holds only top-level directory
+        // paths; the descendant file pairs live in
+        // `inflight.moved`) BEFORE any byte moves, and FAIL CLOSED
+        // if the markers cannot persist: the crashed process's
+        // forward markers may legitimately have aged and been swept
+        // while it was down. A marker-persistence failure returns
+        // DIRECTLY — never through the barrier handler below, which
+        // deletes the inflight journal (round 37): this open fails,
+        // the journal survives, and the next open retries with the
+        // filesystem untouched.
+        if let Err(plant_error) = self.plant_move_markers_locked(
+            &conn,
+            inflight
+                .moved
+                .iter()
+                .flat_map(|(old, new)| [old.as_str(), new.as_str()]),
+        ) {
+            return Err(VaultError::InvalidArgument {
+                message: format!(
+                    "structural batch recovery deferred: reconciliation markers could not \
+                     persist ({plant_error}); recovery will retry on the next open"
+                ),
+            });
+        }
+
         match self.rollback_structural_batch_inflight_locked(&mut conn, &inflight) {
             Ok(()) => Ok(()),
             Err(error) => self.fail_structural_batch_recovery_locked(&mut conn, error),
@@ -2323,22 +2351,9 @@ impl VaultSession {
             self.restore_structural_batch_rewrites_locked(conn, inflight, true)?;
         }
 
-        // Rounds 35-36: crash-recovery renames are filesystem
-        // mutations like any other — mark both sides before
-        // reversing, and FAIL CLOSED if the markers cannot persist
-        // (round 36): the crashed process's forward markers may
-        // have legitimately aged and been swept while it was down,
-        // so recovery cannot rely on them; renaming without durable
-        // triggers would expose the reversal to racing saves with
-        // no reconciliation. The inflight record survives the
-        // abort, so the next open retries.
-        self.plant_move_markers_locked(
-            conn,
-            inflight
-                .entries
-                .iter()
-                .flat_map(|entry| [entry.from.as_str(), entry.to.as_str()]),
-        )?;
+        // (Round 37: the recovery markers were planted by the
+        // caller, from `inflight.moved`, BEFORE the rewrite
+        // restoration above — the first byte-mutating step.)
         // Reverse only the renames that physically landed, always in strict
         // reverse plan order. A crash between rename and progress update is
         // therefore indistinguishable from (and as safe as) a recorded step.
@@ -6273,6 +6288,16 @@ impl VaultSession {
     ) -> Result<Vec<(String, i64)>, VaultError> {
         let mut planted = Vec::new();
         for path in paths {
+            // Test-only seam (adversarial round 37): a transient
+            // persistence failure while planting — recovery flows
+            // must fail closed WITHOUT consuming their journal.
+            if let Some(trigger) = std::env::var_os("SLATE_TEST_FAULT_PLANT_MARKERS")
+                && path.contains(trigger.to_string_lossy().as_ref())
+            {
+                return Err(VaultError::InvalidArgument {
+                    message: "test fault: injected marker plant failure".into(),
+                });
+            }
             let token = fresh_intent_token();
             conn.execute(
                 "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
