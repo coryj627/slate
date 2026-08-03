@@ -1042,10 +1042,18 @@ fn property_value_to_yaml(value: &PropertyValue) -> Result<Yaml, FrontmatterEdit
             }
             // yaml-rust2's `Real` is the string form a YAML float
             // would be written as. `f64::to_string` matches Rust's
-            // canonical decimal form, which the parser will accept
-            // back as `Real` and the layered classifier converts to
-            // `Float` again.
-            Yaml::Real(f.to_string())
+            // canonical decimal form — EXCEPT for integral values,
+            // where it drops the decimal point ("1.0" → "1") and the
+            // re-read would classify Integer, silently flipping the
+            // number kind (W4-4 adversarial round 4). Append ".0" so
+            // an integral float survives the round trip as a float.
+            {
+                let mut s = f.to_string();
+                if !s.contains('.') && !s.contains('e') && !s.contains('E') {
+                    s.push_str(".0");
+                }
+                Yaml::Real(s)
+            }
         }
         PropertyValue::Boolean(b) => Yaml::Boolean(*b),
         PropertyValue::Date(s) | PropertyValue::Datetime(s) => Yaml::String(s.clone()),
@@ -1818,6 +1826,11 @@ mod tests {
             ("text_k", PropertyValue::Text("hello world".to_string())),
             ("int_k", PropertyValue::Integer(-7)),
             ("float_k", PropertyValue::Float(3.5)),
+            // Integral floats must NOT flip to Integer on re-read
+            // (W4-4 adversarial round 4): the emitter keeps a real
+            // decimal marker.
+            ("float_int_k", PropertyValue::Float(1.0)),
+            ("float_exp_k", PropertyValue::Float(1e3)),
             ("bool_k", PropertyValue::Boolean(true)),
             ("date_k", PropertyValue::Date("2026-05-24".to_string())),
             (

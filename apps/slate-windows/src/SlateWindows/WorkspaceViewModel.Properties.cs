@@ -262,12 +262,15 @@ internal sealed partial class WorkspaceViewModel
                 FindTabForPath(path)?.RefreshExternalStaleness();
                 _announce(new A11yEvent.PropertyEditConflict(
                     System.IO.Path.GetFileName(path)));
+                // The RESOLUTION owns the follow-up refresh
+                // (adversarial round 4): a trailing refresh here
+                // would supersede Reload's announced request, and
+                // Cancel's contract is "the panel stays as it was".
                 PropertyConflictDialog?.Invoke(
                     System.IO.Path.GetFileName(path),
                     key,
                     () => RetryAddWithFreshHash(path, sheet, key, value),
                     () => ReloadPropertiesFromDisk(path));
-                RefreshPropertiesFor(path);
                 return;
             }
             _announce(new A11yEvent.PropertyEditFailed(
@@ -531,6 +534,10 @@ internal sealed partial class WorkspaceViewModel
                 if (FindTabForPath(path) is { } conflictTab)
                 {
                     conflictTab.RefreshExternalStaleness();
+                    // The RESOLUTION owns the follow-up refresh
+                    // (adversarial round 4): Keep Mine's completion
+                    // and Reload each schedule their own; Cancel's
+                    // contract is "the panel stays as it was".
                     AnnouncePropertyConflict(conflictTab, row, deleted);
                 }
                 else
@@ -538,7 +545,6 @@ internal sealed partial class WorkspaceViewModel
                     _announce(new A11yEvent.PropertyEditConflict(
                         System.IO.Path.GetFileName(path)));
                 }
-                RefreshPropertiesFor(path);
                 return;
             }
             _announce(new A11yEvent.PropertyEditFailed(

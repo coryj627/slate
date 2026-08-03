@@ -22,6 +22,7 @@ public sealed class NotePropertiesTests
         + "title: Hello\n"
         + "count: 42\n"
         + "rating: 1.5\n"
+        + "score: 1.0\n"
         + "published: true\n"
         + "due: 2026-05-01\n"
         + "created: 2026-05-01T10:00:00Z\n"
@@ -78,12 +79,12 @@ public sealed class NotePropertiesTests
         Assert.Equal(
             new[]
             {
-                "title", "count", "rating", "published", "due",
+                "title", "count", "rating", "score", "published", "due",
                 "created", "edited", "source", "aliases", "tags",
             },
             properties.Rows.Select(row => row.Key).ToArray());
-        Assert.Equal("Properties, 10 items", properties.HeaderText);
-        Assert.Equal("Properties, 10 properties", properties.HeaderGroupName);
+        Assert.Equal("Properties, 11 items", properties.HeaderText);
+        Assert.Equal("Properties, 11 properties", properties.HeaderGroupName);
         Assert.False(properties.ShowEmptyState);
         Assert.Null(properties.LoadError);
 
@@ -96,21 +97,23 @@ public sealed class NotePropertiesTests
             row => Assert.Equal(tab.SavedContentHash, row.ContentHash));
         Assert.Equal(tab.SavedContentHash, properties.ContentHash);
 
-        // Editor modes derive from the STORED values.
+        // Editor modes derive from the STORED values (score: 1.0 is
+        // the integral-float pin — it must load as a float editor).
         Assert.Equal("text", properties.Rows[0].EditorMode);
         Assert.Equal("integer", properties.Rows[1].EditorMode);
         Assert.Equal("float", properties.Rows[2].EditorMode);
-        Assert.Equal("boolean", properties.Rows[3].EditorMode);
-        Assert.Equal("datePicker", properties.Rows[4].EditorMode);
-        Assert.Equal("text", properties.Rows[5].EditorMode);
+        Assert.Equal("float", properties.Rows[3].EditorMode);
+        Assert.Equal("boolean", properties.Rows[4].EditorMode);
+        Assert.Equal("datePicker", properties.Rows[5].EditorMode);
         Assert.Equal("text", properties.Rows[6].EditorMode);
-        Assert.Equal("wikilink", properties.Rows[7].EditorMode);
-        Assert.Equal("list", properties.Rows[8].EditorMode);
+        Assert.Equal("text", properties.Rows[7].EditorMode);
+        Assert.Equal("wikilink", properties.Rows[8].EditorMode);
         Assert.Equal("list", properties.Rows[9].EditorMode);
-        Assert.True(properties.Rows[9].IsTagList);
-        Assert.Equal(2, properties.Rows[8].Items.Count);
+        Assert.Equal("list", properties.Rows[10].EditorMode);
+        Assert.True(properties.Rows[10].IsTagList);
+        Assert.Equal(2, properties.Rows[9].Items.Count);
         Assert.Equal(
-            "Property aliases, item 1 of 2", properties.Rows[8].Items[0].ItemLabel);
+            "Property aliases, item 1 of 2", properties.Rows[9].Items[0].ItemLabel);
     }
 
     [Fact]
@@ -213,12 +216,15 @@ public sealed class NotePropertiesTests
 
             // Contract 10: committing UNCHANGED drafts is
             // value-preserving — Z stays Z, naive stays naive,
-            // integer never flips to float, dates survive verbatim.
-            // (Core re-emits YAML, so this is a VALUE guarantee
-            // pinned via re-parse, not a byte guarantee.)
+            // integer never flips to float, an INTEGRAL float stays
+            // a float (the round-4 core emitter fix: 1.0 must not
+            // re-read as 1), dates survive verbatim. (Core re-emits
+            // YAML, so this is a VALUE guarantee pinned via
+            // re-parse, not a byte guarantee.)
             Property[] before = SlateUniffiMethods.ParseFrontmatterProperties(
                 session.ReadNoteParts("props.md").FmSource);
-            foreach (string key in new[] { "due", "created", "edited", "rating", "count" })
+            foreach (string key in new[]
+                { "due", "created", "edited", "rating", "count", "score" })
             {
                 PropertyRowViewModel row = properties.Rows.Single(r => r.Key == key);
                 row.CommitCommand.Execute(null);
@@ -227,7 +233,12 @@ public sealed class NotePropertiesTests
 
             Property[] after = SlateUniffiMethods.ParseFrontmatterProperties(
                 session.ReadNoteParts("props.md").FmSource);
-            foreach (string key in new[] { "due", "created", "edited", "rating", "count" })
+            Assert.Contains(
+                "score: 1.0",
+                session.ReadNoteParts("props.md").FmSource,
+                StringComparison.Ordinal);
+            foreach (string key in new[]
+                { "due", "created", "edited", "rating", "count", "score" })
             {
                 Property earlier = before.Single(p => p.Key == key);
                 Property later = after.Single(p => p.Key == key);

@@ -224,3 +224,36 @@ addressed:
 - Accepted risk (recorded): a dead application dispatcher skips the
   wrapped completion and retains the note's write lease — terminal
   app teardown only, when no further writes can be issued.
+
+## Round-4 DESIGN PASS (2026-08-03)
+
+Contracts 9 and 10 produced findings in rounds 2, 3, AND 4 — the
+trajectory rule fired, so round 4 was resolved as a design pass
+addressing the ROOT causes rather than the instances:
+
+- **Contract 10's root cause was classifier mirroring**: the host
+  kept hand-porting core's key/shape classification and every gap
+  was a finding. Structural resolution: (a) the integral-float flip
+  (`1.0` → `1`) was a CORE emitter bug — core's own round-trip test
+  now pins `Float(1.0)`/`Float(1e3)` and the emitter appends a
+  decimal marker; (b) the add sheet's validation is key-aware
+  (`tags` is always a tag list) and shape-aware (datetime requires a
+  time component; `#`-seeds refuse under list; date/datetime/
+  wikilink-SHAPED text refuses — while YAML-scalar shapes like
+  true/123/1.5 stay text because core quotes them); (c) the
+  contract itself is pinned by an either-refuse-or-match matrix
+  fact run against real core for every (key, kind, seed) — future
+  classifier drift in either direction fails the matrix instead of
+  waiting for a review round.
+- **Contract 9's root cause was multi-entrant refresh scheduling**:
+  conflict completions scheduled a refresh AND handed the resolution
+  dialog callbacks that scheduled their own, so the second request
+  superseded the first's announcement. Structural resolution: the
+  RESOLUTION owns the follow-up exclusively — Keep Mine's completion
+  refreshes, Reload refreshes with the announced mode, Cancel
+  refreshes nothing ("the panel stays as it was", which is also the
+  mac hint's literal contract). No other path schedules a refresh
+  after presenting the dialog.
+- Below-bar: the disposal regression now bites (a real CancelToken
+  is asserted cancelled); wikilink newline targets refuse pre-core
+  in both the sheet and the row editor with host copy.

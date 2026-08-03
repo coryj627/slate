@@ -346,6 +346,8 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
 
     internal void MarkWorkInFlightForTests() => WorkInFlight = true;
 
+    internal void SetInFlightCancelForTests(CancelToken token) => _inFlightCancel = token;
+
     internal int RequestIdForTests => _requestId;
 
     /// <summary>Row status strings, rendered from the TYPED reason

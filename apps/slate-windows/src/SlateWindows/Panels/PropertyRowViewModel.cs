@@ -184,6 +184,12 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
             case PropertyDraft.WikilinkDraft w when w.Target.Contains("]]"):
                 ValidationError = PropertyPhrase.WikilinkBracketError;
                 return false;
+            case PropertyDraft.WikilinkDraft crlf
+                when crlf.Target.Contains('\n') || crlf.Target.Contains('\r'):
+                // Core rejects newline targets; refuse pre-core with
+                // the host copy (round-4 below-bar).
+                ValidationError = PropertyPhrase.WikilinkNewlineError;
+                return false;
             default:
                 ValidationError = null;
                 return true;

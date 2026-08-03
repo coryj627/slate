@@ -287,6 +287,7 @@ public sealed class BulkRenameTests : IDisposable
         var reconciled = new List<RenameReport>();
         var announced = new List<A11yEvent>();
         BulkRenameViewModel sheet;
+        using var inFlightCancel = new CancelToken();
         using (var workspace = new WorkspaceViewModel(
             _session, _fixture.Root, () => [], announced.Add,
             startInteractionBackgroundWork: false))
@@ -294,7 +295,13 @@ public sealed class BulkRenameTests : IDisposable
             workspace.OpenBulkRenameSheet(synchronousForTests: true);
             sheet = workspace.BulkRenameSheet!;
             sheet.MarkWorkInFlightForTests();
+            sheet.SetInFlightCancelForTests(inFlightCancel);
         }
+
+        // Round-3/4 below-bar: disposal must actually CANCEL the
+        // in-flight core run — this bites if Dispose stops calling
+        // CancelInFlight.
+        Assert.True(inFlightCancel.IsCancelled());
 
         // Round 3: disposal cancelled and SHUT DOWN the sheet — a
         // late terminal publish cannot mutate UI state, while an

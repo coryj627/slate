@@ -91,59 +91,79 @@ public sealed class AddPropertyTests
         // Round 3, contract 10: the chosen kind must SURVIVE the
         // authoritative re-read — shape-derived kinds require a
         // shape-valid seed, refused with the verbatim message.
-        Assert.Null(AddPropertyViewModel.BuildInitialValue("text", "", out var text));
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("fresh", "text", "", out var text));
         Assert.Equal(new PropertyValue.Text(""), text);
-        Assert.Null(AddPropertyViewModel.BuildInitialValue("number", "", out var zero));
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("fresh", "number", "", out var zero));
         Assert.Equal(new PropertyValue.Integer(0), zero);
-        Assert.Null(AddPropertyViewModel.BuildInitialValue("number", "1.5", out var real));
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("fresh", "number", "1.5", out var real));
         Assert.Equal(new PropertyValue.Float(1.5), real);
         Assert.Equal(
             "Must be a finite decimal number.",
-            AddPropertyViewModel.BuildInitialValue("number", "seven", out _));
-        Assert.Null(AddPropertyViewModel.BuildInitialValue("boolean", "true", out var flag));
+            AddPropertyViewModel.BuildInitialValue("fresh", "number", "seven", out _));
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("fresh", "boolean", "true", out var flag));
         Assert.Equal(new PropertyValue.Boolean(true), flag);
         Assert.Equal(
             "Enter true or false.",
-            AddPropertyViewModel.BuildInitialValue("boolean", "yep", out _));
+            AddPropertyViewModel.BuildInitialValue("fresh", "boolean", "yep", out _));
         Assert.Equal(
             "Date must be YYYY-MM-DD.",
-            AddPropertyViewModel.BuildInitialValue("date", "", out _));
+            AddPropertyViewModel.BuildInitialValue("fresh", "date", "", out _));
         Assert.Null(
-            AddPropertyViewModel.BuildInitialValue("date", "2026-05-01", out var date));
+            AddPropertyViewModel.BuildInitialValue("fresh", "date", "2026-05-01", out var date));
         Assert.Equal(new PropertyValue.Date("2026-05-01"), date);
         Assert.Equal(
             "Enter a date and time like 2026-05-01T10:00:00.",
-            AddPropertyViewModel.BuildInitialValue("datetime", "soon", out _));
+            AddPropertyViewModel.BuildInitialValue("fresh", "datetime", "soon", out _));
         Assert.Equal(
             "Wikilink target can't be empty.",
-            AddPropertyViewModel.BuildInitialValue("wikilink", "  ", out _));
-        Assert.Null(AddPropertyViewModel.BuildInitialValue("list", "", out var list));
+            AddPropertyViewModel.BuildInitialValue("fresh", "wikilink", "  ", out _));
+        Assert.Null(AddPropertyViewModel.BuildInitialValue("fresh", "list", "", out var list));
         Assert.Equal([], Assert.IsType<PropertyValue.List>(list).Items);
         Assert.Equal(
             "Tag lists need at least one tag to keep their type.",
-            AddPropertyViewModel.BuildInitialValue("tag_list", "", out _));
+            AddPropertyViewModel.BuildInitialValue("fresh", "tag_list", "", out _));
         Assert.Null(
-            AddPropertyViewModel.BuildInitialValue("tag_list", "#alpha", out var tags));
+            AddPropertyViewModel.BuildInitialValue("fresh", "tag_list", "#alpha", out var tags));
         Assert.Equal(["alpha"], Assert.IsType<PropertyValue.TagList>(tags).Tags);
     }
 
+    /// <summary>Contract 10, the round-4 DESIGN-PASS shape: instead
+    /// of trusting a hand-mirrored classifier table, this matrix
+    /// pins the CONTRACT itself against core end-to-end — for every
+    /// (key, kind, seed), the sheet either REFUSES pre-core or the
+    /// authoritative re-read stores exactly the chosen kind. A
+    /// classifier drift in either direction fails this fact.</summary>
     [Theory]
-    [InlineData("text", "hello", "text")]
-    [InlineData("number", "7", "number")]
-    [InlineData("number", "1.5", "number")]
-    [InlineData("boolean", "true", "boolean")]
-    [InlineData("date", "2026-05-01", "date")]
-    [InlineData("datetime", "2026-05-01T10:00:00Z", "datetime")]
-    [InlineData("wikilink", "other", "wikilink")]
-    [InlineData("list", "", "list")]
-    [InlineData("tag_list", "alpha", "tag_list")]
-    public void EveryAdvertisedKindSurvivesTheAuthoritativeReadBack(
-        string kind, string seed, string expectedStoredKind)
+    [InlineData("fresh", "text", "hello")]
+    [InlineData("fresh", "number", "7")]
+    [InlineData("fresh", "number", "1.5")]
+    [InlineData("fresh", "number", "1.0")]
+    [InlineData("fresh", "boolean", "true")]
+    [InlineData("fresh", "date", "2026-05-01")]
+    [InlineData("fresh", "datetime", "2026-05-01T10:00:00Z")]
+    [InlineData("fresh", "datetime", "2026-05-01")]
+    [InlineData("fresh", "wikilink", "other")]
+    [InlineData("fresh", "list", "")]
+    [InlineData("fresh", "list", "#alpha")]
+    [InlineData("fresh", "tag_list", "alpha")]
+    [InlineData("fresh", "tag_list", "")]
+    [InlineData("fresh", "text", "2026-05-01")]
+    [InlineData("fresh", "text", "2026-05-01T10:00:00Z")]
+    [InlineData("fresh", "text", "[[other]]")]
+    [InlineData("fresh", "text", "true")]
+    [InlineData("fresh", "text", "123")]
+    [InlineData("fresh", "text", "1.5")]
+    [InlineData("tags", "tag_list", "alpha")]
+    [InlineData("tags", "tag_list", "")]
+    [InlineData("tags", "list", "x")]
+    [InlineData("tags", "text", "x")]
+    public void EveryAddEitherRefusesOrStoresExactlyTheChosenKind(
+        string key, string kind, string seed)
     {
         RunSta(() =>
         {
             using FixtureVault fixture = FixtureVault.Create(
-                0, $"add-kind-{kind.Replace('_', '-')}-{seed.Length}");
+                0, $"add-kind-{key}-{kind.Replace('_', '-')}-{(uint)seed.GetHashCode():x8}");
             File.WriteAllText(
                 Path.Combine(fixture.Root, "note.md"), "---\nfirst: one\n---\nBody.\n");
             File.WriteAllText(Path.Combine(fixture.Root, "other.md"), "# Other\n");
@@ -156,19 +176,24 @@ public sealed class AddPropertyTests
 
             workspace.OpenAddPropertySheet(synchronousForTests: true);
             AddPropertyViewModel sheet = workspace.AddPropertySheet!;
-            sheet.Key = "fresh";
+            sheet.Key = key;
             sheet.Kind = kind;
             sheet.Value = seed;
-            Assert.True(sheet.Add());
+            if (!sheet.Add())
+            {
+                // Refused pre-core: nothing may have been written.
+                Assert.NotNull(sheet.ValidationError);
+                Assert.DoesNotContain(
+                    key + ":",
+                    session.ReadNoteParts("note.md").FmSource,
+                    StringComparison.Ordinal);
+                return;
+            }
             WaitForUi(() => workspace.AddPropertySheet is null);
-
-            // Round 3, contract 10: the stored kind after the
-            // authoritative re-read IS the chosen kind — the sheet's
-            // type choice never lies.
             Property stored = SlateUniffiMethods
                 .ParseFrontmatterProperties(session.ReadNoteParts("note.md").FmSource)
-                .Single(property => property.Key == "fresh");
-            Assert.Equal(expectedStoredKind, stored.Kind);
+                .Single(property => property.Key == key);
+            Assert.Equal(kind, stored.Kind);
         });
     }
 

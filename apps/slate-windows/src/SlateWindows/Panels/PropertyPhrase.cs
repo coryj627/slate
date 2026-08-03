@@ -121,6 +121,15 @@ internal static class PropertyPhrase
     public const string TagListSeedError =
         "Tag lists need at least one tag to keep their type.";
     public const string BooleanShapeError = "Enter true or false.";
+    public const string TagsKeyKindError = "The tags key is always a tag list.";
+    public const string WikilinkNewlineError =
+        "Wikilink target can't contain line breaks.";
+
+    /// <summary>Round 4: a seed whose SHAPE core would classify as a
+    /// different kind is refused — the type choice never lies.</summary>
+    public static string StoredKindMismatchError(string storedKind) =>
+        $"That value would be stored as {TypeWord(storedKind)}. "
+        + $"Change the value or pick {TypeWord(storedKind)}.";
 
     public static string KeyDuplicateError(string key) =>
         $"A property named `{key}` already exists on this note.";
