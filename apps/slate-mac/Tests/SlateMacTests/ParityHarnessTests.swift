@@ -300,7 +300,7 @@ final class ParityHarnessTests: XCTestCase {
         // SurfaceSerializer.cs. value_json is emitted exactly as the
         // FFI hands it, never re-parsed or re-serialized.
         j.raw(",\"properties\":[")
-        let properties = try session.getFileMetadata(path: relPath).properties
+        let properties = try session.getFileMetadata(path: relPath)?.properties ?? []
         for (i, property) in properties.enumerated() {
             if i > 0 { j.raw(",") }
             appendProperty(j, property)
