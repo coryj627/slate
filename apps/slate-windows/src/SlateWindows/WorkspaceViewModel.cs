@@ -1624,6 +1624,16 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
 
     public void Dispose()
     {
+        // W4-4 (adversarial round 2): the bulk-rename worker holds
+        // the shared session too — cancel any in-flight run through
+        // its CancelToken and shut the scheduler down so a terminal
+        // publish can't land in this dying workspace. The rename's
+        // per-file CAS writes are individually safe; cancellation
+        // reports the unprocessed remainder at the core layer.
+        _bulkRenameSheet?.CancelInFlight();
+        _bulkRenameSheet?.Shutdown();
+        _bulkRenameSheet = null;
+        _addPropertySheet = null;
         // Panels first: their workers hold the shared session, which
         // the vault lifecycle disposes right after this workspace —
         // invalidate every in-flight load before that happens.

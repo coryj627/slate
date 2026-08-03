@@ -41,11 +41,14 @@ internal abstract record PropertyDraft
     {
         public ListDraft Copy() => new([.. Items]);
 
+        /// <summary>Equality ignores the transient Edited flag (round
+        /// 2 below-bar): typing a value away and back restores a
+        /// clean row — the flag only steers encode conversion, and a
+        /// same-text conversion is value-identical.</summary>
         public bool ValueEquals(ListDraft other) =>
             Items.Count == other.Items.Count
             && Items.Zip(other.Items).All(pair =>
                 pair.First.Text == pair.Second.Text
-                && pair.First.Edited == pair.Second.Edited
                 && Equals(pair.First.Source, pair.Second.Source));
     }
 

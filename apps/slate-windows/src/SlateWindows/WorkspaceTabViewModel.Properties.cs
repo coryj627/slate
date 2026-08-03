@@ -22,7 +22,6 @@ namespace SlateWindows;
 internal sealed partial class WorkspaceTabViewModel
 {
     private NotePropertiesViewModel? _properties;
-    private int _propertyWriteLease;
 
     /// <summary>The per-tab properties header. Created lazily by the
     /// workspace when the tab first shows a markdown note; null for
@@ -38,10 +37,6 @@ internal sealed partial class WorkspaceTabViewModel
     /// <summary>Test seam: thrown after the core write lands, before
     /// the completion publishes (the W4-3 fault pattern).</summary>
     internal Action? PropertyWriteFaultForTests { get; set; }
-
-    /// <summary>True while this tab has a property write in flight
-    /// (any of set/delete/add/retry).</summary>
-    internal bool PropertyWriteInFlight => Volatile.Read(ref _propertyWriteLease) == 1;
 
     internal NotePropertiesViewModel EnsureProperties(
         Action<PropertyRowViewModel> commit,
@@ -141,23 +136,18 @@ internal sealed partial class WorkspaceTabViewModel
         announce(new A11yEvent.HostComposed(Status, A11yPriority.High));
     }
 
-    /// <summary>Run one property write off the UI thread. Returns
-    /// false WITHOUT scheduling when another property write on this
-    /// tab is still in flight (the tab-scoped lease). Otherwise the
+    /// <summary>Run one property write off the UI thread. The
     /// completion ALWAYS fires (on the dispatcher) with either the
     /// report or the failure plus the post-failure disk hash — the
-    /// caller owns announcements and reconciliation. The lease is
-    /// released just before the completion runs, so a completion may
-    /// legally chain a follow-up write (Keep Mine).</summary>
-    internal bool WriteProperty(
+    /// caller owns announcements, reconciliation, and the
+    /// NOTE-scoped write lease (the workspace acquires it before
+    /// calling and releases it in the wrapped completion — round 2:
+    /// per-path exclusion survives this tab closing mid-flight).</summary>
+    internal void WriteProperty(
         string? expectedHash,
         Func<string?, SaveReport> write,
         Action<SaveReport?, VaultException?, string?> completion)
     {
-        if (Interlocked.CompareExchange(ref _propertyWriteLease, 1, 0) != 0)
-        {
-            return false;
-        }
         string path = Path;
         Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
         _ = Task.Run(() =>
@@ -216,17 +206,11 @@ internal sealed partial class WorkspaceTabViewModel
 
             if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
             {
-                Volatile.Write(ref _propertyWriteLease, 0);
                 return;
             }
             _dispatcher.BeginInvoke(
                 DispatcherPriority.Background,
-                new Action(() =>
-                {
-                    Volatile.Write(ref _propertyWriteLease, 0);
-                    completion(report, failure, postFailureDiskHash);
-                }));
+                new Action(() => completion(report, failure, postFailureDiskHash)));
         });
-        return true;
     }
 }

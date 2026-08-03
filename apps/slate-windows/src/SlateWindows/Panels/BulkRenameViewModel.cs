@@ -87,7 +87,18 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     public bool WorkInFlight
     {
         get => _workInFlight;
-        private set => SetField(ref _workInFlight, value);
+        private set
+        {
+            // In-flight state gates BOTH commands (adversarial
+            // round 2): the buttons must disable the moment a run
+            // starts, so a Preview can never supersede an in-flight
+            // Apply.
+            if (SetField(ref _workInFlight, value))
+            {
+                OnPropertyChanged(nameof(CanApply));
+                OnPropertyChanged(nameof(CanPreview));
+            }
+        }
     }
 
     public string? ProgressText
@@ -116,12 +127,14 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     }
 
     /// <summary>Contract 7: armed only after a preview on the exact
-    /// current pair.</summary>
+    /// current pair (compared TRIMMED — runs consume trimmed keys,
+    /// so incidental whitespace must not leave a valid preview
+    /// unarmed).</summary>
     public bool CanApply =>
         !_workInFlight
-        && string.Equals(_armedOldKey, _oldKey, StringComparison.Ordinal)
-        && string.Equals(_armedNewKey, _newKey, StringComparison.Ordinal)
-        && _armedOldKey is not null;
+        && _armedOldKey is not null
+        && string.Equals(_armedOldKey, _oldKey.Trim(), StringComparison.Ordinal)
+        && string.Equals(_armedNewKey, _newKey.Trim(), StringComparison.Ordinal);
 
     public bool CanPreview =>
         !_workInFlight && _oldKey.Trim().Length > 0 && _newKey.Trim().Length > 0;
@@ -185,6 +198,14 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
 
     private void Run(bool dryRun)
     {
+        if (_workInFlight)
+        {
+            // Runtime guard behind the disabled buttons (adversarial
+            // round 2): runs are strictly serialized — a superseding
+            // request must never stale-discard an in-flight apply's
+            // terminal report.
+            return;
+        }
         string oldKey = _oldKey.Trim();
         string newKey = _newKey.Trim();
         int requestId = Interlocked.Increment(ref _requestId);
@@ -228,24 +249,28 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         RenameReport? report,
         string? error)
     {
+        // DISK TRUTH is unconditional (adversarial round 2): an apply
+        // report reconciles open tabs and announces its summary even
+        // if a later request or a shutdown superseded this run — the
+        // writes already landed. Runs are serialized by the
+        // WorkInFlight guard, so a stale requestId here is a test
+        // construction, but the ordering keeps the guarantee
+        // structural rather than incidental.
+        if (report is not null && !dryRun)
+        {
+            _reconcileTabs(report);
+            _announce(new A11yEvent.RenameSummary(
+                Applied: true,
+                Renamed: (uint)report.Affected.Length,
+                Skipped: (uint)report.Skipped.Length,
+                Failed: (uint)report.Failed.Length));
+        }
         if (requestId != _requestId)
         {
             return;
         }
-        if (report is not null && !dryRun)
-        {
-            _reconcileTabs(report);
-        }
         if (IsShutDown)
         {
-            if (report is not null)
-            {
-                _announce(new A11yEvent.RenameSummary(
-                    Applied: !dryRun,
-                    Renamed: (uint)report.Affected.Length,
-                    Skipped: (uint)report.Skipped.Length,
-                    Failed: (uint)report.Failed.Length));
-            }
             SettleCloseIfRequested();
             return;
         }
@@ -286,9 +311,14 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
             Skipped: (uint)report.Skipped.Length,
             Failed: (uint)report.Failed.Length);
         // The footer IS the canonical rendering — one template for
-        // announcement and display, so they cannot drift.
+        // announcement and display, so they cannot drift. Apply
+        // summaries were already announced in the unconditional
+        // disk-truth block above (exactly once per outcome).
         FooterText = SlateUniffiMethods.A11yRender(summary).Text;
-        _announce(summary);
+        if (dryRun)
+        {
+            _announce(summary);
+        }
 
         if (dryRun)
         {

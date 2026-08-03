@@ -267,6 +267,39 @@ public sealed class BulkRenameTests : IDisposable
     }
 
     [Fact]
+    public void RunsAreSerializedAndStaleApplyReportsStillLandDiskTruth()
+    {
+        var announced = new List<A11yEvent>();
+        var reconciled = new List<RenameReport>();
+        var sheet = MakeSheet(announced, reconciled: reconciled);
+        sheet.OldKey = "oldkey";
+        sheet.NewKey = "renamed";
+
+        // Adversarial round 2: a run can never start while another is
+        // in flight — Preview cannot supersede an in-flight Apply.
+        sheet.MarkWorkInFlightForTests();
+        int before = sheet.RequestIdForTests;
+        sheet.Preview();
+        Assert.Equal(before, sheet.RequestIdForTests);
+        Assert.False(sheet.CanPreview);
+        Assert.False(sheet.CanApply);
+
+        // And even a stale-requestId APPLY report reconciles and
+        // announces — landed writes are never discarded by later
+        // requests.
+        var report = new RenameReport(
+            Affected: [new RenameAffected("a.md", "old", "new", true, "hash-after")],
+            Skipped: [],
+            Failed: []);
+        sheet.PublishRun(
+            sheet.RequestIdForTests - 1, dryRun: false, "oldkey", "renamed", report, null);
+        Assert.Same(report, Assert.Single(reconciled));
+        Assert.Contains(
+            announced,
+            item => item is A11yEvent.RenameSummary { Applied: true, Renamed: 1 });
+    }
+
+    [Fact]
     public void CloseDuringAnInFlightRunSettlesAtTheTerminalPublish()
     {
         var sheet = MakeSheet();

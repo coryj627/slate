@@ -142,3 +142,53 @@ round:
   tab-BUFFER reload failures aggregate into one RenameReloadFailed;
   header refresh failures speak their own PropertiesReloadFailed at
   publish. Two events for two distinct failure surfaces.
+
+## Round-2 review resolutions (2026-08-03)
+
+Round 2 (same invariant prompt) returned 6 findings + 3 below-bar;
+all fixed in one batch. Contracts 1, 4, 5, 6 and core INV1–4 were
+not falsifiable. Additional resolutions and accepted risks:
+
+- **Bulk-rename runs are strictly serialized**: WorkInFlight gates
+  and a runtime guard prevent any run from starting while another is
+  in flight; independently, an APPLY report's tab reconciliation and
+  summary announcement are UNCONDITIONAL in the publish path — a
+  landed apply can never be stale-discarded by shutdown or a later
+  request.
+- **Drafts are parked across authoritative refreshes** (the mac
+  parked-draft posture): every accepted publish re-applies surviving
+  dirty drafts by key onto the rebuilt rows (fresh baseline and
+  hash); completions commit the DISPATCHED draft, so mid-flight
+  edits stay honestly dirty against what disk actually received.
+  Accepted risk: a parked draft whose stored KIND changed externally
+  rides on a row whose editor mode reflects the new stored value.
+- **Typed list elements and the shipping transport**: core emits
+  Text, Date, Datetime, and Wikilink as the SAME YAML string node
+  and re-classifies by shape on read (property_value_to_yaml,
+  frontmatter.rs) — element kind is a derived property of the text,
+  so preserving the text preserves the kind at the byte level. The
+  parse-path's plain-string elements decode as Text sources and
+  re-encode byte-identically; the tagged DB representation keeps
+  richer sources when present. Pinned end-to-end by
+  EditingOneListItemLeavesTypedSiblingsByteIdenticalOnDisk.
+- **The property-write lease is NOTE-scoped** (workspace-owned,
+  path-keyed), not per visual tab: duplicate same-path tabs share
+  one lease and closing the dispatching tab cannot free the note
+  mid-flight. Released by the wrapped terminal completion.
+- **Vault teardown cancels the rename worker**: workspace disposal
+  cancels in-flight bulk-rename work via the CancelToken and shuts
+  the sheet's scheduler down before tabs and session go; per-file
+  CAS makes the already-landed writes individually safe, and the
+  publish path's disposed-tab guards contain the rest. Accepted
+  risk: the cancellation partition has no UI to land in after a
+  vault close — the disk state is reported by core's Cancelled
+  entries on the next open.
+- **One reload action, one announcement**: the reload outcome is
+  spoken by the FIRST same-path header only; peer duplicates refresh
+  silently. Accepted risk: two reload requests racing before a
+  publish coalesce into one completion announcement — one final
+  state, one announcement.
+- Below-bar fixes: list equality ignores the transient Edited flag;
+  bulk-rename arming compares TRIMMED keys; an edited typed list
+  element keeps its kind only when the new text still fits it, else
+  degrades to Text (byte-identical emission either way).

@@ -199,13 +199,15 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
         RevertAnnounceDelegate(this);
     }
 
-    /// <summary>Called by the workspace after a successful write:
-    /// the row's world is about to be replaced by a fresh read, but
-    /// mark the draft committed so no stale dirty flag survives the
-    /// swap.</summary>
-    public void MarkCommitted()
+    /// <summary>Called by the workspace after a successful write with
+    /// the DRAFT THAT WAS DISPATCHED (adversarial round 2): the user
+    /// may have kept editing while the write was in flight, and
+    /// marking the CURRENT draft committed would bless input the disk
+    /// never saw. The baseline becomes the dispatched value; a
+    /// mid-flight edit stays honestly dirty against it.</summary>
+    public void MarkCommitted(PropertyDraft dispatched)
     {
-        _committedBaseline = PropertyDraft.Copy(_draft);
+        _committedBaseline = PropertyDraft.Copy(dispatched);
         ValidationError = null;
         OnPropertyChanged(nameof(IsDirty));
     }

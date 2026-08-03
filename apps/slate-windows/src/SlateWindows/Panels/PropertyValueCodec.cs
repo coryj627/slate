@@ -137,9 +137,26 @@ internal static class PropertyValueCodec
         }
         return item.Source switch
         {
-            PropertyValue.Date => new PropertyValue.Date(item.Text),
-            PropertyValue.Datetime => new PropertyValue.Datetime(item.Text),
-            PropertyValue.Wikilink => new PropertyValue.Wikilink(item.Text),
+            // Round-2 below-bar: an edited element keeps its kind
+            // only when the new text still FITS it — an invalid date
+            // or a bracketed/empty wikilink target degrades to Text
+            // instead of handing core an unencodable value. (Core
+            // classifies plain strings by shape on the next read, so
+            // this is honest, not lossy.)
+            PropertyValue.Date when DateOnly.TryParseExact(
+                item.Text, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None, out _) =>
+                new PropertyValue.Date(item.Text),
+            PropertyValue.Datetime when DateTimeOffset.TryParse(
+                    item.Text, CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out _)
+                || DateTime.TryParseExact(
+                    item.Text, "yyyy-MM-ddTHH:mm:ss", CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.None, out _) =>
+                new PropertyValue.Datetime(item.Text),
+            PropertyValue.Wikilink when item.Text.Trim().Length > 0
+                && !item.Text.Contains("]]") =>
+                new PropertyValue.Wikilink(item.Text),
             PropertyValue.Integer when long.TryParse(
                 item.Text, System.Globalization.NumberStyles.Integer,
                 CultureInfo.InvariantCulture, out long integer) =>

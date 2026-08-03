@@ -27,6 +27,29 @@ internal sealed partial class WorkspaceViewModel
 {
     private AddPropertyViewModel? _addPropertySheet;
     private BulkRenameViewModel? _bulkRenameSheet;
+
+    /// <summary>The NOTE-scoped property-write lease (adversarial
+    /// round 2, contract 3): exclusion is per PATH, not per visual
+    /// tab — duplicate same-path tabs share one lease, and closing
+    /// the tab that carried an in-flight write cannot free the note
+    /// for a second write. Acquired on the dispatcher thread before
+    /// scheduling; released by the wrapped terminal completion just
+    /// before it runs, so a completion may legally chain a retry.</summary>
+    private readonly HashSet<string> _propertyWritePaths = new(StringComparer.Ordinal);
+
+    internal bool PropertyWriteInFlightFor(string path) =>
+        _propertyWritePaths.Contains(path);
+
+    private bool TryAcquirePropertyWriteLease(string path) =>
+        _propertyWritePaths.Add(path);
+
+    private Action<SaveReport?, VaultException?, string?> WithLeaseRelease(
+        string path, Action<SaveReport?, VaultException?, string?> completion) =>
+        (report, failure, postFailureDiskHash) =>
+        {
+            _ = _propertyWritePaths.Remove(path);
+            completion(report, failure, postFailureDiskHash);
+        };
     private System.Windows.Input.ICommand? _openAddPropertySheetCommand;
     private System.Windows.Input.ICommand? _closeAddPropertySheetCommand;
     private System.Windows.Input.ICommand? _openBulkRenameSheetCommand;
@@ -163,14 +186,16 @@ internal sealed partial class WorkspaceViewModel
             AnnounceAddConflict(intent.Path, sheet, key, value);
             return false;
         }
-        if (!tab.WriteProperty(
-            intent.ContentHash,
-            expectedHash => _session.SetProperty(intent.Path, key, value, expectedHash),
-            AddWriteCompletion(intent.Path, sheet, key, value)))
+        if (!TryAcquirePropertyWriteLease(intent.Path))
         {
             AnnounceWriteInFlightRefusal();
             return false;
         }
+        tab.WriteProperty(
+            intent.ContentHash,
+            expectedHash => _session.SetProperty(intent.Path, key, value, expectedHash),
+            WithLeaseRelease(
+                intent.Path, AddWriteCompletion(intent.Path, sheet, key, value)));
         return true;
     }
 
@@ -200,17 +225,19 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
-        if (!tab.WriteProperty(
+        if (!TryAcquirePropertyWriteLease(path))
+        {
+            AnnounceWriteInFlightRefusal();
+            return;
+        }
+        tab.WriteProperty(
             null,
             _ =>
             {
                 string freshHash = _session.ReadNoteParts(path).ContentHash;
                 return _session.SetProperty(path, key, value, freshHash);
             },
-            AddWriteCompletion(path, sheet, key, value)))
-        {
-            AnnounceWriteInFlightRefusal();
-        }
+            WithLeaseRelease(path, AddWriteCompletion(path, sheet, key, value)));
     }
 
     private Action<SaveReport?, VaultException?, string?> AddWriteCompletion(
@@ -345,14 +372,23 @@ internal sealed partial class WorkspaceViewModel
     }
 
     /// <summary>One dispatch path for row writes: the snapshot hash,
-    /// the row's own in-flight flag, and the TAB-SCOPED write lease
+    /// the row's own in-flight flag, and the NOTE-SCOPED write lease
     /// (contract 3 — set, delete, add, and retries mutually exclude
-    /// per note, refused pre-core with the spoken reason).</summary>
+    /// per path, refused pre-core with the spoken reason). The draft
+    /// is CAPTURED at dispatch (adversarial round 2): the completion
+    /// commits the dispatched value, never whatever the user typed
+    /// while the write was in flight.</summary>
     private void DispatchRowWrite(
         WorkspaceTabViewModel tab, PropertyRowViewModel row, bool deleted)
     {
-        row.WriteInFlight = true;
         string path = row.OwnerPath;
+        if (!TryAcquirePropertyWriteLease(path))
+        {
+            AnnounceWriteInFlightRefusal();
+            return;
+        }
+        row.WriteInFlight = true;
+        PropertyDraft dispatched = PropertyDraft.Copy(row.Draft);
         Func<string?, SaveReport> write;
         if (deleted)
         {
@@ -360,15 +396,13 @@ internal sealed partial class WorkspaceViewModel
         }
         else
         {
-            PropertyValue value = PropertyValueCodec.Encode(row.Draft);
+            PropertyValue value = PropertyValueCodec.Encode(dispatched);
             write = expectedHash => _session.SetProperty(path, row.Key, value, expectedHash);
         }
-        if (!tab.WriteProperty(
-            row.ContentHash, write, PropertyWriteCompletion(path, row, deleted)))
-        {
-            row.WriteInFlight = false;
-            AnnounceWriteInFlightRefusal();
-        }
+        tab.WriteProperty(
+            row.ContentHash,
+            write,
+            WithLeaseRelease(path, PropertyWriteCompletion(path, row, deleted, dispatched)));
     }
 
     /// <summary>The shared refusal gates. True = refused (announced
@@ -376,7 +410,7 @@ internal sealed partial class WorkspaceViewModel
     private bool RefusePropertyWriteGates(
         WorkspaceTabViewModel tab, PropertyRowViewModel row, bool deleted)
     {
-        if (row.WriteInFlight || tab.PropertyWriteInFlight)
+        if (row.WriteInFlight || PropertyWriteInFlightFor(row.OwnerPath))
         {
             AnnounceWriteInFlightRefusal();
             return true;
@@ -432,8 +466,14 @@ internal sealed partial class WorkspaceViewModel
         {
             return;
         }
-        row.WriteInFlight = true;
         string path = row.OwnerPath;
+        if (!TryAcquirePropertyWriteLease(path))
+        {
+            AnnounceWriteInFlightRefusal();
+            return;
+        }
+        row.WriteInFlight = true;
+        PropertyDraft dispatched = PropertyDraft.Copy(row.Draft);
         Func<string?, SaveReport> write;
         if (deleted)
         {
@@ -445,19 +485,17 @@ internal sealed partial class WorkspaceViewModel
         }
         else
         {
-            PropertyValue value = PropertyValueCodec.Encode(row.Draft);
+            PropertyValue value = PropertyValueCodec.Encode(dispatched);
             write = _ =>
             {
                 string freshHash = _session.ReadNoteParts(path).ContentHash;
                 return _session.SetProperty(path, row.Key, value, freshHash);
             };
         }
-        if (!tab.WriteProperty(
-            null, write, PropertyWriteCompletion(path, row, deleted)))
-        {
-            row.WriteInFlight = false;
-            AnnounceWriteInFlightRefusal();
-        }
+        tab.WriteProperty(
+            null,
+            write,
+            WithLeaseRelease(path, PropertyWriteCompletion(path, row, deleted, dispatched)));
     }
 
     /// <summary>Reload-from-disk resolution: the outcome is spoken
@@ -475,13 +513,13 @@ internal sealed partial class WorkspaceViewModel
     /// Failure keeps the draft, announces once, and reconciles when
     /// the disk hash moved (the W4-3 read-back rule).</summary>
     internal Action<SaveReport?, VaultException?, string?> PropertyWriteCompletion(
-        string path, PropertyRowViewModel row, bool deleted) =>
+        string path, PropertyRowViewModel row, bool deleted, PropertyDraft dispatched) =>
         (report, failure, postFailureDiskHash) =>
         {
             row.WriteInFlight = false;
             if (report is not null)
             {
-                row.MarkCommitted();
+                row.MarkCommitted(dispatched);
                 _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
                 RefreshPropertiesFor(path);
                 Panels.NoteSaved(path);
@@ -596,14 +634,20 @@ internal sealed partial class WorkspaceViewModel
     }
 
     /// <summary>Refresh the header VM of every open tab on this path
-    /// (duplicate same-path tabs each hold their own instance).</summary>
+    /// (duplicate same-path tabs each hold their own instance). One
+    /// user action announces ONCE (adversarial round 2, contract 9):
+    /// the reload outcome is spoken by the first header only; peer
+    /// duplicates refresh silently.</summary>
     internal void RefreshPropertiesFor(string path, bool announceReloadOutcome = false)
     {
+        bool announcePending = announceReloadOutcome;
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
-            if (string.Equals(tab.Path, path, StringComparison.Ordinal))
+            if (string.Equals(tab.Path, path, StringComparison.Ordinal)
+                && tab.Properties is { } properties)
             {
-                tab.Properties?.RefreshProperties(announceReloadOutcome);
+                properties.RefreshProperties(announcePending);
+                announcePending = false;
             }
         }
     }

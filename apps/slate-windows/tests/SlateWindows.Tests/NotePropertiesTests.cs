@@ -538,48 +538,128 @@ public sealed class NotePropertiesTests
         {
             using FixtureVault fixture = MakeVault("props-lease");
             using VaultSession session = OpenScanned(fixture.Root);
+            var announced = new List<A11yEvent>();
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], announced.Add,
+                startInteractionBackgroundWork: false);
+            NotePropertiesViewModel properties = AttachProperties(workspace, "props.md");
+            WorkspaceTabViewModel tab =
+                Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+            workspace.PropertyConflictDialog = (_, _, _, _) => { };
+            PropertyRowViewModel first = properties.Rows[0];
+            PropertyRowViewModel second = properties.Rows[1];
+
+            // Contract 3 (adversarial rounds 1+2): the lease is
+            // NOTE-scoped and acquired synchronously at dispatch, so
+            // a second commit on ANY row of the same note is refused
+            // pre-core until the first write's terminal completion —
+            // which can only run on this dispatcher thread, making
+            // the refusal deterministic here.
+            first.EditorText = "One";
+            first.CommitCommand.Execute(null);
+            Assert.True(workspace.PropertyWriteInFlightFor("props.md"));
+
+            second.EditorText = "43";
+            second.CommitCommand.Execute(null);
+            Assert.False(second.WriteInFlight);
+            Assert.Contains(
+                announced.OfType<A11yEvent.HostComposed>(),
+                item => item.Text == "Wait for the current save to finish.");
+
+            // The lease releases with the terminal completion; the
+            // note is writable again.
+            WaitForUi(() => !first.WriteInFlight);
+            Assert.False(workspace.PropertyWriteInFlightFor("props.md"));
+
+            // Completion totality: even a write that throws a
+            // non-Vault exception reaches its terminal completion.
+            int completions = 0;
+            tab.WriteProperty(
+                null,
+                _ => throw new InvalidOperationException("fails fast"),
+                (report, failure, _) =>
+                {
+                    Assert.Null(report);
+                    Assert.NotNull(failure);
+                    completions++;
+                });
+            WaitForUi(() => completions == 1);
+        });
+    }
+
+    [Fact]
+    public void AuthoritativeRefreshesParkDirtyDraftsInsteadOfDestroyingThem()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = MakeVault("props-park-drafts");
+            using VaultSession session = OpenScanned(fixture.Root);
             using var workspace = new WorkspaceViewModel(
                 session, fixture.Root, () => [], _ => { },
                 startInteractionBackgroundWork: false);
-            _ = AttachProperties(workspace, "props.md");
-            WorkspaceTabViewModel tab =
-                Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+            NotePropertiesViewModel properties = AttachProperties(workspace, "props.md");
 
-            using var release = new ManualResetEventSlim(false);
-            using var entered = new ManualResetEventSlim(false);
-            int completions = 0;
-            // First write parks inside the worker: the tab lease is
-            // held for its whole duration.
-            Assert.True(tab.WriteProperty(
-                null,
-                _ =>
-                {
-                    entered.Set();
-                    release.Wait(TimeSpan.FromSeconds(20));
-                    throw new InvalidOperationException("parked write ends as failure");
-                },
-                (_, _, _) => completions++));
-            Assert.True(entered.Wait(TimeSpan.FromSeconds(20)));
+            // Contract 2 (adversarial round 2): a no-op Ctrl+S and a
+            // direct refresh both rebuild rows from authoritative
+            // bytes — the uncommitted draft must survive the rebuild.
+            properties.Rows[0].EditorText = "Uncommitted";
+            workspace.SaveActiveCommand.Execute(null);
+            properties.RefreshProperties();
+            PropertyRowViewModel title = properties.Rows[0];
+            Assert.Equal("Uncommitted", title.EditorText);
+            Assert.True(title.IsDirty);
 
-            // Contract 3 (adversarial round 1): a second write on the
-            // SAME tab is refused pre-core while the first is in
-            // flight — set, delete, add, and retries all share this
-            // lease through WriteProperty.
-            Assert.True(tab.PropertyWriteInFlight);
-            Assert.False(tab.WriteProperty(
-                null, _ => throw new InvalidOperationException("must not run"),
-                (_, _, _) => { }));
+            // A mid-flight edit stays honestly dirty against the
+            // DISPATCHED value: commit "One", type "Two" before the
+            // completion lands — disk has One, the row keeps Two as
+            // an uncommitted draft.
+            title.EditorText = "One";
+            title.CommitCommand.Execute(null);
+            title.EditorText = "Two";
+            WaitForUi(() => properties.Rows[0].EditorText == "Two"
+                && !workspace.PropertyWriteInFlightFor("props.md"));
+            Assert.Contains(
+                "title: One",
+                session.ReadNoteParts("props.md").FmSource,
+                StringComparison.Ordinal);
+            Assert.True(properties.Rows[0].IsDirty);
+            Assert.Equal("Two", properties.Rows[0].EditorText);
+        });
+    }
 
-            release.Set();
-            WaitForUi(() => completions == 1);
-            Assert.False(tab.PropertyWriteInFlight);
-            // The lease releases with the terminal completion; the
-            // next write proceeds.
-            Assert.True(tab.WriteProperty(
-                null,
-                _ => throw new InvalidOperationException("fails fast"),
-                (_, _, _) => completions++));
-            WaitForUi(() => completions == 2);
+    [Fact]
+    public void EditingOneListItemLeavesTypedSiblingsByteIdenticalOnDisk()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = MakeVault("props-typed-list");
+            string notePath = Path.Combine(fixture.Root, "typed.md");
+            File.WriteAllText(
+                notePath,
+                "---\nmilestones:\n  - 2026-04-01\n  - 2026-05-01\n  - plain note\n---\nBody.\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+            NotePropertiesViewModel properties = AttachProperties(workspace, "typed.md");
+
+            // Contract 10 through the SHIPPING transport (adversarial
+            // round 2): parse → decode → edit ONE item → encode →
+            // set_property. The untouched date elements' emitted
+            // lines are byte-identical (core emits Text and Date as
+            // the same YAML string node and re-classifies by shape).
+            PropertyRowViewModel milestones =
+                properties.Rows.Single(r => r.Key == "milestones");
+            milestones.Items[2].Text = "edited note";
+            milestones.CommitCommand.Execute(null);
+            WaitForUi(() => session.ReadNoteParts("typed.md").FmSource
+                .Contains("edited note", StringComparison.Ordinal));
+
+            string fm = session.ReadNoteParts("typed.md").FmSource;
+            Assert.Contains("- 2026-04-01", fm, StringComparison.Ordinal);
+            Assert.Contains("- 2026-05-01", fm, StringComparison.Ordinal);
+            Assert.DoesNotContain("\"2026-04-01\"", fm, StringComparison.Ordinal);
+            Assert.DoesNotContain("'2026-04-01'", fm, StringComparison.Ordinal);
         });
     }
 

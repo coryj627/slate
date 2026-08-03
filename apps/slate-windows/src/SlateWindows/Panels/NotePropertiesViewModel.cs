@@ -191,14 +191,33 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         {
             return;
         }
+        // PARK dirty drafts before the rebuild (adversarial round 2,
+        // contract 2 — the mac parked-draft posture): an authoritative
+        // refresh must never silently destroy uncommitted input. The
+        // parked draft lands on the rebuilt row for the same key with
+        // the FRESH baseline and hash; if the refreshed disk value now
+        // equals the draft, the row is naturally clean.
+        var parkedDrafts = new Dictionary<string, PropertyDraft>(StringComparer.Ordinal);
+        foreach (var existing in Rows)
+        {
+            if (existing.IsDirty)
+            {
+                parkedDrafts[existing.Key] = existing.Draft;
+            }
+        }
         Rows.Clear();
         ContentHash = loadError is null ? contentHash : "";
         if (loadError is null)
         {
             foreach (var property in properties)
             {
-                Rows.Add(new PropertyRowViewModel(
-                    property, path, contentHash, _commit, _revertAnnounce, _requestDelete));
+                var row = new PropertyRowViewModel(
+                    property, path, contentHash, _commit, _revertAnnounce, _requestDelete);
+                if (parkedDrafts.TryGetValue(row.Key, out PropertyDraft? parked))
+                {
+                    row.Draft = parked;
+                }
+                Rows.Add(row);
             }
         }
         IsLoading = false;
