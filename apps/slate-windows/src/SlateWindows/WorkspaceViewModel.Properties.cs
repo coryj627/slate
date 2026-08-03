@@ -39,7 +39,8 @@ internal sealed partial class WorkspaceViewModel
                 // the widget; carried as the same residue family.
                 $"Reverted changes to {row.Key}.", A11yPriority.Medium)),
             row => RequestPanelPropertyDelete(row),
-            synchronousForTests);
+            persistExpansion: PersistTabState,
+            synchronousForTests: synchronousForTests);
         if (properties.Path != tab.Path)
         {
             properties.Load(tab.Path);
@@ -239,6 +240,61 @@ internal sealed partial class WorkspaceViewModel
                 Panels.NoteSaved(path);
             }
         };
+
+    /// <summary>Build the bulk-rename sheet VM, wired to this
+    /// workspace: the old key prefills from the active note's first
+    /// property, the dirty-draft gate scans every open tab's header,
+    /// and applied reports reconcile open tabs (contract 8).</summary>
+    internal BulkRenameViewModel CreateBulkRename(bool synchronousForTests = false)
+    {
+        var sheet = new BulkRenameViewModel(
+            _session,
+            _announce,
+            () => Groups.SelectMany(group => group.Tabs)
+                .Any(tab => tab.Properties?.AnyRowDirty == true),
+            ReconcileTabsAfterBulkRename,
+            synchronousForTests);
+        if (ActiveGroup.ActiveTab is WorkspaceTabViewModel { IsMarkdown: true } tab
+            && tab.Properties?.Rows.FirstOrDefault() is { } firstRow)
+        {
+            sheet.OldKey = firstRow.Key;
+        }
+        return sheet;
+    }
+
+    /// <summary>Contract 8: after an APPLY, every open tab whose path
+    /// appears in the report ends either re-baselined to that entry's
+    /// new content hash (clean tabs) or flagged externally stale
+    /// (dirty tabs) — no open tab may retain a stale SavedContentHash
+    /// that would let a later save clobber the rename. Failures to
+    /// re-read announce loudly instead of passing silently.</summary>
+    internal void ReconcileTabsAfterBulkRename(RenameReport report)
+    {
+        bool anyReloadFailed = false;
+        foreach (var affected in report.Affected)
+        {
+            if (!affected.Applied || affected.NewContentHash is null)
+            {
+                continue;
+            }
+            try
+            {
+                ReconcileTabsAfterDirectTaskWrite(affected.Path, affected.NewContentHash);
+                RefreshPropertiesFor(affected.Path);
+                Panels.NoteSaved(affected.Path);
+            }
+            catch (Exception exception) when (
+                exception is VaultException or InvalidOperationException)
+            {
+                anyReloadFailed = true;
+            }
+        }
+        if (anyReloadFailed)
+        {
+            _announce(new A11yEvent.RenameReloadFailed(
+                "Some open notes could not be reloaded."));
+        }
+    }
 
     /// <summary>Refresh the header VM of every open tab on this path
     /// (duplicate same-path tabs each hold their own instance).</summary>

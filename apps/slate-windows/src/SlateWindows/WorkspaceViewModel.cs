@@ -296,7 +296,17 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     }
 
     public WorkspaceTabState Snapshot() =>
-        new(Id, Item, Mode, PropsCollapsed, ActiveCanvasSurface);
+        // Sparse per-tab expansion (W4-4): collapsed persists as true,
+        // expanded as absent; a header never materialized this session
+        // keeps the restored value.
+        new(
+            Id,
+            Item,
+            Mode,
+            Properties is { } properties
+                ? (properties.IsExpanded ? null : true)
+                : PropsCollapsed,
+            ActiveCanvasSurface);
 
     public void ReplaceItem(WorkspaceItemState item)
     {
@@ -517,6 +527,9 @@ internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
     {
         _disposed = true;
         _taskToggleGeneration++;
+        // W4-4: refuse new property-header work before the session
+        // this tab's header reads from goes away.
+        ShutdownProperties();
         // The reading projection goes first: it observes the editor
         // document and schedules background FFI work against this
         // tab's session — both torn down below.
@@ -1624,6 +1637,11 @@ internal sealed partial class WorkspaceViewModel : BindableBase, IDisposable
             // Headings move under edits — the outline leaf re-reads
             // after a save (link rows deliberately do not; mac parity).
             Panels.NoteSaved(tab.Path);
+            // W4-4: frontmatter can be hand-edited in the whole-file
+            // buffer on Windows — the header re-derives from the
+            // just-saved bytes so its rows and CAS tokens are never
+            // a stale generation behind the tab (contract 4).
+            RefreshPropertiesFor(tab.Path);
         }
     }
 

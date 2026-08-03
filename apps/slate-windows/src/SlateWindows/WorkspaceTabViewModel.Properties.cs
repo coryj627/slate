@@ -30,10 +30,28 @@ internal sealed partial class WorkspaceTabViewModel
         Action<PropertyRowViewModel> commit,
         Action<PropertyRowViewModel> revertAnnounce,
         Action<PropertyRowViewModel> requestDelete,
+        Action? persistExpansion = null,
         bool synchronousForTests = false)
     {
-        Properties ??= new NotePropertiesViewModel(
-            _session, commit, revertAnnounce, requestDelete, synchronousForTests);
+        if (Properties is null)
+        {
+            Properties = new NotePropertiesViewModel(
+                _session, commit, revertAnnounce, requestDelete, synchronousForTests);
+            if (PropsCollapsed == true)
+            {
+                Properties.IsExpanded = false;
+            }
+            if (persistExpansion is not null)
+            {
+                Properties.PropertyChanged += (_, args) =>
+                {
+                    if (args.PropertyName == nameof(NotePropertiesViewModel.IsExpanded))
+                    {
+                        persistExpansion();
+                    }
+                };
+            }
+        }
         return Properties;
     }
 
