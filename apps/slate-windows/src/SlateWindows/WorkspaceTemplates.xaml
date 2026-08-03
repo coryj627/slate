@@ -151,7 +151,13 @@
     <DataTemplate x:Key="PropertyListEditorTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
         <StackPanel>
-            <ItemsControl ItemsSource="{Binding Items}">
+            <!-- Unnamed on purpose: it is non-focusable structure and
+                 the type-cued row name contains "list", which trips
+                 axe's NameExcludesControlType on a List control. The
+                 per-item editors carry the full labels. -->
+            <ItemsControl ItemsSource="{Binding Items}"
+                          Focusable="False"
+                          IsTabStop="False">
                 <ItemsControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type panels:PropertyListItemViewModel}">
                         <StackPanel Margin="0,2" Orientation="Horizontal">
@@ -346,10 +352,14 @@
                          ~280px (mac parity). -->
                     <ScrollViewer MaxHeight="280"
                                   VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled">
+                                  HorizontalScrollBarVisibility="Disabled"
+                                  Visibility="{Binding Properties.HasRows, Converter={StaticResource BooleanToVisibilityConverter}}">
                         <ItemsControl ItemsSource="{Binding Properties.Rows}"
                                       ItemTemplate="{StaticResource PropertyRowTemplate}"
-                                      AutomationProperties.AutomationId="PropertiesRows" />
+                                      Focusable="False"
+                                      IsTabStop="False"
+                                      AutomationProperties.AutomationId="PropertiesRows"
+                                      AutomationProperties.Name="{Binding Properties.HeaderGroupName}" />
                     </ScrollViewer>
                 </StackPanel>
             </Expander>

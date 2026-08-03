@@ -21,9 +21,10 @@ internal sealed partial class WorkspaceTabViewModel
 
     /// <summary>The per-tab properties header. Created lazily by the
     /// workspace when the tab first shows a markdown note; null for
-    /// non-markdown tabs. Notifies so the header region can appear
-    /// after the attach.</summary>
-    internal NotePropertiesViewModel? Properties
+    /// non-markdown tabs. PUBLIC because WPF bindings only reflect
+    /// over public members (the Reading precedent); notifies so the
+    /// header region can appear after the attach.</summary>
+    public NotePropertiesViewModel? Properties
     {
         get => _properties;
         private set => SetField(ref _properties, value);

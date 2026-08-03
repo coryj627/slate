@@ -92,6 +92,10 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
 
     public bool ShowEmptyState => Rows.Count == 0 && _loadError is null && !_isLoading;
 
+    /// <summary>The rows scroll region collapses when empty — a
+    /// zero-size but UIA-visible list is an axe violation.</summary>
+    public bool HasRows => Rows.Count > 0;
+
     public bool AnyRowDirty => Rows.Any(row => row.IsDirty);
 
     /// <summary>The keys currently on the note — the add-property
@@ -175,6 +179,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         OnPropertyChanged(nameof(HeaderText));
         OnPropertyChanged(nameof(HeaderGroupName));
         OnPropertyChanged(nameof(ShowEmptyState));
+        OnPropertyChanged(nameof(HasRows));
         OnPropertyChanged(nameof(AnyRowDirty));
     }
 
