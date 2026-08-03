@@ -76,7 +76,7 @@ internal enum TabTaskToggle
     Started,
 }
 
-internal sealed class WorkspaceTabViewModel : BindableBase, IDisposable
+internal sealed partial class WorkspaceTabViewModel : BindableBase, IDisposable
 {
     private readonly VaultSession _session;
     private readonly Action<WorkspaceTabViewModel, EditorDocumentSyncEvent?>? _documentChanged;
