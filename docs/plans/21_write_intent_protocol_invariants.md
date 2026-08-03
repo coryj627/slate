@@ -108,6 +108,28 @@ became a durability rule (below), and two are scope clarifications:
   domain, including the known coarse-mtime/same-size stat-tuple evasion — see
   accepted risk 5.
 
+## Re-confirmation review resolutions (2026-08-02, second pass)
+
+Three classes became code fixes: provider-invalid spellings (Windows reserved
+names) are typed as provable no-mutation at the write and containable at the
+sweep, so one bad API input can no longer poison queries; folder moves
+classify every un-frozen prefix row by DISK TRUTH under the writer lock
+(source-exists stays, destination-exists is rewritten and double-marked,
+neither is marked for NotFound convergence), covering pre-rename entrants;
+deletes keep rows and held markers for paths recreated between the filesystem
+delete and the index transaction. Two classes are scope preconditions:
+
+- **Canonical file identity (case/Unicode)** is a platform-wide property this
+  protocol consumes but does not define. The raw-segment gate guarantees one
+  key per exact spelling; case-insensitive and Unicode-normalizing volumes
+  can still alias two spellings to one physical file, affecting links, rows,
+  and search alike. Tracked as its own work item; the protocol adopts
+  whatever canonical identity the platform layer establishes.
+- **Same-protocol-version precondition.** All coordinated actors sharing a
+  cache must run this protocol version. Sessions older than migration 035/036
+  must not stay live across an upgrade; enforcement (open-time fencing of
+  stale sessions) is an upgrade-machinery item, moot until W4-3 ships.
+
 ## Accepted-risk register (documented, not defects)
 
 1. `create_exclusive_binding` (new-file publish) can crash post-write with no
@@ -140,7 +162,14 @@ became a durability rule (below), and two are scope clarifications:
    marker becomes sweep-eligible. This transient, bounded, marked staleness is
    intentional — the alternative is blocking reads on every in-flight write.
 9. Batch-trash marker release is best-effort after proven outcomes; an
-   uncleared marker costs one orphan-sweep read, never correctness.
+   uncleared marker costs one orphan-sweep read, never correctness. Its
+   late-descendant and same-kind-recreation schedules leave residues covered
+   by kept markers plus orphan sweeps or the requires_rescan invalidation.
+10. A 64-bit token collision combined with one writer's post-write failure and
+    the colliding writer's pre-write cleanup could erase a shared marker;
+    below the bar by probability.
+11. Delete-vs-recreate residue in the crash arm remains the honest-absent /
+    marker-heals class; the live arm now keeps recreated rows by disk truth.
 
 ## Rules for future changes
 

@@ -3509,3 +3509,66 @@ fn recovery_finalization_failure_defers_without_consuming_the_journal() {
     assert_eq!(structural_inflight_count(tmp.path()), 0);
     drop(recovered);
 }
+
+#[test]
+fn deletes_keep_rows_and_markers_for_recreated_paths() {
+    let _env_guard = super::common::ENV_FAULT_GUARD.lock().unwrap();
+    // Re-confirmation review: a concurrent save can recreate a path
+    // between delete_file's filesystem delete and its index
+    // transaction. Deleting the row and clearing the marker would
+    // leave a REAL file unindexed with no trigger. Disk truth
+    // decides: a recreated path keeps its row AND the held marker,
+    // and the orphan sweep converges both by reading.
+    let (_tmp, session, state) = fixture(&[("x.md", "- [ ] original task\n")], &[]);
+    state
+        .lock()
+        .unwrap()
+        .replace_after_delete_with_kind
+        .insert("x.md".to_string(), EntryKind::File);
+
+    session.delete_file("x.md").unwrap();
+
+    {
+        let conn = session.conn.lock().unwrap();
+        let (rows, held): (i64, i64) = (
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'x.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = 'x.md' AND created_ms = ?1",
+                rusqlite::params![i64::MAX],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        );
+        assert_eq!(rows, 1, "a recreated path keeps its files row");
+        assert_eq!(held, 1, "and keeps the held delete marker");
+    }
+
+    // The orphan sweep re-reads: the row converges to the
+    // replacement bytes (task-free) and the original task can never
+    // serve as a ghost.
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    assert!(
+        page.items
+            .iter()
+            .all(|r| !r.task.text.contains("original task")),
+        "the deleted incarnation's tasks must not serve"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = 'x.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0, "the read resolved the delete marker");
+    }
+}

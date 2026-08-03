@@ -1796,6 +1796,7 @@ fn folder_moves_never_relocate_post_snapshot_entrants() {
         let tx = conn.transaction().unwrap();
         rename_prefix_in_index(
             &tx,
+            session.provider.as_ref(),
             "f",
             "g",
             &[("f/a.md".to_string(), "g/a.md".to_string())],
@@ -1824,6 +1825,90 @@ fn folder_moves_never_relocate_post_snapshot_entrants() {
             late, 1,
             "post-snapshot entrants stay at their true on-disk paths"
         );
+    }
+}
+
+#[test]
+fn folder_moves_sweep_pre_rename_entrants_by_disk_truth() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Re-confirmation review: the frozen snapshot protects
+    // POST-rename entrants, but a file committed into the source
+    // folder BETWEEN the snapshot and the filesystem rename is
+    // physically swept to the destination while its row stays at
+    // the source — a ghost with no marker. The stray pass now
+    // classifies every un-frozen prefix row by DISK TRUTH under the
+    // writer lock: source-exists rows stay, destination-exists rows
+    // are rewritten and marked on both sides.
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("f/a.md", b"- [ ] frozen one\n").unwrap();
+        p.write_file("f/pre.md", b"- [ ] swept along\n").unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // The physical rename swept BOTH files; the frozen set only
+    // knows about a.md — pre.md is the pre-rename entrant.
+    std::fs::rename(tmp.path().join("f"), tmp.path().join("g")).unwrap();
+    {
+        let mut conn = session.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        rename_prefix_in_index(
+            &tx,
+            session.provider.as_ref(),
+            "f",
+            "g",
+            &[("f/a.md".to_string(), "g/a.md".to_string())],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    {
+        let conn = session.conn.lock().unwrap();
+        let (swept_row, ghost_row, markers): (i64, i64, i64) = (
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'g/pre.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'f/pre.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path IN ('f/pre.md', 'g/pre.md')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        );
+        assert_eq!(swept_row, 1, "the swept entrant's row follows its bytes");
+        assert_eq!(ghost_row, 0, "no ghost row remains at the source");
+        assert!(markers >= 2, "both sides carry re-verification markers");
+    }
+
+    // The markers are aged: the next query re-verifies by reading
+    // and the swept entrant serves from its true path.
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    assert!(
+        page.items
+            .iter()
+            .any(|r| r.path == "g/pre.md" && r.task.text.contains("swept along")),
+        "the swept entrant serves at the destination"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path IN ('f/pre.md', 'g/pre.md')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0, "the reads resolved the sweep markers");
     }
 }
 

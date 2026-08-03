@@ -2418,7 +2418,7 @@ impl VaultSession {
 
         if indexed_truth == StructuralBatchTruth::Forward {
             let tx = conn.transaction()?;
-            apply_batch_move_index_direction(&tx, &plans, false)?;
+            apply_batch_move_index_direction(&tx, self.provider.as_ref(), &plans, false)?;
             tx.commit()?;
         } else {
             self.restore_structural_batch_rewrites_locked(conn, inflight, false)?;
@@ -3700,7 +3700,24 @@ impl VaultSession {
         // check-to-rename window above stays exclusive; a failed commit
         // still leaves a fully-written file, never a partial one —
         // `atomic_write` is temp-file + rename.)
-        self.provider.write_file(path, contents.as_bytes())?;
+        //
+        // Error typing (re-confirmation review): `InvalidPath` from
+        // the provider is its mutation-path validation refusing the
+        // spelling BEFORE touching disk — a Windows reserved name
+        // like `CON.md` passes vault-level validation but can never
+        // be written. That is a PROVABLE no-mutation, so it clears
+        // its registration like every pre-write exit; leaving the
+        // marker would poison every vault-wide query once aged,
+        // since its repair stats the same impossible path forever.
+        // All other write errors keep the marker: an atomic publish
+        // can fail AFTER mutating disk.
+        if let Err(write_error) = self.provider.write_file(path, contents.as_bytes()) {
+            if matches!(write_error, VaultError::InvalidPath { .. }) {
+                drop(tx);
+                self.clear_own_intent_registration(conn, path, intent_token);
+            }
+            return Err(write_error);
+        }
 
         // Test-only fault seam (adversarial round 12): THIS is the
         // real partial-failure boundary — file written, index not
@@ -6209,7 +6226,8 @@ impl VaultSession {
             Err(repair_err) => match &repair_err {
                 VaultError::Io(_)
                 | VaultError::InvalidUtf8 { .. }
-                | VaultError::FileTooLarge { .. } => {
+                | VaultError::FileTooLarge { .. }
+                | VaultError::InvalidPath { .. } => {
                     if self.contain_unrepairable_pending_path_locked(
                         &mut conn,
                         path,
@@ -6710,9 +6728,18 @@ impl VaultSession {
             // provably obsolete, deleted without containment.
             if let Err(repair_err) = self.reindex_path_locked(conn, &path, &tokens) {
                 match &repair_err {
+                    // InvalidPath joins the containable class
+                    // (re-confirmation review): a marker stranded on
+                    // a provider-invalid spelling — a Windows
+                    // reserved name — can never repair by reading,
+                    // and propagating would fail every vault-wide
+                    // query forever over one impossible path.
+                    // Containment serves honest-empty and keeps the
+                    // marker, which is idempotent and quiet.
                     VaultError::Io(_)
                     | VaultError::InvalidUtf8 { .. }
-                    | VaultError::FileTooLarge { .. } => {
+                    | VaultError::FileTooLarge { .. }
+                    | VaultError::InvalidPath { .. } => {
                         self.quarantine_unrepairable_path_locked(conn, &path, &tokens)
                             .map_err(|_| repair_err)?;
                     }
@@ -11378,6 +11405,7 @@ fn validate_batch_directory_index_source(
 
 fn apply_batch_move_index_direction(
     tx: &rusqlite::Transaction,
+    provider: &dyn VaultProvider,
     plans: &[crate::structural_batch::PlannedBatchMove],
     forward: bool,
 ) -> Result<Vec<(String, String)>, VaultError> {
@@ -11400,7 +11428,7 @@ fn apply_batch_move_index_direction(
                     }
                 })
                 .collect();
-            rename_prefix_in_index(tx, from, to, &frozen)?;
+            rename_prefix_in_index(tx, provider, from, to, &frozen)?;
         } else {
             let changed = tx.execute(
                 "UPDATE files SET path = ?1 WHERE path = ?2",
@@ -11621,6 +11649,7 @@ impl VaultSession {
                     validate_batch_directory_index_source(&tx, plan, true)?;
                     rename_prefix_in_index(
                         &tx,
+                        self.provider.as_ref(),
                         &plan.item.path,
                         &plan.destination,
                         &plan.moved_files,
@@ -12138,6 +12167,7 @@ impl VaultSession {
                 let tx = conn.transaction()?;
                 apply_batch_move_index_direction(
                     &tx,
+                    self.provider.as_ref(),
                     reconciliation_plans,
                     reconciliation_forward,
                 )?;
@@ -12500,6 +12530,7 @@ impl VaultSession {
                     validate_batch_directory_index_source(&tx, plan, true)?;
                     rename_prefix_in_index(
                         &tx,
+                        self.provider.as_ref(),
                         &plan.item.path,
                         &plan.destination,
                         &plan.moved_files,
@@ -13849,23 +13880,33 @@ impl VaultSession {
         // crash (the sweep's read hits NotFound and converges).
         let planted_markers = self.plant_move_markers_locked(&conn, [path])?;
         self.provider.delete(path)?;
+        // DISK TRUTH decides the index outcome (re-confirmation
+        // review): a concurrent save can recreate the path between
+        // our filesystem delete and this transaction — its committed
+        // row then describes the LIVE file, and deleting it (and our
+        // marker) would leave a real file unindexed with no trigger.
+        // If the path exists again, keep the row AND our held marker:
+        // the orphan sweep re-verifies both by reading.
+        let recreated = self.provider.stat(path).is_ok();
         let mut graph_sink = self.graph_sink();
         self.with_structural_tx(&mut conn, |tx| {
-            // Inbound snapshot BEFORE the delete: the FK cascade emits
-            // no per-row signal, and rows pointing here stay
-            // resolved-but-dangling (#550, p0_spec rule 1a).
-            graph_sink.stage_with(|| {
-                Ok(crate::graph::GraphOp::FileRemoved {
-                    path: path.to_string(),
-                    inbound: crate::links_db::graph_inbound_rows(tx, path)?,
-                })
-            })?;
-            tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
-            for (marker_path, token) in &planted_markers {
-                tx.execute(
-                    "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
-                    rusqlite::params![marker_path, token],
-                )?;
+            if !recreated {
+                // Inbound snapshot BEFORE the delete: the FK cascade emits
+                // no per-row signal, and rows pointing here stay
+                // resolved-but-dangling (#550, p0_spec rule 1a).
+                graph_sink.stage_with(|| {
+                    Ok(crate::graph::GraphOp::FileRemoved {
+                        path: path.to_string(),
+                        inbound: crate::links_db::graph_inbound_rows(tx, path)?,
+                    })
+                })?;
+                tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![path])?;
+                for (marker_path, token) in &planted_markers {
+                    tx.execute(
+                        "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
+                        rusqlite::params![marker_path, token],
+                    )?;
+                }
             }
             journal_append(
                 tx,
@@ -13886,7 +13927,14 @@ impl VaultSession {
         drop(structural_operation);
         drop(vault_structural_lock);
         self.bump_bases_generation();
-        self.notify_file_change(FileChangeKind::Deleted, path, None);
+        if recreated {
+            // The path is live again — announcing Deleted would be a
+            // lie; the recreating save's own events (and our held
+            // marker's eventual sweep) tell the true story.
+            self.notify_file_change(FileChangeKind::Modified, path, None);
+        } else {
+            self.notify_file_change(FileChangeKind::Deleted, path, None);
+        }
         Ok(())
     }
 
@@ -13916,6 +13964,14 @@ impl VaultSession {
         let planted_markers =
             self.plant_move_markers_locked(&conn, deleted_files.iter().map(String::as_str))?;
         self.provider.delete(path)?;
+        // DISK TRUTH per descendant (re-confirmation review) — see
+        // delete_file: a concurrent save can recreate a descendant
+        // between the filesystem delete and this transaction. Keep
+        // recreated rows and their held markers; delete the rest.
+        let recreated: std::collections::HashSet<&String> = deleted_files
+            .iter()
+            .filter(|file| self.provider.stat(file).is_ok())
+            .collect();
         let mut graph_sink = self.graph_sink();
         self.with_structural_tx(&mut conn, |tx| {
             // Per-file removal replay, snapshotted BEFORE the range
@@ -13923,23 +13979,26 @@ impl VaultSession {
             // at a time; inbound rows from co-deleted files are
             // skipped at apply time when their source is already gone.
             for file in &deleted_files {
+                if recreated.contains(file) {
+                    continue;
+                }
                 graph_sink.stage_with(|| {
                     Ok(crate::graph::GraphOp::FileRemoved {
                         path: file.clone(),
                         inbound: crate::links_db::graph_inbound_rows(tx, file)?,
                     })
                 })?;
+                tx.execute("DELETE FROM files WHERE path = ?1", rusqlite::params![file])?;
             }
             let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
-            tx.execute(
-                "DELETE FROM files WHERE path >= ?1 AND path < ?2",
-                rusqlite::params![lo, hi],
-            )?;
             tx.execute(
                 "DELETE FROM dirs WHERE path = ?1 OR (path >= ?2 AND path < ?3)",
                 rusqlite::params![path, lo, hi],
             )?;
             for (marker_path, token) in &planted_markers {
+                if recreated.contains(marker_path) {
+                    continue;
+                }
                 tx.execute(
                     "DELETE FROM text_write_intents WHERE path = ?1 AND token = ?2",
                     rusqlite::params![marker_path, token],
@@ -13962,7 +14021,11 @@ impl VaultSession {
         drop(vault_structural_lock);
         self.bump_bases_generation();
         for file in &deleted_files {
-            self.notify_file_change(FileChangeKind::Deleted, file, None);
+            if recreated.contains(file) {
+                self.notify_file_change(FileChangeKind::Modified, file, None);
+            } else {
+                self.notify_file_change(FileChangeKind::Deleted, file, None);
+            }
         }
         Ok(())
     }
@@ -14211,6 +14274,7 @@ impl VaultSession {
         // never a fresh prefix enumeration (model-confirmation
         // review); see rename_prefix_in_index.
         let moved_for_index = moved.clone();
+        let provider_for_index = Arc::clone(&self.provider);
         self.finish_structural_move(
             conn,
             kind,
@@ -14219,7 +14283,9 @@ impl VaultSession {
             moved,
             plan_rewrites,
             planted_markers,
-            move |tx, _sink| rename_prefix_in_index(tx, from, to, &moved_for_index),
+            move |tx, _sink| {
+                rename_prefix_in_index(tx, provider_for_index.as_ref(), from, to, &moved_for_index)
+            },
         )
     }
 
@@ -15363,6 +15429,7 @@ fn index_entry_case_insensitive(
 /// U2-1 discipline (GLOB/LIKE are wildcard-unsafe against legal filenames).
 fn rename_prefix_in_index(
     tx: &rusqlite::Transaction,
+    provider: &dyn VaultProvider,
     from: &str,
     to: &str,
     frozen_files: &[(String, String)],
@@ -15395,6 +15462,55 @@ fn rename_prefix_in_index(
         // (adversarial rounds 33-34) — see
         // clear_index_epoch_for_moved_path.
         clear_index_epoch_for_moved_path(tx, new_path)?;
+    }
+
+    // STRAY rows still under the source prefix are entrants the
+    // frozen snapshot missed (re-confirmation review). Which side of
+    // the filesystem rename they landed on is decided by DISK TRUTH,
+    // under the writer lock — never by bookkeeping:
+    //  - source file exists  -> a post-rename entrant recreated the
+    //    source; its row already matches disk. Leave it.
+    //  - destination exists  -> a pre-rename entrant was physically
+    //    swept along; rewrite its row and mark BOTH sides (aged,
+    //    in-transaction) so the next query re-verifies by reading.
+    //  - neither exists      -> deleted meanwhile; leave the row
+    //    with an aged marker and let the sweep's NotFound
+    //    convergence remove it.
+    let strays: Vec<String> = {
+        let mut stmt = tx.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
+        let rows = stmt.query_map(rusqlite::params![lo, hi], |row| row.get::<_, String>(0))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    for stray in strays {
+        let swept_to = format!("{to}{}", &stray[from.len()..]);
+        let source_exists = provider.stat(&stray).is_ok();
+        let destination_exists = provider.stat(&swept_to).is_ok();
+        if source_exists {
+            continue;
+        }
+        let aged_stamp = now_ms() - VaultSession::intent_abandon_threshold_ms(&stray) - 1;
+        if destination_exists {
+            let (name, extension, is_markdown) = classify_path(&swept_to);
+            tx.execute(
+                "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
+                 WHERE path = ?5",
+                rusqlite::params![swept_to, name, extension, is_markdown as i64, stray],
+            )?;
+            clear_index_epoch_for_moved_path(tx, &swept_to)?;
+            for marker_path in [stray.as_str(), swept_to.as_str()] {
+                tx.execute(
+                    "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                     VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+                    rusqlite::params![marker_path, aged_stamp, fresh_intent_token()],
+                )?;
+            }
+        } else {
+            tx.execute(
+                "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+                 VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+                rusqlite::params![stray, aged_stamp, fresh_intent_token()],
+            )?;
+        }
     }
 
     let dir_rows: Vec<(i64, String)> = {
