@@ -1167,7 +1167,26 @@ fn atomic_write(target: &Path, tmp_dir: &Path, contents: &[u8]) -> io::Result<()
     let mut attempts = 0u32;
     loop {
         match temp.persist(target) {
-            Ok(_) => return Ok(()),
+            Ok(_) => {
+                // Durable PUBLICATION, not just durable bytes (W4-3
+                // final-confirmation review): on POSIX the rename
+                // lives in the parent directory's entries, and an
+                // unsynced directory can lose the rename to a power
+                // cut while a LATER SQLite commit (which fsyncs)
+                // survives — new index, old bytes, marker already
+                // cleared. Sync the parent so the write-intent
+                // protocol's marker-clearing commit can never
+                // out-live the publication it vouches for. Windows
+                // has no directory handle sync through std; NTFS
+                // metadata journaling orders the rename with the
+                // synced file data — recorded in the protocol's
+                // accepted-risk register.
+                #[cfg(unix)]
+                {
+                    let _ = fs::File::open(parent).and_then(|dir| dir.sync_all());
+                }
+                return Ok(());
+            }
             Err(persist_error) => {
                 let transient = cfg!(windows)
                     && matches!(persist_error.error.raw_os_error(), Some(5) | Some(32));

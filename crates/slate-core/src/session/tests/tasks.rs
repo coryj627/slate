@@ -1996,6 +1996,161 @@ fn completed_deletes_release_their_markers() {
 }
 
 #[test]
+fn aged_save_tokens_defer_while_a_move_owns_the_path() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Final-confirmation review: skipping only the HELD token when
+    // the structural claim failed left aged SAVE tokens on the same
+    // path selectable — their repair could read a mid-move
+    // filesystem topology. Selection now groups per path: an
+    // unclaimable held marker defers EVERY token for that path, and
+    // the host route declines outright.
+    let (_tmp, session) = make_vault(|p| {
+        p.write_file("notes/moving43.md", b"- [ ] mid move\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+    {
+        let conn = session.conn.lock().unwrap();
+        // The active move's held marker...
+        let _ = session
+            .plant_move_markers_locked(&conn, ["notes/moving43.md"])
+            .unwrap();
+        // ...plus an aged save marker on the same path.
+        conn.execute(
+            "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
+             VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
+            rusqlite::params!["notes/moving43.md", now_ms() - 60_000, 0x43A6Ei64],
+        )
+        .unwrap();
+    }
+
+    // The move is ACTIVE: its lock is held.
+    let lock = VaultStructuralLock::acquire(&session.config.cache_dir).unwrap();
+    unsafe { std::env::set_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR", "moving43") };
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    assert!(
+        page.items.iter().any(|r| r.path == "notes/moving43.md"),
+        "the committed pre-operation snapshot serves"
+    );
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/moving43.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            markers, 2,
+            "EVERY token defers while the move owns the path — aged save tokens included"
+        );
+    }
+    // The host route declines rather than repairing mid-move.
+    assert_eq!(
+        session.repair_or_contain_path("notes/moving43.md").unwrap(),
+        TaskIndexRepairOutcome::Declined,
+    );
+
+    // The move ends: everything resolves by reading.
+    drop(lock);
+    let healed = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the healed query succeeds");
+    unsafe { std::env::remove_var("SLATE_TEST_INTENT_ABANDON_ZERO_FOR") };
+    assert!(healed.items.iter().any(|r| r.path == "notes/moving43.md"));
+    {
+        let conn = session.conn.lock().unwrap();
+        let markers: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path = ?1",
+                rusqlite::params!["notes/moving43.md"],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(markers, 0, "the reads resolved both markers");
+    }
+}
+
+#[test]
+fn both_present_strays_keep_the_source_and_mark_both_sides() {
+    let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
+    // Final-confirmation review: the source-first shortcut missed
+    // the BOTH-PRESENT case — a pre-rename entrant swept to the
+    // destination whose source was then recreated. The four-state
+    // classifier keeps the source incarnation's row (never erased in
+    // favor of the destination) and marks both paths so reads build
+    // the destination's row and re-verify the source's.
+    let (tmp, session) = make_vault(|p| {
+        p.write_file("f2/a.md", b"- [ ] frozen two\n").unwrap();
+        p.write_file("f2/both.md", b"- [ ] original both\n")
+            .unwrap();
+    });
+    session.scan_initial(&CancelToken::new()).unwrap();
+
+    // The folder physically moved (sweeping both files), then the
+    // source file was recreated by a racing writer.
+    std::fs::rename(tmp.path().join("f2"), tmp.path().join("g2")).unwrap();
+    std::fs::create_dir_all(tmp.path().join("f2")).unwrap();
+    std::fs::write(
+        tmp.path().join("f2").join("both.md"),
+        b"- [x] recreated both\n",
+    )
+    .unwrap();
+    {
+        let mut conn = session.conn.lock().unwrap();
+        let tx = conn.transaction().unwrap();
+        rename_prefix_in_index(
+            &tx,
+            session.provider.as_ref(),
+            "f2",
+            "g2",
+            &[("f2/a.md".to_string(), "g2/a.md".to_string())],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    {
+        let conn = session.conn.lock().unwrap();
+        let (source_row, markers): (i64, i64) = (
+            conn.query_row(
+                "SELECT COUNT(*) FROM files WHERE path = 'f2/both.md'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+            conn.query_row(
+                "SELECT COUNT(*) FROM text_write_intents WHERE path IN ('f2/both.md', 'g2/both.md')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap(),
+        );
+        assert_eq!(source_row, 1, "the source incarnation's row survives");
+        assert!(markers >= 2, "both sides carry markers");
+    }
+
+    // Reads converge both incarnations to their disk truth.
+    let page = session
+        .tasks_in_vault(crate::TaskFilter::default(), Paging::first(50))
+        .expect("the query succeeds");
+    assert!(
+        page.items
+            .iter()
+            .any(|r| r.path == "f2/both.md" && r.task.text.contains("recreated both")),
+        "the recreated source serves its bytes"
+    );
+    assert!(
+        page.items
+            .iter()
+            .any(|r| r.path == "g2/both.md" && r.task.text.contains("original both")),
+        "the swept destination is discovered and serves its bytes"
+    );
+}
+
+#[test]
 fn held_orphan_sweeps_hold_the_structural_lock_through_repair() {
     let _env_guard = ENV_FAULT_GUARD.lock().unwrap();
     // Adversarial round 41: the round-40 probe released the lock

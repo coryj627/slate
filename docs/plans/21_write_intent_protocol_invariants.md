@@ -130,6 +130,33 @@ delete and the index transaction. Two classes are scope preconditions:
   must not stay live across an upgrade; enforcement (open-time fencing of
   stale sessions) is an upgrade-machinery item, moot until W4-3 ships.
 
+## Final-confirmation review resolutions (2026-08-03, third pass)
+
+Six classes, all resolved in code plus one register entry:
+
+- **Membership fence** (`fence_prefix_and_mutate`): folder moves and folder
+  deletes enumerate-and-mark the prefix under the SQLite writer lock — which
+  blocks every coordinated save, since saves write inside their own writer
+  transaction — and mutate the filesystem only while the verification holds.
+  Late entrants are either marked before the bytes move or blocked until they
+  are; persistent churn aborts before any mutation.
+- **Deletes probe inside the writer lock, kind-aware**: the filesystem delete
+  and the disk-truth probe run inside the index transaction; only PROVEN
+  absence (Io NotFound) deletes rows and clears markers — live paths and
+  unknown probe outcomes keep both.
+- **Four-state stray classification**: source/destination probes distinguish
+  Live / ProvenAbsent / Unknown; both-present keeps the SOURCE incarnation's
+  row and marks both paths; any Unknown mutates nothing and marks both.
+  Directory rows apply the same source-Live rule so file and directory trees
+  cannot split.
+- **Per-path deferral**: a path whose HELD marker's structural claim fails
+  defers every token — aged save markers included — and the host repair route
+  returns Declined, so no repair can commit a mid-move snapshot.
+- **Durable publication**: `atomic_write` syncs the destination parent
+  directory after the rename on POSIX, so the marker-clearing index commit can
+  never out-live the publication it vouches for. Windows relies on NTFS
+  metadata journaling (register entry 12).
+
 ## Accepted-risk register (documented, not defects)
 
 1. `create_exclusive_binding` (new-file publish) can crash post-write with no
@@ -170,6 +197,13 @@ delete and the index transaction. Two classes are scope preconditions:
     below the bar by probability.
 11. Delete-vs-recreate residue in the crash arm remains the honest-absent /
     marker-heals class; the live arm now keeps recreated rows by disk truth.
+12. Windows directory-entry durability after rename/delete relies on NTFS
+    metadata journaling ordering rather than an explicit directory sync (std
+    exposes none); POSIX parents are synced explicitly.
+13. `VaultProvider::write_file` returning `InvalidPath` is treated as
+    pre-mutation by contract; the shipping filesystem provider satisfies this,
+    and any future provider must preserve it or the marker-clearing rule must
+    be revisited.
 
 ## Rules for future changes
 

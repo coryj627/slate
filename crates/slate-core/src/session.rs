@@ -6214,6 +6214,25 @@ impl VaultSession {
     /// database must stay loud (round 29).
     pub fn repair_or_contain_path(&self, path: &str) -> Result<TaskIndexRepairOutcome, VaultError> {
         let mut conn = self.conn.lock().expect("session connection mutex");
+        // A path owned by an ACTIVE move must not be repaired or
+        // contained mid-operation (final-confirmation review): if a
+        // HELD marker stands and the nonblocking structural claim
+        // fails, decline — the coordinator keeps the path pending
+        // and retries after the move ends. The guard, when claimed,
+        // is held for the whole repair-or-contain attempt.
+        let path_has_held_marker: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM text_write_intents WHERE path = ?1 AND created_ms = ?2)",
+            rusqlite::params![path, Self::HELD_MOVE_MARKER_MS],
+            |row| row.get(0),
+        )?;
+        let _move_guard = if path_has_held_marker {
+            match Self::try_acquire_structural_guard(&self.config.cache_dir) {
+                Some(guard) => Some(guard),
+                None => return Ok(TaskIndexRepairOutcome::Declined),
+            }
+        } else {
+            None
+        };
         let epoch_before_attempt: Option<i64> = conn
             .query_row(
                 "SELECT index_epoch FROM files WHERE path = ?1",
@@ -6368,6 +6387,67 @@ impl VaultSession {
         let result = f();
         let _ = conn.pragma_update(None, "synchronous", "NORMAL");
         result
+    }
+
+    /// MEMBERSHIP FENCE for prefix-scale filesystem mutations
+    /// (final-confirmation review): enumerate the prefix and verify
+    /// every member is marked UNDER SQLite's writer lock — which
+    /// blocks every coordinated save, since saves write inside their
+    /// own writer transaction — and only run the filesystem mutation
+    /// while that verification holds. A save committing a new
+    /// source-prefix row after a snapshot can therefore never slip
+    /// between marking and the rename/trash: either it committed
+    /// before the fence's verification (and gets marked in the next
+    /// loop pass) or it is blocked until the mutation completes.
+    /// Newcomers found mid-loop are marked durably (both sides for
+    /// moves) and the verification retries; persistent churn fails
+    /// the operation BEFORE any byte moves. Returns every marker it
+    /// planted alongside the mutation's result.
+    #[allow(clippy::type_complexity)]
+    fn fence_prefix_and_mutate<R>(
+        &self,
+        conn: &mut Connection,
+        from_prefix: &str,
+        destination_prefix: Option<&str>,
+        fs_mutation: impl FnOnce() -> Result<R, VaultError>,
+    ) -> Result<(Vec<(String, i64)>, R), VaultError> {
+        let (lo, hi) = subtree_bounds(from_prefix).expect("non-root folder path");
+        let mut planted: Vec<(String, i64)> = Vec::new();
+        let mut marked: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for _attempt in 0..4 {
+            let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let members: Vec<String> = {
+                let mut stmt =
+                    tx.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
+                let rows = stmt.query_map(rusqlite::params![lo, hi], |row| row.get(0))?;
+                rows.collect::<Result<_, _>>()?
+            };
+            let unmarked: Vec<String> = members
+                .iter()
+                .filter(|member| !marked.contains(*member))
+                .cloned()
+                .collect();
+            if unmarked.is_empty() {
+                let result = fs_mutation()?;
+                drop(tx);
+                return Ok((planted, result));
+            }
+            drop(tx);
+            let mut to_mark: Vec<String> = Vec::new();
+            for member in unmarked {
+                if let Some(dest) = destination_prefix {
+                    to_mark.push(format!("{dest}{}", &member[from_prefix.len()..]));
+                }
+                to_mark.push(member);
+            }
+            planted
+                .extend(self.plant_move_markers_locked(conn, to_mark.iter().map(String::as_str))?);
+            marked.extend(to_mark);
+        }
+        Err(VaultError::InvalidArgument {
+            message: "prefix membership kept changing during a structural mutation; aborted                       before any bytes moved"
+                .into(),
+        })
     }
 
     fn plant_move_markers_locked<'p>(
@@ -6630,7 +6710,7 @@ impl VaultSession {
                     row.get::<_, i64>(2)?,
                 ))
             })?;
-            let mut grouped: Vec<(String, Vec<i64>)> = Vec::new();
+            let mut raw: Vec<(String, i64, i64)> = Vec::new();
             for row in rows {
                 let (path, created_ms, token) = row?;
                 if let Some(scope_path) = scope
@@ -6638,6 +6718,22 @@ impl VaultSession {
                 {
                     continue;
                 }
+                raw.push((path, created_ms, token));
+            }
+            // Group per PATH before selection (final-confirmation
+            // review): when a path carries a HELD move marker whose
+            // structural-lock claim fails — an ACTIVE move owns it —
+            // its aged save tokens must defer too, or the repair
+            // would read a mid-move topology the guard exists to
+            // fence. One claim attempt per sweep, as before.
+            let mut grouped: Vec<(String, Vec<i64>)> = Vec::new();
+            let held_paths: std::collections::HashSet<&str> = raw
+                .iter()
+                .filter(|(_, created_ms, _)| *created_ms == Self::HELD_MOVE_MARKER_MS)
+                .map(|(path, _, _)| path.as_str())
+                .collect();
+            for (path, created_ms, token) in &raw {
+                let (path, created_ms, token) = (path.clone(), *created_ms, *token);
                 // HELD move markers (adversarial rounds 40-41) never
                 // age by wall clock: they are honored while the
                 // vault structural lock is held (an active move owns
@@ -6649,12 +6745,22 @@ impl VaultSession {
                 // One nonblocking claim per sweep, only when a held
                 // marker is present; unavailable means an active
                 // move owns the markers — skip them.
-                let selectable = if created_ms == Self::HELD_MOVE_MARKER_MS {
+                let path_needs_guard = held_paths.contains(path.as_str());
+                let guard_claimed = if path_needs_guard {
                     orphan_guard
                         .get_or_insert_with(|| {
                             Self::try_acquire_structural_guard(&self.config.cache_dir)
                         })
                         .is_some()
+                } else {
+                    true
+                };
+                let selectable = if !guard_claimed {
+                    // An active move owns this path: defer EVERY
+                    // token — held and aged alike — until it ends.
+                    false
+                } else if created_ms == Self::HELD_MOVE_MARKER_MS {
+                    true
                 } else {
                     // `now < created_ms` is a CLOCK ANOMALY (the
                     // wall clock was corrected backward after the
@@ -13879,17 +13985,28 @@ impl VaultSession {
         // token-scoped with the row deletion, orphan-sweepable on a
         // crash (the sweep's read hits NotFound and converges).
         let planted_markers = self.plant_move_markers_locked(&conn, [path])?;
-        self.provider.delete(path)?;
-        // DISK TRUTH decides the index outcome (re-confirmation
-        // review): a concurrent save can recreate the path between
-        // our filesystem delete and this transaction — its committed
-        // row then describes the LIVE file, and deleting it (and our
-        // marker) would leave a real file unindexed with no trigger.
-        // If the path exists again, keep the row AND our held marker:
-        // the orphan sweep re-verifies both by reading.
-        let recreated = self.provider.stat(path).is_ok();
+        // The filesystem delete AND the disk-truth probe both run
+        // INSIDE the index transaction (final-confirmation review):
+        // the writer lock blocks every coordinated save — saves
+        // write inside their own writer transaction — so nothing
+        // can recreate the path between the delete, the probe, and
+        // the row decision. The probe is kind-aware: only PROVEN
+        // absence deletes the row and clears the marker; a live
+        // path or an unknown probe outcome keeps both for the
+        // orphan sweep to re-verify by reading.
+        let mut recreated = false;
         let mut graph_sink = self.graph_sink();
         self.with_structural_tx(&mut conn, |tx| {
+            self.provider.delete(path)?;
+            recreated = match self.provider.stat(path) {
+                Ok(_) => true,
+                Err(VaultError::Io(ref io_err))
+                    if io_err.kind() == std::io::ErrorKind::NotFound =>
+                {
+                    false
+                }
+                Err(_) => true, // unknown outcome: keep row + marker
+            };
             if !recreated {
                 // Inbound snapshot BEFORE the delete: the FK cascade emits
                 // no per-row signal, and rows pointing here stay
@@ -13946,40 +14063,51 @@ impl VaultSession {
         validate_save_path(path)?;
         let mut conn = self.conn.lock().expect("session connection mutex");
         ensure_structural_batch_idle(&conn)?;
-        // #802: the range delete below erases the paths — capture them
-        // first so each file's Deleted event can fire after commit.
-        // In-memory and O(folder size) by design (Codoki on #846): a
-        // folder delete already walks its subtree on disk, and events
-        // are per-file by contract; revisit with streamed emission
-        // only if a real vault shows this hot.
-        let deleted_files: Vec<String> = {
-            let (lo, hi) = subtree_bounds(path).expect("non-root folder path");
-            let mut stmt = conn.prepare("SELECT path FROM files WHERE path >= ?1 AND path < ?2")?;
-            let rows = stmt.query_map(rusqlite::params![lo, hi], |row| row.get(0))?;
-            rows.collect::<Result<_, _>>()?
+        // Membership-fenced trash (final-confirmation review): every
+        // descendant — including one a racing save commits after any
+        // earlier snapshot — is durably marked before the bytes
+        // move, or the save is blocked until they have. The fence's
+        // own enumeration is also the #802 event list: per-file
+        // Deleted events fire from the fenced membership after
+        // commit. See fence_prefix_and_mutate.
+
+        let (planted_markers, ()) =
+            self.fence_prefix_and_mutate(&mut conn, path, None, || self.provider.delete(path))?;
+        let fenced_members: Vec<String> = {
+            let mut unique: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+            for (marker_path, _) in &planted_markers {
+                unique.insert(marker_path.clone());
+            }
+            unique.into_iter().collect()
         };
-        // Held delete markers for every descendant, planted before
-        // the filesystem mutation (model-confirmation review) — see
-        // delete_file.
-        let planted_markers =
-            self.plant_move_markers_locked(&conn, deleted_files.iter().map(String::as_str))?;
-        self.provider.delete(path)?;
-        // DISK TRUTH per descendant (re-confirmation review) — see
-        // delete_file: a concurrent save can recreate a descendant
-        // between the filesystem delete and this transaction. Keep
-        // recreated rows and their held markers; delete the rest.
-        let recreated: std::collections::HashSet<&String> = deleted_files
-            .iter()
-            .filter(|file| self.provider.stat(file).is_ok())
-            .collect();
+        let deleted_files = fenced_members;
+        // Kind-aware disk truth per descendant, probed INSIDE the
+        // index transaction (writer lock held — coordinated saves
+        // cannot recreate mid-decision): proven absence deletes the
+        // row and clears the marker; live or unknown keeps both.
+        let mut recreated: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut graph_sink = self.graph_sink();
         self.with_structural_tx(&mut conn, |tx| {
+            for file in &deleted_files {
+                let keep = match self.provider.stat(file) {
+                    Ok(_) => true,
+                    Err(VaultError::Io(ref io_err))
+                        if io_err.kind() == std::io::ErrorKind::NotFound =>
+                    {
+                        false
+                    }
+                    Err(_) => true,
+                };
+                if keep {
+                    recreated.insert(file.clone());
+                }
+            }
             // Per-file removal replay, snapshotted BEFORE the range
             // delete (#550): the graph mirrors the cascade one victim
             // at a time; inbound rows from co-deleted files are
             // skipped at apply time when their source is already gone.
             for file in &deleted_files {
-                if recreated.contains(file) {
+                if recreated.contains(file.as_str()) {
                     continue;
                 }
                 graph_sink.stage_with(|| {
@@ -13996,7 +14124,7 @@ impl VaultSession {
                 rusqlite::params![path, lo, hi],
             )?;
             for (marker_path, token) in &planted_markers {
-                if recreated.contains(marker_path) {
+                if recreated.contains(marker_path.as_str()) {
                     continue;
                 }
                 tx.execute(
@@ -14021,7 +14149,7 @@ impl VaultSession {
         drop(vault_structural_lock);
         self.bump_bases_generation();
         for file in &deleted_files {
-            if recreated.contains(file) {
+            if recreated.contains(file.as_str()) {
                 self.notify_file_change(FileChangeKind::Modified, file, None);
             } else {
                 self.notify_file_change(FileChangeKind::Deleted, file, None);
@@ -14261,15 +14389,16 @@ impl VaultSession {
             out
         };
 
-        // Round 35: mark BOTH sides of every file this move touches
-        // BEFORE the filesystem mutation — see plant_move_markers_locked.
-        let planted_markers = self.plant_move_markers_locked(
-            &conn,
-            moved
-                .iter()
-                .flat_map(|(old, new)| [old.as_str(), new.as_str()]),
-        )?;
-        self.provider.rename(from, to)?;
+        // Rounds 35 + final-confirmation review: mark BOTH sides of
+        // every file this move touches BEFORE the filesystem
+        // mutation, and FENCE the prefix membership under the writer
+        // lock so a save landing after the snapshot is either marked
+        // too or blocked until the rename completes.
+        let mut conn = conn;
+        let (planted_markers, ()) =
+            self.fence_prefix_and_mutate(&mut conn, from, Some(to), || {
+                self.provider.rename(from, to)
+            })?;
         // The index rewrite uses the FROZEN pre-rename snapshot —
         // never a fresh prefix enumeration (model-confirmation
         // review); see rename_prefix_in_index.
@@ -15481,35 +15610,70 @@ fn rename_prefix_in_index(
         let rows = stmt.query_map(rusqlite::params![lo, hi], |row| row.get::<_, String>(0))?;
         rows.collect::<Result<_, _>>()?
     };
-    for stray in strays {
-        let swept_to = format!("{to}{}", &stray[from.len()..]);
-        let source_exists = provider.stat(&stray).is_ok();
-        let destination_exists = provider.stat(&swept_to).is_ok();
-        if source_exists {
-            continue;
+    // FOUR-STATE, kind-aware classification (final-confirmation
+    // review). `is_ok()` alone collapsed permission and transient
+    // stat failures into "absent", and the source-first shortcut
+    // missed the both-present case (swept entrant plus a recreated
+    // source). Probe outcomes are Live / ProvenAbsent / Unknown per
+    // side:
+    //  - source Live only        -> row already matches disk; leave.
+    //  - destination Live only   -> swept along; rewrite + mark both.
+    //  - BOTH Live               -> keep the SOURCE incarnation's row
+    //    (never erase it by preferring the destination) and mark both
+    //    paths: the unindexed destination file gains its marker, and
+    //    the sweep's reads build its row and re-verify the source.
+    //  - anything Unknown        -> mark both, mutate nothing.
+    //  - both ProvenAbsent       -> mark the source for NotFound
+    //    convergence.
+    let probe = |p: &str| -> u8 {
+        match provider.stat(p) {
+            Ok(_) => 0,
+            Err(VaultError::Io(ref io_err)) if io_err.kind() == std::io::ErrorKind::NotFound => 1,
+            Err(_) => 2,
         }
-        let aged_stamp = now_ms() - VaultSession::intent_abandon_threshold_ms(&stray) - 1;
-        if destination_exists {
-            let (name, extension, is_markdown) = classify_path(&swept_to);
-            tx.execute(
-                "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
-                 WHERE path = ?5",
-                rusqlite::params![swept_to, name, extension, is_markdown as i64, stray],
-            )?;
-            clear_index_epoch_for_moved_path(tx, &swept_to)?;
-            for marker_path in [stray.as_str(), swept_to.as_str()] {
-                tx.execute(
-                    "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
-                     VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
-                    rusqlite::params![marker_path, aged_stamp, fresh_intent_token()],
-                )?;
-            }
-        } else {
+    };
+    let mark = |paths: &[&str]| -> Result<(), VaultError> {
+        for marker_path in paths {
+            let aged_stamp = now_ms() - VaultSession::intent_abandon_threshold_ms(marker_path) - 1;
             tx.execute(
                 "INSERT OR REPLACE INTO text_write_intents(path, created_ms, token, registered_epoch)
                  VALUES (?1, ?2, ?3, COALESCE((SELECT index_epoch FROM files WHERE path = ?1), 0))",
-                rusqlite::params![stray, aged_stamp, fresh_intent_token()],
+                rusqlite::params![marker_path, aged_stamp, fresh_intent_token()],
             )?;
+        }
+        Ok(())
+    };
+    for stray in strays {
+        let swept_to = format!("{to}{}", &stray[from.len()..]);
+        match (probe(&stray), probe(&swept_to)) {
+            (0, 1) => {} // source live, destination absent: row matches disk
+            (1, 0) => {
+                // Swept along: the row follows its bytes, marked on
+                // both sides for re-verification.
+                let (name, extension, is_markdown) = classify_path(&swept_to);
+                tx.execute(
+                    "UPDATE files SET path = ?1, name = ?2, extension = ?3, is_markdown = ?4
+                     WHERE path = ?5",
+                    rusqlite::params![swept_to, name, extension, is_markdown as i64, stray],
+                )?;
+                clear_index_epoch_for_moved_path(tx, &swept_to)?;
+                mark(&[stray.as_str(), swept_to.as_str()])?;
+            }
+            (0, 0) => {
+                // Both present: keep the source incarnation's row and
+                // let reads build the destination's.
+                mark(&[stray.as_str(), swept_to.as_str()])?;
+            }
+            (1, 1) => {
+                // Deleted meanwhile: NotFound convergence will remove
+                // the row.
+                mark(&[stray.as_str()])?;
+            }
+            _ => {
+                // Unknown probe outcome on either side: mutate
+                // nothing, mark both, and let reads decide later.
+                mark(&[stray.as_str(), swept_to.as_str()])?;
+            }
         }
     }
 
@@ -15528,6 +15692,13 @@ fn rename_prefix_in_index(
         });
     }
     for (id, old_path) in dir_rows {
+        // Disk truth for directory rows too (final-confirmation
+        // review): a source directory recreated by a racing save
+        // keeps its row — relocating it would split the file and
+        // directory trees.
+        if old_path != from && provider.stat(&old_path).is_ok() {
+            continue;
+        }
         let new_path = if old_path == from {
             to.to_string()
         } else {
