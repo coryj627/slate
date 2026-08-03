@@ -241,6 +241,80 @@ public sealed class BulkRenameTests : IDisposable
     }
 
     [Fact]
+    public void ApplyReportsReconcileTabsEvenAfterTheSheetShutsDown()
+    {
+        var announced = new List<A11yEvent>();
+        var reconciled = new List<RenameReport>();
+        var sheet = MakeSheet(announced, reconciled: reconciled);
+        var report = new RenameReport(
+            Affected:
+            [
+                new RenameAffected("a.md", "old", "new", true, "hash-after"),
+            ],
+            Skipped: [],
+            Failed: []);
+
+        // Contract 7/8 (adversarial round 1): a close mid-apply must
+        // not discard the landed writes' reconciliation — disk truth
+        // publishes regardless of UI liveness.
+        sheet.Shutdown();
+        sheet.PublishRun(0, dryRun: false, "oldkey", "newkey", report, null);
+        Assert.Same(report, Assert.Single(reconciled));
+        Assert.Contains(
+            announced,
+            item => item is A11yEvent.RenameSummary { Applied: true, Renamed: 1 });
+        Assert.Empty(sheet.Rows);
+    }
+
+    [Fact]
+    public void CloseDuringAnInFlightRunSettlesAtTheTerminalPublish()
+    {
+        var sheet = MakeSheet();
+        int settled = 0;
+        sheet.CloseSettled += () => settled++;
+
+        // Idle close settles immediately.
+        sheet.RequestClose();
+        Assert.Equal(1, settled);
+
+        // A close requested mid-run defers to the terminal publish.
+        sheet.OldKey = "oldkey";
+        sheet.NewKey = "renamed";
+        sheet.MarkWorkInFlightForTests();
+        sheet.RequestClose();
+        Assert.Equal(1, settled);
+        sheet.PublishRun(sheet.RequestIdForTests, true, "oldkey", "renamed", null, "cancelled");
+        Assert.Equal(2, settled);
+    }
+
+    [Fact]
+    public void DirtyTabsTakePropertyStaleCopyAfterAnAppliedRename()
+    {
+        using var workspace = new WorkspaceViewModel(
+            _session, _fixture.Root, () => [], _ => { },
+            startInteractionBackgroundWork: false);
+        var announced = new List<A11yEvent>();
+        workspace.OpenPath("a.md");
+        _ = workspace.EnsureActiveTabProperties(synchronousForTests: true);
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+        tab.Text += "\nUnsaved body edit.";
+        Assert.True(tab.IsDirty);
+
+        // Contract 8's dirty branch with contract 9's identity
+        // (adversarial round 1): the containment is spoken with
+        // PROPERTY copy — the task-toggle wording would be factually
+        // wrong here.
+        Assert.True(tab.RebaselineAfterPropertyWrite("some-new-hash", announced.Add));
+        Assert.True(tab.IsExternallyStale);
+        A11yEvent.HostComposed stale = Assert.IsType<A11yEvent.HostComposed>(
+            Assert.Single(announced));
+        Assert.StartsWith(
+            "Properties changed on disk", stale.Text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Task", stale.Text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void WorkspaceApplyReconcilesOpenCleanTabsToTheNewHash()
     {
         using var workspace = new WorkspaceViewModel(

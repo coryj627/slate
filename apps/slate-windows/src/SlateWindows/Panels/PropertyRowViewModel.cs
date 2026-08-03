@@ -28,12 +28,14 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
 
     public PropertyRowViewModel(
         Property property,
+        string ownerPath,
         string contentHash,
         Action<PropertyRowViewModel> commit,
         Action<PropertyRowViewModel> revertAnnounce,
         Action<PropertyRowViewModel> requestDelete)
     {
         Property = property;
+        OwnerPath = ownerPath;
         ContentHash = contentHash;
         CommitDelegate = commit;
         RevertAnnounceDelegate = revertAnnounce;
@@ -48,6 +50,12 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
     partial void OnDraftReplaced();
 
     public Property Property { get; }
+
+    /// <summary>The note PATH of the read that produced this row —
+    /// the write seam resolves the target tab by THIS, never by the
+    /// active tab (contract 1; adversarial round 1: an old row must
+    /// not mutate whichever note happens to be active).</summary>
+    public string OwnerPath { get; }
 
     /// <summary>The note's content hash AT the read that produced
     /// this row — the CAS token for every write from it.</summary>
@@ -168,7 +176,9 @@ internal sealed partial class PropertyRowViewModel : INotifyPropertyChanged
                     CultureInfo.InvariantCulture, DateTimeStyles.None, out _):
                 ValidationError = PropertyPhrase.DateShapeError;
                 return false;
-            case PropertyDraft.WikilinkDraft { Target: "" }:
+            case PropertyDraft.WikilinkDraft blank when blank.Target.Trim().Length == 0:
+                // Trim before the emptiness check (mac parity) — a
+                // whitespace-only target is empty.
                 ValidationError = PropertyPhrase.WikilinkEmptyError;
                 return false;
             case PropertyDraft.WikilinkDraft w when w.Target.Contains("]]"):

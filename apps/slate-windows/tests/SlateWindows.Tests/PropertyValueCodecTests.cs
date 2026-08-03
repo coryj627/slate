@@ -15,6 +15,11 @@ namespace SlateWindows.Tests;
 /// </summary>
 public class PropertyValueCodecTests
 {
+    /// <summary>A tagged date element with the invisible U+F8FF
+    /// discriminator prefix spelled as an escape.</summary>
+    private const string TaggedDateElement =
+        "{\"slate.property-kind\":\"date\",\"value\":\"2026-04-01\"}";
+
     [Fact]
     public void NumberKindNeverFlipsIntegerAndFloat()
     {
@@ -85,14 +90,14 @@ public class PropertyValueCodecTests
         // Plain string arrays (the parse path)...
         var list = Assert.IsType<PropertyDraft.ListDraft>(
             PropertyValueCodec.Decode("list", "[\"a\",\"b\"]"));
-        Assert.Equal(new[] { "a", "b" }, list.Items);
+        Assert.Equal(new[] { "a", "b" }, list.Items.Select(item => item.Text));
 
         // ...and tagged element objects (the DB round-trip path).
         var tagged = Assert.IsType<PropertyDraft.ListDraft>(
             PropertyValueCodec.Decode(
                 "list",
                 "[{\"slate.property-kind\":\"date\",\"value\":\"2026-04-01\"},\"plain\"]"));
-        Assert.Equal(new[] { "2026-04-01", "plain" }, tagged.Items);
+        Assert.Equal(new[] { "2026-04-01", "plain" }, tagged.Items.Select(item => item.Text));
 
         var tags = Assert.IsType<PropertyDraft.TagListDraft>(
             PropertyValueCodec.Decode("tag_list", "[\"fixture\",\"properties\"]"));
@@ -104,6 +109,30 @@ public class PropertyValueCodecTests
         var encodedTags = Assert.IsType<PropertyValue.TagList>(
             PropertyValueCodec.Encode(tags));
         Assert.Equal(new[] { "fixture", "properties" }, encodedTags.Tags);
+
+        // Contract 10 (adversarial round 1): UNTOUCHED tagged and
+        // numeric elements re-encode with their original types —
+        // editing item 2 must not turn item 1's date into a string.
+        var typed = Assert.IsType<PropertyDraft.ListDraft>(
+            PropertyValueCodec.Decode(
+                "list", "[" + TaggedDateElement + ",7,1.5,true,\"plain\"]"));
+        typed.Items[4] = typed.Items[4] with { Text = "edited", Edited = true };
+        var reEncoded = Assert.IsType<PropertyValue.List>(
+            PropertyValueCodec.Encode(typed));
+        Assert.Equal(new PropertyValue.Date("2026-04-01"), reEncoded.Items[0]);
+        Assert.Equal(new PropertyValue.Integer(7), reEncoded.Items[1]);
+        Assert.Equal(new PropertyValue.Float(1.5), reEncoded.Items[2]);
+        Assert.Equal(new PropertyValue.Boolean(true), reEncoded.Items[3]);
+        Assert.Equal(new PropertyValue.Text("edited"), reEncoded.Items[4]);
+
+        // An EDITED typed element converts along its kind when the
+        // new text still fits it.
+        typed.Items[0] = typed.Items[0] with { Text = "2027-01-02", Edited = true };
+        typed.Items[1] = typed.Items[1] with { Text = "not a number", Edited = true };
+        var converted = Assert.IsType<PropertyValue.List>(
+            PropertyValueCodec.Encode(typed));
+        Assert.Equal(new PropertyValue.Date("2027-01-02"), converted.Items[0]);
+        Assert.Equal(new PropertyValue.Text("not a number"), converted.Items[1]);
     }
 
     [Fact]
@@ -148,12 +177,13 @@ public class PropertyValueCodecTests
         int reverts = 0;
         var row = new PropertyRowViewModel(
             new Property("aliases", "list", "[\"a\",\"b\"]"),
+            "note.md",
             "hash-1",
             _ => { },
             _ => reverts++,
             _ => { });
         var draft = Assert.IsType<PropertyDraft.ListDraft>(row.Draft);
-        draft.Items.Add("c");
+        draft.Items.Add(PropertyDraft.ListElementDraft.ForNew("c"));
         row.Draft = draft; // re-publish
         Assert.True(row.IsDirty);
 
@@ -162,13 +192,16 @@ public class PropertyValueCodecTests
         Assert.Equal(1, reverts);
         Assert.Equal(
             new[] { "a", "b" },
-            Assert.IsType<PropertyDraft.ListDraft>(row.Draft).Items);
+            Assert.IsType<PropertyDraft.ListDraft>(row.Draft)
+                .Items.Select(item => item.Text));
         // The baseline was never aliased into the mutable draft.
         Assert.Equal(
             new[] { "a", "b" },
-            Assert.IsType<PropertyDraft.ListDraft>(row.CommittedBaseline).Items);
+            Assert.IsType<PropertyDraft.ListDraft>(row.CommittedBaseline)
+                .Items.Select(item => item.Text));
     }
 
     private static PropertyRowViewModel MakeRow(string key, string kind, string valueJson) =>
-        new(new Property(key, kind, valueJson), "hash-1", _ => { }, _ => { }, _ => { });
+        new(new Property(key, kind, valueJson), "note.md", "hash-1",
+            _ => { }, _ => { }, _ => { });
 }

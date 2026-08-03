@@ -200,62 +200,86 @@ internal sealed partial class PropertyRowViewModel
         }
     }
 
-    private List<string>? DraftItems => _draft switch
+    private int DraftItemCount => _draft switch
     {
-        PropertyDraft.ListDraft list => list.Items,
-        PropertyDraft.TagListDraft tags => tags.Tags,
-        _ => null,
+        PropertyDraft.ListDraft list => list.Items.Count,
+        PropertyDraft.TagListDraft tags => tags.Tags.Count,
+        _ => 0,
     };
 
     private void AddItem()
     {
-        if (DraftItems is not { } items)
+        switch (_draft)
         {
-            return;
+            case PropertyDraft.ListDraft list:
+                list.Items.Add(PropertyDraft.ListElementDraft.ForNew(""));
+                break;
+            case PropertyDraft.TagListDraft tags:
+                tags.Tags.Add("");
+                break;
+            default:
+                return;
         }
-        items.Add("");
         RebuildItems();
         OnPropertyChanged(nameof(IsDirty));
     }
 
     internal void RemoveItem(int index)
     {
-        if (DraftItems is not { } items || index < 0 || index >= items.Count)
+        switch (_draft)
         {
-            return;
+            case PropertyDraft.ListDraft list
+                when index >= 0 && index < list.Items.Count:
+                list.Items.RemoveAt(index);
+                break;
+            case PropertyDraft.TagListDraft tags
+                when index >= 0 && index < tags.Tags.Count:
+                tags.Tags.RemoveAt(index);
+                break;
+            default:
+                return;
         }
-        items.RemoveAt(index);
         RebuildItems();
         OnPropertyChanged(nameof(IsDirty));
     }
 
+    /// <summary>Typed edits mark the ELEMENT edited (contract 10):
+    /// only user-touched elements convert on encode.</summary>
     internal void SetItemText(int index, string value)
     {
-        if (DraftItems is not { } items || index < 0 || index >= items.Count
-            || items[index] == value)
+        switch (_draft)
         {
-            return;
+            case PropertyDraft.ListDraft list
+                when index >= 0 && index < list.Items.Count
+                    && list.Items[index].Text != value:
+                list.Items[index] = list.Items[index] with { Text = value, Edited = true };
+                break;
+            case PropertyDraft.TagListDraft tags
+                when index >= 0 && index < tags.Tags.Count && tags.Tags[index] != value:
+                tags.Tags[index] = value;
+                break;
+            default:
+                return;
         }
-        items[index] = value;
         OnPropertyChanged(nameof(IsDirty));
     }
 
-    internal string ItemText(int index)
+    internal string ItemText(int index) => _draft switch
     {
-        List<string>? items = DraftItems;
-        return items is not null && index >= 0 && index < items.Count ? items[index] : "";
-    }
+        PropertyDraft.ListDraft list when index >= 0 && index < list.Items.Count =>
+            list.Items[index].Text,
+        PropertyDraft.TagListDraft tags when index >= 0 && index < tags.Tags.Count =>
+            tags.Tags[index],
+        _ => "",
+    };
 
     private void RebuildItems()
     {
         Items.Clear();
-        if (DraftItems is not { } items)
+        int count = DraftItemCount;
+        for (int index = 0; index < count; index++)
         {
-            return;
-        }
-        for (int index = 0; index < items.Count; index++)
-        {
-            Items.Add(new PropertyListItemViewModel(this, index, items.Count));
+            Items.Add(new PropertyListItemViewModel(this, index, count));
         }
     }
 }
@@ -281,6 +305,15 @@ internal sealed class PropertyListItemViewModel : INotifyPropertyChanged
     public string RemoveLabel { get; }
 
     public ICommand RemoveCommand { get; }
+
+    /// <summary>Enter in an item editor commits the ROW (contract 2:
+    /// Enter is a commit trigger for lists too — adversarial round
+    /// 1); Esc reverts it; the delete chord routes to the row.</summary>
+    public ICommand CommitCommand => _row.CommitCommand;
+
+    public ICommand RevertCommand => _row.RevertCommand;
+
+    public ICommand DeleteCommand => _row.DeleteCommand;
 
     public string Text
     {

@@ -1,6 +1,8 @@
 // Copyright (C) 2026 Cory Joseph
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
+using uniffi.slate_uniffi;
+
 namespace SlateWindows.Panels;
 
 /// <summary>
@@ -9,6 +11,11 @@ namespace SlateWindows.Panels;
 /// is typable; shape validation happens at commit, pre-core.
 /// Drafts are value-cloneable so `CommittedBaseline` snapshots are
 /// independent of live edits.
+///
+/// List elements are TYPED (adversarial round 1, contract 10): each
+/// element carries its original decoded `PropertyValue` so untouched
+/// tagged elements (dates, wikilinks, numbers) re-encode verbatim —
+/// editing item 2 must never turn item 1's date into a plain string.
 /// </summary>
 internal abstract record PropertyDraft
 {
@@ -22,11 +29,24 @@ internal abstract record PropertyDraft
 
     internal sealed record WikilinkDraft(string Target) : PropertyDraft;
 
-    internal sealed record ListDraft(List<string> Items) : PropertyDraft
+    /// <summary>One list element: the decoded source value (null for
+    /// user-added elements), its editable text, and whether the user
+    /// touched it. Encode keeps untouched sources verbatim.</summary>
+    internal sealed record ListElementDraft(PropertyValue? Source, string Text, bool Edited)
     {
-        public ListDraft Copy() => new(new List<string>(Items));
+        public static ListElementDraft ForNew(string text) => new(null, text, true);
+    }
 
-        public bool ValueEquals(ListDraft other) => Items.SequenceEqual(other.Items);
+    internal sealed record ListDraft(List<ListElementDraft> Items) : PropertyDraft
+    {
+        public ListDraft Copy() => new([.. Items]);
+
+        public bool ValueEquals(ListDraft other) =>
+            Items.Count == other.Items.Count
+            && Items.Zip(other.Items).All(pair =>
+                pair.First.Text == pair.Second.Text
+                && pair.First.Edited == pair.Second.Edited
+                && Equals(pair.First.Source, pair.Second.Source));
     }
 
     internal sealed record TagListDraft(List<string> Tags) : PropertyDraft
@@ -37,7 +57,7 @@ internal abstract record PropertyDraft
     }
 
     /// <summary>Structural equality that respects list CONTENTS
-    /// (record equality on List&lt;string&gt; is reference-based).</summary>
+    /// (record equality on List&lt;T&gt; is reference-based).</summary>
     public static bool ValueEquals(PropertyDraft a, PropertyDraft b) => (a, b) switch
     {
         (ListDraft la, ListDraft lb) => la.ValueEquals(lb),

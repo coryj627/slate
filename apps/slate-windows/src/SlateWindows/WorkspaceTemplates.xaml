@@ -81,11 +81,20 @@
     <DataTemplate x:Key="PropertyDatePickerTemplate"
                   DataType="{x:Type panels:PropertyRowViewModel}">
         <!-- Only mounted when the STORED value parses yyyy-MM-dd, so
-             SelectedDate never invents a date; picking commits
-             immediately (mac parity). -->
+             SelectedDate never invents a date; a CALENDAR pick
+             commits immediately (mac parity). The text portion is
+             read-only (adversarial round 1, contract 2): WPF's
+             DatePicker parses typed text on LostFocus, which would
+             turn a focus change into a disk write. -->
         <DatePicker SelectedDate="{Binding DateValue, Mode=TwoWay}"
                     ToolTip="{Binding EditorTooltip}"
-                    AutomationProperties.Name="{Binding AutomationName}" />
+                    AutomationProperties.Name="{Binding AutomationName}">
+            <DatePicker.Resources>
+                <Style TargetType="DatePickerTextBox">
+                    <Setter Property="IsReadOnly" Value="True" />
+                </Style>
+            </DatePicker.Resources>
+        </DatePicker>
     </DataTemplate>
 
     <DataTemplate x:Key="PropertyNumberEditorTemplate"
@@ -161,9 +170,18 @@
                 <ItemsControl.ItemTemplate>
                     <DataTemplate DataType="{x:Type panels:PropertyListItemViewModel}">
                         <StackPanel Margin="0,2" Orientation="Horizontal">
+                            <!-- Enter commits the ROW (contract 2 —
+                                 lists have the same commit triggers
+                                 as scalars), Esc reverts it. -->
                             <TextBox MinWidth="140"
                                      Text="{Binding Text, UpdateSourceTrigger=PropertyChanged}"
-                                     AutomationProperties.Name="{Binding ItemLabel}" />
+                                     AutomationProperties.Name="{Binding ItemLabel}">
+                                <TextBox.InputBindings>
+                                    <KeyBinding Key="Return" Command="{Binding CommitCommand}" />
+                                    <KeyBinding Key="Escape" Command="{Binding RevertCommand}" />
+                                    <KeyBinding Key="Back" Modifiers="Control" Command="{Binding DeleteCommand}" />
+                                </TextBox.InputBindings>
+                            </TextBox>
                             <Button Margin="6,0,0,0"
                                     Padding="8,2"
                                     Content="Remove"

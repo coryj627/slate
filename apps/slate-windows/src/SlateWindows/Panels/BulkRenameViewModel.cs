@@ -161,6 +161,28 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
     /// on it instead of per-row collection churn.</summary>
     internal event Action? RunPublished;
 
+    /// <summary>Raised when the sheet may actually be released — the
+    /// workspace shuts it down and nulls the reference here.</summary>
+    internal event Action? CloseSettled;
+
+    private bool _closeRequested;
+
+    /// <summary>Close request (adversarial round 1, contract 7): an
+    /// idle sheet settles immediately; an in-flight run is CANCELLED
+    /// and the sheet stays alive until the terminal publish lands the
+    /// partial report, its cancellation partition, and the tab
+    /// reconciliation — a mid-apply close must never discard them.</summary>
+    public void RequestClose()
+    {
+        if (!_workInFlight)
+        {
+            CloseSettled?.Invoke();
+            return;
+        }
+        _closeRequested = true;
+        CancelInFlight();
+    }
+
     private void Run(bool dryRun)
     {
         string oldKey = _oldKey.Trim();
@@ -192,8 +214,12 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         });
     }
 
-    /// <summary>Publish seam (internal for tests). Mutations before
-    /// notifications; stale requests discard.</summary>
+    /// <summary>Publish seam (internal for tests). DISK TRUTH comes
+    /// first (adversarial round 1, contracts 7/8/9): an apply
+    /// report's tab reconciliation and its canonical announcements
+    /// happen regardless of UI liveness — the writes already landed;
+    /// only the visual state is gated on the sheet being alive.
+    /// Mutations before notifications; stale requests discard.</summary>
     internal void PublishRun(
         int requestId,
         bool dryRun,
@@ -202,8 +228,25 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         RenameReport? report,
         string? error)
     {
-        if (IsShutDown || requestId != _requestId)
+        if (requestId != _requestId)
         {
+            return;
+        }
+        if (report is not null && !dryRun)
+        {
+            _reconcileTabs(report);
+        }
+        if (IsShutDown)
+        {
+            if (report is not null)
+            {
+                _announce(new A11yEvent.RenameSummary(
+                    Applied: !dryRun,
+                    Renamed: (uint)report.Affected.Length,
+                    Skipped: (uint)report.Skipped.Length,
+                    Failed: (uint)report.Failed.Length));
+            }
+            SettleCloseIfRequested();
             return;
         }
         WorkInFlight = false;
@@ -214,6 +257,7 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
             Disarm();
             _announce(new A11yEvent.RenameFailed(error ?? "unknown failure"));
             RunPublished?.Invoke();
+            SettleCloseIfRequested();
             return;
         }
         Rows.Clear();
@@ -254,12 +298,25 @@ internal sealed class BulkRenameViewModel : PanelWorkScheduler
         else
         {
             Disarm();
-            _reconcileTabs(report);
         }
         OnPropertyChanged(nameof(CanApply));
         OnPropertyChanged(nameof(CanPreview));
         RunPublished?.Invoke();
+        SettleCloseIfRequested();
     }
+
+    private void SettleCloseIfRequested()
+    {
+        if (_closeRequested)
+        {
+            _closeRequested = false;
+            CloseSettled?.Invoke();
+        }
+    }
+
+    internal void MarkWorkInFlightForTests() => WorkInFlight = true;
+
+    internal int RequestIdForTests => _requestId;
 
     /// <summary>Row status strings, rendered from the TYPED reason
     /// enums (§2.5, verbatim).</summary>

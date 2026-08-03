@@ -5,13 +5,22 @@ using uniffi.slate_uniffi;
 
 namespace SlateWindows.Panels;
 
+/// <summary>The immutable identity an add sheet writes against
+/// (contract 1, adversarial round 1): the owner path, the header's
+/// publish hash, and the key set of THAT read. Captured when the
+/// sheet opens; the commit never re-resolves the active tab or
+/// re-reads a hash.</summary>
+internal sealed record PropertyAddIntent(
+    string Path, string ContentHash, IReadOnlyList<string> Keys);
+
 /// <summary>
 /// W4-4 (#736): the add-property sheet. Validation is TOTAL and
 /// PRE-CORE (feature contract 6): empty, dotted, and duplicate keys
 /// are refused with the verbatim message before any FFI call; a
 /// blocked commit announces its disabled reason (the mac residue
-/// site's twin). Commits route through the same workspace seam the
-/// editor rows use — the sheet itself never writes.
+/// site's twin). Commits route through the workspace seam with the
+/// captured intent — the sheet itself never writes, and an
+/// undispatched commit is reported honestly (never as success).
 /// </summary>
 internal sealed class AddPropertyViewModel : BindableBase
 {
@@ -19,19 +28,19 @@ internal sealed class AddPropertyViewModel : BindableBase
     public static readonly string[] Kinds =
         ["text", "number", "boolean", "date", "datetime", "wikilink", "list", "tag_list"];
 
-    private readonly Func<IReadOnlyList<string>?> _currentKeys;
-    private readonly Action<string, PropertyValue> _commit;
+    private readonly PropertyAddIntent? _intent;
+    private readonly Func<PropertyAddIntent, string, PropertyValue, bool> _commit;
     private readonly Action<A11yEvent> _announce;
     private string _key = "";
     private string _kind = "text";
     private string? _validationError;
 
     public AddPropertyViewModel(
-        Func<IReadOnlyList<string>?> currentKeys,
-        Action<string, PropertyValue> commit,
+        PropertyAddIntent? intent,
+        Func<PropertyAddIntent, string, PropertyValue, bool> commit,
         Action<A11yEvent> announce)
     {
-        _currentKeys = currentKeys;
+        _intent = intent;
         _commit = commit;
         _announce = announce;
     }
@@ -64,14 +73,15 @@ internal sealed class AddPropertyViewModel : BindableBase
         private set => SetField(ref _validationError, value);
     }
 
-    /// <summary>Validate and commit. Returns true when the write was
-    /// dispatched; false leaves the sheet open with the error.</summary>
+    /// <summary>Validate and commit against the captured intent.
+    /// Returns true only when the write was actually DISPATCHED
+    /// (contract 6 — a refused dispatch is never reported as
+    /// success); false leaves the sheet open with the error.</summary>
     public bool Add()
     {
         string key = _key.Trim();
-        var keys = _currentKeys();
         string? error = null;
-        if (keys is null)
+        if (_intent is null)
         {
             error = PropertyPhrase.NoNoteError;
         }
@@ -83,7 +93,7 @@ internal sealed class AddPropertyViewModel : BindableBase
         {
             error = PropertyPhrase.KeyDottedError;
         }
-        else if (keys.Contains(key, StringComparer.Ordinal))
+        else if (_intent.Keys.Contains(key, StringComparer.Ordinal))
         {
             error = PropertyPhrase.KeyDuplicateError(key);
         }
@@ -95,7 +105,14 @@ internal sealed class AddPropertyViewModel : BindableBase
             _announce(new A11yEvent.HostComposed(error, A11yPriority.High));
             return false;
         }
-        _commit(key, DefaultValueFor(_kind));
+        if (!_commit(_intent!, key, DefaultValueFor(_kind)))
+        {
+            // The seam refused (dirty owner, conflict, in-flight) and
+            // already announced its reason; the sheet keeps the draft
+            // with the verbatim failure copy.
+            ValidationError = PropertyPhrase.AddFailedDraftKept;
+            return false;
+        }
         return true;
     }
 

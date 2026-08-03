@@ -20,9 +20,16 @@ public sealed class AddPropertyTests
     {
         var announced = new List<A11yEvent>();
         var commits = new List<string>();
+        bool dispatch = true;
         var sheet = new AddPropertyViewModel(
-            () => ["existing"],
-            (key, _) => commits.Add(key),
+            new PropertyAddIntent("note.md", "hash-1", ["existing"]),
+            (intent, key, _) =>
+            {
+                Assert.Equal("note.md", intent.Path);
+                Assert.Equal("hash-1", intent.ContentHash);
+                commits.Add(key);
+                return dispatch;
+            },
             announced.Add);
 
         sheet.Key = "";
@@ -41,8 +48,16 @@ public sealed class AddPropertyTests
             "A property named `existing` already exists on this note.",
             sheet.ValidationError);
 
+        // A null intent (no authoritative header data at open) makes
+        // every Add refuse pre-core.
         var noNote = new AddPropertyViewModel(
-            () => null, (key, _) => commits.Add(key), announced.Add);
+            null,
+            (_, key, _) =>
+            {
+                commits.Add(key);
+                return true;
+            },
+            announced.Add);
         noNote.Key = "anything";
         Assert.False(noNote.Add());
         Assert.Equal("No note is loaded.", noNote.ValidationError);
@@ -57,6 +72,17 @@ public sealed class AddPropertyTests
         Assert.Null(sheet.ValidationError);
         Assert.True(sheet.Add());
         Assert.Equal(["fresh"], commits);
+
+        // A REFUSED dispatch is never reported as success
+        // (contract 6, adversarial round 1): the seam said no, the
+        // sheet keeps the draft with the verbatim copy.
+        dispatch = false;
+        sheet.Key = "fresh2";
+        Assert.False(sheet.Add());
+        Assert.Equal(
+            "The property was not added. Your draft is still here.",
+            sheet.ValidationError);
+        Assert.Equal("fresh2", sheet.Key);
     }
 
     [Fact]
@@ -86,7 +112,7 @@ public sealed class AddPropertyTests
     public void SheetShownPostsTheCanonicalEventOnce()
     {
         var announced = new List<A11yEvent>();
-        var sheet = new AddPropertyViewModel(() => [], (_, _) => { }, announced.Add);
+        var sheet = new AddPropertyViewModel(null, (_, _, _) => true, announced.Add);
         sheet.SheetShown();
         A11yEvent shown = Assert.Single(announced);
         Assert.IsType<A11yEvent.AddPropertySheetShown>(shown);
@@ -170,6 +196,58 @@ public sealed class AddPropertyTests
                 "The property was not added. Your draft is still here.",
                 sheet.ValidationError);
             Assert.Single(announced.OfType<A11yEvent.PropertyEditFailed>());
+        });
+    }
+
+    [Fact]
+    public void AddConflictsGetTheResolutionDialogAndKeepMineRetriesTheAdd()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = FixtureVault.Create(0, "add-property-conflict");
+            string notePath = Path.Combine(fixture.Root, "note.md");
+            File.WriteAllText(notePath, "---\nfirst: one\n---\nBody.\n");
+            using VaultSession session = OpenScanned(fixture.Root);
+            var announced = new List<A11yEvent>();
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], announced.Add,
+                startInteractionBackgroundWork: false);
+            (Action KeepMine, Action Reload)? resolution = null;
+            workspace.PropertyConflictDialog = (_, _, keepMine, reload) =>
+                resolution = (keepMine, reload);
+            workspace.OpenPath("note.md");
+            _ = workspace.EnsureActiveTabProperties(synchronousForTests: true);
+            WorkspaceTabViewModel tab =
+                Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+
+            workspace.OpenAddPropertySheet(synchronousForTests: true);
+            AddPropertyViewModel sheet = workspace.AddPropertySheet!;
+
+            // The disk moves AFTER the intent was captured; the tab
+            // is unaware, so the pre-core gates pass and core CAS
+            // refuses — the add must get the SAME resolution surface
+            // as row edits (contract 1, adversarial round 1).
+            _ = session.SaveText(
+                "note.md", "---\nfirst: one\n---\nMoved body.\n", tab.SavedContentHash);
+            sheet.Key = "second";
+            Assert.True(sheet.Add());
+            WaitForUi(() => resolution is not null);
+            Assert.Same(sheet, workspace.AddPropertySheet);
+            Assert.Equal(
+                "The property was not added. Your draft is still here.",
+                sheet.ValidationError);
+
+            // Keep Mine re-issues the ADD against a fresh hash.
+            resolution!.Value.KeepMine();
+            WaitForUi(() => workspace.AddPropertySheet is null);
+            Assert.Contains(
+                "second:",
+                File.ReadAllText(notePath),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                announced,
+                item => SlateUniffiMethods.A11yRender(item).Text
+                    == "Property second updated.");
         });
     }
 

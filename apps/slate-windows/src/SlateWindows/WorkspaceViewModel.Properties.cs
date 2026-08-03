@@ -10,10 +10,18 @@ namespace SlateWindows;
 /// W4-4 (#736): the property WRITE SEAM — the TogglePanelTask shape
 /// applied to set_property/delete_property. The header VM and its
 /// rows never write; every commit funnels here for the refusal
-/// gates (feature contract 3), the CAS snapshot hash (contract 1),
-/// and the terminal completion + single announcement per outcome
-/// (contracts 4 and 9). The write worker itself lives on the tab
-/// (WorkspaceTabViewModel.Properties.cs), like the toggle worker.
+/// gates (feature contract 3), the CAS snapshot identity
+/// (contract 1), and the terminal completion + single announcement
+/// per outcome (contracts 4 and 9). The write worker itself lives
+/// on the tab (WorkspaceTabViewModel.Properties.cs), like the
+/// toggle worker.
+///
+/// Adversarial-round-1 posture: every operation resolves its target
+/// tab by the OWNER PATH captured at the read that produced it —
+/// rows carry OwnerPath, the add sheet carries an immutable
+/// PropertyAddIntent — never by whichever tab happens to be active
+/// at commit time. Conflict retries are OPERATION-SPECIFIC: a
+/// conflicted delete retries as a delete, never as a set.
 /// </summary>
 internal sealed partial class WorkspaceViewModel
 {
@@ -79,16 +87,23 @@ internal sealed partial class WorkspaceViewModel
             },
             _ => true);
 
+    /// <summary>Open the add sheet with an IMMUTABLE intent captured
+    /// NOW (contract 1): owner path, the header's publish hash, and
+    /// the key set all pin the exact read the sheet validates and
+    /// writes against — commit never re-resolves the active tab or
+    /// re-reads a hash. No authoritative header data yet (pending
+    /// load or load error) → the intent is null and every Add
+    /// refuses pre-core (contract 6 totality).</summary>
     internal void OpenAddPropertySheet(bool synchronousForTests = false)
     {
         var properties = EnsureActiveTabProperties(synchronousForTests);
-        var sheet = new AddPropertyViewModel(
-            () => properties is { LoadError: null } header
-                && ActiveGroup.ActiveTab is { IsMarkdown: true }
-                ? header.CurrentKeys
-                : null,
-            (key, value) => CommitAddProperty(key, value),
-            _announce);
+        PropertyAddIntent? intent =
+            ActiveGroup.ActiveTab is WorkspaceTabViewModel { IsMarkdown: true } tab
+            && properties is { LoadError: null } header
+            && header.ContentHash.Length > 0
+                ? new PropertyAddIntent(tab.Path, header.ContentHash, header.CurrentKeys)
+                : null;
+        var sheet = new AddPropertyViewModel(intent, CommitAddProperty, _announce);
         AddPropertySheet = sheet;
         sheet.SheetShown();
     }
@@ -96,27 +111,38 @@ internal sealed partial class WorkspaceViewModel
     internal void OpenBulkRenameSheet(bool synchronousForTests = false)
     {
         var sheet = CreateBulkRename(synchronousForTests);
+        sheet.CloseSettled += () =>
+        {
+            sheet.Shutdown();
+            if (ReferenceEquals(BulkRenameSheet, sheet))
+            {
+                BulkRenameSheet = null;
+            }
+        };
         BulkRenameSheet = sheet;
         sheet.SheetShown();
     }
 
-    internal void CloseBulkRenameSheet()
-    {
-        BulkRenameSheet?.CancelInFlight();
-        BulkRenameSheet?.Shutdown();
-        BulkRenameSheet = null;
-    }
+    /// <summary>Close request: an idle sheet closes immediately; a
+    /// sheet with an in-flight run cancels and stays visible until
+    /// the run's terminal publish settles (adversarial round 1,
+    /// contract 7 — a mid-apply close must not discard the partial
+    /// report or its tab reconciliation).</summary>
+    internal void CloseBulkRenameSheet() => BulkRenameSheet?.RequestClose();
 
-    /// <summary>The ADD write: same seam as row commits, with the
-    /// header's read-time hash as the CAS token (contract 1 — adds
-    /// have no row to pin one). Success closes the sheet; failure
-    /// keeps it open with the draft intact (§2.4).</summary>
-    internal bool CommitAddProperty(string key, PropertyValue value)
+    /// <summary>The ADD write (dispatched = true). Refusals announce
+    /// their reason and return false — the sheet reports an
+    /// undispatched add honestly (contract 6). The completion binds
+    /// the CAPTURED sheet instance, so a close-and-reopen during the
+    /// write can never close or mark a replacement sheet.</summary>
+    internal bool CommitAddProperty(PropertyAddIntent intent, string key, PropertyValue value)
     {
-        if (ActiveGroup.ActiveTab is not WorkspaceTabViewModel { IsMarkdown: true } tab
-            || tab.Properties is not { LoadError: null } properties
-            || properties.ContentHash.Length == 0)
+        if (FindTabForPath(intent.Path) is not { IsMarkdown: true } tab)
         {
+            _announce(new A11yEvent.HostComposed(
+                // W0.5-3 residue: the owner note is gone; the draft
+                // stays parked in the sheet.
+                PropertyPhrase.NoNoteError, A11yPriority.High));
             return false;
         }
         if (tab.IsDirty)
@@ -129,45 +155,98 @@ internal sealed partial class WorkspaceViewModel
                 A11yPriority.High));
             return false;
         }
-        string hash = properties.ContentHash;
+        AddPropertyViewModel? sheet = AddPropertySheet;
         if (tab.IsExternallyStale
-            || !string.Equals(tab.SavedContentHash, hash, StringComparison.Ordinal))
+            || !string.Equals(
+                tab.SavedContentHash, intent.ContentHash, StringComparison.Ordinal))
         {
-            _announce(new A11yEvent.PropertyEditConflict(
-                System.IO.Path.GetFileName(tab.Path)));
-            RefreshPropertiesFor(tab.Path);
+            AnnounceAddConflict(intent.Path, sheet, key, value);
             return false;
         }
-        string path = tab.Path;
-        tab.WriteProperty(
-            hash,
-            expectedHash => _session.SetProperty(path, key, value, expectedHash),
-            (report, failure, postFailureDiskHash) =>
-            {
-                if (report is not null)
-                {
-                    AddPropertySheet = null;
-                    ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
-                    RefreshPropertiesFor(path);
-                    Panels.NoteSaved(path);
-                    _announce(new A11yEvent.PropertyChanged(key, false));
-                    return;
-                }
-                AddPropertySheet?.MarkAddFailed();
-                if (failure is VaultException.WriteConflict)
-                {
-                    _announce(new A11yEvent.PropertyEditConflict(
-                        System.IO.Path.GetFileName(path)));
-                }
-                else
-                {
-                    _announce(new A11yEvent.PropertyEditFailed(
-                        failure?.Message ?? "unknown failure"));
-                }
-                RefreshPropertiesFor(path);
-            });
+        if (!tab.WriteProperty(
+            intent.ContentHash,
+            expectedHash => _session.SetProperty(intent.Path, key, value, expectedHash),
+            AddWriteCompletion(intent.Path, sheet, key, value)))
+        {
+            AnnounceWriteInFlightRefusal();
+            return false;
+        }
         return true;
     }
+
+    /// <summary>Add conflicts get the SAME resolution surface as row
+    /// conflicts (contract 1): Keep Mine re-issues THIS add intent
+    /// against a fresh disk hash; Reload refreshes the owner header
+    /// while the sheet keeps the draft.</summary>
+    private void AnnounceAddConflict(
+        string path, AddPropertyViewModel? sheet, string key, PropertyValue value)
+    {
+        sheet?.MarkAddFailed();
+        _announce(new A11yEvent.PropertyEditConflict(
+            System.IO.Path.GetFileName(path)));
+        PropertyConflictDialog?.Invoke(
+            System.IO.Path.GetFileName(path),
+            key,
+            () => RetryAddWithFreshHash(path, sheet, key, value),
+            () => ReloadPropertiesFromDisk(path));
+    }
+
+    /// <summary>Keep Mine for adds — the sanctioned fresh-hash
+    /// re-read, operation-specific (it re-issues the ADD).</summary>
+    private void RetryAddWithFreshHash(
+        string path, AddPropertyViewModel? sheet, string key, PropertyValue value)
+    {
+        if (FindTabForPath(path) is not { IsMarkdown: true } tab)
+        {
+            return;
+        }
+        if (!tab.WriteProperty(
+            null,
+            _ =>
+            {
+                string freshHash = _session.ReadNoteParts(path).ContentHash;
+                return _session.SetProperty(path, key, value, freshHash);
+            },
+            AddWriteCompletion(path, sheet, key, value)))
+        {
+            AnnounceWriteInFlightRefusal();
+        }
+    }
+
+    private Action<SaveReport?, VaultException?, string?> AddWriteCompletion(
+        string path, AddPropertyViewModel? sheet, string key, PropertyValue value) =>
+        (report, failure, postFailureDiskHash) =>
+        {
+            if (report is not null)
+            {
+                if (ReferenceEquals(AddPropertySheet, sheet))
+                {
+                    AddPropertySheet = null;
+                }
+                _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
+                RefreshPropertiesFor(path);
+                Panels.NoteSaved(path);
+                _announce(new A11yEvent.PropertyChanged(key, false));
+                return;
+            }
+            sheet?.MarkAddFailed();
+            if (failure is VaultException.WriteConflict)
+            {
+                FindTabForPath(path)?.RefreshExternalStaleness();
+                _announce(new A11yEvent.PropertyEditConflict(
+                    System.IO.Path.GetFileName(path)));
+                PropertyConflictDialog?.Invoke(
+                    System.IO.Path.GetFileName(path),
+                    key,
+                    () => RetryAddWithFreshHash(path, sheet, key, value),
+                    () => ReloadPropertiesFromDisk(path));
+                RefreshPropertiesFor(path);
+                return;
+            }
+            _announce(new A11yEvent.PropertyEditFailed(
+                failure?.Message ?? "unknown failure"));
+            ReconcileAfterReadBack(path, postFailureDiskHash);
+        };
 
     /// <summary>Attach (or return) the active tab's header VM with
     /// the workspace seam delegates wired. Called at tab activation
@@ -221,10 +300,12 @@ internal sealed partial class WorkspaceViewModel
     /// <summary>Commit a row's draft via set_property. Refusals are
     /// total and pre-core (contract 3): validation, write-in-flight,
     /// dirty tab, externally-stale tab, and row-hash mismatch touch
-    /// nothing and announce exactly once.</summary>
+    /// nothing and announce exactly once. The target tab is resolved
+    /// by the row's OWNER PATH (contract 1) — a row from a note the
+    /// tab has navigated away from finds no tab and does nothing.</summary>
     internal bool SetPanelProperty(PropertyRowViewModel row)
     {
-        if (ActiveGroup.ActiveTab is not WorkspaceTabViewModel { IsMarkdown: true } tab)
+        if (FindTabForPath(row.OwnerPath) is not { IsMarkdown: true } tab)
         {
             return false;
         }
@@ -232,22 +313,11 @@ internal sealed partial class WorkspaceViewModel
         {
             return true;
         }
-        if (row.WriteInFlight)
-        {
-            AnnounceWriteInFlightRefusal();
-            return true;
-        }
-        if (RefusePropertyWriteGates(tab, row))
+        if (RefusePropertyWriteGates(tab, row, deleted: false))
         {
             return true;
         }
-        row.WriteInFlight = true;
-        PropertyValue value = PropertyValueCodec.Encode(row.Draft);
-        string path = tab.Path;
-        tab.WriteProperty(
-            row.ContentHash,
-            expectedHash => _session.SetProperty(path, row.Key, value, expectedHash),
-            PropertyWriteCompletion(path, row, deleted: false));
+        DispatchRowWrite(tab, row, deleted: false);
         return true;
     }
 
@@ -262,32 +332,55 @@ internal sealed partial class WorkspaceViewModel
     /// after the confirmation flow chose Delete).</summary>
     internal bool DeletePanelProperty(PropertyRowViewModel row)
     {
-        if (ActiveGroup.ActiveTab is not WorkspaceTabViewModel { IsMarkdown: true } tab)
+        if (FindTabForPath(row.OwnerPath) is not { IsMarkdown: true } tab)
         {
             return false;
         }
-        if (row.WriteInFlight)
-        {
-            AnnounceWriteInFlightRefusal();
-            return true;
-        }
-        if (RefusePropertyWriteGates(tab, row))
+        if (RefusePropertyWriteGates(tab, row, deleted: true))
         {
             return true;
         }
-        row.WriteInFlight = true;
-        string path = tab.Path;
-        tab.WriteProperty(
-            row.ContentHash,
-            expectedHash => _session.DeleteProperty(path, row.Key, expectedHash),
-            PropertyWriteCompletion(path, row, deleted: true));
+        DispatchRowWrite(tab, row, deleted: true);
         return true;
+    }
+
+    /// <summary>One dispatch path for row writes: the snapshot hash,
+    /// the row's own in-flight flag, and the TAB-SCOPED write lease
+    /// (contract 3 — set, delete, add, and retries mutually exclude
+    /// per note, refused pre-core with the spoken reason).</summary>
+    private void DispatchRowWrite(
+        WorkspaceTabViewModel tab, PropertyRowViewModel row, bool deleted)
+    {
+        row.WriteInFlight = true;
+        string path = row.OwnerPath;
+        Func<string?, SaveReport> write;
+        if (deleted)
+        {
+            write = expectedHash => _session.DeleteProperty(path, row.Key, expectedHash);
+        }
+        else
+        {
+            PropertyValue value = PropertyValueCodec.Encode(row.Draft);
+            write = expectedHash => _session.SetProperty(path, row.Key, value, expectedHash);
+        }
+        if (!tab.WriteProperty(
+            row.ContentHash, write, PropertyWriteCompletion(path, row, deleted)))
+        {
+            row.WriteInFlight = false;
+            AnnounceWriteInFlightRefusal();
+        }
     }
 
     /// <summary>The shared refusal gates. True = refused (announced
     /// once, nothing written, draft intact).</summary>
-    private bool RefusePropertyWriteGates(WorkspaceTabViewModel tab, PropertyRowViewModel row)
+    private bool RefusePropertyWriteGates(
+        WorkspaceTabViewModel tab, PropertyRowViewModel row, bool deleted)
     {
+        if (row.WriteInFlight || tab.PropertyWriteInFlight)
+        {
+            AnnounceWriteInFlightRefusal();
+            return true;
+        }
         if (tab.IsDirty)
         {
             // W0.5-3 residue: dirty-tab refusal is a recorded
@@ -304,53 +397,75 @@ internal sealed partial class WorkspaceViewModel
             || !string.Equals(
                 tab.SavedContentHash, row.ContentHash, StringComparison.Ordinal))
         {
-            AnnouncePropertyConflict(tab, row);
+            AnnouncePropertyConflict(tab, row, deleted);
             return true;
         }
         return false;
     }
 
-    private void AnnouncePropertyConflict(WorkspaceTabViewModel tab, PropertyRowViewModel row)
+    /// <summary>Conflict resolution is OPERATION-SPECIFIC
+    /// (adversarial round 1, contracts 1 and 5): a conflicted delete
+    /// retries as a DELETE — Keep Mine must never turn a confirmed
+    /// destructive operation into a set.</summary>
+    private void AnnouncePropertyConflict(
+        WorkspaceTabViewModel tab, PropertyRowViewModel row, bool deleted)
     {
         _announce(new A11yEvent.PropertyEditConflict(
             System.IO.Path.GetFileName(tab.Path)));
-        string path = tab.Path;
+        string path = row.OwnerPath;
         PropertyConflictDialog?.Invoke(
             System.IO.Path.GetFileName(path),
             row.Key,
-            () => RetryPropertyEditWithFreshHash(path, row),
+            () => RetryPropertyEditWithFreshHash(row, deleted),
             () => ReloadPropertiesFromDisk(path));
     }
 
-    /// <summary>Keep Mine: re-issue the edit against the CURRENT
-    /// disk hash with the latest preserved draft — the only place a
-    /// non-snapshot hash is ever used, at the user's explicit
-    /// choice.</summary>
-    private void RetryPropertyEditWithFreshHash(string path, PropertyRowViewModel row)
+    /// <summary>Keep Mine: re-issue THE SAME OPERATION against the
+    /// CURRENT disk hash with the latest preserved draft — the only
+    /// place a non-snapshot hash is ever used, at the user's
+    /// explicit choice.</summary>
+    private void RetryPropertyEditWithFreshHash(PropertyRowViewModel row, bool deleted)
     {
-        if (FindTabForPath(path) is not { } tab
-            || !row.ValidateForCommit()
+        if (FindTabForPath(row.OwnerPath) is not { IsMarkdown: true } tab
+            || (!deleted && !row.ValidateForCommit())
             || row.WriteInFlight)
         {
             return;
         }
         row.WriteInFlight = true;
-        PropertyValue value = PropertyValueCodec.Encode(row.Draft);
-        tab.WriteProperty(
-            null,
-            _ =>
+        string path = row.OwnerPath;
+        Func<string?, SaveReport> write;
+        if (deleted)
+        {
+            write = _ =>
+            {
+                string freshHash = _session.ReadNoteParts(path).ContentHash;
+                return _session.DeleteProperty(path, row.Key, freshHash);
+            };
+        }
+        else
+        {
+            PropertyValue value = PropertyValueCodec.Encode(row.Draft);
+            write = _ =>
             {
                 string freshHash = _session.ReadNoteParts(path).ContentHash;
                 return _session.SetProperty(path, row.Key, value, freshHash);
-            },
-            PropertyWriteCompletion(path, row, deleted: false));
+            };
+        }
+        if (!tab.WriteProperty(
+            null, write, PropertyWriteCompletion(path, row, deleted)))
+        {
+            row.WriteInFlight = false;
+            AnnounceWriteInFlightRefusal();
+        }
     }
 
-    private void ReloadPropertiesFromDisk(string path)
-    {
-        RefreshPropertiesFor(path);
-        _announce(new A11yEvent.PropertiesReloaded());
-    }
+    /// <summary>Reload-from-disk resolution: the outcome is spoken
+    /// at the refresh's COMPLETION by the header VM — PropertiesReloaded
+    /// on success, PropertiesReloadFailed with the reason on failure
+    /// (contract 9; never an eager success echo).</summary>
+    private void ReloadPropertiesFromDisk(string path) =>
+        RefreshPropertiesFor(path, announceReloadOutcome: true);
 
     /// <summary>Terminal completion (contract 4): success
     /// re-baselines clean same-path tabs to the report hash BEFORE
@@ -367,7 +482,7 @@ internal sealed partial class WorkspaceViewModel
             if (report is not null)
             {
                 row.MarkCommitted();
-                ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
+                _ = ReconcileTabsAfterPropertyWrite(path, report.NewContentHash);
                 RefreshPropertiesFor(path);
                 Panels.NoteSaved(path);
                 _announce(new A11yEvent.PropertyChanged(row.Key, deleted));
@@ -378,7 +493,7 @@ internal sealed partial class WorkspaceViewModel
                 if (FindTabForPath(path) is { } conflictTab)
                 {
                     conflictTab.RefreshExternalStaleness();
-                    AnnouncePropertyConflict(conflictTab, row);
+                    AnnouncePropertyConflict(conflictTab, row, deleted);
                 }
                 else
                 {
@@ -390,16 +505,23 @@ internal sealed partial class WorkspaceViewModel
             }
             _announce(new A11yEvent.PropertyEditFailed(
                 failure?.Message ?? "unknown failure"));
-            if (postFailureDiskHash is not null
-                && FindTabForPath(path) is { } tab
-                && !string.Equals(
-                    tab.SavedContentHash, postFailureDiskHash, StringComparison.Ordinal))
-            {
-                ReconcileTabsAfterPropertyWrite(path, postFailureDiskHash);
-                RefreshPropertiesFor(path);
-                Panels.NoteSaved(path);
-            }
+            ReconcileAfterReadBack(path, postFailureDiskHash);
         };
+
+    /// <summary>The W4-3 read-back rule: a non-conflict failure whose
+    /// disk hash moved re-baselines tabs and re-derives headers.</summary>
+    private void ReconcileAfterReadBack(string path, string? postFailureDiskHash)
+    {
+        if (postFailureDiskHash is not null
+            && FindTabForPath(path) is { } tab
+            && !string.Equals(
+                tab.SavedContentHash, postFailureDiskHash, StringComparison.Ordinal))
+        {
+            _ = ReconcileTabsAfterPropertyWrite(path, postFailureDiskHash);
+            RefreshPropertiesFor(path);
+            Panels.NoteSaved(path);
+        }
+    }
 
     /// <summary>Build the bulk-rename sheet VM, wired to this
     /// workspace: the old key prefills from the active note's first
@@ -426,8 +548,11 @@ internal sealed partial class WorkspaceViewModel
     /// appears in the report ends either re-baselined to that entry's
     /// new content hash (clean tabs) or flagged externally stale
     /// (dirty tabs) — no open tab may retain a stale SavedContentHash
-    /// that would let a later save clobber the rename. Failures to
-    /// re-read announce loudly instead of passing silently.</summary>
+    /// that would let a later save clobber the rename. Rebaseline
+    /// failures aggregate into ONE RenameReloadFailed (adversarial
+    /// round 1 — the old try/catch could never fire because the
+    /// callees report, not throw); header refresh failures speak
+    /// their own canonical PropertiesReloadFailed at publish.</summary>
     internal void ReconcileTabsAfterBulkRename(RenameReport report)
     {
         bool anyReloadFailed = false;
@@ -437,17 +562,12 @@ internal sealed partial class WorkspaceViewModel
             {
                 continue;
             }
-            try
-            {
-                ReconcileTabsAfterPropertyWrite(affected.Path, affected.NewContentHash);
-                RefreshPropertiesFor(affected.Path);
-                Panels.NoteSaved(affected.Path);
-            }
-            catch (Exception exception) when (
-                exception is VaultException or InvalidOperationException)
+            if (!ReconcileTabsAfterPropertyWrite(affected.Path, affected.NewContentHash))
             {
                 anyReloadFailed = true;
             }
+            RefreshPropertiesFor(affected.Path);
+            Panels.NoteSaved(affected.Path);
         }
         if (anyReloadFailed)
         {
@@ -458,28 +578,32 @@ internal sealed partial class WorkspaceViewModel
 
     /// <summary>Contract 8 fan-out: every open same-path tab either
     /// re-baselines its buffer to the just-written disk state (clean
-    /// tabs) or takes the stale-flag honesty (dirty tabs).</summary>
-    internal void ReconcileTabsAfterPropertyWrite(string path, string newContentHash)
+    /// tabs) or takes the stale-flag honesty (dirty tabs). Returns
+    /// false when any tab's reload attempt failed.</summary>
+    internal bool ReconcileTabsAfterPropertyWrite(string path, string newContentHash)
     {
+        bool allSettled = true;
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
             if (tab.IsMarkdown
-                && string.Equals(tab.Path, path, StringComparison.Ordinal))
+                && string.Equals(tab.Path, path, StringComparison.Ordinal)
+                && !tab.RebaselineAfterPropertyWrite(newContentHash, _announce))
             {
-                tab.RebaselineAfterPropertyWrite(newContentHash, _announce);
+                allSettled = false;
             }
         }
+        return allSettled;
     }
 
     /// <summary>Refresh the header VM of every open tab on this path
     /// (duplicate same-path tabs each hold their own instance).</summary>
-    internal void RefreshPropertiesFor(string path)
+    internal void RefreshPropertiesFor(string path, bool announceReloadOutcome = false)
     {
         foreach (WorkspaceTabViewModel tab in Groups.SelectMany(group => group.Tabs))
         {
             if (string.Equals(tab.Path, path, StringComparison.Ordinal))
             {
-                tab.Properties?.RefreshProperties();
+                tab.Properties?.RefreshProperties(announceReloadOutcome);
             }
         }
     }

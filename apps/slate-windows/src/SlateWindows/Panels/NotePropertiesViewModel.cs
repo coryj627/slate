@@ -14,10 +14,13 @@ namespace SlateWindows.Panels;
 /// Rows always re-derive from AUTHORITATIVE BYTES (feature
 /// contract 4): ParseFrontmatterProperties over a fresh
 /// ReadNoteParts — never from a local draft — and each row pins the
-/// bundle's content hash as its CAS token (contract 1). Publishes
-/// are guarded by generation + requestId two-token staleness (the
-/// W4-2/3 posture); the VM never writes — commits route through the
-/// workspace seam injected as delegates.
+/// bundle's content hash AND OWNER PATH as its CAS identity
+/// (contract 1; adversarial round 1: a row must never be actionable
+/// against a different note than the read that produced it, so a
+/// path change clears rows SYNCHRONOUSLY). Publishes are guarded by
+/// generation + requestId two-token staleness (the W4-2/3 posture);
+/// the VM never writes — commits route through the workspace seam
+/// injected as delegates.
 /// </summary>
 internal sealed class NotePropertiesViewModel : PanelWorkScheduler
 {
@@ -25,18 +28,21 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     private readonly Action<PropertyRowViewModel> _commit;
     private readonly Action<PropertyRowViewModel> _revertAnnounce;
     private readonly Action<PropertyRowViewModel> _requestDelete;
+    private readonly Action<A11yEvent>? _announce;
     private long _generation;
     private int _requestId;
     private bool _isExpanded = true;
     private bool _isLoading;
     private string? _loadError;
     private string _path = "";
+    private bool _announceReloadOutcome;
 
     public NotePropertiesViewModel(
         VaultSession session,
         Action<PropertyRowViewModel> commit,
         Action<PropertyRowViewModel> revertAnnounce,
         Action<PropertyRowViewModel> requestDelete,
+        Action<A11yEvent>? announce = null,
         bool synchronousForTests = false)
         : base(synchronousForTests)
     {
@@ -44,6 +50,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
         _commit = commit;
         _revertAnnounce = revertAnnounce;
         _requestDelete = requestDelete;
+        _announce = announce;
     }
 
     public ObservableCollection<PropertyRowViewModel> Rows { get; } = [];
@@ -53,7 +60,8 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     /// <summary>The content hash of the read that produced the
     /// current rows — the CAS token for ADD writes, which have no
     /// row to pin one (contract 1, same discipline). Empty until the
-    /// first successful publish and after a failed one.</summary>
+    /// first successful publish, after a failed one, and while a
+    /// path change is loading.</summary>
     public string ContentHash { get; private set; } = "";
 
     public bool IsExpanded
@@ -103,27 +111,45 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     public IReadOnlyList<string> CurrentKeys => Rows.Select(row => row.Key).ToList();
 
     /// <summary>(Re)load for a path. A new PATH bumps the generation
-    /// (parked work for the old path can never publish); a refresh
-    /// on the same path takes a new requestId under the same
-    /// generation.</summary>
+    /// (parked work for the old path can never publish) and clears
+    /// the old note's rows and hash SYNCHRONOUSLY — a stale row must
+    /// not remain actionable while the new read is in flight
+    /// (contract 1); a refresh on the same path takes a new
+    /// requestId under the same generation.</summary>
     public void Load(string path)
     {
         if (path != _path)
         {
             _path = path;
             Interlocked.Increment(ref _generation);
+            Rows.Clear();
+            ContentHash = "";
+            LoadError = null;
+            OnPropertyChanged(nameof(HeaderText));
+            OnPropertyChanged(nameof(HeaderGroupName));
+            OnPropertyChanged(nameof(ShowEmptyState));
+            OnPropertyChanged(nameof(HasRows));
+            OnPropertyChanged(nameof(AnyRowDirty));
         }
         RefreshProperties();
     }
 
     /// <summary>Fresh read of the CURRENT path (post-write refresh,
-    /// save-funnel refresh, external-change reconcile).</summary>
-    public void RefreshProperties()
+    /// save-funnel refresh, external-change reconcile). With
+    /// announceReloadOutcome the publish speaks the canonical
+    /// PropertiesReloaded / PropertiesReloadFailed for THIS refresh
+    /// — success is announced at completion, never eagerly
+    /// (contract 9, adversarial round 1).</summary>
+    public void RefreshProperties(bool announceReloadOutcome = false)
     {
         string path = _path;
         if (path.Length == 0)
         {
             return;
+        }
+        if (announceReloadOutcome)
+        {
+            _announceReloadOutcome = true;
         }
         long generation = Interlocked.Read(ref _generation);
         int requestId = Interlocked.Increment(ref _requestId);
@@ -135,7 +161,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
                 var parts = _session.ReadNoteParts(path);
                 var properties = SlateUniffiMethods.ParseFrontmatterProperties(parts.FmSource);
                 Post(() => PublishProperties(
-                    generation, requestId, properties, parts.ContentHash, null));
+                    generation, requestId, path, properties, parts.ContentHash, null));
             }
             catch (Exception exception) when (
                 exception is not OutOfMemoryException
@@ -143,7 +169,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
                     and not AccessViolationException)
             {
                 Post(() => PublishProperties(
-                    generation, requestId, [], "", exception.Message));
+                    generation, requestId, path, [], "", exception.Message));
             }
         });
     }
@@ -154,6 +180,7 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
     internal void PublishProperties(
         long generation,
         int requestId,
+        string path,
         Property[] properties,
         string contentHash,
         string? loadError)
@@ -171,11 +198,24 @@ internal sealed class NotePropertiesViewModel : PanelWorkScheduler
             foreach (var property in properties)
             {
                 Rows.Add(new PropertyRowViewModel(
-                    property, contentHash, _commit, _revertAnnounce, _requestDelete));
+                    property, path, contentHash, _commit, _revertAnnounce, _requestDelete));
             }
         }
         IsLoading = false;
         LoadError = loadError;
+        bool announceOutcome = _announceReloadOutcome;
+        _announceReloadOutcome = false;
+        // Any failed refresh surfaces the canonical reload-failure
+        // event (the honest-containment posture); the success echo is
+        // reserved for the explicit reload flow.
+        if (loadError is not null)
+        {
+            _announce?.Invoke(new A11yEvent.PropertiesReloadFailed(loadError));
+        }
+        else if (announceOutcome)
+        {
+            _announce?.Invoke(new A11yEvent.PropertiesReloaded());
+        }
         OnPropertyChanged(nameof(HeaderText));
         OnPropertyChanged(nameof(HeaderGroupName));
         OnPropertyChanged(nameof(ShowEmptyState));

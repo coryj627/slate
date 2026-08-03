@@ -107,4 +107,38 @@ them.
 - **`RetryPropertyEditWithFreshHash` (Keep Mine)** is the one
   sanctioned non-snapshot hash use; it re-reads inside the write
   worker at the user's explicit instruction (contract 1's stated
-  exception).
+  exception). Retries are OPERATION-SPECIFIC: a conflicted delete
+  retries as a delete, a conflicted add re-issues its captured
+  intent.
+
+## Round-1 review resolutions (2026-08-03)
+
+Adversarial round 1 (invariant prompt, xhigh) returned 13 findings;
+all fixed in one batch. Additional accepted risks recorded from that
+round:
+
+- **Add sheet with no authoritative header data**: opening the sheet
+  before the header's first publish (or on a load error) captures a
+  null intent — every Add refuses with "No note is loaded." until
+  the sheet is reopened. Inert-but-total beats a mutable intent.
+- **Per-tab containment speech**: a property write that lands under
+  a dirty same-path duplicate tab speaks the property-stale
+  containment once per affected tab (each tab's state changed);
+  contract 9's "one per outcome" governs the WRITE outcome
+  announcement, which stays single.
+- **Well-formed dates edit via the calendar only**: WPF's DatePicker
+  parses typed text on focus loss, which would turn a focus change
+  into a disk write (contract 2); the text portion is read-only and
+  calendar picks commit immediately. Malformed stored dates keep the
+  raw TextBox with Enter/Save commits.
+- **Unknown future property kinds** decode/re-encode as text — a
+  version-skew type-loss risk outside contract 10's enumerated
+  kinds; tracked with #1078 (version-skew fencing).
+- **Edited list elements convert along their source kind** when the
+  new text still parses (a re-typed date stays a date), else become
+  text — the sanctioned explicit conversion; untouched elements
+  re-encode their decoded source verbatim.
+- **RenameReloadFailed vs PropertiesReloadFailed**: after a rename,
+  tab-BUFFER reload failures aggregate into one RenameReloadFailed;
+  header refresh failures speak their own PropertiesReloadFailed at
+  publish. Two events for two distinct failure surfaces.

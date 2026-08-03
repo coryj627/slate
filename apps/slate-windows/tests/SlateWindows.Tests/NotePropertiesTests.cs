@@ -143,7 +143,7 @@ public sealed class NotePropertiesTests
 
         // Stale generation and stale requestId both discard.
         properties.PublishProperties(
-            long.MaxValue, int.MaxValue, [], "bogus", null);
+            long.MaxValue, int.MaxValue, "props.md", [], "bogus", null);
         Assert.Equal(rowCount, properties.Rows.Count);
         Assert.Equal(hash, properties.ContentHash);
 
@@ -453,6 +453,173 @@ public sealed class NotePropertiesTests
     }
 
     [Fact]
+    public void RowsFromANavigatedAwayNoteCanNeverWriteTheNewNote()
+    {
+        using FixtureVault fixture = MakeVault("props-owner-path");
+        using VaultSession session = OpenScanned(fixture.Root);
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], _ => { }, startInteractionBackgroundWork: false);
+        NotePropertiesViewModel properties = AttachProperties(workspace, "props.md");
+        PropertyRowViewModel oldRow = properties.Rows[0];
+        Assert.Equal("props.md", oldRow.OwnerPath);
+        string propsBefore = File.ReadAllText(Path.Combine(fixture.Root, "props.md"));
+        string bareBefore = File.ReadAllText(Path.Combine(fixture.Root, "bare.md"));
+
+        // Navigate the SAME tab to another note: the header clears
+        // synchronously and re-derives for the new path.
+        workspace.OpenPath("bare.md");
+        _ = workspace.EnsureActiveTabProperties(synchronousForTests: true);
+        Assert.Equal("bare.md", properties.Path);
+        Assert.Empty(properties.Rows);
+
+        // Contract 1 (adversarial round 1): the OLD note's row
+        // resolves by OWNER PATH — with no open tab on props.md it
+        // does nothing; it can never write bare.md.
+        oldRow.EditorText = "Hijack";
+        oldRow.CommitCommand.Execute(null);
+        Assert.False(oldRow.WriteInFlight);
+        Assert.Equal(
+            propsBefore, File.ReadAllText(Path.Combine(fixture.Root, "props.md")));
+        Assert.Equal(
+            bareBefore, File.ReadAllText(Path.Combine(fixture.Root, "bare.md")));
+    }
+
+    [Fact]
+    public void KeepMineOnAConflictedDeleteStaysADelete()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = MakeVault("props-delete-retry");
+            using VaultSession session = OpenScanned(fixture.Root);
+            var announced = new List<A11yEvent>();
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], announced.Add,
+                startInteractionBackgroundWork: false);
+            (Action KeepMine, Action Reload)? resolution = null;
+            workspace.PropertyConflictDialog = (_, _, keepMine, reload) =>
+                resolution = (keepMine, reload);
+            workspace.PropertyDeleteConfirmation = (_, _) => true;
+            NotePropertiesViewModel properties = AttachProperties(workspace, "props.md");
+            WorkspaceTabViewModel tab =
+                Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+
+            // A direct session write moves the disk hash; the
+            // refreshed row pins the NEW hash while the tab lags.
+            _ = session.SaveText(
+                "props.md",
+                PropsFrontmatter + PropsBody + "\nExternal edit.\n",
+                tab.SavedContentHash);
+            properties.RefreshProperties();
+            PropertyRowViewModel title = properties.Rows.Single(r => r.Key == "title");
+
+            title.DeleteCommand.Execute(null);
+            Assert.NotNull(resolution);
+            Assert.Contains(
+                "title: Hello",
+                File.ReadAllText(Path.Combine(fixture.Root, "props.md")),
+                StringComparison.Ordinal);
+
+            // Contracts 1 + 5 (adversarial round 1): Keep Mine on a
+            // conflicted DELETE re-issues the DELETE — never a set
+            // that resurrects the stale value.
+            resolution!.Value.KeepMine();
+            WaitForUi(() => announced.Any(item =>
+                SlateUniffiMethods.A11yRender(item).Text == "Property title deleted."));
+            WaitForUi(() => TryReadAllText(
+                    Path.Combine(fixture.Root, "props.md")) is { } text
+                && !text.Contains("title:", StringComparison.Ordinal));
+        });
+    }
+
+    [Fact]
+    public void TheTabScopedWriteLeaseRefusesOverlappingWrites()
+    {
+        RunSta(() =>
+        {
+            using FixtureVault fixture = MakeVault("props-lease");
+            using VaultSession session = OpenScanned(fixture.Root);
+            using var workspace = new WorkspaceViewModel(
+                session, fixture.Root, () => [], _ => { },
+                startInteractionBackgroundWork: false);
+            _ = AttachProperties(workspace, "props.md");
+            WorkspaceTabViewModel tab =
+                Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+
+            using var release = new ManualResetEventSlim(false);
+            using var entered = new ManualResetEventSlim(false);
+            int completions = 0;
+            // First write parks inside the worker: the tab lease is
+            // held for its whole duration.
+            Assert.True(tab.WriteProperty(
+                null,
+                _ =>
+                {
+                    entered.Set();
+                    release.Wait(TimeSpan.FromSeconds(20));
+                    throw new InvalidOperationException("parked write ends as failure");
+                },
+                (_, _, _) => completions++));
+            Assert.True(entered.Wait(TimeSpan.FromSeconds(20)));
+
+            // Contract 3 (adversarial round 1): a second write on the
+            // SAME tab is refused pre-core while the first is in
+            // flight — set, delete, add, and retries all share this
+            // lease through WriteProperty.
+            Assert.True(tab.PropertyWriteInFlight);
+            Assert.False(tab.WriteProperty(
+                null, _ => throw new InvalidOperationException("must not run"),
+                (_, _, _) => { }));
+
+            release.Set();
+            WaitForUi(() => completions == 1);
+            Assert.False(tab.PropertyWriteInFlight);
+            // The lease releases with the terminal completion; the
+            // next write proceeds.
+            Assert.True(tab.WriteProperty(
+                null,
+                _ => throw new InvalidOperationException("fails fast"),
+                (_, _, _) => completions++));
+            WaitForUi(() => completions == 2);
+        });
+    }
+
+    [Fact]
+    public void ReloadResolutionAnnouncesItsOutcomeAtCompletion()
+    {
+        using FixtureVault fixture = MakeVault("props-reload-outcome");
+        using VaultSession session = OpenScanned(fixture.Root);
+        var announced = new List<A11yEvent>();
+        using var workspace = new WorkspaceViewModel(
+            session, fixture.Root, () => [], announced.Add,
+            startInteractionBackgroundWork: false);
+        (Action KeepMine, Action Reload)? resolution = null;
+        workspace.PropertyConflictDialog = (_, _, keepMine, reload) =>
+            resolution = (keepMine, reload);
+        NotePropertiesViewModel properties = AttachProperties(workspace, "props.md");
+        WorkspaceTabViewModel tab =
+            Assert.IsType<WorkspaceTabViewModel>(workspace.ActiveGroup.ActiveTab);
+
+        _ = session.SaveText(
+            "props.md",
+            PropsFrontmatter + PropsBody + "\nMoved.\n",
+            tab.SavedContentHash);
+        properties.RefreshProperties();
+        PropertyRowViewModel title = properties.Rows[0];
+        title.EditorText = "Blocked";
+        title.CommitCommand.Execute(null);
+        Assert.NotNull(resolution);
+
+        // Contract 9 (adversarial round 1): PropertiesReloaded is
+        // spoken at the refresh's COMPLETION, exactly once — never
+        // eagerly before the read could still fail.
+        Assert.DoesNotContain(
+            announced, item => item is A11yEvent.PropertiesReloaded);
+        resolution!.Value.Reload();
+        Assert.Equal(
+            1, announced.Count(item => item is A11yEvent.PropertiesReloaded));
+    }
+
+    [Fact]
     public void StoredValueDatePickerTruthTableIsPinned()
     {
         Assert.True(PropertyRowViewModel.StoredValueTakesDatePicker(
@@ -476,6 +643,7 @@ public sealed class NotePropertiesTests
     {
         var row = new PropertyRowViewModel(
             new Property("count", "number", long.MaxValue.ToString()),
+            "note.md",
             "hash",
             _ => Assert.Fail("steppers must not commit"),
             _ => { },

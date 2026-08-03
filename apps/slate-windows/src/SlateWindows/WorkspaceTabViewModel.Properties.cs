@@ -13,11 +13,16 @@ namespace SlateWindows;
 /// duplicate same-path tabs each hold their own) and the property
 /// WRITE WORKER, a mirror of PerformTaskToggle: mutation lease with
 /// a fail-closed finally, terminal completion regardless of tab
-/// disposal, post-failure disk-hash read-back.
+/// disposal, post-failure disk-hash read-back. The worker also owns
+/// the TAB-SCOPED property-write lease (contract 3, adversarial
+/// round 1): set, delete, add, and Keep-Mine retries all funnel
+/// through WriteProperty, so at most one property write per tab is
+/// ever in flight and the second attempt is refused pre-core.
 /// </summary>
 internal sealed partial class WorkspaceTabViewModel
 {
     private NotePropertiesViewModel? _properties;
+    private int _propertyWriteLease;
 
     /// <summary>The per-tab properties header. Created lazily by the
     /// workspace when the tab first shows a markdown note; null for
@@ -34,6 +39,10 @@ internal sealed partial class WorkspaceTabViewModel
     /// the completion publishes (the W4-3 fault pattern).</summary>
     internal Action? PropertyWriteFaultForTests { get; set; }
 
+    /// <summary>True while this tab has a property write in flight
+    /// (any of set/delete/add/retry).</summary>
+    internal bool PropertyWriteInFlight => Volatile.Read(ref _propertyWriteLease) == 1;
+
     internal NotePropertiesViewModel EnsureProperties(
         Action<PropertyRowViewModel> commit,
         Action<PropertyRowViewModel> revertAnnounce,
@@ -44,7 +53,8 @@ internal sealed partial class WorkspaceTabViewModel
         if (_properties is null)
         {
             var created = new NotePropertiesViewModel(
-                _session, commit, revertAnnounce, requestDelete, synchronousForTests);
+                _session, commit, revertAnnounce, requestDelete, _announce,
+                synchronousForTests);
             if (PropsCollapsed == true)
             {
                 created.IsExpanded = false;
@@ -70,25 +80,28 @@ internal sealed partial class WorkspaceTabViewModel
     /// tab's file WITHOUT publishing through its buffer. Contract 8:
     /// a CLEAN tab re-baselines — reload the buffer from disk and
     /// adopt the new hash, exactly like a save settles — while a
-    /// dirty tab takes the W4-3 stale-flag honesty (the divergence
-    /// copy, verbatim) because overwriting unsaved edits is worse
-    /// than a reopen prompt.</summary>
-    internal void RebaselineAfterPropertyWrite(
+    /// dirty tab takes the stale-flag honesty with PROPERTY copy
+    /// (adversarial round 1: never the task-toggle wording) because
+    /// overwriting unsaved edits is worse than a reopen prompt.
+    /// Returns false only when the reload attempt itself failed —
+    /// the caller aggregates that into RenameReloadFailed.</summary>
+    internal bool RebaselineAfterPropertyWrite(
         string newContentHash, Action<A11yEvent> announce)
     {
+        ArgumentNullException.ThrowIfNull(announce);
         if (!IsMarkdown || _disposed)
         {
-            return;
+            return true;
         }
         if (string.Equals(_contentHash, newContentHash, StringComparison.Ordinal))
         {
             IsExternallyStale = false;
-            return;
+            return true;
         }
         if (IsDirty)
         {
-            ReconcileAfterExternalTaskWrite(newContentHash, announce);
-            return;
+            MarkPropertyStale(announce);
+            return true;
         }
         string fresh;
         try
@@ -98,9 +111,9 @@ internal sealed partial class WorkspaceTabViewModel
         catch (VaultException)
         {
             // Can't re-read: honest containment beats a silent stale
-            // baseline.
-            ReconcileAfterExternalTaskWrite(newContentHash, announce);
-            return;
+            // baseline — and the failure is REPORTED, not swallowed.
+            MarkPropertyStale(announce);
+            return false;
         }
         if (_editorSession is not null)
         {
@@ -113,17 +126,38 @@ internal sealed partial class WorkspaceTabViewModel
         IsExternallyStale = false;
         _editorInteractions?.InvalidateExternalState();
         _documentChanged?.Invoke(this, null);
+        return true;
     }
 
-    /// <summary>Run one property write off the UI thread. The
+    private void MarkPropertyStale(Action<A11yEvent> announce)
+    {
+        IsExternallyStale = true;
+        _editorInteractions?.InvalidateExternalState();
+        Status = "Properties changed on disk, but the editor no longer matches it. "
+            + "Save or reopen the note to reconcile.";
+        // W0.5-3 residue: the containment state is spoken with
+        // PROPERTY copy (the task-toggle wording would be factually
+        // wrong here).
+        announce(new A11yEvent.HostComposed(Status, A11yPriority.High));
+    }
+
+    /// <summary>Run one property write off the UI thread. Returns
+    /// false WITHOUT scheduling when another property write on this
+    /// tab is still in flight (the tab-scoped lease). Otherwise the
     /// completion ALWAYS fires (on the dispatcher) with either the
     /// report or the failure plus the post-failure disk hash — the
-    /// caller owns announcements and reconciliation.</summary>
-    internal void WriteProperty(
+    /// caller owns announcements and reconciliation. The lease is
+    /// released just before the completion runs, so a completion may
+    /// legally chain a follow-up write (Keep Mine).</summary>
+    internal bool WriteProperty(
         string? expectedHash,
         Func<string?, SaveReport> write,
         Action<SaveReport?, VaultException?, string?> completion)
     {
+        if (Interlocked.CompareExchange(ref _propertyWriteLease, 1, 0) != 0)
+        {
+            return false;
+        }
         string path = Path;
         Panels.TaskIndexRepairCoordinator? repairs = TaskRepairs;
         _ = Task.Run(() =>
@@ -150,13 +184,19 @@ internal sealed partial class WorkspaceTabViewModel
                     leaseSettled = true;
                 }
                 catch (Exception inner) when (
-                    inner is VaultException or InvalidOperationException)
+                    inner is not OutOfMemoryException
+                        and not StackOverflowException
+                        and not AccessViolationException)
                 {
-                    // The fault seam can throw AFTER the core write
-                    // landed; the completion keys on report-vs-failure,
-                    // so a landed-then-faulted write must present as a
-                    // FAILURE (the read-back reconcile recovers the
-                    // landed bytes) — never as a clean success.
+                    // Catch-all (adversarial round 1, completion
+                    // totality): ANY worker failure must still reach
+                    // the terminal completion — a stranded completion
+                    // leaks the write lease and the row's in-flight
+                    // flag forever. The fault seam can throw AFTER
+                    // the core write landed; the completion keys on
+                    // report-vs-failure, so a landed-then-faulted
+                    // write presents as a FAILURE (the read-back
+                    // reconcile recovers the landed bytes).
                     report = null;
                     repairs?.EndMutation(
                         path, indexConsistent: inner is VaultException.WriteConflict);
@@ -176,11 +216,17 @@ internal sealed partial class WorkspaceTabViewModel
 
             if (_dispatcher.HasShutdownStarted || _dispatcher.HasShutdownFinished)
             {
+                Volatile.Write(ref _propertyWriteLease, 0);
                 return;
             }
             _dispatcher.BeginInvoke(
                 DispatcherPriority.Background,
-                new Action(() => completion(report, failure, postFailureDiskHash)));
+                new Action(() =>
+                {
+                    Volatile.Write(ref _propertyWriteLease, 0);
+                    completion(report, failure, postFailureDiskHash);
+                }));
         });
+        return true;
     }
 }
